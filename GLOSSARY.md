@@ -49,12 +49,40 @@ Work that only resolves through a live exchange with the Operator speaking for t
 _Avoid_: interactive, manual
 
 **Triage**:
-The AFK step that sorts every new issue into its next state: straight to an Implementer, into design with the Operator, or set aside.
+The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside.
 _Avoid_: intake, sorting
 
 **Design session**:
 A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets.
 _Avoid_: redesign, planning meeting
+
+**Spec**:
+A design written up in a Design session, the parent of the Tickets that build it.
+_Avoid_: PRD, plan
+
+**Ticket**:
+One issue an Implementer can turn into a single pull request.
+_Avoid_: task, story
+
+**Fast path**:
+Triage sending an issue straight to an Implementer, skipping the Design session.
+_Avoid_: fast-track, easy fix
+
+**Dispatch**:
+The Kit releasing a ready, unblocked Ticket to an Implementer.
+_Avoid_: kick off, assign
+
+**Verdict**:
+The Reviewer's judgment on a pull request: pass, Execution flaw or Design flaw.
+_Avoid_: approval, review result
+
+**Execution flaw**:
+A Verdict that the right design was built wrongly, so the Implementer can fix it.
+_Avoid_: bug, failing review
+
+**Design flaw**:
+A Verdict that the Ticket itself is wrong, so it needs a Design session.
+_Avoid_: bad spec, rejection
 
 **Sandbox**:
 An isolated environment where an Implementer does its work on a branch, holding no production secrets.
