@@ -1,0 +1,65 @@
+# Fabrik
+
+A software factory: a kit that lets one Operator run an agent-driven engineering loop in their own product repositories, taking work from idea to merged pull request.
+
+## The factory
+
+**Fabrik**:
+The factory as a whole: the Kit, the Loop it runs, and the conventions that bind them.
+_Avoid_: the tool, the platform, the system
+
+**Kit**:
+The portable bundle of skills, conventions and orchestration that a Product repo adopts to run the Loop. A thing a repo takes on, not a service it calls.
+_Avoid_: framework, service, template
+
+**Product repo**:
+A repository holding a real product that has adopted the Kit, where the Loop's work actually lands.
+_Avoid_: target repo, client repo, project
+
+**Pilot**:
+The first Product repo used to prove the Kit against real stakes: Penrith Physiotherapy & Sports Centre.
+_Avoid_: test repo, demo
+
+## People and agents
+
+**Operator**:
+The single human who runs Fabrik across their Product repos: answers HITL sessions and owns every merge.
+_Avoid_: user, admin, developer
+
+**Implementer**:
+An agent that turns one ready ticket into a pull request inside a Sandbox, typically on a lighter model.
+_Avoid_: worker, coder, builder
+
+**Reviewer**:
+An agent on a frontier model that judges an Implementer's pull request against the ticket and the Product repo's standards.
+_Avoid_: checker, critic, QA
+
+## The loop
+
+**Loop**:
+The end-to-end path a piece of work takes in Fabrik, from idea to a pull request the Operator has merged.
+_Avoid_: pipeline, workflow, Real Engineering Loop (Matt Pocock's term, not Fabrik's)
+
+**AFK**:
+Work an agent drives alone, with no human in the exchange.
+_Avoid_: autonomous, background
+
+**HITL**:
+Work that only resolves through a live exchange with the Operator speaking for themselves; an agent never stands in for the Operator's side.
+_Avoid_: interactive, manual
+
+**Triage**:
+The AFK step that sorts every new issue into its next state: straight to an Implementer, into design with the Operator, or set aside.
+_Avoid_: intake, sorting
+
+**Design session**:
+A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets.
+_Avoid_: redesign, planning meeting
+
+**Sandbox**:
+An isolated environment where an Implementer does its work on a branch, holding no production secrets.
+_Avoid_: container, VM, workspace
+
+**Merge gate**:
+The rule that only the Operator merges a pull request into a Product repo's main branch; agents never push to it.
+_Avoid_: approval, sign-off
