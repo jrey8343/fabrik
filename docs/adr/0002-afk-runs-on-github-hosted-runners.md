@@ -12,5 +12,5 @@ Each agent step is split into two jobs. The agent job gets `contents: read`, the
 ## Consequences
 
 - Private Product repos use Actions minutes for the whole run, including time spent waiting on the model. Each job has a hard `timeout-minutes` (Kit config).
-- Each Product repo holds the App ID, its private key and `CLAUDE_CODE_OAUTH_TOKEN` as Actions secrets, because a personal account can't share Actions secrets across repos.
+- Each Product repo holds the App ID, its private key and `CLAUDE_CODE_OAUTH_TOKEN` as Actions secrets, because a personal account can't share Actions secrets across repos. _Replaced by ADR-0004: these now live in 1Password, and each repo holds only three read-only service-account tokens._
 - Per-issue and per-PR `concurrency` groups ensure only one run per Ticket. A cap on how many run at once across Tickets plugs into Dispatch (ADR-0001).
