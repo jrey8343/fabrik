@@ -12,6 +12,10 @@ _Avoid_: the tool, the platform, the system
 The portable bundle of skills, conventions and orchestration that a Product repo adopts to run the Loop. A thing a repo takes on, not a service it calls.
 _Avoid_: framework, service, template
 
+**Kit config**:
+The settings a Product repo owns that tell the Kit how to work there, such as how to build and test it in a Sandbox.
+_Avoid_: Fabrik config, settings, manifest
+
 **Product repo**:
 A repository holding a real product that has adopted the Kit, where the Loop's work actually lands.
 _Avoid_: target repo, client repo, project
