@@ -1,0 +1,22 @@
+# PROTOTYPE, throwaway. Lives only on the prototype/hitl-async-grilling branch.
+# Stands in for the agent's turn in async grilling: each push posts
+# prototype/hitl/round.md to the issue as github-actions[bot], so the
+# Operator gets a real GitHub notification (they never get one for their own comments).
+name: PROTOTYPE grill round
+on:
+  push:
+    branches: [prototype/hitl-async-grilling]
+    paths: ['prototype/hitl/round.md']
+permissions:
+  contents: read
+  issues: write
+jobs:
+  post-round:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Post the round as a comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment "$(cat prototype/hitl/issue.txt)" --repo "$GITHUB_REPOSITORY" --body-file prototype/hitl/round.md
