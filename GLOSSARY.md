@@ -84,6 +84,10 @@ _Avoid_: bug, failing review
 A Verdict that the Ticket itself is wrong, so it needs a Design session.
 _Avoid_: bad spec, rejection
 
+**Step-up**:
+An Implementer run on a stronger model than its role's default, after a failed review or at the Operator's request.
+_Avoid_: escalation, upgrade
+
 **Sandbox**:
 An isolated environment where an Implementer does its work on a branch, holding no production secrets.
 _Avoid_: container, VM, workspace
