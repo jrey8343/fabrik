@@ -232,6 +232,12 @@ describe("A Request-changes run's branch", () => {
     expect(commentsOf(plan)[0]).toMatch(/^<!-- fabrik:request-changes-run -->\n/);
   });
 
+  it("that only brings main in, to fix a conflict, is pushed: bringing the PR up to date is a change", () => {
+    const plan = planFor(requestChangesPushed({ net: [], commits: [], updatedFromMain: true }), pushSnapshot(), kitConfig());
+
+    expect(actionsOf(plan)[0]).toEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+  });
+
   it("that changes nothing is an Execution flaw marked as from a Request-changes run, so it uses no retry", () => {
     const plan = planFor(requestChangesPushed({ net: [], commits: [] }), pushSnapshot(), kitConfig());
 

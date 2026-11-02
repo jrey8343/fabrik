@@ -139,7 +139,8 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   const guard = checkTrustRoot([...changes.net, ...changes.commits]);
   if (guard.kind === "refuse") return refuse(issueNumber, guard.paths, operator, pullRequest.number);
   const requestChanges = fixes.requestChanges === true;
-  if (changes.net.length === 0) {
+  // Merging main in or rebasing onto it, to fix a conflict, is a change even with none of the run's own.
+  if (changes.net.length === 0 && changes.updatedFromMain !== true) {
     return {
       kind: "act",
       actions: verdictActions(

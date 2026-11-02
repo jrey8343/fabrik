@@ -23,8 +23,8 @@ If the end of this prompt has "The pull request you're fixing", this run is a re
 
 If the end of this prompt has "The pull request the Operator requested changes on", this run is a Request-changes run: the PR passed review, and at the Merge gate the Operator asked for changes. The branch checked out is that PR's branch. "The Operator's requested changes" and "The Operator's comments on the code" are the Operator's own words: make those changes, on top of the earlier commits, and still meet the Ticket's acceptance criteria.
 
-- Keep the earlier work the Operator didn't ask you to change. Add new commits; don't rewrite history.
-- If the Operator asks you to rebase, or says the PR conflicts with `main`, merge `origin/main` into the branch (`git merge origin/main`), resolve the conflicts, and commit the merge. Don't rebase: the Kit only fast-forwards the PR's branch. This is the one case where you merge another branch.
+- Keep the earlier work the Operator didn't ask you to change. Add new commits; don't otherwise rewrite history.
+- If the Operator asks you to rebase, or says the PR conflicts with `main`, bring `origin/main` in: rebase onto it (`git rebase origin/main`) if they asked for a rebase, otherwise merge it (`git merge origin/main`). Resolve the conflicts and commit. This is the one case where you rebase or merge another branch. The Kit judges only your own changes, never what `main` already has, so a conflict you resolve in a file you must not change still counts as your change.
 - Run the build and the tests again before you finish.
 - Your output's `title` and `summary` describe what the Operator asked for and what you changed.
 

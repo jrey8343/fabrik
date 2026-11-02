@@ -38,6 +38,13 @@ export interface FailureReport {
 export interface BranchChanges {
   readonly net: readonly ChangedPath[];
   readonly commits: readonly ChangedPath[];
+  /**
+   * For a run on its agent PR's own branch: whether it brought in main's newer
+   * commits, by a merge or a rebase. `net` and `commits` then hold only the
+   * run's own changes, never main's, and bringing the PR up to date is a
+   * change even when the run made none of its own.
+   */
+  readonly updatedFromMain?: boolean;
 }
 
 /** Something that happened in a Product repo that the Loop may act on. */

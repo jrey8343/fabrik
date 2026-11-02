@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { BuiltBranch } from "../agent/result.ts";
 import { parseNameStatus } from "../guard/changes.ts";
+import type { ChangedPath } from "../guard/trust-root.ts";
 import type { BranchChanges } from "../loop/types.ts";
 import type { Repo } from "./client.ts";
 
@@ -17,7 +18,7 @@ const run = promisify(execFile);
 
 export interface AgentBranchGit {
   readonly changes: BranchChanges;
-  /** Pushes the rebuilt branch to the Product repo, replacing any branch of that name. */
+  /** Pushes the rebuilt branch to the Product repo, replacing the agent branch of that name. */
   push(branch: string): Promise<void>;
 }
 
@@ -26,6 +27,12 @@ interface Remote {
   readonly repo: Repo;
   readonly token: string;
 }
+
+/** Runs git in the empty repository the branch is rebuilt in. */
+type Git = (...args: string[]) => Promise<string>;
+
+/** Where the remote's default branch (the PR's base, main) is fetched to. */
+const MAIN_REF = "refs/fabrik/main";
 
 /**
  * Rebuilds `branch` from `bundlePath` and reads what it changes. A branch with
@@ -49,44 +56,102 @@ export async function rebuildAgentBranch(
     GIT_CONFIG_KEY_1: "core.hooksPath",
     GIT_CONFIG_VALUE_1: "/dev/null",
   };
-  const git = async (...args: string[]): Promise<string> =>
-    (await run("git", args, { cwd: dir, env, maxBuffer: 64 * 1024 * 1024 })).stdout;
+  const git: Git = async (...args) => (await run("git", args, { cwd: dir, env, maxBuffer: 64 * 1024 * 1024 })).stdout;
 
   await git("init", "--quiet", "--template=");
-  const ref = `refs/heads/${branch.name}`;
   if (branch.head === null) {
     return {
-      changes: { net: [], commits: [] },
+      changes: { net: [], commits: [], updatedFromMain: false },
       push: () => Promise.reject(new Error(`${branch.name} has no commits to push`)),
     };
   }
+  return branch.base.ref === branch.name
+    ? onItsOwnBranch(git, url, branch, bundlePath)
+    : cutFromMain(git, url, branch, bundlePath);
+}
 
-  // A first run's bundle needs only its base commit, which the remote already has. A
-  // retry's may also need older commits: a Request-changes run can merge main into
-  // the branch to resolve a conflict, so it takes the base's history too.
-  const onItsOwnBranch = branch.base.ref === branch.name;
-  await git("fetch", "--quiet", ...(onItsOwnBranch ? [] : ["--depth=1"]), url, branch.base.sha);
+/** Reads the bundle's branch in, checking it ends where the agent job said. */
+async function fetchBundle(git: Git, branch: BuiltBranch, bundlePath: string): Promise<string> {
+  const ref = `refs/heads/${branch.name}`;
   await git("bundle", "verify", "--quiet", bundlePath);
   await git("fetch", "--quiet", bundlePath, `${ref}:${ref}`);
   const tip = (await git("rev-parse", "--verify", `${ref}^{commit}`)).trim();
   if (tip !== branch.head) throw new Error(`The bundle's ${branch.name} is at ${tip}, not ${branch.head}`);
-  await git("merge-base", "--is-ancestor", branch.base.sha, tip).catch(() => {
-    throw new Error(`${branch.name} doesn't start from ${branch.base.ref} at ${branch.base.sha}`);
-  });
+  return tip;
+}
 
-  const range = `${branch.base.sha}..${tip}`;
-  const net = parseNameStatus(await git("diff", "--name-status", "-z", "-M", "--no-ext-diff", branch.base.sha, tip));
-  const commits = parseNameStatus(
-    await git("log", "--format=", "--name-status", "-z", "-M", "--diff-merges=first-parent", "--no-ext-diff", range),
+function diff(git: Git, from: string, to: string): Promise<ChangedPath[]> {
+  return git("diff", "--name-status", "-z", "-M", "--no-ext-diff", from, to).then(parseNameStatus);
+}
+
+/**
+ * What each commit in `range` changes on its own. A merge shows only what was
+ * changed by hand on top of the merge git would make (remerge), so merging
+ * main in doesn't count main's own changes.
+ */
+function commitsIn(git: Git, range: string): Promise<ChangedPath[]> {
+  return git("log", "--format=", "--name-status", "-z", "-M", "--diff-merges=remerge", "--no-ext-diff", range).then(
+    parseNameStatus,
   );
+}
+
+function isAncestor(git: Git, ancestor: string, of: string): Promise<boolean> {
+  return git("merge-base", "--is-ancestor", ancestor, of).then(
+    () => true,
+    () => false,
+  );
+}
+
+/** A first run, cut from main: everything it changes is its own. Its push replaces whatever an earlier run left on the agent branch. */
+async function cutFromMain(git: Git, url: string, branch: BuiltBranch, bundlePath: string): Promise<AgentBranchGit> {
+  const ref = `refs/heads/${branch.name}`;
+  await git("fetch", "--quiet", "--depth=1", url, branch.base.sha);
+  const tip = await fetchBundle(git, branch, bundlePath);
+  if (!(await isAncestor(git, branch.base.sha, tip))) {
+    throw new Error(`${branch.name} doesn't start from ${branch.base.ref} at ${branch.base.sha}`);
+  }
   return {
-    changes: { net, commits },
+    changes: {
+      net: await diff(git, branch.base.sha, tip),
+      commits: await commitsIn(git, `${branch.base.sha}..${tip}`),
+      updatedFromMain: false,
+    },
     async push(name) {
       if (name !== branch.name) throw new Error(`Asked to push ${name}, but the bundle holds ${branch.name}`);
-      // A retry builds on the branch itself, so it only fast-forwards it: a branch
-      // that moved meanwhile refuses the push. A fresh run from main is forced,
-      // replacing whatever an earlier run left on the agent branch.
-      await git("push", "--quiet", ...(onItsOwnBranch ? [] : ["--force"]), url, `${ref}:${ref}`);
+      await git("push", "--quiet", "--force", url, `${ref}:${ref}`);
+    },
+  };
+}
+
+/**
+ * A retry or Request-changes run, built on its agent PR's head. To fix a
+ * conflict it may have merged main in or rebased onto it, so only its own
+ * changes are judged: its commits main doesn't hold, and the paths it changed
+ * that don't now read as main has them. Its push may replace the PR's branch
+ * (a rebase doesn't fast-forward), but only while that branch is still at the
+ * head the run built on, and it never touches any other branch.
+ */
+async function onItsOwnBranch(git: Git, url: string, branch: BuiltBranch, bundlePath: string): Promise<AgentBranchGit> {
+  const ref = `refs/heads/${branch.name}`;
+  await git("fetch", "--quiet", url, branch.base.sha);
+  await git("fetch", "--quiet", url, `+HEAD:${MAIN_REF}`);
+  const tip = await fetchBundle(git, branch, bundlePath);
+  const main = (await git("rev-parse", "--verify", `${MAIN_REF}^{commit}`)).trim();
+
+  const unlikeMain = new Set((await git("diff", "--name-only", "-z", "--no-ext-diff", main, tip)).split("\0").filter(Boolean));
+  // A path the branch now holds just as main does came from main, not from this run.
+  const net = (await diff(git, branch.base.sha, tip)).filter(
+    (change) => unlikeMain.has(change.path) || (change.from !== undefined && unlikeMain.has(change.from)),
+  );
+  return {
+    changes: {
+      net,
+      commits: await commitsIn(git, `${main}..${tip}`),
+      updatedFromMain: !(await isAncestor(git, main, branch.base.sha)) && (await isAncestor(git, main, tip)),
+    },
+    async push(name) {
+      if (name !== branch.name) throw new Error(`Asked to push ${name}, but the bundle holds ${branch.name}`);
+      await git("push", "--quiet", `--force-with-lease=${ref}:${branch.base.sha}`, url, `${ref}:${ref}`);
     },
   };
 }
