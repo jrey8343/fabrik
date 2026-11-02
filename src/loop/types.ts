@@ -8,6 +8,14 @@ export type AgentRole = "triage";
 export type LoopEvent =
   | { readonly kind: "issue-opened"; readonly issue: number }
   | {
+      readonly kind: "issue-comment-created";
+      readonly issue: number;
+      /** The login of whoever wrote the comment. */
+      readonly commenter: string;
+      /** Whether that account is a bot, the Fabrik App included. */
+      readonly commenterIsBot: boolean;
+    }
+  | {
       readonly kind: "agent-run-finished";
       readonly role: AgentRole;
       readonly issue: number;
@@ -27,6 +35,8 @@ export interface IssueSnapshot {
 /** The slice of GitHub state a Loop event needs to be decided. */
 export interface Snapshot {
   readonly issue: IssueSnapshot;
+  /** The Operator's GitHub login, whom ready-for-human work is assigned to. */
+  readonly operator: string;
 }
 
 /** The resolved Kit config, every default filled in (src/kit/config.ts). */
@@ -36,7 +46,9 @@ export type { KitConfig } from "../kit/config.ts";
 export type Action =
   | { readonly kind: "add-labels"; readonly issue: number; readonly labels: readonly string[] }
   | { readonly kind: "remove-label"; readonly issue: number; readonly label: string }
-  | { readonly kind: "comment"; readonly issue: number; readonly body: string };
+  | { readonly kind: "comment"; readonly issue: number; readonly body: string }
+  | { readonly kind: "assign"; readonly issue: number; readonly assignee: string }
+  | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" };
 
 /**
  * What the core decided: actions to apply, nothing (with the reason why), or
