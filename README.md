@@ -42,7 +42,7 @@ npm test
 - The repo's read-only agent service account (reads the `Fabrik` vault) stored as the Actions secret `FABRIK_OP_AGENT_TOKEN`.
 - A `Fabrik Sandbox · <product>` vault holding the repo's test secrets, and the repo's read-only implement service account (reads the `Fabrik` vault and that one) stored as the Actions secret `FABRIK_OP_IMPLEMENT_TOKEN`.
 - `.claude/skills/` in the repo's `.gitignore`, and the labels `needs-triage`, `needs-info`, `needs-design`, `ready-for-agent`, `ready-for-human`, `wontfix`, `agent:implement`, `agent:review`, `agent:retry`, `bug` and `enhancement`.
-- `templates/fabrik.yml` installed as `.github/workflows/fabrik.yml`, with every Fabrik `uses:` line pinned to the same exact tag. A run fails if they disagree. It runs on `issues`, `issue_comment` and `pull_request_target` (opened, synchronize, reopened, labeled, ready_for_review, closed).
+- `templates/fabrik.yml` installed as `.github/workflows/fabrik.yml`, with every Fabrik `uses:` line pinned to the same exact tag. A run fails if they disagree. It runs on `issues`, `issue_comment`, `pull_request_target` (opened, synchronize, reopened, labeled, ready_for_review, closed) and `pull_request_review` (submitted).
 
 ## Design session (async)
 
@@ -100,6 +100,14 @@ A Ticket that can't be built as designed goes back to the Operator. A Design-fla
 - **Round 1** of that session says the Ticket came back from the closed PR and links its Verdict. Its @-mention of the Operator is the event's one notification: the failed review, the closed PR and the note mention nobody.
 - **The outcome** rewrites the Ticket in place as an agent brief, or splits it into sibling Tickets under the same Spec (a `split` outcome: each a sub-issue of the Spec, with native blocked-by edges, and the Ticket closed as superseded). A Ticket under a Spec never gets a Spec of its own, and only a Ticket under a Spec can split.
 - **The model**: a Step-up applies only to the PR it ran on, so a rewritten or split Ticket starts again on the Implementer's default model.
+
+## Merge gate
+
+A passing PR leaves draft and requests the Operator's review. Only the Operator merges; branch protection, which the setup skill applies, enforces it. The Operator has three moves:
+
+- **Merge**: the PR's `Closes #<ticket>` closes the Ticket, which runs a Dispatch check. When that was the last open Ticket under its Spec, the Kit closes the Spec as completed, with a comment listing each Ticket's merged PRs. The comment mentions nobody.
+- **Request changes**: a review from the Operator that requests changes on an agent PR out of draft puts it back in draft and starts one Implementer run on the Step-up model, on the PR's branch, with the review and its inline comments as input. It isn't a retry. Its push carries a `<!-- fabrik:request-changes-run -->` note, so the Verdict Review gives it is marked as from a Request-changes run and uses no retry; later retries count as before. On a pass the PR leaves draft and the Operator's review is requested again, the event's one notification. To fix a conflict, ask for a rebase in the review: the Implementer merges `origin/main` into the branch, since the Kit only fast-forwards it. A review from anyone else, or on a draft PR, does nothing. The caller workflow runs on `pull_request_review` (submitted) for this. GitHub has no `_target` form of that event, so the run uses the PR's copy of the caller workflow and Kit config, which an agent branch can never change (ADR-0005).
+- **Send it back**: adding `needs-design` to an open agent PR takes the Design-flaw route: the PR closes unmerged, keeping its branch, and the Ticket swaps `ready-for-agent` for `needs-design`. The note's marker is `<!-- fabrik:back-to-design <pr> operator -->`, and round 1 says the Operator sent the Ticket back.
 
 ## Kit config
 

@@ -73,13 +73,15 @@ function describeAction(action: Action): string {
     case "close-as-superseded":
       return `- close #${action.issue} as superseded`;
     case "start-agent-run":
-      return `- a ${action.role} run on #${action.issue}${action.pullRequest === undefined ? "" : `, retrying #${action.pullRequest}`} (${action.model}), which the Kit job routes to its agent job`;
+      return `- a ${action.role} run on #${action.issue}${action.pullRequest === undefined ? "" : `, ${action.requestChanges === undefined ? "retrying" : "with the Operator's requested changes on"} #${action.pullRequest}`} (${action.model}), which the Kit job routes to its agent job`;
     case "check-dispatch":
       return "- run a Dispatch check";
     case "push-branch":
       return `- push ${action.branch}`;
     case "open-pull-request":
       return `- open a draft PR from ${action.head} to ${action.base} that closes #${action.issue}`;
+    case "convert-to-draft":
+      return `- put #${action.pullRequest} back in draft`;
     case "mark-ready-for-review":
       return `- take #${action.pullRequest} out of draft`;
     case "request-review":
@@ -134,7 +136,9 @@ async function agentResultEvent(
   }
   // A retry's PR comes from the Kit job's plan, which the agent can't rewrite, and it builds on its own branch.
   const retried = process.env["FABRIK_RUN_PULL_REQUEST"] ?? "";
-  const retry = retried === "" ? null : { pullRequest: Number(retried), runUrl: thisRunUrl() };
+  // So is whether it was a Request-changes run: the Kit job's plan named the Operator's review.
+  const requestChanges = (process.env["FABRIK_RUN_REVIEW"] ?? "") !== "";
+  const retry = retried === "" ? null : { pullRequest: Number(retried), runUrl: thisRunUrl(), requestChanges };
   if (retry !== null && !(Number.isInteger(retry.pullRequest) && retry.pullRequest > 0)) {
     throw new Error("FABRIK_RUN_PULL_REQUEST is not a PR number");
   }

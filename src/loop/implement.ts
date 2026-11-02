@@ -6,6 +6,7 @@ import { parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
+import { REQUEST_CHANGES_RUN_MARKER } from "./mergeGate.ts";
 import { MAX_RETRIES } from "./retry.ts";
 import { verdictActions } from "./review.ts";
 import type {
@@ -119,15 +120,17 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
 
   const guard = checkTrustRoot([...changes.net, ...changes.commits]);
   if (guard.kind === "refuse") return refuse(issueNumber, guard.paths, operator);
+  const requestChanges = fixes.requestChanges === true;
   if (changes.net.length === 0) {
     return {
       kind: "act",
       actions: verdictActions(
         fixes,
-        pullRequest,
+        // Its Verdict is the Request-changes run's, so it uses no retry.
+        requestChanges ? { ...pullRequest, requestChangesRun: true } : pullRequest,
         "execution-flaw",
         "empty-diff",
-        `The Implementer's retry on \`${branch}\` committed no change, so there was nothing to review.`,
+        `The Implementer's ${requestChanges ? "Request-changes run" : "retry"} on \`${branch}\` committed no change, so there was nothing to review.`,
       ),
     };
   }
@@ -139,7 +142,11 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         kind: "comment",
         issue: pullRequest.number,
         body: [
-          `The Implementer pushed a fix for the Execution flaw to \`${branch}\`; Review runs again on it.`,
+          // Marks the push, so the Verdict Review gives it is marked as from a Request-changes run.
+          ...(requestChanges ? [REQUEST_CHANGES_RUN_MARKER] : []),
+          requestChanges
+            ? `The Implementer pushed the Operator's requested changes to \`${branch}\`; Review runs again on it.`
+            : `The Implementer pushed a fix for the Execution flaw to \`${branch}\`; Review runs again on it.`,
           "",
           withoutMentions(parsed.output.summary),
         ].join("\n"),

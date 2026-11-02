@@ -61,8 +61,11 @@ export async function rebuildAgentBranch(
     };
   }
 
-  // The bundle's only prerequisite is the base commit, which the remote already has.
-  await git("fetch", "--quiet", "--depth=1", url, branch.base.sha);
+  // A first run's bundle needs only its base commit, which the remote already has. A
+  // retry's may also need older commits: a Request-changes run can merge main into
+  // the branch to resolve a conflict, so it takes the base's history too.
+  const onItsOwnBranch = branch.base.ref === branch.name;
+  await git("fetch", "--quiet", ...(onItsOwnBranch ? [] : ["--depth=1"]), url, branch.base.sha);
   await git("bundle", "verify", "--quiet", bundlePath);
   await git("fetch", "--quiet", bundlePath, `${ref}:${ref}`);
   const tip = (await git("rev-parse", "--verify", `${ref}^{commit}`)).trim();
@@ -83,8 +86,7 @@ export async function rebuildAgentBranch(
       // A retry builds on the branch itself, so it only fast-forwards it: a branch
       // that moved meanwhile refuses the push. A fresh run from main is forced,
       // replacing whatever an earlier run left on the agent branch.
-      const retry = branch.base.ref === branch.name;
-      await git("push", "--quiet", ...(retry ? [] : ["--force"]), url, `${ref}:${ref}`);
+      await git("push", "--quiet", ...(onItsOwnBranch ? [] : ["--force"]), url, `${ref}:${ref}`);
     },
   };
 }

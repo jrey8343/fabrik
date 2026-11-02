@@ -16,6 +16,11 @@ on:
   # finish, and labeled lets agent:review resume one after a failure.
   pull_request_target:
     types: [opened, synchronize, reopened, labeled, ready_for_review, closed]
+  # The Operator's Request changes at the Merge gate. GitHub has no _target
+  # form of it, so it runs the PR's copy of this file and Kit config, which an
+  # agent PR can't change: the Kit refuses agent branches that touch them.
+  pull_request_review:
+    types: [submitted]
   # The Loop's time-based rules, such as closing the weekly-limit issue after its reset.
   schedule:
     - cron: "17 * * * *"

@@ -78,7 +78,13 @@ export type LoopEvent =
        * its branch's base, so `changes` holds only the retry's own commits;
        * and the Actions run, which a Verdict the push job posts links to.
        */
-      readonly fixes?: { readonly pullRequest: number; readonly headSha: string; readonly runUrl: string };
+      readonly fixes?: {
+        readonly pullRequest: number;
+        readonly headSha: string;
+        readonly runUrl: string;
+        /** Whether the run was the Operator's Request changes rather than a retry. */
+        readonly requestChanges?: boolean;
+      };
     }
   | {
       /** An agent job failed or was cancelled; its failure job carries the news. */
@@ -119,6 +125,16 @@ export type LoopEvent =
       /** The Reviewer's reply, unparsed: a Verdict line, then its findings (src/loop/verdict.ts). */
       readonly output: string;
       readonly runUrl: string;
+    }
+  | {
+      /** A review that requests changes was submitted on a PR: at the Merge gate, the Operator's ask for another run. */
+      readonly kind: "pull-request-changes-requested";
+      readonly pullRequest: number;
+      /** The review's id, which the Request-changes run reads as its input. */
+      readonly review: number;
+      /** The login of whoever submitted it. */
+      readonly reviewer: string;
+      readonly reviewerIsBot: boolean;
     }
   | { readonly kind: "pull-request-left-draft"; readonly pullRequest: number }
   | { readonly kind: "pull-request-closed"; readonly pullRequest: number }
@@ -220,10 +236,25 @@ export interface Snapshot {
   readonly pullRequest: PullRequestSnapshot | null;
   /** Gathered for a Dispatch check only. */
   readonly dispatch: DispatchSnapshot | null;
+  /** For an issue closing: the Spec it is a Ticket of, or null when it has no parent. */
+  readonly spec: SpecSnapshot | null;
   /** The Operator's GitHub login: ready-for-human work is assigned to them, and Design rounds and failures @-mention them. */
   readonly operator: string;
   /** The open issues the Kit owns in this repo (token rotation, weekly limit), oldest first. Gathered for every event. */
   readonly kitIssues: readonly KitIssueSnapshot[];
+}
+
+/** A Spec and its Tickets, which Spec closing weighs. */
+export interface SpecSnapshot {
+  readonly number: number;
+  readonly open: boolean;
+  /** Every sub-issue, open or closed. */
+  readonly tickets: readonly {
+    readonly number: number;
+    readonly open: boolean;
+    /** The merged PRs that closed it. */
+    readonly pullRequests: readonly number[];
+  }[];
 }
 
 /** An open issue carrying one of the Kit's own labels, as the adapter read it (src/loop/kitIssues.ts). */
@@ -309,6 +340,8 @@ export type Action =
       readonly issue: number;
       /** For an Implement run that retries an agent PR: that PR, whose branch it builds on. */
       readonly pullRequest?: number;
+      /** For a Request-changes run: the Operator's review, which is its input. It isn't a retry. */
+      readonly requestChanges?: { readonly review: number };
       readonly model: string;
       readonly effort: string | null;
       readonly timeoutMinutes: number;
@@ -328,6 +361,8 @@ export type Action =
     }
   /** Closes a PR unmerged. Its branch stays, so nothing it built is lost. */
   | { readonly kind: "close-pull-request"; readonly pullRequest: number }
+  /** Puts a PR back in draft, so the Loop reviews it again before it returns to the Merge gate. */
+  | { readonly kind: "convert-to-draft"; readonly pullRequest: number }
   /** Takes a draft PR out of draft. */
   | { readonly kind: "mark-ready-for-review"; readonly pullRequest: number }
   /** Requests a review on a PR: the Merge gate's one notification. */

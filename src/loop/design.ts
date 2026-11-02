@@ -288,7 +288,9 @@ function roundComment(
       ? []
       : [
           "",
-          `This Ticket came back from #${sentBack.pullRequest}, which the Kit closed unmerged after [its Verdict](${sentBack.verdictUrl}).`,
+          sentBack.verdictUrl === null
+            ? `This Ticket came back from #${sentBack.pullRequest}, which the Operator sent back to design from the Merge gate.`
+            : `This Ticket came back from #${sentBack.pullRequest}, which the Kit closed unmerged after [its Verdict](${sentBack.verdictUrl}).`,
         ]),
     "",
     withoutMentions(output.intro),
