@@ -236,10 +236,25 @@ export interface Snapshot {
   readonly pullRequest: PullRequestSnapshot | null;
   /** Gathered for a Dispatch check only. */
   readonly dispatch: DispatchSnapshot | null;
+  /** For an issue closing: the Spec it is a Ticket of, or null when it has no parent. */
+  readonly spec: SpecSnapshot | null;
   /** The Operator's GitHub login: ready-for-human work is assigned to them, and Design rounds and failures @-mention them. */
   readonly operator: string;
   /** The open issues the Kit owns in this repo (token rotation, weekly limit), oldest first. Gathered for every event. */
   readonly kitIssues: readonly KitIssueSnapshot[];
+}
+
+/** A Spec and its Tickets, which Spec closing weighs. */
+export interface SpecSnapshot {
+  readonly number: number;
+  readonly open: boolean;
+  /** Every sub-issue, open or closed. */
+  readonly tickets: readonly {
+    readonly number: number;
+    readonly open: boolean;
+    /** The merged PRs that closed it. */
+    readonly pullRequests: readonly number[];
+  }[];
 }
 
 /** An open issue carrying one of the Kit's own labels, as the adapter read it (src/loop/kitIssues.ts). */

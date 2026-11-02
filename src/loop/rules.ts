@@ -12,6 +12,7 @@ import {
 } from "./labels.ts";
 import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
 import { RETRY_LABEL, startRetry } from "./retry.ts";
+import { closeSpecAfter } from "./specClosing.ts";
 import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { dispatch } from "./dispatch.ts";
@@ -57,9 +58,13 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
         : applyRetryImplementation(event, snapshot);
     case "agent-run-failed":
       return withIssue(snapshot, (context) => failureNotice(event, context, config));
-    // A closed issue may free a slot or unblock a Ticket.
+    // A closed issue may finish its Spec, free a slot or unblock a Ticket. Merging an
+    // agent PR closes its Ticket through `Closes #n`, so it lands here.
     case "issue-closed":
-      return { kind: "act", actions: [CHECK_DISPATCH] };
+      return withIssue(snapshot, ({ issue }) => ({
+        kind: "act",
+        actions: [...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH],
+      }));
     // A push to an agent draft PR, or agent:review added to resume after a failure, starts a
     // Review; agent:retry added after an Execution flaw starts its retry.
     case "pull-request-pushed":

@@ -28,7 +28,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, operator: "operator", kitIssues: [], ...overrides };
+  return { issue, pullRequest: null, dispatch: null, spec: null, operator: "operator", kitIssues: [], ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
@@ -55,7 +55,7 @@ export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
   overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, operator: "operator", kitIssues: [], ...overrides };
+  return { issue: null, pullRequest, dispatch: null, spec: null, operator: "operator", kitIssues: [], ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -80,6 +80,7 @@ export function dispatchSnapshotOf(
     issue: null,
     pullRequest: null,
     dispatch: { tickets, openAgentDraftPullRequests: 0, implementRunsInProgress: 0, ...inFlight },
+    spec: null,
     operator: "operator",
     kitIssues: [],
   };
@@ -87,7 +88,7 @@ export function dispatchSnapshotOf(
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
 export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, operator: "operator", kitIssues: [], ...overrides };
+  return { issue: null, pullRequest: null, dispatch: null, spec: null, operator: "operator", kitIssues: [], ...overrides };
 }
 
 /**

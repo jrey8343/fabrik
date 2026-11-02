@@ -20,6 +20,7 @@ import type {
   Plan,
   PostedComment,
   Snapshot,
+  SpecSnapshot,
   TicketSnapshot,
 } from "../loop/types.ts";
 
@@ -369,10 +370,66 @@ export async function gatherSnapshot(
     gatherKitIssues(github, repo),
     gatherEventPart(github, repo, event, operator, actions),
   ]);
+  // A closed Ticket may be its Spec's last.
+  const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
+  const spec = parent === null ? null : await gatherSpec(github, repo, parent);
   // By default the Operator owns the Product repos they run Fabrik in.
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, operator: operator ?? owner, kitIssues }
-    : { ...part, kitIssues };
+    ? { issue: null, pullRequest: null, dispatch: null, spec, operator: operator ?? owner, kitIssues }
+    : { ...part, spec, kitIssues };
+}
+
+// A Spec's Tickets and the merged PRs that closed each. A Spec with more than 100 Tickets is far past v1.
+const SPEC_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      issue(number: $number) {
+        number
+        state
+        subIssues(first: 100) {
+          nodes {
+            number
+            state
+            closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number state } }
+          }
+        }
+      }
+    }
+  }
+`;
+
+interface SpecQueryResult {
+  repository: {
+    issue: {
+      number: number;
+      state: "OPEN" | "CLOSED";
+      subIssues: {
+        nodes: {
+          number: number;
+          state: "OPEN" | "CLOSED";
+          closedByPullRequestsReferences: { nodes: { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[] };
+        }[];
+      };
+    } | null;
+  };
+}
+
+async function gatherSpec(github: GitHub, repo: Repo, number: number): Promise<SpecSnapshot | null> {
+  const data = await github.graphql<SpecQueryResult>(SPEC_QUERY, { owner: repo.owner, name: repo.name, number });
+  const spec = data.repository.issue;
+  if (spec === null) return null;
+  return {
+    number: spec.number,
+    open: spec.state === "OPEN",
+    tickets: spec.subIssues.nodes.map((ticket) => ({
+      number: ticket.number,
+      open: ticket.state === "OPEN",
+      pullRequests: ticket.closedByPullRequestsReferences.nodes
+        .filter((pr) => pr.state === "MERGED")
+        .map((pr) => pr.number)
+        .sort((a, b) => a - b),
+    })),
+  };
 }
 
 /** The part of the snapshot the event is about, or null for an event about the repo as a whole. */
@@ -409,7 +466,7 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec">;
 
 const KIT_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $labels: [String!]!) {
