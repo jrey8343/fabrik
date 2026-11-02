@@ -2,6 +2,7 @@
 // Infrastructure failure. It's never retried and never counts against a
 // Ticket's retries; the Operator gets one comment saying how to resume it.
 import { repoWideNotice } from "./kitIssues.ts";
+import { RETRY_LABEL } from "./retry.ts";
 import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
@@ -57,11 +58,13 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
 export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig): Plan {
   const { issue, operator } = context;
   const failure = classify(run);
-  const label = TRIGGER_LABELS[run.role];
   const pullRequest = issue.openPullRequests[0];
   const target = pullRequest ?? run.issue;
-  // The review trigger lives on the PR; every other role's on the issue.
-  const labelled = run.role === "review" ? target : run.issue;
+  // An Implement run on a Ticket that has a PR is that PR's retry (a first run never starts beside one).
+  const retry = run.role === "implement" && pullRequest !== undefined;
+  const label = retry ? RETRY_LABEL : TRIGGER_LABELS[run.role];
+  // The review and retry triggers live on the PR; every other role's on the issue.
+  const labelled = run.role === "review" || retry ? target : run.issue;
   const where = labelled === target ? "" : ` on #${labelled}`;
   const detail = run.report === null || run.report.detail.trim() === "" ? [] : ["", `> ${run.report.detail.trim()}`];
   const failedRun = `The ${ROLE_NAMES[run.role]} run on #${run.issue}`;

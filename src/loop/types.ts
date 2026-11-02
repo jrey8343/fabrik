@@ -72,6 +72,12 @@ export type LoopEvent =
       readonly base: string;
       /** What the branch changes, read from the bundle the agent job passed out. */
       readonly changes: BranchChanges;
+      /**
+       * For a retry: the agent PR it fixes, and the head it built on, which is
+       * its branch's base, so `changes` holds only the retry's own commits;
+       * and the Actions run, which a Verdict the push job posts links to.
+       */
+      readonly fixes?: { readonly pullRequest: number; readonly headSha: string; readonly runUrl: string };
     }
   | {
       /** An agent job failed or was cancelled; its failure job carries the news. */
@@ -164,8 +170,11 @@ export type Verdict = "pass" | "execution-flaw" | "design-flaw";
 /** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
 export interface VerdictRecord {
   readonly verdict: Verdict;
-  /** The Reviewer judged it, or red required checks made it an Execution flaw. */
-  readonly source: "reviewer" | "ci";
+  /**
+   * The Reviewer judged it; or red required checks, or a retry whose branch
+   * changed nothing, made it an Execution flaw.
+   */
+  readonly source: "reviewer" | "ci" | "empty-diff";
   /** Whether it came from a Request-changes run, which doesn't count as a retry. */
   readonly requestChanges: boolean;
   /** The head commit it was given on. */
@@ -272,6 +281,8 @@ export type Action =
       readonly kind: "start-agent-run";
       readonly role: AgentRole;
       readonly issue: number;
+      /** For an Implement run that retries an agent PR: that PR, whose branch it builds on. */
+      readonly pullRequest?: number;
       readonly model: string;
       readonly effort: string | null;
       readonly timeoutMinutes: number;

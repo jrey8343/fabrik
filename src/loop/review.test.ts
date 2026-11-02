@@ -140,7 +140,7 @@ describe("Review: red CI", () => {
 
     const actions = actionsOf(plan);
     expect(actions.filter((action) => action.kind === "start-agent-run")).toEqual([]);
-    expect(actions).toHaveLength(1);
+    expect(actions.map((action) => action.kind)).toEqual(["comment", "add-labels"]);
     const [body] = commentsOf(plan);
     expect(actions[0]).toMatchObject({ kind: "comment", issue: 50 });
     expect(verdictsIn([body!])).toEqual([
@@ -183,10 +183,10 @@ describe("Review: the Reviewer's Verdict", () => {
     expect(commentsOf(plan)[0]).not.toMatch(/@someone/);
   });
 
-  it("a flaw Verdict is only posted: it doesn't leave draft or notify anyone", () => {
+  it("an Execution-flaw Verdict is posted and starts a retry: it doesn't leave draft or notify anyone", () => {
     const plan = planFor(reviewed("verdict: execution-flaw\n\nFix the build."), snapshotOfPullRequest(aPullRequest()), kitConfig());
 
-    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["comment"]);
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["comment", "add-labels"]);
     expect(notificationsOf(plan)).toEqual([]);
   });
 

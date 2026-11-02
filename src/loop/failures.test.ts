@@ -131,20 +131,20 @@ describe("Failure notices", () => {
     expect(commentOf(plan)).toContain("the model provider returned an error.\n\n> overloaded (529)\n");
   });
 
-  it("an Implement failure on a Ticket with an open PR comments on the PR and names agent:implement on the Ticket", () => {
-    const issue = anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], openPullRequests: [12] });
+  it("an Implement failure on a Ticket with an open PR is that PR's retry: it comments on the PR and names agent:retry there", () => {
+    const issue = anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [12] });
 
     const plan = planFor(failed({ role: "implement" }), snapshotOf(issue), kitConfig());
 
     expect(plan).toEqual({
       kind: "act",
       actions: [
-        { kind: "remove-label", issue: 7, label: "agent:implement" },
+        { kind: "remove-label", issue: 12, label: "agent:retry" },
         { kind: "comment", issue: 12, body: expect.any(String) },
       ],
     });
     expect(commentOf(plan)).toContain("The Implement run on #7 failed: it crashed.");
-    expect(commentOf(plan)).toContain("Re-add the `agent:implement` label on #7 to run it again.");
+    expect(commentOf(plan)).toContain("Re-add the `agent:retry` label to run it again.");
   });
 
   it("an Implement failure with no PR yet comments on the Ticket", () => {

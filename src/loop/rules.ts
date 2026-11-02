@@ -1,6 +1,6 @@
 import { answerRound, applyTurn, startSession } from "./design.ts";
 import { failureNotice } from "./failures.ts";
-import { applyImplementation, startImplementer } from "./implement.ts";
+import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import { KIT_ISSUE_LABELS, scheduledTick } from "./kitIssues.ts";
 import {
   CATEGORY_LABELS,
@@ -10,6 +10,7 @@ import {
   NEEDS_TRIAGE,
   STATE_LABELS,
 } from "./labels.ts";
+import { RETRY_LABEL, startRetry } from "./retry.ts";
 import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { dispatch } from "./dispatch.ts";
@@ -49,20 +50,26 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
           return { kind: "nothing", reason: `The Kit doesn't apply ${event.role} output yet` };
       }
     case "implement-run-finished":
-      return withIssue(snapshot, (context) => applyImplementation(event, context));
+      // A retry lands on the PR it fixes; a first run opens one.
+      return event.fixes === undefined
+        ? withIssue(snapshot, (context) => applyImplementation(event, context))
+        : applyRetryImplementation(event, snapshot);
     case "agent-run-failed":
       return withIssue(snapshot, (context) => failureNotice(event, context, config));
     // A closed issue may free a slot or unblock a Ticket.
     case "issue-closed":
       return { kind: "act", actions: [CHECK_DISPATCH] };
-    // A push to an agent draft PR, or agent:review added to resume after a failure, starts a Review.
+    // A push to an agent draft PR, or agent:review added to resume after a failure, starts a
+    // Review; agent:retry added after an Execution flaw starts its retry.
     case "pull-request-pushed":
       return withPullRequest(snapshot, (pullRequest) => startReview(pullRequest, config));
     case "pull-request-labeled":
       return withPullRequest(snapshot, (pullRequest) =>
         event.label === REVIEW_LABEL
           ? startReview(pullRequest, config)
-          : { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` },
+          : event.label === RETRY_LABEL
+            ? startRetry(pullRequest, config)
+            : { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` },
       );
     case "required-checks-finished":
       return applyRedChecks(event, snapshot);
