@@ -53,6 +53,14 @@ function describeAction(action: Action): string {
       return `- close #${action.issue} as ${action.reason.replace("_", " ")}`;
     case "edit-issue-body":
       return `- rewrite the body of #${action.issue}`;
+    case "create-issue":
+      return [
+        `- create "${action.title}" (${action.labels.join(", ")})`,
+        action.parent === null ? "" : `, a sub-issue of ${action.parent.created}`,
+        action.blockedBy.length === 0 ? "" : `, blocked by ${action.blockedBy.map((b) => b.created).join(", ")}`,
+      ].join("");
+    case "close-as-superseded":
+      return `- close #${action.issue} as superseded`;
     case "start-agent-run":
       return `- a ${action.role} run on #${action.issue}, which the Kit job routes to its agent job`;
     case "check-dispatch":

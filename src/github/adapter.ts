@@ -5,7 +5,16 @@ import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from
 import type { AgentRunResult } from "../agent/result.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { isDesignRoundComment } from "../loop/design.ts";
-import type { Action, AgentRole, FailureReport, LoopEvent, Plan, Snapshot, TicketSnapshot } from "../loop/types.ts";
+import type {
+  Action,
+  AgentRole,
+  CreatedIssue,
+  FailureReport,
+  LoopEvent,
+  Plan,
+  Snapshot,
+  TicketSnapshot,
+} from "../loop/types.ts";
 
 export interface Repo {
   readonly owner: string;
@@ -404,8 +413,46 @@ export async function readKitConfigSources(github: GitHub, repo: Repo, ref: stri
 /** Applies each action in the plan, in order. */
 export async function applyPlan(github: GitHub, repo: Repo, plan: Plan): Promise<void> {
   if (plan.kind !== "act") return;
+  const created = new Map<string, CreatedRecord>();
   for (const action of plan.actions) {
-    await apply(github, repo, action);
+    await apply(github, repo, action, created);
+  }
+}
+
+/** An issue a plan created: its number for links in text, its database id for sub-issue and blocked-by edges. */
+interface CreatedRecord {
+  readonly number: number;
+  readonly id: number;
+}
+
+function createdIn(created: ReadonlyMap<string, CreatedRecord>, { created: key }: CreatedIssue): CreatedRecord {
+  const record = created.get(key);
+  if (record === undefined) throw new Error(`The plan refers to an issue it hasn't created: ${key}`);
+  return record;
+}
+
+/** Creates the issue, then links it under its parent and to each blocker, all made earlier in the plan. */
+async function createIssue(
+  github: GitHub,
+  repo: Repo,
+  action: Extract<Action, { kind: "create-issue" }>,
+  created: Map<string, CreatedRecord>,
+): Promise<void> {
+  const issues = `/repos/${repo.owner}/${repo.name}/issues`;
+  const issue = (await github.rest("POST", issues, {
+    title: action.title,
+    body: action.body,
+    labels: action.labels,
+  })) as CreatedRecord;
+  created.set(action.key, { number: issue.number, id: issue.id });
+  if (action.parent !== null) {
+    const parent = createdIn(created, action.parent);
+    await github.rest("POST", `${issues}/${parent.number}/sub_issues`, { sub_issue_id: issue.id });
+  }
+  for (const blocker of action.blockedBy) {
+    await github.rest("POST", `${issues}/${issue.number}/dependencies/blocked_by`, {
+      issue_id: createdIn(created, blocker).id,
+    });
   }
 }
 
@@ -414,9 +461,15 @@ export function wantsDispatchCheck(plan: Plan): boolean {
   return plan.kind === "act" && plan.actions.some((action) => action.kind === "check-dispatch");
 }
 
-async function apply(github: GitHub, repo: Repo, action: Action): Promise<void> {
+async function apply(
+  github: GitHub,
+  repo: Repo,
+  action: Action,
+  created: Map<string, CreatedRecord>,
+): Promise<void> {
   // Not a GitHub change: the push job hands it on to the Dispatch job.
   if (action.kind === "check-dispatch") return;
+  if (action.kind === "create-issue") return createIssue(github, repo, action, created);
   const issue = `/repos/${repo.owner}/${repo.name}/issues/${action.issue}`;
   switch (action.kind) {
     case "add-labels":
@@ -439,6 +492,14 @@ async function apply(github: GitHub, repo: Repo, action: Action): Promise<void> 
     case "edit-issue-body":
       await github.rest("PATCH", issue, { body: action.body });
       return;
+    case "close-as-superseded": {
+      const body = action.comment
+        .map((part) => (typeof part === "string" ? part : `#${createdIn(created, part).number}`))
+        .join("");
+      await github.rest("POST", `${issue}/comments`, { body });
+      await github.rest("PATCH", issue, { state: "closed", state_reason: "completed" });
+      return;
+    }
     case "start-agent-run":
       // The workflow starts agent runs by routing to the role's agent job (src/kit/jobs.ts).
       return;
