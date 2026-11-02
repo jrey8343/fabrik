@@ -88,6 +88,10 @@ _Avoid_: bug, failing review
 A Verdict that the Ticket itself is wrong, so it needs a Design session.
 _Avoid_: bad spec, rejection
 
+**Infrastructure failure**:
+A run that fails for a reason outside the work itself, such as the model provider, the Sandbox or a credential, rather than anything the Implementer built. It never counts against a Ticket's retries.
+_Avoid_: crash, error, flake
+
 **Step-up**:
 An Implementer run on a stronger model than its role's default, after a failed review or at the Operator's request.
 _Avoid_: escalation, upgrade
@@ -95,6 +99,10 @@ _Avoid_: escalation, upgrade
 **Sandbox**:
 An isolated environment where an Implementer does its work on a branch, holding no production secrets.
 _Avoid_: container, VM, workspace
+
+**Trust-root file**:
+A file in a Product repo that steers how agents behave or how their work is judged, so agents may never change it.
+_Avoid_: config file, protected file
 
 **Merge gate**:
 The rule that only the Operator merges a pull request into a Product repo's main branch; agents never push to it.
