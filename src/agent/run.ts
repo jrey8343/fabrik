@@ -31,6 +31,7 @@ import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutpu
 import { type ImplementOutput, readImplementOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
 import type { AgentRole } from "../loop/types.ts";
+import { kitPromptPath } from "../guard/trust-root.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { SKILLS_MARKER } from "../skills/fetch.ts";
@@ -168,7 +169,7 @@ async function promptFor(
   heading: string,
   extra: readonly string[],
 ): Promise<string> {
-  const template = await readFile(join(KIT_DIR, "prompts", `${role}.md`), "utf8");
+  const template = await readFile(join(KIT_DIR, kitPromptPath(role)), "utf8");
   const issue: unknown = JSON.parse(issueText);
   const parts = [template.trimEnd()];
   const instructions = config.instructions[role];

@@ -1,3 +1,5 @@
+import { AGENT_ROLES, type AgentRole } from "../loop/types.ts";
+
 /** One path an agent branch changes. A rename also carries the path it moved from. */
 export interface ChangedPath {
   readonly path: string;
@@ -26,14 +28,25 @@ export function checkTrustRoot(changes: readonly ChangedPath[]): GuardResult {
 /** Instruction files agents read from any folder they work in, so they count at any depth. */
 const INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md"];
 
+/** Where the Kit keeps each role's prompt, relative to the Kit's own root. */
+export function kitPromptPath(role: AgentRole): string {
+  return `prompts/${role}.md`;
+}
+
 /**
- * Folders that are trust roots only at the repo root: the Kit's prompts (kept
- * in `prompts/`, which matters when the Loop runs on Fabrik itself), the
- * Product repo's Kit config and phase files, and the workflows GitHub runs.
+ * The Kit's role prompts, which are trust roots only when the Loop runs on
+ * Fabrik itself; a Product's own `prompts/` folder is its own business.
  */
-const ROOT_FOLDERS = ["prompts/", ".fabrik/", ".github/workflows/"];
+const KIT_PROMPTS: readonly string[] = AGENT_ROLES.map(kitPromptPath);
+
+/**
+ * Folders that are trust roots only at the repo root: the Product repo's Kit
+ * config and phase files, and the workflows GitHub runs.
+ */
+const ROOT_FOLDERS = [".fabrik/", ".github/workflows/"];
 
 function isTrustRoot(path: string): boolean {
+  if (KIT_PROMPTS.includes(path)) return true;
   if (ROOT_FOLDERS.some((folder) => path.startsWith(folder))) return true;
   const segments = path.split("/");
   const name = segments.at(-1) ?? "";

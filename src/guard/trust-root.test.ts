@@ -20,7 +20,10 @@ describe("Trust-root guard", () => {
     ["Claude settings", ".claude/settings.json"],
     ["local Claude settings", ".claude/settings.local.json"],
     ["a skill", ".claude/skills/tdd/SKILL.md"],
-    ["the Kit's prompts", "prompts/review.md"],
+    ["the Kit's Review prompt", "prompts/review.md"],
+    ["the Kit's Implement prompt", "prompts/implement.md"],
+    ["the Kit's Triage prompt", "prompts/triage.md"],
+    ["the Kit's Design prompt", "prompts/design.md"],
     ["the Kit config", ".fabrik/config.yml"],
     ["a phase file", ".fabrik/implement.md"],
     ["a workflow", ".github/workflows/fabrik.yml"],
@@ -46,6 +49,9 @@ describe("Trust-root guard", () => {
     "src/.fabrik/notes.md",
     "docs/github/workflows/how-we-deploy.md",
     "MYAGENTS.md",
+    // A Product's own prompts folder: only the Kit's role prompts are trust roots.
+    "prompts/onboarding.md",
+    "prompts/chatbot/system.txt",
   ])("allows %s, which only looks like a trust-root path", (path) => {
     expect(checkTrustRoot([{ path }])).toEqual({ kind: "allow" });
   });
