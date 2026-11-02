@@ -241,8 +241,21 @@ describe("Finishing a Design session with an agent brief", () => {
         },
         { kind: "remove-label", issue: 7, label: "needs-design" },
         { kind: "add-labels", issue: 7, labels: ["ready-for-agent"] },
+        { kind: "check-dispatch" },
       ],
     });
+  });
+
+  it("runs a Dispatch check once the brief has landed, so the Ticket can start straight away", () => {
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
+
+    const plan = planFor(
+      { kind: "agent-run-finished", role: "design", issue: 7, output: JSON.stringify(finished) },
+      snapshotOf(issue),
+      kitConfig(),
+    );
+
+    expect(plan.kind === "act" ? plan.actions.at(-1) : null).toEqual({ kind: "check-dispatch" });
   });
 
   it("notifies nobody: neither the body nor the comment @-mentions anyone", () => {

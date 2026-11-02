@@ -7,7 +7,7 @@ The issue, with its full comment thread, is at the end of this prompt. Rounds th
 - You can read anything in this repository and run read-only commands to check how the code works today.
 - Don't change any file, commit, push, or call `gh` or the GitHub API. You hold no GitHub credential. The Kit posts your round or applies your outcome after you finish, from the output described below.
 - Read `GLOSSARY.md` and the ADRs under `docs/adr/` if they exist, and use the repo's own terms. Don't reopen a decision an ADR records unless the Operator asks to.
-- If `.claude/skills/grilling/SKILL.md` exists, use it for how to grill: one decision at a time, each with your recommended answer, walking the design tree until every branch is resolved. `.claude/skills/triage/AGENT-BRIEF.md` describes how to write an agent brief. Ignore any step in a skill that asks you to wait for a live answer, apply labels, post comments or create issues: the Kit does all of that.
+- If `.claude/skills/grilling/SKILL.md` exists, use it for how to grill: one decision at a time, each with your recommended answer, walking the design tree until every branch is resolved. `.claude/skills/triage/AGENT-BRIEF.md` describes how to write an agent brief. `.claude/skills/to-spec/SKILL.md` and `.claude/skills/to-tickets/SKILL.md` describe how to write a Spec and slice it into Tickets: follow their templates and slicing rules, but where they say to publish to the issue tracker, call `gh`, apply a label, link a sub-issue or add a blocked-by edge, write the Spec and Tickets into your output below instead. Ignore any step in a skill that asks you to wait for a live answer, quiz the user, apply labels, post comments or create issues: the Operator's answers in the thread are their approval, and the Kit does all of that.
 
 ## Your turn
 
@@ -15,9 +15,10 @@ The issue, with its full comment thread, is at the end of this prompt. Rounds th
 2. Check what you can against the code yourself. Never ask the Operator something the repository can answer.
 3. Then do exactly one of these:
    - **Ask the next round** while any design, product or priority question that matters to building this is still open. Ask the fewest questions that settle the most, usually two to five. Write each so it can be answered in a word or two from a phone, and give each a concrete recommended answer.
-   - **Finish with an agent brief** once nothing that matters is open and the work fits one pull request an Implementer can finish. The brief replaces the issue's body, so it must stand alone: what to build and why, the decisions the session made, and what is out of scope, followed by acceptance criteria that each state one check a test could make. Finishing the session counts as the Operator approving it, so only finish on what the Operator actually answered or accepted.
+   - **Finish with an agent brief** once nothing that matters is open and the work fits one pull request an Implementer can finish. The brief replaces the issue's body, so it must stand alone: what to build and why, the decisions the session made, and what is out of scope, followed by acceptance criteria that each state one check a test could make.
+   - **Finish with a Spec and its Tickets** once nothing that matters is open but the work is too big for one pull request. Write the Spec as `to-spec` does, and slice it into Tickets as `to-tickets` does: tracer-bullet vertical slices, each one pull request, each naming the Tickets that must be finished before it can start. The Kit creates the Spec, makes each Ticket its sub-issue with native blocked-by edges, and closes this issue as superseded by the Spec.
 
-If the work is too big for one pull request, keep asking rounds for now and say in your intro that it will need a Spec and Tickets; the Kit doesn't take that outcome from an Actions turn yet.
+Finishing the session either way counts as the Operator approving it, so only finish on what the Operator actually answered or accepted.
 
 ## Your output
 
@@ -46,6 +47,24 @@ To finish with an agent brief:
 }
 </design>
 
-- Every text field is non-empty Markdown. The Kit numbers the round and the questions, and adds the one @-mention of the Operator, so don't number anything yourself and don't @-mention anyone.
+To finish with a Spec and its Tickets:
+
+<design>
+{
+  "kind": "spec",
+  "comment": "Markdown for the closing comment on this issue: the decisions the session made, briefly.",
+  "spec": {
+    "title": "The Spec's issue title.",
+    "body": "Markdown for the Spec, in to-spec's template."
+  },
+  "tickets": [
+    { "key": "model", "title": "The Ticket's issue title.", "body": "Markdown in to-tickets' issue template, without the Parent and Blocked by sections.", "blockedBy": [] },
+    { "key": "ui", "title": "Another Ticket.", "body": "…", "blockedBy": ["model"] }
+  ]
+}
+</design>
+
+- Every text field is non-empty Markdown.
+- Each Ticket's `key` is a short name unique among the Tickets, used only in other Tickets' `blockedBy`. A Ticket that can start straight away has an empty `blockedBy`. Blockers must not loop. The Kit links the Spec and the blockers natively, so don't write issue numbers, `Parent` or `Blocked by` sections into any body. The Kit numbers the round and the questions, and adds the one @-mention of the Operator, so don't number anything yourself and don't @-mention anyone.
 - `questions` holds at least one question, each with a recommendation.
 - `acceptanceCriteria` holds at least one criterion.

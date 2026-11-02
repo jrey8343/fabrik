@@ -1,10 +1,10 @@
 // Design-session rules: when a turn starts, and how its output lands on the issue.
 // Each turn rebuilds its context from the issue thread, so nothing is held here
 // between turns beyond what the thread itself shows.
-import { parseDesignTurnOutput, type DesignTurnOutput } from "./designOutput.ts";
-import { NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
+import { dependencyOrder, parseDesignTurnOutput, type DesignTurnOutput } from "./designOutput.ts";
+import { CATEGORY_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { startAgentRun } from "./runs.ts";
-import type { IssueContext, IssueSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
+import type { Action, CreatedIssue, IssueContext, IssueSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
 
 /** Adding needs-design starts the session's first round. */
 export function startSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
@@ -47,23 +47,85 @@ export function applyTurn(issueNumber: number, text: string, snapshot: IssueCont
     const round = snapshot.issue.designRounds + 1;
     return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body: roundComment(round, output, snapshot.operator) }] };
   }
-  return {
-    kind: "act",
-    actions: [
-      { kind: "edit-issue-body", issue: issueNumber, body: briefBody(output) },
-      {
-        kind: "comment",
-        issue: issueNumber,
-        body: [
-          "**Design session finished.** This issue is now its agent brief, ready for an Implementer.",
-          "",
-          withoutMentions(output.comment),
-        ].join("\n"),
-      },
-      { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
-      { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] },
-    ],
-  };
+  const landed =
+    output.kind === "brief"
+      ? rewriteAsBrief(issueNumber, output)
+      : supersedeBySpec(issueNumber, output, snapshot.issue);
+  // Either outcome leaves new ready work, so see whether it can start.
+  return { kind: "act", actions: [...landed, { kind: "check-dispatch" }] };
+}
+
+/** The small outcome: the issue becomes its own agent brief, ready for an Implementer. */
+function rewriteAsBrief(issueNumber: number, output: Extract<DesignTurnOutput, { kind: "brief" }>): Action[] {
+  return [
+    { kind: "edit-issue-body", issue: issueNumber, body: briefBody(output) },
+    {
+      kind: "comment",
+      issue: issueNumber,
+      body: [
+        "**Design session finished.** This issue is now its agent brief, ready for an Implementer.",
+        "",
+        withoutMentions(output.comment),
+      ].join("\n"),
+    },
+    { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
+    { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] },
+  ];
+}
+
+const SPEC: CreatedIssue = { created: "spec" };
+
+/**
+ * The large outcome: the Spec, then its Tickets as its sub-issues, blockers
+ * first so each blocked-by edge points at an issue that exists. Both carry a
+ * state label (and the Tickets a parent), so Intake never sends them to Triage.
+ * The issue they came from closes, superseded by the Spec.
+ */
+function supersedeBySpec(
+  issueNumber: number,
+  output: Extract<DesignTurnOutput, { kind: "spec" }>,
+  issue: IssueSnapshot,
+): Action[] {
+  const labels = [...issue.labels.filter((label) => CATEGORY_LABELS.includes(label)), READY_FOR_AGENT];
+  const ticketIssue = (key: string): CreatedIssue => ({ created: `ticket:${key}` });
+  // The contract has already refused blockers that loop, so there is always an order.
+  const tickets = dependencyOrder(output.tickets) ?? [];
+  return [
+    {
+      kind: "create-issue",
+      key: SPEC.created,
+      title: withoutMentions(output.spec.title),
+      body: [
+        withoutMentions(output.spec.body),
+        "",
+        `<sub>Written by the Fabrik Design session on #${issueNumber}, which this Spec supersedes.</sub>`,
+      ].join("\n"),
+      labels,
+      parent: null,
+      blockedBy: [],
+    },
+    ...tickets.map(
+      (ticket): Action => ({
+        kind: "create-issue",
+        key: ticketIssue(ticket.key).created,
+        title: withoutMentions(ticket.title),
+        body: withoutMentions(ticket.body),
+        labels,
+        parent: SPEC,
+        blockedBy: ticket.blockedBy.map(ticketIssue),
+      }),
+    ),
+    { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
+    {
+      kind: "close-as-superseded",
+      issue: issueNumber,
+      comment: [
+        "**Design session finished.** This issue is superseded by the Spec ",
+        SPEC,
+        ` and its ${tickets.length} ${tickets.length === 1 ? "Ticket" : "Tickets"}.\n\n${withoutMentions(output.comment)}`,
+      ],
+    },
+  ];
 }
 
 const ROUND_MARKER = /^<!-- fabrik:design-round (\d+) -->/;

@@ -151,8 +151,31 @@ export interface IssueContext {
 /** The resolved Kit config, every default filled in (src/kit/config.ts). */
 export type { KitConfig } from "../kit/config.ts";
 
+/** An issue an earlier `create-issue` action in the same plan creates, named by that action's key. */
+export interface CreatedIssue {
+  readonly created: string;
+}
+
 /** One change the GitHub adapter makes on the core's behalf. */
 export type Action =
+  | {
+      /** Creates an issue, then links it under its parent and to its blockers, which earlier actions created. */
+      readonly kind: "create-issue";
+      /** Names the new issue for later actions in the plan. */
+      readonly key: string;
+      readonly title: string;
+      readonly body: string;
+      readonly labels: readonly string[];
+      readonly parent: CreatedIssue | null;
+      readonly blockedBy: readonly CreatedIssue[];
+    }
+  | {
+      /** Comments on an issue, then closes it as completed: another issue now carries its work. */
+      readonly kind: "close-as-superseded";
+      readonly issue: number;
+      /** The comment's Markdown, with each created issue written as its `#number`. */
+      readonly comment: readonly (string | CreatedIssue)[];
+    }
   | { readonly kind: "add-labels"; readonly issue: number; readonly labels: readonly string[] }
   | { readonly kind: "remove-label"; readonly issue: number; readonly label: string }
   | { readonly kind: "comment"; readonly issue: number; readonly body: string }
