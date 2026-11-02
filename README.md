@@ -10,7 +10,12 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 - `src/__fixtures__/` holds the snapshot builders the core's tests use.
 - `src/kit/` holds the **Kit config** loader (`resolveKitConfig`: defaults and validation) and the caller workflow release check (`checkCallerWorkflow`). Both are pure; every run calls them before anything else.
 - `src/github/` holds the thin **GitHub adapter**: it maps an Actions event to a Loop event, gathers the snapshot and applies the plan.
-- `src/main.ts` is what a push job runs (`node src/main.ts`, Node 24, no build step and no runtime dependencies).
+- `src/main.ts` is what a push job runs (`node src/main.ts`, Node 24, no build step and no runtime dependencies). Given `FABRIK_AGENT_RESULT`, it applies an agent job's output instead of the Actions event.
+- `src/agent/` holds the **agent job** runner (`node src/agent/run.ts triage`): Sandcastle with `noSandbox()` on the runner VM, the metered-billing preflight as the last `onSandboxReady` step, the `init` check, the step summary, and the role's output passed out as `agent-result.json`. Only agent jobs install the runtime dependencies (Sandcastle and the Claude Code CLI, pinned exactly).
+- `src/preflight/` holds the metered-billing preflight (pure) and the command the hook runs.
+- `src/skills/` and `skills.lock.json` pin Matt Pocock's skills at a commit SHA and install them into a Product checkout's gitignored `.claude/skills/` (ADR-0003).
+- `src/kit/jobs.ts` is the Kit job's step: it validates the Kit config and routes the event to an agent job or straight to the push job.
+- `prompts/` holds the Kit's agent prompts.
 - `.github/workflows/loop.yml` is the reusable workflow a Product repo calls. It holds wiring only.
 - `templates/fabrik.yml` is the caller workflow a Product repo installs as `.github/workflows/fabrik.yml`.
 
@@ -27,6 +32,9 @@ npm test
 - The Fabrik GitHub App installed (Issues, Pull requests and Contents; no `workflows`).
 - A 1Password item `Fabrik App` in the `Fabrik App` vault, with fields `client-id` and `private-key`.
 - The repo's read-only push service account (reads the `Fabrik App` vault) stored as the Actions secret `FABRIK_OP_PUSH_TOKEN`.
+- A 1Password API Credential item `Claude token` in the `Fabrik` vault, holding the `claude setup-token` token in its `credential` field, with its expiry date.
+- The repo's read-only agent service account (reads the `Fabrik` vault) stored as the Actions secret `FABRIK_OP_AGENT_TOKEN`.
+- `.claude/skills/` in the repo's `.gitignore`, and the labels `needs-triage`, `needs-info`, `needs-design`, `ready-for-agent`, `ready-for-human`, `wontfix`, `bug` and `enhancement`.
 - `templates/fabrik.yml` installed as `.github/workflows/fabrik.yml`, with every Fabrik `uses:` line pinned to the same exact tag. A run fails if they disagree.
 
 ## Kit config

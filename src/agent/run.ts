@@ -13,12 +13,13 @@ import { delimiter, join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import { instructionsPath, KIT_CONFIG_PATH, PHASES, resolveKitConfig, type KitConfig } from "../kit/config.ts";
+import { readIfPresent, readKitConfigFromCheckout } from "../kit/checkout.ts";
+import type { KitConfig } from "../kit/config.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
-import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
-import { AGENT_RESULT_FILE, type AgentRunResult } from "./result.ts";
+import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { SKILLS_MARKER } from "../skills/fetch.ts";
+import { AGENT_RESULT_FILE, type AgentRunResult } from "./result.ts";
 import { initMessageOf, missingSkills, runSummary } from "./summary.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
@@ -29,25 +30,9 @@ function required(name: string): string {
   return value;
 }
 
-async function readIfPresent(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
 /** The Kit config from the Product checkout, validated, or an error naming every problem. */
 async function loadConfig(productDir: string): Promise<KitConfig> {
-  const [config, ...instructions] = await Promise.all([
-    readIfPresent(join(productDir, KIT_CONFIG_PATH)),
-    ...PHASES.map((phase) => readIfPresent(join(productDir, instructionsPath(phase)))),
-  ]);
-  const resolved = resolveKitConfig({
-    config: config ?? null,
-    instructions: Object.fromEntries(PHASES.map((phase, i) => [phase, instructions[i] ?? null])),
-  });
+  const resolved = await readKitConfigFromCheckout(productDir);
   if (!resolved.ok) throw new Error(`The Kit config is invalid:\n${resolved.errors.map((e) => `- ${e}`).join("\n")}`);
   return resolved.config;
 }

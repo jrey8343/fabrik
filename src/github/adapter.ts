@@ -3,7 +3,7 @@
 // Loop rules; those all live in src/loop/rules.ts.
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import type { AgentRunResult } from "../agent/result.ts";
-import type { Action, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
+import type { Action, AgentRole, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 
 export interface Repo {
   readonly owner: string;
@@ -16,6 +16,18 @@ export function loopEventFrom(eventName: string, payload: Record<string, unknown
     const issue = payload["issue"] as { number: number };
     return { kind: "issue-opened", issue: issue.number };
   }
+  return null;
+}
+
+/**
+ * The AFK role whose agent job an Actions event starts, or null when it goes
+ * straight to the push job. Adding needs-triage to an open issue starts Triage.
+ */
+export function agentRoleFor(eventName: string, payload: Record<string, unknown>): AgentRole | null {
+  if (eventName !== "issues" || payload["action"] !== "labeled") return null;
+  const label = payload["label"] as { name?: unknown } | undefined;
+  const issue = payload["issue"] as { state?: unknown } | undefined;
+  if (label?.name === "needs-triage" && issue?.state === "open") return "triage";
   return null;
 }
 
