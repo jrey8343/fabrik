@@ -68,7 +68,7 @@ function describeAction(action: Action): string {
     case "close-as-superseded":
       return `- close #${action.issue} as superseded`;
     case "start-agent-run":
-      return `- a ${action.role} run on #${action.issue}, which the Kit job routes to its agent job`;
+      return `- a ${action.role} run on #${action.issue}${action.pullRequest === undefined ? "" : `, retrying #${action.pullRequest}`} (${action.model}), which the Kit job routes to its agent job`;
     case "check-dispatch":
       return "- run a Dispatch check";
     case "push-branch":
@@ -127,12 +127,25 @@ async function agentResultEvent(
   if (built === undefined || built.name !== agentBranchFor(result.issue)) {
     throw new Error(`The Implement run on #${result.issue} didn't build ${agentBranchFor(result.issue)}`);
   }
+  // A retry's PR comes from the Kit job's plan, which the agent can't rewrite, and it builds on its own branch.
+  const retried = process.env["FABRIK_RUN_PULL_REQUEST"] ?? "";
+  const retry = retried === "" ? null : { pullRequest: Number(retried), runUrl: thisRunUrl() };
+  if (retry !== null && !(Number.isInteger(retry.pullRequest) && retry.pullRequest > 0)) {
+    throw new Error("FABRIK_RUN_PULL_REQUEST is not a PR number");
+  }
+  if ((retry !== null) !== (built.base.ref === built.name)) {
+    throw new Error(
+      retry === null
+        ? `The Implement run on #${result.issue} built on ${built.name} itself, but it isn't a retry`
+        : `The retry on #${retry.pullRequest} didn't build on ${built.name}`,
+    );
+  }
   const branch = await rebuildAgentBranch(built, join(dirname(resultPath), AGENT_BUNDLE_FILE), {
     serverUrl: required("GITHUB_SERVER_URL"),
     repo,
     token: required("FABRIK_APP_TOKEN"),
   });
-  return { event: agentRunEventFrom(result, branch.changes), source, branch };
+  return { event: agentRunEventFrom(result, branch.changes, retry), source, branch };
 }
 
 /**

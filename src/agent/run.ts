@@ -12,7 +12,9 @@
 //   CLAUDE_CODE_OAUTH_TOKEN, from the agent service account (ADR-0004)
 // An Implement run instead takes the Claude token and its test secrets from
 // FABRIK_SECRETS (src/agent/implement.ts), its parent Spec from FABRIK_SPEC_FILE,
-// and passes its commits out as a git bundle beside agent-result.json.
+// and passes its commits out as a git bundle beside agent-result.json. A retry
+// runs in a checkout of its PR's branch, with FABRIK_PULL_REQUEST_FILE the PR and
+// its comments, whose latest Verdict holds the findings to fix.
 // A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
 // PR, and its result is the Reviewer's reply, a Verdict line first.
@@ -32,7 +34,14 @@ import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { SKILLS_MARKER } from "../skills/fetch.ts";
 import { type ParsedVerdict, parseVerdict } from "../loop/verdict.ts";
 import { AGENT_FAILURE_FILE, failureReportFor, MissingVerdictError } from "./failure.ts";
-import { bundleAgentBranch, implementContext, setImplementerEnv, startAgentBranch } from "./implement.ts";
+import {
+  bundleAgentBranch,
+  continueAgentBranch,
+  implementContext,
+  retryContext,
+  setImplementerEnv,
+  startAgentBranch,
+} from "./implement.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { initMessageOf, missingSkills, runSummary } from "./summary.ts";
@@ -217,8 +226,12 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   const extra: string[] = [];
   if (spec.buildsBranch === true) {
     setImplementerEnv(config);
-    branch = await startAgentBranch(productDir, issueNumber);
+    // A retry carries on its PR's branch with the findings to fix; a first run cuts the branch from main.
+    const retryFile = process.env["FABRIK_PULL_REQUEST_FILE"] ?? "";
+    branch =
+      retryFile === "" ? await startAgentBranch(productDir, issueNumber) : await continueAgentBranch(productDir, issueNumber);
     extra.push(...(await implementContext(productDir, required("FABRIK_SPEC_FILE"), config)));
+    if (retryFile !== "") extra.push(...(await retryContext(retryFile)).parts);
   }
   // The Reviewer's result is for the PR it judged, which its push job checks against the event.
   let subject = issueNumber;

@@ -9,7 +9,9 @@
 //   design-timeout-minutes   the Design-session turn's Kit config timeout
 //   implement-timeout-minutes the Implement role's Kit config timeout
 //   review-timeout-minutes   the Review role's Kit config timeout
-//   pull-request, ticket     for a Review, the agent PR and the Ticket its branch was cut for; else empty
+//   pull-request, ticket     for a Review or a retry, the agent PR and the Ticket its branch was cut for;
+//                            for a first Implement run, an empty PR and its Ticket; else empty
+//   branch                   for a retry, the agent branch it builds on; else empty
 //   model, effort            the model and effort the plan chose for its agent run (a Step-up, say),
 //                            empty when it starts none or leaves effort to the CLI
 //   dispatch-timeout-minutes the Dispatch job's Kit config timeout
@@ -17,6 +19,7 @@
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
 import { appendFile, readFile } from "node:fs/promises";
 import { agentRunIn, gatherSnapshot, GitHub, loopEventFrom, type Repo } from "../github/adapter.ts";
+import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
 import { readKitConfigFromCheckout } from "./checkout.ts";
@@ -61,7 +64,9 @@ async function main(productDir: string): Promise<void> {
     run = agentRunIn(plan);
     ticket = snapshot.pullRequest?.ticket ?? null;
   }
-  const review = run?.role === "review";
+  // A Review's subject is the PR itself; a retry is an Implement run on the Ticket that fixes its PR.
+  const pullRequest = run?.role === "review" ? run.issue : (run?.pullRequest ?? null);
+  if (run?.role === "implement") ticket = run.issue;
 
   const outputs = {
     route,
@@ -69,8 +74,10 @@ async function main(productDir: string): Promise<void> {
     "design-timeout-minutes": String(config.roles.design.timeoutMinutes),
     "implement-timeout-minutes": String(config.roles.implement.timeoutMinutes),
     "review-timeout-minutes": String(config.roles.review.timeoutMinutes),
-    "pull-request": review ? String(run?.issue ?? "") : "",
-    ticket: review && ticket !== null ? String(ticket) : "",
+    "pull-request": pullRequest === null ? "" : String(pullRequest),
+    ticket: (run?.role === "review" || run?.role === "implement") && ticket !== null ? String(ticket) : "",
+    // A retry checks out its PR's branch; a first Implement run cuts it from the default branch.
+    branch: run?.role === "implement" && run.pullRequest !== undefined ? agentBranchFor(run.issue) : "",
     model: run?.model ?? "",
     effort: run?.effort ?? "",
     "dispatch-timeout-minutes": String(config.roles.dispatch.timeoutMinutes),
