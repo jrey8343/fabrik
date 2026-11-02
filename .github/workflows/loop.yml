@@ -1,0 +1,82 @@
+# The Fabrik Loop, called from a Product repo's .github/workflows/fabrik.yml.
+#
+# This file is wiring only. Every decision comes from the Loop rules core
+# (src/loop/rules.ts), which the push job runs through src/main.ts.
+#
+# The push job (ADR-0002) runs on a fresh VM, loads the Fabrik App key through
+# the push service account (ADR-0004), mints an App token, and never checks out
+# or runs Product code. It checks out only Fabrik itself, at the exact commit
+# the caller pinned.
+name: Fabrik Loop
+
+on:
+  workflow_call:
+    secrets:
+      OP_PUSH_TOKEN:
+        description: The Product repo's read-only 1Password push service account, which reads the Fabrik App vault.
+        required: true
+
+permissions: {}
+
+jobs:
+  push:
+    name: Push
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Only to read this workflow's own commit from the job's OIDC token.
+      id-token: write
+    steps:
+      # No expression context names the commit of a called workflow, so read
+      # it from the OIDC token's job_workflow_sha claim.
+      - name: Find the Kit's pinned commit
+        id: kit
+        run: |
+          set -euo pipefail
+          jwt="$(curl -sSf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r .value)"
+          claims="$(node -e 'process.stdout.write(Buffer.from(process.argv[1].split(".")[1], "base64url").toString())' "$jwt")"
+          ref="$(jq -r .job_workflow_ref <<<"$claims")"
+          sha="$(jq -r .job_workflow_sha <<<"$claims")"
+          case "$ref" in
+            jrey8343/fabrik/.github/workflows/loop.yml@*) ;;
+            *) echo "::error::Unexpected Kit workflow ref: $ref"; exit 1 ;;
+          esac
+          echo "Kit: $ref ($sha)"
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ steps.kit.outputs.sha }}
+          path: .fabrik-kit
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Load the Fabrik App key
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}
+          FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+          FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+      - name: Mint a Fabrik App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+          private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+
+      # The App token, not GITHUB_TOKEN, so the labels it adds start later workflows.
+      - name: Run the Loop
+        working-directory: .fabrik-kit
+        env:
+          FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: node src/main.ts
