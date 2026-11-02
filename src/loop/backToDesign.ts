@@ -10,20 +10,46 @@ import type { Action, PostedComment, PullRequestSnapshot } from "./types.ts";
 /** Why the PR goes back: the Reviewer said so, or its retries ran out. */
 export type BackToDesignReason = "design-flaw" | "retries-used-up";
 
-/** The agent PR whose Verdict sent a Ticket back to design, as the Kit's note on the Ticket records it. */
+/** The agent PR a Ticket was sent back to design from, as the Kit's note on the Ticket records it. */
 export interface SentBack {
   readonly pullRequest: number;
-  /** The Verdict comment's URL. */
-  readonly verdictUrl: string;
+  /** The URL of the Verdict comment that sent it back, or null when the Operator did, from the Merge gate. */
+  readonly verdictUrl: string | null;
 }
 
-const MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+) -->/;
+const MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
 
 /** The Kit's note that a Ticket came back from this PR, read from a comment's first line; null if it isn't one. */
 export function sentBackIn(body: string): SentBack | null {
   const match = MARKER.exec(body);
   if (match?.[1] === undefined || match[2] === undefined) return null;
-  return { pullRequest: Number(match[1]), verdictUrl: match[2] };
+  return { pullRequest: Number(match[1]), verdictUrl: match[2] === "operator" ? null : match[2] };
+}
+
+/**
+ * The Operator added needs-design to an agent PR: the Design-flaw route,
+ * without a Verdict. The PR closes unmerged, keeping its branch, and its
+ * Ticket goes back to design. None of it notifies anyone: the Design
+ * session's round 1 does.
+ */
+export function sentBackByOperator(pullRequest: PullRequestSnapshot): Action[] {
+  const close: Action = { kind: "close-pull-request", pullRequest: pullRequest.number };
+  const ticket = pullRequest.ticket;
+  if (ticket === null) return [close];
+  return [
+    close,
+    {
+      kind: "comment",
+      issue: ticket,
+      body: [
+        `<!-- fabrik:back-to-design ${pullRequest.number} operator -->`,
+        `**Back to design.** The Operator added \`${NEEDS_DESIGN}\` to #${pullRequest.number}, so the Kit closed it unmerged, keeping its branch \`${agentBranchFor(ticket)}\`. A Design session on this Ticket starts now.`,
+      ].join("\n"),
+    },
+    { kind: "remove-label", issue: ticket, label: READY_FOR_AGENT },
+    // Starts the Design session; it goes on last, so that session sees the rest.
+    { kind: "add-labels", issue: ticket, labels: [NEEDS_DESIGN] },
+  ];
 }
 
 /** The line the Verdict comment ends with when its PR goes back to design. */

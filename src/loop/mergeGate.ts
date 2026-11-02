@@ -2,6 +2,7 @@
 // can request changes, which starts one Request-changes run on the Step-up
 // model with their review as input (it isn't a retry), or add needs-design to
 // the PR, which sends its Ticket back to design as a Design flaw does.
+import { sentBackByOperator } from "./backToDesign.ts";
 import type { KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 import { verdictsIn } from "./verdict.ts";
 
@@ -40,6 +41,16 @@ export function requestChanges(event: ChangesRequested, snapshot: Snapshot, conf
       },
     ],
   };
+}
+
+/**
+ * needs-design added to an agent PR sends its Ticket back to design, as a
+ * Design flaw does, whether the PR waits at the Merge gate or is still in the Loop.
+ */
+export function sendBackToDesign(pullRequest: PullRequestSnapshot): Plan {
+  if (!pullRequest.isAgent) return { kind: "nothing", reason: `#${pullRequest.number} isn't an agent PR` };
+  if (!pullRequest.open) return { kind: "nothing", reason: `#${pullRequest.number} is closed` };
+  return { kind: "act", actions: sentBackByOperator(pullRequest) };
 }
 
 /** The first line of the Kit's note on a PR that a Request-changes run pushed to it. */

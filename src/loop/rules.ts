@@ -10,7 +10,7 @@ import {
   NEEDS_TRIAGE,
   STATE_LABELS,
 } from "./labels.ts";
-import { requestChanges } from "./mergeGate.ts";
+import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
 import { RETRY_LABEL, startRetry } from "./retry.ts";
 import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
@@ -70,7 +70,9 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
           ? startReview(pullRequest, config)
           : event.label === RETRY_LABEL
             ? startRetry(pullRequest, config)
-            : { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` },
+            : event.label === NEEDS_DESIGN
+              ? sendBackToDesign(pullRequest)
+              : { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` },
       );
     case "required-checks-finished":
       return applyRedChecks(event, snapshot);

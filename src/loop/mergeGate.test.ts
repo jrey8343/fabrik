@@ -5,8 +5,10 @@ import {
   HEAD_SHA,
   kitConfig,
   notificationsOf,
+  snapshotOf,
   snapshotOfPullRequest,
 } from "../__fixtures__/snapshots.ts";
+import { designSessionOf } from "./design.ts";
 import { requestChangesRunIn } from "./mergeGate.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
@@ -70,6 +72,61 @@ describe("Request changes at the Merge gate", () => {
 });
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
+
+const needsDesignOnPullRequest: LoopEvent = { kind: "pull-request-labeled", pullRequest: 50, label: "needs-design" };
+
+describe("needs-design on an agent PR sends its Ticket back to design", () => {
+  it.each([
+    ["at the Merge gate", atMergeGate],
+    ["still a draft in the Loop", aPullRequest({ draft: true })],
+  ])("takes the Design-flaw route for a PR %s: closes it keeping its branch, and swaps ready-for-agent for needs-design on the Ticket", (_, pullRequest) => {
+    const actions = actionsOf(planFor(needsDesignOnPullRequest, snapshotOfPullRequest(pullRequest), kitConfig()));
+
+    expect(actions.map((action) => action.kind)).toEqual(["close-pull-request", "comment", "remove-label", "add-labels"]);
+    expect(actions[0]).toEqual({ kind: "close-pull-request", pullRequest: 50 });
+    expect(actions[2]).toEqual({ kind: "remove-label", issue: 7, label: "ready-for-agent" });
+    // needs-design goes on the Ticket last, which starts its Design session.
+    expect(actions[3]).toEqual({ kind: "add-labels", issue: 7, labels: ["needs-design"] });
+  });
+
+  it("leaves a note on the Ticket that its Design session's round 1 reads as the Operator sending it back from #50", () => {
+    const actions = actionsOf(planFor(needsDesignOnPullRequest, snapshotOfPullRequest(atMergeGate), kitConfig()));
+
+    const note = actions[1];
+    expect(note).toMatchObject({ kind: "comment", issue: 7 });
+    const body = note?.kind === "comment" ? note.body : "";
+    expect(designSessionOf([{ body, byBot: true }]).sentBack).toEqual({ pullRequest: 50, verdictUrl: null });
+    expect(body).toContain("`fabrik/ticket-7`");
+  });
+
+  it("notifies nobody: the Design session's round 1 does", () => {
+    expect(notificationsOf(planFor(needsDesignOnPullRequest, snapshotOfPullRequest(atMergeGate), kitConfig()))).toEqual([]);
+  });
+
+  it.each([
+    ["a person's PR", aPullRequest({ isAgent: false })],
+    ["a closed PR", aPullRequest({ open: false })],
+  ])("does nothing on %s", (_, pullRequest) => {
+    expect(planFor(needsDesignOnPullRequest, snapshotOfPullRequest(pullRequest), kitConfig()).kind).toBe("nothing");
+  });
+});
+
+describe("The Design session after the Operator sent a Ticket back", () => {
+  it("opens round 1 by saying the Operator sent it back from the closed PR", () => {
+    const ticket = anIssue({ number: 7, labels: ["needs-design"], sentBack: { pullRequest: 50, verdictUrl: null } });
+    const output = JSON.stringify({
+      kind: "round",
+      intro: "Let's rethink the total.",
+      questions: [{ question: "Where does the total live?", recommendation: "In the cart." }],
+    });
+    const plan = planFor({ kind: "agent-run-finished", role: "design", issue: 7, output }, snapshotOf(ticket), kitConfig());
+
+    const [round] = actionsOf(plan);
+    expect(round?.kind === "comment" ? round.body : "").toContain(
+      "This Ticket came back from #50, which the Operator sent back to design from the Merge gate.",
+    );
+  });
+});
 
 /** A Request-changes run's push job: it built on the PR's head, which went back to draft as it started. */
 function requestChangesPushed(
