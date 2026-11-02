@@ -11,9 +11,13 @@ export function startSession(issueNumber: number, { issue }: IssueContext, confi
   return whileInSession(issueNumber, issue) ?? startAgentRun("design", issueNumber, config);
 }
 
-/** The Operator's reply to a round starts the next turn; nobody else's comment, and no bot's, does. */
+/**
+ * The Operator's reply to a round starts the next turn; nobody else's comment,
+ * and no bot's, does. The Operator's comment that opens with a live outcome
+ * marker instead lands what a live session decided.
+ */
 export function answerRound(
-  { issue: issueNumber, commenter, commenterIsBot }: Extract<LoopEvent, { kind: "issue-comment-created" }>,
+  { issue: issueNumber, commenter, commenterIsBot, body }: Extract<LoopEvent, { kind: "issue-comment-created" }>,
   snapshot: IssueContext,
   config: KitConfig,
 ): Plan {
@@ -26,7 +30,42 @@ export function answerRound(
       reason: `@${commenter} isn't the Operator, so their comment on #${issueNumber} doesn't drive the Design session`,
     };
   }
-  return whileInSession(issueNumber, snapshot.issue) ?? startAgentRun("design", issueNumber, config);
+  const notNow = whileInSession(issueNumber, snapshot.issue);
+  if (notNow !== null) return notNow;
+  const live = LIVE_OUTCOME_MARKER.exec(body);
+  return live?.[1] === undefined ? startAgentRun("design", issueNumber, config) : landLiveOutcome(issueNumber, live[1]);
+}
+
+/**
+ * Opens the comment a live Design session ends with. A live session runs with
+ * the Operator's own credentials in a cloud or local session, and has already
+ * published its outcome: the issue rewritten as its agent brief, or the Spec and
+ * its Tickets created. Only the start of a comment counts, so quoting it doesn't.
+ */
+const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
+
+/** The live session's outcome is already on GitHub, so the Kit only moves the issue on, as an async finish would. */
+function landLiveOutcome(issueNumber: number, outcome: string): Plan {
+  const leaveSession: Action = { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN };
+  // Either outcome leaves new ready work, so see whether it can start.
+  switch (outcome) {
+    case "brief":
+      return {
+        kind: "act",
+        actions: [leaveSession, { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] }, { kind: "check-dispatch" }],
+      };
+    case "spec":
+      // The Operator's comment already names the Spec that supersedes this issue.
+      return {
+        kind: "act",
+        actions: [leaveSession, { kind: "close", issue: issueNumber, reason: "completed" }, { kind: "check-dispatch" }],
+      };
+    default:
+      return {
+        kind: "nothing",
+        reason: `The live Design session on #${issueNumber} posted the outcome ${outcome}, which isn't brief or spec, so the Kit left the issue as it is`,
+      };
+  }
 }
 
 /** A finished turn posts the next round, or ends the session with its outcome. */

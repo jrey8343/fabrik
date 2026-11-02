@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.github/workflows/fabrik.yml\"; v=$(sed -n -E \"s|^[[:space:]-]*uses:[[:space:]\\\"']*jrey8343/fabrik/[^@]*@([A-Za-z0-9._+-]+).*|\\1|p\" \"$f\" 2>/dev/null | head -n 1); if [ -z \"$v\" ]; then echo \"{\\\"systemMessage\\\":\\\"Fabrik didn't install its skills: .github/workflows/fabrik.yml pins no Fabrik release\\\"}\"; exit 0; fi; d=$(mktemp -d); if curl -fsSL \"https://codeload.github.com/jrey8343/fabrik/tar.gz/refs/tags/$v\" 2>/dev/null | tar -xzf - -C \"$d\" --strip-components=1 2>/dev/null && [ -f \"$d/src/session/start.ts\" ]; then node \"$d/src/session/start.ts\" \"$CLAUDE_PROJECT_DIR\" \"$v\"; else echo \"{\\\"systemMessage\\\":\\\"Fabrik didn't install its skills: downloading Fabrik $v failed\\\"}\"; fi; rm -rf \"$d\"",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "mattpocock-skills@claude-plugins-official": false
+  }
+}

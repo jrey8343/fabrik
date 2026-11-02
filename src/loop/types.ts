@@ -38,6 +38,8 @@ export type LoopEvent =
       readonly commenter: string;
       /** Whether that account is a bot, the Fabrik App included. */
       readonly commenterIsBot: boolean;
+      /** The comment's Markdown, which may carry a live Design session's outcome marker. */
+      readonly body: string;
     }
   | {
       readonly kind: "agent-run-finished";

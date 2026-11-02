@@ -22,6 +22,7 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 - `.github/workflows/schedule.yml` is the reusable scheduled tick the caller workflow runs hourly, for the Loop's time-based rules (closing the weekly-limit issue after its reset). Like the push job, it never touches Product code.
 - `src/loop/kitIssues.ts` holds the Kit-owned issues: the "Rotate the Claude token" issue (label `fabrik:token-rotation`) and the weekly-limit issue (label `fabrik:weekly-limit`), which buzz the Operator once per repo, or once per limit window, instead of once per Ticket.
 - `templates/fabrik.yml` is the caller workflow a Product repo installs as `.github/workflows/fabrik.yml`.
+- `templates/claude-settings.json` holds the `SessionStart` hook entry a Product repo merges into `.claude/settings.json`, and disables the `mattpocock-skills` plugin there. The entry reads the release from `fabrik.yml`, downloads Fabrik at that tag (public, no credentials) and runs `src/session/start.ts`, which installs the skills that release's `skills.lock.json` pins, the same commit the Kit step installs in Actions, plus Fabrik's own `skills/` (the `fabrik-live-design` skill).
 
 ## Developing
 
@@ -49,6 +50,14 @@ Adding `needs-design` to an open issue starts a Design session. Each turn is a f
 - **An agent brief**: the issue body is rewritten in place as the brief and its acceptance criteria, a closing comment (no mention) records the decisions, and `needs-design` is swapped for `ready-for-agent`. Finishing the session counts as the Operator approving it.
 
 Only rounds notify: the Kit strips @-mentions from everything the agent writes.
+
+## Design session (live)
+
+The Operator can take a Design session live in a claude.ai/code or iOS cloud session, or a local Claude Code session, on the Product repo. The `SessionStart` hook installs the pinned skills into `.claude/skills/` and returns `reloadSkills: true`, because Claude Code discovers skills before `SessionStart` hooks finish. Then `/fabrik-live-design <issue>` runs the session (`skills/fabrik-live-design/SKILL.md`):
+
+- It posts nothing on the issue until it ends, since every Operator comment on a `needs-design` issue starts an async turn.
+- It runs with the Operator's own `gh` credentials and publishes the outcome itself: the issue body rewritten as its agent brief, or the Spec and its Tickets (category label and `ready-for-agent`, Tickets as sub-issues with native blocked-by edges).
+- Its last act is one comment whose first line is `<!-- fabrik:live-outcome brief -->` or `<!-- fabrik:live-outcome spec -->`. From the Operator, that comment makes the Kit land the outcome as an async finish would: `brief` swaps `needs-design` for `ready-for-agent`, `spec` removes `needs-design` and closes the issue as completed, and both run a Dispatch check. Without the marker, a summary comment is an ordinary answer, and the async session carries on from it.
 
 ## Kit config
 
