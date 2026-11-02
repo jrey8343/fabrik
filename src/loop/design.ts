@@ -1,6 +1,7 @@
 // Design-session rules: when a turn starts, and how its output lands on the issue.
 // Each turn rebuilds its context from the issue thread, so nothing is held here
 // between turns beyond what the thread itself shows.
+import { sentBackIn, type SentBack } from "./backToDesign.ts";
 import { dependencyOrder, parseDesignTurnOutput, type DesignTurnOutput } from "./designOutput.ts";
 import { CATEGORY_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
@@ -85,7 +86,12 @@ export function applyTurn(issueNumber: number, text: string, snapshot: IssueCont
   const { output } = parsed;
   if (output.kind === "round") {
     const round = snapshot.issue.designRounds + 1;
-    return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body: roundComment(round, output, snapshot.operator) }] };
+    // A session that follows a Ticket's return opens by saying why it came back.
+    const sentBack = round === 1 ? snapshot.issue.sentBack : null;
+    return {
+      kind: "act",
+      actions: [{ kind: "comment", issue: issueNumber, body: roundComment(round, output, snapshot.operator, sentBack) }],
+    };
   }
   const landed =
     output.kind === "brief"
@@ -178,16 +184,47 @@ export function isDesignRoundComment(body: string): boolean {
   return ROUND_MARKER.test(body);
 }
 
+/**
+ * Where an issue's current Design session stands, from its comments oldest
+ * first: how many rounds it has posted, and the return it follows, if any. A
+ * session's end starts the count again, and so does the Kit's note that a
+ * Ticket came back, whose session that follows. Only a bot's note counts, so
+ * nobody can fake a return by quoting one.
+ */
+export function designSessionOf(
+  comments: readonly { readonly body: string; readonly byBot: boolean }[],
+): Pick<IssueSnapshot, "designRounds" | "sentBack"> {
+  let session: Pick<IssueSnapshot, "designRounds" | "sentBack"> = { designRounds: 0, sentBack: null };
+  for (const { body, byBot } of comments) {
+    const returned = byBot ? sentBackIn(body) : null;
+    if (returned !== null) session = { designRounds: 0, sentBack: returned };
+    else if (isDesignRoundComment(body)) session = { ...session, designRounds: session.designRounds + 1 };
+    else if (isDesignSessionComment(body)) session = { designRounds: 0, sentBack: null };
+  }
+  return session;
+}
+
 /** Whether a comment is part of a Design session: a round, or the session's end, async or live. */
 export function isDesignSessionComment(body: string): boolean {
   return isDesignRoundComment(body) || body.startsWith(SESSION_FINISHED) || LIVE_OUTCOME_MARKER.test(body);
 }
 
 /** A round: the only Design-session text that notifies, through one @-mention of the Operator. */
-function roundComment(round: number, output: Extract<DesignTurnOutput, { kind: "round" }>, operator: string): string {
+function roundComment(
+  round: number,
+  output: Extract<DesignTurnOutput, { kind: "round" }>,
+  operator: string,
+  sentBack: SentBack | null,
+): string {
   return [
     `<!-- fabrik:design-round ${round} -->`,
     `@${operator} **Design session, round ${round}.** Reply with the numbers you'd answer differently, or \`yes\` to take every recommendation.`,
+    ...(sentBack === null
+      ? []
+      : [
+          "",
+          `This Ticket came back from #${sentBack.pullRequest}, which the Kit closed unmerged after [its Verdict](${sentBack.verdictUrl}).`,
+        ]),
     "",
     withoutMentions(output.intro),
     ...output.questions.flatMap(({ question, recommendation }, i) => [

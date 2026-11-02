@@ -20,6 +20,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     parent: null,
     openPullRequests: [],
     designRounds: 0,
+    sentBack: null,
     emptyDiffs: 0,
     ...overrides,
   };

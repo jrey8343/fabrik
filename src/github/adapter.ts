@@ -4,7 +4,7 @@
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import type { AgentRunResult } from "../agent/result.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
-import { isDesignRoundComment } from "../loop/design.ts";
+import { designSessionOf } from "../loop/design.ts";
 import { countEmptyDiffs } from "../loop/implement.ts";
 import { verdictsIn } from "../loop/verdict.ts";
 import { KIT_ISSUE_LABELS } from "../loop/kitIssues.ts";
@@ -232,7 +232,7 @@ const ISSUE_QUERY = `
         author { login }
         labels(first: 100) { nodes { name } }
         parent { number }
-        comments(last: 100) { nodes { body } }
+        comments(last: 100) { nodes { body author { __typename } } }
         closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number } }
       }
     }
@@ -248,7 +248,7 @@ interface IssueQueryResult {
       author: { login: string } | null;
       labels: { nodes: { name: string }[] };
       parent: { number: number } | null;
-      comments: { nodes: { body: string }[] };
+      comments: { nodes: { body: string; author: { __typename: string } | null }[] };
       closedByPullRequestsReferences: { nodes: { number: number }[] };
     } | null;
   };
@@ -452,7 +452,9 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
-      designRounds: issue.comments.nodes.filter((comment) => isDesignRoundComment(comment.body)).length,
+      ...designSessionOf(
+        issue.comments.nodes.map((comment) => ({ body: comment.body, byBot: comment.author?.__typename === "Bot" })),
+      ),
       emptyDiffs: countEmptyDiffs(issue.comments.nodes.map((comment) => comment.body)),
     },
     pullRequest: null,

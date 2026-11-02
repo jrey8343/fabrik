@@ -5,8 +5,10 @@ import {
   HEAD_SHA,
   kitConfig,
   notificationsOf,
+  snapshotOf,
   snapshotOfPullRequest,
 } from "../__fixtures__/snapshots.ts";
+import { designSessionOf } from "./design.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, VerdictRecord } from "./types.ts";
 
@@ -134,5 +136,103 @@ describe("The Kit's note on the Ticket", () => {
     expect(text).toContain("#50");
     expect(text).toContain("[the Verdict](<verdict>)");
     expect(text).toContain("`fabrik/ticket-7`");
+  });
+});
+
+const VERDICT_URL = "https://github.com/acme/shop/pull/50#issuecomment-9001";
+
+const roundOutput = JSON.stringify({
+  kind: "round",
+  intro: "The cart total needs a home before the Ticket can be rebuilt.",
+  questions: [{ question: "Should checkout read the cart total?", recommendation: "Yes, from the cart service." }],
+});
+
+const turnFinished: LoopEvent = { kind: "agent-run-finished", role: "design", issue: 7, output: roundOutput };
+
+/** The Ticket in the Design session that follows its return from #50. */
+const returnedTicket = anIssue({
+  number: 7,
+  parent: 3,
+  labels: ["enhancement", "needs-design"],
+  sentBack: { pullRequest: 50, verdictUrl: VERDICT_URL },
+});
+
+describe("The Design session after a Ticket comes back", () => {
+  it("opens round 1 by saying why the Ticket came back, linking the closed PR and its Verdict", () => {
+    const plan = planFor(turnFinished, snapshotOf(returnedTicket, { operator: "jrey" }), kitConfig());
+
+    const [round] = actionsOf(plan);
+    expect(round).toMatchObject({ kind: "comment", issue: 7 });
+    const body = round?.kind === "comment" ? round.body : "";
+    expect(body).toContain("**Design session, round 1.**");
+    expect(body).toContain(`This Ticket came back from #50, which the Kit closed unmerged after [its Verdict](${VERDICT_URL}).`);
+    expect(body).toContain("The cart total needs a home");
+  });
+
+  it("round 1 is the event's one notification, an @-mention of the Operator", () => {
+    const labeled = planFor({ kind: "label-added", issue: 7, label: "needs-design" }, snapshotOf(returnedTicket, { operator: "jrey" }), kitConfig());
+    const round = planFor(turnFinished, snapshotOf(returnedTicket, { operator: "jrey" }), kitConfig());
+
+    expect(notificationsOf(labeled, "jrey")).toEqual([]);
+    expect(notificationsOf(round, "jrey")).toEqual(["mention on #7"]);
+  });
+
+  it("later rounds don't repeat it", () => {
+    const plan = planFor(turnFinished, snapshotOf({ ...returnedTicket, designRounds: 1 }), kitConfig());
+
+    const [round] = actionsOf(plan);
+    expect(round?.kind === "comment" ? round.body : "").not.toContain("came back from");
+  });
+
+  it("a session that didn't follow a return says nothing about one, as before", () => {
+    const plan = planFor(turnFinished, snapshotOf({ ...returnedTicket, sentBack: null }), kitConfig());
+
+    const [round] = actionsOf(plan);
+    expect(round?.kind === "comment" ? round.body : "").not.toContain("came back from");
+  });
+});
+
+/** A Ticket's comment, as the adapter reads it: its text, and whether a bot (the Fabrik App) wrote it. */
+const kit = (body: string) => ({ body, byBot: true });
+const person = (body: string) => ({ body, byBot: false });
+const note = (pullRequest: number) =>
+  kit(`<!-- fabrik:back-to-design ${pullRequest} ${VERDICT_URL} -->\n**Back to design.** The Reviewer gave #${pullRequest} a Design flaw.`);
+const round = (n: number) => kit(`<!-- fabrik:design-round ${n} -->\n@jrey **Design session, round ${n}.**`);
+
+describe("Reading a Ticket's Design session from its comments", () => {
+  it("a Ticket that never came back has no return, and counts its rounds", () => {
+    expect(designSessionOf([round(1), person("yes"), round(2)])).toEqual({ designRounds: 2, sentBack: null });
+  });
+
+  it("the Kit's note starts a new session that follows the return, counting rounds again from 1", () => {
+    const comments = [
+      round(1),
+      person("yes"),
+      kit("**Design session finished.** This issue is now its agent brief, ready for an Implementer."),
+      note(50),
+      round(1),
+    ];
+
+    expect(designSessionOf(comments)).toEqual({
+      designRounds: 1,
+      sentBack: { pullRequest: 50, verdictUrl: VERDICT_URL },
+    });
+  });
+
+  it("the session finishing ends the return", () => {
+    const comments = [note(50), round(1), person("yes"), kit("**Design session finished.** This issue is now its agent brief.")];
+
+    expect(designSessionOf(comments)).toEqual({ designRounds: 0, sentBack: null });
+  });
+
+  it("the latest return counts, after a Ticket came back twice", () => {
+    expect(designSessionOf([note(50), round(1), kit("**Design session finished.** Done."), note(61)]).sentBack).toEqual({
+      pullRequest: 61,
+      verdictUrl: VERDICT_URL,
+    });
+  });
+
+  it("a person quoting the note doesn't fake a return", () => {
+    expect(designSessionOf([person(note(50).body)]).sentBack).toBeNull();
   });
 });

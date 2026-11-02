@@ -1,6 +1,7 @@
 // The Loop rules core's interface: a Loop event, a snapshot of GitHub state and
 // the resolved Kit config go in; a plan comes out.
 import type { ChangedPath } from "../guard/trust-root.ts";
+import type { SentBack } from "./backToDesign.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
 export type AgentRole = "triage" | "design" | "implement" | "review";
@@ -140,8 +141,14 @@ export interface IssueSnapshot {
   readonly parent: number | null;
   /** The open pull requests linked to close this issue, oldest first. */
   readonly openPullRequests: readonly number[];
-  /** How many Design-session rounds the Kit has posted on the issue so far. */
+  /** How many rounds the Kit has posted in the issue's current Design session (src/loop/design.ts). */
   readonly designRounds: number;
+  /**
+   * The agent PR whose Verdict sent this Ticket back to design, read from the
+   * Kit's note on it (src/loop/backToDesign.ts), while the Design session that
+   * followed hasn't finished; otherwise null.
+   */
+  readonly sentBack: SentBack | null;
   /** How many Implement runs on it ended in an empty diff since its last Design session (src/loop/implement.ts). */
   readonly emptyDiffs: number;
 }
