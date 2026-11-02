@@ -51,8 +51,8 @@ describe("Starting a Design-session turn", () => {
 });
 
 describe("Answering a Design-session round", () => {
-  const commented = (author: string, authorIsBot = false) =>
-    ({ kind: "issue-comment-created", issue: 7, author, authorIsBot }) as const;
+  const commented = (commenter: string, commenterIsBot = false) =>
+    ({ kind: "issue-comment-created", issue: 7, commenter, commenterIsBot }) as const;
   const inSession = snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"] }), { operator: "jrey" });
 
   it("starts the next turn when the Operator comments on a needs-design issue", () => {
@@ -84,7 +84,7 @@ describe("Answering a Design-session round", () => {
 
     const plan = planFor(commented("jrey"), snapshotOf(issue, { operator: "jrey" }), kitConfig());
 
-    expect(plan).toEqual({ kind: "nothing", reason: "The Loop doesn't act on a comment on #7 while it is ready-for-agent" });
+    expect(plan).toEqual({ kind: "nothing", reason: "#7 isn't in needs-info" });
   });
 
   it("does nothing when the Operator comments on a closed needs-design issue", () => {

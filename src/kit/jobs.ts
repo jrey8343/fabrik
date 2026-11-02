@@ -10,7 +10,7 @@
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
 import { appendFile, readFile } from "node:fs/promises";
-import { agentRunIn, gatherSnapshot, GitHub, loopEventFrom, operatorFor, type Repo } from "../github/adapter.ts";
+import { agentRunIn, gatherSnapshot, GitHub, loopEventFrom, type Repo } from "../github/adapter.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
 import { readKitConfigFromCheckout } from "./checkout.ts";
@@ -46,7 +46,7 @@ async function main(productDir: string): Promise<void> {
     const [owner, name] = required("GITHUB_REPOSITORY").split("/");
     const repo: Repo = { owner: owner ?? "", name: name ?? "" };
     const github = new GitHub(required("GH_TOKEN"), process.env["GITHUB_API_URL"]);
-    const plan = planFor(event, await gatherSnapshot(github, repo, event, operatorFor(config, payload)), config);
+    const plan = planFor(event, await gatherSnapshot(github, repo, event, config.operator), config);
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
     route = routeOf(plan);
   }

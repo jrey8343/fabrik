@@ -24,6 +24,6 @@
     "@anthropic-ai/claude-code": "2.1.316"
   },
   "allowScripts": {
-    "@anthropic-ai/claude-code@2.1.316": true
+    "@anthropic-ai/claude-code": true
   }
 }

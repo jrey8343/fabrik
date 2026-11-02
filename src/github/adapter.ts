@@ -1,10 +1,10 @@
 // The GitHub adapter: turns an Actions event into a Loop event, gathers the
 // snapshot the core needs, and applies the plan the core returns. It holds no
 // Loop rules; those all live in src/loop/rules.ts.
-import { instructionsPath, KIT_CONFIG_PATH, type KitConfig, type KitConfigSources, PHASES } from "../kit/config.ts";
+import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import type { AgentRunResult } from "../agent/result.ts";
 import { isDesignRoundComment } from "../loop/design.ts";
-import type { Action, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
+import type { Action, AgentRole, FailureReport, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 
 export interface Repo {
   readonly owner: string;
@@ -13,34 +13,23 @@ export interface Repo {
 
 /** Maps an Actions event to the Loop event it stands for, or null if the Loop ignores it. */
 export function loopEventFrom(eventName: string, payload: Record<string, unknown>): LoopEvent | null {
-  const issue = payload["issue"] as { number: number; pull_request?: unknown } | undefined;
-  if (issue === undefined) return null;
   if (eventName === "issues" && payload["action"] === "opened") {
+    const issue = payload["issue"] as { number: number };
     return { kind: "issue-opened", issue: issue.number };
   }
   if (eventName === "issues" && payload["action"] === "labeled") {
+    const issue = payload["issue"] as { number: number };
     const label = payload["label"] as { name: string };
     return { kind: "label-added", issue: issue.number, label: label.name };
   }
-  // issue_comment also fires for comments on pull requests, which aren't issue comments to the Loop.
-  if (eventName === "issue_comment" && payload["action"] === "created" && issue.pull_request === undefined) {
+  if (eventName === "issue_comment" && payload["action"] === "created") {
+    const issue = payload["issue"] as { number: number; pull_request?: unknown };
+    // A comment on a PR is not a reply on an issue.
+    if (issue.pull_request !== undefined) return null;
     const user = (payload["comment"] as { user: { login: string; type: string } }).user;
-    return { kind: "issue-comment-created", issue: issue.number, author: user.login, authorIsBot: user.type === "Bot" };
+    return { kind: "issue-comment-created", issue: issue.number, commenter: user.login, commenterIsBot: user.type === "Bot" };
   }
   return null;
-}
-
-/**
- * The Operator's login: the Kit config's `operator`, or else the Product
- * repo's owner, which must then be a user rather than an organization.
- */
-export function operatorFor(config: KitConfig, payload: Record<string, unknown>): string {
-  if (config.operator !== null) return config.operator;
-  const owner = (payload["repository"] as { owner?: { login?: string; type?: string } } | undefined)?.owner;
-  if (owner?.type === "User" && typeof owner.login === "string") return owner.login;
-  throw new Error(
-    `The repo's owner ${owner?.login ?? "(unknown)"} isn't a user, so set "operator" to the Operator's login in ${KIT_CONFIG_PATH}`,
-  );
 }
 
 /** The agent run a plan starts, which the workflow carries out by routing to that role's agent job. */
@@ -59,6 +48,34 @@ export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run
  */
 export function agentRunEventFrom(result: AgentRunResult): LoopEvent {
   return { kind: "agent-run-finished", role: result.role, issue: result.issue, output: result.output };
+}
+
+/** What the failure job knows about the agent job it follows (see the failure job in loop.yml). */
+export interface FailedJob {
+  readonly role: AgentRole;
+  readonly issue: number;
+  readonly runUrl: string;
+  /** `needs.<job>.result`. */
+  readonly jobResult: string;
+  /** The agent job's 1Password step outcome, passed out as a job output; empty if it never got that far. */
+  readonly secretsStep: string;
+  readonly report: FailureReport | null;
+}
+
+const SECRETS_OUTCOMES = ["success", "failure", "cancelled", "skipped"] as const;
+
+/** Turns what the failure job gathered into the Loop event it reports. */
+export function agentFailureEventFrom(job: FailedJob): LoopEvent {
+  const secretsStep = SECRETS_OUTCOMES.find((outcome) => outcome === job.secretsStep) ?? null;
+  return {
+    kind: "agent-run-failed",
+    role: job.role,
+    issue: job.issue,
+    runUrl: job.runUrl,
+    jobResult: job.jobResult === "cancelled" ? "cancelled" : "failure",
+    secretsStep,
+    report: job.report,
+  };
 }
 
 /** A GitHub API client authenticated as the Fabrik App. */
@@ -120,6 +137,7 @@ export class GitHub {
 const ISSUE_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
     repository(owner: $owner, name: $name) {
+      owner { login }
       issue(number: $number) {
         number
         state
@@ -127,6 +145,7 @@ const ISSUE_QUERY = `
         labels(first: 100) { nodes { name } }
         parent { number }
         comments(last: 100) { nodes { body } }
+        closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number } }
       }
     }
   }
@@ -134,6 +153,7 @@ const ISSUE_QUERY = `
 
 interface IssueQueryResult {
   repository: {
+    owner: { login: string };
     issue: {
       number: number;
       state: "OPEN" | "CLOSED";
@@ -141,12 +161,21 @@ interface IssueQueryResult {
       labels: { nodes: { name: string }[] };
       parent: { number: number } | null;
       comments: { nodes: { body: string }[] };
+      closedByPullRequestsReferences: { nodes: { number: number }[] };
     } | null;
   };
 }
 
-/** Reads the current GitHub state the event needs, fresh rather than from the event payload. */
-export async function gatherSnapshot(github: GitHub, repo: Repo, event: LoopEvent, operator: string): Promise<Snapshot> {
+/**
+ * Reads the current GitHub state the event needs, fresh rather than from the
+ * event payload. The Operator is the Kit config's `operator`, or else the repo's owner.
+ */
+export async function gatherSnapshot(
+  github: GitHub,
+  repo: Repo,
+  event: LoopEvent,
+  operator: string | null,
+): Promise<Snapshot> {
   const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, {
     owner: repo.owner,
     name: repo.name,
@@ -163,9 +192,11 @@ export async function gatherSnapshot(github: GitHub, repo: Repo, event: LoopEven
       author: issue.author?.login ?? "ghost",
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
+      openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
       designRounds: issue.comments.nodes.filter((comment) => isDesignRoundComment(comment.body)).length,
     },
-    operator,
+    // By default the Operator owns the Product repos they run Fabrik in.
+    operator: operator ?? data.repository.owner.login,
   };
 }
 
@@ -202,6 +233,12 @@ async function apply(github: GitHub, repo: Repo, action: Action): Promise<void> 
       return;
     case "comment":
       await github.rest("POST", `${issue}/comments`, { body: action.body });
+      return;
+    case "assign":
+      await github.rest("POST", `${issue}/assignees`, { assignees: [action.assignee] });
+      return;
+    case "close":
+      await github.rest("PATCH", issue, { state: "closed", state_reason: action.reason });
       return;
     case "edit-issue-body":
       await github.rest("PATCH", issue, { body: action.body });

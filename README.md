@@ -14,6 +14,8 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 - `src/agent/` holds the **agent job** runner (`node src/agent/run.ts triage` or `design`): Sandcastle with `noSandbox()` on the runner VM, the metered-billing preflight as the last `onSandboxReady` step, the `init` check, the step summary, and the role's output passed out as `agent-result.json`. Only agent jobs install the runtime dependencies (Sandcastle and the Claude Code CLI, pinned exactly).
 - `src/preflight/` holds the metered-billing preflight (pure) and the command the hook runs.
 - `src/skills/` and `skills.lock.json` pin Matt Pocock's skills at a commit SHA and install them into a Product checkout's gitignored `.claude/skills/` (ADR-0003).
+- `src/skills/bump.ts` decides the weekly skills bump PR (`.github/workflows/skills-bump.yml`), with the upstream diff in its body; `src/skills/bump-main.ts` is its step.
+- `src/release/` checks that each release pins Sandcastle and the Claude Code CLI at exact versions, which Dependabot bumps (`.github/dependabot.yml`). See [docs/releasing.md](docs/releasing.md) for the release process.
 - `src/kit/jobs.ts` is the Kit job's step: it validates the Kit config, asks the Loop rules core what the event calls for, and routes it to an agent job (when the plan starts an agent run), to the push job, or nowhere.
 - `prompts/` holds the Kit's agent prompts.
 - `.github/workflows/loop.yml` is the reusable workflow a Product repo calls. It holds wiring only.
@@ -78,5 +80,5 @@ A Product repo's Kit config lives in `.fabrik/`. Every file is optional and ever
 - Leave a field out to take its default. `null` is accepted only where the default is `null` (the Sandbox commands and `effort`). A `null` effort means the Claude Code CLI's default; otherwise set it to `low`, `medium`, `high`, `xhigh` or `max`.
 - `sandbox.env` holds non-secret values. `sandbox.secrets` maps an env var name to an `op://` reference; a literal secret is refused.
 - A model naming Fable (or the `best` alias) is refused in every role, because Fable can bill metered usage.
-- `operator` is the Operator's GitHub login: the one person whose comments drive a Design session and whom its rounds @-mention. `null` means the repo's owner, which must then be a user account; set it for a repo an organization owns.
+- `operator` is the Operator's GitHub login: the one person whose comments drive a Design session, whom its rounds and failure notices @-mention, and to whom `ready-for-human` work is assigned. `null` means the repo's owner; set it for a repo an organization owns.
 - Per-phase instructions are optional Markdown files: `.fabrik/triage.md`, `.fabrik/design.md`, `.fabrik/implement.md` and `.fabrik/review.md`.

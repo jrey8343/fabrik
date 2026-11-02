@@ -202,6 +202,65 @@ describe("Applying Triage output", () => {
     });
   });
 
+  it("closes a wontfix issue as not planned, with Triage's reasoning and no notification", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage"] });
+
+    const plan = planFor(
+      triaged({ category: "enhancement", state: "wontfix", comment: "Already built in src/booking.ts." }),
+      snapshotOf(issue),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "comment", issue: 7, body: "Already built in src/booking.ts." },
+        { kind: "remove-label", issue: 7, label: "needs-triage" },
+        { kind: "add-labels", issue: 7, labels: ["enhancement", "wontfix"] },
+        { kind: "close", issue: 7, reason: "not_planned" },
+      ],
+    });
+  });
+
+  it("@-mentions the author of a needs-info issue with Triage's question, as its one notification", () => {
+    const issue = anIssue({ number: 7, author: "kate", labels: ["needs-triage"] });
+
+    const plan = planFor(
+      triaged({ category: "bug", state: "needs-info", comment: "Which browser were you using?" }),
+      snapshotOf(issue),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "comment", issue: 7, body: "@kate\n\nWhich browser were you using?" },
+        { kind: "remove-label", issue: 7, label: "needs-triage" },
+        { kind: "add-labels", issue: 7, labels: ["bug", "needs-info"] },
+      ],
+    });
+  });
+
+  it("assigns a ready-for-human issue to the Operator, with Triage's comment saying what to do", () => {
+    const issue = anIssue({ number: 7, author: "kate", labels: ["needs-triage"] });
+
+    const plan = planFor(
+      triaged({ category: "bug", state: "ready-for-human", comment: "Rotate the Stripe key in the dashboard." }),
+      snapshotOf(issue, { operator: "jrey8343" }),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "comment", issue: 7, body: "Rotate the Stripe key in the dashboard." },
+        { kind: "remove-label", issue: 7, label: "needs-triage" },
+        { kind: "add-labels", issue: 7, labels: ["bug", "ready-for-human"] },
+        { kind: "assign", issue: 7, assignee: "jrey8343" },
+      ],
+    });
+  });
+
   it("does not re-add a category the issue already has", () => {
     const issue = anIssue({ number: 7, labels: ["needs-triage", "bug"] });
 
@@ -220,6 +279,58 @@ describe("Applying Triage output", () => {
       ],
     });
   });
+});
+
+describe("A reply on a needs-info issue", () => {
+  const commented = (commenter: string, commenterIsBot: boolean) =>
+    ({ kind: "issue-comment-created", issue: 7, commenter, commenterIsBot }) as const;
+
+  it("sends the issue back to needs-triage when a person replies", () => {
+    const issue = anIssue({ number: 7, author: "kate", labels: ["bug", "needs-info"] });
+
+    const plan = planFor(commented("kate", false), snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "needs-info" },
+        { kind: "add-labels", issue: 7, labels: ["needs-triage"] },
+      ],
+    });
+  });
+
+  it("sends the issue back to needs-triage when someone other than its author replies", () => {
+    const issue = anIssue({ number: 7, author: "kate", labels: ["needs-info"] });
+
+    const plan = planFor(commented("sam", false), snapshotOf(issue), kitConfig());
+
+    expect(plan.kind).toBe("act");
+  });
+
+  it.each(["fabrik-app[bot]", "dependabot[bot]"])(
+    "does nothing when the bot %s replies, so the Loop can't loop on itself",
+    (bot) => {
+      const issue = anIssue({ number: 7, author: "kate", labels: ["bug", "needs-info"] });
+
+      const plan = planFor(commented(bot, true), snapshotOf(issue), kitConfig());
+
+      expect(plan).toEqual({
+        kind: "nothing",
+        reason: `${bot} is a bot, so its comment on #7 doesn't restart Triage`,
+      });
+    },
+  );
+
+  it.each([["ready-for-human"], ["ready-for-agent"], ["needs-triage"]])(
+    "does not restart Triage for a reply on an issue in %s",
+    (state) => {
+      const issue = anIssue({ number: 7, author: "kate", labels: ["bug", state] });
+
+      const plan = planFor(commented("kate", false), snapshotOf(issue), kitConfig());
+
+      expect(plan).toEqual({ kind: "nothing", reason: "#7 isn't in needs-info" });
+    },
+  );
 });
 
 describe("Starting Triage", () => {

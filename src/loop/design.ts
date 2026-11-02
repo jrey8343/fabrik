@@ -4,19 +4,26 @@
 import { parseDesignTurnOutput, type DesignTurnOutput } from "./designOutput.ts";
 import { NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { startAgentRun } from "./runs.ts";
-import type { KitConfig, Plan, Snapshot } from "./types.ts";
+import type { KitConfig, LoopEvent, Plan, Snapshot } from "./types.ts";
 
 /** Adding needs-design starts the session's first round. */
 export function startSession(issueNumber: number, { issue }: Snapshot, config: KitConfig): Plan {
   return whileInSession(issueNumber, issue) ?? startAgentRun("design", issueNumber, config);
 }
 
-/** The Operator's reply to a round starts the next turn; nobody else's comment does. */
-export function answerRound(issueNumber: number, author: string, snapshot: Snapshot, config: KitConfig): Plan {
-  if (author !== snapshot.operator) {
+/** The Operator's reply to a round starts the next turn; nobody else's comment, and no bot's, does. */
+export function answerRound(
+  { issue: issueNumber, commenter, commenterIsBot }: Extract<LoopEvent, { kind: "issue-comment-created" }>,
+  snapshot: Snapshot,
+  config: KitConfig,
+): Plan {
+  if (commenterIsBot) {
+    return { kind: "nothing", reason: `@${commenter} is a bot, so its comment on #${issueNumber} doesn't drive the Loop` };
+  }
+  if (commenter !== snapshot.operator) {
     return {
       kind: "nothing",
-      reason: `@${author} isn't the Operator, so their comment on #${issueNumber} doesn't drive the Design session`,
+      reason: `@${commenter} isn't the Operator, so their comment on #${issueNumber} doesn't drive the Design session`,
     };
   }
   return whileInSession(issueNumber, snapshot.issue) ?? startAgentRun("design", issueNumber, config);

@@ -1,0 +1,77 @@
+# Fabrik's weekly skills bump. Opens, or refreshes, one PR moving skills.lock.json
+# to Matt Pocock's skills at upstream main, with the upstream diff in its body.
+# Nothing happens when upstream main is still the pinned commit.
+#
+# Wiring only: src/skills/bump.ts decides whether to bump and writes the PR.
+name: Skills bump
+
+on:
+  schedule:
+    - cron: "23 4 * * 1" # Mondays, 04:23 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: skills-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Bump the skills SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out Fabrik
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Compare the pin with upstream main
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node src/skills/bump-main.ts "$RUNNER_TEMP/skills-bump"
+
+      - name: Open or refresh the bump PR
+        if: steps.plan.outputs.bump == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.repository.default_branch }}
+          BRANCH: ${{ steps.plan.outputs.branch }}
+          TITLE: ${{ steps.plan.outputs.title }}
+          BODY_FILE: ${{ steps.plan.outputs.body-file }}
+        run: |
+          set -euo pipefail
+          pr="$(gh pr list --head "$BRANCH" --base "$BASE" --state open --json number --jq '.[0].number // empty')"
+          # Push only when the branch doesn't already bump to this commit, so an
+          # unchanged week leaves the PR's review alone.
+          if git fetch --quiet origin "$BRANCH" 2>/dev/null && git show FETCH_HEAD:skills.lock.json | cmp -s - skills.lock.json; then
+            if [ -z "$pr" ]; then
+              # The Operator closed the PR for this commit: wait for upstream to move again.
+              echo "The bump to this commit was closed unmerged; nothing to do until upstream moves."
+              exit 0
+            fi
+            echo "$BRANCH already bumps to this commit."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git switch --create "$BRANCH"
+            git add skills.lock.json
+            git commit --quiet --message "$TITLE"
+            git push --force origin "$BRANCH"
+            # A push by GITHUB_TOKEN starts no pull_request run, so start CI here.
+            gh workflow run ci.yml --ref "$BRANCH"
+          fi
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --title "$TITLE" --body-file "$BODY_FILE"
+          else
+            gh pr create --base "$BASE" --head "$BRANCH" --title "$TITLE" --body-file "$BODY_FILE"
+          fi

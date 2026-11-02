@@ -21,6 +21,7 @@ import type { AgentRole } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { SKILLS_MARKER } from "../skills/fetch.ts";
+import { AGENT_FAILURE_FILE, failureReportFor } from "./failure.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult } from "./result.ts";
 import { initMessageOf, missingSkills, runSummary } from "./summary.ts";
 
@@ -186,6 +187,10 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     console.log(spec.describe(issueNumber, result.output));
   } catch (error) {
     for (const route of init.refused ?? []) console.log(`::error title=Metered-billing route::${route}`);
+    // Left for the failure job, which posts the failure notice (loop.yml).
+    const report = failureReportFor({ error, lines, initRefused: init.refused });
+    await writeFile(join(outDir, AGENT_FAILURE_FILE), `${JSON.stringify(report, null, 2)}\n`);
+    console.log(`::error title=Infrastructure failure (${report.failure})::${report.detail}`);
     throw error;
   } finally {
     const pinnedSkills = await installedSkills(productDir);

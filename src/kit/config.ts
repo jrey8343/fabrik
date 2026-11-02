@@ -26,7 +26,7 @@ export interface KitConfig {
     readonly stepUp: { readonly model: string; readonly effort: string | null };
   };
   readonly maxInFlight: number;
-  /** The Operator's GitHub login; null means the Product repo's owner, who must then be a user. */
+  /** The Operator's GitHub login; null means the Product repo's owner. */
   readonly operator: string | null;
   readonly instructions: Readonly<Record<Phase, string | null>>;
 }

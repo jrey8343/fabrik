@@ -10,14 +10,15 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     author: "someone",
     labels: [],
     parent: null,
+    openPullRequests: [],
     designRounds: 0,
     ...overrides,
   };
 }
 
-/** A snapshot around this issue; the Operator is `the-operator` unless a test says otherwise. */
+/** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, operator: "the-operator", ...overrides };
+  return { issue, operator: "operator", ...overrides };
 }
 
 /** A Kit config with every v1 default, as a Product repo with no .fabrik/config.json gets. */

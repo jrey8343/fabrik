@@ -11,6 +11,9 @@
 # - The push job runs on a fresh VM, loads the Fabrik App key through the push
 #   service account, mints an App token, and never checks out or runs Product
 #   code. It checks out only Fabrik itself, at the exact commit the caller pinned.
+# - The failure job runs instead of the push job when the agent job failed or
+#   was cancelled (its timeout-minutes included). Like the push job it never
+#   touches Product code; it posts the failure notice through src/main.ts.
 name: Fabrik Loop
 
 on:
@@ -98,6 +101,9 @@ jobs:
     permissions:
       contents: read
       issues: read
+    outputs:
+      # Read by the failure job: a failed 1Password step means the agent never started.
+      secrets-step: ${{ steps.op.outcome }}
     steps:
       - name: Check out the Product repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -157,6 +163,76 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # src/agent/run.ts writes this when it catches a failure. A run cancelled
+      # by its timeout leaves none, and the failure job reads that as a timeout.
+      - name: Pass the failure report to the failure job
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  triage-failed:
+    name: Triage failed
+    needs: [kit, triage]
+    # always(), so this still runs when the Triage job was cancelled by its timeout.
+    if: >-
+      always() && needs.kit.result == 'success' && needs.kit.outputs.route == 'triage' &&
+      (needs.triage.result == 'failure' || needs.triage.result == 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: .fabrik-kit
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Take the agent job's failure report, if it left one
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/agent
+
+      - name: Load the Fabrik App key
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}
+          FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+          FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+      - name: Mint a Fabrik App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+          private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+
+      - name: Post the failure notice
+        working-directory: .fabrik-kit
+        env:
+          FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
+          FABRIK_FAILED_ROLE: triage
+          FABRIK_FAILED_ISSUE: ${{ github.event.issue.number }}
+          FABRIK_AGENT_JOB_RESULT: ${{ needs.triage.result }}
+          FABRIK_SECRETS_STEP: ${{ needs.triage.outputs.secrets-step }}
+          FABRIK_AGENT_FAILURE: ${{ runner.temp }}/agent/agent-failure.json
+        run: node src/main.ts
+
   design:
     name: Design-session turn
     needs: kit
@@ -172,6 +248,9 @@ jobs:
     permissions:
       contents: read
       issues: read
+    outputs:
+      # Read by the failure job: a failed 1Password step means the agent never started.
+      secrets-step: ${{ steps.op.outcome }}
     steps:
       - name: Check out the Product repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -230,6 +309,76 @@ jobs:
           path: ${{ runner.temp }}/fabrik-out/agent-result.json
           if-no-files-found: error
           retention-days: 7
+
+      # src/agent/run.ts writes this when it catches a failure. A run cancelled
+      # by its timeout leaves none, and the failure job reads that as a timeout.
+      - name: Pass the failure report to the failure job
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  design-failed:
+    name: Design-session turn failed
+    needs: [kit, design]
+    # always(), so this still runs when the Design-session job was cancelled by its timeout.
+    if: >-
+      always() && needs.kit.result == 'success' && needs.kit.outputs.route == 'design' &&
+      (needs.design.result == 'failure' || needs.design.result == 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: .fabrik-kit
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Take the agent job's failure report, if it left one
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/agent
+
+      - name: Load the Fabrik App key
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}
+          FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+          FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+      - name: Mint a Fabrik App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+          private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+
+      - name: Post the failure notice
+        working-directory: .fabrik-kit
+        env:
+          FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
+          FABRIK_FAILED_ROLE: design
+          FABRIK_FAILED_ISSUE: ${{ github.event.issue.number }}
+          FABRIK_AGENT_JOB_RESULT: ${{ needs.design.result }}
+          FABRIK_SECRETS_STEP: ${{ needs.design.outputs.secrets-step }}
+          FABRIK_AGENT_FAILURE: ${{ runner.temp }}/agent/agent-failure.json
+        run: node src/main.ts
 
   push:
     name: Push

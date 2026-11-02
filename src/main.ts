@@ -1,21 +1,22 @@
 // Entry point for a Kit push job: event + snapshot + config -> plan -> applied.
 // Run with `node src/main.ts` (Node 24 strips the types).
 import { appendFile, readFile } from "node:fs/promises";
+import { readFailureReport } from "./agent/failure.ts";
 import { readAgentRunResult } from "./agent/result.ts";
 import {
+  agentFailureEventFrom,
   agentRunEventFrom,
   applyPlan,
   gatherSnapshot,
   GitHub,
   loopEventFrom,
-  operatorFor,
   readKitConfigSources,
   type Repo,
 } from "./github/adapter.ts";
 import { checkCallerWorkflow } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
 import { planFor } from "./loop/rules.ts";
-import type { Action, KitConfig, LoopEvent, Plan } from "./loop/types.ts";
+import { AGENT_ROLES, type Action, type AgentRole, type KitConfig, type LoopEvent, type Plan } from "./loop/types.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -44,6 +45,10 @@ function describeAction(action: Action): string {
       return `- remove label on #${action.issue}: ${action.label}`;
     case "comment":
       return `- comment on #${action.issue}`;
+    case "assign":
+      return `- assign #${action.issue} to ${action.assignee}`;
+    case "close":
+      return `- close #${action.issue} as ${action.reason.replace("_", " ")}`;
     case "edit-issue-body":
       return `- rewrite the body of #${action.issue}`;
     case "start-agent-run":
@@ -55,16 +60,46 @@ function describeAction(action: Action): string {
  * The Loop event this run applies: an agent job's result when the push job was
  * handed one (FABRIK_AGENT_RESULT), otherwise the Actions event itself.
  */
-async function loopEvent(
-  eventName: string,
-  payload: Record<string, unknown>,
-): Promise<{ event: LoopEvent | null; source: string }> {
+async function loopEvent(): Promise<{ event: LoopEvent | null; source: string }> {
+  const failedRole = process.env["FABRIK_FAILED_ROLE"];
+  if (failedRole !== undefined && failedRole !== "") return failedRunEvent(failedRole);
   const resultPath = process.env["FABRIK_AGENT_RESULT"];
   if (resultPath !== undefined && resultPath !== "") {
     const result = readAgentRunResult(await readFile(resultPath, "utf8"));
     return { event: agentRunEventFrom(result), source: `the ${result.role} run on #${result.issue}` };
   }
+  const eventName = required("GITHUB_EVENT_NAME");
+  const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
   return { event: loopEventFrom(eventName, payload), source: `${eventName}.${String(payload["action"] ?? "")}` };
+}
+
+/**
+ * The failure job's event: the agent job named by FABRIK_FAILED_ROLE failed or
+ * was cancelled. FABRIK_AGENT_FAILURE is the report it left, which is missing
+ * when its timeout cancelled it.
+ */
+async function failedRunEvent(role: string): Promise<{ event: LoopEvent; source: string }> {
+  if (!AGENT_ROLES.includes(role as AgentRole)) throw new Error(`FABRIK_FAILED_ROLE is not an agent role: ${role}`);
+  const issue = Number(required("FABRIK_FAILED_ISSUE"));
+  if (!Number.isInteger(issue) || issue < 1) throw new Error("FABRIK_FAILED_ISSUE is not an issue number");
+  const reportText = await readFile(required("FABRIK_AGENT_FAILURE"), "utf8").catch(() => null);
+  const runUrl = [
+    required("GITHUB_SERVER_URL"),
+    required("GITHUB_REPOSITORY"),
+    "actions/runs",
+    required("GITHUB_RUN_ID"),
+    "attempts",
+    required("GITHUB_RUN_ATTEMPT"),
+  ].join("/");
+  const event = agentFailureEventFrom({
+    role: role as AgentRole,
+    issue,
+    runUrl,
+    jobResult: required("FABRIK_AGENT_JOB_RESULT"),
+    secretsStep: process.env["FABRIK_SECRETS_STEP"] ?? "",
+    report: reportText === null ? null : readFailureReport(reportText),
+  });
+  return { event, source: `the failed ${role} run on #${issue}` };
 }
 
 async function report(text: string): Promise<void> {
@@ -131,15 +166,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  const eventName = required("GITHUB_EVENT_NAME");
-  const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
-  const { event, source } = await loopEvent(eventName, payload);
+  const { event, source } = await loopEvent();
   if (event === null) {
     await report(`Nothing to do: the Loop doesn't act on ${source}`);
     return;
   }
 
-  const snapshot = await gatherSnapshot(github, repo, event, operatorFor(config, payload));
+  const snapshot = await gatherSnapshot(github, repo, event, config.operator);
   const plan = planFor(event, snapshot, config);
   await applyPlan(github, repo, plan);
   await report(describe(plan));
