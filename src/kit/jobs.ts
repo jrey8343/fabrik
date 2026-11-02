@@ -4,6 +4,7 @@
 // timeout-minutes. Writes step outputs:
 //   route                    "triage", or "push" for events the push job handles alone
 //   triage-timeout-minutes   the Triage role's Kit config timeout
+//   dispatch-timeout-minutes the Dispatch job's Kit config timeout
 //   node src/kit/jobs.ts <product checkout>
 import { appendFile, readFile } from "node:fs/promises";
 import { agentRoleFor } from "../github/adapter.ts";
@@ -25,7 +26,12 @@ async function main(productDir: string): Promise<void> {
 
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
   const route = agentRoleFor(required("GITHUB_EVENT_NAME"), payload) ?? "push";
-  const outputs = { route, "triage-timeout-minutes": String(resolved.config.roles.triage.timeoutMinutes) };
+  const { roles } = resolved.config;
+  const outputs = {
+    route,
+    "triage-timeout-minutes": String(roles.triage.timeoutMinutes),
+    "dispatch-timeout-minutes": String(roles.dispatch.timeoutMinutes),
+  };
   await appendFile(
     required("GITHUB_OUTPUT"),
     Object.entries(outputs)

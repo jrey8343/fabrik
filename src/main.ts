@@ -1,4 +1,5 @@
-// Entry point for a Kit push job: event + snapshot + config -> plan -> applied.
+// Entry point for a Kit push job and the Dispatch job: event + snapshot +
+// config -> plan -> applied.
 // Run with `node src/main.ts` (Node 24 strips the types).
 import { appendFile, readFile } from "node:fs/promises";
 import { readAgentRunResult } from "./agent/result.ts";
@@ -10,6 +11,7 @@ import {
   loopEventFrom,
   readKitConfigSources,
   type Repo,
+  wantsDispatchCheck,
 } from "./github/adapter.ts";
 import { checkCallerWorkflow } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
@@ -47,14 +49,20 @@ function describeAction(action: Action): string {
       return `- assign #${action.issue} to ${action.assignee}`;
     case "close":
       return `- close #${action.issue} as ${action.reason.replace("_", " ")}`;
+    case "check-dispatch":
+      return "- run a Dispatch check";
   }
 }
 
 /**
  * The Loop event this run applies: an agent job's result when the push job was
- * handed one (FABRIK_AGENT_RESULT), otherwise the Actions event itself.
+ * handed one (FABRIK_AGENT_RESULT), a Dispatch check in the Dispatch job
+ * (FABRIK_DISPATCH_CHECK), otherwise the Actions event itself.
  */
 async function loopEvent(): Promise<{ event: LoopEvent | null; source: string }> {
+  if (process.env["FABRIK_DISPATCH_CHECK"] === "true") {
+    return { event: { kind: "dispatch-check" }, source: "a Dispatch check" };
+  }
   const resultPath = process.env["FABRIK_AGENT_RESULT"];
   if (resultPath !== undefined && resultPath !== "") {
     const result = readAgentRunResult(await readFile(resultPath, "utf8"));
@@ -135,9 +143,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  const snapshot = await gatherSnapshot(github, repo, event);
+  // Only the Dispatch job sets it: its GITHUB_TOKEN, scoped to actions: read.
+  const actionsToken = process.env["FABRIK_ACTIONS_TOKEN"];
+  const actions =
+    actionsToken === undefined || actionsToken === "" ? null : new GitHub(actionsToken, process.env["GITHUB_API_URL"]);
+  const snapshot = await gatherSnapshot(github, repo, event, actions);
   const plan = planFor(event, snapshot, config);
   await applyPlan(github, repo, plan);
+  // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.
+  if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
   await report(describe(plan));
   if (plan.kind === "fail") {
     console.log(`::error title=Infrastructure failure::${plan.reason}`);

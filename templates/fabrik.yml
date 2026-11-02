@@ -7,9 +7,13 @@ name: Fabrik
 
 on:
   issues:
-    types: [opened, labeled]
+    types: [opened, labeled, closed]
   issue_comment:
     types: [created]
+  # _target, so these runs use main's workflow and Kit config, never the PR's.
+  # The Loop never checks out PR code.
+  pull_request_target:
+    types: [ready_for_review, closed]
 
 permissions: {}
 
@@ -22,6 +26,7 @@ jobs:
       id-token: write
       contents: read
       issues: read
+      actions: read
     secrets:
       OP_AGENT_TOKEN: ${{ secrets.FABRIK_OP_AGENT_TOKEN }}
       OP_PUSH_TOKEN: ${{ secrets.FABRIK_OP_PUSH_TOKEN }}
