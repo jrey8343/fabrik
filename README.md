@@ -67,6 +67,8 @@ Adding `needs-design` to an open issue starts a Design session. Each turn is a f
 
 Only rounds notify: the Kit strips @-mentions from everything the agent writes.
 
+A turn that fails for Infrastructure leaves `needs-design` on the issue, so it stays in its session: the failure notice asks the Operator to reply, and their reply runs the turn again.
+
 ## Design session (live)
 
 The Operator can take a Design session live in a claude.ai/code or iOS cloud session, or a local Claude Code session, on the Product repo. The `SessionStart` hook installs the pinned skills into `.claude/skills/` and returns `reloadSkills: true`, because Claude Code discovers skills before `SessionStart` hooks finish. Then `/fabrik-live-design <issue>` runs the session (`skills/fabrik-live-design/SKILL.md`):
