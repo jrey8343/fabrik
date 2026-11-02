@@ -9,6 +9,7 @@ export function aCleanProduct(overrides: Partial<ProductState> = {}): ProductSta
     secrets: [],
     vaults: [],
     protection: null,
+    mergeGate: null,
     ...overrides,
   };
 }
@@ -36,8 +37,19 @@ export function afterApplying(state: ProductState, plan: SetupPlan): ProductStat
           protection: {
             requiredChecks: action.requiredChecks,
             requiresPullRequest: true,
-            requiredApprovals: action.requiredApprovals,
             bypassAllowances: [],
+          },
+        };
+        break;
+      case "restrict-default-branch":
+        next = {
+          ...next,
+          mergeGate: {
+            id: action.rulesetId ?? 1,
+            enforcement: "active",
+            branches: ["~DEFAULT_BRANCH"],
+            restrictsUpdates: true,
+            bypassActors: ["RepositoryRole:5"],
           },
         };
         break;

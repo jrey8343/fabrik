@@ -9,7 +9,17 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
 import { loadSetupKit } from "./kit.ts";
-import { type BranchProtection, type ProductState, planSetup, type SetupAction, type SetupPlan, setupPaths } from "./plan.ts";
+import {
+  ADMIN_BYPASS,
+  type BranchProtection,
+  MERGE_GATE_RULESET,
+  type MergeGateRuleset,
+  type ProductState,
+  planSetup,
+  type SetupAction,
+  type SetupPlan,
+  setupPaths,
+} from "./plan.ts";
 import { pinCaller } from "./shims.ts";
 
 interface Run {
@@ -54,13 +64,13 @@ async function gatherState(productDir: string, paths: readonly string[]): Promis
   const labels = names(await ok("gh", ["label", "list", "--limit", "1000", "--json", "name"], { cwd }));
   const secrets = names(await ok("gh", ["secret", "list", "--json", "name"], { cwd }));
   const vaults = names(await ok("op", ["vault", "list", "--format", "json"], { cwd }));
-  return { repo, files, labels, secrets, vaults, protection: await gatherProtection(cwd, repo) };
+  const [protection, mergeGate] = await Promise.all([gatherProtection(cwd, repo), gatherMergeGate(cwd, repo)]);
+  return { repo, files, labels, secrets, vaults, protection, mergeGate };
 }
 
 interface ProtectionResponse {
   required_status_checks?: { contexts?: string[]; checks?: { context: string }[] } | null;
   required_pull_request_reviews?: {
-    required_approving_review_count?: number;
     bypass_pull_request_allowances?: { users?: { login: string }[]; teams?: { slug: string }[]; apps?: { slug: string }[] };
   } | null;
 }
@@ -78,12 +88,38 @@ async function gatherProtection(cwd: string, repo: ProductState["repo"]): Promis
   return {
     requiredChecks: checks?.contexts ?? checks?.checks?.map((check) => check.context) ?? [],
     requiresPullRequest: reviews != null,
-    requiredApprovals: reviews?.required_approving_review_count ?? 0,
     bypassAllowances: [
       ...(bypass?.apps ?? []).map((app) => `app:${app.slug}`),
       ...(bypass?.users ?? []).map((user) => `user:${user.login}`),
       ...(bypass?.teams ?? []).map((team) => `team:${team.slug}`),
     ],
+  };
+}
+
+interface RulesetResponse {
+  id: number;
+  name: string;
+  enforcement: string;
+  conditions?: { ref_name?: { include?: string[] } } | null;
+  rules?: { type: string }[];
+  bypass_actors?: { actor_id: number | null; actor_type: string }[];
+}
+
+/** The Merge gate ruleset, found by its name among the repo's own rulesets. */
+async function gatherMergeGate(cwd: string, repo: ProductState["repo"]): Promise<MergeGateRuleset | null> {
+  const rulesets = JSON.parse(await ok("gh", ["api", `repos/${repo.owner}/${repo.name}/rulesets?includes_parents=false`], { cwd })) as {
+    id: number;
+    name: string;
+  }[];
+  const found = rulesets.find((ruleset) => ruleset.name === MERGE_GATE_RULESET);
+  if (found === undefined) return null;
+  const ruleset = JSON.parse(await ok("gh", ["api", `repos/${repo.owner}/${repo.name}/rulesets/${found.id}`], { cwd })) as RulesetResponse;
+  return {
+    id: ruleset.id,
+    enforcement: ruleset.enforcement,
+    branches: ruleset.conditions?.ref_name?.include ?? [],
+    restrictsUpdates: (ruleset.rules ?? []).some((rule) => rule.type === "update"),
+    bypassActors: (ruleset.bypass_actors ?? []).map((actor) => `${actor.actor_type}:${actor.actor_id ?? ""}`),
   };
 }
 
@@ -114,8 +150,10 @@ async function apply(action: SetupAction, productDir: string, repo: ProductState
       const body = {
         required_status_checks: action.requiredChecks.length === 0 ? null : { strict: false, contexts: action.requiredChecks },
         enforce_admins: false,
+        // A PR, but no approving review: the Operator can't approve their own PRs.
+        // The Merge gate ruleset is what keeps the Fabrik App from merging.
         required_pull_request_reviews: {
-          required_approving_review_count: action.requiredApprovals,
+          required_approving_review_count: 0,
           dismiss_stale_reviews: true,
           bypass_pull_request_allowances: { users: [], teams: [], apps: [] },
         },
@@ -125,6 +163,23 @@ async function apply(action: SetupAction, productDir: string, repo: ProductState
       };
       const path = `repos/${repo.owner}/${repo.name}/branches/${action.branch}/protection`;
       await ok("gh", ["api", "--method", "PUT", path, "--input", "-"], { cwd, input: JSON.stringify(body) });
+      return;
+    }
+    case "restrict-default-branch": {
+      // Only its bypass actors may update the default branch, merging a PR included,
+      // and the only one is the repo admin role: the Operator, never the Fabrik App.
+      const [actorType, actorId] = ADMIN_BYPASS.split(":");
+      const body = {
+        name: MERGE_GATE_RULESET,
+        target: "branch",
+        enforcement: "active",
+        conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+        rules: [{ type: "update" }],
+        bypass_actors: [{ actor_type: actorType, actor_id: Number(actorId), bypass_mode: "always" }],
+      };
+      const rulesets = `repos/${repo.owner}/${repo.name}/rulesets`;
+      const target = action.rulesetId === null ? ["POST", rulesets] : ["PUT", `${rulesets}/${action.rulesetId}`];
+      await ok("gh", ["api", "--method", ...target, "--input", "-"], { cwd, input: JSON.stringify(body) });
       return;
     }
   }
@@ -141,7 +196,9 @@ export function describeAction(action: SetupAction): string {
     case "create-service-account":
       return `create the read-only service account "${action.name}" (reads ${action.vaults.map((v) => `"${v}"`).join(", ")}) and store it as the Actions secret ${action.secret}`;
     case "protect-branch":
-      return `protect ${action.branch}: a PR with ${action.requiredApprovals} approving review, ${action.requiredChecks.length === 0 ? "no required checks yet" : `the checks ${action.requiredChecks.join(", ")}`}, no bypass`;
+      return `protect ${action.branch}: a PR and ${action.requiredChecks.length === 0 ? "no required checks yet" : `the checks ${action.requiredChecks.join(", ")}`}, no bypass, no approving review`;
+    case "restrict-default-branch":
+      return `${action.rulesetId === null ? "create" : "repair"} the "${MERGE_GATE_RULESET}" ruleset: only repo admins (you) may update the default branch, so the Fabrik App can't merge`;
   }
 }
 

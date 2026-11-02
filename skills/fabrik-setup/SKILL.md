@@ -38,11 +38,12 @@ curl -fsSL "https://codeload.github.com/jrey8343/fabrik/tar.gz/refs/tags/<releas
 node "$FABRIK/src/setup/main.ts" . <release>
 ```
 
-This only reads: the repo's files, its labels, its Actions secret names, its branch protection and your 1Password vault names. Show the Operator its output as it is, then explain anything they'd want to know before saying yes:
+This only reads: the repo's files, its labels, its Actions secret names, its branch protection and rulesets, and your 1Password vault names. Show the Operator its output as it is, then explain anything they'd want to know before saying yes:
 
 - **Files**: the caller workflow and the stable shims (`.claude/settings.json`'s `SessionStart` hook entry and plugin switch, the `.gitignore` lines, the Dependabot entry) are Kit-owned, and setup puts them back when they drift. The starter Kit config (`.fabrik/config.json`), `docs/agents/*` and the `## Agent skills` block are written once and are the Product's from then on.
 - **Service accounts**: each is read-only, has no expiry, and its token goes straight into its Actions secret. 1Password shows a token only once, so a missing secret is repaired with a new account. When the plan replaces one, tell the Operator to delete the old account of the same name in 1Password afterwards (Developer → Service accounts).
-- **Branch protection** replaces the default branch's current protection: a PR with one approving review and the gating checks required, with no bypass for anyone. The Fabrik App can't approve the PRs it opens, so only the Operator can merge an agent PR.
+- **Branch protection** replaces the default branch's current protection: a PR and the gating checks required, with no bypass allowance for anyone. It requires no approving review, on purpose: the Operator works alone and can't approve their own PRs, and a required review would only make them bypass protection on every PR they open.
+- **The Merge gate ruleset** (`Fabrik Merge gate`) is what keeps the Fabrik App from merging: on the default branch, only its bypass actors may update the branch, merging a PR included, and its one bypass actor is the repo admin role. The Operator owns the repo, so they're its admin and can merge; the Fabrik App is never an admin, so it can push agent branches but never merge to the default branch. If GitHub's merge button offers to bypass the ruleset, that's this rule recognising the Operator as its bypass actor.
 - **For the Operator** lines are things setup couldn't do itself. Pass each one on.
 
 If the plan says there's nothing to do and has no notes, tell the Operator the install is complete, skip to step 5 if they haven't walked the wizard yet, and stop.
@@ -54,7 +55,7 @@ Ask the Operator to confirm before you go on.
 1. Create a branch: `git switch -c fabrik/setup-<release>`.
 2. Apply the plan: `node "$FABRIK/src/setup/main.ts" . <release> --apply`. If it fails partway, tell the Operator what it printed and run step 3 again: it plans only what's still missing.
 3. If it wrote any files, commit them (`git add -A && git commit -m "Set up Fabrik <release>"`), push the branch and open a PR to the default branch with `gh pr create`. Its body lists what setup did, and the notes for the Operator.
-4. Tell the Operator to merge that PR themselves. Branch protection now requires an approving review, which they can't give their own PR, so they merge it as a repo admin (GitHub offers to bypass the rules for admins). The Loop starts once the caller workflow is on the default branch.
+4. Tell the Operator to merge that PR themselves, once its gating checks pass: no approving review is required, and as the repo's admin they're the Merge gate ruleset's one bypass actor. The Loop starts once the caller workflow is on the default branch.
 
 ## 5. Hand over the wizard
 

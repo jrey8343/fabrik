@@ -40,15 +40,35 @@ export interface ProductState {
   readonly secrets: readonly string[];
   readonly vaults: readonly string[];
   readonly protection: BranchProtection | null;
+  /** The Merge gate ruleset, found by its name, or null when the repo lacks it. */
+  readonly mergeGate: MergeGateRuleset | null;
 }
 
 export interface BranchProtection {
   readonly requiredChecks: readonly string[];
   readonly requiresPullRequest: boolean;
-  readonly requiredApprovals: number;
   /** Who may skip the pull request requirement: app slugs, users and teams. */
   readonly bypassAllowances: readonly string[];
 }
+
+/** The repository ruleset named MERGE_GATE_RULESET, as setup reads it. */
+export interface MergeGateRuleset {
+  readonly id: number;
+  /** "active", "evaluate" or "disabled". */
+  readonly enforcement: string;
+  /** The ref_name conditions it includes, such as ~DEFAULT_BRANCH. */
+  readonly branches: readonly string[];
+  /** Whether it has the rule that only its bypass actors may update a matching branch. */
+  readonly restrictsUpdates: boolean;
+  /** Who may bypass it, as `<actor_type>:<actor_id>`. */
+  readonly bypassActors: readonly string[];
+}
+
+/** The name setup gives the ruleset that keeps the default branch the Operator's alone. */
+export const MERGE_GATE_RULESET = "Fabrik Merge gate";
+
+/** Repository admins, the only bypass actor: the Operator, who owns the repo. The Fabrik App is never an admin. */
+export const ADMIN_BYPASS = "RepositoryRole:5";
 
 export type SetupAction =
   | { readonly kind: "write-file"; readonly path: string; readonly content: string; readonly why: string }
@@ -66,7 +86,11 @@ export type SetupAction =
       readonly kind: "protect-branch";
       readonly branch: string;
       readonly requiredChecks: readonly string[];
-      readonly requiredApprovals: number;
+    }
+  | {
+      /** Creates the Merge gate ruleset, or with its id puts the existing one right. */
+      readonly kind: "restrict-default-branch";
+      readonly rulesetId: number | null;
     };
 
 export interface SetupPlan {
@@ -96,6 +120,7 @@ export function planSetup(state: ProductState, kit: SetupKit): SetupPlan {
   }
   actions.push(...secrets(state));
   actions.push(...protection(state, kit, notes));
+  actions.push(...mergeGate(state));
   return { actions, notes };
 }
 
@@ -118,9 +143,11 @@ function file(state: ProductState, path: string): string | null {
 }
 
 /**
- * Only the Operator merges into the default branch: a PR is required, with an
- * approving review the App can't give its own PRs, the gating checks, and no
- * bypass for anyone (user stories 10 and 71).
+ * Only the Operator merges into the default branch (user stories 10 and 71).
+ * Branch protection requires a PR and the gating checks, with no bypass
+ * allowance for anyone, but no approving review: the Operator works alone and
+ * can't approve their own PRs. What keeps the Fabrik App from merging is the
+ * Merge gate ruleset (mergeGate below), not a review.
  */
 function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupAction[] {
   const configText = state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig;
@@ -137,14 +164,31 @@ function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupA
   const satisfied =
     current !== null &&
     current.requiresPullRequest &&
-    current.requiredApprovals >= REQUIRED_APPROVALS &&
     current.bypassAllowances.length === 0 &&
     gating.every((check) => current.requiredChecks.includes(check));
   if (satisfied) return [];
-  return [{ kind: "protect-branch", branch: state.repo.defaultBranch, requiredChecks, requiredApprovals: REQUIRED_APPROVALS }];
+  return [{ kind: "protect-branch", branch: state.repo.defaultBranch, requiredChecks }];
 }
 
-const REQUIRED_APPROVALS = 1;
+/**
+ * The Merge gate ruleset: an active repository ruleset on the default branch
+ * whose one rule restricts updates to its bypass actors, and whose only bypass
+ * actor is the repo admin role. Merging a PR updates the branch, so the
+ * Fabrik App, which can push agent branches but is never an admin, can't
+ * merge one, while the Operator, the repo's owner and admin, can.
+ */
+function mergeGate(state: ProductState): SetupAction[] {
+  const current = state.mergeGate;
+  const sound =
+    current !== null &&
+    current.enforcement === "active" &&
+    current.restrictsUpdates &&
+    current.branches.includes("~DEFAULT_BRANCH") &&
+    current.bypassActors.length === 1 &&
+    current.bypassActors[0] === ADMIN_BYPASS;
+  if (sound) return [];
+  return [{ kind: "restrict-default-branch", rulesetId: current?.id ?? null }];
+}
 
 /** The vault every repo's agent and implement accounts read: the shared Claude token. */
 export const FABRIK_VAULT = "Fabrik";

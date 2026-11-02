@@ -307,18 +307,16 @@ describe("Branch protection", () => {
     ".fabrik/config.json": JSON.stringify({ sandbox: { checks } }),
   });
 
-  it("requires a PR, an approving review and the Kit config's gating checks on the default branch, with no bypass", () => {
+  it("requires a PR and the Kit config's gating checks on the default branch, with no bypass and no approving review", () => {
     const state = aCleanProduct({ files: withChecks(["build", "test"]) });
 
-    expect(protects(state)).toEqual([
-      { kind: "protect-branch", branch: "main", requiredChecks: ["build", "test"], requiredApprovals: 1 },
-    ]);
+    expect(protects(state)).toEqual([{ kind: "protect-branch", branch: "main", requiredChecks: ["build", "test"] }]);
   });
 
   it("keeps the checks the branch already requires", () => {
     const state = aCleanProduct({
       files: withChecks(["build"]),
-      protection: { requiredChecks: ["lint"], requiresPullRequest: true, requiredApprovals: 1, bypassAllowances: [] },
+      protection: { requiredChecks: ["lint"], requiresPullRequest: true, bypassAllowances: [] },
     });
 
     expect(protects(state)[0]?.requiredChecks).toEqual(["lint", "build"]);
@@ -327,7 +325,7 @@ describe("Branch protection", () => {
   it("takes away a bypass that would let the Fabrik App merge without the Operator", () => {
     const state = aCleanProduct({
       files: withChecks(["build"]),
-      protection: { requiredChecks: ["build"], requiresPullRequest: true, requiredApprovals: 1, bypassAllowances: ["app:fabrik"] },
+      protection: { requiredChecks: ["build"], requiresPullRequest: true, bypassAllowances: ["app:fabrik"] },
     });
 
     expect(protects(state)).toHaveLength(1);
@@ -342,10 +340,34 @@ describe("Branch protection", () => {
   it("leaves protection alone when it already requires all of that", () => {
     const state = aCleanProduct({
       files: withChecks(["build"]),
-      protection: { requiredChecks: ["build", "lint"], requiresPullRequest: true, requiredApprovals: 2, bypassAllowances: [] },
+      protection: { requiredChecks: ["build", "lint"], requiresPullRequest: true, bypassAllowances: [] },
     });
 
     expect(protects(state)).toEqual([]);
+  });
+});
+
+describe("The Merge gate ruleset: only the Operator updates the default branch", () => {
+  function gates(state: ProductState) {
+    return planSetup(state, kit).actions.flatMap((a) => (a.kind === "restrict-default-branch" ? [a] : []));
+  }
+  const sound = { id: 12, enforcement: "active", branches: ["~DEFAULT_BRANCH"], restrictsUpdates: true, bypassActors: ["RepositoryRole:5"] };
+
+  it("creates a ruleset that lets only repo admins (the Operator) update the default branch, so the Fabrik App can't merge", () => {
+    expect(gates(aCleanProduct())).toEqual([{ kind: "restrict-default-branch", rulesetId: null }]);
+  });
+
+  it.each([
+    ["isn't enforced", { ...sound, enforcement: "evaluate" }],
+    ["doesn't restrict updates", { ...sound, restrictsUpdates: false }],
+    ["lets the Fabrik App bypass it", { ...sound, bypassActors: ["RepositoryRole:5", "Integration:99"] }],
+    ["doesn't cover the default branch", { ...sound, branches: ["refs/heads/release"] }],
+  ])("repairs the ruleset in place when it %s", (_, mergeGate) => {
+    expect(gates(aCleanProduct({ mergeGate }))).toEqual([{ kind: "restrict-default-branch", rulesetId: 12 }]);
+  });
+
+  it("leaves a sound ruleset alone", () => {
+    expect(gates(aCleanProduct({ mergeGate: sound }))).toEqual([]);
   });
 });
 
