@@ -5,11 +5,13 @@ import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from
 import type { AgentRunResult } from "../agent/result.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { isDesignRoundComment } from "../loop/design.ts";
+import { KIT_ISSUE_LABELS } from "../loop/kitIssues.ts";
 import type {
   Action,
   AgentRole,
   CreatedIssue,
   FailureReport,
+  KitIssueSnapshot,
   LoopEvent,
   Plan,
   Snapshot,
@@ -22,7 +24,13 @@ export interface Repo {
 }
 
 /** Maps an Actions event to the Loop event it stands for, or null if the Loop ignores it. */
-export function loopEventFrom(eventName: string, payload: Record<string, unknown>): LoopEvent | null {
+export function loopEventFrom(
+  eventName: string,
+  payload: Record<string, unknown>,
+  now: Date = new Date(),
+): LoopEvent | null {
+  // The scheduled Kit workflow (schedule.yml), for the Loop's time-based rules.
+  if (eventName === "schedule") return { kind: "scheduled-tick", now: now.toISOString() };
   if (eventName === "issues" && payload["action"] === "opened") {
     const issue = payload["issue"] as { number: number };
     return { kind: "issue-opened", issue: issue.number };
@@ -268,6 +276,24 @@ export async function gatherSnapshot(
   operator: string | null,
   actions: GitHub | null = null,
 ): Promise<Snapshot> {
+  const [{ owner, kitIssues }, part] = await Promise.all([
+    gatherKitIssues(github, repo),
+    gatherEventPart(github, repo, event, operator, actions),
+  ]);
+  // By default the Operator owns the Product repos they run Fabrik in.
+  return part === null
+    ? { issue: null, pullRequest: null, dispatch: null, operator: operator ?? owner, kitIssues }
+    : { ...part, kitIssues };
+}
+
+/** The part of the snapshot the event is about, or null for an event about the repo as a whole. */
+async function gatherEventPart(
+  github: GitHub,
+  repo: Repo,
+  event: LoopEvent,
+  operator: string | null,
+  actions: GitHub | null,
+): Promise<EventPart | null> {
   switch (event.kind) {
     case "pull-request-left-draft":
     case "pull-request-closed":
@@ -275,12 +301,59 @@ export async function gatherSnapshot(
     case "dispatch-check":
       if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");
       return gatherDispatch(github, actions, repo, operator);
+    case "scheduled-tick":
+      return null;
     default:
       return gatherIssue(github, repo, event.issue, operator);
   }
 }
 
-async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null): Promise<Snapshot> {
+type EventPart = Omit<Snapshot, "kitIssues">;
+
+const KIT_ISSUES_QUERY = `
+  query ($owner: String!, $name: String!, $labels: [String!]!) {
+    repository(owner: $owner, name: $name) {
+      owner { login }
+      issues(states: OPEN, labels: $labels, first: 20, orderBy: { field: CREATED_AT, direction: ASC }) {
+        nodes {
+          number
+          body
+          labels(first: 100) { nodes { name } }
+          comments(last: 100) { nodes { body } }
+        }
+      }
+    }
+  }
+`;
+
+interface KitIssuesQueryResult {
+  repository: {
+    owner: { login: string };
+    issues: {
+      nodes: { number: number; body: string; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string }[] } }[];
+    };
+  };
+}
+
+/** The open issues carrying a Kit-owned label (src/loop/kitIssues.ts), which every event's snapshot holds. */
+async function gatherKitIssues(github: GitHub, repo: Repo): Promise<{ owner: string; kitIssues: KitIssueSnapshot[] }> {
+  const data = await github.graphql<KitIssuesQueryResult>(KIT_ISSUES_QUERY, {
+    owner: repo.owner,
+    name: repo.name,
+    labels: KIT_ISSUE_LABELS,
+  });
+  return {
+    owner: data.repository.owner.login,
+    kitIssues: data.repository.issues.nodes.map((issue) => ({
+      number: issue.number,
+      labels: issue.labels.nodes.map((label) => label.name),
+      body: issue.body,
+      comments: issue.comments.nodes.map((comment) => comment.body),
+    })),
+  };
+}
+
+async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null): Promise<EventPart> {
   const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, { owner: repo.owner, name: repo.name, number });
   const issue = data.repository.issue;
   if (issue === null) {
@@ -308,7 +381,7 @@ async function gatherPullRequest(
   repo: Repo,
   number: number,
   operator: string | null,
-): Promise<Snapshot> {
+): Promise<EventPart> {
   const data = await github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, {
     owner: repo.owner,
     name: repo.name,
@@ -337,7 +410,7 @@ async function gatherDispatch(
   actions: GitHub,
   repo: Repo,
   operator: string | null,
-): Promise<Snapshot> {
+): Promise<EventPart> {
   const tickets: TicketSnapshot[] = [];
   let after: string | null = null;
   let page: DispatchQueryResult;
@@ -470,7 +543,18 @@ async function apply(
   // Not a GitHub change: the push job hands it on to the Dispatch job.
   if (action.kind === "check-dispatch") return;
   if (action.kind === "create-issue") return createIssue(github, repo, action, created);
-  const issue = `/repos/${repo.owner}/${repo.name}/issues/${action.issue}`;
+  const issues = `/repos/${repo.owner}/${repo.name}/issues`;
+  if (action.kind === "open-issue") {
+    // Labels go on with the issue, so the issues.opened run it starts already sees them.
+    await github.rest("POST", issues, {
+      title: action.title,
+      body: action.body,
+      labels: action.labels,
+      assignees: action.assignees,
+    });
+    return;
+  }
+  const issue = `${issues}/${action.issue}`;
   switch (action.kind) {
     case "add-labels":
       if (action.labels.length > 0) await github.rest("POST", `${issue}/labels`, { labels: action.labels });

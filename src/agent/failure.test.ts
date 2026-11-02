@@ -59,7 +59,17 @@ describe("How an agent job reports its own failure", () => {
       initRefused: [],
     });
 
-    expect(report).toEqual({ failure: "weekly-limit", detail: "resets at 2026-12-23T04:26:40.000Z" });
+    expect(report).toEqual({
+      failure: "weekly-limit",
+      detail: "resets at 2026-12-23T04:26:40.000Z",
+      resetsAt: "2026-12-23T04:26:40.000Z",
+    });
+  });
+
+  it("the failure job reads back when the weekly limit resets", () => {
+    const report = { failure: "weekly-limit", detail: "", resetsAt: "2026-12-23T04:26:40.000Z" };
+
+    expect(readFailureReport(JSON.stringify(report))).toEqual(report);
   });
 
   it("a five-hour rate limit is a provider error, not the weekly limit", () => {
