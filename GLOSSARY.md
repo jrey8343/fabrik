@@ -52,9 +52,13 @@ _Avoid_: autonomous, background
 Work that only resolves through a live exchange with the Operator speaking for themselves; an agent never stands in for the Operator's side.
 _Avoid_: interactive, manual
 
+**Intake**:
+The rule that gives a new issue `needs-triage`, unless a skill made it or it already has a state, so Triage sees it.
+_Avoid_: inbox, new-issue hook
+
 **Triage**:
 The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside.
-_Avoid_: intake, sorting
+_Avoid_: sorting
 
 **Design session**:
 A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets.
