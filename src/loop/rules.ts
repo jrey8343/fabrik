@@ -1,5 +1,7 @@
+import { answerRound, applyTurn, startSession } from "./design.ts";
 import { failureNotice } from "./failures.ts";
-import { CATEGORY_LABELS, isWayfinderLabel, STATE_LABELS } from "./labels.ts";
+import { CATEGORY_LABELS, isWayfinderLabel, NEEDS_DESIGN, NEEDS_TRIAGE, STATE_LABELS } from "./labels.ts";
+import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import type { Action, KitConfig, LoopEvent, Plan, Snapshot } from "./types.ts";
 
@@ -8,16 +10,34 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
   switch (event.kind) {
     case "issue-opened":
       return intake(event.issue, snapshot);
+    case "label-added":
+      return labelAdded(event.issue, event.label, snapshot, config);
     case "issue-comment-created":
+      // A needs-design issue is in a Design session; a needs-info one waits on its author.
+      if (snapshot.issue.labels.includes(NEEDS_DESIGN)) return answerRound(event, snapshot, config);
       return replyOnNeedsInfo(event, snapshot);
     case "agent-run-finished":
-      if (event.role !== "triage") {
-        return { kind: "nothing", reason: `The Kit doesn't apply ${event.role} output yet` };
+      switch (event.role) {
+        case "triage":
+          return applyTriage(event.issue, event.output, snapshot);
+        case "design":
+          return applyTurn(event.issue, event.output, snapshot);
+        default:
+          return { kind: "nothing", reason: `The Kit doesn't apply ${event.role} output yet` };
       }
-      return applyTriage(event.issue, event.output, snapshot);
     case "agent-run-failed":
       return failureNotice(event, snapshot, config);
   }
+}
+
+/** Adding needs-triage starts Triage, and adding needs-design starts a Design session. */
+function labelAdded(issueNumber: number, label: string, snapshot: Snapshot, config: KitConfig): Plan {
+  if (label === NEEDS_DESIGN) return startSession(issueNumber, snapshot, config);
+  if (label !== NEEDS_TRIAGE) {
+    return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
+  }
+  if (!snapshot.issue.open) return { kind: "nothing", reason: `#${issueNumber} is closed` };
+  return startAgentRun("triage", issueNumber, config);
 }
 
 /** A new issue gets needs-triage unless something has already given it a place. */

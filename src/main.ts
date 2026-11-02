@@ -49,6 +49,10 @@ function describeAction(action: Action): string {
       return `- assign #${action.issue} to ${action.assignee}`;
     case "close":
       return `- close #${action.issue} as ${action.reason.replace("_", " ")}`;
+    case "edit-issue-body":
+      return `- rewrite the body of #${action.issue}`;
+    case "start-agent-run":
+      return `- a ${action.role} run on #${action.issue}, which the Kit job routes to its agent job`;
   }
 }
 
@@ -168,7 +172,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const snapshot = await gatherSnapshot(github, repo, event);
+  const snapshot = await gatherSnapshot(github, repo, event, config.operator);
   const plan = planFor(event, snapshot, config);
   await applyPlan(github, repo, plan);
   await report(describe(plan));

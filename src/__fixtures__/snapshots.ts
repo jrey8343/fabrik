@@ -6,10 +6,12 @@ import type { IssueSnapshot, KitConfig, Snapshot } from "../loop/types.ts";
 export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
   return {
     number: 1,
+    open: true,
     author: "someone",
     labels: [],
     parent: null,
     openPullRequests: [],
+    designRounds: 0,
     ...overrides,
   };
 }

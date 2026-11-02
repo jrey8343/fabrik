@@ -28,6 +28,7 @@ export interface FailureReport {
 /** Something that happened in a Product repo that the Loop may act on. */
 export type LoopEvent =
   | { readonly kind: "issue-opened"; readonly issue: number }
+  | { readonly kind: "label-added"; readonly issue: number; readonly label: string }
   | {
       readonly kind: "issue-comment-created";
       readonly issue: number;
@@ -62,18 +63,21 @@ export type LoopEvent =
 /** An issue as the core sees it, gathered fresh by the GitHub adapter. */
 export interface IssueSnapshot {
   readonly number: number;
+  readonly open: boolean;
   readonly author: string;
   readonly labels: readonly string[];
   /** The parent issue's number, or null if it isn't a sub-issue. */
   readonly parent: number | null;
   /** The open pull requests linked to close this issue, oldest first. */
   readonly openPullRequests: readonly number[];
+  /** How many Design-session rounds the Kit has posted on the issue so far. */
+  readonly designRounds: number;
 }
 
 /** The slice of GitHub state a Loop event needs to be decided. */
 export interface Snapshot {
   readonly issue: IssueSnapshot;
-  /** The Operator's GitHub login, whom ready-for-human work is assigned to and failures @-mention. */
+  /** The Operator's GitHub login: ready-for-human work is assigned to them, and Design rounds and failures @-mention them. */
   readonly operator: string;
 }
 
@@ -85,8 +89,18 @@ export type Action =
   | { readonly kind: "add-labels"; readonly issue: number; readonly labels: readonly string[] }
   | { readonly kind: "remove-label"; readonly issue: number; readonly label: string }
   | { readonly kind: "comment"; readonly issue: number; readonly body: string }
+  | { readonly kind: "edit-issue-body"; readonly issue: number; readonly body: string }
   | { readonly kind: "assign"; readonly issue: number; readonly assignee: string }
-  | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" };
+  | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" }
+  | {
+      /** Starts a role's agent job; the workflow does this by routing to it, not the adapter. */
+      readonly kind: "start-agent-run";
+      readonly role: AgentRole;
+      readonly issue: number;
+      readonly model: string;
+      readonly effort: string | null;
+      readonly timeoutMinutes: number;
+    };
 
 /**
  * What the core decided: actions to apply, nothing (with the reason why), or

@@ -3,6 +3,7 @@
 // Loop rules; those all live in src/loop/rules.ts.
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import type { AgentRunResult } from "../agent/result.ts";
+import { isDesignRoundComment } from "../loop/design.ts";
 import type { Action, AgentRole, FailureReport, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 
 export interface Repo {
@@ -16,6 +17,11 @@ export function loopEventFrom(eventName: string, payload: Record<string, unknown
     const issue = payload["issue"] as { number: number };
     return { kind: "issue-opened", issue: issue.number };
   }
+  if (eventName === "issues" && payload["action"] === "labeled") {
+    const issue = payload["issue"] as { number: number };
+    const label = payload["label"] as { name: string };
+    return { kind: "label-added", issue: issue.number, label: label.name };
+  }
   if (eventName === "issue_comment" && payload["action"] === "created") {
     const issue = payload["issue"] as { number: number; pull_request?: unknown };
     // A comment on a PR is not a reply on an issue.
@@ -26,16 +32,14 @@ export function loopEventFrom(eventName: string, payload: Record<string, unknown
   return null;
 }
 
-/**
- * The AFK role whose agent job an Actions event starts, or null when it goes
- * straight to the push job. Adding needs-triage to an open issue starts Triage.
- */
-export function agentRoleFor(eventName: string, payload: Record<string, unknown>): AgentRole | null {
-  if (eventName !== "issues" || payload["action"] !== "labeled") return null;
-  const label = payload["label"] as { name?: unknown } | undefined;
-  const issue = payload["issue"] as { state?: unknown } | undefined;
-  if (label?.name === "needs-triage" && issue?.state === "open") return "triage";
-  return null;
+/** The agent run a plan starts, which the workflow carries out by routing to that role's agent job. */
+export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run" }> | null {
+  if (plan.kind !== "act") return null;
+  return (
+    plan.actions.find(
+      (action): action is Extract<Action, { kind: "start-agent-run" }> => action.kind === "start-agent-run",
+    ) ?? null
+  );
 }
 
 /**
@@ -136,9 +140,11 @@ const ISSUE_QUERY = `
       owner { login }
       issue(number: $number) {
         number
+        state
         author { login }
         labels(first: 100) { nodes { name } }
         parent { number }
+        comments(last: 100) { nodes { body } }
         closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number } }
       }
     }
@@ -150,16 +156,26 @@ interface IssueQueryResult {
     owner: { login: string };
     issue: {
       number: number;
+      state: "OPEN" | "CLOSED";
       author: { login: string } | null;
       labels: { nodes: { name: string }[] };
       parent: { number: number } | null;
+      comments: { nodes: { body: string }[] };
       closedByPullRequestsReferences: { nodes: { number: number }[] };
     } | null;
   };
 }
 
-/** Reads the current GitHub state the event needs, fresh rather than from the event payload. */
-export async function gatherSnapshot(github: GitHub, repo: Repo, event: LoopEvent): Promise<Snapshot> {
+/**
+ * Reads the current GitHub state the event needs, fresh rather than from the
+ * event payload. The Operator is the Kit config's `operator`, or else the repo's owner.
+ */
+export async function gatherSnapshot(
+  github: GitHub,
+  repo: Repo,
+  event: LoopEvent,
+  operator: string | null,
+): Promise<Snapshot> {
   const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, {
     owner: repo.owner,
     name: repo.name,
@@ -172,13 +188,15 @@ export async function gatherSnapshot(github: GitHub, repo: Repo, event: LoopEven
   return {
     issue: {
       number: issue.number,
+      open: issue.state === "OPEN",
       author: issue.author?.login ?? "ghost",
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
+      designRounds: issue.comments.nodes.filter((comment) => isDesignRoundComment(comment.body)).length,
     },
-    // The Operator owns the Product repos they run Fabrik in.
-    operator: data.repository.owner.login,
+    // By default the Operator owns the Product repos they run Fabrik in.
+    operator: operator ?? data.repository.owner.login,
   };
 }
 
@@ -221,6 +239,12 @@ async function apply(github: GitHub, repo: Repo, action: Action): Promise<void> 
       return;
     case "close":
       await github.rest("PATCH", issue, { state: "closed", state_reason: action.reason });
+      return;
+    case "edit-issue-body":
+      await github.rest("PATCH", issue, { body: action.body });
+      return;
+    case "start-agent-run":
+      // The workflow starts agent runs by routing to the role's agent job (src/kit/jobs.ts).
       return;
   }
 }
