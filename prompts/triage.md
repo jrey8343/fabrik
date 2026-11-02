@@ -20,9 +20,9 @@ Choose exactly one **state**:
 
 - `ready-for-agent`: the **Fast path**, straight to an Implementer. Take it only if **all five** tests below pass.
 - `needs-design`: the issue needs a Design session with the Operator before anyone builds it.
-- `needs-info`: the report is missing something only its author can supply. Say exactly what.
-- `ready-for-human`: the work needs the Operator's own hands (external access, manual testing, a judgment call no agent should make).
-- `wontfix`: it won't be actioned, for example because it is already implemented. Say where, or why.
+- `needs-info`: the report is missing something only its author can supply. Ask exactly what, as specific questions; the Kit addresses your comment to the author.
+- `ready-for-human`: the work needs the Operator's own hands (external access, manual testing, a judgment call no agent should make). Say exactly what the Operator has to do; the Kit assigns the issue to them.
+- `wontfix`: it won't be actioned, for example because it is already implemented. Say where, or why; the Kit closes the issue with your comment.
 
 ### The five Fast-path tests
 
@@ -42,7 +42,7 @@ When you have decided, end your reply with exactly one `<triage>` tag holding a 
 {
   "category": "bug",
   "state": "needs-design",
-  "comment": "Markdown for the issue comment: your reasoning, what you checked in the code and where, and for needs-info the specific questions for the author.",
+  "comment": "Markdown for the issue comment: your reasoning, what you checked in the code and where, for needs-info the specific questions for the author, and for ready-for-human what the Operator has to do.",
   "brief": null
 }
 </triage>
