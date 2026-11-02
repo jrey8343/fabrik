@@ -1,6 +1,14 @@
 import { answerRound, applyTurn, startSession } from "./design.ts";
 import { failureNotice } from "./failures.ts";
-import { CATEGORY_LABELS, isWayfinderLabel, NEEDS_DESIGN, NEEDS_TRIAGE, STATE_LABELS } from "./labels.ts";
+import { applyImplementation, startImplementer } from "./implement.ts";
+import {
+  CATEGORY_LABELS,
+  DISPATCH_LABEL,
+  isWayfinderLabel,
+  NEEDS_DESIGN,
+  NEEDS_TRIAGE,
+  STATE_LABELS,
+} from "./labels.ts";
 import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { dispatch } from "./dispatch.ts";
@@ -29,6 +37,8 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
         default:
           return { kind: "nothing", reason: `The Kit doesn't apply ${event.role} output yet` };
       }
+    case "implement-run-finished":
+      return withIssue(snapshot, (context) => applyImplementation(event, context));
     case "agent-run-failed":
       return withIssue(snapshot, (context) => failureNotice(event, context, config));
     // A closed issue may free a slot or unblock a Ticket.
@@ -65,6 +75,7 @@ function missingFromSnapshot(what: string): Plan {
 /** Adding needs-triage starts Triage, and adding needs-design starts a Design session. */
 function labelAdded(issueNumber: number, label: string, context: IssueContext, config: KitConfig): Plan {
   if (label === NEEDS_DESIGN) return startSession(issueNumber, context, config);
+  if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, config);
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }

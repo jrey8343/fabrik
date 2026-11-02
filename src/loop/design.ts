@@ -3,6 +3,7 @@
 // between turns beyond what the thread itself shows.
 import { parseDesignTurnOutput, type DesignTurnOutput } from "./designOutput.ts";
 import { NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
+import { withoutMentions } from "./mentions.ts";
 import { startAgentRun } from "./runs.ts";
 import type { IssueContext, IssueSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
 
@@ -55,7 +56,7 @@ export function applyTurn(issueNumber: number, text: string, snapshot: IssueCont
         kind: "comment",
         issue: issueNumber,
         body: [
-          "**Design session finished.** This issue is now its agent brief, ready for an Implementer.",
+          `${SESSION_FINISHED} This issue is now its agent brief, ready for an Implementer.`,
           "",
           withoutMentions(output.comment),
         ].join("\n"),
@@ -68,9 +69,17 @@ export function applyTurn(issueNumber: number, text: string, snapshot: IssueCont
 
 const ROUND_MARKER = /^<!-- fabrik:design-round (\d+) -->/;
 
+/** How the comment that ends a Design session starts. */
+const SESSION_FINISHED = "**Design session finished.**";
+
 /** Whether a comment is a round the Kit posted, so the next round can be numbered after it. */
 export function isDesignRoundComment(body: string): boolean {
   return ROUND_MARKER.test(body);
+}
+
+/** Whether a comment is one the Kit posts during a Design session: a round, or the session's end. */
+export function isDesignSessionComment(body: string): boolean {
+  return isDesignRoundComment(body) || body.startsWith(SESSION_FINISHED);
 }
 
 /** A round: the only Design-session text that notifies, through one @-mention of the Operator. */
@@ -102,13 +111,6 @@ function briefBody(output: Extract<DesignTurnOutput, { kind: "brief" }>): string
   ].join("\n");
 }
 
-/**
- * Agent-written text never notifies anyone: a zero-width space after each `@`
- * that would start a mention keeps the text readable but unlinked.
- */
-function withoutMentions(text: string): string {
-  return text.replace(/(?<![\w`])@(?=[A-Za-z0-9])/g, "@​");
-}
 
 /** Why a session on this issue can't take a turn now, or null when it can. */
 function whileInSession(issueNumber: number, issue: IssueSnapshot): Plan | null {
