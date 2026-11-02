@@ -3,6 +3,7 @@
 // Loop rules; those all live in src/loop/rules.ts.
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import type { AgentRunResult } from "../agent/result.ts";
+import { KIT_ISSUE_LABELS } from "../loop/kitIssues.ts";
 import type { Action, AgentRole, FailureReport, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 
 export interface Repo {
@@ -11,7 +12,13 @@ export interface Repo {
 }
 
 /** Maps an Actions event to the Loop event it stands for, or null if the Loop ignores it. */
-export function loopEventFrom(eventName: string, payload: Record<string, unknown>): LoopEvent | null {
+export function loopEventFrom(
+  eventName: string,
+  payload: Record<string, unknown>,
+  now: Date = new Date(),
+): LoopEvent | null {
+  // The scheduled Kit workflow (schedule.yml), for the Loop's time-based rules.
+  if (eventName === "schedule") return { kind: "scheduled-tick", now: now.toISOString() };
   if (eventName === "issues" && payload["action"] === "opened") {
     const issue = payload["issue"] as { number: number };
     return { kind: "issue-opened", issue: issue.number };
@@ -130,55 +137,78 @@ export class GitHub {
   }
 }
 
-const ISSUE_QUERY = `
-  query ($owner: String!, $name: String!, $number: Int!) {
+const SNAPSHOT_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!, $withIssue: Boolean!, $kitLabels: [String!]!) {
     repository(owner: $owner, name: $name) {
       owner { login }
-      issue(number: $number) {
+      issue(number: $number) @include(if: $withIssue) {
         number
         author { login }
         labels(first: 100) { nodes { name } }
         parent { number }
         closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number } }
       }
+      kitIssues: issues(states: OPEN, labels: $kitLabels, first: 20, orderBy: { field: CREATED_AT, direction: ASC }) {
+        nodes {
+          number
+          body
+          labels(first: 100) { nodes { name } }
+          comments(last: 100) { nodes { body } }
+        }
+      }
     }
   }
 `;
 
-interface IssueQueryResult {
+interface SnapshotQueryResult {
   repository: {
     owner: { login: string };
-    issue: {
+    issue?: {
       number: number;
       author: { login: string } | null;
       labels: { nodes: { name: string }[] };
       parent: { number: number } | null;
       closedByPullRequestsReferences: { nodes: { number: number }[] };
     } | null;
+    kitIssues: {
+      nodes: { number: number; body: string; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string }[] } }[];
+    };
   };
 }
 
 /** Reads the current GitHub state the event needs, fresh rather than from the event payload. */
 export async function gatherSnapshot(github: GitHub, repo: Repo, event: LoopEvent): Promise<Snapshot> {
-  const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, {
+  const number = event.kind === "scheduled-tick" ? null : event.issue;
+  const data = await github.graphql<SnapshotQueryResult>(SNAPSHOT_QUERY, {
     owner: repo.owner,
     name: repo.name,
-    number: event.issue,
+    number: number ?? 0,
+    withIssue: number !== null,
+    kitLabels: KIT_ISSUE_LABELS,
   });
-  const issue = data.repository.issue;
-  if (issue === null) {
-    throw new Error(`Issue #${event.issue} not found in ${repo.owner}/${repo.name}`);
+  const issue = data.repository.issue ?? null;
+  if (number !== null && issue === null) {
+    throw new Error(`Issue #${number} not found in ${repo.owner}/${repo.name}`);
   }
   return {
-    issue: {
-      number: issue.number,
-      author: issue.author?.login ?? "ghost",
-      labels: issue.labels.nodes.map((label) => label.name),
-      parent: issue.parent?.number ?? null,
-      openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
-    },
+    issue:
+      issue === null
+        ? null
+        : {
+            number: issue.number,
+            author: issue.author?.login ?? "ghost",
+            labels: issue.labels.nodes.map((label) => label.name),
+            parent: issue.parent?.number ?? null,
+            openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
+          },
     // The Operator owns the Product repos they run Fabrik in.
     operator: data.repository.owner.login,
+    kitIssues: data.repository.kitIssues.nodes.map((kitIssue) => ({
+      number: kitIssue.number,
+      labels: kitIssue.labels.nodes.map((label) => label.name),
+      body: kitIssue.body,
+      comments: kitIssue.comments.nodes.map((comment) => comment.body),
+    })),
   };
 }
 
@@ -203,7 +233,18 @@ export async function applyPlan(github: GitHub, repo: Repo, plan: Plan): Promise
 }
 
 async function apply(github: GitHub, repo: Repo, action: Action): Promise<void> {
-  const issue = `/repos/${repo.owner}/${repo.name}/issues/${action.issue}`;
+  const issues = `/repos/${repo.owner}/${repo.name}/issues`;
+  if (action.kind === "open-issue") {
+    // Labels go on with the issue, so the issues.opened run it starts already sees them.
+    await github.rest("POST", issues, {
+      title: action.title,
+      body: action.body,
+      labels: action.labels,
+      assignees: action.assignees,
+    });
+    return;
+  }
+  const issue = `${issues}/${action.issue}`;
   switch (action.kind) {
     case "add-labels":
       if (action.labels.length > 0) await github.rest("POST", `${issue}/labels`, { labels: action.labels });
