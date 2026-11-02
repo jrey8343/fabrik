@@ -16,6 +16,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     author: "someone",
     labels: [],
     parent: null,
+    openPullRequests: [],
     ...overrides,
   };
 }

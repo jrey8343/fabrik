@@ -2,8 +2,10 @@
 // config -> plan -> applied.
 // Run with `node src/main.ts` (Node 24 strips the types).
 import { appendFile, readFile } from "node:fs/promises";
+import { readFailureReport } from "./agent/failure.ts";
 import { readAgentRunResult } from "./agent/result.ts";
 import {
+  agentFailureEventFrom,
   agentRunEventFrom,
   applyPlan,
   gatherSnapshot,
@@ -16,7 +18,7 @@ import {
 import { checkCallerWorkflow } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
 import { planFor } from "./loop/rules.ts";
-import type { Action, KitConfig, LoopEvent, Plan } from "./loop/types.ts";
+import { AGENT_ROLES, type Action, type AgentRole, type KitConfig, type LoopEvent, type Plan } from "./loop/types.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -63,6 +65,8 @@ async function loopEvent(): Promise<{ event: LoopEvent | null; source: string }>
   if (process.env["FABRIK_DISPATCH_CHECK"] === "true") {
     return { event: { kind: "dispatch-check" }, source: "a Dispatch check" };
   }
+  const failedRole = process.env["FABRIK_FAILED_ROLE"];
+  if (failedRole !== undefined && failedRole !== "") return failedRunEvent(failedRole);
   const resultPath = process.env["FABRIK_AGENT_RESULT"];
   if (resultPath !== undefined && resultPath !== "") {
     const result = readAgentRunResult(await readFile(resultPath, "utf8"));
@@ -71,6 +75,35 @@ async function loopEvent(): Promise<{ event: LoopEvent | null; source: string }>
   const eventName = required("GITHUB_EVENT_NAME");
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
   return { event: loopEventFrom(eventName, payload), source: `${eventName}.${String(payload["action"] ?? "")}` };
+}
+
+/**
+ * The failure job's event: the agent job named by FABRIK_FAILED_ROLE failed or
+ * was cancelled. FABRIK_AGENT_FAILURE is the report it left, which is missing
+ * when its timeout cancelled it.
+ */
+async function failedRunEvent(role: string): Promise<{ event: LoopEvent; source: string }> {
+  if (!AGENT_ROLES.includes(role as AgentRole)) throw new Error(`FABRIK_FAILED_ROLE is not an agent role: ${role}`);
+  const issue = Number(required("FABRIK_FAILED_ISSUE"));
+  if (!Number.isInteger(issue) || issue < 1) throw new Error("FABRIK_FAILED_ISSUE is not an issue number");
+  const reportText = await readFile(required("FABRIK_AGENT_FAILURE"), "utf8").catch(() => null);
+  const runUrl = [
+    required("GITHUB_SERVER_URL"),
+    required("GITHUB_REPOSITORY"),
+    "actions/runs",
+    required("GITHUB_RUN_ID"),
+    "attempts",
+    required("GITHUB_RUN_ATTEMPT"),
+  ].join("/");
+  const event = agentFailureEventFrom({
+    role: role as AgentRole,
+    issue,
+    runUrl,
+    jobResult: required("FABRIK_AGENT_JOB_RESULT"),
+    secretsStep: process.env["FABRIK_SECRETS_STEP"] ?? "",
+    report: reportText === null ? null : readFailureReport(reportText),
+  });
+  return { event, source: `the failed ${role} run on #${issue}` };
 }
 
 async function report(text: string): Promise<void> {

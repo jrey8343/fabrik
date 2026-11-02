@@ -1,3 +1,4 @@
+import { failureNotice } from "./failures.ts";
 import { CATEGORY_LABELS, isWayfinderLabel, STATE_LABELS } from "./labels.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { dispatch } from "./dispatch.ts";
@@ -11,7 +12,12 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
     case "issue-comment-created":
       return withIssue(snapshot, (issue) => replyOnNeedsInfo(event, issue));
     case "agent-run-finished":
+      if (event.role !== "triage") {
+        return { kind: "nothing", reason: `The Kit doesn't apply ${event.role} output yet` };
+      }
       return withIssue(snapshot, (issue) => applyTriage(event.issue, event.output, issue, snapshot.operator));
+    case "agent-run-failed":
+      return withIssue(snapshot, (issue) => failureNotice(event, { issue, operator: snapshot.operator }, config));
     // A closed issue may free a slot or unblock a Ticket.
     case "issue-closed":
       return { kind: "act", actions: [CHECK_DISPATCH] };
