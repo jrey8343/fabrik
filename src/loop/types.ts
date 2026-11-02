@@ -1,8 +1,19 @@
 // The Loop rules core's interface: a Loop event, a snapshot of GitHub state and
 // the resolved Kit config go in; a plan comes out.
 
+/** An AFK role whose agent job passes structured output to its push job. */
+export type AgentRole = "triage";
+
 /** Something that happened in a Product repo that the Loop may act on. */
-export type LoopEvent = { readonly kind: "issue-opened"; readonly issue: number };
+export type LoopEvent =
+  | { readonly kind: "issue-opened"; readonly issue: number }
+  | {
+      readonly kind: "agent-run-finished";
+      readonly role: AgentRole;
+      readonly issue: number;
+      /** The text the agent emitted as its structured output, unparsed. */
+      readonly output: string;
+    };
 
 /** An issue as the core sees it, gathered fresh by the GitHub adapter. */
 export interface IssueSnapshot {
@@ -22,13 +33,16 @@ export interface Snapshot {
 export type { KitConfig } from "../kit/config.ts";
 
 /** One change the GitHub adapter makes on the core's behalf. */
-export type Action = {
-  readonly kind: "add-labels";
-  readonly issue: number;
-  readonly labels: readonly string[];
-};
+export type Action =
+  | { readonly kind: "add-labels"; readonly issue: number; readonly labels: readonly string[] }
+  | { readonly kind: "remove-label"; readonly issue: number; readonly label: string }
+  | { readonly kind: "comment"; readonly issue: number; readonly body: string };
 
-/** What the core decided: actions to apply, or nothing, with the reason why. */
+/**
+ * What the core decided: actions to apply, nothing (with the reason why), or
+ * that the run failed, which changes nothing and fails the job.
+ */
 export type Plan =
   | { readonly kind: "act"; readonly actions: readonly Action[] }
-  | { readonly kind: "nothing"; readonly reason: string };
+  | { readonly kind: "nothing"; readonly reason: string }
+  | { readonly kind: "fail"; readonly failure: "infrastructure"; readonly reason: string };

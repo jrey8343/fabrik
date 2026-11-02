@@ -1,7 +1,9 @@
 // Entry point for a Kit push job: event + snapshot + config -> plan -> applied.
 // Run with `node src/main.ts` (Node 24 strips the types).
 import { appendFile, readFile } from "node:fs/promises";
+import { readAgentRunResult } from "./agent/result.ts";
 import {
+  agentRunEventFrom,
   applyPlan,
   gatherSnapshot,
   GitHub,
@@ -12,7 +14,7 @@ import {
 import { checkCallerWorkflow } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
 import { planFor } from "./loop/rules.ts";
-import type { KitConfig, Plan } from "./loop/types.ts";
+import type { Action, KitConfig, LoopEvent, Plan } from "./loop/types.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -23,8 +25,40 @@ function required(name: string): string {
 }
 
 function describe(plan: Plan): string {
-  if (plan.kind === "nothing") return `Nothing to do: ${plan.reason}`;
-  return plan.actions.map((action) => `- ${action.kind} on #${action.issue}: ${action.labels.join(", ")}`).join("\n");
+  switch (plan.kind) {
+    case "nothing":
+      return `Nothing to do: ${plan.reason}`;
+    case "fail":
+      return `The run failed (${plan.failure} failure): ${plan.reason}`;
+    case "act":
+      return plan.actions.map(describeAction).join("\n");
+  }
+}
+
+function describeAction(action: Action): string {
+  switch (action.kind) {
+    case "add-labels":
+      return `- add labels on #${action.issue}: ${action.labels.join(", ") || "(none new)"}`;
+    case "remove-label":
+      return `- remove label on #${action.issue}: ${action.label}`;
+    case "comment":
+      return `- comment on #${action.issue}`;
+  }
+}
+
+/**
+ * The Loop event this run applies: an agent job's result when the push job was
+ * handed one (FABRIK_AGENT_RESULT), otherwise the Actions event itself.
+ */
+async function loopEvent(): Promise<{ event: LoopEvent | null; source: string }> {
+  const resultPath = process.env["FABRIK_AGENT_RESULT"];
+  if (resultPath !== undefined && resultPath !== "") {
+    const result = readAgentRunResult(await readFile(resultPath, "utf8"));
+    return { event: agentRunEventFrom(result), source: `the ${result.role} run on #${result.issue}` };
+  }
+  const eventName = required("GITHUB_EVENT_NAME");
+  const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
+  return { event: loopEventFrom(eventName, payload), source: `${eventName}.${String(payload["action"] ?? "")}` };
 }
 
 async function report(text: string): Promise<void> {
@@ -91,11 +125,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  const eventName = required("GITHUB_EVENT_NAME");
-  const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
-  const event = loopEventFrom(eventName, payload);
+  const { event, source } = await loopEvent();
   if (event === null) {
-    await report(`Nothing to do: the Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
+    await report(`Nothing to do: the Loop doesn't act on ${source}`);
     return;
   }
 
@@ -103,6 +135,10 @@ async function main(): Promise<void> {
   const plan = planFor(event, snapshot, config);
   await applyPlan(github, repo, plan);
   await report(describe(plan));
+  if (plan.kind === "fail") {
+    console.log(`::error title=Infrastructure failure::${plan.reason}`);
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error: unknown) => {
