@@ -1,7 +1,7 @@
 // Failure notices: an agent run that fails for a reason outside the work is an
 // Infrastructure failure. It's never retried and never counts against a
 // Ticket's retries; the Operator gets one comment saying how to resume it.
-import type { AgentRole, InfrastructureFailure, KitConfig, LoopEvent, Plan, Snapshot } from "./types.ts";
+import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
@@ -49,7 +49,7 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
 }
 
 /** One comment, with the Operator's only @-mention, on the Ticket's PR if it has one, else the issue. */
-export function failureNotice(run: FailedRun, { issue, operator }: Snapshot, config: KitConfig): Plan {
+export function failureNotice(run: FailedRun, { issue, operator }: IssueContext, config: KitConfig): Plan {
   const failure = classify(run);
   const label = TRIGGER_LABELS[run.role];
   const pullRequest = issue.openPullRequests[0];

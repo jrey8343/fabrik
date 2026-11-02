@@ -4,17 +4,17 @@
 import { parseDesignTurnOutput, type DesignTurnOutput } from "./designOutput.ts";
 import { NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { startAgentRun } from "./runs.ts";
-import type { KitConfig, LoopEvent, Plan, Snapshot } from "./types.ts";
+import type { IssueContext, IssueSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
 
 /** Adding needs-design starts the session's first round. */
-export function startSession(issueNumber: number, { issue }: Snapshot, config: KitConfig): Plan {
+export function startSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
   return whileInSession(issueNumber, issue) ?? startAgentRun("design", issueNumber, config);
 }
 
 /** The Operator's reply to a round starts the next turn; nobody else's comment, and no bot's, does. */
 export function answerRound(
   { issue: issueNumber, commenter, commenterIsBot }: Extract<LoopEvent, { kind: "issue-comment-created" }>,
-  snapshot: Snapshot,
+  snapshot: IssueContext,
   config: KitConfig,
 ): Plan {
   if (commenterIsBot) {
@@ -30,7 +30,7 @@ export function answerRound(
 }
 
 /** A finished turn posts the next round, or ends the session with its outcome. */
-export function applyTurn(issueNumber: number, text: string, snapshot: Snapshot): Plan {
+export function applyTurn(issueNumber: number, text: string, snapshot: IssueContext): Plan {
   const parsed = parseDesignTurnOutput(text);
   if (!parsed.ok) {
     return {
@@ -111,7 +111,7 @@ function withoutMentions(text: string): string {
 }
 
 /** Why a session on this issue can't take a turn now, or null when it can. */
-function whileInSession(issueNumber: number, issue: Snapshot["issue"]): Plan | null {
+function whileInSession(issueNumber: number, issue: IssueSnapshot): Plan | null {
   if (!issue.open) return { kind: "nothing", reason: `#${issueNumber} is closed` };
   if (!issue.labels.includes(NEEDS_DESIGN)) {
     return { kind: "nothing", reason: `#${issueNumber} no longer has ${NEEDS_DESIGN}` };

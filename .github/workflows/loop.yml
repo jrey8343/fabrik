@@ -37,13 +37,15 @@ jobs:
       # Only to read this workflow's own commit from the job's OIDC token.
       id-token: write
       contents: read
-      # To read the issue for the Loop rules core's snapshot.
+      # To read the issue, or the pull request, for the Loop rules core's snapshot.
       issues: read
+      pull-requests: read
     outputs:
       sha: ${{ steps.kit.outputs.sha }}
       route: ${{ steps.route.outputs.route }}
       triage-timeout-minutes: ${{ steps.route.outputs.triage-timeout-minutes }}
       design-timeout-minutes: ${{ steps.route.outputs.design-timeout-minutes }}
+      dispatch-timeout-minutes: ${{ steps.route.outputs.dispatch-timeout-minutes }}
     steps:
       # No expression context names the commit of a called workflow, so read
       # it from the OIDC token's job_workflow_sha claim.
@@ -393,6 +395,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions: {}
+    outputs:
+      # "true" when the plan asked for a Dispatch check.
+      dispatch: ${{ steps.loop.outputs.dispatch }}
     steps:
       - name: Check out the Kit (never the Product repo)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -433,8 +438,66 @@ jobs:
 
       # The App token, not GITHUB_TOKEN, so the labels it adds start later workflows.
       - name: Run the Loop
+        id: loop
         working-directory: .fabrik-kit
         env:
           FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
           FABRIK_AGENT_RESULT: ${{ needs.kit.outputs.route != 'push' && format('{0}/agent/agent-result.json', runner.temp) || '' }}
+        run: node src/main.ts
+
+  # Dispatch (ADR-0001): runs when the push job's plan asked for a check, on a
+  # fresh snapshot taken after that plan's labels landed. Like a push job, it
+  # never checks out or runs Product code.
+  dispatch:
+    name: Dispatch
+    needs: [kit, push]
+    if: ${{ !cancelled() && needs.push.result == 'success' && needs.push.outputs.dispatch == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.dispatch-timeout-minutes) }}
+    # One check at a time, so two can't both fill the same free slot. A newer
+    # pending check replacing an older one is fine: each reads fresh state.
+    concurrency:
+      group: fabrik-dispatch
+      cancel-in-progress: false
+    permissions:
+      # Only to count Implement runs in progress; the Fabrik App has no Actions permission.
+      actions: read
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: .fabrik-kit
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Load the Fabrik App key
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}
+          FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+          FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+      - name: Mint a Fabrik App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+          private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+
+      # The App token adds agent:implement, so the label starts the Implement run.
+      - name: Run a Dispatch check
+        working-directory: .fabrik-kit
+        env:
+          FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
+          FABRIK_ACTIONS_TOKEN: ${{ github.token }}
+          FABRIK_DISPATCH_CHECK: "true"
         run: node src/main.ts

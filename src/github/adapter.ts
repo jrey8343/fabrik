@@ -3,8 +3,9 @@
 // Loop rules; those all live in src/loop/rules.ts.
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import type { AgentRunResult } from "../agent/result.ts";
+import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { isDesignRoundComment } from "../loop/design.ts";
-import type { Action, AgentRole, FailureReport, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
+import type { Action, AgentRole, FailureReport, LoopEvent, Plan, Snapshot, TicketSnapshot } from "../loop/types.ts";
 
 export interface Repo {
   readonly owner: string;
@@ -28,6 +29,16 @@ export function loopEventFrom(eventName: string, payload: Record<string, unknown
     if (issue.pull_request !== undefined) return null;
     const user = (payload["comment"] as { user: { login: string; type: string } }).user;
     return { kind: "issue-comment-created", issue: issue.number, commenter: user.login, commenterIsBot: user.type === "Bot" };
+  }
+  if (eventName === "issues" && payload["action"] === "closed") {
+    return { kind: "issue-closed", issue: (payload["issue"] as { number: number }).number };
+  }
+  // pull_request_target, so the run uses the base branch's caller workflow and
+  // Kit config, never the PR's. The Loop never checks out PR code.
+  if (eventName === "pull_request_target") {
+    const pullRequest = (payload["pull_request"] as { number: number }).number;
+    if (payload["action"] === "ready_for_review") return { kind: "pull-request-left-draft", pullRequest };
+    if (payload["action"] === "closed") return { kind: "pull-request-closed", pullRequest };
   }
   return null;
 }
@@ -166,24 +177,105 @@ interface IssueQueryResult {
   };
 }
 
+const PULL_REQUEST_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      owner { login }
+      pullRequest(number: $number) {
+        number
+        headRefName
+        author { __typename }
+      }
+    }
+  }
+`;
+
+interface PullRequestQueryResult {
+  repository: {
+    owner: { login: string };
+    pullRequest: { number: number; headRefName: string; author: { __typename: string } | null } | null;
+  };
+}
+
+// Pages through every open ready-for-agent issue. Open PRs are read once: a
+// Product repo with more than 100 open PRs is far past max_in_flight anyway.
+const DISPATCH_QUERY = `
+  query ($owner: String!, $name: String!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      owner { login }
+      issues(states: OPEN, labels: ["ready-for-agent"], first: 50, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          number
+          state
+          labels(first: 100) { nodes { name } }
+          subIssues { totalCount }
+          blockedBy(first: 50) { nodes { number state } }
+          closedByPullRequestsReferences(first: 20, includeClosedPrs: false) { nodes { number state } }
+        }
+      }
+      pullRequests(states: OPEN, first: 100) {
+        nodes { isDraft headRefName author { __typename } }
+      }
+    }
+  }
+`;
+
+interface DispatchQueryResult {
+  repository: {
+    owner: { login: string };
+    issues: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: {
+        number: number;
+        state: "OPEN" | "CLOSED";
+        labels: { nodes: { name: string }[] };
+        subIssues: { totalCount: number };
+        blockedBy: { nodes: { number: number; state: "OPEN" | "CLOSED" }[] };
+        closedByPullRequestsReferences: { nodes: { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[] };
+      }[];
+    };
+    pullRequests: { nodes: { isDraft: boolean; headRefName: string; author: { __typename: string } | null }[] };
+  };
+}
+
+/**
+ * The name of the Implement job in .github/workflows/loop.yml. Called from a
+ * Product repo's caller workflow, it shows up as `<caller job> / Implement`.
+ */
+const IMPLEMENT_JOB_NAME = "Implement";
+
 /**
  * Reads the current GitHub state the event needs, fresh rather than from the
- * event payload. The Operator is the Kit config's `operator`, or else the repo's owner.
+ * event payload. The Operator is the Kit config's `operator`, or else the
+ * repo's owner. A Dispatch check also reads workflow runs, through `actions`:
+ * the Fabrik App has no Actions permission (ADR-0002), so that is the Dispatch
+ * job's own read-only GITHUB_TOKEN.
  */
 export async function gatherSnapshot(
   github: GitHub,
   repo: Repo,
   event: LoopEvent,
   operator: string | null,
+  actions: GitHub | null = null,
 ): Promise<Snapshot> {
-  const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, {
-    owner: repo.owner,
-    name: repo.name,
-    number: event.issue,
-  });
+  switch (event.kind) {
+    case "pull-request-left-draft":
+    case "pull-request-closed":
+      return gatherPullRequest(github, repo, event.pullRequest, operator);
+    case "dispatch-check":
+      if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");
+      return gatherDispatch(github, actions, repo, operator);
+    default:
+      return gatherIssue(github, repo, event.issue, operator);
+  }
+}
+
+async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null): Promise<Snapshot> {
+  const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, { owner: repo.owner, name: repo.name, number });
   const issue = data.repository.issue;
   if (issue === null) {
-    throw new Error(`Issue #${event.issue} not found in ${repo.owner}/${repo.name}`);
+    throw new Error(`Issue #${number} not found in ${repo.owner}/${repo.name}`);
   }
   return {
     issue: {
@@ -195,9 +287,106 @@ export async function gatherSnapshot(
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
       designRounds: issue.comments.nodes.filter((comment) => isDesignRoundComment(comment.body)).length,
     },
+    pullRequest: null,
+    dispatch: null,
     // By default the Operator owns the Product repos they run Fabrik in.
     operator: operator ?? data.repository.owner.login,
   };
+}
+
+async function gatherPullRequest(
+  github: GitHub,
+  repo: Repo,
+  number: number,
+  operator: string | null,
+): Promise<Snapshot> {
+  const data = await github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, {
+    owner: repo.owner,
+    name: repo.name,
+    number,
+  });
+  const pullRequest = data.repository.pullRequest;
+  if (pullRequest === null) {
+    throw new Error(`Pull request #${number} not found in ${repo.owner}/${repo.name}`);
+  }
+  return {
+    issue: null,
+    pullRequest: {
+      number: pullRequest.number,
+      isAgent: isAgentPullRequest({
+        headRef: pullRequest.headRefName,
+        authorIsBot: pullRequest.author?.__typename === "Bot",
+      }),
+    },
+    dispatch: null,
+    operator: operator ?? data.repository.owner.login,
+  };
+}
+
+async function gatherDispatch(
+  github: GitHub,
+  actions: GitHub,
+  repo: Repo,
+  operator: string | null,
+): Promise<Snapshot> {
+  const tickets: TicketSnapshot[] = [];
+  let after: string | null = null;
+  let page: DispatchQueryResult;
+  do {
+    page = await github.graphql<DispatchQueryResult>(DISPATCH_QUERY, { owner: repo.owner, name: repo.name, after });
+    for (const issue of page.repository.issues.nodes) {
+      tickets.push({
+        number: issue.number,
+        open: issue.state === "OPEN",
+        labels: issue.labels.nodes.map((label) => label.name),
+        openBlockers: issue.blockedBy.nodes.filter((b) => b.state === "OPEN").map((b) => b.number),
+        subIssues: issue.subIssues.totalCount,
+        openLinkedPullRequests: issue.closedByPullRequestsReferences.nodes
+          .filter((pr) => pr.state === "OPEN")
+          .map((pr) => pr.number),
+      });
+    }
+    after = page.repository.issues.pageInfo.hasNextPage ? page.repository.issues.pageInfo.endCursor : null;
+  } while (after !== null);
+
+  const openAgentDraftPullRequests = page.repository.pullRequests.nodes.filter(
+    (pr) => pr.isDraft && isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }),
+  ).length;
+
+  return {
+    issue: null,
+    pullRequest: null,
+    dispatch: {
+      tickets,
+      openAgentDraftPullRequests,
+      implementRunsInProgress: await countImplementRunsInProgress(actions, repo),
+    },
+    operator: operator ?? page.repository.owner.login,
+  };
+}
+
+/**
+ * Implement jobs running now, across every workflow run in the repo. A queued
+ * one isn't counted here: its Ticket still has agent:implement, which the core
+ * counts instead.
+ */
+async function countImplementRunsInProgress(github: GitHub, repo: Repo): Promise<number> {
+  const base = `/repos/${repo.owner}/${repo.name}/actions`;
+  const runs = (await github.rest("GET", `${base}/runs?status=in_progress&per_page=100`)) as {
+    workflow_runs: { id: number }[];
+  };
+  let count = 0;
+  for (const run of runs.workflow_runs) {
+    const jobs = (await github.rest("GET", `${base}/runs/${run.id}/jobs?filter=latest&per_page=100`)) as {
+      jobs: { name: string; status: string }[];
+    };
+    count += jobs.jobs.filter(
+      (job) =>
+        job.status === "in_progress" &&
+        (job.name === IMPLEMENT_JOB_NAME || job.name.endsWith(` / ${IMPLEMENT_JOB_NAME}`)),
+    ).length;
+  }
+  return count;
 }
 
 /** Reads the Kit config folder's files from the Product repo at `ref`, through the API. */
@@ -220,7 +409,14 @@ export async function applyPlan(github: GitHub, repo: Repo, plan: Plan): Promise
   }
 }
 
+/** Whether the plan asks for a Dispatch check, which the Dispatch job then runs. */
+export function wantsDispatchCheck(plan: Plan): boolean {
+  return plan.kind === "act" && plan.actions.some((action) => action.kind === "check-dispatch");
+}
+
 async function apply(github: GitHub, repo: Repo, action: Action): Promise<void> {
+  // Not a GitHub change: the push job hands it on to the Dispatch job.
+  if (action.kind === "check-dispatch") return;
   const issue = `/repos/${repo.owner}/${repo.name}/issues/${action.issue}`;
   switch (action.kind) {
     case "add-labels":

@@ -7,6 +7,7 @@
 //                            "none" when the plan is to do nothing
 //   triage-timeout-minutes   the Triage role's Kit config timeout
 //   design-timeout-minutes   the Design-session turn's Kit config timeout
+//   dispatch-timeout-minutes the Dispatch job's Kit config timeout
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
 import { appendFile, readFile } from "node:fs/promises";
@@ -55,6 +56,7 @@ async function main(productDir: string): Promise<void> {
     route,
     "triage-timeout-minutes": String(config.roles.triage.timeoutMinutes),
     "design-timeout-minutes": String(config.roles.design.timeoutMinutes),
+    "dispatch-timeout-minutes": String(config.roles.dispatch.timeoutMinutes),
   };
   await appendFile(
     required("GITHUB_OUTPUT"),
