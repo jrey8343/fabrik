@@ -1,12 +1,12 @@
 // Implementation rules: when an Implementer starts on a Ticket, and how the
 // branch it built lands as one draft PR, or doesn't.
 import { checkTrustRoot } from "../guard/trust-root.ts";
-import { isDesignSessionComment } from "./design.ts";
 import { parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
-import { owedRequestChangesRun, REQUEST_CHANGES_RUN_MARKER } from "./mergeGate.ts";
+import { EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER } from "./markers.ts";
+import { owedRequestChangesRun } from "./mergeGate.ts";
 import { MAX_RETRIES, owedRetry } from "./retry.ts";
 import { verdictActions } from "./review.ts";
 import type {
@@ -222,21 +222,6 @@ function refuse(issueNumber: number, paths: readonly string[], operator: string,
   };
 }
 
-const EMPTY_DIFF_MARKER = "<!-- fabrik:empty-diff -->";
-
-/**
- * How many empty diffs the Kit has recorded on a Ticket, from its comments
- * oldest first. A Design session starts the count again, because a redesigned
- * Ticket starts again on its retries.
- */
-export function countEmptyDiffs(commentBodies: readonly string[]): number {
-  let count = 0;
-  for (const body of commentBodies) {
-    if (isDesignSessionComment(body)) count = 0;
-    else if (body.startsWith(EMPTY_DIFF_MARKER)) count += 1;
-  }
-  return count;
-}
 
 /**
  * An empty diff is an Execution flaw. With no PR to retry on, the retry is a

@@ -17,14 +17,6 @@ export interface SentBack {
   readonly verdictUrl: string | null;
 }
 
-const MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
-
-/** The Kit's note that a Ticket came back from this PR, read from a comment's first line; null if it isn't one. */
-export function sentBackIn(body: string): SentBack | null {
-  const match = MARKER.exec(body);
-  if (match?.[1] === undefined || match[2] === undefined) return null;
-  return { pullRequest: Number(match[1]), verdictUrl: match[2] === "operator" ? null : match[2] };
-}
 
 /**
  * The Operator added needs-design to an agent PR: the Design-flaw route,

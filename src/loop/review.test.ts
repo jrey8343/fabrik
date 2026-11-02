@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import {
+  aPullRequest,
+  HEAD_SHA,
+  kitConfig,
+  notificationsOf,
+  snapshotOfPullRequest,
+  verdictsPostedIn,
+} from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan } from "./types.ts";
-import { verdictsIn } from "./verdict.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
@@ -97,7 +103,7 @@ describe("Review: the Verdict marker", () => {
       kitConfig(),
     );
 
-    expect(verdictsIn(commentsOf(plan))).toEqual([
+    expect(verdictsPostedIn(commentsOf(plan))).toEqual([
       { verdict: "execution-flaw", source: "reviewer", requestChanges: true, headSha: HEAD_SHA },
     ]);
   });
@@ -112,26 +118,6 @@ describe("Review: the Verdict marker", () => {
     expect(actionsOf(plan)[0]).toEqual({ kind: "remove-label", issue: 50, label: "agent:review" });
   });
 
-  it("can be read back from a PR's comments alone, oldest first, skipping every other comment", () => {
-    const ci = planFor(redChecks({ headSha: "1".repeat(40) }), snapshotOfPullRequest(aPullRequest({ headSha: "1".repeat(40) })), kitConfig());
-    const pass = planFor(
-      reviewed("verdict: pass", { headSha: "2".repeat(40) }),
-      snapshotOfPullRequest(aPullRequest({ headSha: "2".repeat(40) })),
-      kitConfig(),
-    );
-    const comments = [
-      "Nice work!",
-      ...commentsOf(ci),
-      "<!-- fabrik:verdict not json -->",
-      'Quoting: <!-- fabrik:verdict {"verdict":"pass","source":"reviewer","requestChanges":false,"headSha":"x"} -->',
-      ...commentsOf(pass),
-    ];
-
-    expect(verdictsIn(comments)).toEqual([
-      { verdict: "execution-flaw", source: "ci", requestChanges: false, headSha: "1".repeat(40) },
-      { verdict: "pass", source: "reviewer", requestChanges: false, headSha: "2".repeat(40) },
-    ]);
-  });
 });
 
 describe("Review: red CI", () => {
@@ -143,7 +129,7 @@ describe("Review: red CI", () => {
     expect(actions.map((action) => action.kind)).toEqual(["comment", "add-labels"]);
     const [body] = commentsOf(plan);
     expect(actions[0]).toMatchObject({ kind: "comment", issue: 50 });
-    expect(verdictsIn([body!])).toEqual([
+    expect(verdictsPostedIn([body!])).toEqual([
       { verdict: "execution-flaw", source: "ci", requestChanges: false, headSha: HEAD_SHA },
     ]);
     expect(body).toContain("`build`");
@@ -162,7 +148,7 @@ describe("Review: the Reviewer's Verdict", () => {
     const plan = planFor(reviewed(output), snapshotOfPullRequest(aPullRequest()), kitConfig());
 
     const [body] = commentsOf(plan);
-    expect(verdictsIn([body!])).toEqual([{ verdict, source: "reviewer", requestChanges: false, headSha: HEAD_SHA }]);
+    expect(verdictsPostedIn([body!])).toEqual([{ verdict, source: "reviewer", requestChanges: false, headSha: HEAD_SHA }]);
     expect(body).toContain(findings);
     expect(body).toContain(`[The run](${RUN})`);
   });

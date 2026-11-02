@@ -122,6 +122,18 @@ export function notificationsOf(plan: Plan, operator = "operator"): string[] {
   });
 }
 
+/**
+ * The Verdict records these comments' first lines carry, as the marker's JSON
+ * says them (README: "Posting"). The core's tests read a plan's Verdicts with
+ * this rather than through the adapter's reader (src/github/threads.ts).
+ */
+export function verdictsPostedIn(commentBodies: readonly string[]): unknown[] {
+  return commentBodies.flatMap((body) => {
+    const json = /^<!-- fabrik:verdict (\{.*?\}) -->\n/.exec(body)?.[1];
+    return json === undefined ? [] : [JSON.parse(json) as unknown];
+  });
+}
+
 /** A Kit config with every v1 default, as a Product repo with no .fabrik/config.json gets. */
 export function kitConfig(overrides: Partial<KitConfig> = {}): KitConfig {
   return { ...DEFAULT_KIT_CONFIG, ...overrides };

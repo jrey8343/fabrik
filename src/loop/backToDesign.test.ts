@@ -8,7 +8,6 @@ import {
   snapshotOf,
   snapshotOfPullRequest,
 } from "../__fixtures__/snapshots.ts";
-import { designSessionOf } from "./design.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, VerdictRecord } from "./types.ts";
 
@@ -189,50 +188,5 @@ describe("The Design session after a Ticket comes back", () => {
 
     const [round] = actionsOf(plan);
     expect(round?.kind === "comment" ? round.body : "").not.toContain("came back from");
-  });
-});
-
-/** A Ticket's comment, as the adapter reads it: its text, and whether a bot (the Fabrik App) wrote it. */
-const kit = (body: string) => ({ body, byBot: true });
-const person = (body: string) => ({ body, byBot: false });
-const note = (pullRequest: number) =>
-  kit(`<!-- fabrik:back-to-design ${pullRequest} ${VERDICT_URL} -->\n**Back to design.** The Reviewer gave #${pullRequest} a Design flaw.`);
-const round = (n: number) => kit(`<!-- fabrik:design-round ${n} -->\n@jrey **Design session, round ${n}.**`);
-
-describe("Reading a Ticket's Design session from its comments", () => {
-  it("a Ticket that never came back has no return, and counts its rounds", () => {
-    expect(designSessionOf([round(1), person("yes"), round(2)])).toEqual({ designRounds: 2, sentBack: null });
-  });
-
-  it("the Kit's note starts a new session that follows the return, counting rounds again from 1", () => {
-    const comments = [
-      round(1),
-      person("yes"),
-      kit("**Design session finished.** This issue is now its agent brief, ready for an Implementer."),
-      note(50),
-      round(1),
-    ];
-
-    expect(designSessionOf(comments)).toEqual({
-      designRounds: 1,
-      sentBack: { pullRequest: 50, verdictUrl: VERDICT_URL },
-    });
-  });
-
-  it("the session finishing ends the return", () => {
-    const comments = [note(50), round(1), person("yes"), kit("**Design session finished.** This issue is now its agent brief.")];
-
-    expect(designSessionOf(comments)).toEqual({ designRounds: 0, sentBack: null });
-  });
-
-  it("the latest return counts, after a Ticket came back twice", () => {
-    expect(designSessionOf([note(50), round(1), kit("**Design session finished.** Done."), note(61)]).sentBack).toEqual({
-      pullRequest: 61,
-      verdictUrl: VERDICT_URL,
-    });
-  });
-
-  it("a person quoting the note doesn't fake a return", () => {
-    expect(designSessionOf([person(note(50).body)]).sentBack).toBeNull();
   });
 });

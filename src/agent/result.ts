@@ -2,7 +2,7 @@
 // ran for, and the structured output it emitted. The push job applies it
 // through the Loop rules core, which checks the output against its contract.
 // An Implement run also passes the branch it built, as a git bundle beside it.
-import type { AgentRole } from "../loop/types.ts";
+import { AGENT_ROLES, type AgentRole } from "../loop/types.ts";
 
 /** The branch an Implement run built, which the push job reads back from the bundle. */
 export interface BuiltBranch {
@@ -29,7 +29,6 @@ export const AGENT_RESULT_FILE = "agent-result.json";
 /** The Implementer's commits, beside the result, when it made any. */
 export const AGENT_BUNDLE_FILE = "agent-branch.bundle";
 
-const ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review"];
 
 const SHA = /^[0-9a-f]{40}$/;
 const REF = /^[A-Za-z0-9._/-]+$/;
@@ -39,7 +38,7 @@ export function readAgentRunResult(text: string): AgentRunResult {
   const value: unknown = JSON.parse(text);
   if (typeof value !== "object" || value === null) throw new Error(`${AGENT_RESULT_FILE} is not a JSON object`);
   const { role, issue, output, branch } = value as Record<string, unknown>;
-  if (typeof role !== "string" || !ROLES.includes(role as AgentRole)) {
+  if (typeof role !== "string" || !AGENT_ROLES.includes(role as AgentRole)) {
     throw new Error(`${AGENT_RESULT_FILE} names an unknown role: ${JSON.stringify(role)}`);
   }
   if (typeof issue !== "number" || !Number.isInteger(issue) || issue < 1) {

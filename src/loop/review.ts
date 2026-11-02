@@ -7,7 +7,8 @@ import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
 import { REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw } from "./retry.ts";
-import { parseVerdict, verdictMarker } from "./verdict.ts";
+import { verdictMarker } from "./markers.ts";
+import { parseVerdict } from "./verdict.ts";
 import type {
   Action,
   KitConfig,

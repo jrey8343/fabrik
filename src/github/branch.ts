@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 import type { BuiltBranch } from "../agent/result.ts";
 import { parseNameStatus } from "../guard/changes.ts";
 import type { BranchChanges } from "../loop/types.ts";
-import type { Repo } from "./adapter.ts";
+import type { Repo } from "./client.ts";
 
 const run = promisify(execFile);
 

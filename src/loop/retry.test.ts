@@ -7,10 +7,10 @@ import {
   notificationsOf,
   snapshotOf,
   snapshotOfPullRequest,
+  verdictsPostedIn,
 } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, Snapshot, VerdictRecord } from "./types.ts";
-import { verdictsIn } from "./verdict.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
@@ -279,7 +279,7 @@ describe("A retry's branch", () => {
     const actions = actionsOf(plan);
     expect(actions.map((action) => action.kind)).not.toContain("push-branch");
     const comments = actions.flatMap((action) => (action.kind === "comment" ? [action.body] : []));
-    expect(verdictsIn(comments)).toEqual([
+    expect(verdictsPostedIn(comments)).toEqual([
       { verdict: "execution-flaw", source: "empty-diff", requestChanges: false, headSha: HEAD_SHA },
     ]);
     expect(actions).toContainEqual(RETRY_TRIGGER);
@@ -324,7 +324,7 @@ describe("A retry that fails for Infrastructure", () => {
     expect(actions).toContainEqual({ kind: "comment", issue: 50, body: expect.any(String) });
     const [body] = actions.flatMap((action) => (action.kind === "comment" ? [action.body] : []));
     expect(body).toContain("Re-add the `agent:implement` label on #7 to run it again");
-    expect(verdictsIn([body!])).toEqual([]);
+    expect(verdictsPostedIn([body!])).toEqual([]);
   });
 });
 

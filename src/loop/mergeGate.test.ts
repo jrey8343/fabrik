@@ -7,12 +7,10 @@ import {
   notificationsOf,
   snapshotOf,
   snapshotOfPullRequest,
+  verdictsPostedIn,
 } from "../__fixtures__/snapshots.ts";
-import { designSessionOf } from "./design.ts";
-import { requestChangesRunIn } from "./mergeGate.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
-import { verdictsIn } from "./verdict.ts";
 
 function actionsOf(plan: Plan): readonly Action[] {
   if (plan.kind !== "act") throw new Error(`expected a plan that acts, got ${JSON.stringify(plan)}`);
@@ -155,7 +153,7 @@ describe("needs-design on an agent PR sends its Ticket back to design", () => {
     const note = actions[1];
     expect(note).toMatchObject({ kind: "comment", issue: 7 });
     const body = note?.kind === "comment" ? note.body : "";
-    expect(designSessionOf([{ body, byBot: true }]).sentBack).toEqual({ pullRequest: 50, verdictUrl: null });
+    expect(body).toMatch(/^<!-- fabrik:back-to-design 50 operator -->\n/);
     expect(body).toContain("`fabrik/ticket-7`");
   });
 
@@ -230,29 +228,14 @@ describe("A Request-changes run's branch", () => {
     expect(actionsOf(plan)[0]).toEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
     expect(notificationsOf(plan)).toEqual([]);
     expect(commentsOf(plan)[0]).toContain("Renamed the total as the Operator asked.");
-    // The PR's comments now say its latest push came from a Request-changes run.
-    expect(requestChangesRunIn(commentsOf(plan))).toBe(true);
-  });
-
-  it("stops counting as the latest push once a Verdict lands after it", () => {
-    const pushed = commentsOf(planFor(requestChangesPushed(), pushSnapshot(), kitConfig()));
-    const head = "b".repeat(40);
-    const verdict = commentsOf(
-      planFor(
-        { kind: "review-run-finished", pullRequest: 50, headSha: head, output: "verdict: pass", runUrl: RUN },
-        snapshotOfPullRequest(aPullRequest({ headSha: head, requestChangesRun: requestChangesRunIn(pushed) })),
-        kitConfig(),
-      ),
-    );
-
-    expect(verdictsIn(verdict)).toEqual([{ verdict: "pass", source: "reviewer", requestChanges: true, headSha: head }]);
-    expect(requestChangesRunIn([...pushed, ...verdict])).toBe(false);
+    // The note's marker says the PR's latest push came from a Request-changes run.
+    expect(commentsOf(plan)[0]).toMatch(/^<!-- fabrik:request-changes-run -->\n/);
   });
 
   it("that changes nothing is an Execution flaw marked as from a Request-changes run, so it uses no retry", () => {
     const plan = planFor(requestChangesPushed({ net: [], commits: [] }), pushSnapshot(), kitConfig());
 
-    expect(verdictsIn(commentsOf(plan))).toEqual([
+    expect(verdictsPostedIn(commentsOf(plan))).toEqual([
       { verdict: "execution-flaw", source: "empty-diff", requestChanges: true, headSha: HEAD_SHA },
     ]);
     expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });

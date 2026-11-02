@@ -56,7 +56,8 @@ export type LoopEvent =
     }
   | {
       readonly kind: "agent-run-finished";
-      readonly role: AgentRole;
+      /** Implement and Review runs finish through their own events, which carry what their push jobs hold. */
+      readonly role: Exclude<AgentRole, "implement" | "review">;
       readonly issue: number;
       /** The text the agent emitted as its structured output, unparsed. */
       readonly output: string;

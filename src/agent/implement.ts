@@ -10,7 +10,7 @@ import { readIfPresent } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { sandboxEnv } from "../kit/secrets.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
-import { verdictsIn } from "../loop/verdict.ts";
+import { verdictsIn } from "../github/threads.ts";
 import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);

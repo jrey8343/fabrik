@@ -5,7 +5,6 @@
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { sentBackByOperator } from "./backToDesign.ts";
 import type { Action, KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
-import { verdictsIn } from "./verdict.ts";
 
 type ChangesRequested = Extract<LoopEvent, { kind: "pull-request-changes-requested" }>;
 
@@ -83,22 +82,6 @@ export function sendBackToDesign(pullRequest: PullRequestSnapshot): Plan {
   return { kind: "act", actions: sentBackByOperator(pullRequest) };
 }
 
-/** The first line of the Kit's note on a PR that a Request-changes run pushed to it. */
-export const REQUEST_CHANGES_RUN_MARKER = "<!-- fabrik:request-changes-run -->";
-
-/**
- * Whether a PR's latest push came from a Request-changes run, from the Fabrik
- * App's comments on it, oldest first: its last note of such a push has no
- * Verdict after it yet, so the next Verdict is marked as from that run.
- */
-export function requestChangesRunIn(commentBodies: readonly string[]): boolean {
-  let latest = false;
-  for (const body of commentBodies) {
-    if (body.startsWith(REQUEST_CHANGES_RUN_MARKER)) latest = true;
-    else if (verdictsIn([body]).length > 0) latest = false;
-  }
-  return latest;
-}
 
 /** Why this PR isn't an open agent PR waiting at the Merge gate, or null when it is. */
 function whyNotAtMergeGate(pullRequest: PullRequestSnapshot): string | null {

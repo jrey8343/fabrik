@@ -1,9 +1,10 @@
 // Design-session rules: when a turn starts, and how its output lands on the issue.
 // Each turn rebuilds its context from the issue thread, so nothing is held here
 // between turns beyond what the thread itself shows.
-import { sentBackIn, type SentBack } from "./backToDesign.ts";
+import type { SentBack } from "./backToDesign.ts";
 import { dependencyOrder, parseDesignTurnOutput, type DesignTurnOutput, type SpecTicket } from "./designOutput.ts";
 import { isCategoryLabel, type Label, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
+import { designRoundMarker, LIVE_OUTCOME_MARKER, SESSION_FINISHED } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import { startAgentRun } from "./runs.ts";
 import type { Action, CreatedIssue, IssueContext, IssueSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
@@ -38,13 +39,6 @@ export function answerRound(
   return live?.[1] === undefined ? startAgentRun("design", issueNumber, config) : landLiveOutcome(issueNumber, live[1]);
 }
 
-/**
- * Opens the comment a live Design session ends with. A live session runs with
- * the Operator's own credentials in a cloud or local session, and has already
- * published its outcome: the issue rewritten as its agent brief, or the Spec and
- * its Tickets created. Only the start of a comment counts, so quoting it doesn't.
- */
-const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 
 /** The live session's outcome is already on GitHub, so the Kit only moves the issue on, as an async finish would. */
 function landLiveOutcome(issueNumber: number, outcome: string): Plan {
@@ -239,40 +233,6 @@ function supersedeBySpec(
   ];
 }
 
-const ROUND_MARKER = /^<!-- fabrik:design-round (\d+) -->/;
-
-/** How the comment that ends a Design session starts, either way it ends. */
-const SESSION_FINISHED = "**Design session finished.**";
-
-/** Whether a comment is a round the Kit posted, so the next round can be numbered after it. */
-export function isDesignRoundComment(body: string): boolean {
-  return ROUND_MARKER.test(body);
-}
-
-/**
- * Where an issue's current Design session stands, from its comments oldest
- * first: how many rounds it has posted, and the return it follows, if any. A
- * session's end starts the count again, and so does the Kit's note that a
- * Ticket came back, whose session that follows. Only a bot's note counts, so
- * nobody can fake a return by quoting one.
- */
-export function designSessionOf(
-  comments: readonly { readonly body: string; readonly byBot: boolean }[],
-): Pick<IssueSnapshot, "designRounds" | "sentBack"> {
-  let session: Pick<IssueSnapshot, "designRounds" | "sentBack"> = { designRounds: 0, sentBack: null };
-  for (const { body, byBot } of comments) {
-    const returned = byBot ? sentBackIn(body) : null;
-    if (returned !== null) session = { designRounds: 0, sentBack: returned };
-    else if (isDesignRoundComment(body)) session = { ...session, designRounds: session.designRounds + 1 };
-    else if (isDesignSessionComment(body)) session = { designRounds: 0, sentBack: null };
-  }
-  return session;
-}
-
-/** Whether a comment is part of a Design session: a round, or the session's end, async or live. */
-export function isDesignSessionComment(body: string): boolean {
-  return isDesignRoundComment(body) || body.startsWith(SESSION_FINISHED) || LIVE_OUTCOME_MARKER.test(body);
-}
 
 /** A round: the only Design-session text that notifies, through one @-mention of the Operator. */
 function roundComment(
@@ -282,7 +242,7 @@ function roundComment(
   sentBack: SentBack | null,
 ): string {
   return [
-    `<!-- fabrik:design-round ${round} -->`,
+    designRoundMarker(round),
     `@${operator} **Design session, round ${round}.** Reply with the numbers you'd answer differently, or \`yes\` to take every recommendation.`,
     ...(sentBack === null
       ? []

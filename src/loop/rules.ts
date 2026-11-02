@@ -53,8 +53,6 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
           return withIssue(snapshot, ({ issue, operator }) => applyTriage(event.issue, event.output, issue, operator));
         case "design":
           return withIssue(snapshot, (context) => applyTurn(event.issue, event.output, context));
-        default:
-          return { kind: "nothing", reason: `The Kit doesn't apply ${event.role} output yet` };
       }
     case "implement-run-finished":
       // A retry lands on the PR it fixes; a first run opens one.

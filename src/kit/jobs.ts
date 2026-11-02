@@ -19,7 +19,10 @@
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
 import { appendFile, readFile } from "node:fs/promises";
-import { agentRunIn, gatherSnapshot, GitHub, loopEventFrom, type Repo } from "../github/adapter.ts";
+import { agentRunIn } from "../github/apply.ts";
+import { GitHub, type Repo } from "../github/client.ts";
+import { loopEventFrom } from "../github/events.ts";
+import { gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";

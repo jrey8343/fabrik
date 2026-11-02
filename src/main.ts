@@ -7,18 +7,10 @@ import { readFailureReport } from "./agent/failure.ts";
 import { AGENT_BUNDLE_FILE, readAgentRunResult } from "./agent/result.ts";
 import { type AgentBranchGit, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
-import {
-  agentFailureEventFrom,
-  agentRunEventFrom,
-  applyPlan,
-  gatherSnapshot,
-  GitHub,
-  loopEventFrom,
-  readKitConfigSources,
-  type Repo,
-  reviewEventFrom,
-  wantsDispatchCheck,
-} from "./github/adapter.ts";
+import { applyPlan, wantsDispatchCheck } from "./github/apply.ts";
+import { GitHub, type Repo } from "./github/client.ts";
+import { agentFailureEventFrom, agentRunEventFrom, loopEventFrom, reviewEventFrom } from "./github/events.ts";
+import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { checkCallerWorkflow } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
 import { planFor } from "./loop/rules.ts";

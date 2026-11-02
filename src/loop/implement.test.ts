@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
-import { countEmptyDiffs } from "./implement.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan } from "./types.ts";
 
@@ -142,7 +141,7 @@ describe("An empty diff", () => {
   it("is marked so later runs can count it", () => {
     const [comment] = commentsOf(actionsOf(planFor(empty, snapshotOf(readyTicket()), kitConfig())));
 
-    expect(countEmptyDiffs([comment!])).toBe(1);
+    expect(comment).toMatch(/^<!-- fabrik:empty-diff -->\n/);
   });
 
   it("a third one is a Design flaw: the Ticket goes back to needs-design instead of retrying", () => {
@@ -171,28 +170,6 @@ describe("An empty diff", () => {
       model: "claude-opus-5-5",
       timeoutMinutes: 60,
     });
-  });
-});
-
-describe("Counting earlier empty diffs", () => {
-  const marker = "<!-- fabrik:empty-diff -->\nThe Implementer's branch changed nothing.";
-  const round = "<!-- fabrik:design-round 1 -->\n@operator **Design session, round 1.**";
-  const finishedSession = "**Design session finished.** This issue is now its agent brief, ready for an Implementer.";
-
-  it("counts the Kit's empty-diff comments", () => {
-    expect(countEmptyDiffs(["hello", marker, "a reply", marker])).toBe(2);
-  });
-
-  it.each([
-    ["a Design-session round", round],
-    ["a finished Design session", finishedSession],
-    ["a live Design session's outcome", "<!-- fabrik:live-outcome brief -->\nDecided in a live session."],
-  ])("starts again after %s, so a redesigned Ticket gets fresh retries", (_what, comment) => {
-    expect(countEmptyDiffs([marker, marker, comment, marker])).toBe(1);
-  });
-
-  it("ignores someone quoting the marker mid-comment", () => {
-    expect(countEmptyDiffs([`see this: ${marker}`])).toBe(0);
   });
 });
 
