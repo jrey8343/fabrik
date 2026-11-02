@@ -14,6 +14,8 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 - `src/agent/` holds the **agent job** runner (`node src/agent/run.ts triage`): Sandcastle with `noSandbox()` on the runner VM, the metered-billing preflight as the last `onSandboxReady` step, the `init` check, the step summary, and the role's output passed out as `agent-result.json`. Only agent jobs install the runtime dependencies (Sandcastle and the Claude Code CLI, pinned exactly).
 - `src/preflight/` holds the metered-billing preflight (pure) and the command the hook runs.
 - `src/skills/` and `skills.lock.json` pin Matt Pocock's skills at a commit SHA and install them into a Product checkout's gitignored `.claude/skills/` (ADR-0003).
+- `src/skills/bump.ts` decides the weekly skills bump PR (`.github/workflows/skills-bump.yml`), with the upstream diff in its body; `src/skills/bump-main.ts` is its step.
+- `src/release/` checks that each release pins Sandcastle and the Claude Code CLI at exact versions, which Dependabot bumps (`.github/dependabot.yml`). See [docs/releasing.md](docs/releasing.md) for the release process.
 - `src/kit/jobs.ts` is the Kit job's step: it validates the Kit config and routes the event to an agent job or straight to the push job.
 - `prompts/` holds the Kit's agent prompts.
 - `.github/workflows/loop.yml` is the reusable workflow a Product repo calls. It holds wiring only.
