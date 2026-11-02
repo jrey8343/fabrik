@@ -13,7 +13,7 @@ export interface AgentRunResult {
 /** The artifact's file name, the same in both jobs. */
 export const AGENT_RESULT_FILE = "agent-result.json";
 
-const ROLES: readonly AgentRole[] = ["triage"];
+const ROLES: readonly AgentRole[] = ["triage", "design"];
 
 /** Reads the artifact's text, refusing anything that isn't a result for a known role. */
 export function readAgentRunResult(text: string): AgentRunResult {

@@ -8,6 +8,7 @@ import {
   gatherSnapshot,
   GitHub,
   loopEventFrom,
+  operatorFor,
   readKitConfigSources,
   type Repo,
 } from "./github/adapter.ts";
@@ -43,6 +44,10 @@ function describeAction(action: Action): string {
       return `- remove label on #${action.issue}: ${action.label}`;
     case "comment":
       return `- comment on #${action.issue}`;
+    case "edit-issue-body":
+      return `- rewrite the body of #${action.issue}`;
+    case "start-agent-run":
+      return `- a ${action.role} run on #${action.issue}, which the Kit job routes to its agent job`;
   }
 }
 
@@ -50,14 +55,15 @@ function describeAction(action: Action): string {
  * The Loop event this run applies: an agent job's result when the push job was
  * handed one (FABRIK_AGENT_RESULT), otherwise the Actions event itself.
  */
-async function loopEvent(): Promise<{ event: LoopEvent | null; source: string }> {
+async function loopEvent(
+  eventName: string,
+  payload: Record<string, unknown>,
+): Promise<{ event: LoopEvent | null; source: string }> {
   const resultPath = process.env["FABRIK_AGENT_RESULT"];
   if (resultPath !== undefined && resultPath !== "") {
     const result = readAgentRunResult(await readFile(resultPath, "utf8"));
     return { event: agentRunEventFrom(result), source: `the ${result.role} run on #${result.issue}` };
   }
-  const eventName = required("GITHUB_EVENT_NAME");
-  const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
   return { event: loopEventFrom(eventName, payload), source: `${eventName}.${String(payload["action"] ?? "")}` };
 }
 
@@ -125,13 +131,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { event, source } = await loopEvent();
+  const eventName = required("GITHUB_EVENT_NAME");
+  const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
+  const { event, source } = await loopEvent(eventName, payload);
   if (event === null) {
     await report(`Nothing to do: the Loop doesn't act on ${source}`);
     return;
   }
 
-  const snapshot = await gatherSnapshot(github, repo, event);
+  const snapshot = await gatherSnapshot(github, repo, event, operatorFor(config, payload));
   const plan = planFor(event, snapshot, config);
   await applyPlan(github, repo, plan);
   await report(describe(plan));

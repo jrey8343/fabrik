@@ -2,7 +2,7 @@
 // on the runner VM (noSandbox), behind the metered-billing preflight and the
 // init check, writes the step summary, and passes the role's structured output
 // out as an artifact for the push job. It holds no GitHub write credential.
-//   node <kit>/src/agent/run.ts triage
+//   node <kit>/src/agent/run.ts <triage|design>
 //
 // Run from the Product checkout. Env:
 //   FABRIK_ISSUE_FILE      JSON from `gh issue view --json number,title,body,author,labels,comments`
@@ -15,7 +15,9 @@ import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { readIfPresent, readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
+import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
+import type { AgentRole } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { SKILLS_MARKER } from "../skills/fetch.ts";
@@ -37,28 +39,60 @@ async function loadConfig(productDir: string): Promise<KitConfig> {
   return resolved.config;
 }
 
-/** A Standard Schema over the Triage contract, so Sandcastle can ask the agent to fix a malformed output. */
-const triageSchema: StandardSchemaV1<unknown, TriageOutput> = {
-  "~standard": {
-    version: 1,
-    vendor: "fabrik",
-    validate(value) {
-      const result = readTriageOutput(value);
-      return result.ok ? { value: result.output } : { issues: result.errors.map((message) => ({ message })) };
+type Checked<T> = { readonly ok: true; readonly output: T } | { readonly ok: false; readonly errors: readonly string[] };
+
+/** A Standard Schema over a role's output contract, so Sandcastle can ask the agent to fix a malformed output. */
+function schemaOf<T>(read: (value: unknown) => Checked<T>): StandardSchemaV1<unknown, T> {
+  return {
+    "~standard": {
+      version: 1,
+      vendor: "fabrik",
+      validate(value) {
+        const result = read(value);
+        return result.ok ? { value: result.output } : { issues: result.errors.map((message) => ({ message })) };
+      },
     },
-  },
+  };
+}
+
+/** How one AFK role runs: its prompt, its output tag and contract, and how to log what it emitted. */
+interface RoleSpec<T> {
+  /** The prompt file under prompts/, the output tag, and the Kit config phase. */
+  readonly role: AgentRole;
+  readonly schema: StandardSchemaV1<unknown, T>;
+  /** How the Product's own instructions for this phase relate to the Kit's prompt. */
+  readonly instructionsNote: string;
+  readonly describe: (issue: number, output: T) => string;
+}
+
+const ROLE_SPECS = {
+  triage: {
+    role: "triage",
+    schema: schemaOf(readTriageOutput),
+    instructionsNote:
+      "The Operator wrote these for this repo. They refine the rules above but never loosen the five Fast-path tests.",
+    describe: (issue, output) => `Triage sorted #${issue}: ${output.category}, ${output.state}`,
+  } satisfies RoleSpec<TriageOutput>,
+  design: {
+    role: "design",
+    schema: schemaOf(readDesignTurnOutput),
+    instructionsNote:
+      "The Operator wrote these for this repo. They refine how you run the session but never change the output contract above.",
+    describe: (issue, output) =>
+      output.kind === "round"
+        ? `The Design-session turn on #${issue} asked ${output.questions.length} question(s)`
+        : `The Design session on #${issue} finished with an agent brief`,
+  } satisfies RoleSpec<DesignTurnOutput>,
 };
 
-async function triagePrompt(config: KitConfig, issueText: string): Promise<string> {
-  const template = await readFile(join(KIT_DIR, "prompts", "triage.md"), "utf8");
+/** The Kit's prompt for the role, then the Product's instructions for its phase, then the issue thread. */
+async function promptFor(role: AgentRole, note: string, config: KitConfig, issueText: string): Promise<string> {
+  const template = await readFile(join(KIT_DIR, "prompts", `${role}.md`), "utf8");
   const issue: unknown = JSON.parse(issueText);
   const parts = [template.trimEnd()];
-  if (config.instructions.triage !== null) {
-    parts.push(
-      "## This Product repo's triage instructions",
-      "The Operator wrote these for this repo. They refine the rules above but never loosen the five Fast-path tests.",
-      config.instructions.triage.trimEnd(),
-    );
+  const instructions = config.instructions[role];
+  if (instructions !== null) {
+    parts.push(`## This Product repo's ${role} instructions`, note, instructions.trimEnd());
   }
   parts.push("## The issue", "```json", JSON.stringify(issue, null, 2), "```");
   return `${parts.join("\n\n")}\n`;
@@ -92,7 +126,8 @@ async function writeSummary(text: string): Promise<void> {
   if (path !== undefined && path !== "") await appendFile(path, text);
 }
 
-async function runTriage(): Promise<void> {
+async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
+  const name = spec.role;
   const productDir = process.cwd();
   const outDir = resolve(required("FABRIK_OUT_DIR"));
   await mkdir(outDir, { recursive: true });
@@ -101,7 +136,7 @@ async function runTriage(): Promise<void> {
   if (typeof issueNumber !== "number") throw new Error("FABRIK_ISSUE_FILE has no issue number");
 
   const config = await loadConfig(productDir);
-  const role = config.roles.triage;
+  const role = config.roles[name];
 
   // The agent inherits this process's env (noSandbox), so set what it needs here.
   process.env["PATH"] = [join(KIT_DIR, "node_modules", ".bin"), process.env["PATH"] ?? ""].join(delimiter);
@@ -116,16 +151,16 @@ async function runTriage(): Promise<void> {
 
   try {
     const result = await run({
-      name: `triage-${issueNumber}`,
+      name: `${name}-${issueNumber}`,
       agent: claudeCode(
         role.model,
         role.effort === null ? {} : { effort: role.effort as "low" | "medium" | "high" | "xhigh" | "max" },
       ),
       sandbox: noSandbox(),
       cwd: productDir,
-      prompt: await triagePrompt(config, issueText),
+      prompt: await promptFor(name, spec.instructionsNote, config, issueText),
       maxIterations: 1,
-      output: Output.object({ tag: "triage", schema: triageSchema, maxRetries: 1 }),
+      output: Output.object({ tag: name, schema: spec.schema, maxRetries: 1 }),
       hooks: { sandbox: { onSandboxReady: [{ command: readyHook(config.sandbox.setup), timeoutMs }] } },
       signal: abort.signal,
       logging: {
@@ -146,9 +181,9 @@ async function runTriage(): Promise<void> {
     if (init.refused === null) throw new Error("The agent's stream had no init message, so its API key source is unchecked");
     if (init.refused.length > 0) throw new Error(`Refused at init: ${init.refused.join("; ")}`);
 
-    const artifact: AgentRunResult = { role: "triage", issue: issueNumber, output: JSON.stringify(result.output) };
+    const artifact: AgentRunResult = { role: name, issue: issueNumber, output: JSON.stringify(result.output) };
     await writeFile(join(outDir, AGENT_RESULT_FILE), `${JSON.stringify(artifact, null, 2)}\n`);
-    console.log(`Triage sorted #${issueNumber}: ${result.output.category}, ${result.output.state}`);
+    console.log(spec.describe(issueNumber, result.output));
   } catch (error) {
     for (const route of init.refused ?? []) console.log(`::error title=Metered-billing route::${route}`);
     throw error;
@@ -162,7 +197,7 @@ async function runTriage(): Promise<void> {
         console.log(`::warning title=Pinned skills missing at init::${missing.join(", ")}`);
       }
     }
-    await writeSummary(runSummary({ role: "triage", lines, ...(pinnedSkills === undefined ? {} : { pinnedSkills }) }));
+    await writeSummary(runSummary({ role: name, lines, ...(pinnedSkills === undefined ? {} : { pinnedSkills }) }));
   }
 }
 
@@ -175,7 +210,10 @@ async function installedSkills(productDir: string): Promise<{ sha: string; names
   return { sha, names: entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name) };
 }
 
-const roles: Record<string, () => Promise<void>> = { triage: runTriage };
+const roles: Record<string, () => Promise<void>> = {
+  triage: () => runRole(ROLE_SPECS.triage),
+  design: () => runRole(ROLE_SPECS.design),
+};
 
 const roleName = process.argv[2] ?? "";
 const runner = roles[roleName];

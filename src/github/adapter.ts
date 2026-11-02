@@ -1,9 +1,10 @@
 // The GitHub adapter: turns an Actions event into a Loop event, gathers the
 // snapshot the core needs, and applies the plan the core returns. It holds no
 // Loop rules; those all live in src/loop/rules.ts.
-import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
+import { instructionsPath, KIT_CONFIG_PATH, type KitConfig, type KitConfigSources, PHASES } from "../kit/config.ts";
 import type { AgentRunResult } from "../agent/result.ts";
-import type { Action, AgentRole, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
+import { isDesignRoundComment } from "../loop/design.ts";
+import type { Action, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 
 export interface Repo {
   readonly owner: string;
@@ -12,23 +13,44 @@ export interface Repo {
 
 /** Maps an Actions event to the Loop event it stands for, or null if the Loop ignores it. */
 export function loopEventFrom(eventName: string, payload: Record<string, unknown>): LoopEvent | null {
+  const issue = payload["issue"] as { number: number; pull_request?: unknown } | undefined;
+  if (issue === undefined) return null;
   if (eventName === "issues" && payload["action"] === "opened") {
-    const issue = payload["issue"] as { number: number };
     return { kind: "issue-opened", issue: issue.number };
+  }
+  if (eventName === "issues" && payload["action"] === "labeled") {
+    const label = payload["label"] as { name: string };
+    return { kind: "label-added", issue: issue.number, label: label.name };
+  }
+  // issue_comment also fires for comments on pull requests, which aren't issue comments to the Loop.
+  if (eventName === "issue_comment" && payload["action"] === "created" && issue.pull_request === undefined) {
+    const user = (payload["comment"] as { user: { login: string; type: string } }).user;
+    return { kind: "issue-comment-created", issue: issue.number, author: user.login, authorIsBot: user.type === "Bot" };
   }
   return null;
 }
 
 /**
- * The AFK role whose agent job an Actions event starts, or null when it goes
- * straight to the push job. Adding needs-triage to an open issue starts Triage.
+ * The Operator's login: the Kit config's `operator`, or else the Product
+ * repo's owner, which must then be a user rather than an organization.
  */
-export function agentRoleFor(eventName: string, payload: Record<string, unknown>): AgentRole | null {
-  if (eventName !== "issues" || payload["action"] !== "labeled") return null;
-  const label = payload["label"] as { name?: unknown } | undefined;
-  const issue = payload["issue"] as { state?: unknown } | undefined;
-  if (label?.name === "needs-triage" && issue?.state === "open") return "triage";
-  return null;
+export function operatorFor(config: KitConfig, payload: Record<string, unknown>): string {
+  if (config.operator !== null) return config.operator;
+  const owner = (payload["repository"] as { owner?: { login?: string; type?: string } } | undefined)?.owner;
+  if (owner?.type === "User" && typeof owner.login === "string") return owner.login;
+  throw new Error(
+    `The repo's owner ${owner?.login ?? "(unknown)"} isn't a user, so set "operator" to the Operator's login in ${KIT_CONFIG_PATH}`,
+  );
+}
+
+/** The agent run a plan starts, which the workflow carries out by routing to that role's agent job. */
+export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run" }> | null {
+  if (plan.kind !== "act") return null;
+  return (
+    plan.actions.find(
+      (action): action is Extract<Action, { kind: "start-agent-run" }> => action.kind === "start-agent-run",
+    ) ?? null
+  );
 }
 
 /**
@@ -100,9 +122,11 @@ const ISSUE_QUERY = `
     repository(owner: $owner, name: $name) {
       issue(number: $number) {
         number
+        state
         author { login }
         labels(first: 100) { nodes { name } }
         parent { number }
+        comments(last: 100) { nodes { body } }
       }
     }
   }
@@ -112,15 +136,17 @@ interface IssueQueryResult {
   repository: {
     issue: {
       number: number;
+      state: "OPEN" | "CLOSED";
       author: { login: string } | null;
       labels: { nodes: { name: string }[] };
       parent: { number: number } | null;
+      comments: { nodes: { body: string }[] };
     } | null;
   };
 }
 
 /** Reads the current GitHub state the event needs, fresh rather than from the event payload. */
-export async function gatherSnapshot(github: GitHub, repo: Repo, event: LoopEvent): Promise<Snapshot> {
+export async function gatherSnapshot(github: GitHub, repo: Repo, event: LoopEvent, operator: string): Promise<Snapshot> {
   const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, {
     owner: repo.owner,
     name: repo.name,
@@ -133,10 +159,13 @@ export async function gatherSnapshot(github: GitHub, repo: Repo, event: LoopEven
   return {
     issue: {
       number: issue.number,
+      open: issue.state === "OPEN",
       author: issue.author?.login ?? "ghost",
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
+      designRounds: issue.comments.nodes.filter((comment) => isDesignRoundComment(comment.body)).length,
     },
+    operator,
   };
 }
 
@@ -173,6 +202,12 @@ async function apply(github: GitHub, repo: Repo, action: Action): Promise<void> 
       return;
     case "comment":
       await github.rest("POST", `${issue}/comments`, { body: action.body });
+      return;
+    case "edit-issue-body":
+      await github.rest("PATCH", issue, { body: action.body });
+      return;
+    case "start-agent-run":
+      // The workflow starts agent runs by routing to the role's agent job (src/kit/jobs.ts).
       return;
   }
 }

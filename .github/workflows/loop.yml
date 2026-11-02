@@ -34,10 +34,13 @@ jobs:
       # Only to read this workflow's own commit from the job's OIDC token.
       id-token: write
       contents: read
+      # To read the issue for the Loop rules core's snapshot.
+      issues: read
     outputs:
       sha: ${{ steps.kit.outputs.sha }}
       route: ${{ steps.route.outputs.route }}
       triage-timeout-minutes: ${{ steps.route.outputs.triage-timeout-minutes }}
+      design-timeout-minutes: ${{ steps.route.outputs.design-timeout-minutes }}
     steps:
       # No expression context names the commit of a called workflow, so read
       # it from the OIDC token's job_workflow_sha claim.
@@ -79,6 +82,8 @@ jobs:
 
       - name: Validate the Kit config and route the event
         id: route
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: node kit/src/kit/jobs.ts product
 
   triage:
@@ -152,13 +157,90 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  design:
+    name: Design-session turn
+    needs: kit
+    if: needs.kit.outputs.route == 'design'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.design-timeout-minutes) }}
+    # One turn per issue at a time. queue: max keeps every queued Operator reply
+    # instead of letting a newer one cancel the one already waiting.
+    concurrency:
+      group: fabrik-design-${{ github.event.issue.number }}
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - name: Check out the Product repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          persist-credentials: false
+
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Install the Kit (Sandcastle and the Claude Code CLI, pinned)
+        working-directory: kit
+        run: npm ci
+
+      - name: Fetch the pinned skills into .claude/skills
+        run: node kit/src/skills/fetch.ts product
+
+      # Each turn rebuilds its context from the issue thread; the agent never gets a GitHub token.
+      - name: Read the issue thread
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json number,title,body,author,labels,comments >"$RUNNER_TEMP/issue.json"
+
+      - name: Load the Claude token
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+
+      - name: Run the Design-session turn
+        working-directory: product
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
+          FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+        run: node ../kit/src/agent/run.ts design
+
+      - name: Pass the turn's output to the push job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-result
+          path: ${{ runner.temp }}/fabrik-out/agent-result.json
+          if-no-files-found: error
+          retention-days: 7
+
   push:
     name: Push
-    needs: [kit, triage]
-    # Runs straight after the Kit job, or after an agent job that succeeded.
+    needs: [kit, triage, design]
+    # Runs straight after the Kit job when it routed here, or after the agent job it routed to succeeded.
     if: >-
-      !cancelled() && needs.kit.result == 'success' &&
-      (needs.triage.result == 'success' || (needs.kit.outputs.route == 'push' && needs.triage.result == 'skipped'))
+      !cancelled() && needs.kit.result == 'success' && (
+        needs.kit.outputs.route == 'push' ||
+        (needs.kit.outputs.route == 'triage' && needs.triage.result == 'success') ||
+        (needs.kit.outputs.route == 'design' && needs.design.result == 'success')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions: {}
