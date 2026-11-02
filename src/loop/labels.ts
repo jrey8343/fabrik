@@ -13,6 +13,9 @@ export const STATE_LABELS: readonly string[] = [
 /** What kind of work an issue is. Triage leaves exactly one on every issue it sorts. */
 export const CATEGORY_LABELS: readonly string[] = ["bug", "enhancement"];
 
+/** The trigger label Dispatch adds to start an Implementer (ADR-0001). */
+export const DISPATCH_LABEL = "agent:implement";
+
 /** Labels the wayfinder skill puts on the maps and tickets it creates. */
 export function isWayfinderLabel(label: string): boolean {
   return label.startsWith("wayfinder:");

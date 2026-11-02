@@ -130,7 +130,7 @@ describe("Applying Triage output", () => {
     expect(plan).toMatchObject({ kind: "fail", failure: "infrastructure" });
   });
 
-  it("writes a Fast-path issue's agent brief and acceptance criteria into the issue", () => {
+  it("writes a Fast-path issue's agent brief and acceptance criteria into the issue, then checks Dispatch", () => {
     const issue = anIssue({ number: 7, labels: ["needs-triage"] });
 
     const plan = planFor(
@@ -168,6 +168,7 @@ describe("Applying Triage output", () => {
         },
         { kind: "remove-label", issue: 7, label: "needs-triage" },
         { kind: "add-labels", issue: 7, labels: ["bug", "ready-for-agent"] },
+        { kind: "check-dispatch" },
       ],
     });
   });
