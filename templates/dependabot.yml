@@ -1,0 +1,17 @@
+# Fabrik's Dependabot shim in a Product repo (ADR-0003). It opens a PR each time
+# Fabrik cuts a release, bumping the one pin in .github/workflows/fabrik.yml,
+# and the Operator merges it through the Merge gate like any other change.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: daily
+    # Only the Kit pin; this entry leaves the Product's other actions alone.
+    allow:
+      - dependency-name: "jrey8343/fabrik*"
+    # A release reaches the Product repo the day it's cut.
+    cooldown:
+      default-days: 0
+    commit-message:
+      prefix: "fabrik"
