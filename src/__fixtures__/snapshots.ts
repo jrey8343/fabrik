@@ -13,8 +13,9 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
   };
 }
 
-export function snapshotOf(issue: IssueSnapshot): Snapshot {
-  return { issue };
+/** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
+export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
+  return { issue, operator: "operator", ...overrides };
 }
 
 /** A Kit config with every v1 default, as a Product repo with no .fabrik/config.json gets. */
