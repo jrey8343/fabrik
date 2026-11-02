@@ -6,15 +6,18 @@ import type { IssueSnapshot, KitConfig, Snapshot } from "../loop/types.ts";
 export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
   return {
     number: 1,
+    open: true,
     author: "someone",
     labels: [],
     parent: null,
+    designRounds: 0,
     ...overrides,
   };
 }
 
-export function snapshotOf(issue: IssueSnapshot): Snapshot {
-  return { issue };
+/** A snapshot around this issue; the Operator is `the-operator` unless a test says otherwise. */
+export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
+  return { issue, operator: "the-operator", ...overrides };
 }
 
 /** A Kit config with every v1 default, as a Product repo with no .fabrik/config.json gets. */

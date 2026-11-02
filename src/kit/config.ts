@@ -26,6 +26,8 @@ export interface KitConfig {
     readonly stepUp: { readonly model: string; readonly effort: string | null };
   };
   readonly maxInFlight: number;
+  /** The Operator's GitHub login; null means the Product repo's owner, who must then be a user. */
+  readonly operator: string | null;
   readonly instructions: Readonly<Record<Phase, string | null>>;
 }
 
@@ -64,6 +66,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     stepUp: { model: OPUS, effort: null },
   },
   maxInFlight: 2,
+  operator: null,
   instructions: { triage: null, design: null, implement: null, review: null },
 };
 
@@ -121,6 +124,7 @@ function readConfig(file: Reader): KitConfig {
       stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp),
     },
     maxInFlight: file.positiveInteger("max_in_flight") ?? defaults.maxInFlight,
+    operator: orDefault(file.nullableString("operator", checkLogin), defaults.operator),
   };
 }
 
@@ -165,6 +169,12 @@ const EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 
 function checkEffort(effort: string): string | null {
   return EFFORTS.includes(effort) ? null : `effort must be one of ${EFFORTS.join(", ")}`;
+}
+
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+
+function checkLogin(login: string): string | null {
+  return LOGIN.test(login) ? null : "the Operator must be a GitHub login, such as octocat (no @)";
 }
 
 function requireOpReference(value: string): string | null {

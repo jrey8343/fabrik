@@ -221,3 +221,33 @@ describe("Applying Triage output", () => {
     });
   });
 });
+
+describe("Starting Triage", () => {
+  it("starts a Triage run when needs-triage is added to an open issue", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage"] });
+
+    const plan = planFor({ kind: "label-added", issue: 7, label: "needs-triage" }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "start-agent-run",
+          role: "triage",
+          issue: 7,
+          model: "claude-opus-5-5",
+          effort: null,
+          timeoutMinutes: 10,
+        },
+      ],
+    });
+  });
+
+  it("does not triage a closed issue, saying why", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage"], open: false });
+
+    const plan = planFor({ kind: "label-added", issue: 7, label: "needs-triage" }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({ kind: "nothing", reason: "#7 is closed" });
+  });
+});

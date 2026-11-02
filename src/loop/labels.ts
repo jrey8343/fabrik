@@ -10,6 +10,10 @@ export const STATE_LABELS: readonly string[] = [
   "wontfix",
 ];
 
+export const NEEDS_TRIAGE = "needs-triage";
+export const NEEDS_DESIGN = "needs-design";
+export const READY_FOR_AGENT = "ready-for-agent";
+
 /** What kind of work an issue is. Triage leaves exactly one on every issue it sorts. */
 export const CATEGORY_LABELS: readonly string[] = ["bug", "enhancement"];
 
