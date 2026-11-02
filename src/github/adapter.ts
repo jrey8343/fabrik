@@ -2,7 +2,8 @@
 // snapshot the core needs, and applies the plan the core returns. It holds no
 // Loop rules; those all live in src/loop/rules.ts.
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
-import type { Action, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
+import type { AgentRunResult } from "../agent/result.ts";
+import type { Action, AgentRole, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 
 export interface Repo {
   readonly owner: string;
@@ -18,6 +19,26 @@ export function loopEventFrom(eventName: string, payload: Record<string, unknown
   return null;
 }
 
+/**
+ * The AFK role whose agent job an Actions event starts, or null when it goes
+ * straight to the push job. Adding needs-triage to an open issue starts Triage.
+ */
+export function agentRoleFor(eventName: string, payload: Record<string, unknown>): AgentRole | null {
+  if (eventName !== "issues" || payload["action"] !== "labeled") return null;
+  const label = payload["label"] as { name?: unknown } | undefined;
+  const issue = payload["issue"] as { state?: unknown } | undefined;
+  if (label?.name === "needs-triage" && issue?.state === "open") return "triage";
+  return null;
+}
+
+/**
+ * Turns the result an agent job passed out as an artifact (src/agent/result.ts)
+ * into the Loop event its push job applies.
+ */
+export function agentRunEventFrom(result: AgentRunResult): LoopEvent {
+  return { kind: "agent-run-finished", role: result.role, issue: result.issue, output: result.output };
+}
+
 /** A GitHub API client authenticated as the Fabrik App. */
 export class GitHub {
   readonly #token: string;
@@ -28,12 +49,14 @@ export class GitHub {
     this.#apiUrl = apiUrl;
   }
 
-  async rest(method: string, path: string, body?: unknown): Promise<unknown> {
+  /** A REST call; with `allowNotFound`, a 404 (say, removing a label already gone) returns null. */
+  async rest(method: string, path: string, body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<unknown> {
     const response = await fetch(`${this.#apiUrl}${path}`, {
       method,
       headers: this.#headers(),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+    if (response.status === 404 && options.allowNotFound === true) return null;
     if (!response.ok) {
       throw new Error(`GitHub ${method} ${path} failed: ${response.status} ${await response.text()}`);
     }
@@ -131,18 +154,25 @@ export async function readKitConfigSources(github: GitHub, repo: Repo, ref: stri
 
 /** Applies each action in the plan, in order. */
 export async function applyPlan(github: GitHub, repo: Repo, plan: Plan): Promise<void> {
-  if (plan.kind === "nothing") return;
+  if (plan.kind !== "act") return;
   for (const action of plan.actions) {
     await apply(github, repo, action);
   }
 }
 
 async function apply(github: GitHub, repo: Repo, action: Action): Promise<void> {
+  const issue = `/repos/${repo.owner}/${repo.name}/issues/${action.issue}`;
   switch (action.kind) {
     case "add-labels":
-      await github.rest("POST", `/repos/${repo.owner}/${repo.name}/issues/${action.issue}/labels`, {
-        labels: action.labels,
+      if (action.labels.length > 0) await github.rest("POST", `${issue}/labels`, { labels: action.labels });
+      return;
+    case "remove-label":
+      await github.rest("DELETE", `${issue}/labels/${encodeURIComponent(action.label)}`, undefined, {
+        allowNotFound: true,
       });
+      return;
+    case "comment":
+      await github.rest("POST", `${issue}/comments`, { body: action.body });
       return;
   }
 }

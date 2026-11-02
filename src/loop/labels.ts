@@ -10,6 +10,9 @@ export const STATE_LABELS: readonly string[] = [
   "wontfix",
 ];
 
+/** What kind of work an issue is. Triage leaves exactly one on every issue it sorts. */
+export const CATEGORY_LABELS: readonly string[] = ["bug", "enhancement"];
+
 /** Labels the wayfinder skill puts on the maps and tickets it creates. */
 export function isWayfinderLabel(label: string): boolean {
   return label.startsWith("wayfinder:");

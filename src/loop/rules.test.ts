@@ -65,3 +65,159 @@ describe("Intake", () => {
     });
   });
 });
+
+describe("Applying Triage output", () => {
+  const triaged = (output: unknown) =>
+    ({ kind: "agent-run-finished", role: "triage", issue: 7, output: JSON.stringify(output) }) as const;
+
+  it("comments, removes needs-triage, and adds exactly one category and one state label", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage"] });
+
+    const plan = planFor(
+      triaged({ category: "bug", state: "needs-design", comment: "Needs a design pass." }),
+      snapshotOf(issue),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "comment", issue: 7, body: "Needs a design pass." },
+        { kind: "remove-label", issue: 7, label: "needs-triage" },
+        { kind: "add-labels", issue: 7, labels: ["bug", "needs-design"] },
+      ],
+    });
+  });
+
+  it("swaps out a category the author already chose, so the issue keeps exactly one", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage", "bug", "docs"] });
+
+    const plan = planFor(
+      triaged({ category: "enhancement", state: "needs-design", comment: "A feature, not a bug." }),
+      snapshotOf(issue),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "comment", issue: 7, body: "A feature, not a bug." },
+        { kind: "remove-label", issue: 7, label: "needs-triage" },
+        { kind: "remove-label", issue: 7, label: "bug" },
+        { kind: "add-labels", issue: 7, labels: ["enhancement", "needs-design"] },
+      ],
+    });
+  });
+
+  it.each([
+    ["is not JSON", "category: bug"],
+    ["is not an object", JSON.stringify(["bug", "needs-design"])],
+    ["has no category", JSON.stringify({ state: "needs-design", comment: "Hm." })],
+    ["names a category the Loop doesn't use", JSON.stringify({ category: "question", state: "needs-design", comment: "Hm." })],
+    ["names no state", JSON.stringify({ category: "bug", comment: "Hm." })],
+    ["leaves the issue in needs-triage", JSON.stringify({ category: "bug", state: "needs-triage", comment: "Hm." })],
+    ["names a label that isn't a state", JSON.stringify({ category: "bug", state: "urgent", comment: "Hm." })],
+    ["has an empty comment", JSON.stringify({ category: "bug", state: "needs-design", comment: "  " })],
+  ])("fails the run as an Infrastructure failure, changing nothing, when the output %s", (_, output) => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage"] });
+
+    const plan = planFor(
+      { kind: "agent-run-finished", role: "triage", issue: 7, output },
+      snapshotOf(issue),
+      kitConfig(),
+    );
+
+    expect(plan).toMatchObject({ kind: "fail", failure: "infrastructure" });
+  });
+
+  it("writes a Fast-path issue's agent brief and acceptance criteria into the issue", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage"] });
+
+    const plan = planFor(
+      triaged({
+        category: "bug",
+        state: "ready-for-agent",
+        comment: "All five Fast-path tests pass.",
+        brief: {
+          summary: "The booking form rejects valid Medicare numbers.",
+          acceptanceCriteria: ["A 10-digit Medicare number is accepted", "An 9-digit one is refused"],
+        },
+      }),
+      snapshotOf(issue),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: 7,
+          body: [
+            "All five Fast-path tests pass.",
+            "",
+            "## Agent brief",
+            "",
+            "The booking form rejects valid Medicare numbers.",
+            "",
+            "### Acceptance criteria",
+            "",
+            "- [ ] A 10-digit Medicare number is accepted",
+            "- [ ] An 9-digit one is refused",
+          ].join("\n"),
+        },
+        { kind: "remove-label", issue: 7, label: "needs-triage" },
+        { kind: "add-labels", issue: 7, labels: ["bug", "ready-for-agent"] },
+      ],
+    });
+  });
+
+  it.each([
+    ["no brief", undefined],
+    ["a brief with no acceptance criteria", { summary: "Fix it.", acceptanceCriteria: [] }],
+  ])("fails the run when the Fast path comes with %s", (_, brief) => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage"] });
+
+    const plan = planFor(
+      triaged({ category: "bug", state: "ready-for-agent", comment: "Easy.", brief }),
+      snapshotOf(issue),
+      kitConfig(),
+    );
+
+    expect(plan).toMatchObject({ kind: "fail", failure: "infrastructure" });
+  });
+
+  it("leaves an issue alone if it left needs-triage while Triage ran, saying why", () => {
+    const issue = anIssue({ number: 7, labels: ["bug", "ready-for-human"] });
+
+    const plan = planFor(
+      triaged({ category: "bug", state: "needs-design", comment: "Needs design." }),
+      snapshotOf(issue),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "#7 no longer has needs-triage, so Triage's output is stale",
+    });
+  });
+
+  it("does not re-add a category the issue already has", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage", "bug"] });
+
+    const plan = planFor(
+      triaged({ category: "bug", state: "needs-design", comment: "Confirmed." }),
+      snapshotOf(issue),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "comment", issue: 7, body: "Confirmed." },
+        { kind: "remove-label", issue: 7, label: "needs-triage" },
+        { kind: "add-labels", issue: 7, labels: ["needs-design"] },
+      ],
+    });
+  });
+});

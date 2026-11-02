@@ -7,14 +7,19 @@ name: Fabrik
 
 on:
   issues:
-    types: [opened]
+    types: [opened, labeled]
 
 permissions: {}
 
 jobs:
   loop:
     uses: jrey8343/fabrik/.github/workflows/loop.yml@v0.1.0-pre.1
+    # The most any Kit job may hold; each job narrows it. None of these writes:
+    # every write goes through the Fabrik App token in a push job.
     permissions:
       id-token: write
+      contents: read
+      issues: read
     secrets:
+      OP_AGENT_TOKEN: ${{ secrets.FABRIK_OP_AGENT_TOKEN }}
       OP_PUSH_TOKEN: ${{ secrets.FABRIK_OP_PUSH_TOKEN }}
