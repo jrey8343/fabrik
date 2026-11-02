@@ -130,7 +130,7 @@ describe("Applying Triage output", () => {
     expect(plan).toMatchObject({ kind: "fail", failure: "infrastructure" });
   });
 
-  it("writes a Fast-path issue's agent brief and acceptance criteria into the issue", () => {
+  it("writes a Fast-path issue's agent brief and acceptance criteria into the issue, then checks Dispatch", () => {
     const issue = anIssue({ number: 7, labels: ["needs-triage"] });
 
     const plan = planFor(
@@ -168,6 +168,7 @@ describe("Applying Triage output", () => {
         },
         { kind: "remove-label", issue: 7, label: "needs-triage" },
         { kind: "add-labels", issue: 7, labels: ["bug", "ready-for-agent"] },
+        { kind: "check-dispatch" },
       ],
     });
   });
@@ -331,4 +332,34 @@ describe("A reply on a needs-info issue", () => {
       expect(plan).toEqual({ kind: "nothing", reason: "#7 isn't in needs-info" });
     },
   );
+});
+
+describe("Starting Triage", () => {
+  it("starts a Triage run when needs-triage is added to an open issue", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage"] });
+
+    const plan = planFor({ kind: "label-added", issue: 7, label: "needs-triage" }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "start-agent-run",
+          role: "triage",
+          issue: 7,
+          model: "claude-opus-5-5",
+          effort: null,
+          timeoutMinutes: 10,
+        },
+      ],
+    });
+  });
+
+  it("does not triage a closed issue, saying why", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage"], open: false });
+
+    const plan = planFor({ kind: "label-added", issue: 7, label: "needs-triage" }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({ kind: "nothing", reason: "#7 is closed" });
+  });
 });

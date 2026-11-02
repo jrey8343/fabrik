@@ -30,6 +30,7 @@ export interface FailureReport {
 /** Something that happened in a Product repo that the Loop may act on. */
 export type LoopEvent =
   | { readonly kind: "issue-opened"; readonly issue: number }
+  | { readonly kind: "label-added"; readonly issue: number; readonly label: string }
   | {
       readonly kind: "issue-comment-created";
       readonly issue: number;
@@ -60,25 +61,75 @@ export type LoopEvent =
       /** What the agent job reported about its own failure, or null if it left nothing. */
       readonly report: FailureReport | null;
     }
+  | { readonly kind: "issue-closed"; readonly issue: number }
+  | { readonly kind: "pull-request-left-draft"; readonly pullRequest: number }
+  | { readonly kind: "pull-request-closed"; readonly pullRequest: number }
+  /** A Dispatch check, which an earlier plan asked for with `check-dispatch`. */
+  | { readonly kind: "dispatch-check" }
   | {
-      /** The scheduled Kit workflow's tick, for the Loop's time-based rules. */
+      /** The scheduled Kit workflow's tick (schedule.yml), for the Loop's time-based rules. */
       readonly kind: "scheduled-tick";
       /** When the tick ran, as an ISO 8601 time. */
       readonly now: string;
     };
 
-/** The Loop events about one issue, for which the snapshot holds that issue. */
-export type IssueEvent = Exclude<LoopEvent, { kind: "scheduled-tick" }>;
-
 /** An issue as the core sees it, gathered fresh by the GitHub adapter. */
 export interface IssueSnapshot {
   readonly number: number;
+  readonly open: boolean;
   readonly author: string;
   readonly labels: readonly string[];
   /** The parent issue's number, or null if it isn't a sub-issue. */
   readonly parent: number | null;
   /** The open pull requests linked to close this issue, oldest first. */
   readonly openPullRequests: readonly number[];
+  /** How many Design-session rounds the Kit has posted on the issue so far. */
+  readonly designRounds: number;
+}
+
+/** A pull request as the core sees it. */
+export interface PullRequestSnapshot {
+  readonly number: number;
+  /** Whether the Fabrik App opened it for a Ticket (src/loop/agentPullRequest.ts). */
+  readonly isAgent: boolean;
+}
+
+/** A `ready-for-agent` issue that a Dispatch check weighs. */
+export interface TicketSnapshot {
+  readonly number: number;
+  readonly open: boolean;
+  readonly labels: readonly string[];
+  /** The issues blocking it that are still open. */
+  readonly openBlockers: readonly number[];
+  /** How many sub-issues it has, open or closed. Any at all make it a Spec. */
+  readonly subIssues: number;
+  /** The open pull requests linked to close it. */
+  readonly openLinkedPullRequests: readonly number[];
+}
+
+/** What a Dispatch check needs: the Tickets it may release and the work already in flight. */
+export interface DispatchSnapshot {
+  /** Every open `ready-for-agent` issue, in any order. */
+  readonly tickets: readonly TicketSnapshot[];
+  readonly openAgentDraftPullRequests: number;
+  readonly implementRunsInProgress: number;
+}
+
+/**
+ * The slice of GitHub state a Loop event needs to be decided. The adapter
+ * gathers only the part the event is about and leaves the rest null.
+ */
+export interface Snapshot {
+  /** The issue an issue event is about. */
+  readonly issue: IssueSnapshot | null;
+  /** The pull request a pull-request event is about. */
+  readonly pullRequest: PullRequestSnapshot | null;
+  /** Gathered for a Dispatch check only. */
+  readonly dispatch: DispatchSnapshot | null;
+  /** The Operator's GitHub login: ready-for-human work is assigned to them, and Design rounds and failures @-mention them. */
+  readonly operator: string;
+  /** The open issues the Kit owns in this repo (token rotation, weekly limit), oldest first. Gathered for every event. */
+  readonly kitIssues: readonly KitIssueSnapshot[];
 }
 
 /** An open issue carrying one of the Kit's own labels, as the adapter read it (src/loop/kitIssues.ts). */
@@ -90,19 +141,11 @@ export interface KitIssueSnapshot {
   readonly comments: readonly string[];
 }
 
-/** The slice of GitHub state a Loop event needs to be decided. */
-export interface Snapshot {
-  /** The issue the event is about, or null for an event about no one issue (a scheduled tick). */
-  readonly issue: IssueSnapshot | null;
-  /** The Operator's GitHub login, whom ready-for-human work is assigned to and failures @-mention. */
-  readonly operator: string;
-  /** The open issues the Kit owns in this repo (token rotation, weekly limit), oldest first. */
-  readonly kitIssues: readonly KitIssueSnapshot[];
-}
-
-/** The snapshot for an event about one issue. */
-export interface IssueEventSnapshot extends Snapshot {
+/** An issue event's snapshot, once the core has checked it holds the issue. */
+export interface IssueContext {
   readonly issue: IssueSnapshot;
+  readonly operator: Snapshot["operator"];
+  readonly kitIssues: Snapshot["kitIssues"];
 }
 
 /** The resolved Kit config, every default filled in (src/kit/config.ts). */
@@ -113,6 +156,7 @@ export type Action =
   | { readonly kind: "add-labels"; readonly issue: number; readonly labels: readonly string[] }
   | { readonly kind: "remove-label"; readonly issue: number; readonly label: string }
   | { readonly kind: "comment"; readonly issue: number; readonly body: string }
+  | { readonly kind: "edit-issue-body"; readonly issue: number; readonly body: string }
   | { readonly kind: "assign"; readonly issue: number; readonly assignee: string }
   | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" | "completed" }
   | {
@@ -121,7 +165,18 @@ export type Action =
       readonly body: string;
       readonly labels: readonly string[];
       readonly assignees: readonly string[];
-    };
+    }
+  | {
+      /** Starts a role's agent job; the workflow does this by routing to it, not the adapter. */
+      readonly kind: "start-agent-run";
+      readonly role: AgentRole;
+      readonly issue: number;
+      readonly model: string;
+      readonly effort: string | null;
+      readonly timeoutMinutes: number;
+    }
+  /** Run a Dispatch check, in the Dispatch job, once the rest of this plan has landed. */
+  | { readonly kind: "check-dispatch" };
 
 /**
  * What the core decided: actions to apply, nothing (with the reason why), or

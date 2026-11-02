@@ -2,7 +2,7 @@
 // Infrastructure failure. It's never retried and never counts against a
 // Ticket's retries; the Operator gets one comment saying how to resume it.
 import { repoWideNotice } from "./kitIssues.ts";
-import type { AgentRole, InfrastructureFailure, IssueEventSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
+import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
@@ -54,8 +54,8 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
  * Operator's only @-mention, unless the failure stalls the whole repo: then a
  * Kit-owned issue does the notifying, once, and the comment points there.
  */
-export function failureNotice(run: FailedRun, snapshot: IssueEventSnapshot, config: KitConfig): Plan {
-  const { issue, operator } = snapshot;
+export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig): Plan {
+  const { issue, operator } = context;
   const failure = classify(run);
   const label = TRIGGER_LABELS[run.role];
   const pullRequest = issue.openPullRequests[0];
@@ -65,7 +65,7 @@ export function failureNotice(run: FailedRun, snapshot: IssueEventSnapshot, conf
   const where = labelled === target ? "" : ` on #${labelled}`;
   const detail = run.report === null || run.report.detail.trim() === "" ? [] : ["", `> ${run.report.detail.trim()}`];
   const failedRun = `The ${ROLE_NAMES[run.role]} run on #${run.issue}`;
-  const repoWide = repoWideNotice(failure, snapshot, {
+  const repoWide = repoWideNotice(failure, context, {
     run: failedRun,
     runUrl: run.runUrl,
     resetsAt: run.report?.resetsAt ?? null,

@@ -1,18 +1,31 @@
 // The Kit job's step: validates the Product's Kit config (read as data from a
-// sparse checkout, never run) and tells the workflow which job this event
-// routes to and the settings its jobs need before they start, such as their
-// timeout-minutes. Writes step outputs:
-//   route                    "triage", or "push" for events the push job handles alone
+// sparse checkout, never run), asks the Loop rules core what this event calls
+// for, and tells the workflow which job it routes to and the settings its jobs
+// need before they start, such as their timeout-minutes. Writes step outputs:
+//   route                    "triage" or "design" when the plan starts that agent run,
+//                            "push" when the push job has something to apply,
+//                            "none" when the plan is to do nothing
 //   triage-timeout-minutes   the Triage role's Kit config timeout
+//   design-timeout-minutes   the Design-session turn's Kit config timeout
+//   dispatch-timeout-minutes the Dispatch job's Kit config timeout
 //   node src/kit/jobs.ts <product checkout>
+// Env: GH_TOKEN, a read-only token for gathering the snapshot.
 import { appendFile, readFile } from "node:fs/promises";
-import { agentRoleFor } from "../github/adapter.ts";
+import { agentRunIn, gatherSnapshot, GitHub, loopEventFrom, type Repo } from "../github/adapter.ts";
+import { planFor } from "../loop/rules.ts";
+import type { Plan } from "../loop/types.ts";
 import { readKitConfigFromCheckout } from "./checkout.ts";
 
 function required(name: string): string {
   const value = process.env[name];
   if (value === undefined || value === "") throw new Error(`${name} is not set`);
   return value;
+}
+
+function routeOf(plan: Plan): string {
+  const run = agentRunIn(plan);
+  if (run !== null) return run.role;
+  return plan.kind === "nothing" ? "none" : "push";
 }
 
 async function main(productDir: string): Promise<void> {
@@ -22,14 +35,33 @@ async function main(productDir: string): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  const { config } = resolved;
 
+  const eventName = required("GITHUB_EVENT_NAME");
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
-  const route = agentRoleFor(required("GITHUB_EVENT_NAME"), payload) ?? "push";
-  const outputs = { route, "triage-timeout-minutes": String(resolved.config.roles.triage.timeoutMinutes) };
+  const event = loopEventFrom(eventName, payload);
+  let route = "none";
+  if (event === null) {
+    console.log(`The Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
+  } else {
+    const [owner, name] = required("GITHUB_REPOSITORY").split("/");
+    const repo: Repo = { owner: owner ?? "", name: name ?? "" };
+    const github = new GitHub(required("GH_TOKEN"), process.env["GITHUB_API_URL"]);
+    const plan = planFor(event, await gatherSnapshot(github, repo, event, config.operator), config);
+    if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
+    route = routeOf(plan);
+  }
+
+  const outputs = {
+    route,
+    "triage-timeout-minutes": String(config.roles.triage.timeoutMinutes),
+    "design-timeout-minutes": String(config.roles.design.timeoutMinutes),
+    "dispatch-timeout-minutes": String(config.roles.dispatch.timeoutMinutes),
+  };
   await appendFile(
     required("GITHUB_OUTPUT"),
     Object.entries(outputs)
-      .map(([name, value]) => `${name}=${value}\n`)
+      .map(([key, value]) => `${key}=${value}\n`)
       .join(""),
   );
   console.log(`Route: ${route}`);

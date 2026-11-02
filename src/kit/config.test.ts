@@ -12,6 +12,7 @@ const DEFAULTS = {
     stepUp: { model: "claude-opus-5-5", effort: null },
   },
   maxInFlight: 2,
+  operator: null,
   instructions: { triage: null, design: null, implement: null, review: null },
 };
 
@@ -197,6 +198,7 @@ describe("Kit config", () => {
         step_up: { model: "claude-opus-5-5", effort: null },
       },
       max_in_flight: 2,
+      operator: null,
     };
 
     expect(resolveKitConfig({ config: JSON.stringify(starter) })).toEqual({ ok: true, config: DEFAULTS });
@@ -220,4 +222,20 @@ describe("Kit config", () => {
 
     expect(result.ok && result.config.maxInFlight).toBe(4);
   });
+
+  it("names the Operator when the config gives a login, leaving null to mean the repo's owner", () => {
+    const result = resolveKitConfig({ config: `{ "operator": "jrey8343" }` });
+
+    expect(result.ok && result.config.operator).toBe("jrey8343");
+  });
+
+  it.each([`{ "operator": "@jrey8343" }`, `{ "operator": "two words" }`, `{ "operator": "" }`])(
+    "refuses an Operator that isn't a GitHub login: %s",
+    (text) => {
+      expect(resolveKitConfig({ config: text })).toMatchObject({
+        ok: false,
+        errors: [expect.stringMatching(/^operator is .*: the Operator must be a GitHub login/)],
+      });
+    },
+  );
 });

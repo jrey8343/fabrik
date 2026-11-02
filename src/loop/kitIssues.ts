@@ -6,6 +6,9 @@
 // failure comment names the trigger label to re-add.
 import type { Action, InfrastructureFailure, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
 
+/** The repo-wide part of any snapshot: who the Operator is and which Kit-owned issues are open. */
+type RepoContext = Pick<Snapshot, "kitIssues" | "operator">;
+
 /** The label on the Kit's token-rotation issue, by which the adapter finds it. */
 export const TOKEN_ROTATION_LABEL = "fabrik:token-rotation";
 
@@ -47,7 +50,7 @@ function notified(issue: KitIssueSnapshot): boolean {
 /** The Kit-owned issue notice for a failure that stalls the whole repo, or null for one that doesn't. */
 export function repoWideNotice(
   failure: InfrastructureFailure,
-  snapshot: Snapshot,
+  snapshot: RepoContext,
   stalled: StalledRun,
 ): RepoWideNotice | null {
   switch (failure) {
@@ -99,7 +102,7 @@ function readable(iso: string): string {
   return `${at.slice(0, 10)} ${at.slice(11, 16)} UTC`;
 }
 
-function weeklyLimit({ kitIssues, operator }: Snapshot, stalled: StalledRun): RepoWideNotice {
+function weeklyLimit({ kitIssues, operator }: RepoContext, stalled: StalledRun): RepoWideNotice {
   const { resetsAt } = stalled;
   const open = kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
   const openResetsAt = open === undefined ? null : resetsAtOf(open);
@@ -150,7 +153,7 @@ function weeklyLimit({ kitIssues, operator }: Snapshot, stalled: StalledRun): Re
   };
 }
 
-function deadToken({ kitIssues, operator }: Snapshot, stalled: StalledRun): RepoWideNotice {
+function deadToken({ kitIssues, operator }: RepoContext, stalled: StalledRun): RepoWideNotice {
   const open = kitIssues.find((issue) => issue.labels.includes(TOKEN_ROTATION_LABEL));
   if (open === undefined) {
     return {
