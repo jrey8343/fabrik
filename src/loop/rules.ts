@@ -10,6 +10,7 @@ import {
   NEEDS_TRIAGE,
   STATE_LABELS,
 } from "./labels.ts";
+import { requestChanges } from "./mergeGate.ts";
 import { RETRY_LABEL, startRetry } from "./retry.ts";
 import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
@@ -75,6 +76,8 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
       return applyRedChecks(event, snapshot);
     case "review-run-finished":
       return applyReview(event, snapshot);
+    case "pull-request-changes-requested":
+      return requestChanges(event, snapshot, config);
     // An agent PR that leaves draft or closes no longer holds a slot.
     case "pull-request-left-draft":
     case "pull-request-closed": {

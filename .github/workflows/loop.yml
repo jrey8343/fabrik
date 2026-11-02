@@ -59,6 +59,8 @@ jobs:
       ticket: ${{ steps.route.outputs.ticket }}
       # For a retry: the agent branch it builds on, which the Implement job checks out.
       branch: ${{ steps.route.outputs.branch }}
+      # For a Request-changes run: the Operator's review, its input. It runs as a retry otherwise does.
+      review: ${{ steps.route.outputs.review }}
       # The model and effort the plan chose for its agent run, a Step-up included.
       model: ${{ steps.route.outputs.model }}
       effort: ${{ steps.route.outputs.effort }}
@@ -541,6 +543,19 @@ jobs:
             -f owner="${GITHUB_REPOSITORY%%/*}" -f name="${GITHUB_REPOSITORY#*/}" -F number="$PULL_REQUEST" \
             --jq '.data.repository.pullRequest | {number, title, comments: .comments.nodes}' >"$RUNNER_TEMP/pull-request.json"
 
+      # A Request-changes run's input: the review the Kit job's plan named, which it checked is the Operator's.
+      - name: Read the Operator's requested changes
+        if: needs.kit.outputs.review != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST: ${{ needs.kit.outputs.pull-request }}
+          REVIEW: ${{ needs.kit.outputs.review }}
+        run: |
+          set -euo pipefail
+          reviews="repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST/reviews/$REVIEW"
+          jq -n --argjson review "$(gh api "$reviews")" --argjson comments "$(gh api --paginate --slurp "$reviews/comments" | jq 'add // []')" \
+            '{review: $review, comments: $comments}' >"$RUNNER_TEMP/review.json"
+
       # Kit config is read as data; the list of op:// references goes to 1Password as a file.
       - name: List the test secrets to load
         run: node kit/src/kit/secrets-main.ts product "$RUNNER_TEMP/fabrik-secrets.env"
@@ -563,6 +578,7 @@ jobs:
           FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
           FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
           FABRIK_PULL_REQUEST_FILE: ${{ needs.kit.outputs.pull-request != '' && format('{0}/pull-request.json', runner.temp) || '' }}
+          FABRIK_REVIEW_FILE: ${{ needs.kit.outputs.review != '' && format('{0}/review.json', runner.temp) || '' }}
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
           FABRIK_MODEL: ${{ needs.kit.outputs.model }}
           FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
@@ -949,6 +965,8 @@ jobs:
           FABRIK_RUN_ISSUE: ${{ needs.kit.outputs.route == 'implement' && needs.kit.outputs.ticket || github.event.issue.number }}
           # A retry's PR, from the Kit job's plan: its branch lands on that PR.
           FABRIK_RUN_PULL_REQUEST: ${{ needs.kit.outputs.route == 'implement' && needs.kit.outputs.pull-request || '' }}
+          # Set for a Request-changes run, whose push is marked so its Verdict uses no retry.
+          FABRIK_RUN_REVIEW: ${{ needs.kit.outputs.route == 'implement' && needs.kit.outputs.review || '' }}
           FABRIK_AGENT_RESULT: ${{ (needs.kit.outputs.route != 'push' && !(needs.kit.outputs.route == 'review' && needs.review-checks.outputs.checks == 'red')) && format('{0}/agent/agent-result.json', runner.temp) || '' }}
           # A Review's PR, and what its checks job saw, which the agent can't rewrite.
           FABRIK_REVIEW_PULL_REQUEST: ${{ needs.kit.outputs.route == 'review' && needs.kit.outputs.pull-request || '' }}

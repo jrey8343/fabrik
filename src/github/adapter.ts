@@ -6,6 +6,7 @@ import type { AgentRunResult } from "../agent/result.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { designSessionOf } from "../loop/design.ts";
 import { countEmptyDiffs } from "../loop/implement.ts";
+import { requestChangesRunIn } from "../loop/mergeGate.ts";
 import { verdictsIn } from "../loop/verdict.ts";
 import { KIT_ISSUE_LABELS } from "../loop/kitIssues.ts";
 import type {
@@ -75,6 +76,20 @@ export function loopEventFrom(
     if (payload["action"] === "ready_for_review") return { kind: "pull-request-left-draft", pullRequest };
     if (payload["action"] === "closed") return { kind: "pull-request-closed", pullRequest };
   }
+  // There is no _target form of this event, so the run uses the PR's merge
+  // commit's caller workflow and Kit config. An agent PR can't change either:
+  // both are trust roots its push job refuses (ADR-0005).
+  if (eventName === "pull_request_review" && payload["action"] === "submitted") {
+    const review = payload["review"] as { id: number; state: string; user: { login: string; type: string } };
+    if (review.state.toLowerCase() !== "changes_requested") return null;
+    return {
+      kind: "pull-request-changes-requested",
+      pullRequest: (payload["pull_request"] as { number: number }).number,
+      review: review.id,
+      reviewer: review.user.login,
+      reviewerIsBot: review.user.type === "Bot",
+    };
+  }
   return null;
 }
 
@@ -95,7 +110,7 @@ export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run
 export function agentRunEventFrom(
   result: AgentRunResult,
   changes: BranchChanges | null = null,
-  retry: { readonly pullRequest: number; readonly runUrl: string } | null = null,
+  retry: { readonly pullRequest: number; readonly runUrl: string; readonly requestChanges?: boolean } | null = null,
 ): LoopEvent {
   if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
   if (result.role !== "implement") {
@@ -375,6 +390,7 @@ async function gatherEventPart(
     case "review-run-finished":
     case "pull-request-left-draft":
     case "pull-request-closed":
+    case "pull-request-changes-requested":
       return gatherPullRequest(github, repo, event.pullRequest, operator);
     case "dispatch-check":
       if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");
@@ -479,6 +495,9 @@ async function gatherPullRequest(
   if (pullRequest === null) {
     throw new Error(`Pull request #${number} not found in ${repo.owner}/${repo.name}`);
   }
+  const botComments = pullRequest.comments.nodes
+    .filter((comment) => comment.author?.__typename === "Bot")
+    .map((comment) => comment.body);
   return {
     issue: null,
     pullRequest: {
@@ -492,12 +511,9 @@ async function gatherPullRequest(
       draft: pullRequest.isDraft,
       headSha: pullRequest.headRefOid,
       labels: pullRequest.labels.nodes.map((label) => label.name),
-      // Only a bot's markers count, so nobody can fake a Verdict by quoting one.
-      verdicts: verdictsIn(
-        pullRequest.comments.nodes.filter((comment) => comment.author?.__typename === "Bot").map((comment) => comment.body),
-      ),
-      // No Request-changes run exists yet: the Merge gate's rules bring them (#44).
-      requestChangesRun: false,
+      // Only a bot's markers count, so nobody can fake a Verdict or a Request-changes run by quoting one.
+      verdicts: verdictsIn(botComments),
+      requestChangesRun: requestChangesRunIn(botComments),
     },
     dispatch: null,
     operator: operator ?? data.repository.owner.login,
@@ -697,6 +713,17 @@ async function apply(
         draft: action.draft,
       });
       return;
+    case "convert-to-draft": {
+      // As with leaving draft, only GraphQL can do this, by the PR's node id.
+      const pullRequest = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}`)) as {
+        node_id: string;
+      };
+      await github.graphql(
+        "mutation ($id: ID!) { convertPullRequestToDraft(input: { pullRequestId: $id }) { clientMutationId } }",
+        { id: pullRequest.node_id },
+      );
+      return;
+    }
     case "mark-ready-for-review": {
       // REST can't take a PR out of draft; GraphQL can, by its node id.
       const pullRequest = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}`)) as {
@@ -731,6 +758,7 @@ async function applyToIssue(
         | "push-branch"
         | "open-pull-request"
         | "close-pull-request"
+        | "convert-to-draft"
         | "mark-ready-for-review"
         | "request-review";
     }

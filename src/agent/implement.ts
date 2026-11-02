@@ -98,6 +98,43 @@ export async function retryContext(pullRequestFile: string): Promise<{ pullReque
 }
 
 /**
+ * What a Request-changes run's prompt carries beyond the Ticket: the PR, and
+ * the Operator's review that asked for the changes, its inline comments
+ * included. The Kit job's plan named that review only once it checked the
+ * Operator wrote it, so this is the Operator speaking.
+ */
+export async function requestChangesContext(
+  pullRequestFile: string,
+  reviewFile: string,
+): Promise<{ pullRequest: number; parts: string[] }> {
+  const { number, title } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as { number?: unknown; title?: unknown };
+  if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
+  const { review, comments } = (JSON.parse(await readFile(reviewFile, "utf8")) ?? {}) as {
+    review?: { body?: unknown; state?: unknown };
+    comments?: { path?: unknown; line?: unknown; body?: unknown }[];
+  };
+  if (typeof review?.state !== "string" || review.state.toLowerCase() !== "changes_requested") {
+    throw new Error(`FABRIK_REVIEW_FILE isn't a review requesting changes on #${number}`);
+  }
+  const body = typeof review.body === "string" ? review.body.trim() : "";
+  const inline = (comments ?? []).flatMap((comment) =>
+    typeof comment.body === "string" && typeof comment.path === "string"
+      ? [`### \`${comment.path}\`${typeof comment.line === "number" ? ` line ${comment.line}` : ""}`, comment.body.trimEnd()]
+      : [],
+  );
+  return {
+    pullRequest: number,
+    parts: [
+      "## The pull request the Operator requested changes on",
+      `#${number}: ${String(title ?? "")}`,
+      "## The Operator's requested changes",
+      body === "" ? "(The review has no summary; see its comments below.)" : body,
+      ...(inline.length === 0 ? [] : ["## The Operator's comments on the code", ...inline]),
+    ],
+  };
+}
+
+/**
  * Bundles the commits the Implementer made on its branch into `outDir`. With
  * none, there's no bundle and the head stays null: the push job reads that as
  * an empty diff. Work left uncommitted isn't the Implementer's output.

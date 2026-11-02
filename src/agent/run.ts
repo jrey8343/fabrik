@@ -14,7 +14,8 @@
 // FABRIK_SECRETS (src/agent/implement.ts), its parent Spec from FABRIK_SPEC_FILE,
 // and passes its commits out as a git bundle beside agent-result.json. A retry
 // runs in a checkout of its PR's branch, with FABRIK_PULL_REQUEST_FILE the PR and
-// its comments, whose latest Verdict holds the findings to fix.
+// its comments, whose latest Verdict holds the findings to fix. A Request-changes
+// run is a retry with FABRIK_REVIEW_FILE too: the Operator's review, its input.
 // A Design-session turn takes the issue's parent Spec from FABRIK_SPEC_FILE (null if none).
 // A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
@@ -39,6 +40,7 @@ import {
   bundleAgentBranch,
   continueAgentBranch,
   implementContext,
+  requestChangesContext,
   retryContext,
   setImplementerEnv,
   startAgentBranch,
@@ -237,7 +239,12 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     branch =
       retryFile === "" ? await startAgentBranch(productDir, issueNumber) : await continueAgentBranch(productDir, issueNumber);
     extra.push(...(await implementContext(productDir, required("FABRIK_SPEC_FILE"), config)));
-    if (retryFile !== "") extra.push(...(await retryContext(retryFile)).parts);
+    // A Request-changes run works to the Operator's review instead of a Verdict's findings.
+    const reviewFile = process.env["FABRIK_REVIEW_FILE"] ?? "";
+    if (retryFile !== "") {
+      const context = reviewFile === "" ? await retryContext(retryFile) : await requestChangesContext(retryFile, reviewFile);
+      extra.push(...context.parts);
+    }
   }
   if (spec.readsParentSpec === true) {
     const specFile = process.env["FABRIK_SPEC_FILE"] ?? "";
