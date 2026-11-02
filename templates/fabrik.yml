@@ -11,9 +11,11 @@ on:
   issue_comment:
     types: [created]
   # _target, so these runs use main's workflow and Kit config, never the PR's.
-  # The Loop never checks out PR code.
+  # Only the read-only Reviewer checks out a PR's head, to read it; nothing runs its code.
+  # opened, synchronize and reopened start a Review once the required checks
+  # finish, and labeled lets agent:review resume one after a failure.
   pull_request_target:
-    types: [ready_for_review, closed]
+    types: [opened, synchronize, reopened, labeled, ready_for_review, closed]
   # The Loop's time-based rules, such as closing the weekly-limit issue after its reset.
   schedule:
     - cron: "17 * * * *"
@@ -30,6 +32,10 @@ jobs:
       id-token: write
       contents: read
       issues: read
+      pull-requests: read
+      # For a Review to read the agent PR's required checks.
+      checks: read
+      statuses: read
       actions: read
     secrets:
       OP_AGENT_TOKEN: ${{ secrets.FABRIK_OP_AGENT_TOKEN }}

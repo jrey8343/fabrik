@@ -38,6 +38,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
   return {
     number: 50,
     isAgent: true,
+    ticket: 7,
     open: true,
     draft: true,
     headSha: HEAD_SHA,

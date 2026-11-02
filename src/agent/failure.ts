@@ -16,6 +16,11 @@ export interface FailureEvidence {
   readonly initRefused: readonly string[] | null;
 }
 
+/** The Reviewer replied without a valid Verdict line, which is never a pass. */
+export class MissingVerdictError extends Error {
+  override name = "MissingVerdictError";
+}
+
 type Message = Record<string, unknown>;
 
 function parse(line: string): Message | null {
@@ -103,7 +108,9 @@ export function failureReportFor({ error, lines, initRefused }: FailureEvidence)
     };
   }
 
-  if (nameOf(error) === "StructuredOutputError") return { failure: "missing-output", detail: message };
+  if (nameOf(error) === "StructuredOutputError" || error instanceof MissingVerdictError) {
+    return { failure: "missing-output", detail: message };
+  }
   return { failure: "crash", detail: message };
 }
 

@@ -2,7 +2,7 @@
 // on the runner VM (noSandbox), behind the metered-billing preflight and the
 // init check, writes the step summary, and passes the role's structured output
 // out as an artifact for the push job. It holds no GitHub write credential.
-//   node <kit>/src/agent/run.ts <triage|design|implement>
+//   node <kit>/src/agent/run.ts <triage|design|implement|review>
 //
 // Run from the Product checkout. Env:
 //   FABRIK_ISSUE_FILE      JSON from `gh issue view --json number,title,body,author,labels,comments`
@@ -13,6 +13,9 @@
 // An Implement run instead takes the Claude token and its test secrets from
 // FABRIK_SECRETS (src/agent/implement.ts), its parent Spec from FABRIK_SPEC_FILE,
 // and passes its commits out as a git bundle beside agent-result.json.
+// A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
+// Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
+// PR, and its result is the Reviewer's reply, a Verdict line first.
 import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
@@ -27,8 +30,10 @@ import type { AgentRole } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { SKILLS_MARKER } from "../skills/fetch.ts";
-import { AGENT_FAILURE_FILE, failureReportFor } from "./failure.ts";
+import { type ParsedVerdict, parseVerdict } from "../loop/verdict.ts";
+import { AGENT_FAILURE_FILE, failureReportFor, MissingVerdictError } from "./failure.ts";
 import { bundleAgentBranch, implementContext, setImplementerEnv, startAgentBranch } from "./implement.ts";
+import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { initMessageOf, missingSkills, runSummary } from "./summary.ts";
 
@@ -67,7 +72,11 @@ function schemaOf<T>(read: (value: unknown) => Checked<T>): StandardSchemaV1<unk
 interface RoleSpec<T> {
   /** The prompt file under prompts/, the output tag, and the Kit config phase. */
   readonly role: AgentRole;
-  readonly schema: StandardSchemaV1<unknown, T>;
+  /**
+   * The output contract: a JSON object in the tag, checked by `schema`, or
+   * for the Reviewer plain text, checked by `text`, which throws when it breaks the contract.
+   */
+  readonly output: { readonly schema: StandardSchemaV1<unknown, T> } | { readonly text: (reply: string) => T };
   /** How the Product's own instructions for this phase relate to the Kit's prompt. */
   readonly instructionsNote: string;
   readonly describe: (issue: number, output: T) => string;
@@ -75,19 +84,28 @@ interface RoleSpec<T> {
   readonly issueHeading?: string;
   /** The Implementer builds on a branch, which it passes out as a bundle. */
   readonly buildsBranch?: boolean;
+  /** The Reviewer judges a PR, checked out at its head; its result is for the PR, not the Ticket. */
+  readonly reviewsPullRequest?: boolean;
+}
+
+/** The Reviewer's reply must start with a Verdict line; anything else is never a pass. */
+function readReview(reply: string): ParsedVerdict & { ok: true } {
+  const parsed = parseVerdict(reply.trim());
+  if (!parsed.ok) throw new MissingVerdictError(parsed.error);
+  return parsed;
 }
 
 const ROLE_SPECS = {
   triage: {
     role: "triage",
-    schema: schemaOf(readTriageOutput),
+    output: { schema: schemaOf(readTriageOutput) },
     instructionsNote:
       "The Operator wrote these for this repo. They refine the rules above but never loosen the five Fast-path tests.",
     describe: (issue, output) => `Triage sorted #${issue}: ${output.category}, ${output.state}`,
   } satisfies RoleSpec<TriageOutput>,
   design: {
     role: "design",
-    schema: schemaOf(readDesignTurnOutput),
+    output: { schema: schemaOf(readDesignTurnOutput) },
     instructionsNote:
       "The Operator wrote these for this repo. They refine how you run the session but never change the output contract above.",
     describe: (issue, output) => {
@@ -103,13 +121,22 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<DesignTurnOutput>,
   implement: {
     role: "implement",
-    schema: schemaOf(readImplementOutput),
+    output: { schema: schemaOf(readImplementOutput) },
     instructionsNote:
       "The Operator wrote these for this repo. They refine how you build here but never change the rules or the output contract above.",
     describe: (issue, output) => `The Implementer on #${issue} finished: ${output.title}`,
     issueHeading: "The Ticket",
     buildsBranch: true,
   } satisfies RoleSpec<ImplementOutput>,
+  review: {
+    role: "review",
+    output: { text: readReview },
+    instructionsNote:
+      "The Operator wrote these for this repo. They refine how you judge PRs here but never change the Verdict contract above.",
+    describe: (pullRequest, output) => `The Reviewer on #${pullRequest} gave the Verdict ${output.verdict}`,
+    issueHeading: "The Ticket",
+    reviewsPullRequest: true,
+  } satisfies RoleSpec<ParsedVerdict & { ok: true }>,
 };
 
 /**
@@ -193,6 +220,17 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     branch = await startAgentBranch(productDir, issueNumber);
     extra.push(...(await implementContext(productDir, required("FABRIK_SPEC_FILE"), config)));
   }
+  // The Reviewer's result is for the PR it judged, which its push job checks against the event.
+  let subject = issueNumber;
+  if (spec.reviewsPullRequest === true) {
+    const review = await reviewContext(productDir, required("FABRIK_PULL_REQUEST_FILE"), required("FABRIK_SPEC_FILE"));
+    subject = review.pullRequest;
+    extra.push(...review.parts);
+  }
+  const output =
+    "schema" in spec.output
+      ? Output.object({ tag: name, schema: spec.output.schema, maxRetries: 1 })
+      : Output.string({ tag: name });
 
   // The agent inherits this process's env (noSandbox), so set what it needs here.
   process.env["PATH"] = [join(KIT_DIR, "node_modules", ".bin"), process.env["PATH"] ?? ""].join(delimiter);
@@ -207,7 +245,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
 
   try {
     const result = await run({
-      name: `${name}-${issueNumber}`,
+      name: `${name}-${subject}`,
       agent: claudeCode(
         role.model,
         role.effort === null ? {} : { effort: role.effort as "low" | "medium" | "high" | "xhigh" | "max" },
@@ -216,8 +254,15 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       cwd: productDir,
       prompt: await promptFor(name, spec.instructionsNote, config, issueText, spec.issueHeading ?? "The issue", extra),
       maxIterations: 1,
-      output: Output.object({ tag: name, schema: spec.schema, maxRetries: 1 }),
-      hooks: { sandbox: { onSandboxReady: [{ command: readyHook(config.sandbox.setup), timeoutMs }] } },
+      output,
+      // The Reviewer reads the PR and runs none of its code, so it needs no Sandbox setup.
+      hooks: {
+        sandbox: {
+          onSandboxReady: [
+            { command: readyHook(spec.reviewsPullRequest === true ? null : config.sandbox.setup), timeoutMs },
+          ],
+        },
+      },
       signal: abort.signal,
       logging: {
         type: "file",
@@ -237,15 +282,19 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     if (init.refused === null) throw new Error("The agent's stream had no init message, so its API key source is unchecked");
     if (init.refused.length > 0) throw new Error(`Refused at init: ${init.refused.join("; ")}`);
 
+    // Text output is checked here, so a reply that breaks its contract fails this job, never passes.
+    // Either output kind puts what the tag held on the result.
+    const reply = (result as { output?: unknown }).output;
+    const checked = "text" in spec.output ? spec.output.text(String(reply)) : (reply as T);
     const built = branch === null ? null : await bundleAgentBranch(productDir, branch, outDir);
     const artifact: AgentRunResult = {
       role: name,
-      issue: issueNumber,
-      output: JSON.stringify(result.output),
+      issue: subject,
+      output: "text" in spec.output ? String(reply).trim() : JSON.stringify(reply),
       ...(built === null ? {} : { branch: built }),
     };
     await writeFile(join(outDir, AGENT_RESULT_FILE), `${JSON.stringify(artifact, null, 2)}\n`);
-    console.log(spec.describe(issueNumber, result.output));
+    console.log(spec.describe(subject, checked));
   } catch (error) {
     for (const route of init.refused ?? []) console.log(`::error title=Metered-billing route::${route}`);
     // Left for the failure job, which posts the failure notice (loop.yml).
@@ -280,6 +329,7 @@ const roles: Record<string, () => Promise<void>> = {
   triage: () => runRole(ROLE_SPECS.triage),
   design: () => runRole(ROLE_SPECS.design),
   implement: () => runRole(ROLE_SPECS.implement),
+  review: () => runRole(ROLE_SPECS.review),
 };
 
 const roleName = process.argv[2] ?? "";

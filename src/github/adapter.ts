@@ -3,7 +3,7 @@
 // Loop rules; those all live in src/loop/rules.ts.
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import type { AgentRunResult } from "../agent/result.ts";
-import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
+import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { isDesignRoundComment } from "../loop/design.ts";
 import { countEmptyDiffs } from "../loop/implement.ts";
 import { verdictsIn } from "../loop/verdict.ts";
@@ -471,6 +471,7 @@ async function gatherPullRequest(
         headRef: pullRequest.headRefName,
         authorIsBot: pullRequest.author?.__typename === "Bot",
       }),
+      ticket: ticketOfAgentBranch(pullRequest.headRefName),
       open: pullRequest.state === "OPEN",
       draft: pullRequest.isDraft,
       headSha: pullRequest.headRefOid,

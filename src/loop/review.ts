@@ -121,6 +121,7 @@ function verdictActions(
 /** Why this PR isn't one to review, or null when it is. */
 function whyNotReviewable(pullRequest: PullRequestSnapshot): string | null {
   if (!pullRequest.isAgent) return `#${pullRequest.number} isn't an agent PR`;
+  if (pullRequest.ticket === null) return `#${pullRequest.number}'s branch names no Ticket`;
   if (!pullRequest.open) return `#${pullRequest.number} is closed`;
   if (!pullRequest.draft) return `#${pullRequest.number} has left draft`;
   return null;

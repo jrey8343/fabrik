@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { failureReportFor, readFailureReport } from "./failure.ts";
+import { failureReportFor, MissingVerdictError, readFailureReport } from "./failure.ts";
 
 const line = (message: unknown) => JSON.stringify(message);
 const init = line({ type: "system", subtype: "init", apiKeySource: "none" });
@@ -107,6 +107,14 @@ describe("How an agent job reports its own failure", () => {
     const report = failureReportFor({ error, lines: [init], initRefused: [] });
 
     expect(report).toEqual({ failure: "missing-output", detail: "Structured output failed validation" });
+  });
+
+  it("a Reviewer reply with no valid Verdict line is missing output", () => {
+    const error = new MissingVerdictError("The Reviewer's reply is empty");
+
+    const report = failureReportFor({ error, lines: [init], initRefused: [] });
+
+    expect(report).toEqual({ failure: "missing-output", detail: "The Reviewer's reply is empty" });
   });
 
   it("anything else is a crash, with the error's message", () => {

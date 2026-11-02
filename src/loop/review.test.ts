@@ -67,6 +67,7 @@ describe("Review: starting one", () => {
     ["a person's PR", aPullRequest({ isAgent: false })],
     ["a closed agent PR", aPullRequest({ open: false })],
     ["an agent PR out of draft", aPullRequest({ draft: false })],
+    ["an agent PR whose branch names no Ticket", aPullRequest({ ticket: null })],
   ])("a push to %s starts no Review", (_, pullRequest) => {
     const plan = planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(pullRequest), kitConfig());
 

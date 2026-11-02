@@ -145,6 +145,8 @@ export interface PullRequestSnapshot {
   readonly number: number;
   /** Whether the Fabrik App opened it for a Ticket (src/loop/agentPullRequest.ts). */
   readonly isAgent: boolean;
+  /** The Ticket its agent branch was cut for, or null if it isn't on one. */
+  readonly ticket: number | null;
   readonly open: boolean;
   readonly draft: boolean;
   /** Its head commit now. */
