@@ -33,7 +33,13 @@ import {
 
 /** What the setup skill reads from a Product repo and its 1Password account before planning. */
 export interface ProductState {
-  readonly repo: { readonly owner: string; readonly name: string; readonly defaultBranch: string };
+  readonly repo: {
+    readonly owner: string;
+    readonly name: string;
+    readonly defaultBranch: string;
+    /** Whether an organization owns it. Only an organization repo's branch protection can have bypass allowances. */
+    readonly inOrganization: boolean;
+  };
   /** The text of each file the setup skill writes or merges, or null when the repo lacks it. */
   readonly files: Readonly<Record<string, string | null>>;
   readonly labels: readonly string[];
