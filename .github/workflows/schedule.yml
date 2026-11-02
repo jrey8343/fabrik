@@ -64,33 +64,10 @@ jobs:
         with:
           repository: jrey8343/fabrik
           ref: ${{ needs.kit.outputs.sha }}
-          path: .fabrik-kit
+          path: kit
           persist-credentials: false
 
-      - name: Set up Node
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-
-      - name: Load the Fabrik App key
-        id: op
-        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
-        with:
-          export-env: false
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}
-          FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
-          FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
-
-      - name: Mint a Fabrik App token
-        id: app
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
-          private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
-
       - name: Run the Loop's scheduled rules
-        working-directory: .fabrik-kit
-        env:
-          FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
-        run: node src/main.ts
+        uses: ./kit/.github/actions/run-loop
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}

@@ -9,7 +9,7 @@ export type AgentRole = "triage" | "design" | "implement" | "review";
 
 export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review"];
 
-/** How an agent job says it failed, in the report it leaves for its failure job (src/agent/failure.ts). */
+/** How an agent job says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
 export type ReportedFailure =
   | "crash"
   | "missing-output"
@@ -18,10 +18,10 @@ export type ReportedFailure =
   | "weekly-limit"
   | "metered-billing";
 
-/** Every kind of Infrastructure failure: what the agent job reported, or what its failure job saw. */
+/** Every kind of Infrastructure failure: what the agent job reported, or what the push job saw. */
 export type InfrastructureFailure = ReportedFailure | "timeout" | "unreachable-1password";
 
-/** What a failed agent job left for its failure job, when it got far enough to leave anything. */
+/** What a failed agent job left for the push job, when it got far enough to leave anything. */
 export interface FailureReport {
   readonly failure: ReportedFailure;
   /** One line on what went wrong, for the failure comment. */
@@ -96,7 +96,7 @@ export type LoopEvent =
       };
     }
   | {
-      /** An agent job failed or was cancelled; its failure job carries the news. */
+      /** An agent job failed or was cancelled; the push job carries the news. */
       readonly kind: "agent-run-failed";
       readonly role: AgentRole;
       /** The Ticket (or issue) the run was for. */

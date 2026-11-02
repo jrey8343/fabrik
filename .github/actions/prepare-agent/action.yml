@@ -1,0 +1,59 @@
+# Readies an agent job, before any secret loads: installs the Kit's pinned
+# Sandcastle and Claude Code CLI, fetches the pinned skills into the Product
+# checkout's .claude/skills, and reads what the agent is given (the issue, its
+# parent Spec, and for Implement and Review runs the PR and the Operator's
+# review) into $RUNNER_TEMP, through the job's read-only token. The agent
+# itself never gets a GitHub token.
+#
+# Use it after checking out the Product repo into `product/` and the Kit at
+# the pinned commit into `kit/`:
+#   - uses: ./kit/.github/actions/prepare-agent
+name: Prepare an agent job
+description: Installs the Kit, fetches the pinned skills and reads the agent's inputs.
+
+inputs:
+  github-token:
+    description: The job's read-only GITHUB_TOKEN.
+    required: true
+  issue:
+    description: The issue or Ticket the run is for.
+    required: true
+  pull-request:
+    description: For a Review or a retry, the agent PR.
+    required: false
+    default: ""
+  pull-request-comments:
+    description: '"true" for a retry, whose PR file carries the PR''s comments (the Verdict to fix).'
+    required: false
+    default: "false"
+  review:
+    description: For a Request-changes run, the Operator's review on the PR.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24
+
+    - name: Install the Kit (Sandcastle and the Claude Code CLI, pinned)
+      shell: bash
+      working-directory: kit
+      run: npm ci
+
+    - name: Fetch the pinned skills into .claude/skills
+      shell: bash
+      run: node kit/src/skills/fetch.ts product
+
+    - name: Read the agent's inputs
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        FABRIK_ISSUE: ${{ inputs.issue }}
+        FABRIK_PULL_REQUEST: ${{ inputs.pull-request }}
+        FABRIK_PULL_REQUEST_COMMENTS: ${{ inputs.pull-request-comments }}
+        FABRIK_REVIEW: ${{ inputs.review }}
+      run: node kit/src/agent/inputs.ts "$RUNNER_TEMP"

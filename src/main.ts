@@ -1,10 +1,10 @@
-// Entry point for a Kit push job and the Dispatch job: event + snapshot +
-// config -> plan -> applied.
+// Entry point for the Kit's push job, its claim job and the Dispatch job:
+// event + snapshot + config -> plan -> applied.
 // Run with `node src/main.ts` (Node 24 strips the types).
 import { appendFile, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { readFailureReport } from "./agent/failure.ts";
-import { AGENT_BUNDLE_FILE, readAgentRunResult } from "./agent/result.ts";
+import { AGENT_FAILURE_FILE, readFailureReport } from "./agent/failure.ts";
+import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult } from "./agent/result.ts";
 import { type AgentBranchGit, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { applyPlan, wantsDispatchCheck } from "./github/apply.ts";
@@ -13,8 +13,9 @@ import { agentFailureEventFrom, agentRunEventFrom, loopEventFrom, reviewEventFro
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
+import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { planFor } from "./loop/rules.ts";
-import { AGENT_ROLES, type Action, type AgentRole, type KitConfig, type LoopEvent, type Plan } from "./loop/types.ts";
+import type { Action, KitConfig, LoopEvent, Plan } from "./loop/types.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -81,30 +82,43 @@ function describeAction(action: Action): string {
   }
 }
 
+type EventSource = { event: LoopEvent | null; source: string; branch: AgentBranchGit | null };
+
 /**
- * The Loop event this run applies: an agent job's result when the push job was
- * handed one (FABRIK_AGENT_RESULT), a Dispatch check in the Dispatch job
- * (FABRIK_DISPATCH_CHECK), otherwise the Actions event itself.
+ * The Loop event this run applies: in the push job (FABRIK_NEEDS), what the
+ * jobs before it left (src/kit/pushJob.ts); a Dispatch check in the Dispatch
+ * job (FABRIK_DISPATCH_CHECK); otherwise the Actions event itself.
  */
-async function loopEvent(
-  repo: Repo,
-): Promise<{ event: LoopEvent | null; source: string; branch: AgentBranchGit | null }> {
+async function loopEvent(repo: Repo): Promise<EventSource> {
   if (process.env["FABRIK_DISPATCH_CHECK"] === "true") {
     return { event: { kind: "dispatch-check" }, source: "a Dispatch check", branch: null };
   }
-  const failedRole = process.env["FABRIK_FAILED_ROLE"];
-  if (failedRole !== undefined && failedRole !== "") return { ...(await failedRunEvent(failedRole)), branch: null };
-  const reviewed = process.env["FABRIK_REVIEW_PULL_REQUEST"];
-  if (reviewed !== undefined && reviewed !== "") return { ...(await finishedReviewEvent(reviewed)), branch: null };
-  const resultPath = process.env["FABRIK_AGENT_RESULT"];
-  if (resultPath !== undefined && resultPath !== "") return agentResultEvent(resultPath, repo);
   const eventName = required("GITHUB_EVENT_NAME");
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
-  return {
+  const actionsEvent: EventSource = {
     event: loopEventFrom(eventName, payload),
     source: `${eventName}.${String(payload["action"] ?? "")}`,
     branch: null,
   };
+  const needsText = process.env["FABRIK_NEEDS"];
+  if (needsText === undefined || needsText === "") return actionsEvent;
+
+  const eventIssue = (payload["issue"] as { number?: unknown } | undefined)?.number;
+  const input = pushJobInput(JSON.parse(needsText) as Needs, typeof eventIssue === "number" ? eventIssue : null);
+  // The agent job's artifacts, whichever it left (a result and bundle, or a failure report), as the push job downloads them.
+  const agentDir = process.env["FABRIK_AGENT_DIR"] || join(required("RUNNER_TEMP"), "agent");
+  switch (input.kind) {
+    case "actions-event":
+      return actionsEvent;
+    case "nothing":
+      return { event: null, source: input.reason, branch: null };
+    case "agent-failure":
+      return { ...(await failedRunEvent(input, join(agentDir, AGENT_FAILURE_FILE))), branch: null };
+    case "review":
+      return { ...(await finishedReviewEvent(input, join(agentDir, AGENT_RESULT_FILE))), branch: null };
+    case "agent-result":
+      return agentResultEvent(input, join(agentDir, AGENT_RESULT_FILE), repo);
+  }
 }
 
 /**
@@ -113,12 +127,13 @@ async function loopEvent(
  * and an Implement run's branch is rebuilt from its bundle and checked here.
  */
 async function agentResultEvent(
+  input: Extract<PushJobInput, { kind: "agent-result" }>,
   resultPath: string,
   repo: Repo,
-): Promise<{ event: LoopEvent; source: string; branch: AgentBranchGit | null }> {
+): Promise<EventSource> {
   const result = readAgentRunResult(await readFile(resultPath, "utf8"));
-  const runIssue = Number(required("FABRIK_RUN_ISSUE"));
-  if (result.issue !== runIssue) throw new Error(`The agent's result is for #${result.issue}, not #${runIssue}`);
+  if (result.role !== input.role) throw new Error(`The agent's result is a ${result.role} result, not ${input.role}`);
+  if (result.issue !== input.issue) throw new Error(`The agent's result is for #${result.issue}, not #${input.issue}`);
   const source = `the ${result.role} run on #${result.issue}`;
   if (result.role !== "implement") return { event: agentRunEventFrom(result), source, branch: null };
 
@@ -126,14 +141,11 @@ async function agentResultEvent(
   if (built === undefined || built.name !== agentBranchFor(result.issue)) {
     throw new Error(`The Implement run on #${result.issue} didn't build ${agentBranchFor(result.issue)}`);
   }
-  // A retry's PR comes from the Kit job's plan, which the agent can't rewrite, and it builds on its own branch.
-  const retried = process.env["FABRIK_RUN_PULL_REQUEST"] ?? "";
-  // So is whether it was a Request-changes run: the Kit job's plan named the Operator's review.
-  const requestChanges = (process.env["FABRIK_RUN_REVIEW"] ?? "") !== "";
-  const retry = retried === "" ? null : { pullRequest: Number(retried), runUrl: thisRunUrl(), requestChanges };
-  if (retry !== null && !(Number.isInteger(retry.pullRequest) && retry.pullRequest > 0)) {
-    throw new Error("FABRIK_RUN_PULL_REQUEST is not a PR number");
-  }
+  // A retry's PR, and whether it was a Request-changes run, come from the Kit job's plan, which the agent can't rewrite.
+  const retry =
+    input.pullRequest === null
+      ? null
+      : { pullRequest: input.pullRequest, runUrl: thisRunUrl(), requestChanges: input.review !== null };
   if ((retry !== null) !== (built.base.ref === built.name)) {
     throw new Error(
       retry === null
@@ -149,25 +161,21 @@ async function agentResultEvent(
   return { event: agentRunEventFrom(result, branch.changes, retry), source, branch };
 }
 
-/**
- * The failure job's event: the agent job named by FABRIK_FAILED_ROLE failed or
- * was cancelled. FABRIK_AGENT_FAILURE is the report it left, which is missing
- * when its timeout cancelled it.
- */
-async function failedRunEvent(role: string): Promise<{ event: LoopEvent; source: string }> {
-  if (!AGENT_ROLES.includes(role as AgentRole)) throw new Error(`FABRIK_FAILED_ROLE is not an agent role: ${role}`);
-  const issue = Number(required("FABRIK_FAILED_ISSUE"));
-  if (!Number.isInteger(issue) || issue < 1) throw new Error("FABRIK_FAILED_ISSUE is not an issue number");
-  const reportText = await readFile(required("FABRIK_AGENT_FAILURE"), "utf8").catch(() => null);
+/** The routed agent job failed or was cancelled. Its failure report is missing when its timeout cancelled it. */
+async function failedRunEvent(
+  input: Extract<PushJobInput, { kind: "agent-failure" }>,
+  reportPath: string,
+): Promise<{ event: LoopEvent; source: string }> {
+  const reportText = await readFile(reportPath, "utf8").catch(() => null);
   const event = agentFailureEventFrom({
-    role: role as AgentRole,
-    issue,
+    role: input.role,
+    issue: input.issue,
     runUrl: thisRunUrl(),
-    jobResult: required("FABRIK_AGENT_JOB_RESULT"),
-    secretsStep: process.env["FABRIK_SECRETS_STEP"] ?? "",
+    jobResult: input.jobResult,
+    secretsStep: input.secretsStep,
     report: reportText === null ? null : readFailureReport(reportText),
   });
-  return { event, source: `the failed ${role} run on #${issue}` };
+  return { event, source: `the failed ${input.role} run on #${input.issue}` };
 }
 
 /** This Actions run's attempt, which failure and Verdict comments link to. */
@@ -182,29 +190,23 @@ function thisRunUrl(): string {
   ].join("/");
 }
 
-/**
- * A Review's push job: FABRIK_REVIEW_PULL_REQUEST is the PR, FABRIK_REVIEW_HEAD_SHA
- * and FABRIK_REVIEW_FAILED_CHECKS (a JSON list) come from its checks job, and
- * FABRIK_AGENT_RESULT is the Reviewer's result when green checks let it run.
- */
-async function finishedReviewEvent(pullRequestText: string): Promise<{ event: LoopEvent; source: string }> {
-  const pullRequest = Number(pullRequestText);
-  if (!Number.isInteger(pullRequest) || pullRequest < 1) throw new Error("FABRIK_REVIEW_PULL_REQUEST is not a PR number");
-  const failed: unknown = JSON.parse(process.env["FABRIK_REVIEW_FAILED_CHECKS"] || "[]");
-  if (!Array.isArray(failed) || !failed.every((name) => typeof name === "string")) {
-    throw new Error("FABRIK_REVIEW_FAILED_CHECKS is not a list of check names");
-  }
-  const resultPath = process.env["FABRIK_AGENT_RESULT"];
-  const result =
-    resultPath === undefined || resultPath === "" ? null : readAgentRunResult(await readFile(resultPath, "utf8"));
+/** A Review's checks, from its checks job, and the Reviewer's result when green checks let it run. */
+async function finishedReviewEvent(
+  input: Extract<PushJobInput, { kind: "review" }>,
+  resultPath: string,
+): Promise<{ event: LoopEvent; source: string }> {
+  const result = input.withResult ? readAgentRunResult(await readFile(resultPath, "utf8")) : null;
   const event = reviewEventFrom({
-    pullRequest,
-    headSha: required("FABRIK_REVIEW_HEAD_SHA"),
+    pullRequest: input.pullRequest,
+    headSha: input.headSha,
     runUrl: thisRunUrl(),
-    failedChecks: failed as string[],
+    failedChecks: input.failedChecks,
     result,
   });
-  return { event, source: result === null ? `the red required checks on #${pullRequest}` : `the Review of #${pullRequest}` };
+  return {
+    event,
+    source: result === null ? `the red required checks on #${input.pullRequest}` : `the Review of #${input.pullRequest}`,
+  };
 }
 
 async function report(text: string): Promise<void> {

@@ -5,7 +5,7 @@ import type { LoopEvent } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
-/** A failed agent job, as the failure job sees it: cancelled, unless the test says otherwise. */
+/** A failed agent job, as the push job sees it: cancelled, unless the test says otherwise. */
 function failed(overrides: Partial<Extract<LoopEvent, { kind: "agent-run-failed" }>> = {}): LoopEvent {
   return {
     kind: "agent-run-failed",

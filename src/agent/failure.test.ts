@@ -66,7 +66,7 @@ describe("How an agent job reports its own failure", () => {
     });
   });
 
-  it("the failure job reads back when the weekly limit resets", () => {
+  it("the push job reads back when the weekly limit resets", () => {
     const report = { failure: "weekly-limit", detail: "", resetsAt: "2026-12-23T04:26:40.000Z" };
 
     expect(readFailureReport(JSON.stringify(report))).toEqual(report);
@@ -136,7 +136,7 @@ describe("How an agent job reports its own failure", () => {
   });
 });
 
-describe("Reading the failure report in the failure job", () => {
+describe("Reading the failure report in the push job", () => {
   it("reads back what the agent job wrote", () => {
     expect(readFailureReport(JSON.stringify({ failure: "dead-token", detail: "authentication_failed (401)" }))).toEqual({
       failure: "dead-token",

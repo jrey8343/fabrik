@@ -1,0 +1,101 @@
+import { describe, expect, it } from "vitest";
+import { type Needs, pushJobInput } from "./pushJob.ts";
+
+/** The push job's `needs`, as `toJSON(needs)` gives it: the Kit job routed to `route`, and the other jobs as given. */
+function needs(route: string, jobs: Needs = {}, kitOutputs: Record<string, string> = {}): Needs {
+  return { kit: { result: "success", outputs: { route, ticket: "", "pull-request": "", review: "", ...kitOutputs } }, ...jobs };
+}
+
+const ok = (outputs: Record<string, string> = {}) => ({ result: "success", outputs: { "secrets-step": "success", ...outputs } });
+
+describe("What the push job applies", () => {
+  it("applies the Actions event itself when the Kit job routed straight to it", () => {
+    expect(pushJobInput(needs("push"), 12)).toEqual({ kind: "actions-event" });
+  });
+
+  it("applies the Triage result for the event's issue once Triage succeeded", () => {
+    expect(pushJobInput(needs("triage", { triage: ok() }), 12)).toEqual({
+      kind: "agent-result",
+      role: "triage",
+      issue: 12,
+      pullRequest: null,
+      review: null,
+    });
+  });
+
+  it("applies an Implement run's result for the Ticket the Kit job's plan named, with a retry's PR and a Request-changes run's review", () => {
+    const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", review: "900" }), 50);
+
+    expect(input).toEqual({ kind: "agent-result", role: "implement", issue: 7, pullRequest: 50, review: 900 });
+  });
+
+  it("applies red checks as such: the Reviewer didn't run", () => {
+    const input = pushJobInput(
+      needs(
+        "review",
+        { "review-checks": { result: "success", outputs: { checks: "red", "head-sha": "a".repeat(40), failed: '["build"]' } }, review: { result: "skipped", outputs: {} } },
+        { ticket: "7", "pull-request": "50" },
+      ),
+      50,
+    );
+
+    expect(input).toEqual({ kind: "review", pullRequest: 50, headSha: "a".repeat(40), failedChecks: ["build"], withResult: false });
+  });
+
+  it("applies the Reviewer's Verdict once green checks let it run", () => {
+    const input = pushJobInput(
+      needs(
+        "review",
+        { "review-checks": { result: "success", outputs: { checks: "green", "head-sha": "a".repeat(40), failed: "[]" } }, review: ok() },
+        { ticket: "7", "pull-request": "50" },
+      ),
+      50,
+    );
+
+    expect(input).toEqual({ kind: "review", pullRequest: 50, headSha: "a".repeat(40), failedChecks: [], withResult: true });
+  });
+
+  it("does nothing when the PR moved on while its checks were awaited", () => {
+    const input = pushJobInput(
+      needs("review", { "review-checks": { result: "success", outputs: { checks: "stale", "head-sha": "", failed: "[]" } }, review: { result: "skipped", outputs: {} } }, { "pull-request": "50" }),
+      50,
+    );
+
+    expect(input.kind).toBe("nothing");
+  });
+
+  it.each(["failure", "cancelled"])("posts the failure notice when the agent job's result is %s", (result) => {
+    const input = pushJobInput(needs("design", { design: { result, outputs: { "secrets-step": "failure" } } }), 12);
+
+    expect(input).toEqual({ kind: "agent-failure", role: "design", issue: 12, jobResult: result, secretsStep: "failure" });
+  });
+
+  it("names the Ticket for a failed Implement or Review run, where the core finds its PR", () => {
+    const implement = pushJobInput(needs("implement", { implement: { result: "failure", outputs: {} } }, { ticket: "7", "pull-request": "50" }), 50);
+    const checks = pushJobInput(
+      needs("review", { "review-checks": { result: "cancelled", outputs: {} }, review: { result: "skipped", outputs: {} } }, { ticket: "7", "pull-request": "50" }),
+      50,
+    );
+
+    expect(implement).toMatchObject({ kind: "agent-failure", role: "implement", issue: 7, jobResult: "failure", secretsStep: "" });
+    expect(checks).toMatchObject({ kind: "agent-failure", role: "review", issue: 7, jobResult: "cancelled" });
+  });
+
+  it("names a failed Reviewer, after green checks, as the Review's failure", () => {
+    const input = pushJobInput(
+      needs(
+        "review",
+        { "review-checks": { result: "success", outputs: { checks: "green", "head-sha": "a".repeat(40), failed: "[]" } }, review: { result: "failure", outputs: { "secrets-step": "success" } } },
+        { ticket: "7", "pull-request": "50" },
+      ),
+      50,
+    );
+
+    expect(input).toEqual({ kind: "agent-failure", role: "review", issue: 7, jobResult: "failure", secretsStep: "success" });
+  });
+
+  it("does nothing when the Kit job routed nowhere, or failed", () => {
+    expect(pushJobInput(needs("none"), 12).kind).toBe("nothing");
+    expect(pushJobInput({ kit: { result: "failure", outputs: {} } }, 12).kind).toBe("nothing");
+  });
+});

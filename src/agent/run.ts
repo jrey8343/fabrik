@@ -337,7 +337,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     console.log(spec.describe(subject, checked));
   } catch (error) {
     for (const route of init.refused ?? []) console.log(`::error title=Metered-billing route::${route}`);
-    // Left for the failure job, which posts the failure notice (loop.yml).
+    // Left for the push job, which posts the failure notice (loop.yml).
     const report = failureReportFor({ error, lines, initRefused: init.refused });
     await writeFile(join(outDir, AGENT_FAILURE_FILE), `${JSON.stringify(report, null, 2)}\n`);
     console.log(`::error title=Infrastructure failure (${report.failure})::${report.detail}`);

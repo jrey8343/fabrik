@@ -1,10 +1,10 @@
-// What a failed agent job leaves for its failure job: which kind of
+// What a failed agent job leaves for the push job: which kind of
 // Infrastructure failure it saw, read from the error and the `claude -p`
-// stream. A job cancelled by its timeout leaves nothing, and the failure job
+// stream. A job cancelled by its timeout leaves nothing, and the push job
 // works that out itself (src/loop/failures.ts). Pure, no I/O.
 import type { FailureReport, ReportedFailure } from "../loop/types.ts";
 
-/** The artifact's file name, the same in the agent job and its failure job. */
+/** The artifact's file name, the same in the agent job and the push job. */
 export const AGENT_FAILURE_FILE = "agent-failure.json";
 
 export interface FailureEvidence {

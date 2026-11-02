@@ -1,5 +1,5 @@
 // The adapter's event side: turns an Actions event, or what an agent job
-// passed out to its push or failure job, into the Loop event it stands for.
+// passed out to its push job, into the Loop event it stands for.
 // It holds no Loop rules; those all live in src/loop/rules.ts.
 import type { AgentRunResult } from "../agent/result.ts";
 import type { AgentRole, BranchChanges, FailureReport, LoopEvent } from "../loop/types.ts";
@@ -120,7 +120,7 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
   return { kind: "review-run-finished", pullRequest, headSha, output: result.output, runUrl };
 }
 
-/** What the failure job knows about the agent job it follows (see the failure job in loop.yml). */
+/** What the push job knows about the agent job it follows (src/kit/pushJob.ts). */
 export interface FailedJob {
   readonly role: AgentRole;
   readonly issue: number;
@@ -134,7 +134,7 @@ export interface FailedJob {
 
 const SECRETS_OUTCOMES = ["success", "failure", "cancelled", "skipped"] as const;
 
-/** Turns what the failure job gathered into the Loop event it reports. */
+/** Turns what the push job gathered into the Loop event it reports. */
 export function agentFailureEventFrom(job: FailedJob): LoopEvent {
   const secretsStep = SECRETS_OUTCOMES.find((outcome) => outcome === job.secretsStep) ?? null;
   return {

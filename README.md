@@ -8,18 +8,18 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 
 - `src/loop/` holds the **Loop rules core**: a pure function, `planFor(event, snapshot, config)`, that returns a plan. It does no I/O, and its tests (`*.test.ts`, next to the code) are the Loop's behaviour, one sentence each.
 - `src/__fixtures__/` holds the snapshot builders the core's tests use.
-- `src/kit/` holds the **Kit config** loader (`resolveKitConfig`: defaults and validation) and the caller workflow release check (`checkCallerWorkflow`). Both are pure; every run calls them before anything else.
-- `src/github/` holds the thin **GitHub adapter**: it maps an Actions event to a Loop event, gathers the snapshot and applies the plan.
-- `src/main.ts` is what a push job runs (`node src/main.ts`, Node 24, no build step and no runtime dependencies). Given `FABRIK_AGENT_RESULT`, it applies an agent job's output instead of the Actions event.
+- `src/kit/` holds the **Kit config** loader (`resolveKitConfig`: defaults and validation) and the caller workflow release check (`checkCallerWorkflow`), which `checkKit` makes together. All are pure; every run, the Kit job's included, calls them before anything else, so no agent starts on an invalid Kit. `src/kit/pushJob.ts` decides what the push job applies from how the jobs before it ended.
+- `src/github/` holds the thin **GitHub adapter**: `events.ts` maps an Actions event, or what an agent job passed out, to a Loop event; `snapshot.ts` gathers the snapshot, reading the Kit's comment markers back through `threads.ts`; `apply.ts` applies the plan; `client.ts` is the API client.
+- `src/main.ts` is what the push, claim and Dispatch jobs run (`node src/main.ts`, Node 24, no build step and no runtime dependencies). In the push job (`FABRIK_NEEDS`), it applies an agent job's output, or its failure notice, instead of the Actions event.
 - `src/agent/` holds the **agent job** runner (`node src/agent/run.ts triage`, `design`, `implement` or `review`): Sandcastle with `noSandbox()` on the runner VM, the metered-billing preflight as the last `onSandboxReady` step, the `init` check, the step summary, and the role's output passed out as `agent-result.json`. Only agent jobs install the runtime dependencies (Sandcastle and the Claude Code CLI, pinned exactly).
 - `src/review/` holds the Review checks job's step (`node src/review/wait.ts`), which waits for an agent PR's required checks, and the pure rule for how they ended.
 - `src/preflight/` holds the metered-billing preflight (pure) and the command the hook runs.
 - `src/skills/` and `skills.lock.json` pin Matt Pocock's skills at a commit SHA and install them into a Product checkout's gitignored `.claude/skills/` (ADR-0003).
 - `src/skills/bump.ts` decides the weekly skills bump PR (`.github/workflows/skills-bump.yml`), with the upstream diff in its body; `src/skills/bump-main.ts` is its step.
 - `src/release/` checks that each release pins Sandcastle and the Claude Code CLI at exact versions, which Dependabot bumps (`.github/dependabot.yml`). See [docs/releasing.md](docs/releasing.md) for the release process.
-- `src/kit/jobs.ts` is the Kit job's step: it validates the Kit config, asks the Loop rules core what the event calls for, and routes it to an agent job (when the plan starts an agent run), to the push job, or nowhere.
+- `src/kit/jobs.ts` is the Kit job's step: it checks the Kit config and the caller workflow's pins, asks the Loop rules core what the event calls for, and routes it to an agent job (when the plan starts an agent run), to the push job, or nowhere.
 - `prompts/` holds the Kit's agent prompts.
-- `.github/workflows/loop.yml` is the reusable workflow a Product repo calls. It holds wiring only.
+- `.github/workflows/loop.yml` is the reusable workflow a Product repo calls. It holds wiring only. The steps its jobs share are composite actions in `.github/actions/`: `prepare-agent` readies an agent job (installs the Kit, fetches the skills, and reads the agent's inputs through `src/agent/inputs.ts`), and `run-loop` runs the Loop as the Fabrik App.
 - `.github/workflows/schedule.yml` is the reusable scheduled tick the caller workflow runs hourly, for the Loop's time-based rules (closing the weekly-limit issue after its reset). Like the push job, it never touches Product code.
 - `src/loop/kitIssues.ts` holds the Kit-owned issues: the "Rotate the Claude token" issue (label `fabrik:token-rotation`) and the weekly-limit issue (label `fabrik:weekly-limit`), which buzz the Operator once per repo, or once per limit window, instead of once per Ticket.
 - `templates/fabrik.yml` is the caller workflow a Product repo installs as `.github/workflows/fabrik.yml`.
