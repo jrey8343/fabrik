@@ -9,12 +9,14 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     author: "someone",
     labels: [],
     parent: null,
+    openPullRequests: [],
     ...overrides,
   };
 }
 
-export function snapshotOf(issue: IssueSnapshot): Snapshot {
-  return { issue };
+/** A snapshot of this issue, in a repo whose Operator is @the-operator unless the test says otherwise. */
+export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
+  return { issue, operator: "the-operator", ...overrides };
 }
 
 /** A Kit config with every v1 default, as a Product repo with no .fabrik/config.json gets. */

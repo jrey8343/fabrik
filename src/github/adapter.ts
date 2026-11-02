@@ -3,7 +3,7 @@
 // Loop rules; those all live in src/loop/rules.ts.
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import type { AgentRunResult } from "../agent/result.ts";
-import type { Action, AgentRole, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
+import type { Action, AgentRole, FailureReport, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 
 export interface Repo {
   readonly owner: string;
@@ -37,6 +37,34 @@ export function agentRoleFor(eventName: string, payload: Record<string, unknown>
  */
 export function agentRunEventFrom(result: AgentRunResult): LoopEvent {
   return { kind: "agent-run-finished", role: result.role, issue: result.issue, output: result.output };
+}
+
+/** What the failure job knows about the agent job it follows (see the failure job in loop.yml). */
+export interface FailedJob {
+  readonly role: AgentRole;
+  readonly issue: number;
+  readonly runUrl: string;
+  /** `needs.<job>.result`. */
+  readonly jobResult: string;
+  /** The agent job's 1Password step outcome, passed out as a job output; empty if it never got that far. */
+  readonly secretsStep: string;
+  readonly report: FailureReport | null;
+}
+
+const SECRETS_OUTCOMES = ["success", "failure", "cancelled", "skipped"] as const;
+
+/** Turns what the failure job gathered into the Loop event it reports. */
+export function agentFailureEventFrom(job: FailedJob): LoopEvent {
+  const secretsStep = SECRETS_OUTCOMES.find((outcome) => outcome === job.secretsStep) ?? null;
+  return {
+    kind: "agent-run-failed",
+    role: job.role,
+    issue: job.issue,
+    runUrl: job.runUrl,
+    jobResult: job.jobResult === "cancelled" ? "cancelled" : "failure",
+    secretsStep,
+    report: job.report,
+  };
 }
 
 /** A GitHub API client authenticated as the Fabrik App. */
@@ -103,6 +131,7 @@ const ISSUE_QUERY = `
         author { login }
         labels(first: 100) { nodes { name } }
         parent { number }
+        closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number } }
       }
     }
   }
@@ -115,6 +144,7 @@ interface IssueQueryResult {
       author: { login: string } | null;
       labels: { nodes: { name: string }[] };
       parent: { number: number } | null;
+      closedByPullRequestsReferences: { nodes: { number: number }[] };
     } | null;
   };
 }
@@ -136,7 +166,10 @@ export async function gatherSnapshot(github: GitHub, repo: Repo, event: LoopEven
       author: issue.author?.login ?? "ghost",
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
+      openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
     },
+    // v1 Product repos are the Operator's own, so the repo's owner is the Operator.
+    operator: repo.owner,
   };
 }
 

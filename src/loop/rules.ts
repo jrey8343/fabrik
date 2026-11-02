@@ -1,14 +1,20 @@
+import { failureNotice } from "./failures.ts";
 import { CATEGORY_LABELS, isWayfinderLabel, STATE_LABELS } from "./labels.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import type { KitConfig, LoopEvent, Plan, Snapshot } from "./types.ts";
 
 /** The Loop rules core: decides what the Kit does about one Loop event. Pure, no I/O. */
-export function planFor(event: LoopEvent, snapshot: Snapshot, _config: KitConfig): Plan {
+export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
   switch (event.kind) {
     case "issue-opened":
       return intake(event.issue, snapshot);
     case "agent-run-finished":
+      if (event.role !== "triage") {
+        return { kind: "nothing", reason: `The Kit doesn't apply ${event.role} output yet` };
+      }
       return applyTriage(event.issue, event.output, snapshot);
+    case "agent-run-failed":
+      return failureNotice(event, snapshot, config);
   }
 }
 
