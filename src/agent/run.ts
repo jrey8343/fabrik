@@ -15,6 +15,7 @@
 // and passes its commits out as a git bundle beside agent-result.json. A retry
 // runs in a checkout of its PR's branch, with FABRIK_PULL_REQUEST_FILE the PR and
 // its comments, whose latest Verdict holds the findings to fix.
+// A Design-session turn takes the issue's parent Spec from FABRIK_SPEC_FILE (null if none).
 // A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
 // PR, and its result is the Reviewer's reply, a Verdict line first.
@@ -91,6 +92,8 @@ interface RoleSpec<T> {
   readonly describe: (issue: number, output: T) => string;
   /** The heading over the issue in the prompt. */
   readonly issueHeading?: string;
+  /** A Design session weighs the issue's parent Spec, from FABRIK_SPEC_FILE, if it has one. */
+  readonly readsParentSpec?: boolean;
   /** The Implementer builds on a branch, which it passes out as a bundle. */
   readonly buildsBranch?: boolean;
   /** The Reviewer judges a PR, checked out at its head; its result is for the PR, not the Ticket. */
@@ -125,8 +128,11 @@ const ROLE_SPECS = {
           return `The Design session on #${issue} finished with an agent brief`;
         case "spec":
           return `The Design session on #${issue} finished with a Spec and ${output.tickets.length} Ticket(s)`;
+        case "split":
+          return `The Design session on #${issue} split it into ${output.tickets.length} sibling Ticket(s)`;
       }
     },
+    readsParentSpec: true,
   } satisfies RoleSpec<DesignTurnOutput>,
   implement: {
     role: "implement",
@@ -232,6 +238,19 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       retryFile === "" ? await startAgentBranch(productDir, issueNumber) : await continueAgentBranch(productDir, issueNumber);
     extra.push(...(await implementContext(productDir, required("FABRIK_SPEC_FILE"), config)));
     if (retryFile !== "") extra.push(...(await retryContext(retryFile)).parts);
+  }
+  if (spec.readsParentSpec === true) {
+    const specFile = process.env["FABRIK_SPEC_FILE"] ?? "";
+    const parent: unknown = specFile === "" ? null : JSON.parse(await readFile(specFile, "utf8"));
+    if (parent !== null) {
+      extra.push(
+        "## The parent Spec",
+        "This issue is a Ticket under this Spec. Finish by rewriting it in place or splitting it into sibling Tickets under this Spec, never with a Spec of its own.",
+        "```json",
+        JSON.stringify(parent, null, 2),
+        "```",
+      );
+    }
   }
   // The Reviewer's result is for the PR it judged, which its push job checks against the event.
   let subject = issueNumber;

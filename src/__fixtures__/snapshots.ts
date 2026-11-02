@@ -20,6 +20,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     parent: null,
     openPullRequests: [],
     designRounds: 0,
+    sentBack: null,
     emptyDiffs: 0,
     ...overrides,
   };
@@ -104,6 +105,10 @@ export function notificationsOf(plan: Plan, operator = "operator"): string[] {
         return action.reviewer === operator ? [`review request on #${action.pullRequest}`] : [];
       case "comment":
         return mention.test(action.body) ? [`mention on #${action.issue}`] : [];
+      case "comment-linking": {
+        const text = action.body.map((part) => (typeof part === "string" ? part : "https://github.com/x")).join("");
+        return mention.test(text) ? [`mention on #${action.issue}`] : [];
+      }
       case "open-issue":
         return [
           ...(action.assignees.includes(operator) ? [`assign new "${action.title}"`] : []),

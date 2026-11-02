@@ -4,7 +4,7 @@
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import type { AgentRunResult } from "../agent/result.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
-import { isDesignRoundComment } from "../loop/design.ts";
+import { designSessionOf } from "../loop/design.ts";
 import { countEmptyDiffs } from "../loop/implement.ts";
 import { verdictsIn } from "../loop/verdict.ts";
 import { KIT_ISSUE_LABELS } from "../loop/kitIssues.ts";
@@ -17,6 +17,7 @@ import type {
   KitIssueSnapshot,
   LoopEvent,
   Plan,
+  PostedComment,
   Snapshot,
   TicketSnapshot,
 } from "../loop/types.ts";
@@ -231,7 +232,7 @@ const ISSUE_QUERY = `
         author { login }
         labels(first: 100) { nodes { name } }
         parent { number }
-        comments(last: 100) { nodes { body } }
+        comments(last: 100) { nodes { body author { __typename } } }
         closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number } }
       }
     }
@@ -247,7 +248,7 @@ interface IssueQueryResult {
       author: { login: string } | null;
       labels: { nodes: { name: string }[] };
       parent: { number: number } | null;
-      comments: { nodes: { body: string }[] };
+      comments: { nodes: { body: string; author: { __typename: string } | null }[] };
       closedByPullRequestsReferences: { nodes: { number: number }[] };
     } | null;
   };
@@ -451,7 +452,9 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
-      designRounds: issue.comments.nodes.filter((comment) => isDesignRoundComment(comment.body)).length,
+      ...designSessionOf(
+        issue.comments.nodes.map((comment) => ({ body: comment.body, byBot: comment.author?.__typename === "Bot" })),
+      ),
       emptyDiffs: countEmptyDiffs(issue.comments.nodes.map((comment) => comment.body)),
     },
     pullRequest: null,
@@ -593,9 +596,23 @@ export async function applyPlan(
 ): Promise<void> {
   if (plan.kind !== "act") return;
   const created = new Map<string, CreatedRecord>();
+  // The URL of each comment the plan has posted under a key, for later comments that link it.
+  const posted = new Map<string, string>();
   for (const action of plan.actions) {
-    await apply(github, repo, action, created, branches);
+    await apply(github, repo, action, { created, posted }, branches);
   }
+}
+
+/** What earlier actions in the plan made, for later ones to refer to. */
+interface Made {
+  readonly created: Map<string, CreatedRecord>;
+  readonly posted: Map<string, string>;
+}
+
+function postedIn(posted: ReadonlyMap<string, string>, { posted: key }: PostedComment): string {
+  const url = posted.get(key);
+  if (url === undefined) throw new Error(`The plan refers to a comment it hasn't posted: ${key}`);
+  return url;
 }
 
 /** An issue a plan created: its number for links in text, its database id for sub-issue and blocked-by edges. */
@@ -610,7 +627,7 @@ function createdIn(created: ReadonlyMap<string, CreatedRecord>, { created: key }
   return record;
 }
 
-/** Creates the issue, then links it under its parent and to each blocker, all made earlier in the plan. */
+/** Creates the issue, then links it under its parent (made earlier in the plan, or existing) and to each blocker. */
 async function createIssue(
   github: GitHub,
   repo: Repo,
@@ -625,8 +642,8 @@ async function createIssue(
   })) as CreatedRecord;
   created.set(action.key, { number: issue.number, id: issue.id });
   if (action.parent !== null) {
-    const parent = createdIn(created, action.parent);
-    await github.rest("POST", `${issues}/${parent.number}/sub_issues`, { sub_issue_id: issue.id });
+    const parent = typeof action.parent === "number" ? action.parent : createdIn(created, action.parent).number;
+    await github.rest("POST", `${issues}/${parent}/sub_issues`, { sub_issue_id: issue.id });
   }
   for (const blocker of action.blockedBy) {
     await github.rest("POST", `${issues}/${issue.number}/dependencies/blocked_by`, {
@@ -644,7 +661,7 @@ async function apply(
   github: GitHub,
   repo: Repo,
   action: Action,
-  created: Map<string, CreatedRecord>,
+  made: Made,
   branches: BranchPusher | null,
 ): Promise<void> {
   const issues = `/repos/${repo.owner}/${repo.name}/issues`;
@@ -653,7 +670,11 @@ async function apply(
     case "check-dispatch":
       return;
     case "create-issue":
-      return createIssue(github, repo, action, created);
+      return createIssue(github, repo, action, made.created);
+    case "close-pull-request":
+      // Closing never deletes the head branch; only a merge with auto-delete on would.
+      await github.rest("PATCH", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}`, { state: "closed" });
+      return;
     case "open-issue":
       // Labels go on with the issue, so the issues.opened run it starts already sees them.
       await github.rest("POST", issues, {
@@ -693,7 +714,7 @@ async function apply(
       });
       return;
     default:
-      return applyToIssue(github, `${issues}/${action.issue}`, action, created);
+      return applyToIssue(github, `${issues}/${action.issue}`, action, made);
   }
 }
 
@@ -709,11 +730,12 @@ async function applyToIssue(
         | "open-issue"
         | "push-branch"
         | "open-pull-request"
+        | "close-pull-request"
         | "mark-ready-for-review"
         | "request-review";
     }
   >,
-  created: Map<string, CreatedRecord>,
+  { created, posted }: Made,
 ): Promise<void> {
   switch (action.kind) {
     case "add-labels":
@@ -724,9 +746,16 @@ async function applyToIssue(
         allowNotFound: true,
       });
       return;
-    case "comment":
-      await github.rest("POST", `${issue}/comments`, { body: action.body });
+    case "comment": {
+      const comment = (await github.rest("POST", `${issue}/comments`, { body: action.body })) as { html_url: string };
+      if (action.key !== undefined) posted.set(action.key, comment.html_url);
       return;
+    }
+    case "comment-linking": {
+      const body = action.body.map((part) => (typeof part === "string" ? part : postedIn(posted, part))).join("");
+      await github.rest("POST", `${issue}/comments`, { body });
+      return;
+    }
     case "assign":
       await github.rest("POST", `${issue}/assignees`, { assignees: [action.assignee] });
       return;

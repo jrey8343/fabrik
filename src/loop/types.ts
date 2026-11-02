@@ -1,6 +1,7 @@
 // The Loop rules core's interface: a Loop event, a snapshot of GitHub state and
 // the resolved Kit config go in; a plan comes out.
 import type { ChangedPath } from "../guard/trust-root.ts";
+import type { SentBack } from "./backToDesign.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
 export type AgentRole = "triage" | "design" | "implement" | "review";
@@ -140,8 +141,14 @@ export interface IssueSnapshot {
   readonly parent: number | null;
   /** The open pull requests linked to close this issue, oldest first. */
   readonly openPullRequests: readonly number[];
-  /** How many Design-session rounds the Kit has posted on the issue so far. */
+  /** How many rounds the Kit has posted in the issue's current Design session (src/loop/design.ts). */
   readonly designRounds: number;
+  /**
+   * The agent PR whose Verdict sent this Ticket back to design, read from the
+   * Kit's note on it (src/loop/backToDesign.ts), while the Design session that
+   * followed hasn't finished; otherwise null.
+   */
+  readonly sentBack: SentBack | null;
   /** How many Implement runs on it ended in an empty diff since its last Design session (src/loop/implement.ts). */
   readonly emptyDiffs: number;
 }
@@ -243,6 +250,11 @@ export interface CreatedIssue {
   readonly created: string;
 }
 
+/** A comment an earlier `comment` action with a `key` in the same plan posts, linked by its URL. */
+export interface PostedComment {
+  readonly posted: string;
+}
+
 /** One change the GitHub adapter makes on the core's behalf. */
 export type Action =
   | {
@@ -253,7 +265,8 @@ export type Action =
       readonly title: string;
       readonly body: string;
       readonly labels: readonly string[];
-      readonly parent: CreatedIssue | null;
+      /** The issue it becomes a sub-issue of: one created earlier in the plan, or an existing issue by its number. */
+      readonly parent: CreatedIssue | number | null;
       readonly blockedBy: readonly CreatedIssue[];
     }
   | {
@@ -265,7 +278,20 @@ export type Action =
     }
   | { readonly kind: "add-labels"; readonly issue: number; readonly labels: readonly string[] }
   | { readonly kind: "remove-label"; readonly issue: number; readonly label: string }
-  | { readonly kind: "comment"; readonly issue: number; readonly body: string }
+  | {
+      readonly kind: "comment";
+      readonly issue: number;
+      readonly body: string;
+      /** Names the comment for later `comment-linking` actions in the plan, which link to it. */
+      readonly key?: string;
+    }
+  | {
+      /** Comments on an issue, linking comments posted earlier in the plan. */
+      readonly kind: "comment-linking";
+      readonly issue: number;
+      /** The comment's Markdown, with each posted comment written as its URL. */
+      readonly body: readonly (string | PostedComment)[];
+    }
   | { readonly kind: "edit-issue-body"; readonly issue: number; readonly body: string }
   | { readonly kind: "assign"; readonly issue: number; readonly assignee: string }
   | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" | "completed" }
@@ -300,6 +326,8 @@ export type Action =
       readonly body: string;
       readonly draft: true;
     }
+  /** Closes a PR unmerged. Its branch stays, so nothing it built is lost. */
+  | { readonly kind: "close-pull-request"; readonly pullRequest: number }
   /** Takes a draft PR out of draft. */
   | { readonly kind: "mark-ready-for-review"; readonly pullRequest: number }
   /** Requests a review on a PR: the Merge gate's one notification. */

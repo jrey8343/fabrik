@@ -50,7 +50,10 @@ function describeAction(action: Action): string {
     case "remove-label":
       return `- remove label on #${action.issue}: ${action.label}`;
     case "comment":
+    case "comment-linking":
       return `- comment on #${action.issue}`;
+    case "close-pull-request":
+      return `- close #${action.pullRequest} unmerged, keeping its branch`;
     case "assign":
       return `- assign #${action.issue} to ${action.assignee}`;
     case "close":
@@ -62,7 +65,9 @@ function describeAction(action: Action): string {
     case "create-issue":
       return [
         `- create "${action.title}" (${action.labels.join(", ")})`,
-        action.parent === null ? "" : `, a sub-issue of ${action.parent.created}`,
+        action.parent === null
+          ? ""
+          : `, a sub-issue of ${typeof action.parent === "number" ? `#${action.parent}` : action.parent.created}`,
         action.blockedBy.length === 0 ? "" : `, blocked by ${action.blockedBy.map((b) => b.created).join(", ")}`,
       ].join("");
     case "close-as-superseded":
