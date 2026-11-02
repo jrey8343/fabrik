@@ -161,7 +161,7 @@ function secrets(state: ProductState): SetupAction[] {
   }
   for (const { role, vaults, secret } of roles) {
     if (state.secrets.includes(secret)) continue;
-    const name = `Fabrik ${state.repo.owner}/${state.repo.name} ${role}`;
+    const name = `fabrik-${state.repo.owner}-${state.repo.name}-${role}`;
     actions.push({ kind: "create-service-account", name, vaults, secret });
   }
   return actions;

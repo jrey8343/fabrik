@@ -23,7 +23,8 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 - `.github/workflows/schedule.yml` is the reusable scheduled tick the caller workflow runs hourly, for the Loop's time-based rules (closing the weekly-limit issue after its reset). Like the push job, it never touches Product code.
 - `src/loop/kitIssues.ts` holds the Kit-owned issues: the "Rotate the Claude token" issue (label `fabrik:token-rotation`) and the weekly-limit issue (label `fabrik:weekly-limit`), which buzz the Operator once per repo, or once per limit window, instead of once per Ticket.
 - `templates/fabrik.yml` is the caller workflow a Product repo installs as `.github/workflows/fabrik.yml`.
-- `templates/claude-settings.json` holds the `SessionStart` hook entry a Product repo merges into `.claude/settings.json`, and disables the `mattpocock-skills` plugin there. The entry reads the release from `fabrik.yml`, downloads Fabrik at that tag (public, no credentials) and runs `src/session/start.ts`, which installs the skills that release's `skills.lock.json` pins, the same commit the Kit step installs in Actions, plus Fabrik's own `skills/` (the `fabrik-live-design` skill).
+- `templates/claude-settings.json` holds the `SessionStart` hook entry a Product repo merges into `.claude/settings.json`, and disables the `mattpocock-skills` plugin there. The entry reads the release from `fabrik.yml`, downloads Fabrik at that tag (public, no credentials) and runs `src/session/start.ts`, which installs the skills that release's `skills.lock.json` pins, the same commit the Kit step installs in Actions, plus Fabrik's own `skills/` (`fabrik-live-design` and `fabrik-setup`).
+- `src/setup/` is the setup program the `fabrik-setup` skill runs: `plan.ts` is the pure planner (what a Product repo holds now in, the steps it's missing out), `shims.ts` merges the Kit-owned files into the Product's own, and `main.ts` gathers the state with `gh` and `op` and applies the plan. `templates/` holds what it installs.
 
 ## Developing
 
@@ -33,16 +34,28 @@ npm run typecheck
 npm test
 ```
 
-## What a Product repo needs today
+## Adopting the Kit
 
-- The Fabrik GitHub App installed (Issues, Pull requests and Contents; no `workflows`).
-- A 1Password item `Fabrik App` in the `Fabrik App` vault, with fields `client-id` and `private-key`.
-- The repo's read-only push service account (reads the `Fabrik App` vault) stored as the Actions secret `FABRIK_OP_PUSH_TOKEN`.
-- A 1Password API Credential item `Claude token` in the `Fabrik` vault, holding the `claude setup-token` token in its `credential` field, with its expiry date.
-- The repo's read-only agent service account (reads the `Fabrik` vault) stored as the Actions secret `FABRIK_OP_AGENT_TOKEN`.
-- A `Fabrik Sandbox · <product>` vault holding the repo's test secrets, and the repo's read-only implement service account (reads the `Fabrik` vault and that one) stored as the Actions secret `FABRIK_OP_IMPLEMENT_TOKEN`.
-- `.claude/skills/` in the repo's `.gitignore`, and the labels `needs-triage`, `needs-info`, `needs-design`, `ready-for-agent`, `ready-for-human`, `wontfix`, `agent:implement`, `agent:review`, `agent:retry`, `bug` and `enhancement`.
-- `templates/fabrik.yml` installed as `.github/workflows/fabrik.yml`, with every Fabrik `uses:` line pinned to the same exact tag. A run fails if they disagree. It runs on `issues`, `issue_comment`, `pull_request_target` (opened, synchronize, reopened, labeled, ready_for_review, closed) and `pull_request_review` (submitted).
+The Operator adopts the Kit in a Product repo by running the `fabrik-setup` skill from local Claude Code in the repo's checkout (`skills/fabrik-setup/SKILL.md`). The first time, the repo doesn't have Fabrik's skills yet, so copy the skill in from the release:
+
+```sh
+v=v1.0.0   # the Fabrik release to adopt
+d=$(mktemp -d)
+curl -fsSL "https://codeload.github.com/jrey8343/fabrik/tar.gz/refs/tags/$v" | tar -xzf - -C "$d" --strip-components=1
+mkdir -p ~/.claude/skills && cp -R "$d/skills/fabrik-setup" ~/.claude/skills/
+```
+
+Then run `/fabrik-setup v1.0.0` in the Product repo. It needs the Operator's `gh` (repo admin, with the `workflow` scope), `op` signed in as the Operator, and Node 24. It shows its plan (`node src/setup/main.ts <checkout> <release>`), and on the Operator's go-ahead applies it (`--apply`) and opens a PR with the files:
+
+- **Kit-owned files**, put back whenever they drift: `.github/workflows/fabrik.yml` with every Fabrik `uses:` line pinned to the release, the `SessionStart` hook entry and the `mattpocock-skills` plugin switched off in `.claude/settings.json`, `.claude/skills/` in `.gitignore`, and a `.github/dependabot.yml` entry that bumps only the Fabrik pin, with no cooldown. Each is merged into the Product's own file. A caller pinned to an earlier major is migrated; within a major, Dependabot owns the pin.
+- **Starters**, written once and the Product's from then on: `.fabrik/config.json` with every v1 default, `docs/agents/*` with Fabrik's fixed answers (GitHub Issues, the triage labels plus `needs-design`, a single-context glossary and ADRs), and an `## Agent skills` block pointing at them in `CLAUDE.md`, or in `AGENTS.md` when there's no `CLAUDE.md`.
+- **Labels**: `needs-triage`, `needs-info`, `needs-design`, `ready-for-agent`, `ready-for-human`, `wontfix`, `agent:implement`, `agent:review`, `agent:retry`, `bug`, `enhancement`, `fabrik:token-rotation` and `fabrik:weekly-limit`.
+- **1Password** (ADR-0004): the `Fabrik`, `Fabrik App` and `Fabrik Sandbox · <repo>` vaults when they're missing, and three read-only service accounts with no expiry, `fabrik-<owner>-<repo>-agent` (reads `Fabrik`), `-implement` (reads `Fabrik` and the Sandbox vault) and `-push` (reads `Fabrik App`), stored as the Actions secrets `FABRIK_OP_AGENT_TOKEN`, `FABRIK_OP_IMPLEMENT_TOKEN` and `FABRIK_OP_PUSH_TOKEN`.
+- **Branch protection** on the default branch: a PR with one approving review, the checks in `sandbox.checks` (plus any already required), and no bypass for anyone. The Fabrik App can't approve its own PRs, so only the Operator can merge an agent PR.
+
+Then the Operator runs the wizard (`skills/fabrik-setup/wizard.sh`, made with the `wizard` skill) in their own terminal, for what only they can do: installing the Fabrik App on the repo (Issues, Pull requests and Contents; no `workflows`) and storing its `client-id` and `private-key` in the `Fabrik App` item; `claude setup-token` into the `Claude token` API Credential in the `Fabrik` vault, with its expiry; GitHub mobile pushing only mentions, assignments and review requests, with Actions off; and watching the repo on All activity.
+
+Re-running `/fabrik-setup` on a working install changes nothing. On a broken one it repairs only what's missing: a missing label is created, and a missing secret gets a new service account (1Password shows a token only once, so delete the old account by hand).
 
 ## Design session (async)
 

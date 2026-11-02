@@ -74,7 +74,7 @@ describe("Re-running setup", () => {
 
     const actions = planSetup(broken, kit).actions.map((a) => `${a.kind} ${"name" in a ? a.name : ""}`);
 
-    expect(actions).toEqual(["create-label needs-design", "create-service-account Fabrik acme/clinic push"]);
+    expect(actions).toEqual(["create-label needs-design", "create-service-account fabrik-acme-clinic-push"]);
   });
 
   it("restores a stable shim the repo lost, and rewrites only Kit-owned files", () => {
@@ -256,19 +256,19 @@ describe("Service accounts and Actions secrets (ADR-0004)", () => {
     expect(accounts(aCleanProduct())).toEqual([
       {
         kind: "create-service-account",
-        name: "Fabrik acme/clinic agent",
+        name: "fabrik-acme-clinic-agent",
         vaults: ["Fabrik"],
         secret: "FABRIK_OP_AGENT_TOKEN",
       },
       {
         kind: "create-service-account",
-        name: "Fabrik acme/clinic implement",
+        name: "fabrik-acme-clinic-implement",
         vaults: ["Fabrik", "Fabrik Sandbox · clinic"],
         secret: "FABRIK_OP_IMPLEMENT_TOKEN",
       },
       {
         kind: "create-service-account",
-        name: "Fabrik acme/clinic push",
+        name: "fabrik-acme-clinic-push",
         vaults: ["Fabrik App"],
         secret: "FABRIK_OP_PUSH_TOKEN",
       },
