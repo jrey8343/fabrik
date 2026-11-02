@@ -1,6 +1,6 @@
 // The Triage output contract: what a Triage agent job emits and its push job
 // applies. Both sides check it, so a malformed output never half-applies.
-import { CATEGORY_LABELS, STATE_LABELS } from "./labels.ts";
+import { CATEGORY_LABELS, type CategoryLabel, isCategoryLabel, NEEDS_TRIAGE, READY_FOR_AGENT, STATE_LABELS, type StateLabel } from "./labels.ts";
 
 /** The brief a Fast-path issue carries to its Implementer. */
 export interface AgentBrief {
@@ -10,9 +10,9 @@ export interface AgentBrief {
 
 export interface TriageOutput {
   /** `bug` or `enhancement`. */
-  readonly category: string;
+  readonly category: CategoryLabel;
   /** Any state label but `needs-triage`. */
-  readonly state: string;
+  readonly state: TriageState;
   /** The comment Triage leaves on the issue, explaining its sorting. */
   readonly comment: string;
   /** Present exactly when the state is `ready-for-agent` (the Fast path). */
@@ -20,7 +20,12 @@ export interface TriageOutput {
 }
 
 /** The states Triage may sort an issue into. */
-export const TRIAGE_STATES: readonly string[] = STATE_LABELS.filter((label) => label !== "needs-triage");
+export type TriageState = Exclude<StateLabel, typeof NEEDS_TRIAGE>;
+export const TRIAGE_STATES = STATE_LABELS.filter((label): label is TriageState => label !== NEEDS_TRIAGE);
+
+function isTriageState(label: string): label is TriageState {
+  return (TRIAGE_STATES as readonly string[]).includes(label);
+}
 
 export type TriageOutputResult =
   | { readonly ok: true; readonly output: TriageOutput }
@@ -39,16 +44,16 @@ export function readTriageOutput(value: unknown): TriageOutputResult {
   if (!isObject(value)) return { ok: false, errors: ["Triage output must be a JSON object"] };
   const errors: string[] = [];
   const { category, state, comment, brief } = value;
-  if (typeof category !== "string" || !CATEGORY_LABELS.includes(category)) {
+  if (typeof category !== "string" || !isCategoryLabel(category)) {
     errors.push(`category must be one of ${CATEGORY_LABELS.join(", ")}, not ${JSON.stringify(category)}`);
   }
-  if (typeof state !== "string" || !TRIAGE_STATES.includes(state)) {
+  if (typeof state !== "string" || !isTriageState(state)) {
     errors.push(`state must be one of ${TRIAGE_STATES.join(", ")}, not ${JSON.stringify(state)}`);
   }
   if (!isText(comment)) errors.push("comment must be non-empty text");
 
   let agentBrief: AgentBrief | null = null;
-  if (state === "ready-for-agent") {
+  if (state === READY_FOR_AGENT) {
     if (
       !isObject(brief) ||
       !isText(brief.summary) ||
@@ -67,7 +72,7 @@ export function readTriageOutput(value: unknown): TriageOutputResult {
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
-    output: { category: category as string, state: state as string, comment: comment as string, brief: agentBrief },
+    output: { category: category as CategoryLabel, state: state as TriageState, comment: comment as string, brief: agentBrief },
   };
 }
 

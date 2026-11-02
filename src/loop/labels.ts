@@ -1,25 +1,67 @@
-// Label names the Loop reads and writes (docs/agents/triage-labels.md).
-
-/** Every label that says where an issue is in the Loop. An issue holds at most one. */
-export const STATE_LABELS: readonly string[] = [
-  "needs-triage",
-  "needs-info",
-  "needs-design",
-  "ready-for-agent",
-  "ready-for-human",
-  "wontfix",
-];
+// Every label the Kit reads or writes (docs/agents/triage-labels.md), in one
+// place: the core, the adapter and the setup skill all take them from here.
 
 export const NEEDS_TRIAGE = "needs-triage";
+export const NEEDS_INFO = "needs-info";
 export const NEEDS_DESIGN = "needs-design";
 export const READY_FOR_AGENT = "ready-for-agent";
 export const READY_FOR_HUMAN = "ready-for-human";
+export const WONTFIX = "wontfix";
+
+/** Every label that says where an issue is in the Loop. An issue holds at most one. */
+export const STATE_LABELS = [NEEDS_TRIAGE, NEEDS_INFO, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, WONTFIX] as const;
+export type StateLabel = (typeof STATE_LABELS)[number];
+
+export const BUG = "bug";
+export const ENHANCEMENT = "enhancement";
 
 /** What kind of work an issue is. Triage leaves exactly one on every issue it sorts. */
-export const CATEGORY_LABELS: readonly string[] = ["bug", "enhancement"];
+export const CATEGORY_LABELS = [BUG, ENHANCEMENT] as const;
+export type CategoryLabel = (typeof CATEGORY_LABELS)[number];
 
-/** The trigger label Dispatch adds to start an Implementer (ADR-0001). */
+/**
+ * The trigger label Dispatch adds to a Ticket to start an Implementer
+ * (ADR-0001). On a Ticket with an open agent PR, re-adding it resumes that
+ * PR's Implement run: its retry, or the Operator's Request-changes run.
+ */
 export const DISPATCH_LABEL = "agent:implement";
+
+/** The trigger label on an agent PR that starts its Review, so re-adding it resumes one after a failure. */
+export const REVIEW_LABEL = "agent:review";
+
+/** The label on the Kit's token-rotation issue, by which the adapter finds it. */
+export const TOKEN_ROTATION_LABEL = "fabrik:token-rotation";
+
+/** The label on the Kit's weekly-limit issue. */
+export const WEEKLY_LIMIT_LABEL = "fabrik:weekly-limit";
+
+/** Every label that marks an issue as the Kit's own, so the adapter reads it into the snapshot. */
+export const KIT_ISSUE_LABELS = [TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL] as const;
+export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
+
+/** A label the Kit itself adds or removes. Labels read from GitHub stay plain strings: anyone can add any label. */
+export type Label = StateLabel | CategoryLabel | typeof DISPATCH_LABEL | typeof REVIEW_LABEL | KitIssueLabel;
+
+/** Every label the Kit uses, so the setup skill can create each one. */
+export const ALL_LABELS: readonly Label[] = [
+  ...STATE_LABELS,
+  DISPATCH_LABEL,
+  REVIEW_LABEL,
+  ...CATEGORY_LABELS,
+  ...KIT_ISSUE_LABELS,
+];
+
+export function isStateLabel(label: string): label is StateLabel {
+  return (STATE_LABELS as readonly string[]).includes(label);
+}
+
+export function isCategoryLabel(label: string): label is CategoryLabel {
+  return (CATEGORY_LABELS as readonly string[]).includes(label);
+}
+
+export function isKitIssueLabel(label: string): label is KitIssueLabel {
+  return (KIT_ISSUE_LABELS as readonly string[]).includes(label);
+}
 
 /** Labels the wayfinder skill puts on the maps and tickets it creates. */
 export function isWayfinderLabel(label: string): boolean {

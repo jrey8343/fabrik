@@ -46,6 +46,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     labels: [],
     verdicts: [],
     requestChangesRun: false,
+    changesRequested: null,
     ...overrides,
   };
 }

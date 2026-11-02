@@ -2,17 +2,22 @@
 // Infrastructure failure. It's never retried and never counts against a
 // Ticket's retries; the Operator gets one comment saying how to resume it.
 import { repoWideNotice } from "./kitIssues.ts";
-import { RETRY_LABEL } from "./retry.ts";
+import { DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
 import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
-/** The label whose adding starts each role's agent job, so re-adding it resumes a stalled run. */
-export const TRIGGER_LABELS: Readonly<Record<AgentRole, string>> = {
-  triage: "needs-triage",
-  design: "needs-design",
-  implement: "agent:implement",
-  review: "agent:review",
+/**
+ * The label whose adding starts each role's agent job, so re-adding it
+ * resumes a stalled run. A Design-session turn has none to re-add: its issue
+ * keeps needs-design, its place in the Loop, and the Operator's reply starts
+ * the turn again. agent:implement on a Ticket with an open agent PR resumes
+ * that PR's retry or Request-changes run (src/loop/implement.ts).
+ */
+const TRIGGER_LABELS: Readonly<Record<Exclude<AgentRole, "design">, Label>> = {
+  triage: NEEDS_TRIAGE,
+  implement: DISPATCH_LABEL,
+  review: REVIEW_LABEL,
 };
 
 const ROLE_NAMES: Readonly<Record<AgentRole, string>> = {
@@ -60,12 +65,14 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   const failure = classify(run);
   const pullRequest = issue.openPullRequests[0];
   const target = pullRequest ?? run.issue;
-  // An Implement run on a Ticket that has a PR is that PR's retry (a first run never starts beside one).
-  const retry = run.role === "implement" && pullRequest !== undefined;
-  const label = retry ? RETRY_LABEL : TRIGGER_LABELS[run.role];
-  // The review and retry triggers live on the PR; every other role's on the issue.
-  const labelled = run.role === "review" || retry ? target : run.issue;
+  // The review trigger lives on the PR; every other role's on the issue.
+  const labelled = run.role === "review" ? target : run.issue;
   const where = labelled === target ? "" : ` on #${labelled}`;
+  const label = run.role === "design" ? null : TRIGGER_LABELS[run.role];
+  const resume =
+    label === null
+      ? "Reply on this issue to run the turn again."
+      : `Re-add the \`${label}\` label${where} to run it again.`;
   const detail = run.report === null || run.report.detail.trim() === "" ? [] : ["", `> ${run.report.detail.trim()}`];
   const failedRun = `The ${ROLE_NAMES[run.role]} run on #${run.issue}`;
   const repoWide = repoWideNotice(failure, context, {
@@ -77,7 +84,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     `${repoWide === null ? `@${operator} ` : ""}${failedRun} failed: ${howItFailed(failure, run, config)}.`,
     ...detail,
     "",
-    `This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-add the \`${label}\` label${where} to run it again.`,
+    `This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. ${resume}`,
     ...(repoWide === null ? [] : ["", repoWide.pointer]),
     "",
     `[The run](${run.runUrl})`,
@@ -86,7 +93,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     kind: "act",
     actions: [
       // Off now, so that adding it back is a fresh label event that restarts the role.
-      { kind: "remove-label", issue: labelled, label },
+      ...(label === null ? [] : [{ kind: "remove-label" as const, issue: labelled, label }]),
       { kind: "comment", issue: target, body },
       ...(repoWide?.actions ?? []),
     ],

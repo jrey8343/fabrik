@@ -2,6 +2,7 @@
 // the resolved Kit config go in; a plan comes out.
 import type { ChangedPath } from "../guard/trust-root.ts";
 import type { SentBack } from "./backToDesign.ts";
+import type { Label } from "./labels.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
 export type AgentRole = "triage" | "design" | "implement" | "review";
@@ -185,6 +186,17 @@ export interface PullRequestSnapshot {
   readonly verdicts: readonly VerdictRecord[];
   /** Whether its latest push came from a Request-changes run, so a Verdict on it is marked as one. */
   readonly requestChangesRun: boolean;
+  /** The latest review that requested changes on it, if any: what a stalled Request-changes run resumes from. */
+  readonly changesRequested: ChangesRequestedReview | null;
+}
+
+/** A review requesting changes on a PR, as GitHub records it. */
+export interface ChangesRequestedReview {
+  readonly review: number;
+  readonly reviewer: string;
+  readonly reviewerIsBot: boolean;
+  /** The PR's head commit when the review was submitted. */
+  readonly commitSha: string;
 }
 
 /** The Reviewer's judgment on a PR (GLOSSARY.md). */
@@ -295,7 +307,7 @@ export type Action =
       readonly key: string;
       readonly title: string;
       readonly body: string;
-      readonly labels: readonly string[];
+      readonly labels: readonly Label[];
       /** The issue it becomes a sub-issue of: one created earlier in the plan, or an existing issue by its number. */
       readonly parent: CreatedIssue | number | null;
       readonly blockedBy: readonly CreatedIssue[];
@@ -307,8 +319,8 @@ export type Action =
       /** The comment's Markdown, with each created issue written as its `#number`. */
       readonly comment: readonly (string | CreatedIssue)[];
     }
-  | { readonly kind: "add-labels"; readonly issue: number; readonly labels: readonly string[] }
-  | { readonly kind: "remove-label"; readonly issue: number; readonly label: string }
+  | { readonly kind: "add-labels"; readonly issue: number; readonly labels: readonly Label[] }
+  | { readonly kind: "remove-label"; readonly issue: number; readonly label: Label }
   | {
       readonly kind: "comment";
       readonly issue: number;
@@ -330,7 +342,7 @@ export type Action =
       readonly kind: "open-issue";
       readonly title: string;
       readonly body: string;
-      readonly labels: readonly string[];
+      readonly labels: readonly Label[];
       readonly assignees: readonly string[];
     }
   | {

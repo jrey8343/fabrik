@@ -4,6 +4,7 @@
 // comment with its marker. Routing flaws onward is for later rules.
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
+import { REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw } from "./retry.ts";
 import { parseVerdict, verdictMarker } from "./verdict.ts";
@@ -18,9 +19,6 @@ import type {
   Verdict,
   VerdictRecord,
 } from "./types.ts";
-
-/** The label that starts a Review again after a failure (src/loop/failures.ts). */
-export const REVIEW_LABEL = "agent:review";
 
 type RedChecks = Extract<LoopEvent, { kind: "required-checks-finished" }>;
 type Reviewed = Extract<LoopEvent, { kind: "review-run-finished" }>;
@@ -139,10 +137,11 @@ export function verdictActions(
     "",
     `[The run](${event.runUrl})`,
   ].join("\n");
+  const reviewLabelOff: Action[] = pullRequest.labels.includes(REVIEW_LABEL)
+    ? [{ kind: "remove-label", issue: pullRequest.number, label: REVIEW_LABEL }]
+    : [];
   return [
-    ...(pullRequest.labels.includes(REVIEW_LABEL)
-      ? [{ kind: "remove-label" as const, issue: pullRequest.number, label: REVIEW_LABEL }]
-      : []),
+    ...reviewLabelOff,
     { kind: "comment", issue: pullRequest.number, body, key: VERDICT_COMMENT.posted },
     ...(next?.actions ?? []),
   ];

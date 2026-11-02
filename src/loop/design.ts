@@ -3,7 +3,7 @@
 // between turns beyond what the thread itself shows.
 import { sentBackIn, type SentBack } from "./backToDesign.ts";
 import { dependencyOrder, parseDesignTurnOutput, type DesignTurnOutput, type SpecTicket } from "./designOutput.ts";
-import { CATEGORY_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
+import { isCategoryLabel, type Label, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { startAgentRun } from "./runs.ts";
 import type { Action, CreatedIssue, IssueContext, IssueSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
@@ -149,14 +149,14 @@ function splitIntoSiblings(
 }
 
 /** The labels a new Ticket gets: the issue's category, and ready-for-agent, so Intake never sends it to Triage. */
-function readyLabels(issue: IssueSnapshot): string[] {
-  return [...issue.labels.filter((label) => CATEGORY_LABELS.includes(label)), READY_FOR_AGENT];
+function readyLabels(issue: IssueSnapshot): Label[] {
+  return [...issue.labels.filter(isCategoryLabel), READY_FOR_AGENT];
 }
 
 /** Creates these Tickets under `parent`, blockers first so each blocked-by edge points at an issue that exists. */
 function ticketActions(
   outcome: readonly SpecTicket[],
-  labels: readonly string[],
+  labels: readonly Label[],
   parent: CreatedIssue | number,
 ): { actions: Action[]; created: CreatedIssue[] } {
   const ticketIssue = (key: string): CreatedIssue => ({ created: `ticket:${key}` });

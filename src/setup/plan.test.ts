@@ -225,7 +225,6 @@ describe("Labels", () => {
     "needs-design",
     "agent:implement",
     "agent:review",
-    "agent:retry",
     "bug",
     "enhancement",
     "fabrik:token-rotation",

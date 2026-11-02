@@ -1,5 +1,5 @@
 // Dispatch (ADR-0001): the Kit, not a person, decides when a Ticket starts.
-import { DISPATCH_LABEL } from "./labels.ts";
+import { DISPATCH_LABEL, READY_FOR_AGENT } from "./labels.ts";
 import type { DispatchSnapshot, KitConfig, Plan, TicketSnapshot } from "./types.ts";
 
 /** Releases eligible Tickets to Implementers, lowest number first, up to the free slots. */
@@ -50,7 +50,7 @@ function count(n: number, one: string, many: string): string {
 function whyNotEligible(ticket: TicketSnapshot): string | null {
   const name = `#${ticket.number}`;
   if (!ticket.open) return `${name} is closed`;
-  if (!ticket.labels.includes("ready-for-agent")) return `${name} isn't ready-for-agent`;
+  if (!ticket.labels.includes(READY_FOR_AGENT)) return `${name} isn't ${READY_FOR_AGENT}`;
   if (ticket.openBlockers.length > 0) return `${name} is blocked by ${list(ticket.openBlockers)}`;
   if (ticket.subIssues > 0) return `${name} has sub-issues, so it's a Spec`;
   if (ticket.openLinkedPullRequests.length > 0) {

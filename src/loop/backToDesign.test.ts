@@ -88,7 +88,7 @@ describe("A third Execution flaw counts as a Design flaw", () => {
     expect(actions).toContainEqual({ kind: "close-pull-request", pullRequest: 50 });
     expect(actions).toContainEqual({ kind: "remove-label", issue: 7, label: "ready-for-agent" });
     expect(actions.at(-1)).toEqual({ kind: "add-labels", issue: 7, labels: ["needs-design"] });
-    expect(actions).not.toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:retry"] });
+    expect(actions).not.toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
   });
 
   it("a second Execution flaw still retries, and leaves the Ticket and its PR as they are", () => {

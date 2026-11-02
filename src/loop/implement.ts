@@ -6,8 +6,8 @@ import { parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
-import { REQUEST_CHANGES_RUN_MARKER } from "./mergeGate.ts";
-import { MAX_RETRIES } from "./retry.ts";
+import { owedRequestChangesRun, REQUEST_CHANGES_RUN_MARKER } from "./mergeGate.ts";
+import { MAX_RETRIES, owedRetry } from "./retry.ts";
 import { verdictActions } from "./review.ts";
 import type {
   Action,
@@ -26,10 +26,28 @@ const CHECK_DISPATCH: Action = { kind: "check-dispatch" };
 
 /**
  * agent:implement starts the Implementer. The label comes off as the run starts,
- * so the open draft PR, not the label, shows the Ticket is in progress.
+ * so the open draft PR, not the label, shows the Ticket is in progress. On a
+ * Ticket whose agent PR is open, it resumes that PR's Implement run instead:
+ * the retry an Execution flaw is owed, or the Operator's Request-changes run,
+ * so re-adding it recovers either after an Infrastructure failure. It never
+ * starts a second branch beside an open PR. The label always comes off, so it
+ * never claims work that isn't running.
  */
-export function startImplementer(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
+export function startImplementer(
+  issueNumber: number,
+  { issue, operator }: IssueContext,
+  pullRequest: PullRequestSnapshot | null,
+  config: KitConfig,
+): Plan {
   const removeLabel: Action = { kind: "remove-label", issue: issueNumber, label: DISPATCH_LABEL };
+  const open = issue.openPullRequests[0];
+  if (open !== undefined && issue.open && issue.labels.includes(READY_FOR_AGENT)) {
+    const resumed =
+      pullRequest === null || pullRequest.number !== open || pullRequest.ticket !== issueNumber
+        ? null
+        : (owedRetry(pullRequest, config) ?? owedRequestChangesRun(pullRequest, operator, config));
+    return { kind: "act", actions: resumed === null ? [removeLabel] : [removeLabel, resumed] };
+  }
   if (whyNotBuildable(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
   const { implement, stepUp } = config.roles;
   // The second retry Steps up; the first run and the first retry use the Implementer's model.
@@ -119,7 +137,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   if (stale !== null) return { kind: "nothing", reason: `${stale}, so the retry's branch isn't pushed` };
 
   const guard = checkTrustRoot([...changes.net, ...changes.commits]);
-  if (guard.kind === "refuse") return refuse(issueNumber, guard.paths, operator);
+  if (guard.kind === "refuse") return refuse(issueNumber, guard.paths, operator, pullRequest.number);
   const requestChanges = fixes.requestChanges === true;
   if (changes.net.length === 0) {
     return {
@@ -178,17 +196,21 @@ function whyNotRetriedOnto(
  * A refusal isn't the Implementer's mistake to fix: the work itself needs a
  * trust-root change, which only the Operator may make. So it uses no retry.
  */
-function refuse(issueNumber: number, paths: readonly string[], operator: string): Plan {
+function refuse(issueNumber: number, paths: readonly string[], operator: string, pullRequest: number | null = null): Plan {
   const body = [
     `The Implementer's branch for #${issueNumber} changes files that steer or judge the agents, so the Kit didn't push it (ADR-0005):`,
     "",
     ...paths.map((path) => `- \`${path}\``),
     "",
-    "Only the Operator changes these. Make the change yourself, or rewrite the Ticket so it doesn't need it and mark it `ready-for-agent` again.",
+    pullRequest === null
+      ? "Only the Operator changes these. Make the change yourself, or rewrite the Ticket so it doesn't need it and mark it `ready-for-agent` again."
+      : `Only the Operator changes these, so the Kit closed #${pullRequest} unmerged, keeping its branch. Make the change yourself, or rewrite the Ticket so it doesn't need it and mark it \`ready-for-agent\` again.`,
   ].join("\n");
   return {
     kind: "act",
     actions: [
+      // A retry's PR closes too (its branch stays), or it would hold a max_in_flight slot for good.
+      ...(pullRequest === null ? [] : [{ kind: "close-pull-request" as const, pullRequest }]),
       { kind: "comment", issue: issueNumber, body },
       { kind: "remove-label", issue: issueNumber, label: READY_FOR_AGENT },
       { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_HUMAN] },

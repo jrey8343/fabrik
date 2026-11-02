@@ -2,8 +2,9 @@
 // can request changes, which starts one Request-changes run on the Step-up
 // model with their review as input (it isn't a retry), or add needs-design to
 // the PR, which sends its Ticket back to design as a Design flaw does.
+import { whyNotReviewable } from "./agentPullRequest.ts";
 import { sentBackByOperator } from "./backToDesign.ts";
-import type { KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
+import type { Action, KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 import { verdictsIn } from "./verdict.ts";
 
 type ChangesRequested = Extract<LoopEvent, { kind: "pull-request-changes-requested" }>;
@@ -24,23 +25,52 @@ export function requestChanges(event: ChangesRequested, snapshot: Snapshot, conf
   }
   const why = whyNotAtMergeGate(pullRequest);
   if (why !== null || pullRequest.ticket === null) return { kind: "nothing", reason: why ?? "" };
-  const { implement, stepUp } = config.roles;
   return {
     kind: "act",
     actions: [
       { kind: "convert-to-draft", pullRequest: pullRequest.number },
-      {
-        kind: "start-agent-run",
-        role: "implement",
-        issue: pullRequest.ticket,
-        pullRequest: pullRequest.number,
-        requestChanges: { review: event.review },
-        model: stepUp.model,
-        effort: stepUp.effort,
-        timeoutMinutes: implement.timeoutMinutes,
-      },
+      requestChangesRun(pullRequest.ticket, pullRequest.number, event.review, config),
     ],
   };
+}
+
+function requestChangesRun(
+  ticket: number,
+  pullRequest: number,
+  review: number,
+  config: KitConfig,
+): Extract<Action, { kind: "start-agent-run" }> {
+  const { implement, stepUp } = config.roles;
+  return {
+    kind: "start-agent-run",
+    role: "implement",
+    issue: ticket,
+    pullRequest,
+    requestChanges: { review },
+    model: stepUp.model,
+    effort: stepUp.effort,
+    timeoutMinutes: implement.timeoutMinutes,
+  };
+}
+
+/**
+ * The Request-changes run an agent PR is still owed, or null: one the Operator
+ * asked for that stalled before it pushed. Its PR went back to draft, the pass
+ * it had is still the latest Verdict on its head, and the Operator's review
+ * requesting changes is on that head.
+ */
+export function owedRequestChangesRun(
+  pullRequest: PullRequestSnapshot,
+  operator: string,
+  config: KitConfig,
+): Extract<Action, { kind: "start-agent-run" }> | null {
+  const review = pullRequest.changesRequested;
+  const latest = pullRequest.verdicts.at(-1);
+  if (whyNotReviewable(pullRequest) !== null || pullRequest.ticket === null) return null;
+  if (latest?.verdict !== "pass" || latest.headSha !== pullRequest.headSha) return null;
+  if (review === null || review.reviewerIsBot || review.reviewer !== operator) return null;
+  if (review.commitSha !== pullRequest.headSha) return null;
+  return requestChangesRun(pullRequest.ticket, pullRequest.number, review.review, config);
 }
 
 /**

@@ -1,22 +1,27 @@
 import { answerRound, applyTurn, startSession } from "./design.ts";
 import { failureNotice } from "./failures.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
-import { KIT_ISSUE_LABELS, scheduledTick } from "./kitIssues.ts";
+import { scheduledTick } from "./kitIssues.ts";
 import {
-  CATEGORY_LABELS,
   DISPATCH_LABEL,
+  isCategoryLabel,
+  isKitIssueLabel,
+  isStateLabel,
   isWayfinderLabel,
   NEEDS_DESIGN,
+  NEEDS_INFO,
   NEEDS_TRIAGE,
-  STATE_LABELS,
+  READY_FOR_AGENT,
+  READY_FOR_HUMAN,
+  REVIEW_LABEL,
+  WONTFIX,
 } from "./labels.ts";
 import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
-import { RETRY_LABEL, startRetry } from "./retry.ts";
 import { closeSpecAfter } from "./specClosing.ts";
 import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { dispatch } from "./dispatch.ts";
-import { applyRedChecks, applyReview, REVIEW_LABEL, startReview } from "./review.ts";
+import { applyRedChecks, applyReview, startReview } from "./review.ts";
 import type {
   Action,
   IssueContext,
@@ -34,7 +39,7 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
     case "issue-opened":
       return withIssue(snapshot, ({ issue }) => intake(event.issue, issue));
     case "label-added":
-      return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, config));
+      return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, snapshot.pullRequest, config));
     case "issue-comment-created":
       // A needs-design issue is in a Design session; a needs-info one waits on its author.
       return withIssue(snapshot, (context) =>
@@ -65,19 +70,16 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
         kind: "act",
         actions: [...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH],
       }));
-    // A push to an agent draft PR, or agent:review added to resume after a failure, starts a
-    // Review; agent:retry added after an Execution flaw starts its retry.
+    // A push to an agent draft PR, or agent:review added to resume after a failure, starts a Review.
     case "pull-request-pushed":
       return withPullRequest(snapshot, (pullRequest) => startReview(pullRequest, config));
     case "pull-request-labeled":
       return withPullRequest(snapshot, (pullRequest) =>
         event.label === REVIEW_LABEL
           ? startReview(pullRequest, config)
-          : event.label === RETRY_LABEL
-            ? startRetry(pullRequest, config)
-            : event.label === NEEDS_DESIGN
-              ? sendBackToDesign(pullRequest)
-              : { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` },
+          : event.label === NEEDS_DESIGN
+            ? sendBackToDesign(pullRequest)
+            : { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` },
       );
     case "required-checks-finished":
       return applyRedChecks(event, snapshot);
@@ -120,10 +122,19 @@ function missingFromSnapshot(what: string): Plan {
   return { kind: "fail", failure: "infrastructure", reason: `The snapshot is missing ${what}` };
 }
 
-/** Adding needs-triage starts Triage, and adding needs-design starts a Design session. */
-function labelAdded(issueNumber: number, label: string, context: IssueContext, config: KitConfig): Plan {
+/**
+ * Adding needs-triage starts Triage, adding needs-design starts a Design
+ * session, and adding agent:implement starts (or resumes) an Implement run.
+ */
+function labelAdded(
+  issueNumber: number,
+  label: string,
+  context: IssueContext,
+  pullRequest: PullRequestSnapshot | null,
+  config: KitConfig,
+): Plan {
   if (label === NEEDS_DESIGN) return startSession(issueNumber, context, config);
-  if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, config);
+  if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }
@@ -131,13 +142,13 @@ function labelAdded(issueNumber: number, label: string, context: IssueContext, c
   return startAgentRun("triage", issueNumber, config);
 }
 
-/** A new issue gets needs-triage unless something has already given it a place. */
+/** Intake: a new issue gets needs-triage unless something has already given it a place. */
 function intake(issueNumber: number, issue: IssueSnapshot): Plan {
-  const state = issue.labels.find((label) => STATE_LABELS.includes(label));
+  const state = issue.labels.find(isStateLabel);
   if (state !== undefined) {
     return { kind: "nothing", reason: `#${issueNumber} already has the state label ${state}` };
   }
-  const kitOwned = issue.labels.find((label) => KIT_ISSUE_LABELS.includes(label));
+  const kitOwned = issue.labels.find(isKitIssueLabel);
   if (kitOwned !== undefined) {
     return { kind: "nothing", reason: `#${issueNumber} has the label ${kitOwned}, so the Kit owns it` };
   }
@@ -150,7 +161,7 @@ function intake(issueNumber: number, issue: IssueSnapshot): Plan {
   }
   return {
     kind: "act",
-    actions: [{ kind: "add-labels", issue: issueNumber, labels: ["needs-triage"] }],
+    actions: [{ kind: "add-labels", issue: issueNumber, labels: [NEEDS_TRIAGE] }],
   };
 }
 
@@ -159,7 +170,7 @@ function replyOnNeedsInfo(
   { issue: issueNumber, commenter, commenterIsBot }: Extract<LoopEvent, { kind: "issue-comment-created" }>,
   issue: IssueSnapshot,
 ): Plan {
-  if (!issue.labels.includes("needs-info")) {
+  if (!issue.labels.includes(NEEDS_INFO)) {
     return { kind: "nothing", reason: `#${issueNumber} isn't in needs-info` };
   }
   if (commenterIsBot) {
@@ -168,8 +179,8 @@ function replyOnNeedsInfo(
   return {
     kind: "act",
     actions: [
-      { kind: "remove-label", issue: issueNumber, label: "needs-info" },
-      { kind: "add-labels", issue: issueNumber, labels: ["needs-triage"] },
+      { kind: "remove-label", issue: issueNumber, label: NEEDS_INFO },
+      { kind: "add-labels", issue: issueNumber, labels: [NEEDS_TRIAGE] },
     ],
   };
 }
@@ -185,18 +196,16 @@ function applyTriage(issueNumber: number, text: string, issue: IssueSnapshot, op
     };
   }
   const { output } = parsed;
-  if (!issue.labels.includes("needs-triage")) {
+  if (!issue.labels.includes(NEEDS_TRIAGE)) {
     return { kind: "nothing", reason: `#${issueNumber} no longer has needs-triage, so Triage's output is stale` };
   }
-  const staleCategories = issue.labels.filter(
-    (label) => CATEGORY_LABELS.includes(label) && label !== output.category,
-  );
+  const staleCategories = issue.labels.filter(isCategoryLabel).filter((label) => label !== output.category);
   const added = [output.category, output.state].filter((label) => !issue.labels.includes(label));
   return {
     kind: "act",
     actions: [
       { kind: "comment", issue: issueNumber, body: triageComment(output, issue.author) },
-      { kind: "remove-label", issue: issueNumber, label: "needs-triage" },
+      { kind: "remove-label", issue: issueNumber, label: NEEDS_TRIAGE },
       ...staleCategories.map((label) => ({ kind: "remove-label" as const, issue: issueNumber, label })),
       { kind: "add-labels", issue: issueNumber, labels: added },
       ...outcome(issueNumber, output, operator),
@@ -211,12 +220,12 @@ function applyTriage(issueNumber: number, text: string, issue: IssueSnapshot, op
 function outcome(issueNumber: number, { state }: TriageOutput, operator: string): Action[] {
   switch (state) {
     // The Fast path made a Ticket ready, so see whether it can start.
-    case "ready-for-agent":
+    case READY_FOR_AGENT:
       return [CHECK_DISPATCH];
     // The assignment is ready-for-human's one notification.
-    case "ready-for-human":
+    case READY_FOR_HUMAN:
       return [{ kind: "assign", issue: issueNumber, assignee: operator }];
-    case "wontfix":
+    case WONTFIX:
       return [{ kind: "close", issue: issueNumber, reason: "not_planned" }];
     default:
       return [];
@@ -229,7 +238,7 @@ function outcome(issueNumber: number, { state }: TriageOutput, operator: string)
  */
 function triageComment({ state, comment, brief }: TriageOutput, author: string): string {
   // needs-info's one notification: the question reaches its author by @-mention.
-  if (state === "needs-info") return `@${author}\n\n${comment}`;
+  if (state === NEEDS_INFO) return `@${author}\n\n${comment}`;
   if (brief === null) return comment;
   return [
     comment,

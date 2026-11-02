@@ -659,7 +659,7 @@ jobs:
         env:
           FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
           FABRIK_FAILED_ROLE: implement
-          # The Ticket, for a retry too: the core finds its PR and names agent:retry there.
+          # The Ticket, for a retry too: the core finds its PR and names agent:implement on the Ticket.
           FABRIK_FAILED_ISSUE: ${{ needs.kit.outputs.ticket }}
           FABRIK_AGENT_JOB_RESULT: ${{ needs.implement.result }}
           FABRIK_SECRETS_STEP: ${{ needs.implement.outputs.secrets-step }}

@@ -8,7 +8,7 @@ import { designSessionOf } from "../loop/design.ts";
 import { countEmptyDiffs } from "../loop/implement.ts";
 import { requestChangesRunIn } from "../loop/mergeGate.ts";
 import { verdictsIn } from "../loop/verdict.ts";
-import { KIT_ISSUE_LABELS } from "../loop/kitIssues.ts";
+import { KIT_ISSUE_LABELS, READY_FOR_AGENT } from "../loop/labels.ts";
 import type {
   Action,
   AgentRole,
@@ -19,6 +19,7 @@ import type {
   LoopEvent,
   Plan,
   PostedComment,
+  PullRequestSnapshot,
   Snapshot,
   SpecSnapshot,
   TicketSnapshot,
@@ -283,6 +284,7 @@ const PULL_REQUEST_QUERY = `
         author { __typename }
         labels(first: 100) { nodes { name } }
         comments(last: 100) { nodes { body author { __typename } } }
+        reviews(last: 1, states: [CHANGES_REQUESTED]) { nodes { databaseId author { login __typename } commit { oid } } }
       }
     }
   }
@@ -300,6 +302,9 @@ interface PullRequestQueryResult {
       author: { __typename: string } | null;
       labels: { nodes: { name: string }[] };
       comments: { nodes: { body: string; author: { __typename: string } | null }[] };
+      reviews: {
+        nodes: { databaseId: number; author: { login: string; __typename: string } | null; commit: { oid: string } | null }[];
+      };
     } | null;
   };
 }
@@ -307,10 +312,10 @@ interface PullRequestQueryResult {
 // Pages through every open ready-for-agent issue. Open PRs are read once: a
 // Product repo with more than 100 open PRs is far past max_in_flight anyway.
 const DISPATCH_QUERY = `
-  query ($owner: String!, $name: String!, $after: String) {
+  query ($owner: String!, $name: String!, $after: String, $ready: String!) {
     repository(owner: $owner, name: $name) {
       owner { login }
-      issues(states: OPEN, labels: ["ready-for-agent"], first: 50, after: $after) {
+      issues(states: OPEN, labels: [$ready], first: 50, after: $after) {
         pageInfo { hasNextPage endCursor }
         nodes {
           number
@@ -461,6 +466,14 @@ async function gatherEventPart(
       const { pullRequest } = await gatherPullRequest(github, repo, event.fixes.pullRequest, operator);
       return { ...ticket, pullRequest };
     }
+    case "label-added": {
+      // agent:implement on a Ticket with an open PR resumes that PR's run, so the core weighs the PR too.
+      const ticket = await gatherIssue(github, repo, event.issue, operator);
+      const open = ticket.issue?.openPullRequests[0];
+      if (open === undefined) return ticket;
+      const { pullRequest } = await gatherPullRequest(github, repo, open, operator);
+      return { ...ticket, pullRequest };
+    }
     default:
       return gatherIssue(github, repo, event.issue, operator);
   }
@@ -571,9 +584,22 @@ async function gatherPullRequest(
       // Only a bot's markers count, so nobody can fake a Verdict or a Request-changes run by quoting one.
       verdicts: verdictsIn(botComments),
       requestChangesRun: requestChangesRunIn(botComments),
+      changesRequested: changesRequestedOf(pullRequest.reviews.nodes[0]),
     },
     dispatch: null,
     operator: operator ?? data.repository.owner.login,
+  };
+}
+
+function changesRequestedOf(
+  review: NonNullable<PullRequestQueryResult["repository"]["pullRequest"]>["reviews"]["nodes"][number] | undefined,
+): PullRequestSnapshot["changesRequested"] {
+  if (review === undefined || review.author === null || review.commit === null) return null;
+  return {
+    review: review.databaseId,
+    reviewer: review.author.login,
+    reviewerIsBot: review.author.__typename === "Bot",
+    commitSha: review.commit.oid,
   };
 }
 
@@ -587,7 +613,12 @@ async function gatherDispatch(
   let after: string | null = null;
   let page: DispatchQueryResult;
   do {
-    page = await github.graphql<DispatchQueryResult>(DISPATCH_QUERY, { owner: repo.owner, name: repo.name, after });
+    page = await github.graphql<DispatchQueryResult>(DISPATCH_QUERY, {
+      owner: repo.owner,
+      name: repo.name,
+      after,
+      ready: READY_FOR_AGENT,
+    });
     for (const issue of page.repository.issues.nodes) {
       tickets.push({
         number: issue.number,

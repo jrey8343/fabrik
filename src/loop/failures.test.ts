@@ -131,7 +131,7 @@ describe("Failure notices", () => {
     expect(commentOf(plan)).toContain("the model provider returned an error.\n\n> overloaded (529)\n");
   });
 
-  it("an Implement failure on a Ticket with an open PR is that PR's retry: it comments on the PR and names agent:retry there", () => {
+  it("an Implement failure on a Ticket with an open PR comments on the PR and names agent:implement on the Ticket", () => {
     const issue = anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [12] });
 
     const plan = planFor(failed({ role: "implement" }), snapshotOf(issue), kitConfig());
@@ -139,12 +139,12 @@ describe("Failure notices", () => {
     expect(plan).toEqual({
       kind: "act",
       actions: [
-        { kind: "remove-label", issue: 12, label: "agent:retry" },
+        { kind: "remove-label", issue: 7, label: "agent:implement" },
         { kind: "comment", issue: 12, body: expect.any(String) },
       ],
     });
     expect(commentOf(plan)).toContain("The Implement run on #7 failed: it crashed.");
-    expect(commentOf(plan)).toContain("Re-add the `agent:retry` label to run it again.");
+    expect(commentOf(plan)).toContain("Re-add the `agent:implement` label on #7 to run it again.");
   });
 
   it("an Implement failure with no PR yet comments on the Ticket", () => {
@@ -179,10 +179,22 @@ describe("Failure notices", () => {
     expect(commentOf(plan)).toContain("Re-add the `agent:review` label to run it again.");
   });
 
-  it("a Design-session turn failure names needs-design", () => {
-    const plan = planFor(failed({ role: "design" }), snapshotOf(anIssue({ number: 7 })), kitConfig());
+  it("a Design-session turn failure keeps needs-design, so the issue stays in its session, and says a reply runs it again", () => {
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
+    const plan = planFor(failed({ role: "design" }), snapshotOf(issue), kitConfig());
 
-    expect(commentOf(plan)).toContain("Re-add the `needs-design` label to run it again.");
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "comment", issue: 7, body: expect.any(String) }] });
+    expect(commentOf(plan)).toContain("Reply on this issue to run the turn again.");
+  });
+
+  it("after a Design-session turn failure, the Operator's reply starts the turn again", () => {
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
+    const reply: LoopEvent = { kind: "issue-comment-created", issue: 7, commenter: "operator", commenterIsBot: false, body: "Try again" };
+
+    expect(planFor(reply, snapshotOf(issue), kitConfig())).toMatchObject({
+      kind: "act",
+      actions: [{ kind: "start-agent-run", role: "design", issue: 7 }],
+    });
   });
 
   it("mentions whoever the Operator is", () => {

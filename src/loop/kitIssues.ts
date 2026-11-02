@@ -4,19 +4,12 @@
 // the weekly usage limit gets one per window, which a scheduled tick closes
 // after the reset. They don't restart stalled Tickets: each Ticket's own
 // failure comment names the trigger label to re-add.
+import { READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import type { Action, InfrastructureFailure, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
 
 /** The repo-wide part of any snapshot: who the Operator is and which Kit-owned issues are open. */
 type RepoContext = Pick<Snapshot, "kitIssues" | "operator">;
 
-/** The label on the Kit's token-rotation issue, by which the adapter finds it. */
-export const TOKEN_ROTATION_LABEL = "fabrik:token-rotation";
-
-/** The label on the Kit's weekly-limit issue. */
-export const WEEKLY_LIMIT_LABEL = "fabrik:weekly-limit";
-
-/** Every label that marks an issue as the Kit's own, so the adapter reads it into the snapshot. */
-export const KIT_ISSUE_LABELS: readonly string[] = [TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL];
 
 /** Where in its body the weekly-limit issue records when the limit resets, for the scheduled tick. */
 const RESETS_AT_MARKER = "<!-- fabrik:resets-at";
@@ -172,7 +165,7 @@ function deadToken({ kitIssues, operator }: RepoContext, stalled: StalledRun): R
             "",
             NOTIFIED,
           ].join("\n"),
-          labels: ["ready-for-human", TOKEN_ROTATION_LABEL],
+          labels: [READY_FOR_HUMAN, TOKEN_ROTATION_LABEL],
           // The assignment is this issue's one notification.
           assignees: [operator],
         },

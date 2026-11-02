@@ -30,6 +30,8 @@ function changesRequested(overrides: Partial<Extract<LoopEvent, { kind: "pull-re
   };
 }
 
+const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
+
 /** An agent PR at the Merge gate: it passed Review, left draft and waits on the Operator. */
 const atMergeGate = aPullRequest({ draft: false });
 
@@ -71,7 +73,65 @@ describe("Request changes at the Merge gate", () => {
   });
 });
 
-const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
+describe("Resuming a Request-changes run after an Infrastructure failure", () => {
+  /** The PR the failed run left: back in draft, its pass still the latest Verdict on its head, and the Operator's review on it. */
+  const stalled = (review: Partial<NonNullable<PullRequestSnapshot["changesRequested"]>> = {}) =>
+    aPullRequest({
+      draft: true,
+      verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }],
+      changesRequested: { review: 900, reviewer: "operator", reviewerIsBot: false, commitSha: HEAD_SHA, ...review },
+    });
+  const resumed: LoopEvent = { kind: "label-added", issue: 7, label: "agent:implement" };
+  const snapshotFor = (pullRequest: PullRequestSnapshot): Snapshot =>
+    snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement"], openPullRequests: [50] }), {
+      pullRequest,
+    });
+
+  it("re-adding agent:implement on the Ticket runs the Operator's Request-changes run again, on the Step-up model", () => {
+    const config = kitConfig();
+    const plan = planFor(resumed, snapshotFor(stalled()), config);
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:implement" },
+        {
+          kind: "start-agent-run",
+          role: "implement",
+          issue: 7,
+          pullRequest: 50,
+          requestChanges: { review: 900 },
+          model: config.roles.stepUp.model,
+          effort: config.roles.stepUp.effort,
+          timeoutMinutes: config.roles.implement.timeoutMinutes,
+        },
+      ],
+    });
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it.each([
+    ["the review isn't the Operator's", stalled({ reviewer: "someone" })],
+    ["the review is a bot's", stalled({ reviewerIsBot: true })],
+    ["the review was on an older commit", stalled({ commitSha: "b".repeat(40) })],
+    ["no review requested changes", aPullRequest({ verdicts: stalled().verdicts, changesRequested: null })],
+    ["the PR has left draft for the Merge gate", { ...stalled(), draft: false }],
+  ])("starts nothing when %s", (_, pullRequest) => {
+    const plan = planFor(resumed, snapshotFor(pullRequest), kitConfig());
+
+    expect(actionsOf(plan)).toEqual([{ kind: "remove-label", issue: 7, label: "agent:implement" }]);
+  });
+
+  it("a failed Request-changes run's notice names agent:implement on the Ticket", () => {
+    const plan = planFor(
+      { kind: "agent-run-failed", role: "implement", issue: 7, runUrl: RUN, jobResult: "failure", secretsStep: "success", report: null },
+      snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [50] })),
+      kitConfig(),
+    );
+
+    expect(commentsOf(plan)[0]).toContain("Re-add the `agent:implement` label on #7 to run it again.");
+  });
+});
 
 const needsDesignOnPullRequest: LoopEvent = { kind: "pull-request-labeled", pullRequest: 50, label: "needs-design" };
 
@@ -195,7 +255,7 @@ describe("A Request-changes run's branch", () => {
     expect(verdictsIn(commentsOf(plan))).toEqual([
       { verdict: "execution-flaw", source: "empty-diff", requestChanges: true, headSha: HEAD_SHA },
     ]);
-    expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:retry"] });
+    expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
     expect(commentsOf(plan)[0]).toContain("Retry 1 of 2 starts now:");
   });
 });

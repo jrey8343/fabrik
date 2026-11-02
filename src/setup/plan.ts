@@ -2,10 +2,22 @@
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
 import { KIT_CONFIG_PATH, resolveKitConfig } from "../kit/config.ts";
-import { TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL } from "../loop/kitIssues.ts";
-import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN } from "../loop/labels.ts";
-import { RETRY_LABEL } from "../loop/retry.ts";
-import { REVIEW_LABEL } from "../loop/review.ts";
+import {
+  ALL_LABELS,
+  BUG,
+  DISPATCH_LABEL,
+  ENHANCEMENT,
+  type Label as LoopLabel,
+  NEEDS_DESIGN,
+  NEEDS_INFO,
+  NEEDS_TRIAGE,
+  READY_FOR_AGENT,
+  READY_FOR_HUMAN,
+  REVIEW_LABEL,
+  TOKEN_ROTATION_LABEL,
+  WEEKLY_LIMIT_LABEL,
+  WONTFIX,
+} from "../loop/labels.ts";
 import type { SetupKit } from "./kit.ts";
 import {
   CALLER_PATH,
@@ -40,7 +52,7 @@ export interface BranchProtection {
 
 export type SetupAction =
   | { readonly kind: "write-file"; readonly path: string; readonly content: string; readonly why: string }
-  | ({ readonly kind: "create-label" } & Label)
+  | { readonly kind: "create-label"; readonly name: LoopLabel; readonly color: string; readonly description: string }
   | { readonly kind: "create-vault"; readonly name: string }
   | {
       readonly kind: "create-service-account";
@@ -79,8 +91,8 @@ export function planSetup(state: ProductState, kit: SetupKit): SetupPlan {
   }
   actions.push(...starters(state, kit));
   const present = new Set(state.labels.map((label) => label.toLowerCase()));
-  for (const label of LOOP_LABELS) {
-    if (!present.has(label.name.toLowerCase())) actions.push({ kind: "create-label", ...label });
+  for (const name of ALL_LABELS) {
+    if (!present.has(name.toLowerCase())) actions.push({ kind: "create-label", name, ...LOOP_LABELS[name] });
   }
   actions.push(...secrets(state));
   actions.push(...protection(state, kit, notes));
@@ -167,29 +179,21 @@ function secrets(state: ProductState): SetupAction[] {
   return actions;
 }
 
-interface Label {
-  readonly name: string;
-  /** Six hex digits, no #. */
-  readonly color: string;
-  readonly description: string;
-}
-
-/** Every label the Loop reads or writes, so no run fails on a missing one. */
-const LOOP_LABELS: readonly Label[] = [
-  { name: NEEDS_TRIAGE, color: "fbca04", description: "Fabrik: waiting for Triage" },
-  { name: "needs-info", color: "d876e3", description: "Fabrik: waiting on the reporter for more information" },
-  { name: NEEDS_DESIGN, color: "5319e7", description: "Fabrik: needs a Design session with the Operator" },
-  { name: READY_FOR_AGENT, color: "0e8a16", description: "Fabrik: fully specified, ready for an Implementer" },
-  { name: READY_FOR_HUMAN, color: "1d76db", description: "Fabrik: needs the Operator to build it" },
-  { name: "wontfix", color: "ffffff", description: "Fabrik: will not be actioned" },
-  { name: DISPATCH_LABEL, color: "c2e0c6", description: "Fabrik: starts an Implementer (the Kit adds it)" },
-  { name: REVIEW_LABEL, color: "c2e0c6", description: "Fabrik: starts or resumes a Review" },
-  { name: RETRY_LABEL, color: "c2e0c6", description: "Fabrik: starts an Execution-flaw retry" },
-  { name: "bug", color: "d73a4a", description: "Something isn't working" },
-  { name: "enhancement", color: "a2eeef", description: "New feature or request" },
-  { name: TOKEN_ROTATION_LABEL, color: "b60205", description: "Fabrik: the Claude token needs rotating" },
-  { name: WEEKLY_LIMIT_LABEL, color: "b60205", description: "Fabrik: the subscription's weekly limit is reached" },
-];
+/** How the setup skill creates each label the Loop reads or writes, so no run fails on a missing one. */
+const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly description: string }>> = {
+  [NEEDS_TRIAGE]: { color: "fbca04", description: "Fabrik: waiting for Triage" },
+  [NEEDS_INFO]: { color: "d876e3", description: "Fabrik: waiting on the reporter for more information" },
+  [NEEDS_DESIGN]: { color: "5319e7", description: "Fabrik: needs a Design session with the Operator" },
+  [READY_FOR_AGENT]: { color: "0e8a16", description: "Fabrik: fully specified, ready for an Implementer" },
+  [READY_FOR_HUMAN]: { color: "1d76db", description: "Fabrik: needs the Operator to build it" },
+  [WONTFIX]: { color: "ffffff", description: "Fabrik: will not be actioned" },
+  [DISPATCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes an Implementer (the Kit adds it)" },
+  [REVIEW_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes a Review" },
+  [BUG]: { color: "d73a4a", description: "Something isn't working" },
+  [ENHANCEMENT]: { color: "a2eeef", description: "New feature or request" },
+  [TOKEN_ROTATION_LABEL]: { color: "b60205", description: "Fabrik: the Claude token needs rotating" },
+  [WEEKLY_LIMIT_LABEL]: { color: "b60205", description: "Fabrik: the subscription's weekly limit is reached" },
+};
 
 /**
  * Files the Product repo owns from then on. Each is written once, when the repo
