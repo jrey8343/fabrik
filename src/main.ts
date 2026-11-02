@@ -51,6 +51,8 @@ function describeAction(action: Action): string {
       return `- assign #${action.issue} to ${action.assignee}`;
     case "close":
       return `- close #${action.issue} as ${action.reason.replace("_", " ")}`;
+    case "open-issue":
+      return `- open the issue "${action.title}"${action.assignees.length > 0 ? `, assigned to ${action.assignees.join(", ")}` : ""}`;
     case "edit-issue-body":
       return `- rewrite the body of #${action.issue}`;
     case "start-agent-run":

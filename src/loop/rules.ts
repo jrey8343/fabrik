@@ -1,5 +1,6 @@
 import { answerRound, applyTurn, startSession } from "./design.ts";
 import { failureNotice } from "./failures.ts";
+import { KIT_ISSUE_LABELS, scheduledTick } from "./kitIssues.ts";
 import { CATEGORY_LABELS, isWayfinderLabel, NEEDS_DESIGN, NEEDS_TRIAGE, STATE_LABELS } from "./labels.ts";
 import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
@@ -46,6 +47,8 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
       return snapshot.dispatch === null
         ? missingFromSnapshot("the Tickets a Dispatch check weighs")
         : dispatch(snapshot.dispatch, config);
+    case "scheduled-tick":
+      return scheduledTick(event.now, snapshot);
   }
 }
 
@@ -53,8 +56,8 @@ const CHECK_DISPATCH: Action = { kind: "check-dispatch" };
 
 /** Decides an issue event, which needs the issue in the snapshot. */
 function withIssue(snapshot: Snapshot, decide: (context: IssueContext) => Plan): Plan {
-  const { issue, operator } = snapshot;
-  return issue === null ? missingFromSnapshot("the issue") : decide({ issue, operator });
+  const { issue, operator, kitIssues } = snapshot;
+  return issue === null ? missingFromSnapshot("the issue") : decide({ issue, operator, kitIssues });
 }
 
 /** The adapter gathered the wrong snapshot for the event: fail rather than guess. */
@@ -77,6 +80,10 @@ function intake(issueNumber: number, issue: IssueSnapshot): Plan {
   const state = issue.labels.find((label) => STATE_LABELS.includes(label));
   if (state !== undefined) {
     return { kind: "nothing", reason: `#${issueNumber} already has the state label ${state}` };
+  }
+  const kitOwned = issue.labels.find((label) => KIT_ISSUE_LABELS.includes(label));
+  if (kitOwned !== undefined) {
+    return { kind: "nothing", reason: `#${issueNumber} has the label ${kitOwned}, so the Kit owns it` };
   }
   const wayfinder = issue.labels.find(isWayfinderLabel);
   if (wayfinder !== undefined) {

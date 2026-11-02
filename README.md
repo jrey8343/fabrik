@@ -19,6 +19,8 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 - `src/kit/jobs.ts` is the Kit job's step: it validates the Kit config, asks the Loop rules core what the event calls for, and routes it to an agent job (when the plan starts an agent run), to the push job, or nowhere.
 - `prompts/` holds the Kit's agent prompts.
 - `.github/workflows/loop.yml` is the reusable workflow a Product repo calls. It holds wiring only.
+- `.github/workflows/schedule.yml` is the reusable scheduled tick the caller workflow runs hourly, for the Loop's time-based rules (closing the weekly-limit issue after its reset). Like the push job, it never touches Product code.
+- `src/loop/kitIssues.ts` holds the Kit-owned issues: the "Rotate the Claude token" issue (label `fabrik:token-rotation`) and the weekly-limit issue (label `fabrik:weekly-limit`), which buzz the Operator once per repo, or once per limit window, instead of once per Ticket.
 - `templates/fabrik.yml` is the caller workflow a Product repo installs as `.github/workflows/fabrik.yml`.
 
 ## Developing

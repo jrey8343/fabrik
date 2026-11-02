@@ -75,4 +75,20 @@ describe("Caller workflow release check", () => {
 
     expect(checkCallerWorkflow(template).ok).toBe(true);
   });
+
+  it("the caller template runs the scheduled Kit workflow on a schedule, pinned to the same release as the Loop", () => {
+    const template = readFileSync(new URL("../../templates/fabrik.yml", import.meta.url), "utf8");
+    const check = checkCallerWorkflow(template);
+    if (!check.ok) throw new Error(check.error);
+
+    expect(template).toMatch(/^\s+schedule:\n\s+- cron: /m);
+    expect(template).toContain(`uses: jrey8343/fabrik/.github/workflows/loop.yml@${check.release}`);
+    expect(template).toContain(`uses: jrey8343/fabrik/.github/workflows/schedule.yml@${check.release}`);
+  });
+
+  it("the scheduled Kit workflow ships beside the Loop as a reusable workflow", () => {
+    const workflow = readFileSync(new URL("../../.github/workflows/schedule.yml", import.meta.url), "utf8");
+
+    expect(workflow).toMatch(/^on:\n\s+workflow_call:/m);
+  });
 });
