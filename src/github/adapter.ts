@@ -16,6 +16,13 @@ export function loopEventFrom(eventName: string, payload: Record<string, unknown
     const issue = payload["issue"] as { number: number };
     return { kind: "issue-opened", issue: issue.number };
   }
+  if (eventName === "issue_comment" && payload["action"] === "created") {
+    const issue = payload["issue"] as { number: number; pull_request?: unknown };
+    // A comment on a PR is not a reply on an issue.
+    if (issue.pull_request !== undefined) return null;
+    const user = (payload["comment"] as { user: { login: string; type: string } }).user;
+    return { kind: "issue-comment-created", issue: issue.number, commenter: user.login, commenterIsBot: user.type === "Bot" };
+  }
   return null;
 }
 
@@ -126,6 +133,7 @@ export class GitHub {
 const ISSUE_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
     repository(owner: $owner, name: $name) {
+      owner { login }
       issue(number: $number) {
         number
         author { login }
@@ -139,6 +147,7 @@ const ISSUE_QUERY = `
 
 interface IssueQueryResult {
   repository: {
+    owner: { login: string };
     issue: {
       number: number;
       author: { login: string } | null;
@@ -168,8 +177,8 @@ export async function gatherSnapshot(github: GitHub, repo: Repo, event: LoopEven
       parent: issue.parent?.number ?? null,
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
     },
-    // v1 Product repos are the Operator's own, so the repo's owner is the Operator.
-    operator: repo.owner,
+    // The Operator owns the Product repos they run Fabrik in.
+    operator: data.repository.owner.login,
   };
 }
 
@@ -206,6 +215,12 @@ async function apply(github: GitHub, repo: Repo, action: Action): Promise<void> 
       return;
     case "comment":
       await github.rest("POST", `${issue}/comments`, { body: action.body });
+      return;
+    case "assign":
+      await github.rest("POST", `${issue}/assignees`, { assignees: [action.assignee] });
+      return;
+    case "close":
+      await github.rest("PATCH", issue, { state: "closed", state_reason: action.reason });
       return;
   }
 }

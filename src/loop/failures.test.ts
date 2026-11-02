@@ -33,7 +33,7 @@ describe("Failure notices", () => {
           kind: "comment",
           issue: 7,
           body: [
-            "@the-operator The Triage run on #7 failed: it was cancelled, most likely by its 10-minute timeout.",
+            "@operator The Triage run on #7 failed: it was cancelled, most likely by its 10-minute timeout.",
             "",
             "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-add the `needs-triage` label to run it again.",
             "",
@@ -100,7 +100,7 @@ describe("Failure notices", () => {
         ],
       });
       const body = commentOf(plan);
-      expect(body.match(/@\S+/g)).toEqual(["@the-operator"]);
+      expect(body.match(/@\S+/g)).toEqual(["@operator"]);
       expect(body).toContain(`The Triage run on #7 failed: ${how}.`);
       expect(body).toContain("Re-add the `needs-triage` label to run it again.");
       expect(body).toContain(`[The run](${RUN})`);

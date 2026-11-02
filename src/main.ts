@@ -45,6 +45,10 @@ function describeAction(action: Action): string {
       return `- remove label on #${action.issue}: ${action.label}`;
     case "comment":
       return `- comment on #${action.issue}`;
+    case "assign":
+      return `- assign #${action.issue} to ${action.assignee}`;
+    case "close":
+      return `- close #${action.issue} as ${action.reason.replace("_", " ")}`;
   }
 }
 
