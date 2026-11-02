@@ -5,7 +5,17 @@ import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from
 import type { AgentRunResult } from "../agent/result.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { isDesignRoundComment } from "../loop/design.ts";
-import type { Action, AgentRole, FailureReport, LoopEvent, Plan, Snapshot, TicketSnapshot } from "../loop/types.ts";
+import { countEmptyDiffs } from "../loop/implement.ts";
+import type {
+  Action,
+  AgentRole,
+  BranchChanges,
+  FailureReport,
+  LoopEvent,
+  Plan,
+  Snapshot,
+  TicketSnapshot,
+} from "../loop/types.ts";
 
 export interface Repo {
   readonly owner: string;
@@ -57,8 +67,21 @@ export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run
  * Turns the result an agent job passed out as an artifact (src/agent/result.ts)
  * into the Loop event its push job applies.
  */
-export function agentRunEventFrom(result: AgentRunResult): LoopEvent {
-  return { kind: "agent-run-finished", role: result.role, issue: result.issue, output: result.output };
+export function agentRunEventFrom(result: AgentRunResult, changes: BranchChanges | null = null): LoopEvent {
+  if (result.role !== "implement") {
+    return { kind: "agent-run-finished", role: result.role, issue: result.issue, output: result.output };
+  }
+  if (result.branch === undefined || changes === null) {
+    throw new Error("An Implement run's result needs the branch it built and the paths that branch changes");
+  }
+  return {
+    kind: "implement-run-finished",
+    issue: result.issue,
+    output: result.output,
+    branch: result.branch.name,
+    base: result.branch.base.ref,
+    changes,
+  };
 }
 
 /** What the failure job knows about the agent job it follows (see the failure job in loop.yml). */
@@ -286,6 +309,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       parent: issue.parent?.number ?? null,
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
       designRounds: issue.comments.nodes.filter((comment) => isDesignRoundComment(comment.body)).length,
+      emptyDiffs: countEmptyDiffs(issue.comments.nodes.map((comment) => comment.body)),
     },
     pullRequest: null,
     dispatch: null,
@@ -401,11 +425,21 @@ export async function readKitConfigSources(github: GitHub, repo: Repo, ref: stri
   };
 }
 
-/** Applies each action in the plan, in order. */
-export async function applyPlan(github: GitHub, repo: Repo, plan: Plan): Promise<void> {
+/** Pushes an agent branch the push job holds (src/github/branch.ts). */
+export interface BranchPusher {
+  push(branch: string): Promise<void>;
+}
+
+/** Applies each action in the plan, in order. Only an Implement run's push job has a branch to push. */
+export async function applyPlan(
+  github: GitHub,
+  repo: Repo,
+  plan: Plan,
+  branches: BranchPusher | null = null,
+): Promise<void> {
   if (plan.kind !== "act") return;
   for (const action of plan.actions) {
-    await apply(github, repo, action);
+    await apply(github, repo, action, branches);
   }
 }
 
@@ -414,9 +448,34 @@ export function wantsDispatchCheck(plan: Plan): boolean {
   return plan.kind === "act" && plan.actions.some((action) => action.kind === "check-dispatch");
 }
 
-async function apply(github: GitHub, repo: Repo, action: Action): Promise<void> {
-  // Not a GitHub change: the push job hands it on to the Dispatch job.
-  if (action.kind === "check-dispatch") return;
+async function apply(github: GitHub, repo: Repo, action: Action, branches: BranchPusher | null): Promise<void> {
+  switch (action.kind) {
+    // Not a GitHub change: the push job hands it on to the Dispatch job.
+    case "check-dispatch":
+      return;
+    case "push-branch":
+      if (branches === null) throw new Error(`This job holds no branch to push (${action.branch})`);
+      await branches.push(action.branch);
+      return;
+    case "open-pull-request":
+      await github.rest("POST", `/repos/${repo.owner}/${repo.name}/pulls`, {
+        title: action.title,
+        head: action.head,
+        base: action.base,
+        body: action.body,
+        draft: action.draft,
+      });
+      return;
+    default:
+      return applyToIssue(github, repo, action);
+  }
+}
+
+async function applyToIssue(
+  github: GitHub,
+  repo: Repo,
+  action: Exclude<Extract<Action, { issue: number }>, { kind: "open-pull-request" }>,
+): Promise<void> {
   const issue = `/repos/${repo.owner}/${repo.name}/issues/${action.issue}`;
   switch (action.kind) {
     case "add-labels":

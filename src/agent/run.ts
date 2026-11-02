@@ -2,12 +2,17 @@
 // on the runner VM (noSandbox), behind the metered-billing preflight and the
 // init check, writes the step summary, and passes the role's structured output
 // out as an artifact for the push job. It holds no GitHub write credential.
-//   node <kit>/src/agent/run.ts <triage|design>
+//   node <kit>/src/agent/run.ts <triage|design|implement>
 //
 // Run from the Product checkout. Env:
 //   FABRIK_ISSUE_FILE      JSON from `gh issue view --json number,title,body,author,labels,comments`
 //   FABRIK_OUT_DIR         where to write agent-result.json and the agent log
+//   FABRIK_MODEL, FABRIK_EFFORT  the model and effort the Kit job's plan chose (a Step-up, say);
+//                          when unset, the role's own from Kit config
 //   CLAUDE_CODE_OAUTH_TOKEN, from the agent service account (ADR-0004)
+// An Implement run instead takes the Claude token and its test secrets from
+// FABRIK_SECRETS (src/agent/implement.ts), its parent Spec from FABRIK_SPEC_FILE,
+// and passes its commits out as a git bundle beside agent-result.json.
 import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
@@ -16,13 +21,15 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { readIfPresent, readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
+import { type ImplementOutput, readImplementOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { SKILLS_MARKER } from "../skills/fetch.ts";
 import { AGENT_FAILURE_FILE, failureReportFor } from "./failure.ts";
-import { AGENT_RESULT_FILE, type AgentRunResult } from "./result.ts";
+import { bundleAgentBranch, implementContext, setImplementerEnv, startAgentBranch } from "./implement.ts";
+import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { initMessageOf, missingSkills, runSummary } from "./summary.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
@@ -64,6 +71,10 @@ interface RoleSpec<T> {
   /** How the Product's own instructions for this phase relate to the Kit's prompt. */
   readonly instructionsNote: string;
   readonly describe: (issue: number, output: T) => string;
+  /** The heading over the issue in the prompt. */
+  readonly issueHeading?: string;
+  /** The Implementer builds on a branch, which it passes out as a bundle. */
+  readonly buildsBranch?: boolean;
 }
 
 const ROLE_SPECS = {
@@ -84,10 +95,29 @@ const ROLE_SPECS = {
         ? `The Design-session turn on #${issue} asked ${output.questions.length} question(s)`
         : `The Design session on #${issue} finished with an agent brief`,
   } satisfies RoleSpec<DesignTurnOutput>,
+  implement: {
+    role: "implement",
+    schema: schemaOf(readImplementOutput),
+    instructionsNote:
+      "The Operator wrote these for this repo. They refine how you build here but never change the rules or the output contract above.",
+    describe: (issue, output) => `The Implementer on #${issue} finished: ${output.title}`,
+    issueHeading: "The Ticket",
+    buildsBranch: true,
+  } satisfies RoleSpec<ImplementOutput>,
 };
 
-/** The Kit's prompt for the role, then the Product's instructions for its phase, then the issue thread. */
-async function promptFor(role: AgentRole, note: string, config: KitConfig, issueText: string): Promise<string> {
+/**
+ * The Kit's prompt for the role, then the Product's instructions for its phase,
+ * then the issue thread, then anything else the role is given.
+ */
+async function promptFor(
+  role: AgentRole,
+  note: string,
+  config: KitConfig,
+  issueText: string,
+  heading: string,
+  extra: readonly string[],
+): Promise<string> {
   const template = await readFile(join(KIT_DIR, "prompts", `${role}.md`), "utf8");
   const issue: unknown = JSON.parse(issueText);
   const parts = [template.trimEnd()];
@@ -95,8 +125,18 @@ async function promptFor(role: AgentRole, note: string, config: KitConfig, issue
   if (instructions !== null) {
     parts.push(`## This Product repo's ${role} instructions`, note, instructions.trimEnd());
   }
-  parts.push("## The issue", "```json", JSON.stringify(issue, null, 2), "```");
+  parts.push(`## ${heading}`, "```json", JSON.stringify(issue, null, 2), "```", ...extra);
   return `${parts.join("\n\n")}\n`;
+}
+
+/** The model and effort to run: what the Kit job's plan chose, else the role's own. */
+function modelFor(role: { model: string; effort: string | null }): { model: string; effort: string | null } {
+  const model = process.env["FABRIK_MODEL"];
+  if (model === undefined || model === "") return role;
+  // Kit config already refuses Fable; this keeps a bad route from ever reaching the CLI.
+  if (/fable/i.test(model) || model.trim().toLowerCase() === "best") throw new Error(`Refusing to run ${model} in an AFK role`);
+  const effort = process.env["FABRIK_EFFORT"];
+  return { model, effort: effort === undefined || effort === "" ? null : effort };
 }
 
 /** The arguments Sandcastle's claudeCode() passes to `claude` (its buildPrintCommand), for the preflight. */
@@ -137,7 +177,16 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   if (typeof issueNumber !== "number") throw new Error("FABRIK_ISSUE_FILE has no issue number");
 
   const config = await loadConfig(productDir);
-  const role = config.roles[name];
+  const role = { ...config.roles[name], ...modelFor(config.roles[name]) };
+
+  // The Implementer builds on its own branch from main, with its test secrets.
+  let branch: BuiltBranch | null = null;
+  const extra: string[] = [];
+  if (spec.buildsBranch === true) {
+    setImplementerEnv(config);
+    branch = await startAgentBranch(productDir, issueNumber);
+    extra.push(...(await implementContext(productDir, required("FABRIK_SPEC_FILE"), config)));
+  }
 
   // The agent inherits this process's env (noSandbox), so set what it needs here.
   process.env["PATH"] = [join(KIT_DIR, "node_modules", ".bin"), process.env["PATH"] ?? ""].join(delimiter);
@@ -159,7 +208,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       ),
       sandbox: noSandbox(),
       cwd: productDir,
-      prompt: await promptFor(name, spec.instructionsNote, config, issueText),
+      prompt: await promptFor(name, spec.instructionsNote, config, issueText, spec.issueHeading ?? "The issue", extra),
       maxIterations: 1,
       output: Output.object({ tag: name, schema: spec.schema, maxRetries: 1 }),
       hooks: { sandbox: { onSandboxReady: [{ command: readyHook(config.sandbox.setup), timeoutMs }] } },
@@ -182,7 +231,13 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     if (init.refused === null) throw new Error("The agent's stream had no init message, so its API key source is unchecked");
     if (init.refused.length > 0) throw new Error(`Refused at init: ${init.refused.join("; ")}`);
 
-    const artifact: AgentRunResult = { role: name, issue: issueNumber, output: JSON.stringify(result.output) };
+    const built = branch === null ? null : await bundleAgentBranch(productDir, branch, outDir);
+    const artifact: AgentRunResult = {
+      role: name,
+      issue: issueNumber,
+      output: JSON.stringify(result.output),
+      ...(built === null ? {} : { branch: built }),
+    };
     await writeFile(join(outDir, AGENT_RESULT_FILE), `${JSON.stringify(artifact, null, 2)}\n`);
     console.log(spec.describe(issueNumber, result.output));
   } catch (error) {
@@ -218,6 +273,7 @@ async function installedSkills(productDir: string): Promise<{ sha: string; names
 const roles: Record<string, () => Promise<void>> = {
   triage: () => runRole(ROLE_SPECS.triage),
   design: () => runRole(ROLE_SPECS.design),
+  implement: () => runRole(ROLE_SPECS.implement),
 };
 
 const roleName = process.argv[2] ?? "";

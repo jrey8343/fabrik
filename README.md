@@ -36,7 +36,8 @@ npm test
 - The repo's read-only push service account (reads the `Fabrik App` vault) stored as the Actions secret `FABRIK_OP_PUSH_TOKEN`.
 - A 1Password API Credential item `Claude token` in the `Fabrik` vault, holding the `claude setup-token` token in its `credential` field, with its expiry date.
 - The repo's read-only agent service account (reads the `Fabrik` vault) stored as the Actions secret `FABRIK_OP_AGENT_TOKEN`.
-- `.claude/skills/` in the repo's `.gitignore`, and the labels `needs-triage`, `needs-info`, `needs-design`, `ready-for-agent`, `ready-for-human`, `wontfix`, `bug` and `enhancement`.
+- A `Fabrik Sandbox · <product>` vault holding the repo's test secrets, and the repo's read-only implement service account (reads the `Fabrik` vault and that one) stored as the Actions secret `FABRIK_OP_IMPLEMENT_TOKEN`.
+- `.claude/skills/` in the repo's `.gitignore`, and the labels `needs-triage`, `needs-info`, `needs-design`, `ready-for-agent`, `ready-for-human`, `wontfix`, `agent:implement`, `bug` and `enhancement`.
 - `templates/fabrik.yml` installed as `.github/workflows/fabrik.yml`, with every Fabrik `uses:` line pinned to the same exact tag. A run fails if they disagree. It runs on `issues` (opened, labeled) and `issue_comment` (created).
 
 ## Design session (async)
@@ -47,6 +48,17 @@ Adding `needs-design` to an open issue starts a Design session. Each turn is a f
 - **An agent brief**: the issue body is rewritten in place as the brief and its acceptance criteria, a closing comment (no mention) records the decisions, and `needs-design` is swapped for `ready-for-agent`. Finishing the session counts as the Operator approving it.
 
 Only rounds notify: the Kit strips @-mentions from everything the agent writes.
+
+## Implementation
+
+Dispatch adding `agent:implement` to a Ticket starts its Implementer (Sonnet 5.5, 60 minutes by default, `roles.implement`, plus `.fabrik/implement.md` when present), one run per Ticket at a time. The label comes off as the run starts; the open draft PR shows the Ticket is in progress.
+
+- **The Sandbox** is a fresh clone of `main` on the runner, on the branch `fabrik/ticket-<n>`. The job holds only the implement service account. The Claude token and the test secrets listed in `sandbox.secrets` are resolved from 1Password into the Implement step's env only, so adding a test secret never means editing the caller workflow. `sandbox.setup` runs before the agent starts (daemonise any stubs it starts), and the prompt gives the Implementer the `build` and `test` commands to run.
+- **The prompt** carries the Ticket, its parent Spec, `GLOSSARY.md`, the ADRs under `docs/adr/` and the Product's implement instructions, and starts the `implement` skill, which works test-first with `tdd`.
+- **The push job** rebuilds the branch from the git bundle the agent job passed out and runs the trust-root guard on every path any of its commits changes:
+  - **Allowed**: the Fabrik App pushes the branch and opens one draft PR to `main` with `Closes #<n>`, which starts CI. Nobody is notified.
+  - **Refused** (it touches `AGENTS.md`, `CLAUDE.md`, `.claude/settings*`, `.claude/skills/`, `prompts/`, `.fabrik/` or `.github/workflows/`): nothing is pushed. The Ticket moves to `ready-for-human`, is assigned to the Operator, and gets a comment listing the paths. This uses no retry.
+  - **Empty diff**: an Execution flaw, never a pass. The Implementer runs again, silently, up to 2 times (the second a Step-up), and a third empty diff sends the Ticket to `needs-design`.
 
 ## Kit config
 

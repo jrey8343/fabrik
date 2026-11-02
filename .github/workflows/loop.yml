@@ -7,7 +7,9 @@
 # Each AFK role is an agent job followed by the push job (ADR-0002):
 # - The agent job holds `contents: read` and no GitHub write credential, no
 #   `id-token: write`, and only the agent service account, which loads the
-#   Claude token (ADR-0004). It passes its output out as an artifact.
+#   Claude token, or for Implement only the implement service account, which
+#   also loads the repo's test secrets (ADR-0004). It passes its output out as
+#   an artifact, the Implementer's commits as a git bundle.
 # - The push job runs on a fresh VM, loads the Fabrik App key through the push
 #   service account, mints an App token, and never checks out or runs Product
 #   code. It checks out only Fabrik itself, at the exact commit the caller pinned.
@@ -21,6 +23,9 @@ on:
     secrets:
       OP_AGENT_TOKEN:
         description: The Product repo's read-only 1Password agent service account, which reads the Fabrik vault (the Claude token).
+        required: true
+      OP_IMPLEMENT_TOKEN:
+        description: The Product repo's read-only 1Password implement service account, which reads the Fabrik vault (the Claude token) and the repo's Fabrik Sandbox vault (its test secrets).
         required: true
       OP_PUSH_TOKEN:
         description: The Product repo's read-only 1Password push service account, which reads the Fabrik App vault.
@@ -45,7 +50,11 @@ jobs:
       route: ${{ steps.route.outputs.route }}
       triage-timeout-minutes: ${{ steps.route.outputs.triage-timeout-minutes }}
       design-timeout-minutes: ${{ steps.route.outputs.design-timeout-minutes }}
+      implement-timeout-minutes: ${{ steps.route.outputs.implement-timeout-minutes }}
       dispatch-timeout-minutes: ${{ steps.route.outputs.dispatch-timeout-minutes }}
+      # The model and effort the plan chose for its agent run, a Step-up included.
+      model: ${{ steps.route.outputs.model }}
+      effort: ${{ steps.route.outputs.effort }}
     steps:
       # No expression context names the commit of a called workflow, so read
       # it from the OIDC token's job_workflow_sha claim.
@@ -382,15 +391,239 @@ jobs:
           FABRIK_AGENT_FAILURE: ${{ runner.temp }}/agent/agent-failure.json
         run: node src/main.ts
 
+  # Takes agent:implement off the Ticket as its Implement run starts, so the
+  # label never claims work that isn't running (the open draft PR does that).
+  # It applies the same plan the Kit job routed on; the run itself is the
+  # Implement job's. Like a push job, it never touches Product code.
+  implement-claim:
+    name: Claim the Ticket
+    needs: kit
+    if: needs.kit.outputs.route == 'implement'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: .fabrik-kit
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Load the Fabrik App key
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}
+          FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+          FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+      - name: Mint a Fabrik App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+          private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+
+      - name: Take agent:implement off the Ticket
+        working-directory: .fabrik-kit
+        env:
+          FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: node src/main.ts
+
+  # The Implementer (ADR-0002, ADR-0004). It holds only the implement service
+  # account: the Claude token and this repo's test secrets, which Kit config
+  # declares as op:// references, so none of them is named in this file. They
+  # are resolved in output mode and reach the Implement step's env only.
+  # Named "Implement" exactly: Dispatch counts jobs by this name (src/github/adapter.ts).
+  implement:
+    name: Implement
+    needs: kit
+    if: needs.kit.outputs.route == 'implement'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
+    # One Implement run per Ticket at a time, so two never race on one branch.
+    concurrency:
+      group: fabrik-implement-${{ github.event.issue.number }}
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      # Read by the failure job: a failed 1Password step means the agent never started.
+      secrets-step: ${{ steps.op.outcome }}
+    steps:
+      # A fresh clone of main: no working directory or .env* files carried over.
+      - name: Check out the Product repo at main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Install the Kit (Sandcastle and the Claude Code CLI, pinned)
+        working-directory: kit
+        run: npm ci
+
+      - name: Fetch the pinned skills into .claude/skills
+        run: node kit/src/skills/fetch.ts product
+
+      # The agent gets the Ticket and its Spec in its prompt, never a GitHub token.
+      - name: Read the Ticket and its parent Spec
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json number,title,body,author,labels,comments >"$RUNNER_TEMP/issue.json"
+          gh api graphql \
+            -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { issue(number: $number) { parent { number title body } } } }' \
+            -f owner="${GITHUB_REPOSITORY%%/*}" -f name="${GITHUB_REPOSITORY#*/}" -F number="$ISSUE" \
+            --jq '.data.repository.issue.parent' >"$RUNNER_TEMP/spec.json"
+          # No parent prints nothing; the Implementer reads that as no Spec.
+          [ -s "$RUNNER_TEMP/spec.json" ] || echo null >"$RUNNER_TEMP/spec.json"
+
+      # Kit config is read as data; the list of op:// references goes to 1Password as a file.
+      - name: List the test secrets to load
+        run: node kit/src/kit/secrets-main.ts product "$RUNNER_TEMP/fabrik-secrets.env"
+
+      - name: Load the Claude token and the test secrets
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_IMPLEMENT_TOKEN }}
+          OP_ENV_FILE: ${{ runner.temp }}/fabrik-secrets.env
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+
+      - name: Run the Implementer
+        working-directory: product
+        env:
+          # Every value the 1Password step resolved, in this step's env only.
+          FABRIK_SECRETS: ${{ toJSON(steps.op.outputs) }}
+          FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          FABRIK_MODEL: ${{ needs.kit.outputs.model }}
+          FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
+        run: node ../kit/src/agent/run.ts implement
+
+      # The result and the bundle of the Implementer's commits (none if it made none).
+      - name: Pass the Implementer's output and commits to the push job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-result
+          path: |
+            ${{ runner.temp }}/fabrik-out/agent-result.json
+            ${{ runner.temp }}/fabrik-out/agent-branch.bundle
+          if-no-files-found: error
+          retention-days: 7
+
+      # src/agent/run.ts writes this when it catches a failure. A run cancelled
+      # by its timeout leaves none, and the failure job reads that as a timeout.
+      - name: Pass the failure report to the failure job
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  implement-failed:
+    name: Implement failed
+    needs: [kit, implement]
+    # always(), so this still runs when the Implement job was cancelled by its timeout.
+    if: >-
+      always() && needs.kit.result == 'success' && needs.kit.outputs.route == 'implement' &&
+      (needs.implement.result == 'failure' || needs.implement.result == 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: .fabrik-kit
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Take the agent job's failure report, if it left one
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/agent
+
+      - name: Load the Fabrik App key
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}
+          FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+          FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+      - name: Mint a Fabrik App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+          private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+
+      - name: Post the failure notice
+        working-directory: .fabrik-kit
+        env:
+          FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
+          FABRIK_FAILED_ROLE: implement
+          FABRIK_FAILED_ISSUE: ${{ github.event.issue.number }}
+          FABRIK_AGENT_JOB_RESULT: ${{ needs.implement.result }}
+          FABRIK_SECRETS_STEP: ${{ needs.implement.outputs.secrets-step }}
+          FABRIK_AGENT_FAILURE: ${{ runner.temp }}/agent/agent-failure.json
+        run: node src/main.ts
+
   push:
     name: Push
-    needs: [kit, triage, design]
+    needs: [kit, triage, design, implement]
     # Runs straight after the Kit job when it routed here, or after the agent job it routed to succeeded.
+    # For an Implement run it runs the trust-root guard on the branch before pushing it (src/loop/implement.ts).
     if: >-
       !cancelled() && needs.kit.result == 'success' && (
         needs.kit.outputs.route == 'push' ||
         (needs.kit.outputs.route == 'triage' && needs.triage.result == 'success') ||
-        (needs.kit.outputs.route == 'design' && needs.design.result == 'success')
+        (needs.kit.outputs.route == 'design' && needs.design.result == 'success') ||
+        (needs.kit.outputs.route == 'implement' && needs.implement.result == 'success')
       )
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -436,12 +669,15 @@ jobs:
           client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
           private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
 
-      # The App token, not GITHUB_TOKEN, so the labels it adds start later workflows.
+      # The App token, not GITHUB_TOKEN, so the labels it adds, the branch it
+      # pushes and the PR it opens start later workflows, CI included.
       - name: Run the Loop
         id: loop
         working-directory: .fabrik-kit
         env:
           FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
+          # The agent could rewrite its own artifact, so the run's issue comes from the event.
+          FABRIK_RUN_ISSUE: ${{ github.event.issue.number }}
           FABRIK_AGENT_RESULT: ${{ needs.kit.outputs.route != 'push' && format('{0}/agent/agent-result.json', runner.temp) || '' }}
         run: node src/main.ts
 

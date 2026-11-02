@@ -29,4 +29,5 @@ jobs:
       actions: read
     secrets:
       OP_AGENT_TOKEN: ${{ secrets.FABRIK_OP_AGENT_TOKEN }}
+      OP_IMPLEMENT_TOKEN: ${{ secrets.FABRIK_OP_IMPLEMENT_TOKEN }}
       OP_PUSH_TOKEN: ${{ secrets.FABRIK_OP_PUSH_TOKEN }}
