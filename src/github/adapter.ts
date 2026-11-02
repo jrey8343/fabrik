@@ -3,9 +3,10 @@
 // Loop rules; those all live in src/loop/rules.ts.
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import type { AgentRunResult } from "../agent/result.ts";
-import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
+import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { isDesignRoundComment } from "../loop/design.ts";
 import { countEmptyDiffs } from "../loop/implement.ts";
+import { verdictsIn } from "../loop/verdict.ts";
 import { KIT_ISSUE_LABELS } from "../loop/kitIssues.ts";
 import type {
   Action,
@@ -62,6 +63,14 @@ export function loopEventFrom(
   // Kit config, never the PR's. The Loop never checks out PR code.
   if (eventName === "pull_request_target") {
     const pullRequest = (payload["pull_request"] as { number: number }).number;
+    // Opened or pushed to: its required checks start, and a Review waits for them.
+    if (payload["action"] === "opened" || payload["action"] === "synchronize" || payload["action"] === "reopened") {
+      return { kind: "pull-request-pushed", pullRequest };
+    }
+    if (payload["action"] === "labeled") {
+      const label = payload["label"] as { name: string };
+      return { kind: "pull-request-labeled", pullRequest, label: label.name };
+    }
     if (payload["action"] === "ready_for_review") return { kind: "pull-request-left-draft", pullRequest };
     if (payload["action"] === "closed") return { kind: "pull-request-closed", pullRequest };
   }
@@ -83,6 +92,7 @@ export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run
  * into the Loop event its push job applies.
  */
 export function agentRunEventFrom(result: AgentRunResult, changes: BranchChanges | null = null): LoopEvent {
+  if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
   if (result.role !== "implement") {
     return { kind: "agent-run-finished", role: result.role, issue: result.issue, output: result.output };
   }
@@ -97,6 +107,28 @@ export function agentRunEventFrom(result: AgentRunResult, changes: BranchChanges
     base: result.branch.base.ref,
     changes,
   };
+}
+
+/** What a Review's push job knows: from its checks job, and the Reviewer's result when it ran. */
+export interface FinishedReview {
+  readonly pullRequest: number;
+  readonly headSha: string;
+  readonly runUrl: string;
+  /** The required checks that didn't pass, from the checks job. */
+  readonly failedChecks: readonly string[];
+  /** The Reviewer's result, null when red checks kept it from running. */
+  readonly result: AgentRunResult | null;
+}
+
+/** Turns a finished Review into the Loop event its push job applies. */
+export function reviewEventFrom(review: FinishedReview): LoopEvent {
+  const { pullRequest, headSha, runUrl, result } = review;
+  if (result === null) {
+    return { kind: "required-checks-finished", pullRequest, headSha, failed: review.failedChecks, runUrl };
+  }
+  if (result.role !== "review") throw new Error(`A Review's push job was handed a ${result.role} result`);
+  if (result.issue !== pullRequest) throw new Error(`The Reviewer's result is for #${result.issue}, not #${pullRequest}`);
+  return { kind: "review-run-finished", pullRequest, headSha, output: result.output, runUrl };
 }
 
 /** What the failure job knows about the agent job it follows (see the failure job in loop.yml). */
@@ -221,8 +253,13 @@ const PULL_REQUEST_QUERY = `
       owner { login }
       pullRequest(number: $number) {
         number
+        state
+        isDraft
         headRefName
+        headRefOid
         author { __typename }
+        labels(first: 100) { nodes { name } }
+        comments(last: 100) { nodes { body author { __typename } } }
       }
     }
   }
@@ -231,7 +268,16 @@ const PULL_REQUEST_QUERY = `
 interface PullRequestQueryResult {
   repository: {
     owner: { login: string };
-    pullRequest: { number: number; headRefName: string; author: { __typename: string } | null } | null;
+    pullRequest: {
+      number: number;
+      state: "OPEN" | "CLOSED" | "MERGED";
+      isDraft: boolean;
+      headRefName: string;
+      headRefOid: string;
+      author: { __typename: string } | null;
+      labels: { nodes: { name: string }[] };
+      comments: { nodes: { body: string; author: { __typename: string } | null }[] };
+    } | null;
   };
 }
 
@@ -316,6 +362,10 @@ async function gatherEventPart(
   actions: GitHub | null,
 ): Promise<EventPart | null> {
   switch (event.kind) {
+    case "pull-request-pushed":
+    case "pull-request-labeled":
+    case "required-checks-finished":
+    case "review-run-finished":
     case "pull-request-left-draft":
     case "pull-request-closed":
       return gatherPullRequest(github, repo, event.pullRequest, operator);
@@ -421,6 +471,17 @@ async function gatherPullRequest(
         headRef: pullRequest.headRefName,
         authorIsBot: pullRequest.author?.__typename === "Bot",
       }),
+      ticket: ticketOfAgentBranch(pullRequest.headRefName),
+      open: pullRequest.state === "OPEN",
+      draft: pullRequest.isDraft,
+      headSha: pullRequest.headRefOid,
+      labels: pullRequest.labels.nodes.map((label) => label.name),
+      // Only a bot's markers count, so nobody can fake a Verdict by quoting one.
+      verdicts: verdictsIn(
+        pullRequest.comments.nodes.filter((comment) => comment.author?.__typename === "Bot").map((comment) => comment.body),
+      ),
+      // No Request-changes run exists yet: the Merge gate's rules bring them (#44).
+      requestChangesRun: false,
     },
     dispatch: null,
     operator: operator ?? data.repository.owner.login,
@@ -602,6 +663,22 @@ async function apply(
         draft: action.draft,
       });
       return;
+    case "mark-ready-for-review": {
+      // REST can't take a PR out of draft; GraphQL can, by its node id.
+      const pullRequest = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}`)) as {
+        node_id: string;
+      };
+      await github.graphql(
+        "mutation ($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { clientMutationId } }",
+        { id: pullRequest.node_id },
+      );
+      return;
+    }
+    case "request-review":
+      await github.rest("POST", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}/requested_reviewers`, {
+        reviewers: [action.reviewer],
+      });
+      return;
     default:
       return applyToIssue(github, `${issues}/${action.issue}`, action, created);
   }
@@ -612,7 +689,16 @@ async function applyToIssue(
   issue: string,
   action: Exclude<
     Action,
-    { kind: "check-dispatch" | "create-issue" | "open-issue" | "push-branch" | "open-pull-request" }
+    {
+      kind:
+        | "check-dispatch"
+        | "create-issue"
+        | "open-issue"
+        | "push-branch"
+        | "open-pull-request"
+        | "mark-ready-for-review"
+        | "request-review";
+    }
   >,
   created: Map<string, CreatedRecord>,
 ): Promise<void> {

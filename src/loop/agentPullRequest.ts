@@ -12,3 +12,9 @@ export function agentBranchFor(ticket: number): string {
 export function isAgentPullRequest(pullRequest: { readonly headRef: string; readonly authorIsBot: boolean }): boolean {
   return pullRequest.authorIsBot && pullRequest.headRef.startsWith(AGENT_BRANCH_PREFIX);
 }
+
+/** The Ticket an agent branch was cut for, or null if it isn't one. */
+export function ticketOfAgentBranch(headRef: string): number | null {
+  const match = /^fabrik\/ticket-([1-9][0-9]*)$/.exec(headRef);
+  return match === null ? null : Number(match[1]);
+}

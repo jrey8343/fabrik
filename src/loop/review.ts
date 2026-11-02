@@ -1,0 +1,128 @@
+// Review rules: when a Review starts on an agent PR, and how its Verdict lands.
+// Red required checks are an Execution flaw and the Reviewer doesn't run; on
+// green, the Reviewer's Verdict line decides. Every Verdict is posted as a PR
+// comment with its marker. Routing flaws onward is for later rules.
+import { withoutMentions } from "./mentions.ts";
+import { parseVerdict, verdictMarker } from "./verdict.ts";
+import type { Action, KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot, Verdict, VerdictRecord } from "./types.ts";
+
+/** The label that starts a Review again after a failure (src/loop/failures.ts). */
+export const REVIEW_LABEL = "agent:review";
+
+type RedChecks = Extract<LoopEvent, { kind: "required-checks-finished" }>;
+type Reviewed = Extract<LoopEvent, { kind: "review-run-finished" }>;
+
+/**
+ * A push to an agent draft PR, or agent:review added to it, starts a Review.
+ * The Review job waits for the PR's required checks before anything else.
+ */
+export function startReview(pullRequest: PullRequestSnapshot, config: KitConfig): Plan {
+  const why = whyNotReviewable(pullRequest);
+  if (why !== null) return { kind: "nothing", reason: why };
+  const { model, effort, timeoutMinutes } = config.roles.review;
+  return {
+    kind: "act",
+    actions: [{ kind: "start-agent-run", role: "review", issue: pullRequest.number, model, effort, timeoutMinutes }],
+  };
+}
+
+/** Red CI is an Execution flaw, recorded as a Verdict from CI so retries can be counted from the PR alone. */
+export function applyRedChecks(event: RedChecks, snapshot: Snapshot): Plan {
+  return landVerdict(event, snapshot, (pullRequest) => {
+    if (event.failed.length === 0) {
+      return { kind: "nothing", reason: `#${pullRequest.number}'s required checks passed, so the Reviewer judges it` };
+    }
+    const findings = [
+      "These required checks didn't pass, so the Reviewer didn't run:",
+      "",
+      ...event.failed.map((name) => `- \`${name.replace(/`/g, "'")}\``),
+    ].join("\n");
+    return { kind: "act", actions: verdictActions(event, pullRequest, "execution-flaw", "ci", findings) };
+  });
+}
+
+/**
+ * The Reviewer's Verdict. A reply that breaks the contract is an
+ * Infrastructure failure, never a pass. A pass takes the PR out of draft and
+ * requests the Operator's review, the event's one notification.
+ */
+export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
+  return landVerdict(event, snapshot, (pullRequest) => {
+    const parsed = parseVerdict(event.output);
+    if (!parsed.ok) {
+      return { kind: "fail", failure: "infrastructure", reason: `The Review of #${pullRequest.number} gave no valid Verdict: ${parsed.error}` };
+    }
+    const actions = verdictActions(event, pullRequest, parsed.verdict, "reviewer", withoutMentions(parsed.findings));
+    if (parsed.verdict !== "pass") return { kind: "act", actions };
+    return {
+      kind: "act",
+      actions: [
+        ...actions,
+        { kind: "mark-ready-for-review", pullRequest: pullRequest.number },
+        { kind: "request-review", pullRequest: pullRequest.number, reviewer: snapshot.operator },
+      ],
+    };
+  });
+}
+
+/** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once. */
+function landVerdict(
+  event: RedChecks | Reviewed,
+  { pullRequest }: Snapshot,
+  decide: (pullRequest: PullRequestSnapshot) => Plan,
+): Plan {
+  if (pullRequest === null) {
+    return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the pull request" };
+  }
+  const why = whyNotReviewable(pullRequest);
+  if (why !== null) return { kind: "nothing", reason: `${why}, so the Verdict is stale` };
+  if (pullRequest.headSha !== event.headSha) {
+    return { kind: "nothing", reason: `#${pullRequest.number} has moved on from ${event.headSha.slice(0, 7)}, so the Verdict is stale` };
+  }
+  if (pullRequest.verdicts.some((record) => record.headSha === event.headSha)) {
+    return { kind: "nothing", reason: `#${pullRequest.number} already has a Verdict on ${event.headSha.slice(0, 7)}` };
+  }
+  return decide(pullRequest);
+}
+
+const HEADINGS: Readonly<Record<Verdict, string>> = {
+  pass: "Pass",
+  "execution-flaw": "Execution flaw",
+  "design-flaw": "Design flaw",
+};
+
+/** The Verdict comment (it mentions nobody), and agent:review off so re-adding it is a fresh event. */
+function verdictActions(
+  event: RedChecks | Reviewed,
+  pullRequest: PullRequestSnapshot,
+  verdict: Verdict,
+  source: VerdictRecord["source"],
+  findings: string,
+): Action[] {
+  const record: VerdictRecord = { verdict, source, requestChanges: pullRequest.requestChangesRun, headSha: event.headSha };
+  const by = source === "ci" ? "red required checks" : "the Reviewer";
+  const body = [
+    verdictMarker(record),
+    `## Verdict: ${HEADINGS[verdict]}`,
+    "",
+    `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}.`,
+    ...(findings === "" ? [] : ["", findings]),
+    "",
+    `[The run](${event.runUrl})`,
+  ].join("\n");
+  return [
+    ...(pullRequest.labels.includes(REVIEW_LABEL)
+      ? [{ kind: "remove-label" as const, issue: pullRequest.number, label: REVIEW_LABEL }]
+      : []),
+    { kind: "comment", issue: pullRequest.number, body },
+  ];
+}
+
+/** Why this PR isn't one to review, or null when it is. */
+function whyNotReviewable(pullRequest: PullRequestSnapshot): string | null {
+  if (!pullRequest.isAgent) return `#${pullRequest.number} isn't an agent PR`;
+  if (pullRequest.ticket === null) return `#${pullRequest.number}'s branch names no Ticket`;
+  if (!pullRequest.open) return `#${pullRequest.number} is closed`;
+  if (!pullRequest.draft) return `#${pullRequest.number} has left draft`;
+  return null;
+}

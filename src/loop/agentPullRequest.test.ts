@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentBranchFor, isAgentPullRequest } from "./agentPullRequest.ts";
+import { agentBranchFor, isAgentPullRequest, ticketOfAgentBranch } from "./agentPullRequest.ts";
 
 describe("An agent PR", () => {
   it("is on the Ticket's agent branch", () => {
@@ -20,4 +20,14 @@ describe("An agent PR", () => {
       expect(isAgentPullRequest({ headRef, authorIsBot: true })).toBe(false);
     },
   );
+});
+
+describe("An agent PR's Ticket", () => {
+  it("is read from its agent branch", () => {
+    expect(ticketOfAgentBranch("fabrik/ticket-12")).toBe(12);
+  });
+
+  it.each(["fabrik/ticket-", "fabrik/ticket-12x", "fabrik/ticket-0", "main"])("isn't read from %s", (headRef) => {
+    expect(ticketOfAgentBranch(headRef)).toBeNull();
+  });
 });

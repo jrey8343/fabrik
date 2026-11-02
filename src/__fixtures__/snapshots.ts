@@ -30,14 +30,31 @@ export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapsho
   return { issue, pullRequest: null, dispatch: null, operator: "operator", kitIssues: [], ...overrides };
 }
 
-/** A pull request, by default one the Fabrik App opened for a Ticket. */
+/** The head commit aPullRequest() is at unless a test says otherwise. */
+export const HEAD_SHA = "a".repeat(40);
+
+/** A pull request, by default an open agent draft PR the Fabrik App opened for a Ticket, with no Verdicts yet. */
 export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): PullRequestSnapshot {
-  return { number: 50, isAgent: true, ...overrides };
+  return {
+    number: 50,
+    isAgent: true,
+    ticket: 7,
+    open: true,
+    draft: true,
+    headSha: HEAD_SHA,
+    labels: [],
+    verdicts: [],
+    requestChangesRun: false,
+    ...overrides,
+  };
 }
 
 /** A snapshot of this pull request. */
-export function snapshotOfPullRequest(pullRequest: PullRequestSnapshot): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, operator: "operator", kitIssues: [] };
+export function snapshotOfPullRequest(
+  pullRequest: PullRequestSnapshot,
+  overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {},
+): Snapshot {
+  return { issue: null, pullRequest, dispatch: null, operator: "operator", kitIssues: [], ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -73,7 +90,7 @@ export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kit
 }
 
 /**
- * Every way a plan would buzz the Operator's phone: an assignment, an issue
+ * Every way a plan would buzz the Operator's phone: an assignment, a review request, an issue
  * opened assigned to them, or an @-mention of them in a comment or new issue.
  */
 export function notificationsOf(plan: Plan, operator = "operator"): string[] {
@@ -83,6 +100,8 @@ export function notificationsOf(plan: Plan, operator = "operator"): string[] {
     switch (action.kind) {
       case "assign":
         return action.assignee === operator ? [`assign #${action.issue}`] : [];
+      case "request-review":
+        return action.reviewer === operator ? [`review request on #${action.pullRequest}`] : [];
       case "comment":
         return mention.test(action.body) ? [`mention on #${action.issue}`] : [];
       case "open-issue":

@@ -2,12 +2,14 @@
 // sparse checkout, never run), asks the Loop rules core what this event calls
 // for, and tells the workflow which job it routes to and the settings its jobs
 // need before they start, such as their timeout-minutes. Writes step outputs:
-//   route                    "triage", "design" or "implement" when the plan starts that agent run,
+//   route                    "triage", "design", "implement" or "review" when the plan starts that agent run,
 //                            "push" when the push job has something to apply,
 //                            "none" when the plan is to do nothing
 //   triage-timeout-minutes   the Triage role's Kit config timeout
 //   design-timeout-minutes   the Design-session turn's Kit config timeout
 //   implement-timeout-minutes the Implement role's Kit config timeout
+//   review-timeout-minutes   the Review role's Kit config timeout
+//   pull-request, ticket     for a Review, the agent PR and the Ticket its branch was cut for; else empty
 //   model, effort            the model and effort the plan chose for its agent run (a Step-up, say),
 //                            empty when it starts none or leaves effort to the CLI
 //   dispatch-timeout-minutes the Dispatch job's Kit config timeout
@@ -45,23 +47,30 @@ async function main(productDir: string): Promise<void> {
   const event = loopEventFrom(eventName, payload);
   let route = "none";
   let run: ReturnType<typeof agentRunIn> = null;
+  let ticket: number | null = null;
   if (event === null) {
     console.log(`The Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
   } else {
     const [owner, name] = required("GITHUB_REPOSITORY").split("/");
     const repo: Repo = { owner: owner ?? "", name: name ?? "" };
     const github = new GitHub(required("GH_TOKEN"), process.env["GITHUB_API_URL"]);
-    const plan = planFor(event, await gatherSnapshot(github, repo, event, config.operator), config);
+    const snapshot = await gatherSnapshot(github, repo, event, config.operator);
+    const plan = planFor(event, snapshot, config);
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
     route = routeOf(plan);
     run = agentRunIn(plan);
+    ticket = snapshot.pullRequest?.ticket ?? null;
   }
+  const review = run?.role === "review";
 
   const outputs = {
     route,
     "triage-timeout-minutes": String(config.roles.triage.timeoutMinutes),
     "design-timeout-minutes": String(config.roles.design.timeoutMinutes),
     "implement-timeout-minutes": String(config.roles.implement.timeoutMinutes),
+    "review-timeout-minutes": String(config.roles.review.timeoutMinutes),
+    "pull-request": review ? String(run?.issue ?? "") : "",
+    ticket: review && ticket !== null ? String(ticket) : "",
     model: run?.model ?? "",
     effort: run?.effort ?? "",
     "dispatch-timeout-minutes": String(config.roles.dispatch.timeoutMinutes),

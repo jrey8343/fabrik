@@ -69,10 +69,10 @@ export async function bundleAgentBranch(productDir: string, started: BuiltBranch
 }
 
 /**
- * What the Implementer's prompt carries beyond the Ticket: its parent Spec,
- * the repo's glossary and ADRs, and the Sandbox's commands.
+ * What both the Implementer and the Reviewer are given beside the Ticket: its
+ * parent Spec, and the repo's glossary and ADRs from the checkout.
  */
-export async function implementContext(productDir: string, specFile: string, config: KitConfig): Promise<string[]> {
+export async function ticketContext(productDir: string, specFile: string): Promise<string[]> {
   const parts: string[] = [];
   const spec: unknown = JSON.parse(await readFile(specFile, "utf8"));
   if (spec !== null) parts.push("## The parent Spec", "```json", JSON.stringify(spec, null, 2), "```");
@@ -82,7 +82,15 @@ export async function implementContext(productDir: string, specFile: string, con
   const adrDir = join(productDir, "docs", "adr");
   const adrs = (await readdir(adrDir).catch(() => [] as string[])).filter((name) => name.endsWith(".md")).sort();
   for (const name of adrs) parts.push(`## docs/adr/${name}`, (await readFile(join(adrDir, name), "utf8")).trimEnd());
+  return parts;
+}
 
+/**
+ * What the Implementer's prompt carries beyond the Ticket: its parent Spec,
+ * the repo's glossary and ADRs, and the Sandbox's commands.
+ */
+export async function implementContext(productDir: string, specFile: string, config: KitConfig): Promise<string[]> {
+  const parts = await ticketContext(productDir, specFile);
   const { build, test, checks } = config.sandbox;
   const commands = [
     build === null ? "- Build: none configured" : `- Build: \`${build}\``,

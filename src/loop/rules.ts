@@ -13,7 +13,17 @@ import {
 import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { dispatch } from "./dispatch.ts";
-import type { Action, IssueContext, IssueSnapshot, KitConfig, LoopEvent, Plan, Snapshot } from "./types.ts";
+import { applyRedChecks, applyReview, REVIEW_LABEL, startReview } from "./review.ts";
+import type {
+  Action,
+  IssueContext,
+  IssueSnapshot,
+  KitConfig,
+  LoopEvent,
+  Plan,
+  PullRequestSnapshot,
+  Snapshot,
+} from "./types.ts";
 
 /** The Loop rules core: decides what the Kit does about one Loop event. Pure, no I/O. */
 export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
@@ -45,6 +55,19 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
     // A closed issue may free a slot or unblock a Ticket.
     case "issue-closed":
       return { kind: "act", actions: [CHECK_DISPATCH] };
+    // A push to an agent draft PR, or agent:review added to resume after a failure, starts a Review.
+    case "pull-request-pushed":
+      return withPullRequest(snapshot, (pullRequest) => startReview(pullRequest, config));
+    case "pull-request-labeled":
+      return withPullRequest(snapshot, (pullRequest) =>
+        event.label === REVIEW_LABEL
+          ? startReview(pullRequest, config)
+          : { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` },
+      );
+    case "required-checks-finished":
+      return applyRedChecks(event, snapshot);
+    case "review-run-finished":
+      return applyReview(event, snapshot);
     // An agent PR that leaves draft or closes no longer holds a slot.
     case "pull-request-left-draft":
     case "pull-request-closed": {
@@ -68,6 +91,11 @@ const CHECK_DISPATCH: Action = { kind: "check-dispatch" };
 function withIssue(snapshot: Snapshot, decide: (context: IssueContext) => Plan): Plan {
   const { issue, operator, kitIssues } = snapshot;
   return issue === null ? missingFromSnapshot("the issue") : decide({ issue, operator, kitIssues });
+}
+
+/** Decides a pull-request event, which needs the pull request in the snapshot. */
+function withPullRequest(snapshot: Snapshot, decide: (pullRequest: PullRequestSnapshot) => Plan): Plan {
+  return snapshot.pullRequest === null ? missingFromSnapshot("the pull request") : decide(snapshot.pullRequest);
 }
 
 /** The adapter gathered the wrong snapshot for the event: fail rather than guess. */

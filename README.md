@@ -11,7 +11,8 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 - `src/kit/` holds the **Kit config** loader (`resolveKitConfig`: defaults and validation) and the caller workflow release check (`checkCallerWorkflow`). Both are pure; every run calls them before anything else.
 - `src/github/` holds the thin **GitHub adapter**: it maps an Actions event to a Loop event, gathers the snapshot and applies the plan.
 - `src/main.ts` is what a push job runs (`node src/main.ts`, Node 24, no build step and no runtime dependencies). Given `FABRIK_AGENT_RESULT`, it applies an agent job's output instead of the Actions event.
-- `src/agent/` holds the **agent job** runner (`node src/agent/run.ts triage` or `design`): Sandcastle with `noSandbox()` on the runner VM, the metered-billing preflight as the last `onSandboxReady` step, the `init` check, the step summary, and the role's output passed out as `agent-result.json`. Only agent jobs install the runtime dependencies (Sandcastle and the Claude Code CLI, pinned exactly).
+- `src/agent/` holds the **agent job** runner (`node src/agent/run.ts triage`, `design`, `implement` or `review`): Sandcastle with `noSandbox()` on the runner VM, the metered-billing preflight as the last `onSandboxReady` step, the `init` check, the step summary, and the role's output passed out as `agent-result.json`. Only agent jobs install the runtime dependencies (Sandcastle and the Claude Code CLI, pinned exactly).
+- `src/review/` holds the Review checks job's step (`node src/review/wait.ts`), which waits for an agent PR's required checks, and the pure rule for how they ended.
 - `src/preflight/` holds the metered-billing preflight (pure) and the command the hook runs.
 - `src/skills/` and `skills.lock.json` pin Matt Pocock's skills at a commit SHA and install them into a Product checkout's gitignored `.claude/skills/` (ADR-0003).
 - `src/skills/bump.ts` decides the weekly skills bump PR (`.github/workflows/skills-bump.yml`), with the upstream diff in its body; `src/skills/bump-main.ts` is its step.
@@ -40,8 +41,8 @@ npm test
 - A 1Password API Credential item `Claude token` in the `Fabrik` vault, holding the `claude setup-token` token in its `credential` field, with its expiry date.
 - The repo's read-only agent service account (reads the `Fabrik` vault) stored as the Actions secret `FABRIK_OP_AGENT_TOKEN`.
 - A `Fabrik Sandbox · <product>` vault holding the repo's test secrets, and the repo's read-only implement service account (reads the `Fabrik` vault and that one) stored as the Actions secret `FABRIK_OP_IMPLEMENT_TOKEN`.
-- `.claude/skills/` in the repo's `.gitignore`, and the labels `needs-triage`, `needs-info`, `needs-design`, `ready-for-agent`, `ready-for-human`, `wontfix`, `agent:implement`, `bug` and `enhancement`.
-- `templates/fabrik.yml` installed as `.github/workflows/fabrik.yml`, with every Fabrik `uses:` line pinned to the same exact tag. A run fails if they disagree. It runs on `issues` (opened, labeled) and `issue_comment` (created).
+- `.claude/skills/` in the repo's `.gitignore`, and the labels `needs-triage`, `needs-info`, `needs-design`, `ready-for-agent`, `ready-for-human`, `wontfix`, `agent:implement`, `agent:review`, `bug` and `enhancement`.
+- `templates/fabrik.yml` installed as `.github/workflows/fabrik.yml`, with every Fabrik `uses:` line pinned to the same exact tag. A run fails if they disagree. It runs on `issues`, `issue_comment` and `pull_request_target` (opened, synchronize, reopened, labeled, ready_for_review, closed).
 
 ## Design session (async)
 
@@ -70,6 +71,17 @@ Dispatch adding `agent:implement` to a Ticket starts its Implementer (Sonnet 5.5
   - **Allowed**: the Fabrik App pushes the branch and opens one draft PR to `main` with `Closes #<n>`, which starts CI. Nobody is notified.
   - **Refused** (it touches `AGENTS.md`, `CLAUDE.md`, `.claude/settings*`, `.claude/skills/`, `prompts/`, `.fabrik/` or `.github/workflows/`): nothing is pushed. The Ticket moves to `ready-for-human`, is assigned to the Operator, and gets a comment listing the paths. This uses no retry.
   - **Empty diff**: an Execution flaw, never a pass. The Implementer runs again, silently, up to 2 times (the second a Step-up), and a third empty diff sends the Ticket to `needs-design`.
+
+## Review
+
+Every agent draft PR is reviewed before the Operator sees it. The Fabrik App opening the PR, or pushing to it, starts a Review; adding `agent:review` to the PR resumes one after a failure. One Review runs per PR at a time, within the Review timeout (30 minutes by default, `roles.review`).
+
+- **Required checks** come first. The Review checks job waits for them on the PR's head: the checks named in `sandbox.checks` when it lists any, otherwise the branch protection's required checks. A skipped or cancelled check never counts as passed.
+- **Red checks** are an Execution flaw. The Reviewer doesn't run.
+- **Green checks** start the read-only Reviewer (Opus 5.5 by default, plus `.fabrik/review.md` when present) in a checkout of the PR's head. It holds only the agent service account and runs none of the PR's code. It judges the PR against its Ticket, the Ticket's Spec, the repo's standards and the review instructions.
+- **The Verdict contract**: the Reviewer's reply starts with exactly one line, `verdict: pass`, `verdict: execution-flaw` or `verdict: design-flaw`, then its findings. Anything else, an empty reply or a provider error, is an Infrastructure failure, never a pass.
+- **Posting**: the push job posts every Verdict, red checks' included, as a PR comment from the Fabrik App, linking its run. The comment's first line is a marker, `<!-- fabrik:verdict {"verdict":…,"source":"reviewer"|"ci","requestChanges":…,"headSha":…} -->`, so a PR's review history can be read from its comments alone. The marker is only read from bot comments. A Verdict is posted once per head commit, and never for a commit the PR has moved on from.
+- **A pass** takes the PR out of draft and requests the Operator's review, the event's one notification. A flaw is posted and mentions nobody.
 
 ## Kit config
 
