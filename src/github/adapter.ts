@@ -44,8 +44,14 @@ export function loopEventFrom(
     const issue = payload["issue"] as { number: number; pull_request?: unknown };
     // A comment on a PR is not a reply on an issue.
     if (issue.pull_request !== undefined) return null;
-    const user = (payload["comment"] as { user: { login: string; type: string } }).user;
-    return { kind: "issue-comment-created", issue: issue.number, commenter: user.login, commenterIsBot: user.type === "Bot" };
+    const comment = payload["comment"] as { user: { login: string; type: string }; body?: string | null };
+    return {
+      kind: "issue-comment-created",
+      issue: issue.number,
+      commenter: comment.user.login,
+      commenterIsBot: comment.user.type === "Bot",
+      body: comment.body ?? "",
+    };
   }
   if (eventName === "issues" && payload["action"] === "closed") {
     return { kind: "issue-closed", issue: (payload["issue"] as { number: number }).number };

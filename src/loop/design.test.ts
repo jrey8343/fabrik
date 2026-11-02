@@ -52,7 +52,7 @@ describe("Starting a Design-session turn", () => {
 
 describe("Answering a Design-session round", () => {
   const commented = (commenter: string, commenterIsBot = false) =>
-    ({ kind: "issue-comment-created", issue: 7, commenter, commenterIsBot }) as const;
+    ({ kind: "issue-comment-created", issue: 7, commenter, commenterIsBot, body: "yes" }) as const;
   const inSession = snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"] }), { operator: "jrey" });
 
   it("starts the next turn when the Operator comments on a needs-design issue", () => {
