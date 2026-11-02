@@ -1,0 +1,29 @@
+# Fabrik's own upstream bumps. Each Fabrik release pins Sandcastle and the
+# Claude Code CLI at exact versions (src/release/pins.ts checks this), and
+# Dependabot moves those pins as reviewable PRs. Matt Pocock's skills are not a
+# package: .github/workflows/skills-bump.yml bumps their SHA instead.
+#
+# This is not the Product repo shim; the setup skill writes that one.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    # Keep an exact "0.12.0" exact ("0.13.0"), never a range.
+    versioning-strategy: increase
+    allow:
+      - dependency-name: "@ai-hero/sandcastle"
+      - dependency-name: "@anthropic-ai/claude-code"
+    # One PR per upstream, so each bump is reviewed on its own. The default
+    # cooldown stays as supply-chain hygiene.
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "actions"

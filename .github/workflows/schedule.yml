@@ -1,0 +1,73 @@
+# The Fabrik Loop's scheduled tick, called from a Product repo's
+# .github/workflows/fabrik.yml on its schedule.
+#
+# This file is wiring only. It runs the Loop's time-based rules (closing the
+# weekly-limit issue after its reset) through the Loop rules core, which
+# src/main.ts runs as a `scheduled-tick` event.
+#
+# Like the Loop's push job (ADR-0002), the tick job runs on a fresh VM, loads
+# the Fabrik App key through the push service account, mints an App token, and
+# never checks out or runs Product code. It checks out only Fabrik itself, at
+# the exact commit the caller pinned.
+name: Fabrik scheduled tick
+
+on:
+  workflow_call:
+    secrets:
+      OP_PUSH_TOKEN:
+        description: The Product repo's read-only 1Password push service account, which reads the Fabrik App vault.
+        required: true
+
+permissions: {}
+
+jobs:
+  kit:
+    name: Kit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Only to read this workflow's own commit from the job's OIDC token.
+      id-token: write
+    outputs:
+      sha: ${{ steps.kit.outputs.sha }}
+    steps:
+      # No expression context names the commit of a called workflow, so read
+      # it from the OIDC token's job_workflow_sha claim.
+      - name: Find the Kit's pinned commit
+        id: kit
+        run: |
+          set -euo pipefail
+          jwt="$(curl -sSf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r .value)"
+          claims="$(node -e 'process.stdout.write(Buffer.from(process.argv[1].split(".")[1], "base64url").toString())' "$jwt")"
+          ref="$(jq -r .job_workflow_ref <<<"$claims")"
+          sha="$(jq -r .job_workflow_sha <<<"$claims")"
+          case "$ref" in
+            jrey8343/fabrik/.github/workflows/schedule.yml@*) ;;
+            *) echo "::error::Unexpected Kit workflow ref: $ref"; exit 1 ;;
+          esac
+          echo "Kit: $ref ($sha)"
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+
+  tick:
+    name: Tick
+    needs: kit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # One tick at a time per repo; a tick that's queued behind another waits.
+    concurrency:
+      group: fabrik-tick
+      cancel-in-progress: false
+    permissions: {}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Run the Loop's scheduled rules
+        uses: ./kit/.github/actions/run-loop
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}

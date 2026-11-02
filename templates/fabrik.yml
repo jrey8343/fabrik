@@ -1,0 +1,57 @@
+# The Product repo's caller workflow, saved as .github/workflows/fabrik.yml.
+#
+# Every `uses:` line pins the same exact Fabrik release; this file is the only
+# place the Kit's version appears (ADR-0003). Disable this workflow to pause
+# the factory in this repo.
+name: Fabrik
+
+on:
+  issues:
+    types: [opened, labeled, closed]
+  issue_comment:
+    types: [created]
+  # _target, so these runs use main's workflow and Kit config, never the PR's.
+  # Only the read-only Reviewer checks out a PR's head, to read it; nothing runs its code.
+  # opened, synchronize and reopened start a Review once the required checks
+  # finish, and labeled lets agent:review resume one after a failure.
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, ready_for_review, closed]
+  # The Operator's Request changes at the Merge gate. GitHub has no _target
+  # form of it, so it runs the PR's copy of this file and Kit config, which an
+  # agent PR can't change: the Kit refuses agent branches that touch them.
+  pull_request_review:
+    types: [submitted]
+  # The Loop's time-based rules, such as closing the weekly-limit issue after its reset.
+  schedule:
+    - cron: "17 * * * *"
+
+permissions: {}
+
+jobs:
+  loop:
+    if: github.event_name != 'schedule'
+    uses: jrey8343/fabrik/.github/workflows/loop.yml@v0.1.0-pre.1
+    # The most any Kit job may hold; each job narrows it. None of these writes:
+    # every write goes through the Fabrik App token in a push job.
+    permissions:
+      id-token: write
+      contents: read
+      issues: read
+      pull-requests: read
+      # For a Review to read the agent PR's required checks.
+      checks: read
+      statuses: read
+      actions: read
+    secrets:
+      OP_AGENT_TOKEN: ${{ secrets.FABRIK_OP_AGENT_TOKEN }}
+      OP_IMPLEMENT_TOKEN: ${{ secrets.FABRIK_OP_IMPLEMENT_TOKEN }}
+      OP_PUSH_TOKEN: ${{ secrets.FABRIK_OP_PUSH_TOKEN }}
+
+  tick:
+    if: github.event_name == 'schedule'
+    uses: jrey8343/fabrik/.github/workflows/schedule.yml@v0.1.0-pre.1
+    # Only to read the Kit's pinned commit; every write goes through the Fabrik App token.
+    permissions:
+      id-token: write
+    secrets:
+      OP_PUSH_TOKEN: ${{ secrets.FABRIK_OP_PUSH_TOKEN }}

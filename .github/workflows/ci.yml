@@ -1,0 +1,49 @@
+# Fabrik's own checks, on every PR (Dependabot's bumps among them) and on main.
+# The skills bump starts it by workflow_dispatch, because a PR that
+# GITHUB_TOKEN opens or pushes to starts no pull_request run.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out Fabrik
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # The Claude Code CLI's install script has to have run, or agent jobs
+      # have no claude to start.
+      - name: Check the pinned Claude Code CLI runs
+        run: npx --no-install claude --version
+
+      # Proves the pinned skills SHA still fetches and installs.
+      - name: Install the pinned skills into a scratch checkout
+        run: |
+          mkdir -p "$RUNNER_TEMP/product"
+          node src/skills/fetch.ts "$RUNNER_TEMP/product"

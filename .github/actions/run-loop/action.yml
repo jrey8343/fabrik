@@ -1,0 +1,62 @@
+# Runs the Loop as the Fabrik App: loads the App key through the push service
+# account, mints an App token, and runs src/main.ts, which gathers the snapshot,
+# asks the Loop rules core for a plan and applies it. Every job that changes
+# GitHub uses this: the push job, the claim job, the Dispatch job and the
+# scheduled tick. None of them checks out or runs Product code.
+#
+# Use it after checking out the Kit at the pinned commit into `kit/`:
+#   - uses: ./kit/.github/actions/run-loop
+# The job's own env carries whatever src/main.ts reads for it (FABRIK_NEEDS,
+# FABRIK_DISPATCH_CHECK).
+name: Run the Loop
+description: Mints a Fabrik App token and runs the Loop rules core on this run's event.
+
+inputs:
+  op-push-token:
+    description: The push service account's token (secrets.OP_PUSH_TOKEN), which reads the Fabrik App vault.
+    required: true
+  actions-token:
+    description: For the Dispatch job only, a token that can read workflow runs (its GITHUB_TOKEN); the Fabrik App has no Actions permission.
+    required: false
+    default: ""
+
+outputs:
+  dispatch:
+    description: '"true" when the plan asked for a Dispatch check.'
+    value: ${{ steps.loop.outputs.dispatch }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24
+
+    - name: Load the Fabrik App key
+      id: op
+      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+      with:
+        export-env: false
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}
+        FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+        FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+    - name: Mint a Fabrik App token
+      id: app
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+
+    # The App token, not GITHUB_TOKEN, so the labels it adds, the branch it
+    # pushes and the PR it opens start later workflows, CI included.
+    - name: Run the Loop
+      id: loop
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
+        FABRIK_ACTIONS_TOKEN: ${{ inputs.actions-token }}
+      run: node src/main.ts

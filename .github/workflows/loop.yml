@@ -1,0 +1,616 @@
+# The Fabrik Loop, called from a Product repo's .github/workflows/fabrik.yml.
+#
+# This file is wiring only. Every decision comes from the Kit's code: the Loop
+# rules core (src/loop/rules.ts), which the push job runs through src/main.ts,
+# and the routing in src/kit/jobs.ts.
+#
+# Each AFK role is an agent job followed by the push job (ADR-0002):
+# - The agent job holds `contents: read` and no GitHub write credential, no
+#   `id-token: write`, and only the agent service account, which loads the
+#   Claude token, or for Implement only the implement service account, which
+#   also loads the repo's test secrets (ADR-0004). It passes its output out as
+#   an artifact, the Implementer's commits as a git bundle.
+# - The push job runs on a fresh VM, loads the Fabrik App key through the push
+#   service account, mints an App token, and never checks out or runs Product
+#   code. It checks out only Fabrik itself, at the exact commit the caller
+#   pinned. When the agent job failed or was cancelled (its timeout-minutes
+#   included), it posts the failure notice instead.
+#
+# The steps these jobs share are composite actions in .github/actions/, used
+# from the Kit's own checkout at kit/: prepare-agent readies an agent job, and
+# run-loop runs the Loop as the Fabrik App.
+name: Fabrik Loop
+
+on:
+  workflow_call:
+    secrets:
+      OP_AGENT_TOKEN:
+        description: The Product repo's read-only 1Password agent service account, which reads the Fabrik vault (the Claude token).
+        required: true
+      OP_IMPLEMENT_TOKEN:
+        description: The Product repo's read-only 1Password implement service account, which reads the Fabrik vault (the Claude token) and the repo's Fabrik Sandbox vault (its test secrets).
+        required: true
+      OP_PUSH_TOKEN:
+        description: The Product repo's read-only 1Password push service account, which reads the Fabrik App vault.
+        required: true
+
+permissions: {}
+
+jobs:
+  kit:
+    name: Kit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Only to read this workflow's own commit from the job's OIDC token.
+      id-token: write
+      contents: read
+      # To read the issue, or the pull request, for the Loop rules core's snapshot.
+      issues: read
+      pull-requests: read
+    outputs:
+      sha: ${{ steps.kit.outputs.sha }}
+      route: ${{ steps.route.outputs.route }}
+      triage-timeout-minutes: ${{ steps.route.outputs.triage-timeout-minutes }}
+      design-timeout-minutes: ${{ steps.route.outputs.design-timeout-minutes }}
+      implement-timeout-minutes: ${{ steps.route.outputs.implement-timeout-minutes }}
+      review-timeout-minutes: ${{ steps.route.outputs.review-timeout-minutes }}
+      dispatch-timeout-minutes: ${{ steps.route.outputs.dispatch-timeout-minutes }}
+      # For a Review or a retry: the agent PR, and the Ticket its branch was cut for.
+      # For a first Implement run: its Ticket, with no PR.
+      pull-request: ${{ steps.route.outputs.pull-request }}
+      ticket: ${{ steps.route.outputs.ticket }}
+      # For a retry: the agent branch it builds on, which the Implement job checks out.
+      branch: ${{ steps.route.outputs.branch }}
+      # For a Request-changes run: the Operator's review, its input. It runs as a retry otherwise does.
+      review: ${{ steps.route.outputs.review }}
+      # The model and effort the plan chose for its agent run, a Step-up included.
+      model: ${{ steps.route.outputs.model }}
+      effort: ${{ steps.route.outputs.effort }}
+    steps:
+      # No expression context names the commit of a called workflow, so read
+      # it from the OIDC token's job_workflow_sha claim.
+      - name: Find the Kit's pinned commit
+        id: kit
+        run: |
+          set -euo pipefail
+          jwt="$(curl -sSf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r .value)"
+          claims="$(node -e 'process.stdout.write(Buffer.from(process.argv[1].split(".")[1], "base64url").toString())' "$jwt")"
+          ref="$(jq -r .job_workflow_ref <<<"$claims")"
+          sha="$(jq -r .job_workflow_sha <<<"$claims")"
+          case "$ref" in
+            jrey8343/fabrik/.github/workflows/loop.yml@*) ;;
+            *) echo "::error::Unexpected Kit workflow ref: $ref"; exit 1 ;;
+          esac
+          echo "Kit: $ref ($sha)"
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ steps.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # Read as data only; nothing from the Product repo runs in this job. The
+      # workflows folder holds the caller workflow, whose Fabrik pins are checked too.
+      - name: Check out the Product's Kit config and caller workflow
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          sparse-checkout: |
+            .fabrik
+            .github/workflows
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Check the Kit config and caller workflow, and route the event
+        id: route
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node kit/src/kit/jobs.ts product
+
+  triage:
+    name: Triage
+    needs: kit
+    if: needs.kit.outputs.route == 'triage'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.triage-timeout-minutes) }}
+    concurrency:
+      group: fabrik-triage-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      # Read by the push job: a failed 1Password step means the agent never started.
+      secrets-step: ${{ steps.op.outcome }}
+    steps:
+      - name: Check out the Product repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          persist-credentials: false
+
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Prepare the agent job
+        uses: ./kit/.github/actions/prepare-agent
+        with:
+          github-token: ${{ github.token }}
+          issue: ${{ github.event.issue.number }}
+
+      - name: Load the Claude token
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+
+      - name: Run Triage
+        working-directory: product
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
+          FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+        run: node ../kit/src/agent/run.ts triage
+
+      - name: Pass the Triage output to the push job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-result
+          path: ${{ runner.temp }}/fabrik-out/agent-result.json
+          if-no-files-found: error
+          retention-days: 7
+
+      # src/agent/run.ts writes this when it catches a failure. A run cancelled
+      # by its timeout leaves none, and the push job reads that as a timeout.
+      - name: Pass the failure report to the push job
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  design:
+    name: Design-session turn
+    needs: kit
+    if: needs.kit.outputs.route == 'design'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.design-timeout-minutes) }}
+    # One turn per issue at a time. queue: max keeps every queued Operator reply
+    # instead of letting a newer one cancel the one already waiting.
+    concurrency:
+      group: fabrik-design-${{ github.event.issue.number }}
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      # Read by the push job: a failed 1Password step means the agent never started.
+      secrets-step: ${{ steps.op.outcome }}
+    steps:
+      - name: Check out the Product repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          persist-credentials: false
+
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # Each turn rebuilds its context from the issue thread, and a Ticket's from its
+      # parent Spec too, so a Ticket sent back to design is split under it.
+      - name: Prepare the agent job
+        uses: ./kit/.github/actions/prepare-agent
+        with:
+          github-token: ${{ github.token }}
+          issue: ${{ github.event.issue.number }}
+
+      - name: Load the Claude token
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+
+      - name: Run the Design-session turn
+        working-directory: product
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
+          FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+        run: node ../kit/src/agent/run.ts design
+
+      - name: Pass the turn's output to the push job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-result
+          path: ${{ runner.temp }}/fabrik-out/agent-result.json
+          if-no-files-found: error
+          retention-days: 7
+
+      # src/agent/run.ts writes this when it catches a failure. A run cancelled
+      # by its timeout leaves none, and the push job reads that as a timeout.
+      - name: Pass the failure report to the push job
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Takes agent:implement off the Ticket as its Implement run starts, so the
+  # label never claims work that isn't running (the open draft PR does that).
+  # It applies the same plan the Kit job routed on; the run itself is the
+  # Implement job's. Like the push job, it never touches Product code.
+  implement-claim:
+    name: Claim the Ticket
+    needs: kit
+    if: needs.kit.outputs.route == 'implement'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Take agent:implement off the Ticket
+        uses: ./kit/.github/actions/run-loop
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+
+  # The Implementer (ADR-0002, ADR-0004). It holds only the implement service
+  # account: the Claude token and this repo's test secrets, which Kit config
+  # declares as op:// references, so none of them is named in this file. They
+  # are resolved in output mode and reach the Implement step's env only.
+  # Named "Implement" exactly: Dispatch counts jobs by this name (IMPLEMENT_JOB_NAME in src/github/snapshot.ts).
+  implement:
+    name: Implement
+    needs: kit
+    if: needs.kit.outputs.route == 'implement'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
+    # One Implement run per Ticket at a time, so two never race on one branch.
+    # A retry starts from a PR event, so the Ticket comes from the Kit job.
+    concurrency:
+      group: fabrik-implement-${{ needs.kit.outputs.ticket }}
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      issues: read
+      # A retry reads its PR's Verdict comments, and a Request-changes run the Operator's review.
+      pull-requests: read
+    outputs:
+      # Read by the push job: a failed 1Password step means the agent never started.
+      secrets-step: ${{ steps.op.outcome }}
+    steps:
+      # A fresh clone: no working directory or .env* files carried over. A first
+      # run starts from main; a retry from its PR's branch (the Kit job names it).
+      - name: Check out the Product repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          ref: ${{ needs.kit.outputs.branch || github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # The Ticket and its Spec; for a retry, its PR's comments (the Verdict to fix);
+      # for a Request-changes run, the review the Kit job's plan checked is the Operator's.
+      - name: Prepare the agent job
+        uses: ./kit/.github/actions/prepare-agent
+        with:
+          github-token: ${{ github.token }}
+          issue: ${{ needs.kit.outputs.ticket }}
+          pull-request: ${{ needs.kit.outputs.pull-request }}
+          pull-request-comments: "true"
+          review: ${{ needs.kit.outputs.review }}
+
+      # Kit config is read as data; the list of op:// references goes to 1Password as a file.
+      - name: List the test secrets to load
+        run: node kit/src/kit/secrets-main.ts product "$RUNNER_TEMP/fabrik-secrets.env"
+
+      - name: Load the Claude token and the test secrets
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_IMPLEMENT_TOKEN }}
+          OP_ENV_FILE: ${{ runner.temp }}/fabrik-secrets.env
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+
+      - name: Run the Implementer
+        working-directory: product
+        env:
+          # Every value the 1Password step resolved, in this step's env only.
+          FABRIK_SECRETS: ${{ toJSON(steps.op.outputs) }}
+          FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
+          FABRIK_PULL_REQUEST_FILE: ${{ needs.kit.outputs.pull-request != '' && format('{0}/pull-request.json', runner.temp) || '' }}
+          FABRIK_REVIEW_FILE: ${{ needs.kit.outputs.review != '' && format('{0}/review.json', runner.temp) || '' }}
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          FABRIK_MODEL: ${{ needs.kit.outputs.model }}
+          FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
+        run: node ../kit/src/agent/run.ts implement
+
+      # The result and the bundle of the Implementer's commits (none if it made none).
+      - name: Pass the Implementer's output and commits to the push job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-result
+          path: |
+            ${{ runner.temp }}/fabrik-out/agent-result.json
+            ${{ runner.temp }}/fabrik-out/agent-branch.bundle
+          if-no-files-found: error
+          retention-days: 7
+
+      # src/agent/run.ts writes this when it catches a failure. A run cancelled
+      # by its timeout leaves none, and the push job reads that as a timeout.
+      - name: Pass the failure report to the push job
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # A Review starts by waiting for the agent PR's required checks on its head.
+  # check_suite events don't fire for Actions CI, so it polls, bounded by the
+  # Review timeout. It holds only a read-only token and no secrets, and reads
+  # the Kit config as data. Red checks go straight to the push job as an
+  # Execution flaw; the Reviewer never runs.
+  review-checks:
+    name: Review checks
+    needs: kit
+    if: needs.kit.outputs.route == 'review'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}
+    concurrency:
+      group: fabrik-review-checks-${{ needs.kit.outputs.pull-request }}
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      statuses: read
+    outputs:
+      checks: ${{ steps.wait.outputs.checks }}
+      head-sha: ${{ steps.wait.outputs.head-sha }}
+      failed: ${{ steps.wait.outputs.failed }}
+    steps:
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # main's Kit config, read as data for its gating check list.
+      - name: Check out the Product's Kit config
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          sparse-checkout: .fabrik
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Wait for the required checks
+        id: wait
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FABRIK_PULL_REQUEST: ${{ needs.kit.outputs.pull-request }}
+        run: node kit/src/review/wait.ts product
+
+  # The Reviewer (ADR-0002). Read-only: a checkout of the PR's head at the
+  # commit its checks passed on, no GitHub write credential, and only the
+  # agent service account. It runs none of the PR's code, and passes its
+  # Verdict out as an artifact for the push job to post.
+  review:
+    name: Review
+    needs: [kit, review-checks]
+    if: needs.kit.outputs.route == 'review' && needs.review-checks.outputs.checks == 'green'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}
+    # One Review per PR at a time.
+    concurrency:
+      group: fabrik-review-${{ needs.kit.outputs.pull-request }}
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      # Read by the push job: a failed 1Password step means the agent never started.
+      secrets-step: ${{ steps.op.outcome }}
+    steps:
+      - name: Check out the PR's head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          ref: ${{ needs.review-checks.outputs.head-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # The PR, its Ticket and the Ticket's Spec; never the PR's comments, so earlier Verdicts don't steer it.
+      - name: Prepare the agent job
+        uses: ./kit/.github/actions/prepare-agent
+        with:
+          github-token: ${{ github.token }}
+          issue: ${{ needs.kit.outputs.ticket }}
+          pull-request: ${{ needs.kit.outputs.pull-request }}
+
+      - name: Load the Claude token
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+
+      - name: Run the Reviewer
+        working-directory: product
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
+          FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
+          FABRIK_PULL_REQUEST_FILE: ${{ runner.temp }}/pull-request.json
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          FABRIK_MODEL: ${{ needs.kit.outputs.model }}
+          FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
+        run: node ../kit/src/agent/run.ts review
+
+      - name: Pass the Verdict to the push job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-result
+          path: ${{ runner.temp }}/fabrik-out/agent-result.json
+          if-no-files-found: error
+          retention-days: 7
+
+      # src/agent/run.ts writes this when it catches a failure, a reply with no
+      # valid Verdict line included. A run cancelled by its timeout leaves none.
+      - name: Pass the failure report to the push job
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # The push job, after whichever agent job the Kit job routed to, or straight
+  # after the Kit job when it routed here. What it applies, src/main.ts decides
+  # from how those jobs ended (src/kit/pushJob.ts): the agent job's result (for
+  # an Implement run, after the trust-root guard on its branch), a Review's red
+  # checks or Verdict, or, when the agent job failed or was cancelled (its
+  # timeout-minutes included), the failure notice. always(), so it still runs
+  # after a cancelled agent job.
+  push:
+    name: Push
+    needs: [kit, triage, design, implement, review-checks, review]
+    if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    outputs:
+      # "true" when the plan asked for a Dispatch check.
+      dispatch: ${{ steps.loop.outputs.dispatch }}
+    env:
+      # How each job ended and what it passed out, none of which the agent can rewrite.
+      FABRIK_NEEDS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # Whatever the agent job left: its result (and bundle), or its failure report.
+      # Red checks and a timeout leave nothing, and src/main.ts expects that.
+      - name: Take the agent job's artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fabrik-agent-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/agent
+
+      - name: Run the Loop
+        id: loop
+        uses: ./kit/.github/actions/run-loop
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+
+  # Dispatch (ADR-0001): runs when the push job's plan asked for a check, on a
+  # fresh snapshot taken after that plan's labels landed. Like the push job, it
+  # never checks out or runs Product code.
+  dispatch:
+    name: Dispatch
+    needs: [kit, push]
+    if: ${{ !cancelled() && needs.push.result == 'success' && needs.push.outputs.dispatch == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.dispatch-timeout-minutes) }}
+    # One check at a time, so two can't both fill the same free slot. A newer
+    # pending check replacing an older one is fine: each reads fresh state.
+    concurrency:
+      group: fabrik-dispatch
+      cancel-in-progress: false
+    permissions:
+      # Only to count Implement runs in flight; the Fabrik App has no Actions permission.
+      actions: read
+    env:
+      FABRIK_DISPATCH_CHECK: "true"
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # The App token adds agent:implement, so the label starts the Implement run.
+      - name: Run a Dispatch check
+        uses: ./kit/.github/actions/run-loop
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          actions-token: ${{ github.token }}
