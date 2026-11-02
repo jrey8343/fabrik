@@ -46,7 +46,7 @@ npm test
 
 ## Design session (async)
 
-Adding `needs-design` to an open issue starts a Design session. Each turn is a fresh run of the Design-session agent job (Opus 5.5, 30 minutes by default, `roles.design` in the Kit config, plus `.fabrik/design.md` when present), one at a time per issue, rebuilding its context from the issue thread and the repo. A turn ends in one of two ways:
+Adding `needs-design` to an open issue starts a Design session. Each turn is a fresh run of the Design-session agent job (Opus 5.5, 30 minutes by default, `roles.design` in the Kit config, plus `.fabrik/design.md` when present), one at a time per issue, rebuilding its context from the issue thread, the issue's parent Spec when it has one, and the repo. A turn ends in one of these ways (see [Back to design](#back-to-design) for splitting a Ticket):
 
 - **The next round**: the Fabrik App posts numbered questions with recommended answers, @-mentioning the Operator. The Operator's reply starts the next turn. Comments from anyone else, and from any bot, do nothing.
 - **An agent brief**: the issue body is rewritten in place as the brief and its acceptance criteria, a closing comment (no mention) records the decisions, and `needs-design` is swapped for `ready-for-agent`. Finishing the session counts as the Operator approving it.
@@ -91,7 +91,15 @@ An Execution flaw gets fixed without the Operator, silently: no mention, assignm
 - **The count**: retries are counted from the PR's earlier Verdict comments alone, up to 2. Verdicts marked as from a Request-changes run don't count, and an Infrastructure failure posts no Verdict, so it never uses one up: re-adding `agent:retry` runs the same retry again.
 - **The Step-up**: the first retry runs on the Implementer's model (`roles.implement`), the second on the Step-up model (Opus 5.5 by default, `roles.step_up`), for that PR only. The Kit never drops to a cheaper model or skips a Step-up for any reason.
 - **The push**: the push job runs the trust-root guard on the retry's own commits and fast-forwards the PR's branch (a branch that moved meanwhile refuses the push), which starts Review again. A retry that commits nothing is posted as an Execution-flaw Verdict with source `empty-diff`, and counts like any other.
-- **Used up**: a third Execution flaw is posted, and starts no retry.
+- **Used up**: a third Execution flaw is posted, starts no retry, and counts as a Design flaw.
+
+## Back to design
+
+A Ticket that can't be built as designed goes back to the Operator. A Design-flaw Verdict, or a third Execution flaw, closes the PR unmerged (its branch `fabrik/ticket-<n>` stays), and the Fabrik App posts a note on the Ticket linking the closed PR and its Verdict. Its first line is a marker, `<!-- fabrik:back-to-design <pr> <verdict url> -->`, read only from bot comments. Then `ready-for-agent` comes off the Ticket and `needs-design` goes on, which starts a Design session.
+
+- **Round 1** of that session says the Ticket came back from the closed PR and links its Verdict. Its @-mention of the Operator is the event's one notification: the failed review, the closed PR and the note mention nobody.
+- **The outcome** rewrites the Ticket in place as an agent brief, or splits it into sibling Tickets under the same Spec (a `split` outcome: each a sub-issue of the Spec, with native blocked-by edges, and the Ticket closed as superseded). A Ticket under a Spec never gets a Spec of its own, and only a Ticket under a Spec can split.
+- **The model**: a Step-up applies only to the PR it ran on, so a rewritten or split Ticket starts again on the Implementer's default model.
 
 ## Kit config
 

@@ -1,7 +1,8 @@
 // The Design-session turn output contract: what a Design-session agent job
 // emits and its push job applies. Both sides check it, so a malformed output
 // never half-applies. A turn ends in either the next round or a final outcome:
-// an agent brief (small) or a Spec and its Tickets (large).
+// an agent brief (small), a Spec and its Tickets (large), or, for a Ticket
+// already under a Spec, sibling Tickets under that Spec.
 import type { AgentBrief } from "./triageOutput.ts";
 
 export interface RoundQuestion {
@@ -32,6 +33,14 @@ export type DesignTurnOutput =
       readonly comment: string;
       readonly spec: { readonly title: string; readonly body: string };
       /** Each Ticket, with the keys of the Tickets that block it. Any order. */
+      readonly tickets: readonly SpecTicket[];
+    }
+  | {
+      /** A Ticket under a Spec, split into sibling Tickets under that same Spec, which supersede it. */
+      readonly kind: "split";
+      /** What the session decided, for the closing comment. */
+      readonly comment: string;
+      /** Each sibling Ticket, with the keys of the Tickets that block it. Any order. */
       readonly tickets: readonly SpecTicket[];
     };
 
@@ -94,9 +103,9 @@ function readSpec(value: unknown, errors: string[]): { title: string; body: stri
   return { title: value.title, body: value.body };
 }
 
-function readTickets(value: unknown, errors: string[]): SpecTicket[] {
+function readTickets(value: unknown, errors: string[], outcome: "spec" | "split"): SpecTicket[] {
   if (!Array.isArray(value) || value.length === 0) {
-    errors.push("a spec needs at least one ticket");
+    errors.push(`a ${outcome} needs at least one ticket`);
     return [];
   }
   const tickets: SpecTicket[] = [];
@@ -173,13 +182,20 @@ export function readDesignTurnOutput(value: unknown): DesignTurnOutputResult {
     case "spec": {
       if (!isText(value.comment)) errors.push("a spec needs non-empty comment text");
       const spec = readSpec(value.spec, errors);
-      const tickets = readTickets(value.tickets, errors);
+      const tickets = readTickets(value.tickets, errors, "spec");
       if (errors.length === 0) checkBlockers(tickets, errors);
       if (errors.length > 0 || spec === null) return { ok: false, errors };
       return { ok: true, output: { kind: "spec", comment: value.comment as string, spec, tickets } };
     }
+    case "split": {
+      if (!isText(value.comment)) errors.push("a split needs non-empty comment text");
+      const tickets = readTickets(value.tickets, errors, "split");
+      if (errors.length === 0) checkBlockers(tickets, errors);
+      if (errors.length > 0) return { ok: false, errors };
+      return { ok: true, output: { kind: "split", comment: value.comment as string, tickets } };
+    }
     default:
-      return { ok: false, errors: [`kind must be round, brief or spec, not ${JSON.stringify(value.kind)}`] };
+      return { ok: false, errors: [`kind must be round, brief, spec or split, not ${JSON.stringify(value.kind)}`] };
   }
 }
 

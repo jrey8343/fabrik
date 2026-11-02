@@ -65,7 +65,9 @@ function describeAction(action: Action): string {
     case "create-issue":
       return [
         `- create "${action.title}" (${action.labels.join(", ")})`,
-        action.parent === null ? "" : `, a sub-issue of ${action.parent.created}`,
+        action.parent === null
+          ? ""
+          : `, a sub-issue of ${typeof action.parent === "number" ? `#${action.parent}` : action.parent.created}`,
         action.blockedBy.length === 0 ? "" : `, blocked by ${action.blockedBy.map((b) => b.created).join(", ")}`,
       ].join("");
     case "close-as-superseded":

@@ -2,7 +2,7 @@
 // Each turn rebuilds its context from the issue thread, so nothing is held here
 // between turns beyond what the thread itself shows.
 import { sentBackIn, type SentBack } from "./backToDesign.ts";
-import { dependencyOrder, parseDesignTurnOutput, type DesignTurnOutput } from "./designOutput.ts";
+import { dependencyOrder, parseDesignTurnOutput, type DesignTurnOutput, type SpecTicket } from "./designOutput.ts";
 import { CATEGORY_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { startAgentRun } from "./runs.ts";
@@ -93,12 +93,89 @@ export function applyTurn(issueNumber: number, text: string, snapshot: IssueCont
       actions: [{ kind: "comment", issue: issueNumber, body: roundComment(round, output, snapshot.operator, sentBack) }],
     };
   }
+  // The Spec stays the single parent of its work: a Ticket under one splits into
+  // siblings, and only an issue with no Spec above it gets a Spec of its own.
+  const { parent } = snapshot.issue;
+  if (output.kind === "spec" && parent !== null) {
+    return wrongOutcome(issueNumber, `#${issueNumber} is a Ticket under the Spec #${parent}, so it splits into sibling Tickets, never a Spec of its own`);
+  }
+  if (output.kind === "split" && parent === null) {
+    return wrongOutcome(issueNumber, `#${issueNumber} has no Spec above it, so it can't split into sibling Tickets; finish with a Spec instead`);
+  }
   const landed =
     output.kind === "brief"
       ? rewriteAsBrief(issueNumber, output)
-      : supersedeBySpec(issueNumber, output, snapshot.issue);
-  // Either outcome leaves new ready work, so see whether it can start.
+      : output.kind === "spec"
+        ? supersedeBySpec(issueNumber, output, snapshot.issue)
+        : splitIntoSiblings(issueNumber, output, snapshot.issue, parent ?? 0);
+  // Every outcome leaves new ready work, so see whether it can start.
   return { kind: "act", actions: [...landed, { kind: "check-dispatch" }] };
+}
+
+/** An outcome the contract allows but this issue can't take: nothing changes, and the run fails. */
+function wrongOutcome(issueNumber: number, why: string): Plan {
+  return {
+    kind: "fail",
+    failure: "infrastructure",
+    reason: `The Design-session turn on #${issueNumber} emitted output that breaks its contract: ${why}`,
+  };
+}
+
+/**
+ * A Ticket's split: its sibling Tickets as sub-issues of its own Spec,
+ * blockers first, then the Ticket closes, superseded by them. A new Ticket
+ * has no PR, so it starts on the Implementer's default model.
+ */
+function splitIntoSiblings(
+  issueNumber: number,
+  output: Extract<DesignTurnOutput, { kind: "split" }>,
+  issue: IssueSnapshot,
+  spec: number,
+): Action[] {
+  const { actions, created } = ticketActions(output.tickets, readyLabels(issue), spec);
+  return [
+    ...actions,
+    { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
+    {
+      kind: "close-as-superseded",
+      issue: issueNumber,
+      comment: [
+        `${SESSION_FINISHED} This Ticket is split into `,
+        ...created.flatMap((ticket, i) => (i === 0 ? [ticket] : [", ", ticket])),
+        `, sibling Tickets under the Spec #${spec}.\n\n${withoutMentions(output.comment)}`,
+      ],
+    },
+  ];
+}
+
+/** The labels a new Ticket gets: the issue's category, and ready-for-agent, so Intake never sends it to Triage. */
+function readyLabels(issue: IssueSnapshot): string[] {
+  return [...issue.labels.filter((label) => CATEGORY_LABELS.includes(label)), READY_FOR_AGENT];
+}
+
+/** Creates these Tickets under `parent`, blockers first so each blocked-by edge points at an issue that exists. */
+function ticketActions(
+  outcome: readonly SpecTicket[],
+  labels: readonly string[],
+  parent: CreatedIssue | number,
+): { actions: Action[]; created: CreatedIssue[] } {
+  const ticketIssue = (key: string): CreatedIssue => ({ created: `ticket:${key}` });
+  // The contract has already refused blockers that loop, so there is always an order.
+  const tickets = dependencyOrder(outcome) ?? [];
+  return {
+    actions: tickets.map(
+      (ticket): Action => ({
+        kind: "create-issue",
+        key: ticketIssue(ticket.key).created,
+        title: withoutMentions(ticket.title),
+        body: withoutMentions(ticket.body),
+        labels,
+        parent,
+        blockedBy: ticket.blockedBy.map(ticketIssue),
+      }),
+    ),
+    created: tickets.map((ticket) => ticketIssue(ticket.key)),
+  };
 }
 
 /** The small outcome: the issue becomes its own agent brief, ready for an Implementer. */
@@ -132,10 +209,8 @@ function supersedeBySpec(
   output: Extract<DesignTurnOutput, { kind: "spec" }>,
   issue: IssueSnapshot,
 ): Action[] {
-  const labels = [...issue.labels.filter((label) => CATEGORY_LABELS.includes(label)), READY_FOR_AGENT];
-  const ticketIssue = (key: string): CreatedIssue => ({ created: `ticket:${key}` });
-  // The contract has already refused blockers that loop, so there is always an order.
-  const tickets = dependencyOrder(output.tickets) ?? [];
+  const labels = readyLabels(issue);
+  const tickets = ticketActions(output.tickets, labels, SPEC);
   return [
     {
       kind: "create-issue",
@@ -150,17 +225,7 @@ function supersedeBySpec(
       parent: null,
       blockedBy: [],
     },
-    ...tickets.map(
-      (ticket): Action => ({
-        kind: "create-issue",
-        key: ticketIssue(ticket.key).created,
-        title: withoutMentions(ticket.title),
-        body: withoutMentions(ticket.body),
-        labels,
-        parent: SPEC,
-        blockedBy: ticket.blockedBy.map(ticketIssue),
-      }),
-    ),
+    ...tickets.actions,
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
     {
       kind: "close-as-superseded",
@@ -168,7 +233,7 @@ function supersedeBySpec(
       comment: [
         `${SESSION_FINISHED} This issue is superseded by the Spec `,
         SPEC,
-        ` and its ${tickets.length} ${tickets.length === 1 ? "Ticket" : "Tickets"}.\n\n${withoutMentions(output.comment)}`,
+        ` and its ${tickets.created.length} ${tickets.created.length === 1 ? "Ticket" : "Tickets"}.\n\n${withoutMentions(output.comment)}`,
       ],
     },
   ];

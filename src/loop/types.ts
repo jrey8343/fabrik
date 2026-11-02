@@ -265,7 +265,8 @@ export type Action =
       readonly title: string;
       readonly body: string;
       readonly labels: readonly string[];
-      readonly parent: CreatedIssue | null;
+      /** The issue it becomes a sub-issue of: one created earlier in the plan, or an existing issue by its number. */
+      readonly parent: CreatedIssue | number | null;
       readonly blockedBy: readonly CreatedIssue[];
     }
   | {

@@ -296,12 +296,22 @@ jobs:
       - name: Fetch the pinned skills into .claude/skills
         run: node kit/src/skills/fetch.ts product
 
-      # Each turn rebuilds its context from the issue thread; the agent never gets a GitHub token.
-      - name: Read the issue thread
+      # Each turn rebuilds its context from the issue thread, and a Ticket's from its
+      # parent Spec too, so a Ticket sent back to design is split under it; the agent
+      # never gets a GitHub token.
+      - name: Read the issue thread and its parent Spec
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ github.event.issue.number }}
-        run: gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json number,title,body,author,labels,comments >"$RUNNER_TEMP/issue.json"
+        run: |
+          set -euo pipefail
+          gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json number,title,body,author,labels,comments >"$RUNNER_TEMP/issue.json"
+          gh api graphql \
+            -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { issue(number: $number) { parent { number title body } } } }' \
+            -f owner="${GITHUB_REPOSITORY%%/*}" -f name="${GITHUB_REPOSITORY#*/}" -F number="$ISSUE" \
+            --jq '.data.repository.issue.parent' >"$RUNNER_TEMP/spec.json"
+          # No parent prints nothing; the Design session reads that as no Spec.
+          [ -s "$RUNNER_TEMP/spec.json" ] || echo null >"$RUNNER_TEMP/spec.json"
 
       - name: Load the Claude token
         id: op
@@ -317,6 +327,7 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
           FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
         run: node ../kit/src/agent/run.ts design
 

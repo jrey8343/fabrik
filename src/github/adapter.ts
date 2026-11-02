@@ -627,7 +627,7 @@ function createdIn(created: ReadonlyMap<string, CreatedRecord>, { created: key }
   return record;
 }
 
-/** Creates the issue, then links it under its parent and to each blocker, all made earlier in the plan. */
+/** Creates the issue, then links it under its parent (made earlier in the plan, or existing) and to each blocker. */
 async function createIssue(
   github: GitHub,
   repo: Repo,
@@ -642,8 +642,8 @@ async function createIssue(
   })) as CreatedRecord;
   created.set(action.key, { number: issue.number, id: issue.id });
   if (action.parent !== null) {
-    const parent = createdIn(created, action.parent);
-    await github.rest("POST", `${issues}/${parent.number}/sub_issues`, { sub_issue_id: issue.id });
+    const parent = typeof action.parent === "number" ? action.parent : createdIn(created, action.parent).number;
+    await github.rest("POST", `${issues}/${parent}/sub_issues`, { sub_issue_id: issue.id });
   }
   for (const blocker of action.blockedBy) {
     await github.rest("POST", `${issues}/${issue.number}/dependencies/blocked_by`, {
