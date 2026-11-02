@@ -183,6 +183,18 @@ function requireOpReference(value: string): string | null {
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/**
+ * Names the Kit, Claude Code, 1Password or Actions own. A Sandbox value or
+ * test secret by one of these names could replace the Claude token, open a
+ * metered-billing route, or confuse the runner, so none may be set.
+ */
+const RESERVED_ENV_PREFIXES = ["ANTHROPIC_", "CLAUDE_", "OP_", "GITHUB_", "ACTIONS_", "RUNNER_", "FABRIK_"];
+
+function isReservedEnvName(name: string): boolean {
+  const upper = name.toUpperCase();
+  return upper === "PATH" || RESERVED_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
+}
+
 /** Every Reader over one file, so fields nobody read can be reported once reading is done. */
 interface ReadContext {
   readonly errors: string[];
@@ -268,6 +280,11 @@ class Reader {
       if (!ENV_NAME.test(name)) {
         map.#take(name);
         this.#fail(`${map.#field(name)} is not a valid environment variable name`);
+        continue;
+      }
+      if (isReservedEnvName(name)) {
+        map.#take(name);
+        this.#fail(`${map.#field(name)} is reserved for the Kit, so the Sandbox can't set it`);
         continue;
       }
       const value = map.string(name, check);

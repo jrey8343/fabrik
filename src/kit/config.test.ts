@@ -157,6 +157,19 @@ describe("Kit config", () => {
       `sandbox.secrets.STRIPE_TEST_KEY is "sk_test_123": a test secret must be an op:// reference, never the secret itself`,
     ],
     [{ secrets: { "not a name": "op://v/i/f" } }, "sandbox.secrets.not a name is not a valid environment variable name"],
+    [
+      { secrets: { CLAUDE_CODE_OAUTH_TOKEN: "op://v/i/f" } },
+      "sandbox.secrets.CLAUDE_CODE_OAUTH_TOKEN is reserved for the Kit, so the Sandbox can't set it",
+    ],
+    [
+      { env: { ANTHROPIC_BASE_URL: "https://proxy.example" } },
+      "sandbox.env.ANTHROPIC_BASE_URL is reserved for the Kit, so the Sandbox can't set it",
+    ],
+    [
+      { secrets: { OP_SERVICE_ACCOUNT_TOKEN: "op://v/i/f" } },
+      "sandbox.secrets.OP_SERVICE_ACCOUNT_TOKEN is reserved for the Kit, so the Sandbox can't set it",
+    ],
+    [{ env: { GITHUB_TOKEN: "x" } }, "sandbox.env.GITHUB_TOKEN is reserved for the Kit, so the Sandbox can't set it"],
     [{ env: { PORT: 3000 } }, "sandbox.env.PORT must be a string"],
     [{ checks: "build" }, "sandbox.checks must be a list of strings"],
     [{ checks: ["build", 7] }, "sandbox.checks must be a list of strings"],
