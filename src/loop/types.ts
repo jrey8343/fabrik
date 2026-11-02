@@ -23,6 +23,8 @@ export interface FailureReport {
   readonly failure: ReportedFailure;
   /** One line on what went wrong, for the failure comment. */
   readonly detail: string;
+  /** For the weekly limit, when it resets (an ISO 8601 time), if the stream said. */
+  readonly resetsAt?: string;
 }
 
 /** Something that happened in a Product repo that the Loop may act on. */
@@ -57,7 +59,16 @@ export type LoopEvent =
       readonly secretsStep: "success" | "failure" | "cancelled" | "skipped" | null;
       /** What the agent job reported about its own failure, or null if it left nothing. */
       readonly report: FailureReport | null;
+    }
+  | {
+      /** The scheduled Kit workflow's tick, for the Loop's time-based rules. */
+      readonly kind: "scheduled-tick";
+      /** When the tick ran, as an ISO 8601 time. */
+      readonly now: string;
     };
+
+/** The Loop events about one issue, for which the snapshot holds that issue. */
+export type IssueEvent = Exclude<LoopEvent, { kind: "scheduled-tick" }>;
 
 /** An issue as the core sees it, gathered fresh by the GitHub adapter. */
 export interface IssueSnapshot {
@@ -70,11 +81,28 @@ export interface IssueSnapshot {
   readonly openPullRequests: readonly number[];
 }
 
+/** An open issue carrying one of the Kit's own labels, as the adapter read it (src/loop/kitIssues.ts). */
+export interface KitIssueSnapshot {
+  readonly number: number;
+  readonly labels: readonly string[];
+  readonly body: string;
+  /** Its comments' text, oldest first. */
+  readonly comments: readonly string[];
+}
+
 /** The slice of GitHub state a Loop event needs to be decided. */
 export interface Snapshot {
-  readonly issue: IssueSnapshot;
+  /** The issue the event is about, or null for an event about no one issue (a scheduled tick). */
+  readonly issue: IssueSnapshot | null;
   /** The Operator's GitHub login, whom ready-for-human work is assigned to and failures @-mention. */
   readonly operator: string;
+  /** The open issues the Kit owns in this repo (token rotation, weekly limit), oldest first. */
+  readonly kitIssues: readonly KitIssueSnapshot[];
+}
+
+/** The snapshot for an event about one issue. */
+export interface IssueEventSnapshot extends Snapshot {
+  readonly issue: IssueSnapshot;
 }
 
 /** The resolved Kit config, every default filled in (src/kit/config.ts). */
@@ -86,7 +114,14 @@ export type Action =
   | { readonly kind: "remove-label"; readonly issue: number; readonly label: string }
   | { readonly kind: "comment"; readonly issue: number; readonly body: string }
   | { readonly kind: "assign"; readonly issue: number; readonly assignee: string }
-  | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" };
+  | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" | "completed" }
+  | {
+      readonly kind: "open-issue";
+      readonly title: string;
+      readonly body: string;
+      readonly labels: readonly string[];
+      readonly assignees: readonly string[];
+    };
 
 /**
  * What the core decided: actions to apply, nothing (with the reason why), or

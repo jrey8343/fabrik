@@ -1,10 +1,20 @@
 import { failureNotice } from "./failures.ts";
+import { KIT_ISSUE_LABELS, scheduledTick } from "./kitIssues.ts";
 import { CATEGORY_LABELS, isWayfinderLabel, STATE_LABELS } from "./labels.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
-import type { Action, KitConfig, LoopEvent, Plan, Snapshot } from "./types.ts";
+import type { Action, IssueEvent, IssueEventSnapshot, KitConfig, LoopEvent, Plan, Snapshot } from "./types.ts";
 
 /** The Loop rules core: decides what the Kit does about one Loop event. Pure, no I/O. */
 export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
+  if (event.kind === "scheduled-tick") return scheduledTick(event.now, snapshot);
+  const { issue } = snapshot;
+  if (issue === null) {
+    return { kind: "fail", failure: "infrastructure", reason: `The snapshot for #${event.issue} holds no issue` };
+  }
+  return planForIssue(event, { ...snapshot, issue }, config);
+}
+
+function planForIssue(event: IssueEvent, snapshot: IssueEventSnapshot, config: KitConfig): Plan {
   switch (event.kind) {
     case "issue-opened":
       return intake(event.issue, snapshot);
@@ -21,10 +31,14 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
 }
 
 /** A new issue gets needs-triage unless something has already given it a place. */
-function intake(issueNumber: number, { issue }: Snapshot): Plan {
+function intake(issueNumber: number, { issue }: IssueEventSnapshot): Plan {
   const state = issue.labels.find((label) => STATE_LABELS.includes(label));
   if (state !== undefined) {
     return { kind: "nothing", reason: `#${issueNumber} already has the state label ${state}` };
+  }
+  const kitOwned = issue.labels.find((label) => KIT_ISSUE_LABELS.includes(label));
+  if (kitOwned !== undefined) {
+    return { kind: "nothing", reason: `#${issueNumber} has the label ${kitOwned}, so the Kit owns it` };
   }
   const wayfinder = issue.labels.find(isWayfinderLabel);
   if (wayfinder !== undefined) {
@@ -42,7 +56,7 @@ function intake(issueNumber: number, { issue }: Snapshot): Plan {
 /** A person's reply on a needs-info issue sends it back to Triage; a bot's never does. */
 function replyOnNeedsInfo(
   { issue: issueNumber, commenter, commenterIsBot }: Extract<LoopEvent, { kind: "issue-comment-created" }>,
-  { issue }: Snapshot,
+  { issue }: IssueEventSnapshot,
 ): Plan {
   if (!issue.labels.includes("needs-info")) {
     return { kind: "nothing", reason: `#${issueNumber} isn't in needs-info` };
@@ -60,7 +74,7 @@ function replyOnNeedsInfo(
 }
 
 /** Triage's sorting lands as its comment, then needs-triage swapped for a category and a state. */
-function applyTriage(issueNumber: number, text: string, { issue, operator }: Snapshot): Plan {
+function applyTriage(issueNumber: number, text: string, { issue, operator }: IssueEventSnapshot): Plan {
   const parsed = parseTriageOutput(text);
   if (!parsed.ok) {
     return {

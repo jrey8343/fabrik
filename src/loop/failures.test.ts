@@ -69,16 +69,7 @@ describe("Failure notices", () => {
       failed({ report: { failure: "provider-error", detail: "" } }),
       "the model provider returned an error",
     ],
-    [
-      "dead token",
-      failed({ report: { failure: "dead-token", detail: "" } }),
-      "the Claude token was refused (`authentication_failed`), so it may need rotating",
-    ],
-    [
-      "weekly limit",
-      failed({ report: { failure: "weekly-limit", detail: "" } }),
-      "it hit the weekly usage limit",
-    ],
+    // A dead token and the weekly limit notify through a Kit-owned issue instead (kitIssues.test.ts).
     [
       "metered billing",
       failed({ report: { failure: "metered-billing", detail: "" } }),

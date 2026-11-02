@@ -1,7 +1,8 @@
 // Failure notices: an agent run that fails for a reason outside the work is an
 // Infrastructure failure. It's never retried and never counts against a
 // Ticket's retries; the Operator gets one comment saying how to resume it.
-import type { AgentRole, InfrastructureFailure, KitConfig, LoopEvent, Plan, Snapshot } from "./types.ts";
+import { repoWideNotice } from "./kitIssues.ts";
+import type { AgentRole, InfrastructureFailure, IssueEventSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
@@ -48,8 +49,13 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
   }
 }
 
-/** One comment, with the Operator's only @-mention, on the Ticket's PR if it has one, else the issue. */
-export function failureNotice(run: FailedRun, { issue, operator }: Snapshot, config: KitConfig): Plan {
+/**
+ * One comment on the Ticket's PR if it has one, else the issue. It carries the
+ * Operator's only @-mention, unless the failure stalls the whole repo: then a
+ * Kit-owned issue does the notifying, once, and the comment points there.
+ */
+export function failureNotice(run: FailedRun, snapshot: IssueEventSnapshot, config: KitConfig): Plan {
+  const { issue, operator } = snapshot;
   const failure = classify(run);
   const label = TRIGGER_LABELS[run.role];
   const pullRequest = issue.openPullRequests[0];
@@ -58,11 +64,18 @@ export function failureNotice(run: FailedRun, { issue, operator }: Snapshot, con
   const labelled = run.role === "review" ? target : run.issue;
   const where = labelled === target ? "" : ` on #${labelled}`;
   const detail = run.report === null || run.report.detail.trim() === "" ? [] : ["", `> ${run.report.detail.trim()}`];
+  const failedRun = `The ${ROLE_NAMES[run.role]} run on #${run.issue}`;
+  const repoWide = repoWideNotice(failure, snapshot, {
+    run: failedRun,
+    runUrl: run.runUrl,
+    resetsAt: run.report?.resetsAt ?? null,
+  });
   const body = [
-    `@${operator} The ${ROLE_NAMES[run.role]} run on #${run.issue} failed: ${howItFailed(failure, run, config)}.`,
+    `${repoWide === null ? `@${operator} ` : ""}${failedRun} failed: ${howItFailed(failure, run, config)}.`,
     ...detail,
     "",
     `This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-add the \`${label}\` label${where} to run it again.`,
+    ...(repoWide === null ? [] : ["", repoWide.pointer]),
     "",
     `[The run](${run.runUrl})`,
   ].join("\n");
@@ -72,6 +85,7 @@ export function failureNotice(run: FailedRun, { issue, operator }: Snapshot, con
       // Off now, so that adding it back is a fresh label event that restarts the role.
       { kind: "remove-label", issue: labelled, label },
       { kind: "comment", issue: target, body },
+      ...(repoWide?.actions ?? []),
     ],
   };
 }
