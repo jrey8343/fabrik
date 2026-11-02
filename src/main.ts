@@ -1,7 +1,16 @@
 // Entry point for a Kit push job: event + snapshot + config -> plan -> applied.
 // Run with `node src/main.ts` (Node 24 strips the types).
 import { appendFile, readFile } from "node:fs/promises";
-import { applyPlan, gatherSnapshot, GitHub, loopEventFrom, type Repo } from "./github/adapter.ts";
+import {
+  applyPlan,
+  gatherSnapshot,
+  GitHub,
+  loopEventFrom,
+  readKitConfigSources,
+  type Repo,
+} from "./github/adapter.ts";
+import { checkCallerWorkflow } from "./kit/caller.ts";
+import { resolveKitConfig } from "./kit/config.ts";
 import { planFor } from "./loop/rules.ts";
 import type { KitConfig, Plan } from "./loop/types.ts";
 
@@ -26,15 +35,47 @@ async function report(text: string): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
-  const eventName = required("GITHUB_EVENT_NAME");
-  const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
-  const event = loopEventFrom(eventName, payload);
-  if (event === null) {
-    await report(`Nothing to do: the Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
-    return;
+/** The caller workflow's path in the Product repo, from `owner/repo/<path>@<ref>`. */
+function callerWorkflowPath(repo: Repo): string {
+  const workflowRef = required("GITHUB_WORKFLOW_REF");
+  const prefix = `${repo.owner}/${repo.name}/`;
+  const at = workflowRef.lastIndexOf("@");
+  if (!workflowRef.startsWith(prefix) || at < prefix.length) {
+    throw new Error(`GITHUB_WORKFLOW_REF is not ${prefix}<path>@<ref>: ${workflowRef}`);
+  }
+  return workflowRef.slice(prefix.length, at);
+}
+
+/**
+ * Loads and validates the Product repo's Kit config and caller workflow at the
+ * commit this run is for. Returns null, having reported why, when either is invalid.
+ */
+async function loadKit(github: GitHub, repo: Repo): Promise<KitConfig | null> {
+  const ref = required("GITHUB_SHA");
+  const callerPath = callerWorkflowPath(repo);
+  const [sources, caller] = await Promise.all([
+    readKitConfigSources(github, repo, ref),
+    github.fileText(repo, callerPath, ref),
+  ]);
+  const errors: string[] = [];
+  const resolved = resolveKitConfig(sources);
+  if (!resolved.ok) errors.push(...resolved.errors);
+  if (caller === null) {
+    errors.push(`${callerPath} was not found at ${ref}`);
+  } else {
+    const pins = checkCallerWorkflow(caller);
+    if (!pins.ok) errors.push(`${callerPath}: ${pins.error}`);
   }
 
+  if (errors.length > 0 || !resolved.ok) {
+    for (const error of errors) console.log(`::error title=Invalid Kit config::${error}`);
+    await report(`The Kit config is invalid, so the Loop did nothing:\n\n${errors.map((e) => `- ${e}`).join("\n")}`);
+    return null;
+  }
+  return resolved.config;
+}
+
+async function main(): Promise<void> {
   const [owner, name] = required("GITHUB_REPOSITORY").split("/");
   if (owner === undefined || name === undefined) {
     throw new Error("GITHUB_REPOSITORY is not owner/name");
@@ -42,7 +83,21 @@ async function main(): Promise<void> {
   const repo: Repo = { owner, name };
   // Only the Fabrik App's token: changes made with GITHUB_TOKEN don't start later workflows.
   const github = new GitHub(required("FABRIK_APP_TOKEN"), process.env["GITHUB_API_URL"]);
-  const config: KitConfig = {};
+
+  // Every run validates the Kit config first, so an invalid one fails visibly.
+  const config = await loadKit(github, repo);
+  if (config === null) {
+    process.exitCode = 1;
+    return;
+  }
+
+  const eventName = required("GITHUB_EVENT_NAME");
+  const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
+  const event = loopEventFrom(eventName, payload);
+  if (event === null) {
+    await report(`Nothing to do: the Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
+    return;
+  }
 
   const snapshot = await gatherSnapshot(github, repo, event);
   const plan = planFor(event, snapshot, config);

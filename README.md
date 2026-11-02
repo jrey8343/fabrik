@@ -8,6 +8,7 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 
 - `src/loop/` holds the **Loop rules core**: a pure function, `planFor(event, snapshot, config)`, that returns a plan. It does no I/O, and its tests (`*.test.ts`, next to the code) are the Loop's behaviour, one sentence each.
 - `src/__fixtures__/` holds the snapshot builders the core's tests use.
+- `src/kit/` holds the **Kit config** loader (`resolveKitConfig`: defaults and validation) and the caller workflow release check (`checkCallerWorkflow`). Both are pure; every run calls them before anything else.
 - `src/github/` holds the thin **GitHub adapter**: it maps an Actions event to a Loop event, gathers the snapshot and applies the plan.
 - `src/main.ts` is what a push job runs (`node src/main.ts`, Node 24, no build step and no runtime dependencies).
 - `.github/workflows/loop.yml` is the reusable workflow a Product repo calls. It holds wiring only.
@@ -26,4 +27,37 @@ npm test
 - The Fabrik GitHub App installed (Issues, Pull requests and Contents; no `workflows`).
 - A 1Password item `Fabrik App` in the `Fabrik App` vault, with fields `client-id` and `private-key`.
 - The repo's read-only push service account (reads the `Fabrik App` vault) stored as the Actions secret `FABRIK_OP_PUSH_TOKEN`.
-- `templates/fabrik.yml` installed as `.github/workflows/fabrik.yml`, pinned to a Fabrik tag.
+- `templates/fabrik.yml` installed as `.github/workflows/fabrik.yml`, with every Fabrik `uses:` line pinned to the same exact tag. A run fails if they disagree.
+
+## Kit config
+
+A Product repo's Kit config lives in `.fabrik/`. Every file is optional and every field has a default, so a release never needs a config edit. An invalid config, or an unknown field, fails the run with a message naming the field.
+
+`.fabrik/config.json` (the defaults shown):
+
+```json
+{
+  "sandbox": {
+    "setup": null,
+    "build": null,
+    "test": null,
+    "checks": [],
+    "env": {},
+    "secrets": {}
+  },
+  "roles": {
+    "triage": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 10 },
+    "design": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 30 },
+    "implement": { "model": "claude-sonnet-5-5", "effort": null, "timeout_minutes": 60 },
+    "review": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 30 },
+    "dispatch": { "timeout_minutes": 10 },
+    "step_up": { "model": "claude-opus-5-5", "effort": null }
+  },
+  "max_in_flight": 2
+}
+```
+
+- Leave a field out to take its default. `null` is accepted only where the default is `null` (the Sandbox commands and `effort`). A `null` effort means the Claude Code CLI's default; otherwise set it to `low`, `medium`, `high`, `xhigh` or `max`.
+- `sandbox.env` holds non-secret values. `sandbox.secrets` maps an env var name to an `op://` reference; a literal secret is refused.
+- A model naming Fable (or the `best` alias) is refused in every role, because Fable can bill metered usage.
+- Per-phase instructions are optional Markdown files: `.fabrik/triage.md`, `.fabrik/design.md`, `.fabrik/implement.md` and `.fabrik/review.md`.
