@@ -29,7 +29,7 @@ export const AGENT_RESULT_FILE = "agent-result.json";
 /** The Implementer's commits, beside the result, when it made any. */
 export const AGENT_BUNDLE_FILE = "agent-branch.bundle";
 
-const ROLES: readonly AgentRole[] = ["triage", "design", "implement"];
+const ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review"];
 
 const SHA = /^[0-9a-f]{40}$/;
 const REF = /^[A-Za-z0-9._/-]+$/;

@@ -89,6 +89,30 @@ export type LoopEvent =
       readonly report: FailureReport | null;
     }
   | { readonly kind: "issue-closed"; readonly issue: number }
+  /** A PR was opened or pushed to, so its required checks start; a Review waits for them. */
+  | { readonly kind: "pull-request-pushed"; readonly pullRequest: number }
+  | { readonly kind: "pull-request-labeled"; readonly pullRequest: number; readonly label: string }
+  | {
+      /** An agent PR's required checks finished red, so the Reviewer didn't run. */
+      readonly kind: "required-checks-finished";
+      readonly pullRequest: number;
+      /** The head commit the checks ran on. */
+      readonly headSha: string;
+      /** The required checks that didn't pass; empty when they all did. */
+      readonly failed: readonly string[];
+      /** The Review run, linked from the Verdict comment. */
+      readonly runUrl: string;
+    }
+  | {
+      /** The Reviewer finished on a green agent PR; its push job holds the Verdict, not yet posted. */
+      readonly kind: "review-run-finished";
+      readonly pullRequest: number;
+      /** The head commit the checks passed on and the Reviewer judged. */
+      readonly headSha: string;
+      /** The Reviewer's reply, unparsed: a Verdict line, then its findings (src/loop/verdict.ts). */
+      readonly output: string;
+      readonly runUrl: string;
+    }
   | { readonly kind: "pull-request-left-draft"; readonly pullRequest: number }
   | { readonly kind: "pull-request-closed"; readonly pullRequest: number }
   /** A Dispatch check, which an earlier plan asked for with `check-dispatch`. */
@@ -121,6 +145,29 @@ export interface PullRequestSnapshot {
   readonly number: number;
   /** Whether the Fabrik App opened it for a Ticket (src/loop/agentPullRequest.ts). */
   readonly isAgent: boolean;
+  readonly open: boolean;
+  readonly draft: boolean;
+  /** Its head commit now. */
+  readonly headSha: string;
+  readonly labels: readonly string[];
+  /** The Verdicts the Fabrik App has posted on it, oldest first, read from their markers (src/loop/verdict.ts). */
+  readonly verdicts: readonly VerdictRecord[];
+  /** Whether its latest push came from a Request-changes run, so a Verdict on it is marked as one. */
+  readonly requestChangesRun: boolean;
+}
+
+/** The Reviewer's judgment on a PR (GLOSSARY.md). */
+export type Verdict = "pass" | "execution-flaw" | "design-flaw";
+
+/** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
+export interface VerdictRecord {
+  readonly verdict: Verdict;
+  /** The Reviewer judged it, or red required checks made it an Execution flaw. */
+  readonly source: "reviewer" | "ci";
+  /** Whether it came from a Request-changes run, which doesn't count as a retry. */
+  readonly requestChanges: boolean;
+  /** The head commit it was given on. */
+  readonly headSha: string;
 }
 
 /** A `ready-for-agent` issue that a Dispatch check weighs. */
@@ -240,6 +287,10 @@ export type Action =
       readonly body: string;
       readonly draft: true;
     }
+  /** Takes a draft PR out of draft. */
+  | { readonly kind: "mark-ready-for-review"; readonly pullRequest: number }
+  /** Requests a review on a PR: the Merge gate's one notification. */
+  | { readonly kind: "request-review"; readonly pullRequest: number; readonly reviewer: string }
   /** Run a Dispatch check, in the Dispatch job, once the rest of this plan has landed. */
   | { readonly kind: "check-dispatch" };
 

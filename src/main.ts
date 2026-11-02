@@ -16,6 +16,7 @@ import {
   loopEventFrom,
   readKitConfigSources,
   type Repo,
+  reviewEventFrom,
   wantsDispatchCheck,
 } from "./github/adapter.ts";
 import { checkCallerWorkflow } from "./kit/caller.ts";
@@ -74,6 +75,10 @@ function describeAction(action: Action): string {
       return `- push ${action.branch}`;
     case "open-pull-request":
       return `- open a draft PR from ${action.head} to ${action.base} that closes #${action.issue}`;
+    case "mark-ready-for-review":
+      return `- take #${action.pullRequest} out of draft`;
+    case "request-review":
+      return `- request ${action.reviewer}'s review on #${action.pullRequest}`;
   }
 }
 
@@ -90,6 +95,8 @@ async function loopEvent(
   }
   const failedRole = process.env["FABRIK_FAILED_ROLE"];
   if (failedRole !== undefined && failedRole !== "") return { ...(await failedRunEvent(failedRole)), branch: null };
+  const reviewed = process.env["FABRIK_REVIEW_PULL_REQUEST"];
+  if (reviewed !== undefined && reviewed !== "") return { ...(await finishedReviewEvent(reviewed)), branch: null };
   const resultPath = process.env["FABRIK_AGENT_RESULT"];
   if (resultPath !== undefined && resultPath !== "") return agentResultEvent(resultPath, repo);
   const eventName = required("GITHUB_EVENT_NAME");
@@ -138,7 +145,20 @@ async function failedRunEvent(role: string): Promise<{ event: LoopEvent; source:
   const issue = Number(required("FABRIK_FAILED_ISSUE"));
   if (!Number.isInteger(issue) || issue < 1) throw new Error("FABRIK_FAILED_ISSUE is not an issue number");
   const reportText = await readFile(required("FABRIK_AGENT_FAILURE"), "utf8").catch(() => null);
-  const runUrl = [
+  const event = agentFailureEventFrom({
+    role: role as AgentRole,
+    issue,
+    runUrl: thisRunUrl(),
+    jobResult: required("FABRIK_AGENT_JOB_RESULT"),
+    secretsStep: process.env["FABRIK_SECRETS_STEP"] ?? "",
+    report: reportText === null ? null : readFailureReport(reportText),
+  });
+  return { event, source: `the failed ${role} run on #${issue}` };
+}
+
+/** This Actions run's attempt, which failure and Verdict comments link to. */
+function thisRunUrl(): string {
+  return [
     required("GITHUB_SERVER_URL"),
     required("GITHUB_REPOSITORY"),
     "actions/runs",
@@ -146,15 +166,31 @@ async function failedRunEvent(role: string): Promise<{ event: LoopEvent; source:
     "attempts",
     required("GITHUB_RUN_ATTEMPT"),
   ].join("/");
-  const event = agentFailureEventFrom({
-    role: role as AgentRole,
-    issue,
-    runUrl,
-    jobResult: required("FABRIK_AGENT_JOB_RESULT"),
-    secretsStep: process.env["FABRIK_SECRETS_STEP"] ?? "",
-    report: reportText === null ? null : readFailureReport(reportText),
+}
+
+/**
+ * A Review's push job: FABRIK_REVIEW_PULL_REQUEST is the PR, FABRIK_REVIEW_HEAD_SHA
+ * and FABRIK_REVIEW_FAILED_CHECKS (a JSON list) come from its checks job, and
+ * FABRIK_AGENT_RESULT is the Reviewer's result when green checks let it run.
+ */
+async function finishedReviewEvent(pullRequestText: string): Promise<{ event: LoopEvent; source: string }> {
+  const pullRequest = Number(pullRequestText);
+  if (!Number.isInteger(pullRequest) || pullRequest < 1) throw new Error("FABRIK_REVIEW_PULL_REQUEST is not a PR number");
+  const failed: unknown = JSON.parse(process.env["FABRIK_REVIEW_FAILED_CHECKS"] || "[]");
+  if (!Array.isArray(failed) || !failed.every((name) => typeof name === "string")) {
+    throw new Error("FABRIK_REVIEW_FAILED_CHECKS is not a list of check names");
+  }
+  const resultPath = process.env["FABRIK_AGENT_RESULT"];
+  const result =
+    resultPath === undefined || resultPath === "" ? null : readAgentRunResult(await readFile(resultPath, "utf8"));
+  const event = reviewEventFrom({
+    pullRequest,
+    headSha: required("FABRIK_REVIEW_HEAD_SHA"),
+    runUrl: thisRunUrl(),
+    failedChecks: failed as string[],
+    result,
   });
-  return { event, source: `the failed ${role} run on #${issue}` };
+  return { event, source: result === null ? `the red required checks on #${pullRequest}` : `the Review of #${pullRequest}` };
 }
 
 async function report(text: string): Promise<void> {
