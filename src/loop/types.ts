@@ -18,8 +18,8 @@ export interface Snapshot {
   readonly issue: IssueSnapshot;
 }
 
-/** The resolved Kit config. It grows its fields with the rules that read them. */
-export type KitConfig = Readonly<Record<never, never>>;
+/** The resolved Kit config, every default filled in (src/kit/config.ts). */
+export type { KitConfig } from "../kit/config.ts";
 
 /** One change the GitHub adapter makes on the core's behalf. */
 export type Action = {

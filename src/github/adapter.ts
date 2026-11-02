@@ -1,6 +1,7 @@
 // The GitHub adapter: turns an Actions event into a Loop event, gathers the
 // snapshot the core needs, and applies the plan the core returns. It holds no
 // Loop rules; those all live in src/loop/rules.ts.
+import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import type { Action, LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 
 export interface Repo {
@@ -48,6 +49,17 @@ export class GitHub {
       throw new Error(`GitHub GraphQL query failed: ${JSON.stringify(result.errors)}`);
     }
     return result.data;
+  }
+
+  /** A file's text from the repo at `ref`, or null if it doesn't exist there. Reads only; never runs it. */
+  async fileText(repo: Repo, path: string, ref: string): Promise<string | null> {
+    const url = `${this.#apiUrl}/repos/${repo.owner}/${repo.name}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`;
+    const response = await fetch(url, { headers: { ...this.#headers(), accept: "application/vnd.github.raw+json" } });
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(`GitHub GET ${path}@${ref} failed: ${response.status} ${await response.text()}`);
+    }
+    return response.text();
   }
 
   #headers(): Record<string, string> {
@@ -102,6 +114,18 @@ export async function gatherSnapshot(github: GitHub, repo: Repo, event: LoopEven
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
     },
+  };
+}
+
+/** Reads the Kit config folder's files from the Product repo at `ref`, through the API. */
+export async function readKitConfigSources(github: GitHub, repo: Repo, ref: string): Promise<KitConfigSources> {
+  const [config, ...instructions] = await Promise.all([
+    github.fileText(repo, KIT_CONFIG_PATH, ref),
+    ...PHASES.map((phase) => github.fileText(repo, instructionsPath(phase), ref)),
+  ]);
+  return {
+    config: config ?? null,
+    instructions: Object.fromEntries(PHASES.map((phase, i) => [phase, instructions[i] ?? null])),
   };
 }
 
