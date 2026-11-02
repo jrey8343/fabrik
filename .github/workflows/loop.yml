@@ -90,12 +90,15 @@ jobs:
           path: kit
           persist-credentials: false
 
-      # Read as data only; nothing from the Product repo runs in this job.
-      - name: Check out the Product's Kit config
+      # Read as data only; nothing from the Product repo runs in this job. The
+      # workflows folder holds the caller workflow, whose Fabrik pins are checked too.
+      - name: Check out the Product's Kit config and caller workflow
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: product
-          sparse-checkout: .fabrik
+          sparse-checkout: |
+            .fabrik
+            .github/workflows
           persist-credentials: false
 
       - name: Set up Node
@@ -103,7 +106,7 @@ jobs:
         with:
           node-version: 24
 
-      - name: Validate the Kit config and route the event
+      - name: Check the Kit config and caller workflow, and route the event
         id: route
         env:
           GH_TOKEN: ${{ github.token }}

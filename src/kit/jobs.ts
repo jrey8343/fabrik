@@ -1,6 +1,7 @@
-// The Kit job's step: validates the Product's Kit config (read as data from a
-// sparse checkout, never run), asks the Loop rules core what this event calls
-// for, and tells the workflow which job it routes to and the settings its jobs
+// The Kit job's step: checks the Product's Kit config and its caller
+// workflow's Fabrik pins (read as data from a sparse checkout, never run), so
+// no agent starts on an invalid Kit; asks the Loop rules core what this event
+// calls for; and tells the workflow which job it routes to and the settings its jobs
 // need before they start, such as their timeout-minutes. Writes step outputs:
 //   route                    "triage", "design", "implement" or "review" when the plan starts that agent run,
 //                            "push" when the push job has something to apply,
@@ -19,6 +20,7 @@
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
 import { appendFile, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { agentRunIn } from "../github/apply.ts";
 import { GitHub, type Repo } from "../github/client.ts";
 import { loopEventFrom } from "../github/events.ts";
@@ -26,7 +28,8 @@ import { gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
-import { readKitConfigFromCheckout } from "./checkout.ts";
+import { callerWorkflowPath, checkKit } from "./caller.ts";
+import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -41,13 +44,21 @@ function routeOf(plan: Plan): string {
 }
 
 async function main(productDir: string): Promise<void> {
-  const resolved = await readKitConfigFromCheckout(productDir);
-  if (!resolved.ok) {
-    for (const error of resolved.errors) console.log(`::error title=Invalid Kit config::${error}`);
+  const [owner, name] = required("GITHUB_REPOSITORY").split("/");
+  const repo: Repo = { owner: owner ?? "", name: name ?? "" };
+  // The same check as every push job's, first, so no agent starts on an invalid Kit.
+  const callerPath = callerWorkflowPath(required("GITHUB_WORKFLOW_REF"), repo);
+  const [resolved, callerText] = await Promise.all([
+    readKitConfigFromCheckout(productDir),
+    readIfPresent(join(productDir, callerPath)),
+  ]);
+  const check = checkKit(resolved, { path: callerPath, text: callerText });
+  if (!check.ok) {
+    for (const error of check.errors) console.log(`::error title=Invalid Kit config::${error}`);
     process.exitCode = 1;
     return;
   }
-  const { config } = resolved;
+  const { config } = check;
 
   const eventName = required("GITHUB_EVENT_NAME");
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
@@ -58,8 +69,6 @@ async function main(productDir: string): Promise<void> {
   if (event === null) {
     console.log(`The Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
   } else {
-    const [owner, name] = required("GITHUB_REPOSITORY").split("/");
-    const repo: Repo = { owner: owner ?? "", name: name ?? "" };
     const github = new GitHub(required("GH_TOKEN"), process.env["GITHUB_API_URL"]);
     const snapshot = await gatherSnapshot(github, repo, event, config.operator);
     const plan = planFor(event, snapshot, config);

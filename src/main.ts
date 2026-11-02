@@ -11,7 +11,7 @@ import { applyPlan, wantsDispatchCheck } from "./github/apply.ts";
 import { GitHub, type Repo } from "./github/client.ts";
 import { agentFailureEventFrom, agentRunEventFrom, loopEventFrom, reviewEventFrom } from "./github/events.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
-import { checkCallerWorkflow } from "./kit/caller.ts";
+import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
 import { planFor } from "./loop/rules.ts";
 import { AGENT_ROLES, type Action, type AgentRole, type KitConfig, type LoopEvent, type Plan } from "./loop/types.ts";
@@ -215,44 +215,21 @@ async function report(text: string): Promise<void> {
   }
 }
 
-/** The caller workflow's path in the Product repo, from `owner/repo/<path>@<ref>`. */
-function callerWorkflowPath(repo: Repo): string {
-  const workflowRef = required("GITHUB_WORKFLOW_REF");
-  const prefix = `${repo.owner}/${repo.name}/`;
-  const at = workflowRef.lastIndexOf("@");
-  if (!workflowRef.startsWith(prefix) || at < prefix.length) {
-    throw new Error(`GITHUB_WORKFLOW_REF is not ${prefix}<path>@<ref>: ${workflowRef}`);
-  }
-  return workflowRef.slice(prefix.length, at);
-}
-
 /**
- * Loads and validates the Product repo's Kit config and caller workflow at the
+ * Loads and checks the Product repo's Kit config and caller workflow at the
  * commit this run is for. Returns null, having reported why, when either is invalid.
  */
 async function loadKit(github: GitHub, repo: Repo): Promise<KitConfig | null> {
   const ref = required("GITHUB_SHA");
-  const callerPath = callerWorkflowPath(repo);
-  const [sources, caller] = await Promise.all([
-    readKitConfigSources(github, repo, ref),
-    github.fileText(repo, callerPath, ref),
-  ]);
-  const errors: string[] = [];
-  const resolved = resolveKitConfig(sources);
-  if (!resolved.ok) errors.push(...resolved.errors);
-  if (caller === null) {
-    errors.push(`${callerPath} was not found at ${ref}`);
-  } else {
-    const pins = checkCallerWorkflow(caller);
-    if (!pins.ok) errors.push(`${callerPath}: ${pins.error}`);
-  }
-
-  if (errors.length > 0 || !resolved.ok) {
-    for (const error of errors) console.log(`::error title=Invalid Kit config::${error}`);
-    await report(`The Kit config is invalid, so the Loop did nothing:\n\n${errors.map((e) => `- ${e}`).join("\n")}`);
+  const path = callerWorkflowPath(required("GITHUB_WORKFLOW_REF"), repo);
+  const [sources, text] = await Promise.all([readKitConfigSources(github, repo, ref), github.fileText(repo, path, ref)]);
+  const check = checkKit(resolveKitConfig(sources), { path, text });
+  if (!check.ok) {
+    for (const error of check.errors) console.log(`::error title=Invalid Kit config::${error}`);
+    await report(`The Kit config is invalid, so the Loop did nothing:\n\n${check.errors.map((e) => `- ${e}`).join("\n")}`);
     return null;
   }
-  return resolved.config;
+  return check.config;
 }
 
 async function main(): Promise<void> {

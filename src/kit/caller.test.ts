@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { checkCallerWorkflow } from "./caller.ts";
+import { callerWorkflowPath, checkCallerWorkflow, checkKit } from "./caller.ts";
+import { resolveKitConfig } from "./config.ts";
 
 function callerWith(...uses: string[]): string {
   return [
@@ -90,5 +91,45 @@ describe("Caller workflow release check", () => {
     const workflow = readFileSync(new URL("../../.github/workflows/schedule.yml", import.meta.url), "utf8");
 
     expect(workflow).toMatch(/^on:\n\s+workflow_call:/m);
+  });
+});
+
+describe("Every run's Kit check, before any agent starts", () => {
+  const caller = { path: ".github/workflows/fabrik.yml", text: callerWith("jrey8343/fabrik/.github/workflows/loop.yml@v1.2.3") };
+  const noConfig = resolveKitConfig({ config: null, instructions: {} });
+
+  it("passes a valid Kit config and a caller that pins one exact release", () => {
+    const check = checkKit(noConfig, caller);
+
+    expect(check.ok).toBe(true);
+  });
+
+  it("fails a caller whose pins disagree, even with a valid Kit config", () => {
+    const check = checkKit(noConfig, {
+      ...caller,
+      text: callerWith("jrey8343/fabrik/.github/workflows/loop.yml@v1.2.3", "jrey8343/fabrik/.github/workflows/schedule.yml@v1.3.0"),
+    });
+
+    expect(check).toEqual({ ok: false, errors: [expect.stringMatching(/^\.github\/workflows\/fabrik\.yml: The caller workflow pins more than one Fabrik release/)] });
+  });
+
+  it("fails a missing caller workflow", () => {
+    expect(checkKit(noConfig, { ...caller, text: null })).toEqual({
+      ok: false,
+      errors: [".github/workflows/fabrik.yml was not found"],
+    });
+  });
+
+  it("names every problem at once, the Kit config's and the caller's", () => {
+    const check = checkKit(resolveKitConfig({ config: "{ not json", instructions: {} }), { ...caller, text: "jobs: {}" });
+
+    expect(check.ok ? [] : check.errors).toHaveLength(2);
+  });
+
+  it("reads the caller workflow's path from GITHUB_WORKFLOW_REF", () => {
+    expect(callerWorkflowPath("acme/shop/.github/workflows/fabrik.yml@refs/heads/main", { owner: "acme", name: "shop" })).toBe(
+      ".github/workflows/fabrik.yml",
+    );
+    expect(() => callerWorkflowPath("other/repo/.github/workflows/fabrik.yml@main", { owner: "acme", name: "shop" })).toThrow();
   });
 });

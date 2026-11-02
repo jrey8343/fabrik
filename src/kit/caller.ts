@@ -1,6 +1,8 @@
 // The Kit check on a Product repo's caller workflow (ADR-0003): every `uses:`
 // line that names Fabrik pins the same exact release, the only place the Kit's
-// version appears. Pure, no I/O.
+// version appears. Every run makes it, with the Kit config's own check, before
+// any agent starts. Pure, no I/O.
+import type { KitConfig, KitConfigResult } from "./config.ts";
 
 export type CallerCheck =
   | { readonly ok: true; readonly release: string }
@@ -35,4 +37,36 @@ export function checkCallerWorkflow(text: string): CallerCheck {
     };
   }
   return { ok: true, release };
+}
+
+/** The caller workflow's path in the Product repo, from GITHUB_WORKFLOW_REF: `owner/repo/<path>@<ref>`. */
+export function callerWorkflowPath(workflowRef: string, repo: { readonly owner: string; readonly name: string }): string {
+  const prefix = `${repo.owner}/${repo.name}/`;
+  const at = workflowRef.lastIndexOf("@");
+  if (!workflowRef.startsWith(prefix) || at < prefix.length) {
+    throw new Error(`GITHUB_WORKFLOW_REF is not ${prefix}<path>@<ref>: ${workflowRef}`);
+  }
+  return workflowRef.slice(prefix.length, at);
+}
+
+export type KitCheck =
+  | { readonly ok: true; readonly config: KitConfig }
+  | { readonly ok: false; readonly errors: readonly string[] };
+
+/**
+ * The check every run starts with: the Kit config is valid and the caller
+ * workflow pins one exact Fabrik release. It names every problem at once.
+ */
+export function checkKit(
+  resolved: KitConfigResult,
+  caller: { readonly path: string; readonly text: string | null },
+): KitCheck {
+  const errors: string[] = resolved.ok ? [] : [...resolved.errors];
+  if (caller.text === null) {
+    errors.push(`${caller.path} was not found`);
+  } else {
+    const pins = checkCallerWorkflow(caller.text);
+    if (!pins.ok) errors.push(`${caller.path}: ${pins.error}`);
+  }
+  return errors.length > 0 || !resolved.ok ? { ok: false, errors } : { ok: true, config: resolved.config };
 }
