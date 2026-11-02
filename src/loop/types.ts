@@ -1,5 +1,6 @@
 // The Loop rules core's interface: a Loop event, a snapshot of GitHub state and
 // the resolved Kit config go in; a plan comes out.
+import type { ChangedPath } from "../guard/trust-root.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
 export type AgentRole = "triage" | "design" | "implement" | "review";
@@ -27,6 +28,16 @@ export interface FailureReport {
   readonly resetsAt?: string;
 }
 
+/**
+ * The paths an agent branch changes: `net` from its base to its head, and
+ * `commits` from each commit on its own, so a change made and then undone
+ * still counts.
+ */
+export interface BranchChanges {
+  readonly net: readonly ChangedPath[];
+  readonly commits: readonly ChangedPath[];
+}
+
 /** Something that happened in a Product repo that the Loop may act on. */
 export type LoopEvent =
   | { readonly kind: "issue-opened"; readonly issue: number }
@@ -47,6 +58,20 @@ export type LoopEvent =
       readonly issue: number;
       /** The text the agent emitted as its structured output, unparsed. */
       readonly output: string;
+    }
+  | {
+      /** An Implement run's agent job finished; its push job has the branch it built, not yet pushed. */
+      readonly kind: "implement-run-finished";
+      /** The Ticket. */
+      readonly issue: number;
+      /** The Implementer's structured output (its PR title and summary), unparsed. */
+      readonly output: string;
+      /** The agent branch the run built (src/loop/agentPullRequest.ts). */
+      readonly branch: string;
+      /** The branch it was cut from, which the draft PR targets. */
+      readonly base: string;
+      /** What the branch changes, read from the bundle the agent job passed out. */
+      readonly changes: BranchChanges;
     }
   | {
       /** An agent job failed or was cancelled; its failure job carries the news. */
@@ -87,6 +112,8 @@ export interface IssueSnapshot {
   readonly openPullRequests: readonly number[];
   /** How many Design-session rounds the Kit has posted on the issue so far. */
   readonly designRounds: number;
+  /** How many Implement runs on it ended in an empty diff since its last Design session (src/loop/implement.ts). */
+  readonly emptyDiffs: number;
 }
 
 /** A pull request as the core sees it. */
@@ -199,6 +226,19 @@ export type Action =
       readonly model: string;
       readonly effort: string | null;
       readonly timeoutMinutes: number;
+    }
+  /** Push the agent branch the Implement run built, which the push job holds from its bundle. */
+  | { readonly kind: "push-branch"; readonly branch: string }
+  | {
+      /** Opens a PR as the Fabrik App, which starts CI on it. */
+      readonly kind: "open-pull-request";
+      /** The Ticket it closes. */
+      readonly issue: number;
+      readonly head: string;
+      readonly base: string;
+      readonly title: string;
+      readonly body: string;
+      readonly draft: true;
     }
   /** Run a Dispatch check, in the Dispatch job, once the rest of this plan has landed. */
   | { readonly kind: "check-dispatch" };

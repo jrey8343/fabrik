@@ -2,11 +2,14 @@
 // sparse checkout, never run), asks the Loop rules core what this event calls
 // for, and tells the workflow which job it routes to and the settings its jobs
 // need before they start, such as their timeout-minutes. Writes step outputs:
-//   route                    "triage" or "design" when the plan starts that agent run,
+//   route                    "triage", "design" or "implement" when the plan starts that agent run,
 //                            "push" when the push job has something to apply,
 //                            "none" when the plan is to do nothing
 //   triage-timeout-minutes   the Triage role's Kit config timeout
 //   design-timeout-minutes   the Design-session turn's Kit config timeout
+//   implement-timeout-minutes the Implement role's Kit config timeout
+//   model, effort            the model and effort the plan chose for its agent run (a Step-up, say),
+//                            empty when it starts none or leaves effort to the CLI
 //   dispatch-timeout-minutes the Dispatch job's Kit config timeout
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
@@ -41,6 +44,7 @@ async function main(productDir: string): Promise<void> {
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
   const event = loopEventFrom(eventName, payload);
   let route = "none";
+  let run: ReturnType<typeof agentRunIn> = null;
   if (event === null) {
     console.log(`The Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
   } else {
@@ -50,12 +54,16 @@ async function main(productDir: string): Promise<void> {
     const plan = planFor(event, await gatherSnapshot(github, repo, event, config.operator), config);
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
     route = routeOf(plan);
+    run = agentRunIn(plan);
   }
 
   const outputs = {
     route,
     "triage-timeout-minutes": String(config.roles.triage.timeoutMinutes),
     "design-timeout-minutes": String(config.roles.design.timeoutMinutes),
+    "implement-timeout-minutes": String(config.roles.implement.timeoutMinutes),
+    model: run?.model ?? "",
+    effort: run?.effort ?? "",
     "dispatch-timeout-minutes": String(config.roles.dispatch.timeoutMinutes),
   };
   await appendFile(

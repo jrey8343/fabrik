@@ -2,8 +2,11 @@
 // config -> plan -> applied.
 // Run with `node src/main.ts` (Node 24 strips the types).
 import { appendFile, readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { readFailureReport } from "./agent/failure.ts";
-import { readAgentRunResult } from "./agent/result.ts";
+import { AGENT_BUNDLE_FILE, readAgentRunResult } from "./agent/result.ts";
+import { type AgentBranchGit, rebuildAgentBranch } from "./github/branch.ts";
+import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import {
   agentFailureEventFrom,
   agentRunEventFrom,
@@ -67,6 +70,10 @@ function describeAction(action: Action): string {
       return `- a ${action.role} run on #${action.issue}, which the Kit job routes to its agent job`;
     case "check-dispatch":
       return "- run a Dispatch check";
+    case "push-branch":
+      return `- push ${action.branch}`;
+    case "open-pull-request":
+      return `- open a draft PR from ${action.head} to ${action.base} that closes #${action.issue}`;
   }
 }
 
@@ -75,20 +82,50 @@ function describeAction(action: Action): string {
  * handed one (FABRIK_AGENT_RESULT), a Dispatch check in the Dispatch job
  * (FABRIK_DISPATCH_CHECK), otherwise the Actions event itself.
  */
-async function loopEvent(): Promise<{ event: LoopEvent | null; source: string }> {
+async function loopEvent(
+  repo: Repo,
+): Promise<{ event: LoopEvent | null; source: string; branch: AgentBranchGit | null }> {
   if (process.env["FABRIK_DISPATCH_CHECK"] === "true") {
-    return { event: { kind: "dispatch-check" }, source: "a Dispatch check" };
+    return { event: { kind: "dispatch-check" }, source: "a Dispatch check", branch: null };
   }
   const failedRole = process.env["FABRIK_FAILED_ROLE"];
-  if (failedRole !== undefined && failedRole !== "") return failedRunEvent(failedRole);
+  if (failedRole !== undefined && failedRole !== "") return { ...(await failedRunEvent(failedRole)), branch: null };
   const resultPath = process.env["FABRIK_AGENT_RESULT"];
-  if (resultPath !== undefined && resultPath !== "") {
-    const result = readAgentRunResult(await readFile(resultPath, "utf8"));
-    return { event: agentRunEventFrom(result), source: `the ${result.role} run on #${result.issue}` };
-  }
+  if (resultPath !== undefined && resultPath !== "") return agentResultEvent(resultPath, repo);
   const eventName = required("GITHUB_EVENT_NAME");
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
-  return { event: loopEventFrom(eventName, payload), source: `${eventName}.${String(payload["action"] ?? "")}` };
+  return {
+    event: loopEventFrom(eventName, payload),
+    source: `${eventName}.${String(payload["action"] ?? "")}`,
+    branch: null,
+  };
+}
+
+/**
+ * The push job's event: the result an agent job passed out. The agent could
+ * have rewritten that artifact, so its issue must be the one this run is for,
+ * and an Implement run's branch is rebuilt from its bundle and checked here.
+ */
+async function agentResultEvent(
+  resultPath: string,
+  repo: Repo,
+): Promise<{ event: LoopEvent; source: string; branch: AgentBranchGit | null }> {
+  const result = readAgentRunResult(await readFile(resultPath, "utf8"));
+  const runIssue = Number(required("FABRIK_RUN_ISSUE"));
+  if (result.issue !== runIssue) throw new Error(`The agent's result is for #${result.issue}, not #${runIssue}`);
+  const source = `the ${result.role} run on #${result.issue}`;
+  if (result.role !== "implement") return { event: agentRunEventFrom(result), source, branch: null };
+
+  const built = result.branch;
+  if (built === undefined || built.name !== agentBranchFor(result.issue)) {
+    throw new Error(`The Implement run on #${result.issue} didn't build ${agentBranchFor(result.issue)}`);
+  }
+  const branch = await rebuildAgentBranch(built, join(dirname(resultPath), AGENT_BUNDLE_FILE), {
+    serverUrl: required("GITHUB_SERVER_URL"),
+    repo,
+    token: required("FABRIK_APP_TOKEN"),
+  });
+  return { event: agentRunEventFrom(result, branch.changes), source, branch };
 }
 
 /**
@@ -184,7 +221,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { event, source } = await loopEvent();
+  const { event, source, branch } = await loopEvent(repo);
   if (event === null) {
     await report(`Nothing to do: the Loop doesn't act on ${source}`);
     return;
@@ -196,7 +233,7 @@ async function main(): Promise<void> {
     actionsToken === undefined || actionsToken === "" ? null : new GitHub(actionsToken, process.env["GITHUB_API_URL"]);
   const snapshot = await gatherSnapshot(github, repo, event, config.operator, actions);
   const plan = planFor(event, snapshot, config);
-  await applyPlan(github, repo, plan);
+  await applyPlan(github, repo, plan, branch);
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
   await report(describe(plan));
