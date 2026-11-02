@@ -91,6 +91,14 @@ describe("The max_in_flight cap", () => {
     expect(dispatched(plan)).toEqual([4]);
   });
 
+  it("counts a Ticket resuming its agent PR's run once, by its draft PR, not again by its label", () => {
+    const resuming = aTicket({ number: 2, labels: ["ready-for-agent", "agent:implement"], openLinkedPullRequests: [50] });
+
+    const plan = planFor(check, dispatchSnapshotOf([resuming, ...three], { openAgentDraftPullRequests: 1 }), kitConfig());
+
+    expect(dispatched(plan)).toEqual([4]);
+  });
+
   it("dispatches nothing when draft PRs plus runs in progress fill the cap, saying why", () => {
     const plan = planFor(
       check,

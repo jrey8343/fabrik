@@ -18,8 +18,11 @@ export function dispatch(snapshot: DispatchSnapshot, config: KitConfig): Plan {
   }
 
   // A Ticket already given the label is waiting for its Implement run to start,
-  // which removes the label, so it holds a slot too.
-  const waiting = tickets.filter((ticket) => ticket.open && ticket.labels.includes(DISPATCH_LABEL)).length;
+  // which removes the label, so it holds a slot too. One with an open PR is
+  // resuming that PR's run, whose draft PR already holds its slot.
+  const waiting = tickets.filter(
+    (ticket) => ticket.open && ticket.labels.includes(DISPATCH_LABEL) && ticket.openLinkedPullRequests.length === 0,
+  ).length;
   const inFlight = snapshot.openAgentDraftPullRequests + snapshot.implementRunsInProgress + waiting;
   const free = Math.max(0, config.maxInFlight - inFlight);
   if (free === 0) {

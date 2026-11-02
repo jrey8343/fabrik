@@ -128,10 +128,11 @@ interface DispatchQueryResult {
 }
 
 /**
- * The name of the Implement job in .github/workflows/loop.yml. Called from a
- * Product repo's caller workflow, it shows up as `<caller job> / Implement`.
+ * The name of the Implement job in .github/workflows/loop.yml (a test holds
+ * the two together). Called from a Product repo's caller workflow, it shows
+ * up as `<caller job> / Implement`.
  */
-const IMPLEMENT_JOB_NAME = "Implement";
+export const IMPLEMENT_JOB_NAME = "Implement";
 
 /**
  * Reads the current GitHub state the event needs, fresh rather than from the
@@ -420,30 +421,38 @@ async function gatherDispatch(
     dispatch: {
       tickets,
       openAgentDraftPullRequests,
-      implementRunsInProgress: await countImplementRunsInProgress(actions, repo),
+      implementRunsInProgress: await countImplementRuns(actions, repo),
     },
     operator: operator ?? page.repository.owner.login,
   };
 }
 
+/** Workflow-run statuses, short of completed, whose Implement job may still hold a slot. */
+const UNFINISHED_RUNS = ["in_progress", "queued", "waiting", "pending", "requested"] as const;
+
 /**
- * Implement jobs running now, across every workflow run in the repo. A queued
- * one isn't counted here: its Ticket still has agent:implement, which the core
- * counts instead.
+ * Implement jobs not yet finished, across every workflow run in the repo:
+ * running, and also queued or waiting (behind its concurrency group, say)
+ * after its claim took agent:implement off the Ticket, so no slot goes
+ * uncounted between the label coming off and the run starting.
  */
-async function countImplementRunsInProgress(github: GitHub, repo: Repo): Promise<number> {
+export async function countImplementRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<number> {
   const base = `/repos/${repo.owner}/${repo.name}/actions`;
-  const runs = (await github.rest("GET", `${base}/runs?status=in_progress&per_page=100`)) as {
-    workflow_runs: { id: number }[];
-  };
+  const runIds = new Set<number>();
+  for (const status of UNFINISHED_RUNS) {
+    const runs = (await github.rest("GET", `${base}/runs?status=${status}&per_page=100`)) as {
+      workflow_runs: { id: number }[];
+    };
+    for (const run of runs.workflow_runs) runIds.add(run.id);
+  }
   let count = 0;
-  for (const run of runs.workflow_runs) {
-    const jobs = (await github.rest("GET", `${base}/runs/${run.id}/jobs?filter=latest&per_page=100`)) as {
+  for (const id of runIds) {
+    const jobs = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as {
       jobs: { name: string; status: string }[];
     };
     count += jobs.jobs.filter(
       (job) =>
-        job.status === "in_progress" &&
+        job.status !== "completed" &&
         (job.name === IMPLEMENT_JOB_NAME || job.name.endsWith(` / ${IMPLEMENT_JOB_NAME}`)),
     ).length;
   }

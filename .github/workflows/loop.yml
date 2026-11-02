@@ -463,7 +463,7 @@ jobs:
   # account: the Claude token and this repo's test secrets, which Kit config
   # declares as op:// references, so none of them is named in this file. They
   # are resolved in output mode and reach the Implement step's env only.
-  # Named "Implement" exactly: Dispatch counts jobs by this name (src/github/adapter.ts).
+  # Named "Implement" exactly: Dispatch counts jobs by this name (IMPLEMENT_JOB_NAME in src/github/snapshot.ts).
   implement:
     name: Implement
     needs: kit
