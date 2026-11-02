@@ -50,7 +50,10 @@ function describeAction(action: Action): string {
     case "remove-label":
       return `- remove label on #${action.issue}: ${action.label}`;
     case "comment":
+    case "comment-linking":
       return `- comment on #${action.issue}`;
+    case "close-pull-request":
+      return `- close #${action.pullRequest} unmerged, keeping its branch`;
     case "assign":
       return `- assign #${action.issue} to ${action.assignee}`;
     case "close":

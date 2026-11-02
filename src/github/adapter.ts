@@ -17,6 +17,7 @@ import type {
   KitIssueSnapshot,
   LoopEvent,
   Plan,
+  PostedComment,
   Snapshot,
   TicketSnapshot,
 } from "../loop/types.ts";
@@ -593,9 +594,23 @@ export async function applyPlan(
 ): Promise<void> {
   if (plan.kind !== "act") return;
   const created = new Map<string, CreatedRecord>();
+  // The URL of each comment the plan has posted under a key, for later comments that link it.
+  const posted = new Map<string, string>();
   for (const action of plan.actions) {
-    await apply(github, repo, action, created, branches);
+    await apply(github, repo, action, { created, posted }, branches);
   }
+}
+
+/** What earlier actions in the plan made, for later ones to refer to. */
+interface Made {
+  readonly created: Map<string, CreatedRecord>;
+  readonly posted: Map<string, string>;
+}
+
+function postedIn(posted: ReadonlyMap<string, string>, { posted: key }: PostedComment): string {
+  const url = posted.get(key);
+  if (url === undefined) throw new Error(`The plan refers to a comment it hasn't posted: ${key}`);
+  return url;
 }
 
 /** An issue a plan created: its number for links in text, its database id for sub-issue and blocked-by edges. */
@@ -644,7 +659,7 @@ async function apply(
   github: GitHub,
   repo: Repo,
   action: Action,
-  created: Map<string, CreatedRecord>,
+  made: Made,
   branches: BranchPusher | null,
 ): Promise<void> {
   const issues = `/repos/${repo.owner}/${repo.name}/issues`;
@@ -653,7 +668,11 @@ async function apply(
     case "check-dispatch":
       return;
     case "create-issue":
-      return createIssue(github, repo, action, created);
+      return createIssue(github, repo, action, made.created);
+    case "close-pull-request":
+      // Closing never deletes the head branch; only a merge with auto-delete on would.
+      await github.rest("PATCH", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}`, { state: "closed" });
+      return;
     case "open-issue":
       // Labels go on with the issue, so the issues.opened run it starts already sees them.
       await github.rest("POST", issues, {
@@ -693,7 +712,7 @@ async function apply(
       });
       return;
     default:
-      return applyToIssue(github, `${issues}/${action.issue}`, action, created);
+      return applyToIssue(github, `${issues}/${action.issue}`, action, made);
   }
 }
 
@@ -709,11 +728,12 @@ async function applyToIssue(
         | "open-issue"
         | "push-branch"
         | "open-pull-request"
+        | "close-pull-request"
         | "mark-ready-for-review"
         | "request-review";
     }
   >,
-  created: Map<string, CreatedRecord>,
+  { created, posted }: Made,
 ): Promise<void> {
   switch (action.kind) {
     case "add-labels":
@@ -724,9 +744,16 @@ async function applyToIssue(
         allowNotFound: true,
       });
       return;
-    case "comment":
-      await github.rest("POST", `${issue}/comments`, { body: action.body });
+    case "comment": {
+      const comment = (await github.rest("POST", `${issue}/comments`, { body: action.body })) as { html_url: string };
+      if (action.key !== undefined) posted.set(action.key, comment.html_url);
       return;
+    }
+    case "comment-linking": {
+      const body = action.body.map((part) => (typeof part === "string" ? part : postedIn(posted, part))).join("");
+      await github.rest("POST", `${issue}/comments`, { body });
+      return;
+    }
     case "assign":
       await github.rest("POST", `${issue}/assignees`, { assignees: [action.assignee] });
       return;

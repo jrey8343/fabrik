@@ -20,12 +20,13 @@ export function retryNumber(earlier: readonly VerdictRecord[]): number {
   return 1 + earlier.filter((record) => record.verdict === "execution-flaw" && !record.requestChanges).length;
 }
 
-/** What an Execution flaw on this PR does next: its retry, if one is left, and a line saying so. */
-export function retryAfterFlaw(pullRequest: PullRequestSnapshot): { readonly line: string; readonly actions: Action[] } {
+/**
+ * What an Execution flaw on this PR does next: its retry and a line saying so,
+ * or null when its retries are used up, so the flaw counts as a Design flaw.
+ */
+export function retryAfterFlaw(pullRequest: PullRequestSnapshot): { readonly line: string; readonly actions: Action[] } | null {
   const retry = retryNumber(pullRequest.verdicts);
-  if (retry > MAX_RETRIES) {
-    return { line: `This PR has used its ${MAX_RETRIES} retries, so the Implementer doesn't run again.`, actions: [] };
-  }
+  if (retry > MAX_RETRIES) return null;
   return {
     line: `Retry ${retry} of ${MAX_RETRIES} starts now${retry === MAX_RETRIES ? ", stepped up" : ""}: the Implementer fixes these findings on the same branch.`,
     // A fresh label event starts the retry; the label is the PR's, so it notifies nobody.

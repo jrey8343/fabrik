@@ -3,10 +3,21 @@
 // green, the Reviewer's Verdict line decides. Every Verdict is posted as a PR
 // comment with its marker. Routing flaws onward is for later rules.
 import { whyNotReviewable } from "./agentPullRequest.ts";
+import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
 import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw } from "./retry.ts";
 import { parseVerdict, verdictMarker } from "./verdict.ts";
-import type { Action, KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot, Verdict, VerdictRecord } from "./types.ts";
+import type {
+  Action,
+  KitConfig,
+  LoopEvent,
+  Plan,
+  PostedComment,
+  PullRequestSnapshot,
+  Snapshot,
+  Verdict,
+  VerdictRecord,
+} from "./types.ts";
 
 /** The label that starts a Review again after a failure (src/loop/failures.ts). */
 export const REVIEW_LABEL = "agent:review";
@@ -99,9 +110,14 @@ const HEADINGS: Readonly<Record<Verdict, string>> = {
   "design-flaw": "Design flaw",
 };
 
+/** Names the Verdict comment, so the note on a Ticket sent back to design can link it. */
+const VERDICT_COMMENT: PostedComment = { posted: "verdict" };
+
 /**
  * The Verdict comment (it mentions nobody), and agent:review off so re-adding
- * it is a fresh event. An Execution flaw then starts its retry, if one is left.
+ * it is a fresh event. An Execution flaw then starts its retry, if one is
+ * left; a Design flaw, or an Execution flaw with none left, sends the Ticket
+ * back to design.
  */
 export function verdictActions(
   event: { readonly headSha: string; readonly runUrl: string },
@@ -112,14 +128,14 @@ export function verdictActions(
 ): Action[] {
   const record: VerdictRecord = { verdict, source, requestChanges: pullRequest.requestChangesRun, headSha: event.headSha };
   const by = BY[source];
-  const retry = verdict === "execution-flaw" ? retryAfterFlaw(pullRequest) : null;
+  const next = nextAfter(verdict, pullRequest);
   const body = [
     verdictMarker(record),
     `## Verdict: ${HEADINGS[verdict]}`,
     "",
     `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}.`,
     ...(findings === "" ? [] : ["", findings]),
-    ...(retry === null ? [] : ["", retry.line]),
+    ...(next === null ? [] : ["", next.line]),
     "",
     `[The run](${event.runUrl})`,
   ].join("\n");
@@ -127,7 +143,16 @@ export function verdictActions(
     ...(pullRequest.labels.includes(REVIEW_LABEL)
       ? [{ kind: "remove-label" as const, issue: pullRequest.number, label: REVIEW_LABEL }]
       : []),
-    { kind: "comment", issue: pullRequest.number, body },
-    ...(retry?.actions ?? []),
+    { kind: "comment", issue: pullRequest.number, body, key: VERDICT_COMMENT.posted },
+    ...(next?.actions ?? []),
   ];
+}
+
+/** What a Verdict leads to beyond its comment: a retry, back to design, or (for a pass) nothing here. */
+function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot): { line: string; actions: Action[] } | null {
+  if (verdict === "pass") return null;
+  const retry = verdict === "execution-flaw" ? retryAfterFlaw(pullRequest) : null;
+  if (retry !== null) return retry;
+  const reason = verdict === "design-flaw" ? "design-flaw" : "retries-used-up";
+  return { line: backToDesignLine(pullRequest, reason), actions: backToDesignActions(pullRequest, reason, VERDICT_COMMENT) };
 }

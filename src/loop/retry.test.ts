@@ -45,7 +45,7 @@ describe("An Execution flaw starts a retry", () => {
   it("a pass or a Design flaw starts no retry", () => {
     for (const output of ["verdict: pass", "verdict: design-flaw\n\nWrong approach."]) {
       const plan = planFor(reviewed(output), snapshotOfPullRequest(aPullRequest()), kitConfig());
-      expect(actionsOf(plan).filter((action) => action.kind === "add-labels")).toEqual([]);
+      expect(actionsOf(plan)).not.toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:retry"] });
     }
   });
 });
@@ -165,11 +165,12 @@ function startedRuns(plan: Plan): Action[] {
 }
 
 describe("A Verdict when the retries are used up", () => {
-  it("a third Execution flaw is posted but starts no retry", () => {
+  it("a third Execution flaw is posted but starts no retry (it goes back to design: backToDesign.test.ts)", () => {
     const pullRequest = aPullRequest({ verdicts: [earlier("execution-flaw"), earlier("execution-flaw", { source: "ci" })] });
     const plan = planFor(reviewed("verdict: execution-flaw\n\nStill throws."), snapshotOfPullRequest(pullRequest), kitConfig());
 
-    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["comment"]);
+    expect(actionsOf(plan)[0]).toMatchObject({ kind: "comment", issue: 50 });
+    expect(actionsOf(plan)).not.toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:retry"] });
   });
 });
 
@@ -256,7 +257,7 @@ describe("A retry's branch", () => {
       kitConfig(),
     );
 
-    expect(actionsOf(plan).filter((action) => action.kind === "add-labels")).toEqual([]);
+    expect(actionsOf(plan)).not.toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:retry"] });
   });
 
   it("output that breaks the Implementer's contract is an Infrastructure failure and pushes nothing", () => {

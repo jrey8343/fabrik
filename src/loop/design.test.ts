@@ -269,7 +269,7 @@ describe("Finishing a Design session with an agent brief", () => {
     );
 
     expect(plan.kind).toBe("act");
-    const texts = plan.kind === "act" ? plan.actions.flatMap((a) => ("body" in a ? [a.body] : [])) : [];
+    const texts = plan.kind === "act" ? plan.actions.flatMap((a) => ("body" in a && typeof a.body === "string" ? [a.body] : [])) : [];
     expect(texts).toHaveLength(2);
     expect(texts.flatMap(mentionsIn)).toEqual([]);
   });
