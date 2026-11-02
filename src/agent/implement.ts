@@ -10,6 +10,7 @@ import { readIfPresent } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { sandboxEnv } from "../kit/secrets.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
+import { verdictsIn } from "../loop/verdict.ts";
 import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -49,6 +50,51 @@ export async function startAgentBranch(productDir: string, ticket: number): Prom
   const name = agentBranchFor(ticket);
   await git(productDir, "checkout", "--quiet", "-b", name);
   return { name, base: { ref, sha }, head: null };
+}
+
+/**
+ * For a retry: carries on the Ticket's agent branch, which the checkout holds
+ * at the PR's head. That head is the base, so the bundle holds only the
+ * retry's own commits, and the push job fast-forwards the PR's branch.
+ */
+export async function continueAgentBranch(productDir: string, ticket: number): Promise<BuiltBranch> {
+  const name = agentBranchFor(ticket);
+  // The checkout may be detached at the branch's head; name it, so the bundle has the ref.
+  await git(productDir, "checkout", "--quiet", "-B", name);
+  const sha = await git(productDir, "rev-parse", "HEAD");
+  return { name, base: { ref: name, sha }, head: null };
+}
+
+/**
+ * What a retry's prompt carries beyond the Ticket: the PR it fixes, and the
+ * findings of that PR's latest Verdict, the Fabrik App's comment with a marker.
+ */
+export async function retryContext(pullRequestFile: string): Promise<{ pullRequest: number; parts: string[] }> {
+  const value: unknown = JSON.parse(await readFile(pullRequestFile, "utf8"));
+  const { number, title, comments } = (value ?? {}) as {
+    number?: unknown;
+    title?: unknown;
+    comments?: { body?: unknown; author?: { __typename?: unknown } | null }[];
+  };
+  if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
+  // Only a bot's markers count, as in the core's snapshot, so nobody can plant findings by quoting one.
+  const verdicts = (comments ?? []).flatMap((comment) =>
+    comment.author?.__typename === "Bot" && typeof comment.body === "string" && verdictsIn([comment.body]).length === 1
+      ? [comment.body]
+      : [],
+  );
+  const latest = verdicts.at(-1);
+  if (latest === undefined) throw new Error(`#${number} has no Verdict for the retry to fix`);
+  return {
+    pullRequest: number,
+    parts: [
+      "## The pull request you're fixing",
+      `#${number}: ${String(title ?? "")}`,
+      "## The findings to fix",
+      "The latest Verdict on the PR, posted by the Kit:",
+      latest.trimEnd(),
+    ],
+  };
 }
 
 /**

@@ -53,9 +53,12 @@ jobs:
       implement-timeout-minutes: ${{ steps.route.outputs.implement-timeout-minutes }}
       review-timeout-minutes: ${{ steps.route.outputs.review-timeout-minutes }}
       dispatch-timeout-minutes: ${{ steps.route.outputs.dispatch-timeout-minutes }}
-      # For a Review: the agent PR, and the Ticket its branch was cut for.
+      # For a Review or a retry: the agent PR, and the Ticket its branch was cut for.
+      # For a first Implement run: its Ticket, with no PR.
       pull-request: ${{ steps.route.outputs.pull-request }}
       ticket: ${{ steps.route.outputs.ticket }}
+      # For a retry: the agent branch it builds on, which the Implement job checks out.
+      branch: ${{ steps.route.outputs.branch }}
       # The model and effort the plan chose for its agent run, a Step-up included.
       model: ${{ steps.route.outputs.model }}
       effort: ${{ steps.route.outputs.effort }}
@@ -455,23 +458,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
     # One Implement run per Ticket at a time, so two never race on one branch.
+    # A retry starts from a PR event, so the Ticket comes from the Kit job.
     concurrency:
-      group: fabrik-implement-${{ github.event.issue.number }}
+      group: fabrik-implement-${{ needs.kit.outputs.ticket }}
       cancel-in-progress: false
       queue: max
     permissions:
       contents: read
       issues: read
+      # A retry reads its PR's Verdict comments.
+      pull-requests: read
     outputs:
       # Read by the failure job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}
     steps:
-      # A fresh clone of main: no working directory or .env* files carried over.
-      - name: Check out the Product repo at main
+      # A fresh clone: no working directory or .env* files carried over. A first
+      # run starts from main; a retry from its PR's branch (the Kit job names it).
+      - name: Check out the Product repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: product
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ needs.kit.outputs.branch || github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -499,7 +506,7 @@ jobs:
       - name: Read the Ticket and its parent Spec
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE: ${{ github.event.issue.number }}
+          ISSUE: ${{ needs.kit.outputs.ticket }}
         run: |
           set -euo pipefail
           gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json number,title,body,author,labels,comments >"$RUNNER_TEMP/issue.json"
@@ -509,6 +516,19 @@ jobs:
             --jq '.data.repository.issue.parent' >"$RUNNER_TEMP/spec.json"
           # No parent prints nothing; the Implementer reads that as no Spec.
           [ -s "$RUNNER_TEMP/spec.json" ] || echo null >"$RUNNER_TEMP/spec.json"
+
+      # A retry's findings: the PR's comments, with their authors' kind, so only the Fabrik App's Verdicts count.
+      - name: Read the PR a retry fixes
+        if: needs.kit.outputs.pull-request != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST: ${{ needs.kit.outputs.pull-request }}
+        run: |
+          set -euo pipefail
+          gh api graphql \
+            -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { number title comments(last: 100) { nodes { body author { __typename } } } } } }' \
+            -f owner="${GITHUB_REPOSITORY%%/*}" -f name="${GITHUB_REPOSITORY#*/}" -F number="$PULL_REQUEST" \
+            --jq '.data.repository.pullRequest | {number, title, comments: .comments.nodes}' >"$RUNNER_TEMP/pull-request.json"
 
       # Kit config is read as data; the list of op:// references goes to 1Password as a file.
       - name: List the test secrets to load
@@ -531,6 +551,7 @@ jobs:
           FABRIK_SECRETS: ${{ toJSON(steps.op.outputs) }}
           FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
           FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
+          FABRIK_PULL_REQUEST_FILE: ${{ needs.kit.outputs.pull-request != '' && format('{0}/pull-request.json', runner.temp) || '' }}
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
           FABRIK_MODEL: ${{ needs.kit.outputs.model }}
           FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
@@ -611,7 +632,8 @@ jobs:
         env:
           FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
           FABRIK_FAILED_ROLE: implement
-          FABRIK_FAILED_ISSUE: ${{ github.event.issue.number }}
+          # The Ticket, for a retry too: the core finds its PR and names agent:retry there.
+          FABRIK_FAILED_ISSUE: ${{ needs.kit.outputs.ticket }}
           FABRIK_AGENT_JOB_RESULT: ${{ needs.implement.result }}
           FABRIK_SECRETS_STEP: ${{ needs.implement.outputs.secrets-step }}
           FABRIK_AGENT_FAILURE: ${{ runner.temp }}/agent/agent-failure.json
@@ -911,8 +933,11 @@ jobs:
         working-directory: .fabrik-kit
         env:
           FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
-          # The agent could rewrite its own artifact, so the run's issue comes from the event.
-          FABRIK_RUN_ISSUE: ${{ github.event.issue.number }}
+          # The agent could rewrite its own artifact, so the run's issue comes from the event,
+          # or for an Implement run (a retry's PR event included) from the Kit job's plan.
+          FABRIK_RUN_ISSUE: ${{ needs.kit.outputs.route == 'implement' && needs.kit.outputs.ticket || github.event.issue.number }}
+          # A retry's PR, from the Kit job's plan: its branch lands on that PR.
+          FABRIK_RUN_PULL_REQUEST: ${{ needs.kit.outputs.route == 'implement' && needs.kit.outputs.pull-request || '' }}
           FABRIK_AGENT_RESULT: ${{ (needs.kit.outputs.route != 'push' && !(needs.kit.outputs.route == 'review' && needs.review-checks.outputs.checks == 'red')) && format('{0}/agent/agent-result.json', runner.temp) || '' }}
           # A Review's PR, and what its checks job saw, which the agent can't rewrite.
           FABRIK_REVIEW_PULL_REQUEST: ${{ needs.kit.outputs.route == 'review' && needs.kit.outputs.pull-request || '' }}

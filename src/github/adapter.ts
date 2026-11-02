@@ -91,7 +91,11 @@ export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run
  * Turns the result an agent job passed out as an artifact (src/agent/result.ts)
  * into the Loop event its push job applies.
  */
-export function agentRunEventFrom(result: AgentRunResult, changes: BranchChanges | null = null): LoopEvent {
+export function agentRunEventFrom(
+  result: AgentRunResult,
+  changes: BranchChanges | null = null,
+  retry: { readonly pullRequest: number; readonly runUrl: string } | null = null,
+): LoopEvent {
   if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
   if (result.role !== "implement") {
     return { kind: "agent-run-finished", role: result.role, issue: result.issue, output: result.output };
@@ -106,6 +110,8 @@ export function agentRunEventFrom(result: AgentRunResult, changes: BranchChanges
     branch: result.branch.name,
     base: result.branch.base.ref,
     changes,
+    // A retry's branch starts at the PR head it built on, which the core checks is still the PR's.
+    ...(retry === null ? {} : { fixes: { ...retry, headSha: result.branch.base.sha } }),
   };
 }
 
@@ -374,6 +380,13 @@ async function gatherEventPart(
       return gatherDispatch(github, actions, repo, operator);
     case "scheduled-tick":
       return null;
+    case "implement-run-finished": {
+      const ticket = await gatherIssue(github, repo, event.issue, operator);
+      if (event.fixes === undefined) return ticket;
+      // A retry's push job weighs the Ticket and the PR it fixes.
+      const { pullRequest } = await gatherPullRequest(github, repo, event.fixes.pullRequest, operator);
+      return { ...ticket, pullRequest };
+    }
     default:
       return gatherIssue(github, repo, event.issue, operator);
   }

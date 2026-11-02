@@ -41,7 +41,7 @@ npm test
 - A 1Password API Credential item `Claude token` in the `Fabrik` vault, holding the `claude setup-token` token in its `credential` field, with its expiry date.
 - The repo's read-only agent service account (reads the `Fabrik` vault) stored as the Actions secret `FABRIK_OP_AGENT_TOKEN`.
 - A `Fabrik Sandbox · <product>` vault holding the repo's test secrets, and the repo's read-only implement service account (reads the `Fabrik` vault and that one) stored as the Actions secret `FABRIK_OP_IMPLEMENT_TOKEN`.
-- `.claude/skills/` in the repo's `.gitignore`, and the labels `needs-triage`, `needs-info`, `needs-design`, `ready-for-agent`, `ready-for-human`, `wontfix`, `agent:implement`, `agent:review`, `bug` and `enhancement`.
+- `.claude/skills/` in the repo's `.gitignore`, and the labels `needs-triage`, `needs-info`, `needs-design`, `ready-for-agent`, `ready-for-human`, `wontfix`, `agent:implement`, `agent:review`, `agent:retry`, `bug` and `enhancement`.
 - `templates/fabrik.yml` installed as `.github/workflows/fabrik.yml`, with every Fabrik `uses:` line pinned to the same exact tag. A run fails if they disagree. It runs on `issues`, `issue_comment` and `pull_request_target` (opened, synchronize, reopened, labeled, ready_for_review, closed).
 
 ## Design session (async)
@@ -80,8 +80,18 @@ Every agent draft PR is reviewed before the Operator sees it. The Fabrik App ope
 - **Red checks** are an Execution flaw. The Reviewer doesn't run.
 - **Green checks** start the read-only Reviewer (Opus 5.5 by default, plus `.fabrik/review.md` when present) in a checkout of the PR's head. It holds only the agent service account and runs none of the PR's code. It judges the PR against its Ticket, the Ticket's Spec, the repo's standards and the review instructions.
 - **The Verdict contract**: the Reviewer's reply starts with exactly one line, `verdict: pass`, `verdict: execution-flaw` or `verdict: design-flaw`, then its findings. Anything else, an empty reply or a provider error, is an Infrastructure failure, never a pass.
-- **Posting**: the push job posts every Verdict, red checks' included, as a PR comment from the Fabrik App, linking its run. The comment's first line is a marker, `<!-- fabrik:verdict {"verdict":…,"source":"reviewer"|"ci","requestChanges":…,"headSha":…} -->`, so a PR's review history can be read from its comments alone. The marker is only read from bot comments. A Verdict is posted once per head commit, and never for a commit the PR has moved on from.
+- **Posting**: the push job posts every Verdict, red checks' included, as a PR comment from the Fabrik App, linking its run. The comment's first line is a marker, `<!-- fabrik:verdict {"verdict":…,"source":"reviewer"|"ci"|"empty-diff","requestChanges":…,"headSha":…} -->`, so a PR's review history can be read from its comments alone. The marker is only read from bot comments. A Verdict is posted once per head commit, and never for a commit the PR has moved on from.
 - **A pass** takes the PR out of draft and requests the Operator's review, the event's one notification. A flaw is posted and mentions nobody.
+
+## Execution-flaw retries
+
+An Execution flaw gets fixed without the Operator, silently: no mention, assignment or review request.
+
+- **The trigger**: an Execution-flaw Verdict, from the Reviewer or red CI, adds `agent:retry` to the PR. That label starts the Implementer again on the PR's own branch, in a fresh clone checked out at its head, with the latest Verdict's findings in its prompt. The label comes off as the run starts.
+- **The count**: retries are counted from the PR's earlier Verdict comments alone, up to 2. Verdicts marked as from a Request-changes run don't count, and an Infrastructure failure posts no Verdict, so it never uses one up: re-adding `agent:retry` runs the same retry again.
+- **The Step-up**: the first retry runs on the Implementer's model (`roles.implement`), the second on the Step-up model (Opus 5.5 by default, `roles.step_up`), for that PR only. The Kit never drops to a cheaper model or skips a Step-up for any reason.
+- **The push**: the push job runs the trust-root guard on the retry's own commits and fast-forwards the PR's branch (a branch that moved meanwhile refuses the push), which starts Review again. A retry that commits nothing is posted as an Execution-flaw Verdict with source `empty-diff`, and counts like any other.
+- **Used up**: a third Execution flaw is posted, and starts no retry.
 
 ## Kit config
 

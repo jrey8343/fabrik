@@ -4,15 +4,24 @@ import { checkTrustRoot } from "../guard/trust-root.ts";
 import { isDesignSessionComment } from "./design.ts";
 import { parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
+import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
-import type { Action, IssueContext, IssueSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
+import { MAX_RETRIES } from "./retry.ts";
+import { verdictActions } from "./review.ts";
+import type {
+  Action,
+  IssueContext,
+  IssueSnapshot,
+  KitConfig,
+  LoopEvent,
+  Plan,
+  PullRequestSnapshot,
+  Snapshot,
+} from "./types.ts";
 
 type ImplementRunFinished = Extract<LoopEvent, { kind: "implement-run-finished" }>;
 
 const CHECK_DISPATCH: Action = { kind: "check-dispatch" };
-
-/** Execution-flaw retries a Ticket gets before the next flaw counts as a Design flaw. */
-const MAX_RETRIES = 2;
 
 /**
  * agent:implement starts the Implementer. The label comes off as the run starts,
@@ -81,6 +90,81 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
       },
     ],
   };
+}
+
+/**
+ * The push job's decision on a retry's branch: built on the agent PR's head,
+ * it lands as more commits on that same branch, never a new PR, and the push
+ * starts Review again. The guard checks the retry's own commits, the earlier
+ * ones having passed it already. One that changes nothing is an Execution flaw
+ * on the PR, which starts the next retry if one is left. All of it is silent.
+ */
+export function applyRetryImplementation(event: ImplementRunFinished, snapshot: Snapshot): Plan {
+  const { issue: issueNumber, changes, branch, fixes } = event;
+  const { issue, pullRequest, operator } = snapshot;
+  if (fixes === undefined) throw new Error("A first Implement run lands through applyImplementation");
+  const parsed = parseImplementOutput(event.output);
+  if (!parsed.ok) {
+    return {
+      kind: "fail",
+      failure: "infrastructure",
+      reason: `The Implementer's retry on #${fixes.pullRequest} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
+    };
+  }
+  if (issue === null || pullRequest === null) {
+    return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the Ticket or the PR its retry fixes" };
+  }
+  const stale = whyNotRetriedOnto(issueNumber, issue, fixes, pullRequest);
+  if (stale !== null) return { kind: "nothing", reason: `${stale}, so the retry's branch isn't pushed` };
+
+  const guard = checkTrustRoot([...changes.net, ...changes.commits]);
+  if (guard.kind === "refuse") return refuse(issueNumber, guard.paths, operator);
+  if (changes.net.length === 0) {
+    return {
+      kind: "act",
+      actions: verdictActions(
+        fixes,
+        pullRequest,
+        "execution-flaw",
+        "empty-diff",
+        `The Implementer's retry on \`${branch}\` committed no change, so there was nothing to review.`,
+      ),
+    };
+  }
+  return {
+    kind: "act",
+    actions: [
+      { kind: "push-branch", branch },
+      {
+        kind: "comment",
+        issue: pullRequest.number,
+        body: [
+          `The Implementer pushed a fix for the Execution flaw to \`${branch}\`; Review runs again on it.`,
+          "",
+          withoutMentions(parsed.output.summary),
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+/** Why a retry's branch can't land on this PR now, or null when it can. */
+function whyNotRetriedOnto(
+  issueNumber: number,
+  issue: IssueSnapshot,
+  fixes: NonNullable<ImplementRunFinished["fixes"]>,
+  pullRequest: PullRequestSnapshot,
+): string | null {
+  if (pullRequest.number !== fixes.pullRequest) return `The snapshot is of #${pullRequest.number}, not #${fixes.pullRequest}`;
+  const why = whyNotReviewable(pullRequest);
+  if (why !== null) return why;
+  if (pullRequest.ticket !== issueNumber) return `#${pullRequest.number} isn't #${issueNumber}'s PR`;
+  if (pullRequest.headSha !== fixes.headSha) {
+    return `#${pullRequest.number} has moved on from ${fixes.headSha.slice(0, 7)}`;
+  }
+  if (!issue.open) return `#${issueNumber} is closed`;
+  if (!issue.labels.includes(READY_FOR_AGENT)) return `#${issueNumber} isn't ${READY_FOR_AGENT}`;
+  return null;
 }
 
 /**

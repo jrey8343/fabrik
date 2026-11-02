@@ -2,7 +2,9 @@
 // Red required checks are an Execution flaw and the Reviewer doesn't run; on
 // green, the Reviewer's Verdict line decides. Every Verdict is posted as a PR
 // comment with its marker. Routing flaws onward is for later rules.
+import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
+import { retryAfterFlaw } from "./retry.ts";
 import { parseVerdict, verdictMarker } from "./verdict.ts";
 import type { Action, KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot, Verdict, VerdictRecord } from "./types.ts";
 
@@ -85,28 +87,39 @@ function landVerdict(
   return decide(pullRequest);
 }
 
+const BY: Readonly<Record<VerdictRecord["source"], string>> = {
+  ci: "red required checks",
+  reviewer: "the Reviewer",
+  "empty-diff": "a retry that changed nothing",
+};
+
 const HEADINGS: Readonly<Record<Verdict, string>> = {
   pass: "Pass",
   "execution-flaw": "Execution flaw",
   "design-flaw": "Design flaw",
 };
 
-/** The Verdict comment (it mentions nobody), and agent:review off so re-adding it is a fresh event. */
-function verdictActions(
-  event: RedChecks | Reviewed,
+/**
+ * The Verdict comment (it mentions nobody), and agent:review off so re-adding
+ * it is a fresh event. An Execution flaw then starts its retry, if one is left.
+ */
+export function verdictActions(
+  event: { readonly headSha: string; readonly runUrl: string },
   pullRequest: PullRequestSnapshot,
   verdict: Verdict,
   source: VerdictRecord["source"],
   findings: string,
 ): Action[] {
   const record: VerdictRecord = { verdict, source, requestChanges: pullRequest.requestChangesRun, headSha: event.headSha };
-  const by = source === "ci" ? "red required checks" : "the Reviewer";
+  const by = BY[source];
+  const retry = verdict === "execution-flaw" ? retryAfterFlaw(pullRequest) : null;
   const body = [
     verdictMarker(record),
     `## Verdict: ${HEADINGS[verdict]}`,
     "",
     `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}.`,
     ...(findings === "" ? [] : ["", findings]),
+    ...(retry === null ? [] : ["", retry.line]),
     "",
     `[The run](${event.runUrl})`,
   ].join("\n");
@@ -115,14 +128,6 @@ function verdictActions(
       ? [{ kind: "remove-label" as const, issue: pullRequest.number, label: REVIEW_LABEL }]
       : []),
     { kind: "comment", issue: pullRequest.number, body },
+    ...(retry?.actions ?? []),
   ];
-}
-
-/** Why this PR isn't one to review, or null when it is. */
-function whyNotReviewable(pullRequest: PullRequestSnapshot): string | null {
-  if (!pullRequest.isAgent) return `#${pullRequest.number} isn't an agent PR`;
-  if (pullRequest.ticket === null) return `#${pullRequest.number}'s branch names no Ticket`;
-  if (!pullRequest.open) return `#${pullRequest.number} is closed`;
-  if (!pullRequest.draft) return `#${pullRequest.number} has left draft`;
-  return null;
 }

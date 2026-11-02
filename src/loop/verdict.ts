@@ -57,7 +57,7 @@ function readMarker(body: string): VerdictRecord | null {
   if (typeof value !== "object" || value === null) return null;
   const { verdict, source, requestChanges, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
-  if (source !== "reviewer" && source !== "ci") return null;
+  if (source !== "reviewer" && source !== "ci" && source !== "empty-diff") return null;
   if (typeof requestChanges !== "boolean" || typeof headSha !== "string") return null;
   return { verdict: verdict as Verdict, source, requestChanges, headSha };
 }

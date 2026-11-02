@@ -80,8 +80,11 @@ export async function rebuildAgentBranch(
     changes: { net, commits },
     async push(name) {
       if (name !== branch.name) throw new Error(`Asked to push ${name}, but the bundle holds ${branch.name}`);
-      // Forced: a fresh run from main replaces whatever an earlier run left on the agent branch.
-      await git("push", "--quiet", "--force", url, `${ref}:${ref}`);
+      // A retry builds on the branch itself, so it only fast-forwards it: a branch
+      // that moved meanwhile refuses the push. A fresh run from main is forced,
+      // replacing whatever an earlier run left on the agent branch.
+      const retry = branch.base.ref === branch.name;
+      await git("push", "--quiet", ...(retry ? [] : ["--force"]), url, `${ref}:${ref}`);
     },
   };
 }
