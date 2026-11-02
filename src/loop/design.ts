@@ -1,20 +1,24 @@
 // Design-session rules: when a turn starts, and how its output lands on the issue.
 // Each turn rebuilds its context from the issue thread, so nothing is held here
 // between turns beyond what the thread itself shows.
-import { parseDesignTurnOutput, type DesignTurnOutput } from "./designOutput.ts";
-import { NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
+import { dependencyOrder, parseDesignTurnOutput, type DesignTurnOutput } from "./designOutput.ts";
+import { CATEGORY_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { startAgentRun } from "./runs.ts";
-import type { IssueContext, IssueSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
+import type { Action, CreatedIssue, IssueContext, IssueSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
 
 /** Adding needs-design starts the session's first round. */
 export function startSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
   return whileInSession(issueNumber, issue) ?? startAgentRun("design", issueNumber, config);
 }
 
-/** The Operator's reply to a round starts the next turn; nobody else's comment, and no bot's, does. */
+/**
+ * The Operator's reply to a round starts the next turn; nobody else's comment,
+ * and no bot's, does. The Operator's comment that opens with a live outcome
+ * marker instead lands what a live session decided.
+ */
 export function answerRound(
-  { issue: issueNumber, commenter, commenterIsBot }: Extract<LoopEvent, { kind: "issue-comment-created" }>,
+  { issue: issueNumber, commenter, commenterIsBot, body }: Extract<LoopEvent, { kind: "issue-comment-created" }>,
   snapshot: IssueContext,
   config: KitConfig,
 ): Plan {
@@ -27,7 +31,42 @@ export function answerRound(
       reason: `@${commenter} isn't the Operator, so their comment on #${issueNumber} doesn't drive the Design session`,
     };
   }
-  return whileInSession(issueNumber, snapshot.issue) ?? startAgentRun("design", issueNumber, config);
+  const notNow = whileInSession(issueNumber, snapshot.issue);
+  if (notNow !== null) return notNow;
+  const live = LIVE_OUTCOME_MARKER.exec(body);
+  return live?.[1] === undefined ? startAgentRun("design", issueNumber, config) : landLiveOutcome(issueNumber, live[1]);
+}
+
+/**
+ * Opens the comment a live Design session ends with. A live session runs with
+ * the Operator's own credentials in a cloud or local session, and has already
+ * published its outcome: the issue rewritten as its agent brief, or the Spec and
+ * its Tickets created. Only the start of a comment counts, so quoting it doesn't.
+ */
+const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
+
+/** The live session's outcome is already on GitHub, so the Kit only moves the issue on, as an async finish would. */
+function landLiveOutcome(issueNumber: number, outcome: string): Plan {
+  const leaveSession: Action = { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN };
+  // Either outcome leaves new ready work, so see whether it can start.
+  switch (outcome) {
+    case "brief":
+      return {
+        kind: "act",
+        actions: [leaveSession, { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] }, { kind: "check-dispatch" }],
+      };
+    case "spec":
+      // The Operator's comment already names the Spec that supersedes this issue.
+      return {
+        kind: "act",
+        actions: [leaveSession, { kind: "close", issue: issueNumber, reason: "completed" }, { kind: "check-dispatch" }],
+      };
+    default:
+      return {
+        kind: "nothing",
+        reason: `The live Design session on #${issueNumber} posted the outcome ${outcome}, which isn't brief or spec, so the Kit left the issue as it is`,
+      };
+  }
 }
 
 /** A finished turn posts the next round, or ends the session with its outcome. */
@@ -48,28 +87,90 @@ export function applyTurn(issueNumber: number, text: string, snapshot: IssueCont
     const round = snapshot.issue.designRounds + 1;
     return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body: roundComment(round, output, snapshot.operator) }] };
   }
-  return {
-    kind: "act",
-    actions: [
-      { kind: "edit-issue-body", issue: issueNumber, body: briefBody(output) },
-      {
-        kind: "comment",
-        issue: issueNumber,
-        body: [
-          `${SESSION_FINISHED} This issue is now its agent brief, ready for an Implementer.`,
-          "",
-          withoutMentions(output.comment),
-        ].join("\n"),
-      },
-      { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
-      { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] },
-    ],
-  };
+  const landed =
+    output.kind === "brief"
+      ? rewriteAsBrief(issueNumber, output)
+      : supersedeBySpec(issueNumber, output, snapshot.issue);
+  // Either outcome leaves new ready work, so see whether it can start.
+  return { kind: "act", actions: [...landed, { kind: "check-dispatch" }] };
+}
+
+/** The small outcome: the issue becomes its own agent brief, ready for an Implementer. */
+function rewriteAsBrief(issueNumber: number, output: Extract<DesignTurnOutput, { kind: "brief" }>): Action[] {
+  return [
+    { kind: "edit-issue-body", issue: issueNumber, body: briefBody(output) },
+    {
+      kind: "comment",
+      issue: issueNumber,
+      body: [
+        `${SESSION_FINISHED} This issue is now its agent brief, ready for an Implementer.`,
+        "",
+        withoutMentions(output.comment),
+      ].join("\n"),
+    },
+    { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
+    { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] },
+  ];
+}
+
+const SPEC: CreatedIssue = { created: "spec" };
+
+/**
+ * The large outcome: the Spec, then its Tickets as its sub-issues, blockers
+ * first so each blocked-by edge points at an issue that exists. Both carry a
+ * state label (and the Tickets a parent), so Intake never sends them to Triage.
+ * The issue they came from closes, superseded by the Spec.
+ */
+function supersedeBySpec(
+  issueNumber: number,
+  output: Extract<DesignTurnOutput, { kind: "spec" }>,
+  issue: IssueSnapshot,
+): Action[] {
+  const labels = [...issue.labels.filter((label) => CATEGORY_LABELS.includes(label)), READY_FOR_AGENT];
+  const ticketIssue = (key: string): CreatedIssue => ({ created: `ticket:${key}` });
+  // The contract has already refused blockers that loop, so there is always an order.
+  const tickets = dependencyOrder(output.tickets) ?? [];
+  return [
+    {
+      kind: "create-issue",
+      key: SPEC.created,
+      title: withoutMentions(output.spec.title),
+      body: [
+        withoutMentions(output.spec.body),
+        "",
+        `<sub>Written by the Fabrik Design session on #${issueNumber}, which this Spec supersedes.</sub>`,
+      ].join("\n"),
+      labels,
+      parent: null,
+      blockedBy: [],
+    },
+    ...tickets.map(
+      (ticket): Action => ({
+        kind: "create-issue",
+        key: ticketIssue(ticket.key).created,
+        title: withoutMentions(ticket.title),
+        body: withoutMentions(ticket.body),
+        labels,
+        parent: SPEC,
+        blockedBy: ticket.blockedBy.map(ticketIssue),
+      }),
+    ),
+    { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
+    {
+      kind: "close-as-superseded",
+      issue: issueNumber,
+      comment: [
+        `${SESSION_FINISHED} This issue is superseded by the Spec `,
+        SPEC,
+        ` and its ${tickets.length} ${tickets.length === 1 ? "Ticket" : "Tickets"}.\n\n${withoutMentions(output.comment)}`,
+      ],
+    },
+  ];
 }
 
 const ROUND_MARKER = /^<!-- fabrik:design-round (\d+) -->/;
 
-/** How the comment that ends a Design session starts. */
+/** How the comment that ends a Design session starts, either way it ends. */
 const SESSION_FINISHED = "**Design session finished.**";
 
 /** Whether a comment is a round the Kit posted, so the next round can be numbered after it. */
@@ -77,9 +178,9 @@ export function isDesignRoundComment(body: string): boolean {
   return ROUND_MARKER.test(body);
 }
 
-/** Whether a comment is one the Kit posts during a Design session: a round, or the session's end. */
+/** Whether a comment is part of a Design session: a round, or the session's end, async or live. */
 export function isDesignSessionComment(body: string): boolean {
-  return isDesignRoundComment(body) || body.startsWith(SESSION_FINISHED);
+  return isDesignRoundComment(body) || body.startsWith(SESSION_FINISHED) || LIVE_OUTCOME_MARKER.test(body);
 }
 
 /** A round: the only Design-session text that notifies, through one @-mention of the Operator. */
@@ -110,7 +211,6 @@ function briefBody(output: Extract<DesignTurnOutput, { kind: "brief" }>): string
     "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
   ].join("\n");
 }
-
 
 /** Why a session on this issue can't take a turn now, or null when it can. */
 function whileInSession(issueNumber: number, issue: IssueSnapshot): Plan | null {

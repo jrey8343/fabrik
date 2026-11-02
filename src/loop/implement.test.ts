@@ -186,6 +186,7 @@ describe("Counting earlier empty diffs", () => {
   it.each([
     ["a Design-session round", round],
     ["a finished Design session", finishedSession],
+    ["a live Design session's outcome", "<!-- fabrik:live-outcome brief -->\nDecided in a live session."],
   ])("starts again after %s, so a redesigned Ticket gets fresh retries", (_what, comment) => {
     expect(countEmptyDiffs([marker, marker, comment, marker])).toBe(1);
   });

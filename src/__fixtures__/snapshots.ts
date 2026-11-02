@@ -4,6 +4,7 @@ import type {
   DispatchSnapshot,
   IssueSnapshot,
   KitConfig,
+  Plan,
   PullRequestSnapshot,
   Snapshot,
   TicketSnapshot,
@@ -26,7 +27,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, operator: "operator", ...overrides };
+  return { issue, pullRequest: null, dispatch: null, operator: "operator", kitIssues: [], ...overrides };
 }
 
 /** A pull request, by default one the Fabrik App opened for a Ticket. */
@@ -36,7 +37,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
 
 /** A snapshot of this pull request. */
 export function snapshotOfPullRequest(pullRequest: PullRequestSnapshot): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, operator: "operator" };
+  return { issue: null, pullRequest, dispatch: null, operator: "operator", kitIssues: [] };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -62,7 +63,37 @@ export function dispatchSnapshotOf(
     pullRequest: null,
     dispatch: { tickets, openAgentDraftPullRequests: 0, implementRunsInProgress: 0, ...inFlight },
     operator: "operator",
+    kitIssues: [],
   };
+}
+
+/** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
+export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {}): Snapshot {
+  return { issue: null, pullRequest: null, dispatch: null, operator: "operator", kitIssues: [], ...overrides };
+}
+
+/**
+ * Every way a plan would buzz the Operator's phone: an assignment, an issue
+ * opened assigned to them, or an @-mention of them in a comment or new issue.
+ */
+export function notificationsOf(plan: Plan, operator = "operator"): string[] {
+  if (plan.kind !== "act") return [];
+  const mention = new RegExp(`@${operator}\\b`);
+  return plan.actions.flatMap((action) => {
+    switch (action.kind) {
+      case "assign":
+        return action.assignee === operator ? [`assign #${action.issue}`] : [];
+      case "comment":
+        return mention.test(action.body) ? [`mention on #${action.issue}`] : [];
+      case "open-issue":
+        return [
+          ...(action.assignees.includes(operator) ? [`assign new "${action.title}"`] : []),
+          ...(mention.test(action.body) ? [`mention in new "${action.title}"`] : []),
+        ];
+      default:
+        return [];
+    }
+  });
 }
 
 /** A Kit config with every v1 default, as a Product repo with no .fabrik/config.json gets. */

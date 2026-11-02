@@ -40,7 +40,7 @@ const PREFLIGHT_REFUSAL = /Metered-billing preflight (refused the run|could not 
 const ROUTE_LINE = /::error title=Metered-billing route::(.*)/g;
 
 /** A provider error the stream reported, if the run never recovered from it. */
-function providerError(messages: readonly Message[]): { error: string; detail: string } | null {
+function providerError(messages: readonly Message[]): { error: string; detail: string; resetsAt?: string } | null {
   const results = messages.filter((m) => m["type"] === "result");
   const last = results.at(-1);
   // A run that ended in a clean result recovered from any retries along the way.
@@ -52,8 +52,9 @@ function providerError(messages: readonly Message[]): { error: string; detail: s
   const weekly = rejected.find((info) => String(info["rateLimitType"] ?? "").startsWith("seven_day"));
   if (weekly !== undefined) {
     const resetsAt = weekly["resetsAt"];
-    const detail = typeof resetsAt === "number" ? `resets at ${new Date(resetsAt * 1000).toISOString()}` : "";
-    return { error: "weekly_limit", detail };
+    if (typeof resetsAt !== "number") return { error: "weekly_limit", detail: "" };
+    const at = new Date(resetsAt * 1000).toISOString();
+    return { error: "weekly_limit", detail: `resets at ${at}`, resetsAt: at };
   }
 
   const retries = messages.filter((m) => m["type"] === "system" && m["subtype"] === "api_retry");
@@ -95,7 +96,11 @@ export function failureReportFor({ error, lines, initRefused }: FailureEvidence)
         : provider.error === "weekly_limit"
           ? "weekly-limit"
           : "provider-error";
-    return { failure, detail: provider.detail };
+    return {
+      failure,
+      detail: provider.detail,
+      ...(provider.resetsAt === undefined ? {} : { resetsAt: provider.resetsAt }),
+    };
   }
 
   if (nameOf(error) === "StructuredOutputError") return { failure: "missing-output", detail: message };
@@ -119,5 +124,10 @@ export function readFailureReport(text: string): FailureReport {
     return { failure: "crash", detail: `${AGENT_FAILURE_FILE} was unreadable` };
   }
   const detail = value?.["detail"];
-  return { failure: failure as ReportedFailure, detail: typeof detail === "string" ? detail : "" };
+  const resetsAt = value?.["resetsAt"];
+  return {
+    failure: failure as ReportedFailure,
+    detail: typeof detail === "string" ? detail : "",
+    ...(typeof resetsAt === "string" && !Number.isNaN(Date.parse(resetsAt)) ? { resetsAt } : {}),
+  };
 }

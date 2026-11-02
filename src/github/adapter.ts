@@ -6,11 +6,14 @@ import type { AgentRunResult } from "../agent/result.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { isDesignRoundComment } from "../loop/design.ts";
 import { countEmptyDiffs } from "../loop/implement.ts";
+import { KIT_ISSUE_LABELS } from "../loop/kitIssues.ts";
 import type {
   Action,
   AgentRole,
   BranchChanges,
+  CreatedIssue,
   FailureReport,
+  KitIssueSnapshot,
   LoopEvent,
   Plan,
   Snapshot,
@@ -23,7 +26,13 @@ export interface Repo {
 }
 
 /** Maps an Actions event to the Loop event it stands for, or null if the Loop ignores it. */
-export function loopEventFrom(eventName: string, payload: Record<string, unknown>): LoopEvent | null {
+export function loopEventFrom(
+  eventName: string,
+  payload: Record<string, unknown>,
+  now: Date = new Date(),
+): LoopEvent | null {
+  // The scheduled Kit workflow (schedule.yml), for the Loop's time-based rules.
+  if (eventName === "schedule") return { kind: "scheduled-tick", now: now.toISOString() };
   if (eventName === "issues" && payload["action"] === "opened") {
     const issue = payload["issue"] as { number: number };
     return { kind: "issue-opened", issue: issue.number };
@@ -37,8 +46,14 @@ export function loopEventFrom(eventName: string, payload: Record<string, unknown
     const issue = payload["issue"] as { number: number; pull_request?: unknown };
     // A comment on a PR is not a reply on an issue.
     if (issue.pull_request !== undefined) return null;
-    const user = (payload["comment"] as { user: { login: string; type: string } }).user;
-    return { kind: "issue-comment-created", issue: issue.number, commenter: user.login, commenterIsBot: user.type === "Bot" };
+    const comment = payload["comment"] as { user: { login: string; type: string }; body?: string | null };
+    return {
+      kind: "issue-comment-created",
+      issue: issue.number,
+      commenter: comment.user.login,
+      commenterIsBot: comment.user.type === "Bot",
+      body: comment.body ?? "",
+    };
   }
   if (eventName === "issues" && payload["action"] === "closed") {
     return { kind: "issue-closed", issue: (payload["issue"] as { number: number }).number };
@@ -282,6 +297,24 @@ export async function gatherSnapshot(
   operator: string | null,
   actions: GitHub | null = null,
 ): Promise<Snapshot> {
+  const [{ owner, kitIssues }, part] = await Promise.all([
+    gatherKitIssues(github, repo),
+    gatherEventPart(github, repo, event, operator, actions),
+  ]);
+  // By default the Operator owns the Product repos they run Fabrik in.
+  return part === null
+    ? { issue: null, pullRequest: null, dispatch: null, operator: operator ?? owner, kitIssues }
+    : { ...part, kitIssues };
+}
+
+/** The part of the snapshot the event is about, or null for an event about the repo as a whole. */
+async function gatherEventPart(
+  github: GitHub,
+  repo: Repo,
+  event: LoopEvent,
+  operator: string | null,
+  actions: GitHub | null,
+): Promise<EventPart | null> {
   switch (event.kind) {
     case "pull-request-left-draft":
     case "pull-request-closed":
@@ -289,12 +322,59 @@ export async function gatherSnapshot(
     case "dispatch-check":
       if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");
       return gatherDispatch(github, actions, repo, operator);
+    case "scheduled-tick":
+      return null;
     default:
       return gatherIssue(github, repo, event.issue, operator);
   }
 }
 
-async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null): Promise<Snapshot> {
+type EventPart = Omit<Snapshot, "kitIssues">;
+
+const KIT_ISSUES_QUERY = `
+  query ($owner: String!, $name: String!, $labels: [String!]!) {
+    repository(owner: $owner, name: $name) {
+      owner { login }
+      issues(states: OPEN, labels: $labels, first: 20, orderBy: { field: CREATED_AT, direction: ASC }) {
+        nodes {
+          number
+          body
+          labels(first: 100) { nodes { name } }
+          comments(last: 100) { nodes { body } }
+        }
+      }
+    }
+  }
+`;
+
+interface KitIssuesQueryResult {
+  repository: {
+    owner: { login: string };
+    issues: {
+      nodes: { number: number; body: string; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string }[] } }[];
+    };
+  };
+}
+
+/** The open issues carrying a Kit-owned label (src/loop/kitIssues.ts), which every event's snapshot holds. */
+async function gatherKitIssues(github: GitHub, repo: Repo): Promise<{ owner: string; kitIssues: KitIssueSnapshot[] }> {
+  const data = await github.graphql<KitIssuesQueryResult>(KIT_ISSUES_QUERY, {
+    owner: repo.owner,
+    name: repo.name,
+    labels: KIT_ISSUE_LABELS,
+  });
+  return {
+    owner: data.repository.owner.login,
+    kitIssues: data.repository.issues.nodes.map((issue) => ({
+      number: issue.number,
+      labels: issue.labels.nodes.map((label) => label.name),
+      body: issue.body,
+      comments: issue.comments.nodes.map((comment) => comment.body),
+    })),
+  };
+}
+
+async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null): Promise<EventPart> {
   const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, { owner: repo.owner, name: repo.name, number });
   const issue = data.repository.issue;
   if (issue === null) {
@@ -323,7 +403,7 @@ async function gatherPullRequest(
   repo: Repo,
   number: number,
   operator: string | null,
-): Promise<Snapshot> {
+): Promise<EventPart> {
   const data = await github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, {
     owner: repo.owner,
     name: repo.name,
@@ -352,7 +432,7 @@ async function gatherDispatch(
   actions: GitHub,
   repo: Repo,
   operator: string | null,
-): Promise<Snapshot> {
+): Promise<EventPart> {
   const tickets: TicketSnapshot[] = [];
   let after: string | null = null;
   let page: DispatchQueryResult;
@@ -438,8 +518,46 @@ export async function applyPlan(
   branches: BranchPusher | null = null,
 ): Promise<void> {
   if (plan.kind !== "act") return;
+  const created = new Map<string, CreatedRecord>();
   for (const action of plan.actions) {
-    await apply(github, repo, action, branches);
+    await apply(github, repo, action, created, branches);
+  }
+}
+
+/** An issue a plan created: its number for links in text, its database id for sub-issue and blocked-by edges. */
+interface CreatedRecord {
+  readonly number: number;
+  readonly id: number;
+}
+
+function createdIn(created: ReadonlyMap<string, CreatedRecord>, { created: key }: CreatedIssue): CreatedRecord {
+  const record = created.get(key);
+  if (record === undefined) throw new Error(`The plan refers to an issue it hasn't created: ${key}`);
+  return record;
+}
+
+/** Creates the issue, then links it under its parent and to each blocker, all made earlier in the plan. */
+async function createIssue(
+  github: GitHub,
+  repo: Repo,
+  action: Extract<Action, { kind: "create-issue" }>,
+  created: Map<string, CreatedRecord>,
+): Promise<void> {
+  const issues = `/repos/${repo.owner}/${repo.name}/issues`;
+  const issue = (await github.rest("POST", issues, {
+    title: action.title,
+    body: action.body,
+    labels: action.labels,
+  })) as CreatedRecord;
+  created.set(action.key, { number: issue.number, id: issue.id });
+  if (action.parent !== null) {
+    const parent = createdIn(created, action.parent);
+    await github.rest("POST", `${issues}/${parent.number}/sub_issues`, { sub_issue_id: issue.id });
+  }
+  for (const blocker of action.blockedBy) {
+    await github.rest("POST", `${issues}/${issue.number}/dependencies/blocked_by`, {
+      issue_id: createdIn(created, blocker).id,
+    });
   }
 }
 
@@ -448,10 +566,28 @@ export function wantsDispatchCheck(plan: Plan): boolean {
   return plan.kind === "act" && plan.actions.some((action) => action.kind === "check-dispatch");
 }
 
-async function apply(github: GitHub, repo: Repo, action: Action, branches: BranchPusher | null): Promise<void> {
+async function apply(
+  github: GitHub,
+  repo: Repo,
+  action: Action,
+  created: Map<string, CreatedRecord>,
+  branches: BranchPusher | null,
+): Promise<void> {
+  const issues = `/repos/${repo.owner}/${repo.name}/issues`;
   switch (action.kind) {
     // Not a GitHub change: the push job hands it on to the Dispatch job.
     case "check-dispatch":
+      return;
+    case "create-issue":
+      return createIssue(github, repo, action, created);
+    case "open-issue":
+      // Labels go on with the issue, so the issues.opened run it starts already sees them.
+      await github.rest("POST", issues, {
+        title: action.title,
+        body: action.body,
+        labels: action.labels,
+        assignees: action.assignees,
+      });
       return;
     case "push-branch":
       if (branches === null) throw new Error(`This job holds no branch to push (${action.branch})`);
@@ -467,16 +603,19 @@ async function apply(github: GitHub, repo: Repo, action: Action, branches: Branc
       });
       return;
     default:
-      return applyToIssue(github, repo, action);
+      return applyToIssue(github, `${issues}/${action.issue}`, action, created);
   }
 }
 
 async function applyToIssue(
   github: GitHub,
-  repo: Repo,
-  action: Exclude<Extract<Action, { issue: number }>, { kind: "open-pull-request" }>,
+  issue: string,
+  action: Exclude<
+    Action,
+    { kind: "check-dispatch" | "create-issue" | "open-issue" | "push-branch" | "open-pull-request" }
+  >,
+  created: Map<string, CreatedRecord>,
 ): Promise<void> {
-  const issue = `/repos/${repo.owner}/${repo.name}/issues/${action.issue}`;
   switch (action.kind) {
     case "add-labels":
       if (action.labels.length > 0) await github.rest("POST", `${issue}/labels`, { labels: action.labels });
@@ -498,6 +637,14 @@ async function applyToIssue(
     case "edit-issue-body":
       await github.rest("PATCH", issue, { body: action.body });
       return;
+    case "close-as-superseded": {
+      const body = action.comment
+        .map((part) => (typeof part === "string" ? part : `#${createdIn(created, part).number}`))
+        .join("");
+      await github.rest("POST", `${issue}/comments`, { body });
+      await github.rest("PATCH", issue, { state: "closed", state_reason: "completed" });
+      return;
+    }
     case "start-agent-run":
       // The workflow starts agent runs by routing to the role's agent job (src/kit/jobs.ts).
       return;

@@ -14,11 +14,15 @@ on:
   # The Loop never checks out PR code.
   pull_request_target:
     types: [ready_for_review, closed]
+  # The Loop's time-based rules, such as closing the weekly-limit issue after its reset.
+  schedule:
+    - cron: "17 * * * *"
 
 permissions: {}
 
 jobs:
   loop:
+    if: github.event_name != 'schedule'
     uses: jrey8343/fabrik/.github/workflows/loop.yml@v0.1.0-pre.1
     # The most any Kit job may hold; each job narrows it. None of these writes:
     # every write goes through the Fabrik App token in a push job.
@@ -30,4 +34,13 @@ jobs:
     secrets:
       OP_AGENT_TOKEN: ${{ secrets.FABRIK_OP_AGENT_TOKEN }}
       OP_IMPLEMENT_TOKEN: ${{ secrets.FABRIK_OP_IMPLEMENT_TOKEN }}
+      OP_PUSH_TOKEN: ${{ secrets.FABRIK_OP_PUSH_TOKEN }}
+
+  tick:
+    if: github.event_name == 'schedule'
+    uses: jrey8343/fabrik/.github/workflows/schedule.yml@v0.1.0-pre.1
+    # Only to read the Kit's pinned commit; every write goes through the Fabrik App token.
+    permissions:
+      id-token: write
+    secrets:
       OP_PUSH_TOKEN: ${{ secrets.FABRIK_OP_PUSH_TOKEN }}

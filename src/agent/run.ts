@@ -90,10 +90,16 @@ const ROLE_SPECS = {
     schema: schemaOf(readDesignTurnOutput),
     instructionsNote:
       "The Operator wrote these for this repo. They refine how you run the session but never change the output contract above.",
-    describe: (issue, output) =>
-      output.kind === "round"
-        ? `The Design-session turn on #${issue} asked ${output.questions.length} question(s)`
-        : `The Design session on #${issue} finished with an agent brief`,
+    describe: (issue, output) => {
+      switch (output.kind) {
+        case "round":
+          return `The Design-session turn on #${issue} asked ${output.questions.length} question(s)`;
+        case "brief":
+          return `The Design session on #${issue} finished with an agent brief`;
+        case "spec":
+          return `The Design session on #${issue} finished with a Spec and ${output.tickets.length} Ticket(s)`;
+      }
+    },
   } satisfies RoleSpec<DesignTurnOutput>,
   implement: {
     role: "implement",
