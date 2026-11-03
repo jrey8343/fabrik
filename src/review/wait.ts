@@ -13,7 +13,7 @@ import { appendFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
-import { type CheckState, requiredChecksOutcome } from "./checks.ts";
+import { type CheckState, checksFromGh, requiredChecksOutcome } from "./checks.ts";
 
 const run = promisify(execFile);
 
@@ -27,12 +27,14 @@ function required(name: string): string {
   return value;
 }
 
-async function gh(...args: string[]): Promise<{ stdout: string; failed: boolean }> {
+async function gh(...args: string[]): Promise<{ stdout: string; stderr: string; failed: boolean }> {
   try {
-    return { stdout: (await run("gh", args, { maxBuffer: 16 * 1024 * 1024 })).stdout, failed: false };
+    const { stdout, stderr } = await run("gh", args, { maxBuffer: 16 * 1024 * 1024 });
+    return { stdout, stderr, failed: false };
   } catch (error) {
     // `gh pr checks` exits non-zero while checks are pending or failed, still printing them.
-    return { stdout: String((error as { stdout?: unknown }).stdout ?? ""), failed: true };
+    const { stdout, stderr } = error as { stdout?: unknown; stderr?: unknown };
+    return { stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), failed: true };
   }
 }
 
@@ -50,9 +52,7 @@ async function pullRequestState(repo: string, number: string): Promise<PullReque
 /** The PR head's checks: every one when Kit config names the gating checks, else only the required ones. */
 async function checksOf(repo: string, number: string, gating: readonly string[]): Promise<CheckState[]> {
   const args = ["pr", "checks", number, "--repo", repo, "--json", "name,bucket"];
-  const { stdout } = await gh(...args, ...(gating.length === 0 ? ["--required"] : []));
-  // With no required checks at all, gh prints an error and no JSON: nothing gates the PR.
-  return stdout.trim() === "" ? [] : (JSON.parse(stdout) as CheckState[]);
+  return checksFromGh(await gh(...args, ...(gating.length === 0 ? ["--required"] : [])));
 }
 
 async function main(productDir: string): Promise<void> {
