@@ -22,6 +22,8 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     designRounds: 0,
     sentBack: null,
     emptyDiffs: 0,
+    openBlockers: [],
+    openBlocking: [],
     ...overrides,
   };
 }

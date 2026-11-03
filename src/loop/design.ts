@@ -126,7 +126,7 @@ function splitIntoSiblings(
   issue: IssueSnapshot,
   spec: number,
 ): Action[] {
-  const { actions, created } = ticketActions(output.tickets, readyLabels(issue), spec);
+  const { actions, created, moved } = ticketActions(output.tickets, readyLabels(issue), spec, issue);
   return [
     ...actions,
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
@@ -135,8 +135,9 @@ function splitIntoSiblings(
       issue: issueNumber,
       comment: [
         `${SESSION_FINISHED} This Ticket is split into `,
-        ...created.flatMap((ticket, i) => (i === 0 ? [ticket] : [", ", ticket])),
+        ...commaList(created),
         `, sibling Tickets under the Spec #${spec}.\n\n${closingNote(output.comment)}`,
+        ...moved,
       ],
     },
   ];
@@ -155,29 +156,72 @@ function readyLabels(issue: IssueSnapshot): Label[] {
   return [...issue.labels.filter(isCategoryLabel), READY_FOR_AGENT];
 }
 
-/** Creates these Tickets under `parent`, blockers first so each blocked-by edge points at an issue that exists. */
+/**
+ * Creates these Tickets under `parent`, blockers first so each blocked-by edge
+ * points at an issue that exists. They take the superseded issue's place among
+ * its blockers: a Ticket nothing else in the outcome blocks takes on the
+ * issue's open blockers, and each open issue it blocked then waits on every
+ * Ticket no other Ticket waits on, the ones that finish last. The issue's own
+ * edges stay, recording what happened once it closes.
+ */
 function ticketActions(
   outcome: readonly SpecTicket[],
   labels: readonly Label[],
   parent: CreatedIssue | number,
-): { actions: Action[]; created: CreatedIssue[] } {
+  superseded: IssueSnapshot,
+): { actions: Action[]; created: CreatedIssue[]; moved: (string | CreatedIssue)[] } {
   const ticketIssue = (key: string): CreatedIssue => ({ created: `ticket:${key}` });
   // The contract has already refused blockers that loop, so there is always an order.
   const tickets = dependencyOrder(outcome) ?? [];
+  const waitedOn = new Set(tickets.flatMap((ticket) => ticket.blockedBy));
+  const last = tickets.filter((ticket) => !waitedOn.has(ticket.key)).map((ticket) => ticketIssue(ticket.key));
+  const first = tickets.filter((ticket) => ticket.blockedBy.length === 0).map((ticket) => ticketIssue(ticket.key));
   return {
-    actions: tickets.map(
-      (ticket): Action => ({
-        kind: "create-issue",
-        key: ticketIssue(ticket.key).created,
-        title: withoutMentions(ticket.title),
-        body: withoutMentions(ticket.body),
-        labels,
-        parent,
-        blockedBy: ticket.blockedBy.map(ticketIssue),
-      }),
-    ),
+    actions: [
+      ...tickets.map(
+        (ticket): Action => ({
+          kind: "create-issue",
+          key: ticketIssue(ticket.key).created,
+          title: withoutMentions(ticket.title),
+          body: withoutMentions(ticket.body),
+          labels,
+          parent,
+          blockedBy: ticket.blockedBy.length === 0 ? superseded.openBlockers : ticket.blockedBy.map(ticketIssue),
+        }),
+      ),
+      ...superseded.openBlocking.flatMap((issue) =>
+        last.map((blocker): Action => ({ kind: "add-blocked-by", issue, blocker })),
+      ),
+    ],
     created: tickets.map((ticket) => ticketIssue(ticket.key)),
+    moved: movedEdges(first, superseded.openBlockers, superseded.openBlocking, last),
   };
+}
+
+/**
+ * For the closing comment: which blockers the first Tickets took on, and which
+ * issues now wait on the last ones. Empty when nothing moved.
+ */
+function movedEdges(
+  first: readonly CreatedIssue[],
+  blockers: readonly number[],
+  blocking: readonly number[],
+  last: readonly CreatedIssue[],
+): (string | CreatedIssue)[] {
+  if (blockers.length === 0 && blocking.length === 0) return [];
+  const issueLinks = (issues: readonly number[]) => issues.map((issue) => `#${issue}`).join(", ");
+  return [
+    "\n\nBlocked-by edges moved to the new Tickets:",
+    ...(blockers.length === 0
+      ? []
+      : ["\n- ", ...commaList(first), ` ${first.length === 1 ? "is" : "are"} now blocked by ${issueLinks(blockers)}.`]),
+    ...blocking.flatMap((issue) => [`\n- #${issue} is now blocked by `, ...commaList(last), "."]),
+  ];
+}
+
+/** Created issues for a comment, separated by commas. */
+function commaList(issues: readonly CreatedIssue[]): (string | CreatedIssue)[] {
+  return issues.flatMap((issue, i) => (i === 0 ? [issue] : [", ", issue]));
 }
 
 /** The small outcome: the issue becomes its own agent brief, ready for an Implementer. */
@@ -212,7 +256,7 @@ function supersedeBySpec(
   issue: IssueSnapshot,
 ): Action[] {
   const labels = readyLabels(issue);
-  const tickets = ticketActions(output.tickets, labels, SPEC);
+  const tickets = ticketActions(output.tickets, labels, SPEC, issue);
   return [
     {
       kind: "create-issue",
@@ -236,6 +280,7 @@ function supersedeBySpec(
         `${SESSION_FINISHED} This issue is superseded by the Spec `,
         SPEC,
         ` and its ${tickets.created.length} ${tickets.created.length === 1 ? "Ticket" : "Tickets"}.\n\n${closingNote(output.comment)}`,
+        ...tickets.moved,
       ],
     },
   ];

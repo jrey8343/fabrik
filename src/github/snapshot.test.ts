@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { countImplementRuns, IMPLEMENT_JOB_NAME } from "./snapshot.ts";
+import type { GitHub } from "./client.ts";
+import { countImplementRuns, gatherSnapshot, IMPLEMENT_JOB_NAME } from "./snapshot.ts";
 
 const repo = { owner: "acme", name: "shop" };
 
@@ -52,5 +53,49 @@ describe("The Implement job's name", () => {
     const implementJob = /^ {2}implement:\n {4}name: (.+)$/m.exec(workflow)?.[1];
 
     expect(implementJob).toBe(IMPLEMENT_JOB_NAME);
+  });
+});
+
+describe("Gathering an issue's blocked-by edges", () => {
+  it("holds only the open issues in this repo blocking it, and the open issues in this repo it blocks", async () => {
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issue: {
+                number: 6,
+                state: "OPEN",
+                author: { login: "someone" },
+                labels: { nodes: [{ name: "needs-design" }] },
+                parent: null,
+                comments: { nodes: [] },
+                closedByPullRequestsReferences: { nodes: [] },
+                blockedBy: {
+                  nodes: [
+                    { number: 10, state: "OPEN", repository: { nameWithOwner: "acme/shop" } },
+                    { number: 9, state: "CLOSED", repository: { nameWithOwner: "acme/shop" } },
+                    { number: 11, state: "OPEN", repository: { nameWithOwner: "acme/api" } },
+                  ],
+                },
+                blocking: {
+                  nodes: [
+                    { number: 7, state: "OPEN", repository: { nameWithOwner: "acme/shop" } },
+                    { number: 8, state: "CLOSED", repository: { nameWithOwner: "acme/shop" } },
+                    { number: 12, state: "OPEN", repository: { nameWithOwner: "acme/api" } },
+                  ],
+                },
+              },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 6, label: "needs-design" }, null);
+
+    expect(snapshot.issue).toMatchObject({ openBlockers: [10], openBlocking: [7] });
   });
 });

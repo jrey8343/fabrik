@@ -101,6 +101,42 @@ describe("A Design session splits a Ticket into sibling Tickets", () => {
   });
 });
 
+describe("Sibling Tickets take the split Ticket's place among its blockers", () => {
+  // "total" and "badge" start first; "checkout" and "badge" finish last.
+  const wide = { ...split, tickets: [...split.tickets, { key: "badge", title: "Badge", body: "Show it.", blockedBy: [] }] };
+  const blocked = { ...ticket, openBlockers: [10], openBlocking: [20] };
+
+  it("gives the Tickets nothing else blocks the open blockers, and the open issues it blocked an edge to the Tickets that finish last, before it closes", () => {
+    const actions = actionsOf(planFor(finished(wide), snapshotOf(blocked), kitConfig()));
+
+    expect(
+      actions.flatMap((action) => (action.kind === "create-issue" ? [[action.key, action.blockedBy]] : [])),
+    ).toEqual([
+      ["ticket:total", [10]],
+      ["ticket:checkout", [{ created: "ticket:total" }]],
+      ["ticket:badge", [10]],
+    ]);
+    expect(actions.filter((action) => action.kind === "add-blocked-by")).toEqual([
+      { kind: "add-blocked-by", issue: 20, blocker: { created: "ticket:checkout" } },
+      { kind: "add-blocked-by", issue: 20, blocker: { created: "ticket:badge" } },
+    ]);
+    const closing = actions.findIndex((action) => action.kind === "close-as-superseded");
+    expect(actions.findLastIndex((action) => action.kind === "add-blocked-by")).toBeLessThan(closing);
+  });
+
+  it("lists the moved edges in the closing comment", () => {
+    const actions = actionsOf(planFor(finished(wide), snapshotOf(blocked), kitConfig()));
+
+    const close = actions.find((action) => action.kind === "close-as-superseded");
+    const text = close?.kind === "close-as-superseded"
+      ? close.comment.map((part) => (typeof part === "string" ? part : `<${part.created}>`)).join("")
+      : "";
+    expect(text).toMatch(
+      /ship separately\.\n\nBlocked-by edges moved to the new Tickets:\n- <ticket:total>, <ticket:badge> are now blocked by #10\.\n- #20 is now blocked by <ticket:checkout>, <ticket:badge>\.$/,
+    );
+  });
+});
+
 describe("A rewritten or split Ticket starts again on the default model", () => {
   it("agent:implement on a Ticket whose stepped-up PR went back to design starts the Implementer's own model", () => {
     const config = kitConfig();

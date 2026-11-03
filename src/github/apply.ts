@@ -14,6 +14,9 @@ export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run
 }
 
 
+/** The calls applying a plan makes, which a test can fake. */
+type GitHubApi = Pick<GitHub, "rest" | "graphql">;
+
 /** Pushes an agent branch the push job holds (src/github/branch.ts). */
 export interface BranchPusher {
   push(branch: string): Promise<void>;
@@ -21,7 +24,7 @@ export interface BranchPusher {
 
 /** Applies each action in the plan, in order. Only an Implement run's push job has a branch to push. */
 export async function applyPlan(
-  github: GitHub,
+  github: GitHubApi,
   repo: Repo,
   plan: Plan,
   branches: BranchPusher | null = null,
@@ -59,9 +62,21 @@ function createdIn(created: ReadonlyMap<string, CreatedRecord>, { created: key }
   return record;
 }
 
-/** Creates the issue, then links it under its parent (made earlier in the plan, or existing) and to each blocker. */
+/** An issue's database id, which a blocked-by edge takes: made earlier in the plan, or read from GitHub. */
+async function databaseId(
+  github: GitHubApi,
+  repo: Repo,
+  issue: CreatedIssue | number,
+  created: ReadonlyMap<string, CreatedRecord>,
+): Promise<number> {
+  if (typeof issue !== "number") return createdIn(created, issue).id;
+  const existing = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/issues/${issue}`)) as CreatedRecord;
+  return existing.id;
+}
+
+/** Creates the issue, then links it under its parent and to each blocker, each made earlier in the plan or existing. */
 async function createIssue(
-  github: GitHub,
+  github: GitHubApi,
   repo: Repo,
   action: Extract<Action, { kind: "create-issue" }>,
   created: Map<string, CreatedRecord>,
@@ -78,10 +93,21 @@ async function createIssue(
     await github.rest("POST", `${issues}/${parent}/sub_issues`, { sub_issue_id: issue.id });
   }
   for (const blocker of action.blockedBy) {
-    await github.rest("POST", `${issues}/${issue.number}/dependencies/blocked_by`, {
-      issue_id: createdIn(created, blocker).id,
-    });
+    await addBlockedBy(github, repo, issue.number, blocker, created);
   }
+}
+
+/** Makes `issue` wait on `blocker` by a native blocked-by edge. */
+async function addBlockedBy(
+  github: GitHubApi,
+  repo: Repo,
+  issue: number,
+  blocker: CreatedIssue | number,
+  created: ReadonlyMap<string, CreatedRecord>,
+): Promise<void> {
+  await github.rest("POST", `/repos/${repo.owner}/${repo.name}/issues/${issue}/dependencies/blocked_by`, {
+    issue_id: await databaseId(github, repo, blocker, created),
+  });
 }
 
 /** Whether the plan asks for a Dispatch check, which the Dispatch job then runs. */
@@ -90,7 +116,7 @@ export function wantsDispatchCheck(plan: Plan): boolean {
 }
 
 async function apply(
-  github: GitHub,
+  github: GitHubApi,
   repo: Repo,
   action: Action,
   made: Made,
@@ -103,6 +129,8 @@ async function apply(
       return;
     case "create-issue":
       return createIssue(github, repo, action, made.created);
+    case "add-blocked-by":
+      return addBlockedBy(github, repo, action.issue, action.blocker, made.created);
     case "close-pull-request":
       // Closing never deletes the head branch; only a merge with auto-delete on would.
       await github.rest("PATCH", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}`, { state: "closed" });
@@ -162,7 +190,7 @@ async function apply(
 }
 
 async function applyToIssue(
-  github: GitHub,
+  github: GitHubApi,
   issue: string,
   action: Exclude<
     Action,
@@ -170,6 +198,7 @@ async function applyToIssue(
       kind:
         | "check-dispatch"
         | "create-issue"
+        | "add-blocked-by"
         | "open-issue"
         | "push-branch"
         | "open-pull-request"
