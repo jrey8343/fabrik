@@ -23,7 +23,7 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 - `.github/workflows/schedule.yml` is the reusable scheduled tick the caller workflow runs hourly, for the Loop's time-based rules (closing the weekly-limit issue after its reset). Like the push job, it never touches Product code.
 - `src/loop/kitIssues.ts` holds the Kit-owned issues: the "Rotate the Claude token" issue (label `fabrik:token-rotation`) and the weekly-limit issue (label `fabrik:weekly-limit`), which buzz the Operator once per repo, or once per limit window, instead of once per Ticket.
 - `templates/fabrik.yml` is the caller workflow a Product repo installs as `.github/workflows/fabrik.yml`.
-- `templates/claude-settings.json` holds the `SessionStart` hook entry a Product repo merges into `.claude/settings.json`, and disables the `mattpocock-skills` plugin there. The entry reads the release from `fabrik.yml`, downloads Fabrik at that tag (public, no credentials) and runs `src/session/start.ts`, which installs the skills that release's `skills.lock.json` pins, the same commit the Kit step installs in Actions, plus Fabrik's own `skills/` (`fabrik-live-design` and `fabrik-setup`).
+- `templates/claude-settings.json` holds the `SessionStart` hook entry a Product repo merges into `.claude/settings.json`, and disables the `mattpocock-skills` plugin there. The entry reads the release from `fabrik.yml`, downloads Fabrik at that tag (public, no credentials) and runs `src/session/start.ts`, which installs the skills that release's `skills.lock.json` pins, the same commit the Kit step installs in Actions, plus Fabrik's own `skills/` (`fabrik-live-design`, `fabrik-pair` and `fabrik-setup`).
 - `src/setup/` is the setup program the `fabrik-setup` skill runs: `plan.ts` is the pure planner (what a Product repo holds now in, the steps it's missing out), `shims.ts` merges the Kit-owned files into the Product's own, and `main.ts` gathers the state with `gh` and `op` and applies the plan. `templates/` holds what it installs.
 
 ## Developing
@@ -76,6 +76,17 @@ The Operator can take a Design session live in a claude.ai/code or iOS cloud ses
 - It posts nothing on the issue until it ends, since every Operator comment on a `needs-design` issue starts an async turn.
 - It runs with the Operator's own `gh` credentials and publishes the outcome itself: the issue body rewritten as its agent brief, or the Spec and its Tickets (category label and `ready-for-agent`, Tickets as sub-issues with native blocked-by edges).
 - Its last act is one comment whose first line is `<!-- fabrik:live-outcome brief -->` or `<!-- fabrik:live-outcome spec -->`. From the Operator, that comment makes the Kit land the outcome as an async finish would: `brief` swaps `needs-design` for `ready-for-agent`, `spec` removes `needs-design` and closes the issue as completed, and both run a Dispatch check. Without the marker, a summary comment is an ordinary answer, and the async session carries on from it.
+
+## Pairing session
+
+The Operator works through a `ready-for-human` issue with an agent beside them by running `/fabrik-pair <issue>` in a cloud or local Claude Code session on the Product repo (`skills/fabrik-pair/SKILL.md`). It runs with the Operator's own `gh` credentials:
+
+- It refuses an issue that isn't open and `ready-for-human`. The issue body's `- [ ]` task list is the plan; with none, the session agrees one with the Operator and writes it in below the original text. A rerun resumes at the first unticked step.
+- It talks the Operator through simple steps, and builds a wizard (`.claude/skills/wizard`) in a temp folder, never committed, for dashboards, credentials or a run of commands.
+- It ticks each step once a command confirms it (`gh secret list`, `gh api`, `op item get`, reading the file) or, where nothing can, once the Operator does. File changes, Trust-root files included, go out in one pull request whose body has `Closes #<n>`, never pushed to the default branch.
+- It ends with a comment saying what was done, and closes the issue, or leaves that to the pull request's merge. Stopping partway, it comments where it stopped and leaves the issue open and assigned. No comment names a secret's value or @-mentions anyone.
+
+The token-rotation and weekly-limit issues the Kit opens write their steps as a task list.
 
 ## Implementation
 

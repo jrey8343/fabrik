@@ -131,8 +131,14 @@ function weeklyLimit({ kitIssues, operator }: RepoContext, stalled: StalledRun):
           // The @-mention is this issue's one notification.
           `@${operator} ${stalled.run} hit the weekly usage limit. ${when} Until then every agent run in this repo stalls, and the Kit comments here about each one.`,
           "",
-          `${resetsAt === null ? "" : "The Kit closes this issue after the reset. "}It doesn't restart stalled Tickets: re-add the trigger label named in each Ticket's failure comment.`,
+          "## Steps",
           "",
+          resetsAt === null
+            ? "- [ ] Wait until agent runs work again: when the limit resets isn't known."
+            : `- [ ] Wait for the limit to reset at ${readable(resetsAt)}.`,
+          "- [ ] Re-add the trigger label named in each stalled Ticket's failure comment, to run it again. The Kit doesn't restart them.",
+          "",
+          ...(resetsAt === null ? [] : ["The Kit closes this issue after the reset.", ""]),
           `[The first stalled run](${stalled.runUrl})`,
           "",
           NOTIFIED,
@@ -157,9 +163,12 @@ function deadToken({ kitIssues, operator }: RepoContext, stalled: StalledRun): R
           body: [
             `The Claude token that every Fabrik run in this repo uses was refused (\`authentication_failed\`). ${stalled.run} was the first to fail, and no agent run can start until the token is rotated.`,
             "",
-            "1. Run `claude setup-token` and save the new token, with its expiry date, in the `Claude token` item in the Fabrik 1Password vault.",
-            "2. Re-add the trigger label on each Ticket the Kit commented on, to run it again.",
-            "3. Close this issue, so that the next dead token opens a fresh one.",
+            "## Steps",
+            "",
+            "- [ ] Run `claude setup-token` and save the new token, with its expiry date, in the `Claude token` item in the Fabrik 1Password vault.",
+            "- [ ] Re-add the trigger label on each Ticket the Kit commented on, to run it again.",
+            "",
+            "Then close this issue, so that the next dead token opens a fresh one. `/fabrik-pair` works through these steps with you and closes it at the end.",
             "",
             `[The first refused run](${stalled.runUrl})`,
             "",
