@@ -314,12 +314,13 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
         onAgentStreamEvent(event) {
           if (event.type !== "raw") return;
           lines.push(event.line);
-          transcript(event.line);
           if (init.refused === null && initMessageOf([event.line]) !== null) {
             const check = checkInitMessage(JSON.parse(event.line));
             init.refused = check.kind === "refuse" ? check.routes : [];
             if (check.kind === "refuse") abort.abort(new Error(check.routes.join("; ")));
           }
+          // After the init check, so a failed write can never skip its abort.
+          transcript(event.line);
         },
       },
     });

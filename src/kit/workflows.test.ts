@@ -8,6 +8,7 @@ const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml
   path,
   text: readFileSync(new URL(path, root), "utf8"),
 }));
+const loop = workflows.find((workflow) => workflow.path.endsWith("loop.yml"))!.text;
 
 describe("The Kit's workflows", () => {
   it.each(workflows)("$path checks the Kit out at kit/ in every job", ({ text }) => {
@@ -25,8 +26,6 @@ describe("The Kit's workflows", () => {
   });
 
   it("loop.yml leaves reading GitHub to the Kit's Node program, never inline gh calls", () => {
-    const loop = workflows.find((workflow) => workflow.path.endsWith("loop.yml"))!.text;
-
     expect(loop).not.toMatch(/\bgh (api|issue|pr) /);
   });
 
@@ -35,16 +34,16 @@ describe("The Kit's workflows", () => {
   it.each(["triage", "design", "implement", "review"])(
     "loop.yml's %s job always uploads its gzipped transcript, apart from the push job's artifacts",
     (job) => {
-      const loop = workflows.find((workflow) => workflow.path.endsWith("loop.yml"))!.text;
       const body = loop.split(/\n(?=  [a-z-]+:\n)/).find((section) => section.startsWith(`  ${job}:\n`))!;
       const upload = body.split(/\n(?=      - )/).find((step) => step.includes(`name: fabrik-transcript-${job}`));
 
       expect(upload, `${job} has no transcript upload`).toBeDefined();
       expect(upload).toContain("if: always()");
+      expect(upload).toContain("continue-on-error: true");
       expect(upload).toMatch(/path: .*transcript\.jsonl\.gz/);
       expect(upload).toContain("if-no-files-found: ignore");
       expect(upload).toContain("retention-days: 7");
-      expect(body).toMatch(/if: always\(\)\n\s+run: .*gzip.*transcript\.jsonl/);
+      expect(body).toMatch(/if: always\(\)\n\s+continue-on-error: true\n\s+run: .*gzip.*transcript\.jsonl/);
     },
   );
 });
