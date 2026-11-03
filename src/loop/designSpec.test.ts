@@ -77,6 +77,15 @@ describe("Finishing a Design session with a Spec and its Tickets", () => {
     });
   });
 
+  it("says the session finished once, even when the agent's comment starts by saying so too", () => {
+    const output = { ...finished, comment: "**Design session finished.** Decisions:\n\n1. Two PRs." };
+
+    const plan = planFor(turnFinished(output), inSession, kitConfig());
+
+    const close = plan.kind === "act" ? plan.actions.find((a) => a.kind === "close-as-superseded") : undefined;
+    expect(close && "comment" in close ? close.comment.at(-1) : null).toBe(" and its 2 Tickets.\n\nDecisions:\n\n1. Two PRs.");
+  });
+
   it("creates each Ticket after the Tickets that block it, whatever order the session listed them in", () => {
     const output = { ...finished, tickets: [ticket("ui", ["sms", "model"]), ticket("sms", ["model"]), ticket("model"), ticket("docs")] };
 

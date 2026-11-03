@@ -136,10 +136,18 @@ function splitIntoSiblings(
       comment: [
         `${SESSION_FINISHED} This Ticket is split into `,
         ...created.flatMap((ticket, i) => (i === 0 ? [ticket] : [", ", ticket])),
-        `, sibling Tickets under the Spec #${spec}.\n\n${withoutMentions(output.comment)}`,
+        `, sibling Tickets under the Spec #${spec}.\n\n${closingNote(output.comment)}`,
       ],
     },
   ];
+}
+
+/**
+ * The agent's closing comment, under the Kit's own "Design session finished."
+ * line: without mentions, and without that line again if the agent wrote it.
+ */
+function closingNote(comment: string): string {
+  return withoutMentions(comment.replace(/^\s*\*\*Design session finished\.\*\*\s*/, ""));
 }
 
 /** The labels a new Ticket gets: the issue's category, and ready-for-agent, so Intake never sends it to Triage. */
@@ -182,7 +190,7 @@ function rewriteAsBrief(issueNumber: number, output: Extract<DesignTurnOutput, {
       body: [
         `${SESSION_FINISHED} This issue is now its agent brief, ready for an Implementer.`,
         "",
-        withoutMentions(output.comment),
+        closingNote(output.comment),
       ].join("\n"),
     },
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
@@ -227,7 +235,7 @@ function supersedeBySpec(
       comment: [
         `${SESSION_FINISHED} This issue is superseded by the Spec `,
         SPEC,
-        ` and its ${tickets.created.length} ${tickets.created.length === 1 ? "Ticket" : "Tickets"}.\n\n${withoutMentions(output.comment)}`,
+        ` and its ${tickets.created.length} ${tickets.created.length === 1 ? "Ticket" : "Tickets"}.\n\n${closingNote(output.comment)}`,
       ],
     },
   ];
