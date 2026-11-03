@@ -6,7 +6,8 @@
 //
 // Run from the Product checkout. Env:
 //   FABRIK_ISSUE_FILE      JSON from `gh issue view --json number,title,body,author,labels,comments`
-//   FABRIK_OUT_DIR         where to write agent-result.json and the agent log
+//   FABRIK_OUT_DIR         where to write agent-result.json, the agent log and the
+//                          transcript (every stream-json line, appended as it arrives)
 //   FABRIK_MODEL, FABRIK_EFFORT  the model and effort the Kit job's plan chose (a Step-up, say);
 //                          when unset, the role's own from Kit config
 //   CLAUDE_CODE_OAUTH_TOKEN, from the agent service account (ADR-0004)
@@ -49,6 +50,7 @@ import {
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { initMessageOf, missingSkills, runSummary } from "./summary.ts";
+import { TRANSCRIPT_FILE, transcriptWriter } from "./transcript.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 
@@ -278,6 +280,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   process.env[CLAUDE_ARGS_ENV] = JSON.stringify(claudeArgs(role.model, role.effort));
 
   const lines: string[] = [];
+  const transcript = transcriptWriter(join(outDir, TRANSCRIPT_FILE));
   // null until the init message arrives, then the routes it refused (empty when it passed).
   const init: { refused: readonly string[] | null } = { refused: null };
   const abort = new AbortController();
@@ -311,6 +314,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
         onAgentStreamEvent(event) {
           if (event.type !== "raw") return;
           lines.push(event.line);
+          transcript(event.line);
           if (init.refused === null && initMessageOf([event.line]) !== null) {
             const check = checkInitMessage(JSON.parse(event.line));
             init.refused = check.kind === "refuse" ? check.routes : [];
@@ -352,7 +356,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
         console.log(`::warning title=Pinned skills missing at init::${missing.join(", ")}`);
       }
     }
-    await writeSummary(runSummary({ role: name, lines, ...(pinnedSkills === undefined ? {} : { pinnedSkills }) }));
+    await writeSummary(runSummary({ role: name, effort: role.effort, lines, ...(pinnedSkills === undefined ? {} : { pinnedSkills }) }));
   }
 }
 

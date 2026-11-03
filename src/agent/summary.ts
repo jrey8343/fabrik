@@ -1,9 +1,13 @@
 // The step summary every agent job writes: role, model, effort, duration,
-// turns and tokens, read from the `claude -p` stream-json lines (the init
-// message and the final result message). Pure, no I/O.
+// turns, tokens and cost. Model and skills come from the `claude -p` init
+// message; duration, turns, tokens and cost from the final result message.
+// Effort is what the runner passed to the CLI, since the init message never
+// carries it. Pure, no I/O.
 
 export interface RunSummaryInput {
   readonly role: string;
+  /** The effort the runner passed to the CLI (modelFor() in run.ts); null when it passed none. */
+  readonly effort: string | null;
   /** Every stdout line of the agent's stream, in order. */
   readonly lines: readonly string[];
   /** The skills the Kit installed from its lockfile, to confirm against the init message. */
@@ -44,6 +48,47 @@ function count(value: unknown): string {
   return typeof value === "number" ? value.toLocaleString("en-US") : UNKNOWN;
 }
 
+function dollars(value: unknown): string {
+  return typeof value === "number" ? `$${value.toFixed(2)}` : UNKNOWN;
+}
+
+interface Tokens {
+  readonly input: unknown;
+  readonly output: unknown;
+  readonly cacheWrite: unknown;
+  readonly cacheRead: unknown;
+}
+
+/**
+ * The run's tokens: summed over the result's modelUsage, which counts every
+ * model the run used (subagents included), else its usage, which counts the
+ * main loop only.
+ */
+function tokensOf(result: Message | null): Tokens {
+  const perModel = result?.["modelUsage"];
+  const models =
+    typeof perModel === "object" && perModel !== null ? (Object.values(perModel) as Message[]) : [];
+  if (models.length === 0) {
+    const usage = (result?.["usage"] ?? {}) as Message;
+    return {
+      input: usage["input_tokens"],
+      output: usage["output_tokens"],
+      cacheWrite: usage["cache_creation_input_tokens"],
+      cacheRead: usage["cache_read_input_tokens"],
+    };
+  }
+  const sum = (key: string): number | undefined => {
+    const values = models.map((model) => model[key]);
+    return values.every((value) => typeof value === "number") ? values.reduce((a, b) => a + b, 0) : undefined;
+  };
+  return {
+    input: sum("inputTokens"),
+    output: sum("outputTokens"),
+    cacheWrite: sum("cacheCreationInputTokens"),
+    cacheRead: sum("cacheReadInputTokens"),
+  };
+}
+
 function duration(ms: unknown): string {
   if (typeof ms !== "number") return UNKNOWN;
   const seconds = Math.round(ms / 1000);
@@ -69,30 +114,30 @@ function pinnedSkillsLine(lines: readonly string[], pinned: NonNullable<RunSumma
   return `${at}: ${pinned.names.length - missing.length} of ${pinned.names.length} loaded; missing: ${missing.join(", ")}`;
 }
 
-export function runSummary({ role, lines, pinnedSkills }: RunSummaryInput): string {
+export function runSummary({ role, effort, lines, pinnedSkills }: RunSummaryInput): string {
   const init = initMessageOf(lines);
   const result = resultMessageOf(lines);
-  const usage = (result?.["usage"] ?? {}) as Message;
+  const tokens = tokensOf(result);
 
-  const effort = init === null ? UNKNOWN : typeof init["effort"] === "string" ? init["effort"] : "CLI default";
   const skills = Array.isArray(init?.["skills"]) && init["skills"].length > 0 ? init["skills"].join(", ") : "none reported";
 
   const row = [
     role,
     text(init?.["model"]),
-    effort,
+    effort ?? "CLI default",
     duration(result?.["duration_ms"]),
     count(result?.["num_turns"]),
-    count(usage["input_tokens"]),
-    count(usage["output_tokens"]),
-    count(usage["cache_creation_input_tokens"]),
-    count(usage["cache_read_input_tokens"]),
+    count(tokens.input),
+    count(tokens.output),
+    count(tokens.cacheWrite),
+    count(tokens.cacheRead),
+    dollars(result?.["total_cost_usd"]),
   ];
   return [
     `### Fabrik agent run: ${role}`,
     "",
-    "| Role | Model | Effort | Duration | Turns | Input tokens | Output tokens | Cache write | Cache read |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Role | Model | Effort | Duration | Turns | Input tokens | Output tokens | Cache write | Cache read | Cost |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     `| ${row.join(" | ")} |`,
     "",
     `Skills loaded: ${skills}`,
