@@ -10,6 +10,12 @@ updates:
     # Only the Kit pin; this entry leaves the Product's other actions alone.
     allow:
       - dependency-name: "jrey8343/fabrik*"
+    # Each pinned Fabrik workflow is its own dependency to Dependabot; one group
+    # bumps them in one PR, so the caller never pins two releases at once.
+    groups:
+      fabrik:
+        patterns:
+          - "jrey8343/fabrik*"
     # A release reaches the Product repo the day it's cut.
     cooldown:
       default-days: 0

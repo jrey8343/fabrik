@@ -119,11 +119,11 @@ export const DEPENDABOT_PATH = ".github/dependabot.yml";
  */
 export function dependabotUpdate(existing: string | null, template: string): FileUpdate {
   if (existing === null) return { content: template };
-  if (existing.includes("jrey8343/fabrik")) return null;
+  if (existing.includes("jrey8343/fabrik")) return groupedFabrikPins(existing, template);
   const lines = existing.split("\n");
   const updatesAt = lines.findIndex((line) => /^updates:\s*$/.test(line));
   if (updatesAt === -1) return { content: template };
-  const handMerge = `${DEPENDABOT_PATH} already has an entry for GitHub Actions, so the Fabrik one wasn't added: add \`- dependency-name: "jrey8343/fabrik*"\` to that entry's allow list (if it has one) and set its cooldown to 0 days.`;
+  const handMerge = `${DEPENDABOT_PATH} already has an entry for GitHub Actions, so the Fabrik one wasn't added: add \`- dependency-name: "jrey8343/fabrik*"\` to that entry's allow list (if it has one), group the Fabrik pins into one PR with \`groups: { fabrik: { patterns: ["jrey8343/fabrik*"] } }\`, and set its cooldown to 0 days.`;
   if (/package-ecosystem:\s*["']?github-actions/.test(existing)) return { note: handMerge };
   const laterTopLevelKey = lines.slice(updatesAt + 1).some((line) => /^[A-Za-z]/.test(line));
   if (laterTopLevelKey) {
@@ -133,4 +133,19 @@ export function dependabotUpdate(existing: string | null, template: string): Fil
   const entry = templateLines.slice(templateLines.findIndex((line) => /^updates:\s*$/.test(line)) + 1).join("\n");
   const separator = existing.endsWith("\n") ? "" : "\n";
   return { content: `${existing}${separator}${entry}` };
+}
+
+/**
+ * Fabrik pins several workflows, and Dependabot opens a PR per dependency
+ * unless a group joins them, so an ungrouped shim lands a release half-bumped.
+ * The ungrouped shim setup wrote unchanged is replaced; an edited one is the
+ * Operator's to fix.
+ */
+function groupedFabrikPins(existing: string, template: string): FileUpdate {
+  if (/^\s+fabrik:\n\s+patterns:\n\s+- "jrey8343\/fabrik\*"/m.test(existing)) return null;
+  const groupBlock = /^ {4}# Each pinned Fabrik workflow[\s\S]*?- "jrey8343\/fabrik\*"\n/m;
+  if (existing === template.replace(groupBlock, "")) return { content: template };
+  return {
+    note: `${DEPENDABOT_PATH} doesn't group the Fabrik pins, so Dependabot bumps each pinned workflow in its own PR and the caller pins two releases until both merge: add \`groups: { fabrik: { patterns: ["jrey8343/fabrik*"] } }\` to its Fabrik entry.`,
+  };
 }
