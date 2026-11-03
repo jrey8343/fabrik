@@ -3,7 +3,7 @@ import { type ProductState, type SetupPlan } from "../setup/plan.ts";
 
 export function aCleanProduct(overrides: Partial<ProductState> = {}): ProductState {
   return {
-    repo: { owner: "acme", name: "clinic", defaultBranch: "main" },
+    repo: { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: false },
     files: {},
     labels: [],
     secrets: [],

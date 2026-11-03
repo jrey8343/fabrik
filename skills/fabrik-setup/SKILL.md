@@ -16,7 +16,9 @@ Stop and tell the Operator what's missing if any of these fails:
 
 - The working directory is the root of the Product repo's clone (`git rev-parse --show-toplevel`), on its default branch, up to date with `origin`, with a clean working tree (`git status --porcelain` prints nothing).
 - `gh auth status` succeeds, as someone who administers this repo (`gh repo view --json viewerPermission --jq .viewerPermission` prints `ADMIN`), with the `workflow` scope so the caller workflow can be pushed.
-- `op whoami` succeeds, signed in as the Operator, not as a service account (no `OP_SERVICE_ACCOUNT_TOKEN` in the env).
+- `op` reaches the Operator's 1Password account, not a service account (no `OP_SERVICE_ACCOUNT_TOKEN` in the env):
+  - If `op account list` shows more than one account, ask the Operator which one holds this Product's secrets, and set `OP_ACCOUNT=<its URL>` on every `op` and setup command from here on, the wizard included.
+  - Check with `op vault list`, not `op whoami`. With the 1Password app's CLI integration, each of your shell commands is a new terminal-less session, so `op whoami` always says "account is not signed in"; `op vault list` asks the app to authorize, and succeeds when the app is unlocked. If it fails, ask the Operator to unlock the 1Password app and turn on Settings → Developer → Integrate with 1Password CLI. Never ask them to `eval $(op signin)`: that session lives only in their shell.
 - `node --version` is 24 or later.
 
 ## 2. Pick the release

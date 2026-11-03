@@ -51,12 +51,18 @@ async function ok(command: string, args: readonly string[], options: { cwd: stri
 
 async function gatherState(productDir: string, paths: readonly string[]): Promise<ProductState> {
   const cwd = productDir;
-  const view = JSON.parse(await ok("gh", ["repo", "view", "--json", "owner,name,defaultBranchRef"], { cwd })) as {
+  const view = JSON.parse(await ok("gh", ["repo", "view", "--json", "owner,name,defaultBranchRef,isInOrganization"], { cwd })) as {
     owner: { login: string };
     name: string;
     defaultBranchRef: { name: string };
+    isInOrganization: boolean;
   };
-  const repo = { owner: view.owner.login, name: view.name, defaultBranch: view.defaultBranchRef.name };
+  const repo = {
+    owner: view.owner.login,
+    name: view.name,
+    defaultBranch: view.defaultBranchRef.name,
+    inOrganization: view.isInOrganization,
+  };
   const files = Object.fromEntries(
     await Promise.all(paths.map(async (path) => [path, await readFile(join(productDir, path), "utf8").catch(() => null)] as const)),
   );
@@ -155,7 +161,9 @@ async function apply(action: SetupAction, productDir: string, repo: ProductState
         required_pull_request_reviews: {
           required_approving_review_count: 0,
           dismiss_stale_reviews: true,
-          bypass_pull_request_allowances: { users: [], teams: [], apps: [] },
+          // Empty lists take away any bypass. GitHub rejects the field (HTTP 422) on a
+          // personal account's repo, which can't have bypass allowances anyway.
+          ...(repo.inOrganization ? { bypass_pull_request_allowances: { users: [], teams: [], apps: [] } } : {}),
         },
         restrictions: null,
         allow_force_pushes: false,
