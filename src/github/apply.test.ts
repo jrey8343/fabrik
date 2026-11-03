@@ -67,6 +67,9 @@ describe("Applying a plan that moves blocked-by edges onto new Tickets", () => {
     expect(lastEdge).toBeLessThan(closing);
   });
 
+});
+
+describe("Applying a plan that creates an issue", () => {
   it("assigns a created issue as it creates it, and assigns nobody when the action names no one", async () => {
     const github = fakeGitHub();
     const plan: Plan = {

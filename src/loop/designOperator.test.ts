@@ -118,7 +118,7 @@ describe("A Design session's Operator steps", () => {
       [["bug", "ready-for-human"], ["jrey"]],
     ]);
     expect(closingComment(plan)).toBe(
-      "**Design session finished.** This Ticket is split into <ticket:fix>, <ticket:secret>, 1 Ticket and 1 Operator step under the Spec #3.\n\nSplit.",
+      "**Design session finished.** This Ticket is split into <ticket:fix>, <ticket:secret>: 1 Ticket and 1 Operator step, siblings under the Spec #3.\n\nSplit.",
     );
   });
 

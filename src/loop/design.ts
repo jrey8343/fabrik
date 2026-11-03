@@ -150,7 +150,7 @@ function splitIntoSiblings(
   operator: string,
 ): Action[] {
   const { actions, created, moved } = ticketActions(output.tickets, issue, spec, operator);
-  const operatorSteps = output.tickets.filter((ticket) => ticket.operator).length;
+  const allTickets = output.tickets.every((ticket) => !ticket.operator);
   return [
     ...actions,
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
@@ -160,9 +160,9 @@ function splitIntoSiblings(
       comment: [
         `${SESSION_FINISHED} This Ticket is split into `,
         ...commaList(created),
-        operatorSteps === 0
+        allTickets
           ? `, sibling Tickets under the Spec #${spec}.\n\n${closingNote(output.comment)}`
-          : `, ${itemCount(output.tickets)} under the Spec #${spec}.\n\n${closingNote(output.comment)}`,
+          : `: ${itemCount(output.tickets)}, siblings under the Spec #${spec}.\n\n${closingNote(output.comment)}`,
         ...moved,
       ],
     },
@@ -195,6 +195,7 @@ function itemCount(tickets: readonly SpecTicket[]): string {
   return counts.join(" and ");
 }
 
+/** `1 Ticket`, `2 Tickets`. */
 function count(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -414,7 +415,7 @@ function briefBody(brief: AgentBrief): string {
     "",
     "## Acceptance criteria",
     "",
-    ...brief.acceptanceCriteria.map((criterion) => `- [ ] ${withoutMentions(criterion)}`),
+    ...taskList(brief.acceptanceCriteria),
     "",
     "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
   ].join("\n");
