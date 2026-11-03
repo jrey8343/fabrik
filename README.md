@@ -81,12 +81,12 @@ The Operator can take a Design session live in a claude.ai/code or iOS cloud ses
 
 The Operator works through a `ready-for-human` issue with an agent beside them by running `/fabrik-pair <issue>` in a cloud or local Claude Code session on the Product repo (`skills/fabrik-pair/SKILL.md`). It runs with the Operator's own `gh` credentials:
 
-- It refuses an issue that isn't open and `ready-for-human`. The issue body's `- [ ]` task list is the plan; with none, the session agrees one with the Operator and writes it in below the original text. A rerun resumes at the first unticked step.
+- It counts as the Operator, so it may change Trust-root files. It refuses an issue that isn't open and `ready-for-human`, except the weekly-limit issue: there it waits for the reset before restarting the stalled Tickets, and still finishes the restart after the Kit has closed the issue. The issue body's `- [ ]` task list is the plan; with none, the session agrees one with the Operator and writes it in below the original text. A rerun resumes at the first unticked step.
 - It talks the Operator through simple steps, and builds a wizard (`.claude/skills/wizard`) in a temp folder, never committed, for dashboards, credentials or a run of commands.
 - It ticks each step once a command confirms it (`gh secret list`, `gh api`, `op item get`, reading the file) or, where nothing can, once the Operator does. File changes, Trust-root files included, go out in one pull request whose body has `Closes #<n>`, never pushed to the default branch.
 - It ends with a comment saying what was done, and closes the issue, or leaves that to the pull request's merge. Stopping partway, it comments where it stopped and leaves the issue open and assigned. No comment names a secret's value or @-mentions anyone.
 
-The token-rotation and weekly-limit issues the Kit opens write their steps as a task list.
+The token-rotation and weekly-limit issues the Kit opens write their steps as a task list and point at `/fabrik-pair`.
 
 ## Implementation
 

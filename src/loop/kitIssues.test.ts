@@ -46,6 +46,7 @@ describe("The Rotate the Claude token issue", () => {
 
     expect(issue.body).toContain("\n## Steps\n\n- [ ] Run `claude setup-token`");
     expect(issue.body.match(/^- \[ \] /gm)).toHaveLength(2);
+    expect(issue.body).toContain("Run `/fabrik-pair` on this issue to work through these steps with an agent.");
   });
 
   it("the first auth failure buzzes the Operator once, by the assignment, and the Ticket's comment points at the issue", () => {
@@ -192,6 +193,7 @@ describe("The weekly-limit issue", () => {
     const issue = kitIssueOpenedBy(planFor(weeklyLimit(7, resetsAt), snapshotOf(anIssue({ number: 7 })), kitConfig()), 41);
 
     expect(issue.body).toContain(`\n## Steps\n\n${wait}\n- [ ] Re-add the trigger label named in each stalled Ticket's failure comment`);
+    expect(issue.body).toContain("Run `/fabrik-pair` on this issue to work through these steps with an agent.");
   });
 
   it("a later stall in the same window comments quietly on the open issue", () => {

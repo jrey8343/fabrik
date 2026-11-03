@@ -57,7 +57,7 @@ export async function sessionStart({ kitDir, productDir, release, download }: Se
             ? "To take an issue's Design session live, the Operator runs /fabrik-live-design <issue number>."
             : "",
           own.includes("fabrik-pair")
-            ? "To work through a ready-for-human issue with an agent beside them (a Pairing session), the Operator runs /fabrik-pair <issue number>."
+            ? "To work through a ready-for-human or weekly-limit issue with an agent beside them (a Pairing session), the Operator runs /fabrik-pair <issue number>."
             : "",
         ]
           .filter((line) => line !== "")

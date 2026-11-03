@@ -121,7 +121,7 @@ An isolated environment where an Implementer does its work on a branch, holding 
 _Avoid_: container, VM, workspace
 
 **Trust-root file**:
-A file in a Product repo that steers how agents behave or how their work is judged, so agents may never change it.
+A file in a Product repo that steers how agents behave or how their work is judged, so agents may never change it. An agent in a Pairing session counts as the Operator, so it may.
 _Avoid_: config file, protected file
 
 **Merge gate**:
