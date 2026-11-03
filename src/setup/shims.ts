@@ -102,10 +102,61 @@ const GITIGNORE_BLOCK = `# Fabrik: the skills its SessionStart hook and Kit step
 
 export function gitignoreUpdate(existing: string | null): FileUpdate {
   if (existing === null) return { content: GITIGNORE_BLOCK };
-  const lines = existing.split("\n").map((line) => line.trim());
+  const lines = trimmedLines(existing);
   if (lines.includes(SKILLS_IGNORE) || lines.includes(".claude/skills")) return null;
+  return { content: appendBlock(existing, GITIGNORE_BLOCK) };
+}
+
+function trimmedLines(text: string): string[] {
+  return text.split("\n").map((line) => line.trim());
+}
+
+/** A Fabrik block after the file's own lines, set apart by one blank line. */
+function appendBlock(existing: string, block: string): string {
   const separator = existing === "" ? "" : existing.endsWith("\n") ? "\n" : "\n\n";
-  return { content: `${existing}${separator}${GITIGNORE_BLOCK}` };
+  return `${existing}${separator}${block}`;
+}
+
+// --- .prettierignore ----------------------------------------------------------
+
+export const PRETTIERIGNORE_PATH = ".prettierignore";
+const PRETTIERIGNORE_BLOCK = `# Fabrik: the Kit owns the caller workflow, so the Product's Prettier config can't format it\n${CALLER_PATH}\n`;
+
+const PACKAGE_JSON_PATH = "package.json";
+
+/** The repo-root files that configure Prettier, besides a "prettier" key in package.json. */
+const PRETTIER_CONFIG_PATHS: readonly string[] = [
+  ".prettierrc",
+  ...["json", "json5", "yaml", "yml", "toml", "js", "cjs", "mjs", "ts", "cts", "mts"].map((ext) => `.prettierrc.${ext}`),
+  ...["js", "cjs", "mjs", "ts", "cts", "mts"].map((ext) => `prettier.config.${ext}`),
+];
+
+/** Every file hasPrettierConfig reads. */
+export const PRETTIER_DETECTION_PATHS: readonly string[] = [PACKAGE_JSON_PATH, ...PRETTIER_CONFIG_PATHS];
+
+/** Whether the Product configures Prettier at its root. A package.json that isn't valid JSON has no Prettier key. */
+export function hasPrettierConfig(files: Readonly<Record<string, string | null>>): boolean {
+  if (PRETTIER_CONFIG_PATHS.some((path) => files[path] != null)) return true;
+  const packageJson = files[PACKAGE_JSON_PATH];
+  if (packageJson == null) return false;
+  try {
+    const parsed: unknown = JSON.parse(packageJson);
+    return isObject(parsed) && "prettier" in parsed;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * No agent branch can push the caller workflow (the Fabrik App has no
+ * workflows permission), so a Product whose Prettier config disagrees with the
+ * template's quoting could never pass `prettier --check`. Only a line naming the caller exactly counts.
+ */
+export function prettierignoreUpdate(existing: string | null, prettierConfigured: boolean): FileUpdate {
+  if (!prettierConfigured) return null;
+  if (existing === null) return { content: PRETTIERIGNORE_BLOCK };
+  if (trimmedLines(existing).includes(CALLER_PATH)) return null;
+  return { content: appendBlock(existing, PRETTIERIGNORE_BLOCK) };
 }
 
 // --- .github/dependabot.yml --------------------------------------------------
