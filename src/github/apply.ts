@@ -86,6 +86,8 @@ async function createIssue(
     title: action.title,
     body: action.body,
     labels: action.labels,
+    // Assigned as it's created, so the assignment is its one notification.
+    ...(action.assignees === undefined ? {} : { assignees: action.assignees }),
   })) as CreatedRecord;
   created.set(action.key, { number: issue.number, id: issue.id });
   if (action.parent !== null) {

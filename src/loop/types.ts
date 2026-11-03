@@ -324,6 +324,8 @@ export type Action =
       readonly parent: CreatedIssue | number | null;
       /** The issues blocking it: each one created earlier in the plan, or an existing issue by its number. */
       readonly blockedBy: readonly (CreatedIssue | number)[];
+      /** Who it is assigned to when it is created; none when left out. */
+      readonly assignees?: readonly string[];
     }
   | {
       /** Comments on an issue, then closes it as completed: another issue now carries its work. */

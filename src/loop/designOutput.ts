@@ -1,8 +1,9 @@
 // The Design-session turn output contract: what a Design-session agent job
 // emits and its push job applies. Both sides check it, so a malformed output
 // never half-applies. A turn ends in either the next round or a final outcome:
-// an agent brief (small), a Spec and its Tickets (large), or, for a Ticket
-// already under a Spec, sibling Tickets under that Spec.
+// an agent brief or an Operator brief (small), a Spec and its Tickets
+// (large), or, for a Ticket already under a Spec, sibling Tickets under that
+// Spec. Any Ticket in an outcome may instead be an Operator step.
 import type { AgentBrief } from "./triageOutput.ts";
 
 export interface RoundQuestion {
@@ -20,11 +21,11 @@ export type DesignTurnOutput =
       readonly questions: readonly RoundQuestion[];
     }
   | {
-      /** The small outcome: the issue is rewritten in place as an agent brief. */
+      /** The small outcome: the issue is rewritten in place as an agent brief, or as an Operator brief. */
       readonly kind: "brief";
       /** What the session decided, for the closing comment. */
       readonly comment: string;
-      readonly brief: AgentBrief;
+      readonly brief: AgentBrief | OperatorBrief;
     }
   | {
       /** The large outcome: a Spec and its Tickets, which supersede the issue. */
@@ -44,8 +45,31 @@ export type DesignTurnOutput =
       readonly tickets: readonly SpecTicket[];
     };
 
-/** A Ticket as a Design session writes it, before it is an issue. */
-export interface SpecTicket {
+/**
+ * The small outcome when the whole issue is Operator work that fits one
+ * sitting: ready for a Pairing session rather than an Implementer.
+ */
+export interface OperatorBrief {
+  readonly operator: true;
+  readonly summary: string;
+  /** Each one action the Operator takes; the Kit writes them as a task list. */
+  readonly steps: readonly string[];
+}
+
+/**
+ * A Ticket as a Design session writes it, before it is an issue; or, marked
+ * `operator`, an Operator step, which the Kit gives to the Operator instead.
+ * Either can wait on the other.
+ */
+export type SpecTicket =
+  | (TicketFields & { readonly operator?: undefined })
+  | (TicketFields & {
+      readonly operator: true;
+      /** Each one action the Operator takes; the Kit writes them as a task list. */
+      readonly steps: readonly string[];
+    });
+
+interface TicketFields {
   /** Names the Ticket for other Tickets' `blockedBy`; unique within the outcome. */
   readonly key: string;
   readonly title: string;
@@ -81,7 +105,19 @@ function readQuestions(value: unknown, errors: string[]): RoundQuestion[] {
   return questions;
 }
 
-function readBrief(value: unknown, errors: string[]): AgentBrief | null {
+/** At least one step, and no empty one. */
+function isSteps(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.every(isText);
+}
+
+function readBrief(value: unknown, errors: string[]): AgentBrief | OperatorBrief | null {
+  if (isObject(value) && value.operator !== undefined) {
+    if (value.operator !== true || !isText(value.summary) || !isSteps(value.steps)) {
+      errors.push("an Operator brief needs operator: true, a summary and at least one step, with no empty step");
+      return null;
+    }
+    return { operator: true, summary: value.summary, steps: value.steps };
+  }
   if (
     !isObject(value) ||
     !isText(value.summary) ||
@@ -119,8 +155,23 @@ function readTickets(value: unknown, errors: string[], outcome: "spec" | "split"
       !item.blockedBy.every(isText)
     ) {
       errors.push(`ticket ${i + 1} needs non-empty key, title and body text, and a blockedBy list of keys`);
+    } else if (item.operator === undefined) {
+      const fields = { key: item.key, title: item.title, body: item.body, blockedBy: item.blockedBy };
+      if (item.steps === undefined) tickets.push(fields);
+      else errors.push(`ticket ${JSON.stringify(item.key)} has steps, so mark it "operator": true as an Operator step`);
+    } else if (item.operator !== true || !isSteps(item.steps)) {
+      errors.push(
+        `operator step ${JSON.stringify(item.key)} needs "operator": true and at least one step, with no empty step`,
+      );
     } else {
-      tickets.push({ key: item.key, title: item.title, body: item.body, blockedBy: item.blockedBy });
+      tickets.push({
+        key: item.key,
+        title: item.title,
+        body: item.body,
+        blockedBy: item.blockedBy,
+        operator: true,
+        steps: item.steps,
+      });
     }
   });
   return tickets;

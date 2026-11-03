@@ -58,6 +58,7 @@ function describeAction(action: Action): string {
     case "create-issue":
       return [
         `- create "${action.title}" (${action.labels.join(", ")})`,
+        action.assignees === undefined || action.assignees.length === 0 ? "" : `, assigned to ${action.assignees.join(", ")}`,
         action.parent === null
           ? ""
           : `, a sub-issue of ${typeof action.parent === "number" ? `#${action.parent}` : action.parent.created}`,

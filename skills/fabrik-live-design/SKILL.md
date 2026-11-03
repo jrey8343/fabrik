@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Live Design session
 
-The Operator is taking the Design session on issue `$ARGUMENTS` live, in this cloud or local session, instead of answering numbered rounds on the issue. It must end the way an async session does, so the Loop can carry on: the issue becomes its agent brief, or a Spec and its Tickets replace it.
+The Operator is taking the Design session on issue `$ARGUMENTS` live, in this cloud or local session, instead of answering numbered rounds on the issue. It must end the way an async session does, so the Loop can carry on: the issue becomes its agent brief or its Operator brief, or a Spec and its Tickets (some of which may be Operator steps) replace it.
 
 This session runs with the Operator's own GitHub credentials, so you publish the outcome yourself with `gh` (see `docs/agents/issue-tracker.md`). If `gh auth status` fails, stop and tell the Operator before doing anything else.
 
@@ -51,12 +51,40 @@ Do exactly one of these, once nothing that matters is open or the Operator wants
    <the decisions the session made, briefly>
    ```
 
+### The whole issue is Operator work that fits one sitting: an Operator brief
+
+Use this when only the Operator can do the work (a secret, a repo setting, a trust-root edit) and it needs no pull request from an Implementer.
+
+1. Rewrite the issue's body as its Operator brief (`gh issue edit <n> --body-file …`), in this shape. Each step is one action the Operator takes:
+
+   ```
+   ## Operator brief
+
+   <what needs doing and why, the decisions the session made>
+
+   ## Steps
+
+   - [ ] <one action the Operator takes>
+
+   <sub>Written by a live Fabrik Design session. The original issue is in this issue's edit history.</sub>
+   ```
+
+2. Post the outcome comment last. Its first line is exactly the marker:
+
+   ```
+   <!-- fabrik:live-outcome operator-brief -->
+   **Design session finished live.** This issue is now an Operator brief, ready for a Pairing session.
+
+   <the decisions the session made, briefly>
+   ```
+
 ### The work is bigger: a Spec and its Tickets
 
 1. Write the Spec as `.claude/skills/to-spec/SKILL.md` does, and slice it into Tickets as `.claude/skills/to-tickets/SKILL.md` does. Publish them with `gh`, skipping any step in those skills that asks for labels other than these:
    - The Spec, and every Ticket, gets this issue's category label (`bug` or `enhancement`) and `ready-for-agent`, set with `--label` when you create it, so Intake never sends it to Triage.
-   - Each Ticket is a sub-issue of the Spec (`gh issue create --parent <spec>`).
-   - Each blocker is a native blocked-by edge (see **Blocking** in `docs/agents/issue-tracker.md`). Add every edge before step 2: your outcome comment starts Dispatch, which releases any Ticket with no open blocker.
+   - A piece only the Operator can do, that later Tickets must wait for or that belongs to no one pull request, is an **Operator step** instead of a Ticket. It gets the category label and `ready-for-human` (never `ready-for-agent`), is assigned to the Operator (`--assignee <operator>`), and its body ends with its steps as a task list under `## Steps`, one `- [ ]` line per action the Operator takes. A Spec may be made only of Operator steps.
+   - Each Ticket and Operator step is a sub-issue of the Spec (`gh issue create --parent <spec>`).
+   - Each blocker is a native blocked-by edge (see **Blocking** in `docs/agents/issue-tracker.md`), in either direction between Tickets and Operator steps. Add every edge before step 2: your outcome comment starts Dispatch, which releases any Ticket with no open blocker.
    - End the Spec's body with `<sub>Written by a live Fabrik Design session on #<n>, which this Spec supersedes.</sub>`.
 2. Post the outcome comment last. Its first line is exactly the marker:
 
@@ -67,6 +95,8 @@ Do exactly one of these, once nothing that matters is open or the Operator wants
    <the decisions the session made, briefly>
    ```
 
+   When some of the new items are Operator steps, count them too, as the Kit does: `and its 2 Tickets and 1 Operator step`, or `and its 2 Operator steps` when there are no Tickets. The assignment is what notifies the Operator, so still mention nobody.
+
 3. Don't close the issue or remove its labels. The Kit does that when it sees the comment.
 
 ### Stopping before it's finished
@@ -75,4 +105,6 @@ Post one comment, with no marker, that lists every decision the session made and
 
 ## What the Kit does with the outcome
 
-The Fabrik App sees the marker on the Operator's comment. For `brief` it swaps `needs-design` for `ready-for-agent`; for `spec` it removes `needs-design` and closes this issue as completed. Either way it then runs a Dispatch check, so the new Tickets start as they would after an async session.
+The Fabrik App sees the marker on the Operator's comment. For `brief` it swaps `needs-design` for `ready-for-agent`; for `spec` it removes `needs-design` and closes this issue as completed. Either way it then runs a Dispatch check, so the new Tickets start as they would after an async session. Dispatch never releases an Operator step: it's `ready-for-human`.
+
+For `operator-brief` it swaps `needs-design` for `ready-for-human` and assigns the issue to the Operator, ready for a Pairing session. It runs no Dispatch check.
