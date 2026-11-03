@@ -27,6 +27,8 @@ const ISSUE_QUERY = `
         parent { number }
         comments(last: 100) { nodes { body author { __typename } } }
         closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number } }
+        blockedBy(first: 50) { nodes { number state repository { nameWithOwner } } }
+        blocking(first: 50) { nodes { number state repository { nameWithOwner } } }
       }
     }
   }
@@ -43,8 +45,26 @@ interface IssueQueryResult {
       parent: { number: number } | null;
       comments: { nodes: { body: string; author: { __typename: string } | null }[] };
       closedByPullRequestsReferences: { nodes: { number: number }[] };
+      blockedBy: DependencyEdges;
+      blocking: DependencyEdges;
     } | null;
   };
+}
+
+/** One direction of an issue's native dependencies, as the issue query reads it. */
+interface DependencyEdges {
+  nodes: { number: number; state: "OPEN" | "CLOSED"; repository: { nameWithOwner: string } }[];
+}
+
+/**
+ * The open issues at the other end of these edges, by number, that live in
+ * this repo. An issue in another repo is left out: its number means nothing here.
+ */
+function openIssueNumbersIn(repo: Repo, edges: DependencyEdges): number[] {
+  const here = `${repo.owner}/${repo.name}`.toLowerCase();
+  return edges.nodes
+    .filter((issue) => issue.state === "OPEN" && issue.repository.nameWithOwner.toLowerCase() === here)
+    .map((issue) => issue.number);
 }
 
 const PULL_REQUEST_QUERY = `
@@ -319,6 +339,8 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
         issue.comments.nodes.map((comment) => ({ body: comment.body, byBot: comment.author?.__typename === "Bot" })),
       ),
       emptyDiffs: countEmptyDiffs(issue.comments.nodes.map((comment) => comment.body)),
+      openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
+      openBlocking: openIssueNumbersIn(repo, issue.blocking),
     },
     pullRequest: null,
     dispatch: null,

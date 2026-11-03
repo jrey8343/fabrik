@@ -176,6 +176,10 @@ export interface IssueSnapshot {
   readonly sentBack: SentBack | null;
   /** How many Implement runs on it ended in an empty diff since its last Design session (src/loop/implement.ts). */
   readonly emptyDiffs: number;
+  /** The open issues blocking it, by GitHub's native issue dependencies. */
+  readonly openBlockers: readonly number[];
+  /** The open issues it blocks. */
+  readonly openBlocking: readonly number[];
 }
 
 /** A pull request as the core sees it. */
@@ -309,7 +313,7 @@ export interface PostedComment {
 /** One change the GitHub adapter makes on the core's behalf. */
 export type Action =
   | {
-      /** Creates an issue, then links it under its parent and to its blockers, which earlier actions created. */
+      /** Creates an issue, then links it under its parent and to its blockers. */
       readonly kind: "create-issue";
       /** Names the new issue for later actions in the plan. */
       readonly key: string;
@@ -318,7 +322,8 @@ export type Action =
       readonly labels: readonly Label[];
       /** The issue it becomes a sub-issue of: one created earlier in the plan, or an existing issue by its number. */
       readonly parent: CreatedIssue | number | null;
-      readonly blockedBy: readonly CreatedIssue[];
+      /** The issues blocking it: each one created earlier in the plan, or an existing issue by its number. */
+      readonly blockedBy: readonly (CreatedIssue | number)[];
     }
   | {
       /** Comments on an issue, then closes it as completed: another issue now carries its work. */
@@ -326,6 +331,12 @@ export type Action =
       readonly issue: number;
       /** The comment's Markdown, with each created issue written as its `#number`. */
       readonly comment: readonly (string | CreatedIssue)[];
+    }
+  | {
+      /** Makes an existing issue wait on one created earlier in the plan, by a blocked-by edge. */
+      readonly kind: "add-blocked-by";
+      readonly issue: number;
+      readonly blocker: CreatedIssue;
     }
   | { readonly kind: "add-labels"; readonly issue: number; readonly labels: readonly Label[] }
   | { readonly kind: "remove-label"; readonly issue: number; readonly label: Label }

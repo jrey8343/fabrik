@@ -159,6 +159,90 @@ describe("Finishing a Design session with a Spec and its Tickets", () => {
   });
 });
 
+describe("A Spec that supersedes an issue keeps the issue's place among its blockers", () => {
+  const output = { ...finished, tickets: [ticket("model"), ticket("copy"), ticket("sms", ["model"])] };
+
+  it("gives each Ticket with no blocker in the outcome a blocked-by edge to every open blocker of the issue, and none to a closed one", () => {
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], openBlockers: [10] });
+
+    const plan = planFor(turnFinished(output), snapshotOf(issue), kitConfig());
+
+    expect(created(plan).map((action) => [action.key, action.blockedBy])).toEqual([
+      ["spec", []],
+      ["ticket:model", [10]],
+      ["ticket:copy", [10]],
+      ["ticket:sms", [{ created: "ticket:model" }]],
+    ]);
+  });
+
+  it("points each open issue the superseded issue blocked at every Ticket no other Ticket waits on, before the issue closes", () => {
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], openBlocking: [20] });
+
+    const plan = planFor(turnFinished(output), snapshotOf(issue), kitConfig());
+
+    const actions = plan.kind === "act" ? plan.actions : [];
+    const edges = actions.filter((action) => action.kind === "add-blocked-by");
+    expect(edges).toEqual([
+      { kind: "add-blocked-by", issue: 20, blocker: { created: "ticket:copy" } },
+      { kind: "add-blocked-by", issue: 20, blocker: { created: "ticket:sms" } },
+    ]);
+    const closing = actions.findIndex((action) => action.kind === "close-as-superseded");
+    expect(actions.findLastIndex((action) => action.kind === "add-blocked-by")).toBeLessThan(closing);
+    expect(actions.findLastIndex((action) => action.kind === "create-issue")).toBeLessThan(
+      actions.findIndex((action) => action.kind === "add-blocked-by"),
+    );
+  });
+
+  it("says in the closing comment which blockers the Tickets took on and which issues now wait on which Tickets, mentioning nobody", () => {
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], openBlockers: [10, 11], openBlocking: [20, 21] });
+
+    const plan = planFor(turnFinished(output), snapshotOf(issue), kitConfig());
+
+    const comment = closingComment(plan);
+    expect(comment).toBe(
+      [
+        "**Design session finished.** This issue is superseded by the Spec <spec> and its 3 Tickets.",
+        "",
+        "Too big for one PR, so it's a Spec in two Tickets.",
+        "",
+        "Blocked-by edges moved to the new Tickets:",
+        "- <ticket:model>, <ticket:copy> are now blocked by #10, #11.",
+        "- #20 is now blocked by <ticket:copy>, <ticket:sms>.",
+        "- #21 is now blocked by <ticket:copy>, <ticket:sms>.",
+      ].join("\n"),
+    );
+    expect(comment).not.toMatch(/(?<![\w`])@[A-Za-z0-9]/);
+  });
+
+  it("adds nothing to the closing comment, and no edge, when the issue had no open blockers and blocked nothing open", () => {
+    const plan = planFor(turnFinished(output), inSession, kitConfig());
+
+    expect(closingComment(plan)).toBe(
+      "**Design session finished.** This issue is superseded by the Spec <spec> and its 3 Tickets.\n\nToo big for one PR, so it's a Spec in two Tickets.",
+    );
+    expect(plan.kind === "act" && plan.actions.some((action) => action.kind === "add-blocked-by")).toBe(false);
+  });
+
+  it("gives a single Ticket both the issue's blockers and the issues it blocked", () => {
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], openBlockers: [10], openBlocking: [20] });
+
+    const plan = planFor(turnFinished({ ...finished, tickets: [ticket("model")] }), snapshotOf(issue), kitConfig());
+
+    expect(created(plan).at(-1)?.blockedBy).toEqual([10]);
+    expect(plan.kind === "act" ? plan.actions.filter((action) => action.kind === "add-blocked-by") : []).toEqual([
+      { kind: "add-blocked-by", issue: 20, blocker: { created: "ticket:model" } },
+    ]);
+    expect(closingComment(plan)).toContain("- <ticket:model> is now blocked by #10.\n- #20 is now blocked by <ticket:model>.");
+  });
+});
+
+/** The close-as-superseded comment, with each created issue written as `<key>`. */
+function closingComment(plan: Plan): string {
+  const close = plan.kind === "act" ? plan.actions.find((action) => action.kind === "close-as-superseded") : undefined;
+  if (close?.kind !== "close-as-superseded") throw new Error("the plan doesn't close the issue as superseded");
+  return close.comment.map((part) => (typeof part === "string" ? part : `<${part.created}>`)).join("");
+}
+
 describe("Intake of the issues a Design session creates", () => {
   it("never sends the Spec or its Tickets to Triage", () => {
     const plan = planFor(turnFinished(finished), inSession, kitConfig());

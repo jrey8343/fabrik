@@ -61,8 +61,12 @@ function describeAction(action: Action): string {
         action.parent === null
           ? ""
           : `, a sub-issue of ${typeof action.parent === "number" ? `#${action.parent}` : action.parent.created}`,
-        action.blockedBy.length === 0 ? "" : `, blocked by ${action.blockedBy.map((b) => b.created).join(", ")}`,
+        action.blockedBy.length === 0
+          ? ""
+          : `, blocked by ${action.blockedBy.map((b) => (typeof b === "number" ? `#${b}` : b.created)).join(", ")}`,
       ].join("");
+    case "add-blocked-by":
+      return `- make #${action.issue} blocked by ${action.blocker.created}`;
     case "close-as-superseded":
       return `- close #${action.issue} as superseded`;
     case "start-agent-run":
