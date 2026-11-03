@@ -15,6 +15,7 @@ If the issue is a Ticket under a Spec, that Spec follows the issue at the end of
 
 1. Work out where the session stands: the issue as first written, every earlier round, and every answer the Operator gave. An answer of `yes` takes every recommendation in that round. Numbers the Operator didn't mention take their recommendation too.
 2. Check what you can against the code yourself. Never ask the Operator something the repository can answer.
+   Keep in mind what an Implementer can't change: the trust-root files, which are `AGENTS.md`, `CLAUDE.md`, any `.claude/settings*` file, skills, the Kit's prompts, the `.fabrik/` folder and anything under `.github/workflows/`. The Kit refuses any branch that touches them, and the Fabrik App can't push workflow files at all, so the Operator's approval doesn't change this. When the work needs such a change, keep it out of the brief's and every Ticket's what-to-build and acceptance criteria. Put it in a `## For the Operator` section at the end of the brief or Ticket body instead, as the exact edit to make by hand once the pull request merges. If the Operator asks for an agent to make such a change, say in the next round's intro that it isn't possible and what you'll do instead.
 3. Then do exactly one of these:
    - **Ask the next round** while any design, product or priority question that matters to building this is still open. Ask the fewest questions that settle the most, usually two to five. Write each so it can be answered in a word or two from a phone, and give each a concrete recommended answer.
    - **Finish with an agent brief** once nothing that matters is open and the work fits one pull request an Implementer can finish. The brief replaces the issue's body, so it must stand alone: what to build and why, the decisions the session made, and what is out of scope, followed by acceptance criteria that each state one check a test could make.
@@ -42,7 +43,7 @@ To finish with an agent brief:
 <design>
 {
   "kind": "brief",
-  "comment": "Markdown for the closing comment: the decisions the session made, briefly.",
+  "comment": "Markdown for the closing comment: the decisions the session made, briefly. The Kit writes the line saying the session finished and links what it created, so don't.",
   "brief": {
     "summary": "Markdown for the brief itself, written as AGENT-BRIEF.md describes, without the acceptance criteria.",
     "acceptanceCriteria": ["One testable check.", "Another."]
