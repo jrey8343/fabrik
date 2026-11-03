@@ -53,6 +53,52 @@ describe("Setting up a clean Product repo", () => {
     expect(dependabot).toContain('dependency-name: "jrey8343/fabrik*"');
     expect(dependabot).toContain("default-days: 0");
   });
+
+  it("groups every Fabrik pin into one Dependabot PR, so a release never lands half-bumped", () => {
+    const { actions } = planSetup(aCleanProduct(), kit);
+
+    const dependabot = written(actions, ".github/dependabot.yml") ?? "";
+    expect(dependabot).toMatch(/groups:\n\s+fabrik:\n\s+patterns:\n\s+- "jrey8343\/fabrik\*"/);
+  });
+});
+
+describe("A Dependabot shim from before Fabrik pins were grouped", () => {
+  // The shim v0.1.0 and v0.1.1 wrote: it opened one PR per pinned workflow.
+  const ungrouped = [
+    "# Fabrik's Dependabot shim in a Product repo (ADR-0003). It opens a PR each time",
+    "# Fabrik cuts a release, bumping the one pin in .github/workflows/fabrik.yml,",
+    "# and the Operator merges it through the Merge gate like any other change.",
+    "version: 2",
+    "updates:",
+    "  - package-ecosystem: github-actions",
+    '    directory: "/"',
+    "    schedule:",
+    "      interval: daily",
+    "    # Only the Kit pin; this entry leaves the Product's other actions alone.",
+    "    allow:",
+    '      - dependency-name: "jrey8343/fabrik*"',
+    "    # A release reaches the Product repo the day it's cut.",
+    "    cooldown:",
+    "      default-days: 0",
+    "    commit-message:",
+    '      prefix: "fabrik"',
+    "",
+  ].join("\n");
+
+  it("is replaced with the grouped shim when setup wrote it unchanged", () => {
+    const { actions } = planSetup(aCleanProduct({ files: { ".github/dependabot.yml": ungrouped } }), kit);
+
+    expect(written(actions, ".github/dependabot.yml")).toBe(kit.templates.dependabot);
+  });
+
+  it("asks the Operator to add the group when the Product has edited it", () => {
+    const edited = `${ungrouped}  - package-ecosystem: npm\n    directory: "/"\n    schedule:\n      interval: weekly\n`;
+
+    const plan = planSetup(aCleanProduct({ files: { ".github/dependabot.yml": edited } }), kit);
+
+    expect(written(plan.actions, ".github/dependabot.yml")).toBeUndefined();
+    expect(plan.notes.join("\n")).toContain("groups:");
+  });
 });
 
 describe("Re-running setup", () => {
