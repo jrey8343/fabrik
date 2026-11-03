@@ -75,10 +75,11 @@ describe("An agent job's inputs", () => {
     });
   });
 
-  it("gives a retry the PR's comments with their authors' kind, so only the Fabrik App's Verdicts count", async () => {
+  it("gives a retry the PR's body, to refresh, and its comments with their authors' kind, so only the Fabrik App's Verdicts count", async () => {
     expect(await readPullRequest(graphqlReturning(pullRequest), repo, 50, true)).toEqual({
       number: 50,
       title: "Add a waitlist",
+      body: "Closes #7",
       comments: [{ body: "<!-- fabrik:verdict … -->", author: { __typename: "Bot" } }],
     });
   });

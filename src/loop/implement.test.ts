@@ -204,6 +204,16 @@ describe("Opening the draft PR", () => {
     expect(pullRequest.title).not.toMatch(/(^|\s)@someone\b/);
   });
 
+  it("a first run's output needs no fix, and one it carries anyway doesn't reach the PR", () => {
+    const event = finished({
+      output: JSON.stringify({ title: "Let patients join a waitlist", summary: "Adds a waitlist to full days.", fix: "Nothing to fix." }),
+    });
+
+    const actions = actionsOf(planFor(event, snapshotOf(readyTicket()), kitConfig()));
+
+    expect(actions).toContainEqual(expect.objectContaining({ kind: "open-pull-request", body: "Adds a waitlist to full days.\n\nCloses #7" }));
+  });
+
   it("output that breaks the Implementer's contract is an Infrastructure failure and pushes nothing", () => {
     const plan = planFor(finished({ output: '{"title": ""}' }), snapshotOf(readyTicket()), kitConfig());
 

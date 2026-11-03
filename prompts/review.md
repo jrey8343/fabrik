@@ -31,5 +31,6 @@ verdict: execution-flaw
 </review>
 
 - For a flaw, make each finding specific enough to act on: what is wrong, where, and which criterion or standard it breaks.
+- If the fix needs work that has since landed on the base branch, say so and ask for `origin/main` to be merged into the PR's branch. Never ask for a rebase: the Implementer merges, so its earlier commits stay as they were.
 - For a pass, say briefly what you checked, and list any nits.
 - Don't @-mention anyone.

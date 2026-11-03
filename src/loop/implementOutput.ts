@@ -5,8 +5,14 @@
 export interface ImplementOutput {
   /** The PR title, one line. */
   readonly title: string;
-  /** Markdown for the PR body: what changed and how it was tested. */
+  /** Markdown for the PR body: what the PR as a whole changes, and how it was tested. */
   readonly summary: string;
+  /**
+   * For a run on an existing PR (a retry or a Request-changes run): what this
+   * run was asked to fix and what it changed, posted as a comment on the PR
+   * while `summary` replaces its body. A first run leaves it out.
+   */
+  readonly fix?: string;
 }
 
 export type ImplementOutputResult =
@@ -25,23 +31,43 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return { ok: false, errors: ["Implementer output must be a JSON object"] };
   }
-  const { title, summary } = value as Record<string, unknown>;
+  const { title, summary, fix } = value as Record<string, unknown>;
   const errors: string[] = [];
   if (!isText(title) || title.includes("\n") || title.length > MAX_TITLE) {
     errors.push(`title must be one non-empty line of at most ${MAX_TITLE} characters`);
   }
   if (!isText(summary)) errors.push("summary must be non-empty Markdown");
+  if (fix !== undefined && !isText(fix)) errors.push("fix, when given, must be non-empty Markdown");
   if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, output: { title: (title as string).trim(), summary: (summary as string).trim() } };
+  return {
+    ok: true,
+    output: {
+      title: (title as string).trim(),
+      summary: (summary as string).trim(),
+      ...(fix === undefined ? {} : { fix: (fix as string).trim() }),
+    },
+  };
 }
 
-/** Parses the text an agent emitted, then checks it. */
-export function parseImplementOutput(text: string): ImplementOutputResult {
+/**
+ * The contract for a run on an existing PR: the output a first run gives,
+ * plus the `fix` that says what this run changed.
+ */
+export function readPullRequestRunOutput(value: unknown): ImplementOutputResult {
+  const result = readImplementOutput(value);
+  if (result.ok && result.output.fix === undefined) {
+    return { ok: false, errors: ["fix must be non-empty Markdown on a retry or Request-changes run"] };
+  }
+  return result;
+}
+
+/** Parses the text an agent emitted, then checks it, against the contract for a run on an existing PR when `onPullRequest`. */
+export function parseImplementOutput(text: string, onPullRequest = false): ImplementOutputResult {
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch (error) {
     return { ok: false, errors: [`Implementer output is not valid JSON: ${(error as Error).message}`] };
   }
-  return readImplementOutput(value);
+  return onPullRequest ? readPullRequestRunOutput(value) : readImplementOutput(value);
 }

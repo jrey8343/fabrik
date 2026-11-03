@@ -122,7 +122,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   const { issue: issueNumber, changes, branch, fixes } = event;
   const { issue, pullRequest, operator } = snapshot;
   if (fixes === undefined) throw new Error("A first Implement run lands through applyImplementation");
-  const parsed = parseImplementOutput(event.output);
+  const parsed = parseImplementOutput(event.output, true);
   if (!parsed.ok) {
     return {
       kind: "fail",
@@ -157,6 +157,12 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
     kind: "act",
     actions: [
       { kind: "push-branch", branch },
+      // The body says what the PR as a whole now does, so the next Review, which reads the body, never judges a stale one.
+      {
+        kind: "edit-issue-body",
+        issue: pullRequest.number,
+        body: `${withoutMentions(parsed.output.summary)}\n\nCloses #${issueNumber}`,
+      },
       {
         kind: "comment",
         issue: pullRequest.number,
@@ -167,7 +173,8 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
             ? `The Implementer pushed the Operator's requested changes to \`${branch}\`; Review runs again on it.`
             : `The Implementer pushed a fix for the Execution flaw to \`${branch}\`; Review runs again on it.`,
           "",
-          withoutMentions(parsed.output.summary),
+          // Present: the on-a-PR contract above requires it.
+          withoutMentions(parsed.output.fix ?? ""),
         ].join("\n"),
       },
     ],

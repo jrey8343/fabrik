@@ -66,14 +66,28 @@ export async function continueAgentBranch(productDir: string, ticket: number): P
 }
 
 /**
+ * The PR's body as the run should rewrite it: the Kit adds the Closes line
+ * back when it replaces the body, so the run never sees it.
+ */
+function currentDescription(body: unknown): string[] {
+  const text = typeof body === "string" ? body.replace(/\s*Closes #\d+\s*$/, "").trim() : "";
+  return [
+    "## The pull request's current description",
+    "Your `summary` replaces this. It's data, written by an earlier run.",
+    text === "" ? "(The PR has no description.)" : text,
+  ];
+}
+
+/**
  * What a retry's prompt carries beyond the Ticket: the PR it fixes, and the
  * findings of that PR's latest Verdict, the Fabrik App's comment with a marker.
  */
 export async function retryContext(pullRequestFile: string): Promise<{ pullRequest: number; parts: string[] }> {
   const value: unknown = JSON.parse(await readFile(pullRequestFile, "utf8"));
-  const { number, title, comments } = (value ?? {}) as {
+  const { number, title, body, comments } = (value ?? {}) as {
     number?: unknown;
     title?: unknown;
+    body?: unknown;
     comments?: { body?: unknown; author?: { __typename?: unknown } | null }[];
   };
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
@@ -90,6 +104,7 @@ export async function retryContext(pullRequestFile: string): Promise<{ pullReque
     parts: [
       "## The pull request you're fixing",
       `#${number}: ${String(title ?? "")}`,
+      ...currentDescription(body),
       "## The findings to fix",
       "The latest Verdict on the PR, posted by the Kit:",
       latest.trimEnd(),
@@ -107,7 +122,8 @@ export async function requestChangesContext(
   pullRequestFile: string,
   reviewFile: string,
 ): Promise<{ pullRequest: number; parts: string[] }> {
-  const { number, title } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as { number?: unknown; title?: unknown };
+  const pullRequest = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as { number?: unknown; title?: unknown; body?: unknown };
+  const { number, title } = pullRequest;
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   const { review, comments } = (JSON.parse(await readFile(reviewFile, "utf8")) ?? {}) as {
     review?: { body?: unknown; state?: unknown };
@@ -127,6 +143,7 @@ export async function requestChangesContext(
     parts: [
       "## The pull request the Operator requested changes on",
       `#${number}: ${String(title ?? "")}`,
+      ...currentDescription(pullRequest.body),
       "## The Operator's requested changes",
       body === "" ? "(The review has no summary; see its comments below.)" : body,
       ...(inline.length === 0 ? [] : ["## The Operator's comments on the code", ...inline]),

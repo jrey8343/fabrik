@@ -204,7 +204,11 @@ function retried(
   return {
     kind: "implement-run-finished",
     issue: 7,
-    output: JSON.stringify({ title: "Handle the empty cart", summary: "Guards the empty-cart case, @someone." }),
+    output: JSON.stringify({
+      title: "Handle the empty cart",
+      summary: "Shows the empty state for an empty cart, @someone, and tests both cases.",
+      fix: "Guards the empty-cart case the Reviewer flagged, @someone.",
+    }),
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes: { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }] },
@@ -219,16 +223,36 @@ function retrySnapshot(pullRequest = flawedPullRequest(), ticket = anIssue({ num
 }
 
 describe("A retry's branch", () => {
-  it("is pushed onto the same branch, opens no new PR, and leaves a silent note with the Implementer's summary", () => {
+  it("is pushed onto the same branch, opens no new PR, and leaves a silent note with the Implementer's fix", () => {
     const plan = planFor(retried(), retrySnapshot(), kitConfig());
 
     const actions = actionsOf(plan);
     expect(actions[0]).toEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
-    expect(actions.map((action) => action.kind)).toEqual(["push-branch", "comment"]);
-    expect(actions[1]).toMatchObject({ kind: "comment", issue: 50 });
-    expect(actions[1]).toHaveProperty("body", expect.stringContaining("Guards the empty-cart case"));
+    expect(actions.map((action) => action.kind)).toEqual(["push-branch", "edit-issue-body", "comment"]);
+    expect(actions[2]).toMatchObject({ kind: "comment", issue: 50 });
+    expect(actions[2]).toHaveProperty("body", expect.stringContaining("Guards the empty-cart case the Reviewer flagged"));
+    expect(actions[2]).not.toHaveProperty("body", expect.stringContaining("Shows the empty state"));
     expect(notificationsOf(plan, "jrey")).toEqual([]);
-    expect(actions[1]).not.toHaveProperty("body", expect.stringContaining("@someone"));
+    expect(actions[2]).not.toHaveProperty("body", expect.stringContaining("@someone"));
+  });
+
+  it("replaces the PR body with the refreshed summary, so the next Review reads the PR as it now stands", () => {
+    const actions = actionsOf(planFor(retried(), retrySnapshot(), kitConfig()));
+
+    expect(actions).toContainEqual({
+      kind: "edit-issue-body",
+      issue: 50,
+      body: "Shows the empty state for an empty cart, @\u200bsomeone, and tests both cases.\n\nCloses #7",
+    });
+  });
+
+  it.each([
+    ["no fix", { title: "Handle the empty cart", summary: "Shows the empty state." }],
+    ["an empty fix", { title: "Handle the empty cart", summary: "Shows the empty state.", fix: "  " }],
+  ])("output with %s breaks the contract on a retry: an Infrastructure failure that pushes nothing", (_, output) => {
+    const plan = planFor(retried({ output: JSON.stringify(output) }), retrySnapshot(), kitConfig());
+
+    expect(plan).toMatchObject({ kind: "fail", failure: "infrastructure" });
   });
 
   it.each([
@@ -278,6 +302,7 @@ describe("A retry's branch", () => {
 
     const actions = actionsOf(plan);
     expect(actions.map((action) => action.kind)).not.toContain("push-branch");
+    expect(actions.map((action) => action.kind)).not.toContain("edit-issue-body");
     const comments = actions.flatMap((action) => (action.kind === "comment" ? [action.body] : []));
     expect(verdictsPostedIn(comments)).toEqual([
       { verdict: "execution-flaw", source: "empty-diff", requestChanges: false, headSha: HEAD_SHA },

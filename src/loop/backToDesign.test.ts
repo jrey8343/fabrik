@@ -60,7 +60,7 @@ const usedUp = aPullRequest({ verdicts: [earlier("execution-flaw"), earlier("exe
 const emptySecondRetry: LoopEvent = {
   kind: "implement-run-finished",
   issue: 7,
-  output: JSON.stringify({ title: "Handle the empty cart", summary: "Nothing to change." }),
+  output: JSON.stringify({ title: "Handle the empty cart", summary: "Nothing to change.", fix: "Nothing to change." }),
   branch: "fabrik/ticket-7",
   base: "fabrik/ticket-7",
   changes: { net: [], commits: [] },
