@@ -96,7 +96,7 @@ export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kit
 
 /**
  * Every way a plan would buzz the Operator's phone: an assignment, a review request, an issue
- * opened assigned to them, or an @-mention of them in a comment or new issue.
+ * opened or created assigned to them, or an @-mention of them in a comment or new issue.
  */
 export function notificationsOf(plan: Plan, operator = "operator"): string[] {
   if (plan.kind !== "act") return [];
@@ -113,6 +113,8 @@ export function notificationsOf(plan: Plan, operator = "operator"): string[] {
         const text = action.body.map((part) => (typeof part === "string" ? part : "https://github.com/x")).join("");
         return mention.test(text) ? [`mention on #${action.issue}`] : [];
       }
+      case "create-issue":
+        return action.assignees?.includes(operator) ? [`assign new "${action.title}"`] : [];
       case "open-issue":
         return [
           ...(action.assignees.includes(operator) ? [`assign new "${action.title}"`] : []),

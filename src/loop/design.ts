@@ -2,10 +2,17 @@
 // Each turn rebuilds its context from the issue thread, so nothing is held here
 // between turns beyond what the thread itself shows.
 import type { SentBack } from "./backToDesign.ts";
-import { dependencyOrder, parseDesignTurnOutput, type DesignTurnOutput, type SpecTicket } from "./designOutput.ts";
-import { isCategoryLabel, type Label, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
+import {
+  dependencyOrder,
+  parseDesignTurnOutput,
+  type DesignTurnOutput,
+  type OperatorBrief,
+  type SpecTicket,
+} from "./designOutput.ts";
+import { isCategoryLabel, type Label, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
 import { designRoundMarker, LIVE_OUTCOME_MARKER, SESSION_FINISHED } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
+import type { AgentBrief } from "./triageOutput.ts";
 import { startAgentRun } from "./runs.ts";
 import type { Action, CreatedIssue, IssueContext, IssueSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
 
@@ -36,19 +43,29 @@ export function answerRound(
   const notNow = whileInSession(issueNumber, snapshot.issue);
   if (notNow !== null) return notNow;
   const live = LIVE_OUTCOME_MARKER.exec(body);
-  return live?.[1] === undefined ? startAgentRun("design", issueNumber, config) : landLiveOutcome(issueNumber, live[1]);
+  return live?.[1] === undefined ? startAgentRun("design", issueNumber, config) : landLiveOutcome(issueNumber, live[1], snapshot.operator);
 }
 
 
 /** The live session's outcome is already on GitHub, so the Kit only moves the issue on, as an async finish would. */
-function landLiveOutcome(issueNumber: number, outcome: string): Plan {
+function landLiveOutcome(issueNumber: number, outcome: string, operator: string): Plan {
   const leaveSession: Action = { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN };
-  // Either outcome leaves new ready work, so see whether it can start.
+  // A brief or a Spec leaves new ready work, so see whether it can start.
   switch (outcome) {
     case "brief":
       return {
         kind: "act",
         actions: [leaveSession, { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] }, { kind: "check-dispatch" }],
+      };
+    case "operator-brief":
+      // Only the Operator can do this work, so it waits for them, not Dispatch.
+      return {
+        kind: "act",
+        actions: [
+          leaveSession,
+          { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_HUMAN] },
+          { kind: "assign", issue: issueNumber, assignee: operator },
+        ],
       };
     case "spec":
       // The Operator's comment already names the Spec that supersedes this issue.
@@ -96,14 +113,19 @@ export function applyTurn(issueNumber: number, text: string, snapshot: IssueCont
   if (output.kind === "split" && parent === null) {
     return wrongOutcome(issueNumber, `#${issueNumber} has no Spec above it, so it can't split into sibling Tickets; finish with a Spec instead`);
   }
+  // Every outcome but an Operator brief leaves new ready work, so see whether it can start.
+  const checkDispatch: Action = { kind: "check-dispatch" };
+  if (output.kind === "brief") {
+    // Only the Operator can do an Operator brief's work, so it waits for them, not Dispatch.
+    return "operator" in output.brief
+      ? { kind: "act", actions: rewriteAsOperatorBrief(issueNumber, output.comment, output.brief, snapshot.operator) }
+      : { kind: "act", actions: [...rewriteAsBrief(issueNumber, output.comment, output.brief), checkDispatch] };
+  }
   const landed =
-    output.kind === "brief"
-      ? rewriteAsBrief(issueNumber, output)
-      : output.kind === "spec"
-        ? supersedeBySpec(issueNumber, output, snapshot.issue)
-        : splitIntoSiblings(issueNumber, output, snapshot.issue, parent ?? 0);
-  // Every outcome leaves new ready work, so see whether it can start.
-  return { kind: "act", actions: [...landed, { kind: "check-dispatch" }] };
+    output.kind === "spec"
+      ? supersedeBySpec(issueNumber, output, snapshot.issue, snapshot.operator)
+      : splitIntoSiblings(issueNumber, output, snapshot.issue, parent ?? 0, snapshot.operator);
+  return { kind: "act", actions: [...landed, checkDispatch] };
 }
 
 /** An outcome the contract allows but this issue can't take: nothing changes, and the run fails. */
@@ -125,8 +147,10 @@ function splitIntoSiblings(
   output: Extract<DesignTurnOutput, { kind: "split" }>,
   issue: IssueSnapshot,
   spec: number,
+  operator: string,
 ): Action[] {
-  const { actions, created, moved } = ticketActions(output.tickets, readyLabels(issue), spec, issue);
+  const { actions, created, moved } = ticketActions(output.tickets, issue, spec, operator);
+  const allTickets = output.tickets.every((ticket) => !ticket.operator);
   return [
     ...actions,
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
@@ -136,7 +160,9 @@ function splitIntoSiblings(
       comment: [
         `${SESSION_FINISHED} This Ticket is split into `,
         ...commaList(created),
-        `, sibling Tickets under the Spec #${spec}.\n\n${closingNote(output.comment)}`,
+        allTickets
+          ? `, sibling Tickets under the Spec #${spec}.\n\n${closingNote(output.comment)}`
+          : `: ${itemCount(output.tickets)}, siblings under the Spec #${spec}.\n\n${closingNote(output.comment)}`,
         ...moved,
       ],
     },
@@ -151,9 +177,32 @@ function closingNote(comment: string): string {
   return withoutMentions(comment.replace(/^\s*\*\*Design session finished\.\*\*\s*/, ""));
 }
 
-/** The labels a new Ticket gets: the issue's category, and ready-for-agent, so Intake never sends it to Triage. */
-function readyLabels(issue: IssueSnapshot): Label[] {
-  return [...issue.labels.filter(isCategoryLabel), READY_FOR_AGENT];
+/**
+ * The labels a new Ticket gets: the issue's category, and ready-for-agent, so
+ * Intake never sends it to Triage. An Operator step gets ready-for-human instead.
+ */
+function readyLabels(issue: IssueSnapshot, state: typeof READY_FOR_AGENT | typeof READY_FOR_HUMAN = READY_FOR_AGENT): Label[] {
+  return [...issue.labels.filter(isCategoryLabel), state];
+}
+
+/** `2 Tickets`, `1 Operator step`, or `2 Tickets and 1 Operator step`. */
+function itemCount(tickets: readonly SpecTicket[]): string {
+  const operatorSteps = tickets.filter((ticket) => ticket.operator).length;
+  const counts = [
+    count(tickets.length - operatorSteps, "Ticket", "Tickets"),
+    count(operatorSteps, "Operator step", "Operator steps"),
+  ].filter((part) => !part.startsWith("0 "));
+  return counts.join(" and ");
+}
+
+/** `1 Ticket`, `2 Tickets`. */
+function count(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** Steps as a GitHub task list, one unchecked box each. */
+function taskList(steps: readonly string[]): string[] {
+  return steps.map((step) => `- [ ] ${withoutMentions(step)}`);
 }
 
 /**
@@ -166,9 +215,9 @@ function readyLabels(issue: IssueSnapshot): Label[] {
  */
 function ticketActions(
   outcome: readonly SpecTicket[],
-  labels: readonly Label[],
-  parent: CreatedIssue | number,
   superseded: IssueSnapshot,
+  parent: CreatedIssue | number,
+  operator: string,
 ): { actions: Action[]; created: CreatedIssue[]; moved: (string | CreatedIssue)[] } {
   const ticketIssue = (key: string): CreatedIssue => ({ created: `ticket:${key}` });
   // The contract has already refused blockers that loop, so there is always an order.
@@ -183,8 +232,14 @@ function ticketActions(
           kind: "create-issue",
           key: ticketIssue(ticket.key).created,
           title: withoutMentions(ticket.title),
-          body: withoutMentions(ticket.body),
-          labels,
+          // An Operator step is the Operator's, so it waits for them, assigned, never for an Implementer.
+          ...(ticket.operator
+            ? {
+                body: [withoutMentions(ticket.body), "", "## Steps", "", ...taskList(ticket.steps)].join("\n"),
+                labels: readyLabels(superseded, READY_FOR_HUMAN),
+                assignees: [operator],
+              }
+            : { body: withoutMentions(ticket.body), labels: readyLabels(superseded) }),
           parent,
           blockedBy: ticket.blockedBy.length === 0 ? superseded.openBlockers : ticket.blockedBy.map(ticketIssue),
         }),
@@ -225,16 +280,16 @@ function commaList(issues: readonly CreatedIssue[]): (string | CreatedIssue)[] {
 }
 
 /** The small outcome: the issue becomes its own agent brief, ready for an Implementer. */
-function rewriteAsBrief(issueNumber: number, output: Extract<DesignTurnOutput, { kind: "brief" }>): Action[] {
+function rewriteAsBrief(issueNumber: number, comment: string, brief: AgentBrief): Action[] {
   return [
-    { kind: "edit-issue-body", issue: issueNumber, body: briefBody(output) },
+    { kind: "edit-issue-body", issue: issueNumber, body: briefBody(brief) },
     {
       kind: "comment",
       issue: issueNumber,
       body: [
         `${SESSION_FINISHED} This issue is now its agent brief, ready for an Implementer.`,
         "",
-        closingNote(output.comment),
+        closingNote(comment),
       ].join("\n"),
     },
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
@@ -254,9 +309,9 @@ function supersedeBySpec(
   issueNumber: number,
   output: Extract<DesignTurnOutput, { kind: "spec" }>,
   issue: IssueSnapshot,
+  operator: string,
 ): Action[] {
-  const labels = readyLabels(issue);
-  const tickets = ticketActions(output.tickets, labels, SPEC, issue);
+  const tickets = ticketActions(output.tickets, issue, SPEC, operator);
   return [
     {
       kind: "create-issue",
@@ -267,7 +322,7 @@ function supersedeBySpec(
         "",
         `<sub>Written by the Fabrik Design session on #${issueNumber}, which this Spec supersedes.</sub>`,
       ].join("\n"),
-      labels,
+      labels: readyLabels(issue),
       parent: null,
       blockedBy: [],
     },
@@ -279,7 +334,7 @@ function supersedeBySpec(
       comment: [
         `${SESSION_FINISHED} This issue is superseded by the Spec `,
         SPEC,
-        ` and its ${tickets.created.length} ${tickets.created.length === 1 ? "Ticket" : "Tickets"}.\n\n${closingNote(output.comment)}`,
+        ` and its ${itemCount(output.tickets)}.\n\n${closingNote(output.comment)}`,
         ...tickets.moved,
       ],
     },
@@ -315,15 +370,52 @@ function roundComment(
   ].join("\n");
 }
 
-function briefBody(output: Extract<DesignTurnOutput, { kind: "brief" }>): string {
+/**
+ * The small outcome for Operator work: the issue becomes its Operator brief,
+ * assigned to the Operator, ready for a Pairing session. The assignment is
+ * its one notification, so the comment mentions nobody.
+ */
+function rewriteAsOperatorBrief(issueNumber: number, comment: string, brief: OperatorBrief, operator: string): Action[] {
+  return [
+    {
+      kind: "edit-issue-body",
+      issue: issueNumber,
+      body: [
+        "## Operator brief",
+        "",
+        withoutMentions(brief.summary),
+        "",
+        "## Steps",
+        "",
+        ...taskList(brief.steps),
+        "",
+        "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
+      ].join("\n"),
+    },
+    {
+      kind: "comment",
+      issue: issueNumber,
+      body: [
+        `${SESSION_FINISHED} This issue is now an Operator brief, ready for a Pairing session.`,
+        "",
+        closingNote(comment),
+      ].join("\n"),
+    },
+    { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
+    { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_HUMAN] },
+    { kind: "assign", issue: issueNumber, assignee: operator },
+  ];
+}
+
+function briefBody(brief: AgentBrief): string {
   return [
     "## Agent brief",
     "",
-    withoutMentions(output.brief.summary),
+    withoutMentions(brief.summary),
     "",
     "## Acceptance criteria",
     "",
-    ...output.brief.acceptanceCriteria.map((criterion) => `- [ ] ${withoutMentions(criterion)}`),
+    ...taskList(brief.acceptanceCriteria),
     "",
     "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
   ].join("\n");

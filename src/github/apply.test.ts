@@ -66,4 +66,34 @@ describe("Applying a plan that moves blocked-by edges onto new Tickets", () => {
     const closing = github.calls.findIndex((call) => call.method === "PATCH" && call.path === `${issues}/7`);
     expect(lastEdge).toBeLessThan(closing);
   });
+
+});
+
+describe("Applying a plan that creates an issue", () => {
+  it("assigns a created issue as it creates it, and assigns nobody when the action names no one", async () => {
+    const github = fakeGitHub();
+    const plan: Plan = {
+      kind: "act",
+      actions: [
+        { kind: "create-issue", key: "ticket:a", title: "A", body: "A.", labels: [], parent: null, blockedBy: [] },
+        {
+          kind: "create-issue",
+          key: "ticket:b",
+          title: "B",
+          body: "B.",
+          labels: ["ready-for-human"],
+          assignees: ["jrey"],
+          parent: null,
+          blockedBy: [],
+        },
+      ],
+    };
+
+    await applyPlan(github, repo, plan);
+
+    expect(github.calls.filter((call) => call.path === issues).map((call) => call.body)).toStrictEqual([
+      { title: "A", body: "A.", labels: [] },
+      { title: "B", body: "B.", labels: ["ready-for-human"], assignees: ["jrey"] },
+    ]);
+  });
 });
