@@ -415,6 +415,8 @@ jobs:
       pull-requests: read
       checks: read
       statuses: read
+      # Reading a PR's checks also reads each check's workflow run.
+      actions: read
     outputs:
       checks: ${{ steps.wait.outputs.checks }}
       head-sha: ${{ steps.wait.outputs.head-sha }}

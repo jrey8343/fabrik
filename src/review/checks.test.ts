@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type CheckState, requiredChecksOutcome } from "./checks.ts";
+import { type CheckState, checksFromGh, requiredChecksOutcome } from "./checks.ts";
 
 const check = (name: string, bucket: CheckState["bucket"]): CheckState => ({ name, bucket });
 
@@ -35,5 +35,25 @@ describe("An agent PR's required checks", () => {
 
   it("are green when nothing gates the PR", () => {
     expect(requiredChecksOutcome([], [])).toEqual({ kind: "green" });
+  });
+});
+
+describe("Reading `gh pr checks` output", () => {
+  it("reads the checks it printed, even when gh exits non-zero because some are pending", () => {
+    const stdout = JSON.stringify([{ name: "build", bucket: "pending" }]);
+
+    expect(checksFromGh({ stdout, stderr: "", failed: true })).toEqual([{ name: "build", bucket: "pending" }]);
+  });
+
+  it("reads no checks when the repo has no required checks", () => {
+    const stderr = "no required checks reported on the 'fabrik/ticket-9' branch\n";
+
+    expect(checksFromGh({ stdout: "", stderr, failed: true })).toEqual([]);
+  });
+
+  it("fails loudly, with gh's error, when gh fails without printing checks", () => {
+    const stderr = "GraphQL: Resource not accessible by integration (repository.pullRequest.statusCheckRollup)\n";
+
+    expect(() => checksFromGh({ stdout: "", stderr, failed: true })).toThrow(/Resource not accessible by integration/);
   });
 });

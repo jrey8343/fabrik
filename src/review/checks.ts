@@ -28,3 +28,24 @@ export function requiredChecksOutcome(checks: readonly CheckState[], gating: rea
   if (unreported || gate.some((check) => check.bucket === "pending")) return { kind: "pending" };
   return { kind: "green" };
 }
+
+/** What a `gh pr checks --json name,bucket` run left behind. */
+export interface GhChecksRun {
+  readonly stdout: string;
+  readonly stderr: string;
+  /** gh exited non-zero, which it also does while checks are pending or failed. */
+  readonly failed: boolean;
+}
+
+/**
+ * The checks a `gh pr checks` run printed. gh exits non-zero while checks are
+ * pending or failed but still prints them, and prints only an error when the
+ * repo has no required checks, which means nothing gates the PR. Any other
+ * failure that printed nothing is an error: reading it as "no checks" would
+ * leave a gating check unreported, and the Review would wait out its timeout.
+ */
+export function checksFromGh(run: GhChecksRun): CheckState[] {
+  if (run.stdout.trim() !== "") return JSON.parse(run.stdout) as CheckState[];
+  if (!run.failed || /no required checks reported/i.test(run.stderr)) return [];
+  throw new Error(`gh pr checks failed: ${run.stderr.trim() || "no output"}`);
+}
