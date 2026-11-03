@@ -27,6 +27,10 @@ import {
   type FileUpdate,
   GITIGNORE_PATH,
   gitignoreUpdate,
+  hasPrettierConfig,
+  PRETTIER_DETECTION_PATHS,
+  PRETTIERIGNORE_PATH,
+  prettierignoreUpdate,
   SETTINGS_PATH,
   settingsUpdate,
 } from "./shims.ts";
@@ -112,6 +116,11 @@ export function planSetup(state: ProductState, kit: SetupKit): SetupPlan {
     [CALLER_PATH, callerUpdate(file(state, CALLER_PATH), kit.templates.caller, kit.release), "the caller workflow, pinning one Fabrik release"],
     [SETTINGS_PATH, settingsUpdate(file(state, SETTINGS_PATH), kit.templates.claudeSettings), "the SessionStart hook entry, with the skills plugin off"],
     [GITIGNORE_PATH, gitignoreUpdate(file(state, GITIGNORE_PATH)), "gitignore the skills the Kit installs"],
+    [
+      PRETTIERIGNORE_PATH,
+      prettierignoreUpdate(file(state, PRETTIERIGNORE_PATH), hasPrettierConfig(state.files)),
+      "keep Prettier off the Kit-owned caller workflow",
+    ],
     [DEPENDABOT_PATH, dependabotUpdate(file(state, DEPENDABOT_PATH), kit.templates.dependabot), "Dependabot bumps the Fabrik pin"],
   ];
   for (const [path, update, why] of shims) {
@@ -136,6 +145,8 @@ export function setupPaths(kit: SetupKit): readonly string[] {
     CALLER_PATH,
     SETTINGS_PATH,
     GITIGNORE_PATH,
+    PRETTIERIGNORE_PATH,
+    ...PRETTIER_DETECTION_PATHS,
     DEPENDABOT_PATH,
     KIT_CONFIG_PATH,
     ...Object.keys(kit.templates.docsAgents).map((name) => `docs/agents/${name}`),

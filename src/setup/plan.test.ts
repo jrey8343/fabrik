@@ -211,6 +211,66 @@ describe("Merging a shim into a file the Product repo already has", () => {
   });
 });
 
+describe("Keeping Prettier off the Kit-owned caller workflow", () => {
+  it("creates a .prettierignore that ignores the caller workflow when the Product has a .prettierrc", () => {
+    const { actions } = planSetup(aCleanProduct({ files: { ".prettierrc": "{ \"singleQuote\": true }\n" } }), kit);
+
+    expect(written(actions, ".prettierignore")?.split("\n")).toContain(".github/workflows/fabrik.yml");
+  });
+
+  it("does the same when the Product configures Prettier in package.json", () => {
+    const packageJson = JSON.stringify({ name: "clinic", prettier: { singleQuote: true } });
+    const { actions } = planSetup(aCleanProduct({ files: { "package.json": packageJson } }), kit);
+
+    expect(written(actions, ".prettierignore")?.split("\n")).toContain(".github/workflows/fabrik.yml");
+  });
+
+  it("adds the caller line to an existing .prettierignore, keeping its lines", () => {
+    const files = { ".prettierrc": "{}\n", ".prettierignore": "dist\nnode_modules" };
+    const { actions } = planSetup(aCleanProduct({ files }), kit);
+
+    const lines = written(actions, ".prettierignore")?.split("\n") ?? [];
+    expect(lines.slice(0, 3)).toEqual(["dist", "node_modules", ""]);
+    expect(lines).toContain(".github/workflows/fabrik.yml");
+  });
+
+  it("leaves a .prettierignore that already lists the caller workflow alone", () => {
+    const files = { ".prettierrc": "{}\n", ".prettierignore": "dist\n  .github/workflows/fabrik.yml  \n" };
+    const { actions } = planSetup(aCleanProduct({ files }), kit);
+
+    expect(written(actions, ".prettierignore")).toBeUndefined();
+  });
+
+  it("doesn't count a wider glob as ignoring the caller workflow", () => {
+    const files = { ".prettierrc": "{}\n", ".prettierignore": ".github/\n" };
+    const { actions } = planSetup(aCleanProduct({ files }), kit);
+
+    expect(written(actions, ".prettierignore")?.split("\n")).toContain(".github/workflows/fabrik.yml");
+  });
+
+  it.each([
+    ["it created", { ".prettierrc": "{}\n" }],
+    ["it merged into", { ".prettierrc": "{}\n", ".prettierignore": "dist\n" }],
+  ])("plans nothing for a .prettierignore %s on a re-run", (_, files) => {
+    const state = aCleanProduct({ files });
+    const rerun = planSetup(afterApplying(state, planSetup(state, kit)), kit);
+
+    expect(written(rerun.actions, ".prettierignore")).toBeUndefined();
+  });
+
+  it("leaves .prettierignore alone when the Product has no Prettier config", () => {
+    const { actions } = planSetup(aCleanProduct({ files: { ".prettierignore": "dist\n", "package.json": "{}" } }), kit);
+
+    expect(written(actions, ".prettierignore")).toBeUndefined();
+  });
+
+  it("counts a package.json that isn't valid JSON as having no Prettier config", () => {
+    const { actions } = planSetup(aCleanProduct({ files: { "package.json": '{ "prettier": ' } }), kit);
+
+    expect(written(actions, ".prettierignore")).toBeUndefined();
+  });
+});
+
 describe("The caller workflow on a repo that has one", () => {
   const caller = (release: string) => planSetup(aCleanProduct(), { ...kit, release }).actions;
   const pinnedAt = (release: string) => written(caller(release), ".github/workflows/fabrik.yml") ?? "";
