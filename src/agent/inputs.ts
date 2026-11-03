@@ -107,7 +107,7 @@ interface PullRequestQueryResult {
 
 /**
  * The PR: for a Review, what it judges (never its comments, so earlier
- * Verdicts don't steer it); for a retry, its number, title and comments with
+ * Verdicts don't steer it); for a retry, its number, title, body and comments with
  * their authors' kind, so only the Fabrik App's Verdicts count as findings.
  */
 export async function readPullRequest(github: Reader, repo: Repo, number: number, withComments: boolean): Promise<unknown> {
@@ -116,7 +116,7 @@ export async function readPullRequest(github: Reader, repo: Repo, number: number
   if (pullRequest === null) throw new Error(`Pull request #${number} not found`);
   const { title, body, baseRefName, headRefName, headRefOid, comments } = pullRequest;
   return withComments
-    ? { number, title, comments: comments.nodes }
+    ? { number, title, body, comments: comments.nodes }
     : { number, title, body, baseRefName, headRefName, headRefOid };
 }
 

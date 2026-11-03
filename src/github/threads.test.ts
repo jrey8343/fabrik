@@ -50,7 +50,7 @@ describe("Reading whether a PR's latest push came from a Request-changes run", (
   const pushed: LoopEvent = {
     kind: "implement-run-finished",
     issue: 7,
-    output: JSON.stringify({ title: "Rename the total", summary: "Renamed the total as the Operator asked." }),
+    output: JSON.stringify({ title: "Rename the total", summary: "Renames the total.", fix: "Renamed the total as the Operator asked." }),
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes: { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }] },

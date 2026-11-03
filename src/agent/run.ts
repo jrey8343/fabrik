@@ -29,7 +29,7 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { readIfPresent, readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
-import { type ImplementOutput, readImplementOutput } from "../loop/implementOutput.ts";
+import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { kitPromptPath } from "../guard/trust-root.ts";
@@ -234,6 +234,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
 
   // The Implementer builds on its own branch from main, with its test secrets.
   let branch: BuiltBranch | null = null;
+  let onPullRequest = false;
   const extra: string[] = [];
   if (spec.buildsBranch === true) {
     setImplementerEnv(config);
@@ -245,6 +246,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     // A Request-changes run works to the Operator's review instead of a Verdict's findings.
     const reviewFile = process.env["FABRIK_REVIEW_FILE"] ?? "";
     if (retryFile !== "") {
+      onPullRequest = true;
       const context = reviewFile === "" ? await retryContext(retryFile) : await requestChangesContext(retryFile, reviewFile);
       extra.push(...context.parts);
     }
@@ -271,7 +273,12 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   }
   const output =
     "schema" in spec.output
-      ? Output.object({ tag: name, schema: spec.output.schema, maxRetries: 1 })
+      ? Output.object({
+          tag: name,
+          // A run on an existing PR owes a fix as well, which its push job checks too.
+          schema: onPullRequest ? schemaOf(readPullRequestRunOutput) : spec.output.schema,
+          maxRetries: 1,
+        })
       : Output.string({ tag: name });
 
   // The agent inherits this process's env (noSandbox), so set what it needs here.

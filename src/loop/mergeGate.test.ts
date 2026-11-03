@@ -196,7 +196,11 @@ function requestChangesPushed(
   return {
     kind: "implement-run-finished",
     issue: 7,
-    output: JSON.stringify({ title: "Rename the total", summary: "Renamed the total as the Operator asked." }),
+    output: JSON.stringify({
+      title: "Rename the total",
+      summary: "Adds the order total, named as the Operator asked.",
+      fix: "Renamed the total as the Operator asked.",
+    }),
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes,
@@ -230,6 +234,17 @@ describe("A Request-changes run's branch", () => {
     expect(commentsOf(plan)[0]).toContain("Renamed the total as the Operator asked.");
     // The note's marker says the PR's latest push came from a Request-changes run.
     expect(commentsOf(plan)[0]).toMatch(/^<!-- fabrik:request-changes-run -->\n/);
+  });
+
+  it("replaces the PR body with the refreshed summary", () => {
+    const plan = planFor(requestChangesPushed(), pushSnapshot(), kitConfig());
+
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "edit-issue-body",
+      issue: 50,
+      body: "Adds the order total, named as the Operator asked.\n\nCloses #7",
+    });
+    expect(commentsOf(plan)[0]).not.toContain("Adds the order total");
   });
 
   it("that only brings main in, to fix a conflict, is pushed: bringing the PR up to date is a change", () => {
