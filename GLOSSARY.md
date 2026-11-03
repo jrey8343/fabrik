@@ -72,6 +72,14 @@ _Avoid_: PRD, plan
 One issue an Implementer can turn into a single pull request.
 _Avoid_: task, story
 
+**Operator step**:
+A piece of a Spec only the Operator can do, such as a trust-root edit, a secret or a repo setting, which Tickets can wait on.
+_Avoid_: manual ticket, human task
+
+**Pairing session**:
+The Operator working through an issue only they can do with an agent beside them, step by step, ending with what was done recorded on the issue.
+_Avoid_: walkthrough, hand-off
+
 **Fast path**:
 Triage sending an issue straight to an Implementer, skipping the Design session.
 _Avoid_: fast-track, easy fix
