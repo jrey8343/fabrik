@@ -72,6 +72,14 @@ _Avoid_: PRD, plan
 One issue an Implementer can turn into a single pull request.
 _Avoid_: task, story
 
+**Map**:
+An issue charting the way to a destination still in fog, whose children are Decisions rather than Tickets.
+_Avoid_: epic, roadmap
+
+**Decision**:
+One child question of a Map, resolved by research, a prototype, a grilling or a task, never by a pull request.
+_Avoid_: ticket, task
+
 **Operator step**:
 A piece of a Spec only the Operator can do, such as a trust-root edit, a secret or a repo setting, which Tickets can wait on.
 _Avoid_: manual ticket, human task
