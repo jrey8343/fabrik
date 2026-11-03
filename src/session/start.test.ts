@@ -55,6 +55,35 @@ describe("The SessionStart hook in a cloud or local session", () => {
     expect(output.hookSpecificOutput.additionalContext).toContain("/fabrik-live-design");
   });
 
+  it("installs Fabrik's Pairing session skill too, and tells Claude how the Operator starts one", async () => {
+    const kit = await aKitCheckout(LOCKED_SHA, {
+      "skills/fabrik-live-design/SKILL.md": "---\nname: fabrik-live-design\n---\n# Live",
+      "skills/fabrik-pair/SKILL.md": "---\nname: fabrik-pair\n---\n# Pair",
+    });
+    const product = await aProduct(callerAt("v1.2.3"));
+
+    const output = await sessionStart({
+      kitDir: kit,
+      productDir: product,
+      release: "v1.2.3",
+      download: serving(await aSkillsArchive()).download,
+    });
+
+    expect(await readFile(join(product, ".claude/skills/fabrik-pair/SKILL.md"), "utf8")).toContain("# Pair");
+    expect(output.hookSpecificOutput.additionalContext).toContain("/fabrik-pair <issue number>");
+  });
+
+  it("doesn't mention the Pairing session skill when the release has none", async () => {
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: await aProduct(callerAt("v1.2.3")),
+      release: "v1.2.3",
+      download: serving(await aSkillsArchive()).download,
+    });
+
+    expect(output.hookSpecificOutput.additionalContext).not.toContain("/fabrik-pair");
+  });
+
   it("still reloads skills when the right ones were already installed", async () => {
     const kit = await kitWithLiveSkill();
     const product = await aProduct(callerAt("v1.2.3"));

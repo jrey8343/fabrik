@@ -41,6 +41,14 @@ describe("The Rotate the Claude token issue", () => {
     ]);
   });
 
+  it("writes its steps as a task list, so a Pairing session can start on it straight away", () => {
+    const issue = kitIssueOpenedBy(planFor(deadToken(), snapshotOf(anIssue({ number: 7 })), kitConfig()), 40);
+
+    expect(issue.body).toContain("\n## Steps\n\n- [ ] Run `claude setup-token`");
+    expect(issue.body.match(/^- \[ \] /gm)).toHaveLength(2);
+    expect(issue.body).toContain("Run `/fabrik-pair` on this issue to work through these steps with an agent.");
+  });
+
   it("the first auth failure buzzes the Operator once, by the assignment, and the Ticket's comment points at the issue", () => {
     const plan = planFor(deadToken(), snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] })), kitConfig());
 
@@ -176,6 +184,16 @@ describe("The weekly-limit issue", () => {
         },
       ],
     });
+  });
+
+  it.each([
+    ["is known", RESETS_AT, "- [ ] Wait for the limit to reset at 2026-11-09 04:00 UTC."],
+    ["isn't known", null, "- [ ] Wait until agent runs work again: when the limit resets isn't known."],
+  ])("writes the Operator's steps as a task list when the reset time %s", (_, resetsAt, wait) => {
+    const issue = kitIssueOpenedBy(planFor(weeklyLimit(7, resetsAt), snapshotOf(anIssue({ number: 7 })), kitConfig()), 41);
+
+    expect(issue.body).toContain(`\n## Steps\n\n${wait}\n- [ ] Re-add the trigger label named in each stalled Ticket's failure comment`);
+    expect(issue.body).toContain("Run `/fabrik-pair` on this issue to work through these steps with an agent.");
   });
 
   it("a later stall in the same window comments quietly on the open issue", () => {
