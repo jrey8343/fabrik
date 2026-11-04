@@ -77,7 +77,7 @@ describe("Spec closing", () => {
 
   it.each([
     ["a wayfinder Map", ["wayfinder:map"]],
-    ["a roadmap", ["roadmap"]],
+    ["a parent labelled only roadmap", ["roadmap"]],
     ["an unlabelled parent", []],
   ])("leaves %s open with no comment when its last child closes, and only runs a Dispatch check", (_, labels) => {
     expect(planFor(closed, snapshotOf(ticket, { spec: spec({ labels }) }), kitConfig())).toEqual({

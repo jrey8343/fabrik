@@ -7,8 +7,8 @@ import type { Action, IssueSnapshot, SpecSnapshot } from "./types.ts";
 /**
  * What closing this issue does to its Spec: close it once every Ticket is
  * closed; otherwise nothing. A parent is a Spec only when it carries a
- * ready-for-agent or ready-for-human state label; any other parent (a Map, a
- * roadmap, a tracker) is left for its owner.
+ * ready-for-agent or ready-for-human state label; any other parent (a Map, or
+ * an issue a Product repo keeps open to track its work) is left for its owner.
  */
 export function closeSpecAfter(issue: IssueSnapshot, spec: SpecSnapshot | null): Action[] {
   if (issue.parent === null || spec === null || spec.number !== issue.parent) return [];

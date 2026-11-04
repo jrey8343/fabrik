@@ -65,7 +65,7 @@ A HITL grilling between the Operator and an agent that turns an issue needing de
 _Avoid_: redesign, planning meeting
 
 **Spec**:
-A design written up in a Design session, the parent of the Tickets that build it. The Kit recognises a Spec by its `ready-for-agent` or `ready-for-human` state label; any other parent (a Map, a roadmap) is not one, and Spec closing leaves it open.
+A design written up in a Design session, the parent of the Tickets that build it. The Kit recognises a Spec by its `ready-for-agent` or `ready-for-human` state label; any other parent (a Map, or an issue a Product repo keeps open to track its work) is not one, and Spec closing leaves it open.
 _Avoid_: PRD, plan
 
 **Ticket**:
