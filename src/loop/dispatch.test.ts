@@ -5,6 +5,7 @@ import {
   aTicket,
   dispatchSnapshotOf,
   kitConfig,
+  repoSnapshot,
   snapshotOf,
   snapshotOfPullRequest,
 } from "../__fixtures__/snapshots.ts";
@@ -128,6 +129,37 @@ describe("The max_in_flight cap", () => {
   });
 });
 
+describe("A max_in_flight of 0, which pauses Dispatch", () => {
+  const paused = kitConfig({ maxInFlight: 0 });
+
+  it("dispatches no eligible Ticket, saying Dispatch is paused rather than counting what's in flight", () => {
+    const plan = planFor(check, dispatchSnapshotOf([aTicket({ number: 4 }), aTicket({ number: 5 })]), paused);
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "Dispatch is paused because max_in_flight is 0, so #4 and #5 wait",
+    });
+  });
+
+  it("still says why when no Ticket is eligible", () => {
+    const plan = planFor(check, dispatchSnapshotOf([]), paused);
+
+    expect(plan).toEqual({ kind: "nothing", reason: "No Ticket can be dispatched: none is ready-for-agent" });
+  });
+
+  it("dispatches again once max_in_flight is back above 0, holding the Tickets it had paused", () => {
+    const tickets = [aTicket({ number: 4 }), aTicket({ number: 5 })];
+    expect(planFor(check, dispatchSnapshotOf(tickets), paused).kind).toBe("nothing");
+
+    const plan = planFor(check, dispatchSnapshotOf(tickets), kitConfig({ maxInFlight: 1 }));
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [{ kind: "add-labels", issue: 4, labels: ["agent:implement"] }],
+    });
+  });
+});
+
 describe("What triggers a Dispatch check", () => {
   const checkDispatch = { kind: "act", actions: [{ kind: "check-dispatch" }] };
 
@@ -135,6 +167,12 @@ describe("What triggers a Dispatch check", () => {
     const issue = anIssue({ number: 9, labels: ["enhancement", "ready-for-agent"] });
 
     const plan = planFor({ kind: "issue-closed", issue: 9 }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual(checkDispatch);
+  });
+
+  it("a change to the Kit config, so raising max_in_flight from 0 resumes Dispatch straight away", () => {
+    const plan = planFor({ kind: "kit-config-changed" }, repoSnapshot(), kitConfig());
 
     expect(plan).toEqual(checkDispatch);
   });

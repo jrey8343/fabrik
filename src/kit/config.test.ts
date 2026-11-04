@@ -101,8 +101,10 @@ describe("Kit config", () => {
   });
 
   it.each([
-    [`{ "max_in_flight": "2" }`, "max_in_flight must be a whole number of at least 1"],
-    [`{ "max_in_flight": 0 }`, "max_in_flight must be a whole number of at least 1"],
+    [`{ "max_in_flight": "2" }`, "max_in_flight must be a whole number of at least 0"],
+    [`{ "max_in_flight": -1 }`, "max_in_flight must be a whole number of at least 0"],
+    [`{ "max_in_flight": 1.5 }`, "max_in_flight must be a whole number of at least 0"],
+    [`{ "roles": { "dispatch": { "timeout_minutes": 0 } } }`, "roles.dispatch.timeout_minutes must be a whole number of at least 1"],
     [`{ "roles": { "triage": { "timeout_minutes": 2.5 } } }`, "roles.triage.timeout_minutes must be a whole number of at least 1"],
     [`{ "roles": { "implement": { "model": 5 } } }`, "roles.implement.model must be a string"],
     [`{ "roles": [] }`, "roles must be an object"],
@@ -119,10 +121,10 @@ describe("Kit config", () => {
   });
 
   it("reports every problem at once", () => {
-    const result = resolveKitConfig({ config: `{ "max_in_flight": 0, "colour": "red" }` });
+    const result = resolveKitConfig({ config: `{ "max_in_flight": -1, "colour": "red" }` });
 
     expect(!result.ok && result.errors).toEqual([
-      "max_in_flight must be a whole number of at least 1",
+      "max_in_flight must be a whole number of at least 0",
       "colour is not a Kit config field",
     ]);
   });
@@ -234,6 +236,12 @@ describe("Kit config", () => {
     const result = resolveKitConfig({ config: `{ "max_in_flight": 4 }` });
 
     expect(result.ok && result.config.maxInFlight).toBe(4);
+  });
+
+  it("accepts a max_in_flight of 0, which pauses Dispatch", () => {
+    const result = resolveKitConfig({ config: `{ "max_in_flight": 0 }` });
+
+    expect(result.ok && result.config.maxInFlight).toBe(0);
   });
 
   it("names the Operator when the config gives a login, leaving null to mean the repo's owner", () => {

@@ -108,6 +108,14 @@ describe("Resuming a Request-changes run after an Infrastructure failure", () =>
     expect(notificationsOf(plan)).toEqual([]);
   });
 
+  it("still runs while Dispatch is paused by a max_in_flight of 0", () => {
+    const plan = planFor(resumed, snapshotFor(stalled()), kitConfig({ maxInFlight: 0 }));
+
+    expect(actionsOf(plan)).toContainEqual(
+      expect.objectContaining({ kind: "start-agent-run", pullRequest: 50, requestChanges: { review: 900 } }),
+    );
+  });
+
   it.each([
     ["the review isn't the Operator's", stalled({ reviewer: "someone" })],
     ["the review is a bot's", stalled({ reviewerIsBot: true })],

@@ -2,6 +2,7 @@
 // passed out to its push job, into the Loop event it stands for.
 // It holds no Loop rules; those all live in src/loop/rules.ts.
 import type { AgentRunResult } from "../agent/result.ts";
+import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import type { AgentRole, BranchChanges, FailureReport, LoopEvent } from "../loop/types.ts";
 
 /** Maps an Actions event to the Loop event it stands for, or null if the Loop ignores it. */
@@ -12,6 +13,8 @@ export function loopEventFrom(
 ): LoopEvent | null {
   // The scheduled Kit workflow (schedule.yml), for the Loop's time-based rules.
   if (eventName === "schedule") return { kind: "scheduled-tick", now: now.toISOString() };
+  // The caller workflow's push trigger, filtered to the Kit config's path.
+  if (eventName === "push") return changesKitConfig(payload) ? { kind: "kit-config-changed" } : null;
   if (eventName === "issues" && payload["action"] === "opened") {
     const issue = payload["issue"] as { number: number };
     return { kind: "issue-opened", issue: issue.number };
@@ -69,6 +72,16 @@ export function loopEventFrom(
   return null;
 }
 
+/**
+ * Whether a push to the default branch, whose Kit config the Loop reads,
+ * added, changed or removed .fabrik/config.json (removing it restores the defaults).
+ */
+function changesKitConfig(payload: Record<string, unknown>): boolean {
+  const defaultBranch = (payload["repository"] as { default_branch: string }).default_branch;
+  if (payload["ref"] !== `refs/heads/${defaultBranch}`) return false;
+  const commits = payload["commits"] as { added: string[]; modified: string[]; removed: string[] }[];
+  return commits.some((commit) => [...commit.added, ...commit.modified, ...commit.removed].includes(KIT_CONFIG_PATH));
+}
 
 /**
  * Turns the result an agent job passed out as an artifact (src/agent/result.ts)
