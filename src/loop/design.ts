@@ -9,7 +9,7 @@ import {
   type OperatorBrief,
   type SpecTicket,
 } from "./designOutput.ts";
-import { isCategoryLabel, type Label, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
+import { isCategoryLabel, type Label, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, WONTFIX } from "./labels.ts";
 import { designRoundMarker, LIVE_OUTCOME_MARKER, SESSION_FINISHED } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { AgentBrief } from "./triageOutput.ts";
@@ -104,6 +104,10 @@ export function applyTurn(issueNumber: number, text: string, snapshot: IssueCont
       actions: [{ kind: "comment", issue: issueNumber, body: roundComment(round, output, snapshot.operator, sentBack) }],
     };
   }
+  if (output.kind === "not-planned") {
+    // Nothing new is ready, so there is nothing for Dispatch to check.
+    return { kind: "act", actions: closeAsNotPlanned(issueNumber, output.comment, snapshot.issue.openBlocking) };
+  }
   // The Spec stays the single parent of its work: a Ticket under one splits into
   // siblings, and only an issue with no Spec above it gets a Spec of its own.
   const { parent } = snapshot.issue;
@@ -126,6 +130,35 @@ export function applyTurn(issueNumber: number, text: string, snapshot: IssueCont
       ? supersedeBySpec(issueNumber, output, snapshot.issue, snapshot.operator)
       : splitIntoSiblings(issueNumber, output, snapshot.issue, parent ?? 0, snapshot.operator);
   return { kind: "act", actions: [...landed, checkDispatch] };
+}
+
+/**
+ * Nothing to build: the issue closes as not planned, with the session's
+ * reasoning as its closing comment. Its work never lands, so the issues it
+ * blocks stay blocked by it (src/loop/dispatch.ts); the comment says which.
+ */
+function closeAsNotPlanned(issueNumber: number, comment: string, blocking: readonly number[]): Action[] {
+  const stillBlocked = blocking.map((issue) => `#${issue}`).join(", ");
+  return [
+    {
+      kind: "comment",
+      issue: issueNumber,
+      body: [
+        `${SESSION_FINISHED} This issue won't be built, so the Kit closes it as not planned.`,
+        "",
+        closingNote(comment),
+        ...(blocking.length === 0
+          ? []
+          : [
+              "",
+              `${stillBlocked} stay${blocking.length === 1 ? "s" : ""} blocked by it: an issue closed as not planned never lands its work, so Dispatch won't start ${blocking.length === 1 ? "it" : "them"} until the Operator removes the blocked-by edge.`,
+            ]),
+      ].join("\n"),
+    },
+    { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
+    { kind: "add-labels", issue: issueNumber, labels: [WONTFIX] },
+    { kind: "close", issue: issueNumber, reason: "not_planned" },
+  ];
 }
 
 /** An outcome the contract allows but this issue can't take: nothing changes, and the run fails. */

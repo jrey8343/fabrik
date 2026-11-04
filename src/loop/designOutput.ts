@@ -3,7 +3,8 @@
 // never half-applies. A turn ends in either the next round or a final outcome:
 // an agent brief or an Operator brief (small), a Spec and its Tickets
 // (large), or, for a Ticket already under a Spec, sibling Tickets under that
-// Spec. Any Ticket in an outcome may instead be an Operator step.
+// Spec. Any Ticket in an outcome may instead be an Operator step. Or the
+// session ends as not planned: the Operator decided the issue won't be built.
 import type { AgentBrief } from "./triageOutput.ts";
 
 export interface RoundQuestion {
@@ -43,6 +44,12 @@ export type DesignTurnOutput =
       readonly comment: string;
       /** Each sibling Ticket, with the keys of the Tickets that block it. Any order. */
       readonly tickets: readonly SpecTicket[];
+    }
+  | {
+      /** Nothing to build: the Operator decided the issue won't be built, so it closes as not planned. */
+      readonly kind: "not-planned";
+      /** What the Operator decided and why, for the closing comment. */
+      readonly comment: string;
     };
 
 /**
@@ -245,8 +252,12 @@ export function readDesignTurnOutput(value: unknown): DesignTurnOutputResult {
       if (errors.length > 0) return { ok: false, errors };
       return { ok: true, output: { kind: "split", comment: value.comment as string, tickets } };
     }
+    case "not-planned": {
+      if (!isText(value.comment)) return { ok: false, errors: ["not-planned needs non-empty comment text"] };
+      return { ok: true, output: { kind: "not-planned", comment: value.comment } };
+    }
     default:
-      return { ok: false, errors: [`kind must be round, brief, spec or split, not ${JSON.stringify(value.kind)}`] };
+      return { ok: false, errors: [`kind must be round, brief, spec, split or not-planned, not ${JSON.stringify(value.kind)}`] };
   }
 }
 

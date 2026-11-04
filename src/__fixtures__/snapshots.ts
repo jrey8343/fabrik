@@ -68,6 +68,7 @@ export function aTicket(overrides: Partial<TicketSnapshot> = {}): TicketSnapshot
     open: true,
     labels: ["enhancement", "ready-for-agent"],
     openBlockers: [],
+    notPlannedBlockers: [],
     subIssues: 0,
     openLinkedPullRequests: [],
     ...overrides,

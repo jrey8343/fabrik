@@ -118,7 +118,7 @@ const DISPATCH_QUERY = `
           state
           labels(first: 100) { nodes { name } }
           subIssues { totalCount }
-          blockedBy(first: 50) { nodes { number state } }
+          blockedBy(first: 50) { nodes { number state stateReason } }
           closedByPullRequestsReferences(first: 20, includeClosedPrs: false) { nodes { number state } }
         }
       }
@@ -139,7 +139,7 @@ interface DispatchQueryResult {
         state: "OPEN" | "CLOSED";
         labels: { nodes: { name: string }[] };
         subIssues: { totalCount: number };
-        blockedBy: { nodes: { number: number; state: "OPEN" | "CLOSED" }[] };
+        blockedBy: { nodes: { number: number; state: "OPEN" | "CLOSED"; stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null }[] };
         closedByPullRequestsReferences: { nodes: { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[] };
       }[];
     };
@@ -428,6 +428,9 @@ async function gatherDispatch(
         open: issue.state === "OPEN",
         labels: issue.labels.nodes.map((label) => label.name),
         openBlockers: issue.blockedBy.nodes.filter((b) => b.state === "OPEN").map((b) => b.number),
+        notPlannedBlockers: issue.blockedBy.nodes
+          .filter((b) => b.state === "CLOSED" && b.stateReason === "NOT_PLANNED")
+          .map((b) => b.number),
         subIssues: issue.subIssues.totalCount,
         openLinkedPullRequests: issue.closedByPullRequestsReferences.nodes
           .filter((pr) => pr.state === "OPEN")

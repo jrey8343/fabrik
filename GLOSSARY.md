@@ -61,7 +61,7 @@ The AFK step that sorts each incoming issue (not ones the Loop's own skills crea
 _Avoid_: sorting
 
 **Design session**:
-A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets.
+A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets, or ends as not planned when the Operator decides it won't be built: the issue gets `wontfix` and closes as not planned.
 _Avoid_: redesign, planning meeting
 
 **Spec**:

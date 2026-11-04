@@ -99,3 +99,45 @@ describe("Gathering an issue's blocked-by edges", () => {
     expect(snapshot.issue).toMatchObject({ openBlockers: [10], openBlocking: [7] });
   });
 });
+
+describe("Gathering a Dispatch check's Tickets", () => {
+  it("holds each Ticket's open blockers apart from those closed as not planned, and drops those closed any other way", async () => {
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("labels: [$ready]")) {
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issues: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    number: 6,
+                    state: "OPEN",
+                    labels: { nodes: [{ name: "ready-for-agent" }] },
+                    subIssues: { totalCount: 0 },
+                    blockedBy: {
+                      nodes: [
+                        { number: 10, state: "OPEN", stateReason: null },
+                        { number: 9, state: "CLOSED", stateReason: "NOT_PLANNED" },
+                        { number: 8, state: "CLOSED", stateReason: "COMPLETED" },
+                        { number: 7, state: "CLOSED", stateReason: "DUPLICATE" },
+                      ],
+                    },
+                    closedByPullRequestsReferences: { nodes: [] },
+                  },
+                ],
+              },
+              pullRequests: { nodes: [] },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "dispatch-check" }, null, actionsWith([]) as unknown as GitHub);
+
+    expect(snapshot.dispatch?.tickets).toMatchObject([{ number: 6, openBlockers: [10], notPlannedBlockers: [9] }]);
+  });
+});
