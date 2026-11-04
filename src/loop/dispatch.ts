@@ -62,6 +62,10 @@ function whyNotEligible(ticket: TicketSnapshot): string | null {
   if (!ticket.open) return `${name} is closed`;
   if (!ticket.labels.includes(READY_FOR_AGENT)) return `${name} isn't ${READY_FOR_AGENT}`;
   if (ticket.openBlockers.length > 0) return `${name} is blocked by ${list(ticket.openBlockers)}`;
+  // A blocker closed as not planned never landed its work, so it blocks until the Operator removes the edge.
+  if (ticket.notPlannedBlockers.length > 0) {
+    return `${name} is blocked by ${list(ticket.notPlannedBlockers)}, closed as not planned`;
+  }
   if (ticket.subIssues > 0) return `${name} has sub-issues, so it's a Spec`;
   if (ticket.openLinkedPullRequests.length > 0) {
     return `${name} already has the open PR ${list(ticket.openLinkedPullRequests)}`;

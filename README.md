@@ -64,6 +64,7 @@ Adding `needs-design` to an open issue starts a Design session. Each turn is a f
 
 - **The next round**: the Fabrik App posts numbered questions with recommended answers, @-mentioning the Operator. The Operator's reply starts the next turn. Comments from anyone else, and from any bot, do nothing.
 - **An agent brief**: the issue body is rewritten in place as the brief and its acceptance criteria, a closing comment (no mention) records the decisions, and `needs-design` is swapped for `ready-for-agent`. Finishing the session counts as the Operator approving it.
+- **Not planned**: when the Operator decides the issue won't be built, the session finishes as not planned (`{ "kind": "not-planned", "comment": … }`). The closing comment (no mention) gives the session's reasoning, `needs-design` is swapped for `wontfix`, and the issue closes with state reason *not planned*. It works the same on a Ticket that came back to design. Its work never lands, so the issues it blocks stay blocked: Dispatch treats a blocker closed as not planned as still blocking until the Operator removes the edge, and the closing comment names those issues. The reasoning lives only in that comment.
 
 Only rounds notify: the Kit strips @-mentions from everything the agent writes.
 

@@ -237,6 +237,8 @@ export interface TicketSnapshot {
   readonly labels: readonly string[];
   /** The issues blocking it that are still open. */
   readonly openBlockers: readonly number[];
+  /** The issues blocking it that closed as not planned: their work never landed, so they still block it. */
+  readonly notPlannedBlockers: readonly number[];
   /** How many sub-issues it has, open or closed. Any at all make it a Spec. */
   readonly subIssues: number;
   /** The open pull requests linked to close it. */

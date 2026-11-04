@@ -28,6 +28,11 @@ describe("A Dispatch check", () => {
     ["isn't ready-for-agent", { labels: ["enhancement", "needs-design"] }, "#12 isn't ready-for-agent"],
     ["has an open blocker", { openBlockers: [9] }, "#12 is blocked by #9"],
     ["has open blockers", { openBlockers: [9, 10] }, "#12 is blocked by #9, #10"],
+    [
+      "is blocked by an issue closed as not planned",
+      { notPlannedBlockers: [9] },
+      "#12 is blocked by #9, closed as not planned",
+    ],
     ["has sub-issues, so it's a Spec", { subIssues: 3 }, "#12 has sub-issues, so it's a Spec"],
     ["has an open linked PR", { openLinkedPullRequests: [40] }, "#12 already has the open PR #40"],
     [
