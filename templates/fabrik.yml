@@ -24,8 +24,9 @@ on:
     types: [submitted]
   # A change to the Kit config, which runs a Dispatch check so raising
   # max_in_flight (from 0, to resume Dispatch) takes effect straight away.
-  # Only a push to the default branch counts; the Loop ignores the rest.
+  # branches keeps tag pushes out; the loop job's if skips other branches.
   push:
+    branches: ["**"]
     paths: [.fabrik/config.json]
   # The Loop's time-based rules, such as closing the weekly-limit issue after its reset.
   schedule:
@@ -35,7 +36,10 @@ permissions: {}
 
 jobs:
   loop:
-    if: github.event_name != 'schedule'
+    # Only the default branch's Kit config is the Product's, so a push elsewhere runs nothing.
+    if: >-
+      github.event_name != 'schedule' &&
+      (github.event_name != 'push' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     uses: jrey8343/fabrik/.github/workflows/loop.yml@v0.1.0-pre.1
     # The most any Kit job may hold; each job narrows it. None of these writes:
     # every write goes through the Fabrik App token in a push job.

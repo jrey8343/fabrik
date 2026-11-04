@@ -13,6 +13,7 @@ export function loopEventFrom(
 ): LoopEvent | null {
   // The scheduled Kit workflow (schedule.yml), for the Loop's time-based rules.
   if (eventName === "schedule") return { kind: "scheduled-tick", now: now.toISOString() };
+  // The caller workflow's push trigger, filtered to the Kit config's path.
   if (eventName === "push") return changesKitConfig(payload) ? { kind: "kit-config-changed" } : null;
   if (eventName === "issues" && payload["action"] === "opened") {
     const issue = payload["issue"] as { number: number };
