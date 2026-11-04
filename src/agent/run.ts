@@ -17,7 +17,8 @@
 // runs in a checkout of its PR's branch, with FABRIK_PULL_REQUEST_FILE the PR and
 // its comments, whose latest Verdict holds the findings to fix. A Request-changes
 // run is a retry with FABRIK_REVIEW_FILE too: the Operator's review, its input.
-// A Design-session turn takes the issue's parent Spec from FABRIK_SPEC_FILE (null if none).
+// A Design-session turn takes the issue's parent Spec from FABRIK_SPEC_FILE (null if none),
+// and, for a Ticket back in design, the agent PR it came back from in the issue's sentBack.
 // A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
 // PR, and its result is the Reviewer's reply, a Verdict line first.
@@ -47,6 +48,7 @@ import {
   setImplementerEnv,
   startAgentBranch,
 } from "./implement.ts";
+import { sentBackContext } from "./design.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { initMessageOf, missingSkills, runSummary } from "./summary.ts";
@@ -97,7 +99,10 @@ interface RoleSpec<T> {
   readonly describe: (issue: number, output: T) => string;
   /** The heading over the issue in the prompt. */
   readonly issueHeading?: string;
-  /** A Design session weighs the issue's parent Spec, from FABRIK_SPEC_FILE, if it has one. */
+  /**
+   * A Design session weighs the issue's parent Spec, from FABRIK_SPEC_FILE, if
+   * it has one, and the agent PR it came back from, if it did.
+   */
   readonly readsParentSpec?: boolean;
   /** The Implementer builds on a branch, which it passes out as a bundle. */
   readonly buildsBranch?: boolean;
@@ -169,12 +174,11 @@ async function promptFor(
   role: AgentRole,
   note: string,
   config: KitConfig,
-  issueText: string,
+  issue: unknown,
   heading: string,
   extra: readonly string[],
 ): Promise<string> {
   const template = await readFile(join(KIT_DIR, kitPromptPath(role)), "utf8");
-  const issue: unknown = JSON.parse(issueText);
   const parts = [template.trimEnd()];
   const instructions = config.instructions[role];
   if (instructions !== null) {
@@ -266,6 +270,9 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       );
     }
   }
+  // The PR a Ticket came back to design from goes after the issue, set out on its own; only a Design session sees it.
+  const { issue, parts: sentBack } = sentBackContext(JSON.parse(issueText));
+  if (spec.readsParentSpec === true) extra.push(...sentBack);
   // The Reviewer's result is for the PR it judged, which its push job checks against the event.
   let subject = issueNumber;
   if (spec.reviewsPullRequest === true) {
@@ -304,7 +311,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       ),
       sandbox: noSandbox(),
       cwd: productDir,
-      prompt: await promptFor(name, spec.instructionsNote, config, issueText, spec.issueHeading ?? "The issue", extra),
+      prompt: await promptFor(name, spec.instructionsNote, config, issue, spec.issueHeading ?? "The issue", extra),
       maxIterations: 1,
       output,
       // The Reviewer reads the PR and runs none of its code, so it needs no Sandbox setup.

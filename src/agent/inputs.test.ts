@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readIssue, readPullRequest, type Reader } from "./inputs.ts";
+import { readIssue, readPullRequest, type Reader, SENT_BACK_DIFF_LIMIT } from "./inputs.ts";
 
 const repo = { owner: "acme", name: "shop" };
 
@@ -34,7 +34,7 @@ describe("An agent job's inputs", () => {
   it("reads the issue as gh issue view shapes it, every comment across pages, and its parent Spec", async () => {
     const github = graphqlReturning(issuePage(["first"], "cursor"), issuePage(["second"], null));
 
-    const { issue, spec } = await readIssue(github, repo, 7);
+    const { issue, spec } = await readIssue(github, repo, 7, "operator");
 
     expect(issue).toEqual({
       number: 7,
@@ -48,6 +48,191 @@ describe("An agent job's inputs", () => {
       ],
     });
     expect(spec).toEqual({ number: 3, title: "Bookings", body: "The Spec" });
+  });
+
+  describe("for a Ticket sent back to design", () => {
+    const sha = (c: string) => c.repeat(40);
+    const verdict = (kind: string, headSha: string, findings: string) =>
+      `<!-- fabrik:verdict ${JSON.stringify({ verdict: kind, source: "reviewer", requestChanges: false, headSha })} -->\n**Verdict: ${kind}.** ${findings}`;
+    const bot = (body: string) => ({ body, user: { login: "fabrik-app[bot]", type: "Bot" } });
+    const person = (login: string, body: string) => ({ body, user: { login, type: "User" } });
+
+    /** The issue thread, as GraphQL gives it: each comment's author with its kind. */
+    const ticketPage = (comments: { body: string; bot: boolean }[]) => ({
+      repository: {
+        issue: {
+          ...issuePage([], null).repository.issue,
+          comments: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: comments.map(({ body, bot }) => ({
+              author: bot ? { login: "fabrik-app", __typename: "Bot" } : { login: "operator", __typename: "User" },
+              body,
+              createdAt: "2026-11-01T00:00:00Z",
+            })),
+          },
+        },
+      },
+    });
+
+    /** A GitHub that answers GraphQL with the issue and REST from these paths, one page each. */
+    function gitHub(issue: unknown, routes: Record<string, unknown>): Reader & { paths: string[] } {
+      const paths: string[] = [];
+      return {
+        paths,
+        graphql: async <T>() => issue as T,
+        rest: async (_method: string, path: string) => {
+          paths.push(path);
+          const [route, query] = path.split("?");
+          const value = routes[route ?? ""];
+          if (value === undefined) throw new Error(`unexpected REST call ${path}`);
+          // A list route answers page 1 only.
+          if (Array.isArray(value)) return /(^|&)page=1(&|$)/.test(query ?? "") ? value : [];
+          return value;
+        },
+      };
+    }
+
+    const closedPullRequest = (number: number) => ({
+      number,
+      title: "Add a waitlist",
+      base: { ref: "main" },
+      head: { ref: "fabrik/ticket-7", sha: sha("c") },
+    });
+    const branch = (number: number) => ({
+      [`/repos/acme/shop/pulls/${number}`]: closedPullRequest(number),
+      [`/repos/acme/shop/pulls/${number}/commits`]: [{ sha: sha("c"), commit: { message: "Add the waitlist table" } }],
+      [`/repos/acme/shop/pulls/${number}/files`]: [
+        { filename: "src/waitlist.ts", status: "added", additions: 2, deletions: 0, patch: "@@ -0,0 +1,2 @@\n+export const waitlist = [];\n+" },
+      ],
+    });
+
+    it("gets every Verdict the Fabrik App gave the closed PR, oldest first, and none of anyone else's comments", async () => {
+      const github = gitHub(
+        ticketPage([{ body: "<!-- fabrik:back-to-design 50 https://github.com/acme/shop/pull/50#issuecomment-3 -->\n**Back to design.**", bot: true }]),
+        {
+          ...branch(50),
+          "/repos/acme/shop/issues/50/comments": [
+            bot(verdict("execution-flaw", sha("a"), "The test is missing.")),
+            person("operator", "<!-- fabrik:verdict {} --> looks wrong to me"),
+            bot(verdict("execution-flaw", sha("b"), "Still no test.")),
+            bot("<!-- fabrik:request-changes-run -->\nPushed."),
+            bot(verdict("execution-flaw", sha("c"), "The test fails.")),
+          ],
+        },
+      );
+
+      const { issue } = await readIssue(github, repo, 7, "operator");
+
+      expect((issue as { sentBack: { pullRequest: unknown; verdicts: unknown; operatorReviews: unknown } }).sentBack).toMatchObject({
+        pullRequest: { number: 50, title: "Add a waitlist", baseRefName: "main", headRefName: "fabrik/ticket-7", headRefOid: sha("c") },
+        sentBackBy: "verdict",
+        verdicts: [
+          { verdict: "execution-flaw", source: "reviewer", headSha: sha("a"), comment: verdict("execution-flaw", sha("a"), "The test is missing.") },
+          { verdict: "execution-flaw", source: "reviewer", headSha: sha("b"), comment: verdict("execution-flaw", sha("b"), "Still no test.") },
+          { verdict: "execution-flaw", source: "reviewer", headSha: sha("c"), comment: verdict("execution-flaw", sha("c"), "The test fails.") },
+        ],
+        operatorReviews: [],
+      });
+    });
+
+    const sentBackOf = (issue: unknown) => (issue as { sentBack?: Record<string, unknown> }).sentBack;
+    const backFromVerdict = (pr: number) => ({
+      body: `<!-- fabrik:back-to-design ${pr} https://github.com/acme/shop/pull/${pr}#issuecomment-9 -->\n**Back to design.**`,
+      bot: true,
+    });
+
+    it("gets the Design flaw that sent it back, and what the kept branch built against the base branch", async () => {
+      const github = gitHub(ticketPage([backFromVerdict(50)]), {
+        ...branch(50),
+        "/repos/acme/shop/issues/50/comments": [bot(verdict("design-flaw", sha("c"), "The Ticket contradicts its Spec."))],
+      });
+
+      const sentBack = sentBackOf((await readIssue(github, repo, 7, "operator")).issue);
+
+      expect(sentBack).toEqual({
+        pullRequest: { number: 50, title: "Add a waitlist", baseRefName: "main", headRefName: "fabrik/ticket-7", headRefOid: sha("c") },
+        sentBackBy: "verdict",
+        verdicts: [
+          { verdict: "design-flaw", source: "reviewer", headSha: sha("c"), comment: verdict("design-flaw", sha("c"), "The Ticket contradicts its Spec.") },
+        ],
+        operatorReviews: [],
+        commits: [{ sha: sha("c"), message: "Add the waitlist table" }],
+        files: [{ filename: "src/waitlist.ts", status: "added", additions: 2, deletions: 0 }],
+        diff: "diff --git a/src/waitlist.ts b/src/waitlist.ts\n@@ -0,0 +1,2 @@\n+export const waitlist = [];\n+",
+        diffTruncated: false,
+      });
+    });
+
+    it("gets the Operator's reviews and their inline comments when the Operator sent it back, and no Verdict", async () => {
+      const github = gitHub(ticketPage([{ body: "<!-- fabrik:back-to-design 50 operator -->\n**Back to design.**", bot: true }]), {
+        ...branch(50),
+        "/repos/acme/shop/pulls/50/reviews": [
+          { id: 1, user: { login: "operator", type: "User" }, state: "CHANGES_REQUESTED", body: "This isn't the waitlist we want.", commit_id: sha("c"), submitted_at: "2026-11-02T00:00:00Z" },
+          { id: 2, user: { login: "someone-else", type: "User" }, state: "COMMENTED", body: "Drive-by.", commit_id: sha("c"), submitted_at: "2026-11-02T00:00:00Z" },
+          { id: 3, user: { login: "operator", type: "User" }, state: "PENDING", body: "Draft.", commit_id: sha("c") },
+        ],
+        "/repos/acme/shop/pulls/50/reviews/1/comments": [{ path: "src/waitlist.ts", line: 1, body: "Patients, not slots." }],
+      });
+
+      const sentBack = sentBackOf((await readIssue(github, repo, 7, "operator")).issue);
+
+      expect(sentBack).toMatchObject({
+        sentBackBy: "operator",
+        verdicts: [],
+        operatorReviews: [
+          {
+            state: "CHANGES_REQUESTED",
+            body: "This isn't the waitlist we want.",
+            commitId: sha("c"),
+            submittedAt: "2026-11-02T00:00:00Z",
+            comments: [{ path: "src/waitlist.ts", line: 1, body: "Patients, not slots." }],
+          },
+        ],
+      });
+      expect(github.paths.some((path) => path.includes("/issues/50/comments"))).toBe(false);
+    });
+
+    it("gets only the latest closed PR when the Ticket came back more than once", async () => {
+      const github = gitHub(
+        ticketPage([backFromVerdict(40), { body: "**Design session finished.**", bot: true }, backFromVerdict(50)]),
+        { ...branch(50), "/repos/acme/shop/issues/50/comments": [] },
+      );
+
+      const sentBack = sentBackOf((await readIssue(github, repo, 7, "operator")).issue);
+
+      expect(sentBack).toMatchObject({ pullRequest: { number: 50 } });
+      expect(github.paths.some((path) => path.includes("/40"))).toBe(false);
+    });
+
+    it("gets nothing more once the Design session after the return has finished, or from a note someone only quoted", async () => {
+      for (const comments of [
+        [backFromVerdict(50), { body: "**Design session finished.**", bot: true }],
+        [{ ...backFromVerdict(50), bot: false }],
+      ]) {
+        const github = gitHub(ticketPage(comments), {});
+
+        const { issue } = await readIssue(github, repo, 7, "operator");
+
+        expect(issue).not.toHaveProperty("sentBack");
+        expect(github.paths).toEqual([]);
+      }
+    });
+
+    it("cuts a diff over the limit short with a marker, keeping every changed file in the list", async () => {
+      const big = (name: string) => ({ filename: name, status: "added", additions: 1, deletions: 0, patch: `+${"x".repeat(SENT_BACK_DIFF_LIMIT)}` });
+      const github = gitHub(ticketPage([backFromVerdict(50)]), {
+        ...branch(50),
+        "/repos/acme/shop/issues/50/comments": [],
+        "/repos/acme/shop/pulls/50/files": [big("a.ts"), big("b.ts")],
+      });
+
+      const sentBack = sentBackOf((await readIssue(github, repo, 7, "operator")).issue) as { diff: string; diffTruncated: boolean; files: { filename: string }[] };
+
+      expect(sentBack.diffTruncated).toBe(true);
+      expect(sentBack.diff.length).toBeLessThan(SENT_BACK_DIFF_LIMIT + 200);
+      expect(sentBack.diff).toMatch(/\[Diff truncated at \d+ of \d+ characters; every changed file is listed in files\.\]$/);
+      expect(sentBack.files.map((file) => file.filename)).toEqual(["a.ts", "b.ts"]);
+    });
   });
 
   const pullRequest = {
