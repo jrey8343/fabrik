@@ -16,6 +16,7 @@ function spec(overrides: Partial<SpecSnapshot> = {}): SpecSnapshot {
   return {
     number: 3,
     open: true,
+    labels: ["enhancement", "ready-for-agent"],
     tickets: [
       { number: 8, open: false, pullRequests: [48] },
       { number: 9, open: false, pullRequests: [50] },
@@ -63,6 +64,23 @@ describe("Spec closing", () => {
 
   it("does nothing more to a Spec that's already closed", () => {
     expect(planFor(closed, snapshotOf(ticket, { spec: spec({ open: false }) }), kitConfig())).toEqual({
+      kind: "act",
+      actions: [{ kind: "check-dispatch" }],
+    });
+  });
+
+  it("closes a ready-for-human Spec the same way", () => {
+    const actions = actionsOf(planFor(closed, snapshotOf(ticket, { spec: spec({ labels: ["ready-for-human"] }) }), kitConfig()));
+
+    expect(actions.map((action) => action.kind)).toEqual(["comment", "close", "check-dispatch"]);
+  });
+
+  it.each([
+    ["a wayfinder Map", ["wayfinder:map"]],
+    ["a parent labelled only roadmap", ["roadmap"]],
+    ["an unlabelled parent", []],
+  ])("leaves %s open with no comment when its last child closes, and only runs a Dispatch check", (_, labels) => {
+    expect(planFor(closed, snapshotOf(ticket, { spec: spec({ labels }) }), kitConfig())).toEqual({
       kind: "act",
       actions: [{ kind: "check-dispatch" }],
     });
