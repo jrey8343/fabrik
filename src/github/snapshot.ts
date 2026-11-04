@@ -188,6 +188,7 @@ const SPEC_QUERY = `
       issue(number: $number) {
         number
         state
+        labels(first: 100) { nodes { name } }
         subIssues(first: 100) {
           nodes {
             number
@@ -205,6 +206,7 @@ interface SpecQueryResult {
     issue: {
       number: number;
       state: "OPEN" | "CLOSED";
+      labels: { nodes: { name: string }[] };
       subIssues: {
         nodes: {
           number: number;
@@ -223,6 +225,7 @@ async function gatherSpec(github: GitHub, repo: Repo, number: number): Promise<S
   return {
     number: spec.number,
     open: spec.state === "OPEN",
+    labels: spec.labels.nodes.map((label) => label.name),
     tickets: spec.subIssues.nodes.map((ticket) => ({
       number: ticket.number,
       open: ticket.state === "OPEN",

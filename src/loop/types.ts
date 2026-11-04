@@ -272,6 +272,8 @@ export interface Snapshot {
 export interface SpecSnapshot {
   readonly number: number;
   readonly open: boolean;
+  /** The parent's labels: only one carrying ready-for-agent or ready-for-human is a Spec. */
+  readonly labels: readonly string[];
   /** Every sub-issue, open or closed. */
   readonly tickets: readonly {
     readonly number: number;
