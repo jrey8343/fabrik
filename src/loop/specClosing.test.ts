@@ -37,6 +37,15 @@ describe("Spec closing", () => {
     expect(body).toContain("- #9: #50");
   });
 
+  it("a last Ticket a Design session closed as not planned closes the Spec like any Ticket closed without a merged PR", () => {
+    const notPlanned = { ...ticket, labels: ["enhancement", "wontfix"] };
+    const tickets = [{ number: 8, open: false, pullRequests: [48] }, { number: 9, open: false, pullRequests: [] }];
+    const actions = actionsOf(planFor(closed, snapshotOf(notPlanned, { spec: spec({ tickets }) }), kitConfig()));
+
+    expect(actions[1]).toEqual({ kind: "close", issue: 3, reason: "completed" });
+    expect(actions[0]?.kind === "comment" ? actions[0].body : "").toContain("- #9: closed without a merged PR");
+  });
+
   it("an earlier Ticket closing leaves the Spec open, and only runs a Dispatch check", () => {
     const openSibling = spec({
       tickets: [

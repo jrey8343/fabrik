@@ -139,7 +139,7 @@ interface DispatchQueryResult {
         state: "OPEN" | "CLOSED";
         labels: { nodes: { name: string }[] };
         subIssues: { totalCount: number };
-        blockedBy: { nodes: { number: number; state: "OPEN" | "CLOSED"; stateReason: string | null }[] };
+        blockedBy: { nodes: { number: number; state: "OPEN" | "CLOSED"; stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null }[] };
         closedByPullRequestsReferences: { nodes: { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[] };
       }[];
     };
