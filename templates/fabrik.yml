@@ -2,7 +2,8 @@
 #
 # Every `uses:` line pins the same exact Fabrik release; this file is the only
 # place the Kit's version appears (ADR-0003). Disable this workflow to pause
-# the factory in this repo.
+# the factory in this repo; set max_in_flight to 0 in .fabrik/config.json to
+# pause only Dispatch.
 name: Fabrik
 
 on:
@@ -21,6 +22,11 @@ on:
   # agent PR can't change: the Kit refuses agent branches that touch them.
   pull_request_review:
     types: [submitted]
+  # A change to the Kit config, which runs a Dispatch check so raising
+  # max_in_flight (from 0, to resume Dispatch) takes effect straight away.
+  # Only a push to the default branch counts; the Loop ignores the rest.
+  push:
+    paths: [.fabrik/config.json]
   # The Loop's time-based rules, such as closing the weekly-limit issue after its reset.
   schedule:
     - cron: "17 * * * *"

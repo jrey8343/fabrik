@@ -254,6 +254,7 @@ async function gatherEventPart(
     case "dispatch-check":
       if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");
       return gatherDispatch(github, actions, repo, operator);
+    case "kit-config-changed":
     case "scheduled-tick":
       return null;
     case "implement-run-finished": {

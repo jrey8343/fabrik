@@ -4,6 +4,6 @@ An Implementer starts when the Kit adds `agent:implement` to a Ticket, not when 
 
 ## Consequences
 
-- The Kit checks for Tickets to Dispatch whenever an issue closes, after a Design session and on the Fast path. Limits on how many Implementers run at once will plug in here.
+- The Kit checks for Tickets to Dispatch whenever an issue closes, after a Design session, on the Fast path and when a push to the default branch changes the Kit config. `max_in_flight` caps how many Implementers run at once, and `0` pauses Dispatch.
 - Labels the Kit adds must use a GitHub App token, because labels added with `GITHUB_TOKEN` don't start workflows.
 - Matt's skills are used unchanged; only the trigger is Fabrik's.

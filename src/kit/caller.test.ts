@@ -87,6 +87,12 @@ describe("Caller workflow release check", () => {
     expect(template).toContain(`uses: jrey8343/fabrik/.github/workflows/schedule.yml@${check.release}`);
   });
 
+  it("the caller template runs the Loop when a push changes the Kit config", () => {
+    const template = readFileSync(new URL("../../templates/fabrik.yml", import.meta.url), "utf8");
+
+    expect(template).toMatch(/^\s+push:\n\s+paths: \[\.fabrik\/config\.json\]$/m);
+  });
+
   it("the scheduled Kit workflow ships beside the Loop as a reusable workflow", () => {
     const workflow = readFileSync(new URL("../../.github/workflows/schedule.yml", import.meta.url), "utf8");
 

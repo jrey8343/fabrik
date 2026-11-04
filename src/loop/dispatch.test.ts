@@ -5,6 +5,7 @@ import {
   aTicket,
   dispatchSnapshotOf,
   kitConfig,
+  repoSnapshot,
   snapshotOf,
   snapshotOfPullRequest,
 } from "../__fixtures__/snapshots.ts";
@@ -166,6 +167,12 @@ describe("What triggers a Dispatch check", () => {
     const issue = anIssue({ number: 9, labels: ["enhancement", "ready-for-agent"] });
 
     const plan = planFor({ kind: "issue-closed", issue: 9 }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual(checkDispatch);
+  });
+
+  it("a change to the Kit config, so raising max_in_flight from 0 resumes Dispatch straight away", () => {
+    const plan = planFor({ kind: "kit-config-changed" }, repoSnapshot(), kitConfig());
 
     expect(plan).toEqual(checkDispatch);
   });

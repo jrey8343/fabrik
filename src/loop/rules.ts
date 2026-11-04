@@ -97,6 +97,9 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
       return snapshot.dispatch === null
         ? missingFromSnapshot("the Tickets a Dispatch check weighs")
         : dispatch(snapshot.dispatch, config);
+    case "kit-config-changed":
+      // max_in_flight may have gone up, or from 0 back above it, so see what can start now.
+      return { kind: "act", actions: [CHECK_DISPATCH] };
     case "scheduled-tick":
       return scheduledTick(event.now, snapshot);
   }

@@ -149,6 +149,8 @@ export type LoopEvent =
   | { readonly kind: "pull-request-closed"; readonly pullRequest: number }
   /** A Dispatch check, which an earlier plan asked for with `check-dispatch`. */
   | { readonly kind: "dispatch-check" }
+  /** A push to the default branch that changed the Kit config, which may have unpaused or widened Dispatch. */
+  | { readonly kind: "kit-config-changed" }
   | {
       /** The scheduled Kit workflow's tick (schedule.yml), for the Loop's time-based rules. */
       readonly kind: "scheduled-tick";
