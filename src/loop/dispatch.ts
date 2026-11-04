@@ -2,7 +2,10 @@
 import { DISPATCH_LABEL, READY_FOR_AGENT } from "./labels.ts";
 import type { DispatchSnapshot, KitConfig, Plan, TicketSnapshot } from "./types.ts";
 
-/** Releases eligible Tickets to Implementers, lowest number first, up to the free slots. */
+/**
+ * Releases eligible Tickets to Implementers, lowest number first, up to the free slots.
+ * A max_in_flight of 0 pauses it; resuming an agent PR's run doesn't go through here.
+ */
 export function dispatch(snapshot: DispatchSnapshot, config: KitConfig): Plan {
   const tickets = [...snapshot.tickets].sort((a, b) => a.number - b.number);
   const ineligible: string[] = [];
@@ -15,6 +18,10 @@ export function dispatch(snapshot: DispatchSnapshot, config: KitConfig): Plan {
   if (eligible.length === 0) {
     const why = ineligible.length === 0 ? "none is ready-for-agent" : ineligible.join("; ");
     return { kind: "nothing", reason: `No Ticket can be dispatched: ${why}` };
+  }
+
+  if (config.maxInFlight === 0) {
+    return { kind: "nothing", reason: `Dispatch is paused because max_in_flight is 0, so ${list(eligible, "and")} wait` };
   }
 
   // A Ticket already given the label is waiting for its Implement run to start,

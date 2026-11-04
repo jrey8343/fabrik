@@ -25,6 +25,7 @@ export interface KitConfig {
     readonly dispatch: { readonly timeoutMinutes: number };
     readonly stepUp: { readonly model: string; readonly effort: string | null };
   };
+  /** How many Tickets may be in flight at once; 0 pauses Dispatch. */
   readonly maxInFlight: number;
   /** The Operator's GitHub login; null means the Product repo's owner. */
   readonly operator: string | null;
@@ -123,7 +124,7 @@ function readConfig(file: Reader): KitConfig {
       dispatch: readDispatch(roles.object("dispatch"), defaults.roles.dispatch),
       stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp),
     },
-    maxInFlight: file.positiveInteger("max_in_flight") ?? defaults.maxInFlight,
+    maxInFlight: file.wholeNumber("max_in_flight", 0) ?? defaults.maxInFlight,
     operator: orDefault(file.nullableString("operator", checkLogin), defaults.operator),
   };
 }
@@ -243,10 +244,15 @@ class Reader {
   }
 
   positiveInteger(key: string): number | undefined {
+    return this.wholeNumber(key, 1);
+  }
+
+  /** A whole number no smaller than `min`. */
+  wholeNumber(key: string, min: number): number | undefined {
     const value = this.#take(key);
     if (value === undefined) return undefined;
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-      this.#fail(`${this.#field(key)} must be a whole number of at least 1`);
+    if (typeof value !== "number" || !Number.isInteger(value) || value < min) {
+      this.#fail(`${this.#field(key)} must be a whole number of at least ${min}`);
       return undefined;
     }
     return value;

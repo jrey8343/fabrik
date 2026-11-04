@@ -90,6 +90,12 @@ describe("Starting a retry", () => {
     });
   });
 
+  it("still starts while Dispatch is paused by a max_in_flight of 0", () => {
+    const plan = planFor(retryLabeled, resumeSnapshot(), kitConfig({ maxInFlight: 0 }));
+
+    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", pullRequest: 50 }));
+  });
+
   it("the second Execution flaw starts a Step-up, on the Step-up model", () => {
     const config = kitConfig();
     const plan = planFor(retryLabeled, resumeSnapshot(flawedPullRequest([earlier("execution-flaw")])), config);
