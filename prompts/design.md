@@ -21,8 +21,9 @@ If the issue is a Ticket under a Spec, that Spec follows the issue at the end of
    - **Finish with an agent brief** once nothing that matters is open and the work fits one pull request an Implementer can finish. The brief replaces the issue's body, so it must stand alone: what to build and why, the decisions the session made, and what is out of scope, followed by acceptance criteria that each state one check a test could make.
    - **Finish with a Spec and its Tickets** once nothing that matters is open but the work is too big for one pull request. Write the Spec as `to-spec` does, and slice it into Tickets as `to-tickets` does: tracer-bullet vertical slices, each one pull request, each naming the Tickets that must be finished before it can start. The Kit creates the Spec, makes each Ticket its sub-issue with native blocked-by edges, and closes this issue as superseded by the Spec. Only an issue with no parent Spec finishes this way.
    - **Finish by splitting the Ticket** when the issue is a Ticket under a Spec and the work as this session now designs it is too big for one pull request. Slice it into sibling Tickets as `to-tickets` does. The Kit makes each one a sub-issue of the same Spec, with native blocked-by edges between them, and closes this Ticket as superseded by them. A Ticket under a Spec that fits one pull request finishes with an agent brief, which rewrites it in place.
+   - **Finish as not planned** when the Operator has decided the issue shouldn't be built. Don't ask them to confirm a clear "no": their answer is the decision. The comment says what was decided and why, in a sentence or two.
 
-Finishing the session either way counts as the Operator approving it, so only finish on what the Operator actually answered or accepted.
+Finishing the session any of these ways counts as the Operator approving it, so only finish on what the Operator actually answered or accepted.
 
 ## Your output
 
@@ -78,6 +79,12 @@ To split a Ticket into sibling Tickets under its Spec:
     { "key": "model", "title": "The Ticket's issue title.", "body": "Markdown in to-tickets' issue template, without the Parent and Blocked by sections.", "blockedBy": [] }
   ]
 }
+</design>
+
+To finish as not planned:
+
+<design>
+{ "kind": "not-planned", "comment": "Markdown for the closing comment: what the Operator decided and why." }
 </design>
 
 - Every text field is non-empty Markdown.
