@@ -3,6 +3,7 @@
 // (src/kit/runStore.ts). The judge prompt is src/kit/scorerPrompt.ts. Pure,
 // no I/O.
 import { createHash } from "node:crypto";
+import { isObject } from "../agent/stream.ts";
 import { type Rubric, rubricSet } from "./rubrics.ts";
 import { type RateLimitReading, type RunRecord, type RunRecordRole, runStoreName } from "./runRecord.ts";
 
@@ -255,8 +256,4 @@ function isAnswer(value: unknown): value is JudgeAnswer {
     typeof value["label"] === "string" &&
     typeof value["rationale"] === "string"
   );
-}
-
-function isObject(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
