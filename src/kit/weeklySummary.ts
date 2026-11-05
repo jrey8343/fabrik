@@ -17,6 +17,8 @@ export interface LabelEvent {
 export interface TicketFacts {
   readonly number: number;
   readonly labelEvents: readonly LabelEvent[];
+  /** ISO 8601, or null while it's open. */
+  readonly closedAt: string | null;
 }
 
 /** A Spec, its label timeline and the Tickets that build it (its sub-issues). */
@@ -91,6 +93,12 @@ export interface WeeklySummary {
    * over those Specs.
    */
   readonly costPerSpec: WeekOverWeek<CostFigure>;
+  /**
+   * The cost of every Implement, Retry, Step-up and Review record on the
+   * Tickets that closed in the week without a merged PR, whatever week they
+   * ran in. Never null.
+   */
+  readonly spendNeverMerged: WeekOverWeek<CostFigure>;
   /** The latest weekly-limit reading across the week's records, or null if none read one. */
   readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
   readonly counts: {
@@ -131,6 +139,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     unknownCost: change("unknownCost"),
     costPerMergedPullRequest: change("costPerMergedPullRequest"),
     costPerSpec: change("costPerSpec"),
+    spendNeverMerged: change("spendNeverMerged"),
     weeklyLimit: change("weeklyLimit"),
     counts: {
       mergedPullRequests: change("mergedPullRequests"),
@@ -150,6 +159,7 @@ interface WeekMetrics {
   readonly unknownCost: number;
   readonly costPerMergedPullRequest: CostFigure;
   readonly costPerSpec: CostFigure;
+  readonly spendNeverMerged: CostFigure;
   readonly weeklyLimit: RateLimitReading | null;
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
@@ -169,6 +179,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     unknownCost: records.filter((record) => record.totalCostUsd === null).length,
     costPerMergedPullRequest: costPerMergedPullRequestOf(week, input),
     costPerSpec: costPerSpecOf(week, input),
+    spendNeverMerged: spendNeverMergedOf(week, input),
     weeklyLimit: records.findLast((record) => record.rateLimit !== null)?.rateLimit ?? null,
     mergedPullRequests: pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt)).length,
     ticketsDispatched: tickets.filter((ticket) => {
@@ -218,6 +229,22 @@ function costPerSpecOf(week: Week, input: WeeklySummaryInput): CostFigure {
   return averageCostOf(perSpec);
 }
 
+function spendNeverMergedOf(week: Week, input: WeeklySummaryInput): CostFigure {
+  const ended = endedBy(week, input.records);
+  return costOf(
+    input.facts.flatMap((facts) => {
+      const merged = new Set(facts.pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null).map((pullRequest) => pullRequest.ticket));
+      const unmerged = facts.tickets.filter(
+        (ticket) => ticket.closedAt !== null && within(week, ticket.closedAt) && !merged.has(ticket.number),
+      );
+      return ended.filter(
+        (record) =>
+          record.repo === facts.repo && unmerged.some((ticket) => ticket.number === record.issue) && BUILD_ROLES.includes(record.role),
+      );
+    }),
+  );
+}
+
 /** Whether the App gave the Spec its ready label, ending its Design session, in the week. */
 function leftDesignIn(week: Week, spec: SpecFacts): boolean {
   return spec.labelEvents.some(
@@ -246,7 +273,7 @@ function endedBy(week: Week, records: readonly RunRecord[]): RunRecord[] {
 }
 
 /** The summed cost of these records, leaving out (and counting) those whose cost basis is unknown. */
-function costOf(records: readonly RunRecord[]): { usd: number; unknownCost: number } {
+function costOf(records: readonly RunRecord[]): CostFigure & { readonly usd: number } {
   return {
     usd: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
     unknownCost: records.filter((record) => record.totalCostUsd === null).length,

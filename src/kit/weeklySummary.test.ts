@@ -279,6 +279,54 @@ describe("the Weekly summary", () => {
     });
   });
 
+  describe("spend that never merged", () => {
+    it("sums the build runs on Tickets closed in the week without a merged PR", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 7, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2 }), // last week, closed this week
+            aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1, role: "review" }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-03T06:00:00Z", totalCostUsd: 5, role: "design", pullRequest: null }), // the Spec's
+            aRunRecord({ issue: 8, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 100 }), // closed by its merged PR
+            aRunRecord({ issue: 9, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 100 }), // still open
+            aRunRecord({ issue: 10, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 0.5 }), // closed last week
+          ],
+          facts: [
+            factsOf({
+              pullRequests: [
+                aMergedPullRequest("2026-11-04T00:00:00Z", { number: 50, ticket: 7, mergedAt: null }), // closed unmerged
+                aMergedPullRequest("2026-11-04T00:00:00Z", { number: 51, ticket: 8 }),
+              ],
+              tickets: [
+                aTicketTimeline([], { number: 7, closedAt: "2026-11-04T00:00:00Z" }),
+                aTicketTimeline([], { number: 8, closedAt: "2026-11-04T00:00:00Z" }),
+                aTicketTimeline([], { number: 9 }),
+                aTicketTimeline([], { number: 10, closedAt: "2026-10-29T00:00:00Z" }),
+              ],
+            }),
+          ],
+        }),
+      );
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { spendNeverMerged: { thisWeek: { usd: 3, unknownCost: 0 }, lastWeek: { usd: 0.5, unknownCost: 0 } } },
+      });
+    });
+
+    it("leaves a run whose cost basis is unknown out of the sum, and counts it", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", totalCostUsd: null }),
+          ],
+          facts: [factsOf({ tickets: [aTicketTimeline([], { closedAt: "2026-11-04T00:00:00Z" })] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { spendNeverMerged: { thisWeek: { usd: 1, unknownCost: 1 } } } });
+    });
+  });
+
   describe("rendered", () => {
     const week = input({
       records: [
