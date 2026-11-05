@@ -50,14 +50,24 @@ describe("A comment on a pull request", () => {
     });
   });
 
-  it("from a bot says so, for the Loop to ignore", () => {
+  it("from a bot, such as the Fabrik App's own Verdict, is no event", () => {
     const payload = {
       action: "created",
       issue: { number: 50, pull_request: {} },
       comment: { id: 7002, user: user("fabrik[bot]", "Bot"), body: "Verdict: pass" },
     };
 
-    expect(loopEventFrom("issue_comment", payload)).toMatchObject({ kind: "pull-request-commented", commenterIsBot: true });
+    expect(loopEventFrom("issue_comment", payload)).toBeNull();
+  });
+
+  it("in a review a bot submitted is no event", () => {
+    const payload = {
+      action: "submitted",
+      pull_request: { number: 50 },
+      review: { id: 901, state: "commented", user: user("fabrik[bot]", "Bot"), body: "Noted." },
+    };
+
+    expect(loopEventFrom("pull_request_review", payload)).toBeNull();
   });
 
   it.each(["commented", "approved", "COMMENTED", "APPROVED"])(

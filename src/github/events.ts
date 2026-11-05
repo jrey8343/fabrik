@@ -3,7 +3,7 @@
 // It holds no Loop rules; those all live in src/loop/rules.ts.
 import type { AgentRunResult } from "../agent/result.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
-import type { AgentRole, BranchChanges, FailureReport, LoopEvent } from "../loop/types.ts";
+import type { AgentRole, BranchChanges, FailureReport, LoopEvent, PullRequestCommentPlace } from "../loop/types.ts";
 
 /** Maps an Actions event to the Loop event it stands for, or null if the Loop ignores it. */
 export function loopEventFrom(
@@ -29,13 +29,7 @@ export function loopEventFrom(
     const comment = payload["comment"] as { id: number; user: { login: string; type: string }; body?: string | null };
     // A comment on a PR is not a reply on an issue.
     if (issue.pull_request !== undefined) {
-      return {
-        kind: "pull-request-commented",
-        pullRequest: issue.number,
-        commenter: comment.user.login,
-        commenterIsBot: comment.user.type === "Bot",
-        on: { kind: "conversation", comment: comment.id },
-      };
+      return pullRequestCommented(issue.number, comment.user, { kind: "conversation", comment: comment.id });
     }
     return {
       kind: "issue-comment-created",
@@ -72,13 +66,7 @@ export function loopEventFrom(
     const state = review.state.toLowerCase();
     // A Comment or Approve review, which a lone inline comment or a thread reply also submits.
     if (state === "commented" || state === "approved") {
-      return {
-        kind: "pull-request-commented",
-        pullRequest,
-        commenter: review.user.login,
-        commenterIsBot: review.user.type === "Bot",
-        on: { kind: "review", review: review.id },
-      };
+      return pullRequestCommented(pullRequest, review.user, { kind: "review", review: review.id });
     }
     if (state !== "changes_requested") return null;
     return {
@@ -90,6 +78,20 @@ export function loopEventFrom(
     };
   }
   return null;
+}
+
+/**
+ * A comment on a PR, or null when a bot wrote it: the Fabrik App's own
+ * Verdicts and fix comments would otherwise each start a Kit job that plans
+ * nothing (only the Operator's comments are acknowledged, ADR-0007).
+ */
+function pullRequestCommented(
+  pullRequest: number,
+  user: { readonly login: string; readonly type: string },
+  on: PullRequestCommentPlace,
+): LoopEvent | null {
+  if (user.type === "Bot") return null;
+  return { kind: "pull-request-commented", pullRequest, commenter: user.login, commenterIsBot: false, on };
 }
 
 /**
