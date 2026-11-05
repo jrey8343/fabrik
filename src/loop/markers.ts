@@ -48,14 +48,27 @@ export const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 /** The first line of the Kit's note that a Ticket came back to design from an agent PR. */
 export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
 
+/** What a Monitor issue's marker line says it tracks (#148): a Sentry group, or red main. */
+export type MonitorMarker = { readonly kind: "sentry"; readonly group: string } | { readonly kind: "red-main" };
+
 /**
  * A Monitor issue's marker line, naming the Sentry group or the red main it
- * tracks (#148). Only the line itself counts, never the stats block's markers.
+ * tracks. Only the line itself counts, never the Monitor block's markers.
  */
-const MONITOR_MARKER = /^(<!-- fabrik:monitor (?:sentry:\S+|red-main) -->)$/m;
+const MONITOR_MARKER = /^<!-- fabrik:monitor (?:sentry:(\S+)|red-main) -->$/m;
 
-/** The marker line of the Monitor's red-main issue. */
-export const RED_MAIN_MARKER = "<!-- fabrik:monitor red-main -->";
+/** The Monitor marker in this body, or null when it has none. */
+export function monitorMarkerIn(body: string): MonitorMarker | null {
+  const match = MONITOR_MARKER.exec(body);
+  if (match === null) return null;
+  const group = match[1];
+  return group === undefined ? { kind: "red-main" } : { kind: "sentry", group };
+}
+
+/** The marker line a Monitor issue's body opens with, for what it tracks. */
+export function monitorMarkerLine(marker: MonitorMarker): string {
+  return marker.kind === "sentry" ? `<!-- fabrik:monitor sentry:${marker.group} -->` : "<!-- fabrik:monitor red-main -->";
+}
 
 /**
  * The first line of the Monitor's note closing its red-main issue once the
@@ -63,13 +76,3 @@ export const RED_MAIN_MARKER = "<!-- fabrik:monitor red-main -->";
  * from anyone else's.
  */
 export const RED_MAIN_GREEN_MARKER = "<!-- fabrik:monitor-green -->";
-
-/** The marker line of the Monitor's issue for this Sentry group. */
-export function sentryGroupMarker(groupId: string): string {
-  return `<!-- fabrik:monitor sentry:${groupId} -->`;
-}
-
-/** The Monitor marker line in this body, or null when it has none. */
-export function monitorMarkerIn(body: string): string | null {
-  return MONITOR_MARKER.exec(body)?.[1] ?? null;
-}

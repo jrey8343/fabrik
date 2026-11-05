@@ -2,8 +2,10 @@
 // branch's commits, their check runs and the Monitor's red-main issue,
 // matching ./monitor.ts: say only what a test cares about.
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
-import type { MonitorInput, MonitorIssue } from "../monitor/core.ts";
+import type { MonitorInput } from "../monitor/core.ts";
+import type { MonitorIssue } from "../monitor/issues.ts";
 import type { CheckRun, MainCommit } from "../monitor/redMain.ts";
+import { aMonitorIssue, monitorInput } from "./monitor.ts";
 
 /** A commit's page on GitHub, in the `acme/clinic` Product repo. */
 export function commitUrl(sha: string): string {
@@ -35,20 +37,17 @@ export function aCommit(sha: string, checkRuns: readonly CheckRun[]): MainCommit
 }
 
 /**
- * A tick with production errors off and red main on, gated by every check (as
- * `sandbox.checks` lists none), the default branch read as these commits,
- * newest first, and no Monitor issues.
+ * monitorInput() with production errors off and red main on, gated by every
+ * check (as `sandbox.checks` lists none), the default branch read as these
+ * commits, newest first, and no Monitor issues.
  */
 export function redMainInput(commits: readonly MainCommit[], overrides: Partial<MonitorInput> = {}): MonitorInput {
-  return {
+  return monitorInput([], {
     monitor: { ...DEFAULT_KIT_CONFIG.monitor, redMain: true },
     sentry: null,
-    issues: [],
-    gatingChecks: [],
     mainChecks: { kind: "read", commits },
-    now: "2026-11-06T08:00:00Z",
     ...overrides,
-  };
+  });
 }
 
 /** The details block's lines for commit `badc0de`'s `test` check, run 901, failing. */
@@ -73,19 +72,9 @@ export function aRedMainBody(details: readonly string[] = RED_DETAILS): string {
 }
 
 /**
- * Open issue 41, the Fabrik App's red-main issue, labelled fabrik:monitor and
- * sorted onto the Fast path, its details block naming commit `badc0de`.
+ * aMonitorIssue() as open issue 41, the Fabrik App's red-main issue, labelled
+ * fabrik:monitor and sorted onto the Fast path, its details block naming commit `badc0de`.
  */
 export function aRedMainIssue(overrides: Partial<MonitorIssue> = {}): MonitorIssue {
-  return {
-    number: 41,
-    open: true,
-    stateReason: null,
-    closedAt: null,
-    labels: ["fabrik:monitor", "bug", "ready-for-agent"],
-    byApp: true,
-    body: aRedMainBody(),
-    closedByMonitor: false,
-    ...overrides,
-  };
+  return aMonitorIssue({ number: 41, body: aRedMainBody(), ...overrides });
 }

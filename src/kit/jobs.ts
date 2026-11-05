@@ -80,7 +80,8 @@ async function main(productDir: string): Promise<void> {
     console.log(`The Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
   } else {
     const github = new GitHub(required("GH_TOKEN"), process.env["GITHUB_API_URL"]);
-    const snapshot = await gatherSnapshot(github, repo, event, config.operator);
+    // This job only routes, with no Fabrik App token, so it doesn't know the App's login: the push job's plan is the one applied.
+    const snapshot = await gatherSnapshot(github, repo, event, config.operator, null);
     const plan = planFor(event, snapshot, config);
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
     route = routeOf(plan);

@@ -12,7 +12,7 @@
 //   FABRIK_REVIEW                optional, a Request-changes run's review on that PR: writes review.json
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { GitHub, type Repo } from "../github/client.ts";
+import { allPages, GitHub, type Repo } from "../github/client.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
@@ -102,16 +102,6 @@ type IssueComment = NonNullable<IssueQueryResult["repository"]["issue"]>["commen
 
 /** Past this many characters, the sent-back PR's diff is cut short; its file list stays whole. */
 export const SENT_BACK_DIFF_LIMIT = 60_000;
-
-/** Every item of a paginated REST list. */
-async function allPages<T>(github: Reader, path: string): Promise<T[]> {
-  const items: T[] = [];
-  for (let page = 1; ; page++) {
-    const batch = (await github.rest("GET", `${path}?per_page=100&page=${page}`)) as T[];
-    items.push(...batch);
-    if (batch.length < 100) return items;
-  }
-}
 
 interface RestUser {
   readonly login: string;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aGroup, aMonitorIssue, aMonitorIssueBody, monitorInput, SENTRY_ON } from "../__fixtures__/monitor.ts";
+import { aGroup, aMonitorIssue, aMonitorIssueBody, monitorInput, SENTRY_ON, sentryRead } from "../__fixtures__/monitor.ts";
 import { aCheckRun, aCommit, aRedMainBody, aRedMainIssue, commitUrl, RED_DETAILS, redMainInput, runUrl } from "../__fixtures__/redMain.ts";
 import { monitorPlanFor } from "./core.ts";
 
@@ -70,13 +70,14 @@ describe("Red main", () => {
     expect(plan.open).toEqual([]);
     expect(plan.rewrite).toEqual([
       {
+        kind: "red-main",
         issue: 41,
-        sentryGroup: null,
         body: aRedMainBody([
           `- Red at: [\`dead000\`](${commitUrl(STILL_RED)})`,
           "- Failed checks:",
           `  - [\`lint\`](${runUrl(912)}) failed`,
         ]),
+        summary: "Refreshed red main's details on #41.",
       },
     ]);
   });
@@ -135,7 +136,7 @@ describe("The red-main issue", () => {
   const red = [aCommit(RED, [aCheckRun({ id: 901, name: "test", conclusion: "failure" })])];
 
   it("files one while red when only an issue someone else opened carries the red-main marker", () => {
-    const plan = monitorPlanFor(redMainInput(red, { issues: [aRedMainIssue({ number: 52, byApp: false })] }));
+    const plan = monitorPlanFor(redMainInput(red, { issues: [aRedMainIssue({ number: 52, authorIsApp: false })] }));
 
     expect(filedFor(plan)).toEqual(["badc0de"]);
     expect(plan.rewrite).toEqual([]);
@@ -154,7 +155,7 @@ describe("The red-main issue", () => {
 
 describe("Red main at caps.monitor_issues 0", () => {
   /** Error filings paused, with a qualifying Sentry group that would otherwise be filed. */
-  const paused = { cap: 0, monitor: { errors: SENTRY_ON, redMain: true }, sentry: { kind: "read" as const, groups: [aGroup()], groupsWithoutStats: 0 } };
+  const paused = { cap: 0, monitor: { errors: SENTRY_ON, redMain: true }, sentry: sentryRead([aGroup()]) };
 
   it("still files the red-main issue while new error filings are paused", () => {
     const plan = monitorPlanFor(redMainInput([aCommit(RED, [aCheckRun({ id: 901, name: "test", conclusion: "failure" })])], paused));
@@ -461,13 +462,33 @@ describe("A red-main issue someone closed", () => {
     expect(filedFor(plan)).toEqual(["dead000"]);
   });
 
+  it("keeps it closed while red when only an older commit's re-run passed after the close, as the newer red commit was decided first", () => {
+    const plan = monitorPlanFor(
+      redMainInput(
+        [
+          aCommit(STILL_RED, [aCheckRun({ id: 930, name: "test", conclusion: "failure", completedAt: "2026-11-06T07:00:00Z" })]),
+          aCommit(GREEN, [
+            aCheckRun({ id: 920, name: "test", conclusion: "failure", completedAt: "2026-11-06T06:00:00Z" }),
+            aCheckRun({ id: 925, name: "test", conclusion: "success", completedAt: "2026-11-06T07:40:00Z" }),
+          ]),
+        ],
+        { issues: [byOperator] },
+      ),
+    );
+
+    expect(plan.open).toEqual([]);
+    expect(redMainLines(plan)).toEqual([
+      "Red main: the default branch is red at `dead000`, but #41 stays closed until it's seen green, as someone other than the Monitor closed it.",
+    ]);
+  });
+
   it("goes by the newest of the Fabrik App's red-main issues", () => {
     const plan = monitorPlanFor(
       redMainInput([aCommit(STILL_RED, [aCheckRun({ id: 930, name: "test", conclusion: "failure" })])], {
         issues: [
           aRedMainIssue({ number: 30, open: false, stateReason: "completed", closedAt: "2026-11-01T07:20:00Z", closedByMonitor: true }),
           byOperator,
-          aRedMainIssue({ number: 52, byApp: false }),
+          aRedMainIssue({ number: 52, authorIsApp: false }),
         ],
       }),
     );
@@ -501,6 +522,19 @@ describe("Red main dormant", () => {
     expect(plan.close).toEqual([]);
     expect(redMainLines(plan)).toEqual([
       "Red main is dormant: the Fabrik App needs Checks: read. Accept the App's request for it on this repo's installation (the setup wizard walks through it) to have the Monitor watch the default branch's CI.",
+    ]);
+  });
+
+  it("warns, doing nothing, when GitHub's rate limit stopped the read of the default branch's checks, which isn't a missing Checks: read", () => {
+    const plan = monitorPlanFor(
+      redMainInput([], { mainChecks: { kind: "rate-limited", error: "GitHub GET check-runs failed: 403 API rate limit exceeded" }, issues: [aRedMainIssue()] }),
+    );
+
+    expect(plan.open).toEqual([]);
+    expect(plan.rewrite).toEqual([]);
+    expect(plan.close).toEqual([]);
+    expect(plan.summary.filter((line) => /red main/i.test(line))).toEqual([
+      "Warning: GitHub's rate limit stopped red main reading the default branch's checks, so it did nothing this tick: GitHub GET check-runs failed: 403 API rate limit exceeded",
     ]);
   });
 

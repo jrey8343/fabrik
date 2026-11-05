@@ -1,7 +1,8 @@
 // Small builders for the Monitor core's tests (src/monitor/core.ts), matching
 // anIssue and snapshotOf (./snapshots.ts): say only what a test cares about.
 import { DEFAULT_KIT_CONFIG, type MonitorErrors } from "../kit/config.ts";
-import type { MonitorInput, MonitorIssue } from "../monitor/core.ts";
+import type { MonitorInput, SentryGroupsRead } from "../monitor/core.ts";
+import type { MonitorIssue } from "../monitor/issues.ts";
 import type { GroupFacts } from "../monitor/sentry.ts";
 
 /** Production errors on, read from Sentry's `acme/clinic` project, with the default threshold of 3 events in 24 hours. */
@@ -15,10 +16,12 @@ export const SENTRY_ON: MonitorErrors = {
 
 /**
  * Group 4504 (CLINIC-7): an unresolved `error`-level TypeError in `POST
- * /api/book` with 9 events in the last 24 hours from 4 users, its latest event
- * read: release `clinic@1.4.0` and two in-app frames.
+ * /api/book` with 9 events in the last 24 hours from 4 users, all of them (or
+ * as many as `events24h` says) in the hour from 06:00 UTC on the day the tick
+ * runs, its latest event read: release `clinic@1.4.0` and two in-app frames.
  */
 export function aGroup(overrides: Partial<GroupFacts> = {}): GroupFacts {
+  const events24h = overrides.events24h ?? 9;
   return {
     id: "4504",
     shortId: "CLINIC-7",
@@ -27,7 +30,8 @@ export function aGroup(overrides: Partial<GroupFacts> = {}): GroupFacts {
     culprit: "POST /api/book",
     level: "error",
     status: "unresolved",
-    events24h: 9,
+    events24h,
+    eventsByHour: events24h === 0 ? [] : [{ start: "2026-11-06T06:00:00.000Z", events: events24h }],
     usersAffected: 4,
     firstSeen: "2026-11-01T09:30:00.000000Z",
     lastSeen: "2026-11-06T06:15:00.000000Z",
@@ -77,7 +81,7 @@ export function aMonitorIssue(overrides: Partial<MonitorIssue> = {}): MonitorIss
     stateReason: null,
     closedAt: null,
     labels: ["fabrik:monitor", "bug", "ready-for-agent"],
-    byApp: true,
+    authorIsApp: true,
     body: aMonitorIssueBody(),
     closedByMonitor: false,
     ...overrides,
@@ -100,15 +104,24 @@ export function aClosedMonitorIssue(overrides: Partial<MonitorIssue> = {}): Moni
   return aMonitorIssue({ open: false, stateReason: "completed", closedAt: "2026-11-03T10:00:00Z", ...overrides });
 }
 
-/** A tick with production errors on and Sentry read, giving these groups and no Monitor issues, and the default branch not read. */
+/** Sentry read as listing these groups, every one of them with its 24-hour stats and its latest event as the group says. */
+export function sentryRead(groups: readonly GroupFacts[], overrides: Partial<SentryGroupsRead> = {}): SentryGroupsRead {
+  return { kind: "read", groups, groupsWithoutStats: 0, cutShortAt: null, latestEventErrors: [], ...overrides };
+}
+
+/**
+ * A tick with production errors on and Sentry read, giving these groups and
+ * no Monitor issues, the default branch not read, and the Kit default cap of
+ * 5 open error issues.
+ */
 export function monitorInput(groups: readonly GroupFacts[], overrides: Partial<MonitorInput> = {}): MonitorInput {
   return {
     monitor: { ...DEFAULT_KIT_CONFIG.monitor, errors: SENTRY_ON },
-    sentry: { kind: "read", groups, groupsWithoutStats: 0 },
+    sentry: sentryRead(groups),
     issues: [],
     gatingChecks: [],
     mainChecks: null,
-    now: "2026-11-06T08:00:00Z",
+    cap: DEFAULT_KIT_CONFIG.caps.monitorIssues,
     ...overrides,
   };
 }

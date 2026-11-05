@@ -236,20 +236,24 @@ export const DESIGN_JOB_NAME = "Design-session turn";
 /**
  * Reads the current GitHub state the event needs, fresh rather than from the
  * event payload. The Operator is the Kit config's `operator`, or else the
- * repo's owner. A Dispatch check also reads workflow runs, through `actions`:
- * the Fabrik App has no Actions permission (ADR-0002), so that is the Dispatch
- * job's own read-only GITHUB_TOKEN.
+ * repo's owner. `appLogin` is the Fabrik App's bot login, its slug with
+ * `[bot]`, which tells the App's issues apart from any other bot's; null when
+ * the run doesn't know it, as the Kit job, which only routes, doesn't. A
+ * Dispatch check also reads workflow runs, through `actions`: the Fabrik App
+ * has no Actions permission (ADR-0002), so that is the Dispatch job's own
+ * read-only GITHUB_TOKEN.
  */
 export async function gatherSnapshot(
   github: GitHub,
   repo: Repo,
   event: LoopEvent,
   operator: string | null,
+  appLogin: string | null,
   actions: GitHub | null = null,
 ): Promise<Snapshot> {
   const [{ owner, kitIssues }, part, startingComment] = await Promise.all([
     gatherKitIssues(github, repo),
-    gatherEventPart(github, repo, event, operator, actions),
+    gatherEventPart(github, repo, event, operator, appLogin, actions),
     gatherStartingComment(github, repo, event),
   ]);
   // A closed Ticket may be its Spec's last.
@@ -337,6 +341,7 @@ async function gatherEventPart(
   repo: Repo,
   event: LoopEvent,
   operator: string | null,
+  appLogin: string | null,
   actions: GitHub | null,
 ): Promise<EventPart | null> {
   switch (event.kind) {
@@ -358,7 +363,7 @@ async function gatherEventPart(
     case "scheduled-tick":
       return null;
     case "implement-run-finished": {
-      const ticket = await gatherIssue(github, repo, event.issue, operator);
+      const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
       if (event.fixes === undefined) return ticket;
       // A retry's push job weighs the Ticket and the PR it fixes.
       const { pullRequest } = await gatherPullRequest(github, repo, event.fixes.pullRequest, operator);
@@ -366,14 +371,14 @@ async function gatherEventPart(
     }
     case "label-added": {
       // agent:implement on a Ticket with an open PR resumes that PR's run, so the core weighs the PR too.
-      const ticket = await gatherIssue(github, repo, event.issue, operator);
+      const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
       const open = ticket.issue?.openPullRequests[0];
       if (open === undefined) return ticket;
       const { pullRequest } = await gatherPullRequest(github, repo, open, operator);
       return { ...ticket, pullRequest };
     }
     default:
-      return gatherIssue(github, repo, event.issue, operator);
+      return gatherIssue(github, repo, event.issue, operator, appLogin);
   }
 }
 
@@ -422,7 +427,16 @@ async function gatherKitIssues(github: GitHub, repo: Repo): Promise<{ owner: str
   };
 }
 
-async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null): Promise<EventPart> {
+/**
+ * A GraphQL actor's login as REST and label events give it: a bot's with
+ * `[bot]`, which GraphQL leaves off, and a deleted account's as `ghost`.
+ */
+export function loginOf(actor: { readonly login: string; readonly __typename: string } | null): string {
+  if (actor === null) return "ghost";
+  return actor.__typename === "Bot" && !actor.login.endsWith("[bot]") ? `${actor.login}[bot]` : actor.login;
+}
+
+async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null, appLogin: string | null): Promise<EventPart> {
   const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, { owner: repo.owner, name: repo.name, number });
   const issue = data.repository.issue;
   if (issue === null) {
@@ -440,7 +454,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       number: issue.number,
       open: issue.state === "OPEN",
       author: issue.author?.login ?? "ghost",
-      authorIsBot: issue.author?.__typename === "Bot",
+      authorIsApp: appLogin !== null && loginOf(issue.author) === appLogin,
       body: issue.body,
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,

@@ -4,15 +4,29 @@
 // plan beside production errors'. Pure, no I/O: the program
 // (src/monitor/main.ts) reads the commits and check runs.
 import { CALLER_JOBS } from "../kit/caller.ts";
+import type { KitConfig } from "../kit/config.ts";
 import { MONITOR_LABEL } from "../loop/labels.ts";
-import { RED_MAIN_GREEN_MARKER, RED_MAIN_MARKER } from "../loop/markers.ts";
-import { blockRewrite, bodyCode, type MonitorInput, type MonitorIssue, type MonitorPlan, newestByMarker, statsBlock } from "./core.ts";
+import { monitorMarkerLine, RED_MAIN_GREEN_MARKER } from "../loop/markers.ts";
+import { ascending, bodyCode, monitorBlock, type MonitorIssue, type MonitorPlan, newestByMarker, withMonitorBlock } from "./issues.ts";
+
+/** What red main's part of the plan reads of the Monitor core's input (./core.ts). */
+export interface RedMainInput {
+  readonly monitor: Pick<KitConfig["monitor"], "redMain">;
+  /** What reading the default branch's commits and their check runs gave this tick, or null when `monitor.redMain` is off and they weren't read. */
+  readonly mainChecks: MainChecksRead | null;
+  /** The Kit config's `sandbox.checks`: when it lists any, the only checks that decide whether the default branch is red. */
+  readonly gatingChecks: readonly string[];
+  /** Every issue in the Product repo carrying fabrik:monitor, open or closed. */
+  readonly issues: readonly MonitorIssue[];
+}
 
 export type MainChecksRead =
   /** The default branch's newest commits, newest first back to the program's bound, each with its check runs. */
   | { readonly kind: "read"; readonly commits: readonly MainCommit[] }
   /** GitHub refused the check runs: the Fabrik App hasn't been granted Checks: read. */
-  | { readonly kind: "no-permission" };
+  | { readonly kind: "no-permission" }
+  /** GitHub's rate limit stopped the read, with GitHub's error. */
+  | { readonly kind: "rate-limited"; readonly error: string };
 
 /** A commit on the default branch. */
 export interface MainCommit {
@@ -46,9 +60,15 @@ export interface CheckRun {
  * comment and only close. With no decided commit, or `monitor.red_main` off,
  * it does nothing. Its issue never counts toward the cap on error issues.
  */
-export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: MonitorInput): Pick<MonitorPlan, "open" | "rewrite" | "close" | "summary"> {
+export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: RedMainInput): MonitorPlan {
   const nothing = { open: [], rewrite: [], close: [], summary: [] };
   if (!monitor.redMain || mainChecks === null) return nothing;
+  if (mainChecks.kind === "rate-limited") {
+    return {
+      ...nothing,
+      summary: [`Warning: GitHub's rate limit stopped red main reading the default branch's checks, so it did nothing this tick: ${mainChecks.error}`],
+    };
+  }
   if (mainChecks.kind === "no-permission") {
     return {
       ...nothing,
@@ -61,17 +81,19 @@ export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: Monit
   const state = decided[0];
   if (state === undefined) return { ...nothing, summary: [undecidedNote(mainChecks.commits.length, gatingChecks)] };
   const { commit } = state;
-  const issue = newestByMarker(issues).get(RED_MAIN_MARKER);
+  const issue = newestByMarker(issues).redMain;
   if (state.kind === "green") {
     if (issue?.open === true) return { ...nothing, close: [{ issue: issue.number, comment: greenNoteFor(commit) }] };
     return { ...nothing, summary: [`Red main: the default branch is green at ${shortSha(commit)}.`] };
   }
   if (issue?.open === true) {
-    const rewrite = blockRewrite(issue, null, detailsOf(commit, state.failed));
-    if (rewrite !== null) return { ...nothing, rewrite: [rewrite] };
+    const body = withMonitorBlock(issue, detailsOf(commit, state.failed));
+    if (body !== null) {
+      return { ...nothing, rewrite: [{ kind: "red-main", issue: issue.number, body, summary: `Refreshed red main's details on #${issue.number}.` }] };
+    }
     return { ...nothing, summary: [`Red main: the default branch is still red at ${shortSha(commit)}, as #${issue.number} says.`] };
   }
-  if (issue !== undefined && heldClosed(issue, decided)) {
+  if (issue !== null && heldClosed(issue, decided)) {
     return {
       ...nothing,
       summary: [
@@ -93,13 +115,23 @@ function undecidedNote(commits: number, gatingChecks: readonly string[]): string
 
 /**
  * Whether the newest red-main issue, closed by someone other than the Monitor
- * (the Operator, or the Loop for them), stays closed: no commit within the
- * bound has been decided green since. Once one has, a red files a new issue.
+ * (the Operator, or the Loop for them), stays closed: the default branch
+ * hasn't been seen green since. Once it has, a red files a new issue.
  */
 function heldClosed(issue: MonitorIssue, decided: readonly Decided[]): boolean {
   if (issue.closedByMonitor || issue.closedAt === null) return false;
   const closedAt = Date.parse(issue.closedAt);
-  return !decided.some((commit) => commit.kind === "green" && commit.decidedAt > closedAt);
+  return !decided.some((commit, i) => commit.kind === "green" && commit.decidedAt > closedAt && decidedFirst(commit, decided.slice(0, i)));
+}
+
+/**
+ * Whether the commit was decided before every one newer than it in branch
+ * order, so it was the newest decided commit, the default branch's state,
+ * when it was decided. A green re-run of an older commit while a newer one
+ * stays red never makes the default branch green.
+ */
+function decidedFirst(commit: Decided, newer: readonly Decided[]): boolean {
+  return newer.every((other) => other.decidedAt > commit.decidedAt);
 }
 
 /**
@@ -140,13 +172,13 @@ const RED_MAIN_TITLE = "Red main: the default branch's CI is failing";
 /** The longest check name the red-main issue quotes. */
 const CHECK_NAME_MAX = 100;
 
-/** The red-main issue's body: what it tracks, then the red commit's details in the stats block. */
+/** The red-main issue's body: what it tracks, then the red commit's details in its Monitor block. */
 function redMainBodyOf(commit: MainCommit, failed: readonly CheckRun[]): string {
   return [
-    RED_MAIN_MARKER,
+    monitorMarkerLine({ kind: "red-main" }),
     "The default branch is red: the newest commit on it whose gating checks have all finished failed some of them. The Monitor keeps the details below current while it stays red, and closes this issue itself once the default branch is green again.",
     "",
-    ...statsBlock(detailsOf(commit, failed)),
+    ...monitorBlock(detailsOf(commit, failed)),
     "",
     "The gating checks are `sandbox.checks` in `.fabrik/config.json`, or every check but Fabrik's own when it lists none.",
   ].join("\n");
@@ -158,7 +190,7 @@ function detailsOf(commit: MainCommit, failed: readonly CheckRun[]): string[] {
     `- Red at: [${shortSha(commit)}](${commit.url})`,
     "- Failed checks:",
     ...[...failed]
-      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+      .sort((a, b) => ascending(a.name, b.name))
       .map((run) => `  - [${bodyCode(run.name, CHECK_NAME_MAX)}](${run.url}) ${run.conclusion === "timed_out" ? "timed out" : "failed"}`),
   ];
 }

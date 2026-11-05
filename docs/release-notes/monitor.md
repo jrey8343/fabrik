@@ -24,8 +24,8 @@ Each source has its own step. Until a step is done, the Monitor job runs green e
      - each hourly tick's run has a green Monitor job, and its step summary has a Monitor section;
      - once `build` runs on push, a red commit on main files one red-main issue, which Intake gives `needs-triage`;
      - the next green commit closes that issue with the "green at" note.
-3. **Turn on production errors for the Pilot only at its own Cutover**, so the Monitor files nothing into the Pilot's backlog before it's ready. At Cutover:
+3. **Turn on production errors for the Pilot only at the Pilot's own cutover**, so the Monitor files nothing into the Pilot's backlog before it's ready. At that cutover:
    - Store the Sentry token through the wizard's Sentry stage. It needs `event:read` and `project:read`; an organization token (`sntrys_…`) isn't enough. The wizard saves it as `op://Fabrik App/Sentry token/credential`. It's one token for every Product repo, so this happens once.
    - Set `monitor.errors` in the Pilot's `.fabrik/config.json` and merge it to the default branch: `{ "provider": "sentry", "org": "<org slug>", "project": "<project slug>" }`. Add `url` for another Sentry region or GlitchTip.
    - Check that a qualifying Sentry group is filed as one `fabrik:monitor` issue that goes to `needs-triage`, and that the next tick rewrites its stats block without filing it again.
-4. **Then the other Product repos**, once the Pilot is healthy. In each, merge the bump PR, re-run `/fabrik-setup` and accept Checks: read if GitHub asks again; that turns on red main. A repo that reports to Sentry sets its own `monitor.errors`, only at that repo's own Cutover. The token is already stored.
+4. **Then the other Product repos**, once the Pilot is healthy. In each, merge the bump PR, re-run `/fabrik-setup` and accept Checks: read if GitHub asks again; that turns on red main. A repo that reports to Sentry sets its own `monitor.errors`, only at that repo's own cutover. The token is already stored.

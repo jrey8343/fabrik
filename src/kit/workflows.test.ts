@@ -242,6 +242,20 @@ function job(name: string): string {
   return body;
 }
 
+describe("The run the Loop action", () => {
+  const action = readFileSync(new URL(".github/actions/run-loop/action.yml", root), "utf8");
+  const steps = action.split(/\n(?=    - )/).slice(1);
+
+  it("runs the Loop with the token it mints and the Fabrik App's slug, so only the App's own issues count as its", () => {
+    const mint = steps.find((step) => step.includes("uses: actions/create-github-app-token@"))!;
+    const run = steps.find((step) => step.includes("run: node src/main.ts"))!;
+
+    expect(mint).toContain("id: app");
+    expect(run).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
+    expect(run).toContain("FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}");
+  });
+});
+
 describe("loop.yml's Design queue job", () => {
   const queue = (): string => job("design-queue");
 

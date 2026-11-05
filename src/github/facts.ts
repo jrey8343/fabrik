@@ -20,7 +20,7 @@ import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest
 import { MONITOR_LABEL } from "../loop/labels.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import type { GitHub, Repo } from "./client.ts";
-import { gatherDesignQueueSlice } from "./snapshot.ts";
+import { gatherDesignQueueSlice, loginOf } from "./snapshot.ts";
 
 /**
  * How far back the facts reach: 30 days of agent PRs, plus the week before,
@@ -379,15 +379,6 @@ function labelEventsOf(nodes: readonly RawLabelEvent[]): LabelEvent[] {
     actor: loginOf(event.actor),
     at: event.createdAt,
   }));
-}
-
-/**
- * A login as REST and the summary spell it. GraphQL gives a GitHub App's bot
- * user without its `[bot]` suffix; a deleted account is `ghost`.
- */
-function loginOf(actor: RawActor | null): string {
-  if (actor === null) return "ghost";
-  return actor.__typename === "Bot" && !actor.login.endsWith("[bot]") ? `${actor.login}[bot]` : actor.login;
 }
 
 interface InstallationRepositories {

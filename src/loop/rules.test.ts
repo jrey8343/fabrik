@@ -56,7 +56,7 @@ describe("Intake", () => {
   });
 
   it("adds needs-triage to an issue the Monitor filed, as fabrik:monitor isn't one of the Kit's own labels", () => {
-    const issue = anIssue({ number: 7, author: "fabrik-app[bot]", authorIsBot: true, labels: ["fabrik:monitor"] });
+    const issue = anIssue({ number: 7, author: "fabrik-app[bot]", authorIsApp: true, labels: ["fabrik:monitor"] });
 
     const plan = planFor({ kind: "issue-opened", issue: 7 }, snapshotOf(issue), kitConfig());
 
