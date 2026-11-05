@@ -28,6 +28,10 @@ _Avoid_: core skills, default skills
 A skill a Product repo pins from its own Skills source and gives to particular roles on top of the Base skills.
 _Avoid_: custom skill, plugin, add-on
 
+**Subscription**:
+A Claude account whose token the Kit runs agents on. The Kit may hold several, used one after another in a fixed order as each reaches its weekly limit.
+_Avoid_: account, plan, token (the token is the Subscription's credential, not the Subscription)
+
 **Product repo**:
 A repository holding a real product that has adopted the Kit, where the Loop's work actually lands.
 _Avoid_: target repo, client repo, project
