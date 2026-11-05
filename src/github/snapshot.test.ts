@@ -1,8 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
+import { anIssue, aPullRequest, designQueueSnapshotOf, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import type { DesignQueueSnapshot } from "../loop/types.ts";
+import { planFor } from "../loop/rules.ts";
+import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
 import { countImplementRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME } from "./snapshot.ts";
 
 const repo = { owner: "acme", name: "shop" };
@@ -163,8 +165,99 @@ describe("Gathering a Design queue check's needs-design issues", () => {
     ]);
 
     expect(queue.issues).toEqual([
-      { number: 3, labels: ["needs-design"], designRounds: 0, turnFailed: false, neededDesignAt: "2026-11-03T09:00:00Z" },
+      { number: 3, labels: ["needs-design"], designRounds: 0, turnFailed: false, redesign: false, neededDesignAt: "2026-11-03T09:00:00Z" },
     ]);
+  });
+
+  describe("reading a re-design", () => {
+    const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
+    const reviewed = (output: string): LoopEvent => ({
+      kind: "review-run-finished",
+      pullRequest: 50,
+      headSha: HEAD_SHA,
+      output,
+      runUrl: RUN,
+      repoUrl: "https://github.com/acme/shop",
+    });
+    const earlier = (source: "reviewer" | "ci") => ({
+      verdict: "execution-flaw" as const,
+      source,
+      requestChanges: false,
+      headSha: "0".repeat(40),
+    });
+    const changedNothing: LoopEvent = {
+      kind: "implement-run-finished",
+      issue: 7,
+      output: JSON.stringify({ title: "Handle the empty cart", summary: "Nothing to change." }),
+      branch: "fabrik/ticket-7",
+      base: "main",
+      changes: { net: [], commits: [] },
+    };
+
+    /** The comments a plan posts on the Ticket, #7, as the Kit posts them, with any link to another comment filled in. */
+    function ticketCommentsOf(plan: Plan): { body: string; author: { __typename: string } }[] {
+      if (plan.kind !== "act") throw new Error(`expected a plan that acts, got ${JSON.stringify(plan)}`);
+      return plan.actions.flatMap((action) => {
+        if (action.kind === "comment" && action.issue === 7) return [kit(action.body)];
+        if (action.kind === "comment-linking" && action.issue === 7) {
+          return [kit(action.body.map((part) => (typeof part === "string" ? part : "https://github.com/acme/shop/pull/50#issuecomment-1")).join(""))];
+        }
+        return [];
+      });
+    }
+
+    const emptyDiff = (emptyDiffs: number): Plan =>
+      planFor(changedNothing, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], emptyDiffs })), kitConfig());
+
+    it.each<[string, Plan[]]>([
+      ["a Design flaw", [planFor(reviewed("verdict: design-flaw\n\nWrong approach."), snapshotOfPullRequest(aPullRequest()), kitConfig())]],
+      [
+        "Retries used up",
+        [
+          planFor(
+            reviewed("verdict: execution-flaw\n\nStill throws."),
+            snapshotOfPullRequest(aPullRequest({ pushedSinceVerdict: true, verdicts: [earlier("reviewer"), earlier("ci")] })),
+            kitConfig(),
+          ),
+        ],
+      ],
+      [
+        "the Operator's needs-design at the Merge gate",
+        [
+          planFor(
+            { kind: "pull-request-labeled", pullRequest: 50, label: "needs-design" },
+            snapshotOfPullRequest(aPullRequest({ draft: false })),
+            kitConfig(),
+          ),
+        ],
+      ],
+      ["a third empty diff", [emptyDiff(0), emptyDiff(1), emptyDiff(2)]],
+    ])("reads a Ticket sent back by %s as a re-design, which starts before an older new issue", async (_, plans) => {
+      const queue = await gathered([
+        issue(4, { timelineItems: { nodes: [labelled("needs-design", "2026-10-01T09:00:00Z")] } }),
+        issue(7, { comments: { nodes: [person("Can we add a cart total?"), ...plans.flatMap(ticketCommentsOf)] } }),
+      ]);
+
+      expect(queue.issues.map(({ number, redesign }) => ({ number, redesign }))).toEqual([
+        { number: 4, redesign: false },
+        { number: 7, redesign: true },
+      ]);
+      expect(planFor({ kind: "design-queue-check" }, designQueueSnapshotOf(queue.issues, { designTurnsInProgress: queue.designTurnsInProgress }), kitConfig({ caps: { designSessions: 1 } }))).toEqual({
+        kind: "act",
+        actions: [{ kind: "add-labels", issue: 7, labels: ["agent:design"] }],
+      });
+    });
+
+    it("doesn't read an issue with neither, two empty diffs, or a person quoting the note, as a re-design", async () => {
+      const note = "<!-- fabrik:back-to-design 50 operator -->\n**Back to design.**";
+      const queue = await gathered([
+        issue(6, { comments: { nodes: [person("Can we add a cart total?")] } }),
+        issue(7, { comments: { nodes: [emptyDiff(0), emptyDiff(1)].flatMap(ticketCommentsOf) } }),
+        issue(8, { comments: { nodes: [person(note)] } }),
+      ]);
+
+      expect(queue.issues.map(({ redesign }) => redesign)).toEqual([false, false, false]);
+    });
   });
 
   it("falls back to when the issue was opened when its timeline shows no needs-design", async () => {

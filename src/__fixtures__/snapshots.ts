@@ -95,13 +95,14 @@ export function dispatchSnapshotOf(
   };
 }
 
-/** An open needs-design issue that holds no Design session slot: no round, no turn failed, no agent:design. */
+/** An open needs-design issue that holds no Design session slot (no round, no turn failed, no agent:design) and is no re-design. */
 export function aDesignQueueIssue(overrides: Partial<DesignQueueIssue> = {}): DesignQueueIssue {
   return {
     number: 1,
     labels: ["enhancement", "needs-design"],
     designRounds: 0,
     turnFailed: false,
+    redesign: false,
     neededDesignAt: "2026-11-01T09:00:00Z",
     ...overrides,
   };

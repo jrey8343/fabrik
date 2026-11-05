@@ -6,7 +6,7 @@ import type { DesignQueueIssue, DesignQueueSnapshot, KitConfig, Plan } from "./t
 
 /**
  * Starts a Design turn on as many waiting `needs-design` issues as there are
- * free slots, oldest `needs-design` first. A held issue is left exactly as it
+ * free slots: re-designs first, then oldest `needs-design` first. A held issue is left exactly as it
  * is: no comment, no label, no mention.
  */
 export function checkDesignQueue(snapshot: DesignQueueSnapshot, config: KitConfig): Plan {
@@ -54,11 +54,19 @@ function holders(snapshot: DesignQueueSnapshot): number[] {
   return snapshot.issues.filter((issue) => holdsSlot(issue, snapshot)).map((issue) => issue.number);
 }
 
-/** The issues waiting for a slot, in the order they start: oldest `needs-design` first, then by number. */
+/**
+ * The issues waiting for a slot, in the order they start: re-designs first,
+ * then oldest `needs-design` first, then by number.
+ */
 function waiting(snapshot: DesignQueueSnapshot): DesignQueueIssue[] {
   return snapshot.issues
     .filter((issue) => !holdsSlot(issue, snapshot))
-    .sort((a, b) => Date.parse(a.neededDesignAt) - Date.parse(b.neededDesignAt) || a.number - b.number);
+    .sort(
+      (a, b) =>
+        Number(b.redesign) - Number(a.redesign) ||
+        Date.parse(a.neededDesignAt) - Date.parse(b.neededDesignAt) ||
+        a.number - b.number,
+    );
 }
 
 /**
