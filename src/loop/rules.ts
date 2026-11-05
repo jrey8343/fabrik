@@ -1,4 +1,5 @@
 import { isPendingAudit } from "./audit.ts";
+import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom } from "./design.ts";
 import { failureNotice } from "./failures.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
@@ -99,6 +100,9 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
       return applyRedChecks(event, snapshot);
     case "review-run-finished":
       return applyReview(event, snapshot);
+    // Nothing raises it until the Auditor is switched on (#214).
+    case "audit-run-finished":
+      return withIssue(snapshot, (context) => landAudit(event, context, snapshot.namedPullRequests));
     case "pull-request-changes-requested":
       return requestChanges(event, snapshot, config);
     // Context for the next run that reads the PR, never a trigger (ADR-0007).

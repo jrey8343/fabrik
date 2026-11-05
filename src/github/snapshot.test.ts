@@ -664,6 +664,111 @@ describe("Gathering a scheduled tick's audit slice", () => {
   });
 });
 
+describe("Gathering the PRs an Auditor named", () => {
+  /** The API, holding Audit #97 and these PRs by number; any other number is no PR. */
+  function githubWith(pulls: Record<number, unknown>) {
+    const asked: number[] = [];
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issue: {
+                number: 97,
+                state: "OPEN",
+                author: { login: "fabrik-app", __typename: "Bot" },
+                body: "Reading.\n\n<!-- fabrik:audit-pending -->",
+                labels: { nodes: [{ name: "fabrik:audit" }] },
+                parent: null,
+                comments: { nodes: [] },
+                timelineItems: { nodes: [] },
+                closedByPullRequestsReferences: { nodes: [] },
+                blockedBy: { nodes: [] },
+                blocking: { nodes: [] },
+              },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+      async rest(method: string, path: string, _body: unknown, options: { allowNotFound?: boolean }): Promise<unknown> {
+        expect(method).toBe("GET");
+        const pull = /^\/repos\/acme\/shop\/pulls\/(\d+)$/.exec(path);
+        if (pull === null) throw new Error(`Unexpected call: ${path}`);
+        asked.push(Number(pull[1]));
+        expect(options.allowNotFound).toBe(true);
+        return pulls[Number(pull[1])] ?? null;
+      },
+    } as unknown as GitHub;
+    return { github, asked };
+  }
+
+  const pull = (number: number, merged: boolean, ref: string, type: string) => ({ number, merged, head: { ref }, user: { type } });
+
+  function finished(output: unknown): LoopEvent {
+    return {
+      kind: "audit-run-finished",
+      issue: 97,
+      output: typeof output === "string" ? output : JSON.stringify(output),
+      window: { kind: "last-days", days: 30 },
+      runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    };
+  }
+
+  const candidate = (introducedBy: number[]) => ({
+    title: "Make the cart module deeper",
+    files: ["src/cart.ts"],
+    problem: "p",
+    solution: "s",
+    benefits: "b",
+    before: "flowchart LR\n  a",
+    after: "flowchart LR\n  b",
+    strength: "strong",
+    introducedBy,
+  });
+
+  it("reads each PR the reply names once, telling a merged agent PR from the rest and leaving out a number that's no PR, beside the Audit", async () => {
+    const { github, asked } = githubWith({
+      31: pull(31, true, "fabrik/ticket-7", "Bot"),
+      40: pull(40, false, "fabrik/ticket-8", "Bot"),
+      41: pull(41, true, "feature/cart", "User"),
+      42: pull(42, true, "fabrik/ticket-9", "User"),
+    });
+
+    const snapshot = await gatherSnapshot(
+      github,
+      repo,
+      finished({ candidates: [candidate([31, 40, 404]), candidate([41, 42, 31])], topRecommendation: "Make the cart module deeper" }),
+      null,
+    );
+
+    expect(snapshot.namedPullRequests).toEqual([
+      { number: 31, merged: true, headRef: "fabrik/ticket-7", isAgent: true },
+      { number: 40, merged: false, headRef: "fabrik/ticket-8", isAgent: true },
+      { number: 41, merged: true, headRef: "feature/cart", isAgent: false },
+      { number: 42, merged: true, headRef: "fabrik/ticket-9", isAgent: false },
+    ]);
+    expect(asked.sort((a, b) => a - b)).toEqual([31, 40, 41, 42, 404]);
+    expect(snapshot.issue).toMatchObject({ number: 97, byApp: true, labels: ["fabrik:audit"] });
+  });
+
+  it("reads no PRs for a reply that breaks its contract, whose Audit the core then fails", async () => {
+    const { github, asked } = githubWith({});
+
+    const snapshot = await gatherSnapshot(github, repo, finished("not JSON"), null);
+
+    expect(snapshot.namedPullRequests).toEqual([]);
+    expect(asked).toEqual([]);
+  });
+
+  it("isn't gathered for any other event", async () => {
+    const snapshot = await gatherSnapshot(githubWith({}).github, repo, { kind: "kit-config-changed" }, null);
+
+    expect(snapshot.namedPullRequests).toBeNull();
+  });
+});
+
 describe("Gathering a Design-session turn's starting reply", () => {
   const issueData = {
     repository: {

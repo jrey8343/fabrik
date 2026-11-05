@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { agentRunEventFrom, loopEventFrom } from "./events.ts";
+import { readAgentRunResult } from "../agent/result.ts";
+import { agentRunEventFrom, auditEventFrom, loopEventFrom } from "./events.ts";
 
 describe("A push", () => {
   const push = (overrides: Record<string, unknown> = {}) => ({
@@ -140,5 +141,46 @@ describe("A finished Design-session turn", () => {
 
   it("names no reply when adding needs-design started it", () => {
     expect(agentRunEventFrom(result)).toEqual({ kind: "agent-run-finished", role: "design", issue: 7, output: "{}" });
+  });
+});
+
+describe("A finished Audit run", () => {
+  const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
+  const artifact = (window: unknown) =>
+    JSON.stringify({ role: "audit", issue: 97, output: '{"candidates":[],"topRecommendation":null}', ...(window === undefined ? {} : { window }) });
+
+  it("carries the Auditor's output, unparsed, with the window its inputs gave it and this run", () => {
+    const window = { kind: "since-audit", audit: 90, commit: "c".repeat(40) };
+
+    expect(auditEventFrom(readAgentRunResult(artifact(window)), RUN)).toEqual({
+      kind: "audit-run-finished",
+      issue: 97,
+      output: '{"candidates":[],"topRecommendation":null}',
+      window,
+      runUrl: RUN,
+    });
+  });
+
+  it("carries a window of the last 30 days", () => {
+    expect(auditEventFrom(readAgentRunResult(artifact({ kind: "last-days", days: 30 })), RUN)).toMatchObject({
+      window: { kind: "last-days", days: 30 },
+    });
+  });
+
+  it("refuses an Auditor's result with no window", () => {
+    expect(() => auditEventFrom(readAgentRunResult(artifact(undefined)), RUN)).toThrow(/window/);
+  });
+
+  it.each([
+    ["names no kind", { audit: 90, commit: "c".repeat(40) }],
+    ["names no Audit", { kind: "since-audit", commit: "c".repeat(40) }],
+    ["names no commit", { kind: "since-audit", audit: 90, commit: "main" }],
+    ["counts no days", { kind: "last-days", days: 0 }],
+  ])("refuses a result whose window %s", (_, window) => {
+    expect(() => readAgentRunResult(artifact(window))).toThrow(/window/);
+  });
+
+  it("isn't an agent-run-finished event", () => {
+    expect(() => agentRunEventFrom(readAgentRunResult(artifact({ kind: "last-days", days: 30 })))).toThrow(/auditEventFrom/);
   });
 });
