@@ -66,7 +66,7 @@ describe("The judge's output schema", () => {
         scorer: { const: scorer },
         score: { type: "number", minimum: 0, maximum: 1 },
         label: { enum: labels },
-        rationale: { type: "string", minLength: 1 },
+        rationale: { type: "string" },
       },
       required: ["scorer", "score", "label", "rationale"],
       additionalProperties: false,

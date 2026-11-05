@@ -6,6 +6,7 @@
 // against a schema the rubrics make. Pure, no I/O. Nothing runs the judge yet.
 import { readStream, type StreamMessage, type StreamStep } from "../agent/stream.ts";
 import type { Rubric } from "./rubrics.ts";
+import type { JudgeAnswer, JudgeOutput } from "./scorer.ts";
 
 /** The tag the judge's answer comes in, as the runner's structured output reads it: the judge's role. */
 export const JUDGE_OUTPUT_TAG = "score";
@@ -14,9 +15,10 @@ export const JUDGE_OUTPUT_TAG = "score";
 export type JsonSchema = Readonly<Record<string, unknown>>;
 
 /**
- * The JSON Schema the judge's answer matches: an object whose `answers` holds
- * one answer per rubric, each with the rubric's name (`scorer`), a `score`
- * from 0 to 1, one of that rubric's `labels` and a one-line `rationale`.
+ * The JSON Schema of the judge's JudgeOutput for these rubrics: its `answers`
+ * hold one answer per rubric, each with the rubric's name (`scorer`), a
+ * `score` from 0 to 1, one of that rubric's labels and a `rationale`. The
+ * score file checks the output the same way.
  */
 export function judgeOutputSchema(rubrics: readonly Rubric[]): JsonSchema {
   const answer = (rubric: Rubric): JsonSchema => ({
@@ -25,17 +27,17 @@ export function judgeOutputSchema(rubrics: readonly Rubric[]): JsonSchema {
       scorer: { const: rubric.name },
       score: { type: "number", minimum: 0, maximum: 1 },
       label: { enum: rubric.labels },
-      rationale: { type: "string", minLength: 1 },
-    },
-    required: ["scorer", "score", "label", "rationale"],
+      rationale: { type: "string" },
+    } satisfies Record<keyof JudgeAnswer, JsonSchema>,
+    required: ["scorer", "score", "label", "rationale"] satisfies (keyof JudgeAnswer)[],
     additionalProperties: false,
   });
   return {
     type: "object",
     properties: {
       answers: { type: "array", items: { anyOf: rubrics.map(answer) }, minItems: rubrics.length, maxItems: rubrics.length },
-    },
-    required: ["answers"],
+    } satisfies Record<keyof JudgeOutput, JsonSchema>,
+    required: ["answers"] satisfies (keyof JudgeOutput)[],
     additionalProperties: false,
   };
 }
