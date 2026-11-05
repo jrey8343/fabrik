@@ -476,30 +476,51 @@ describe("Landing an Audit: a stale result", () => {
 });
 
 describe("Landing an Audit: silent", () => {
-  it("mentions nobody from any text the Auditor wrote, on the Audit or in the issue a candidate files", () => {
-    const output = {
-      candidates: [
-        aCandidate({
-          title: "Ask @alice about the cart",
-          files: ["src/@bob/cart.ts"],
-          problem: "@carol wrote it.",
-          solution: "Ping @dave.",
-          benefits: "@erin is happy.",
-          before: "flowchart LR\n  frank[@frank] --> cart",
-          after: "flowchart LR\n  grace[@grace]",
-        }),
-      ],
-      topRecommendation: "Ask @alice about the cart, with @heidi",
-    };
+  /** The filled Audit's body, and the body of the issue its one card's Open as issue link files. */
+  function landed(candidate: Record<string, unknown>, topRecommendation = "Make the cart module deeper") {
+    const body = rewrittenBodyOf(planFor(auditFinished({ candidates: [candidate], topRecommendation }), auditRunSnapshotOf([aNamedPullRequest()]), kitConfig()));
+    const link = new URL(/\[Open as issue\]\(([^)\s]+)\)/.exec(body)?.[1] ?? "");
+    return { body, link, filed: link.searchParams.get("body") ?? "" };
+  }
 
-    const body = rewrittenBodyOf(planFor(auditFinished(output), auditRunSnapshotOf([aNamedPullRequest()]), kitConfig()));
+  it("mentions nobody from any prose the Auditor wrote, on the Audit or in the issue a candidate files", () => {
+    const { body, link, filed } = landed(
+      aCandidate({ title: "Ask @alice about the cart", problem: "@carol wrote it.", solution: "Ping @dave.", benefits: "@erin is happy." }),
+      "Ask @alice about the cart, with @heidi",
+    );
 
-    expect(body).not.toMatch(/@(alice|bob|carol|dave|erin|frank|grace|heidi)/);
+    expect(body).not.toMatch(/@(alice|carol|dave|erin|heidi)/);
     expect(body).toContain("## Ask @​alice about the cart");
     // Nor does the issue a candidate's Open as issue link files.
-    const link = new URL(/\[Open as issue\]\(([^)\s]+)\)/.exec(body)?.[1] ?? "");
     expect(link.searchParams.get("title")).toBe("Ask @\u200balice about the cart");
-    expect(link.searchParams.get("body")).not.toMatch(/@(alice|bob|carol|dave|erin|frank|grace|heidi)/);
+    expect(filed).not.toMatch(/@(alice|carol|dave|erin|heidi)/);
+  });
+
+  it("leaves file paths, set in code spans, and Mermaid source, fenced, as written, since GitHub notifies nobody from code", () => {
+    const { body, filed } = landed(
+      aCandidate({
+        files: ["packages/@scope/cart/index.ts", "src/cart.ts"],
+        before: "flowchart LR\n  checkout --> scope[@scope/cart]",
+        after: "flowchart LR\n  cart[@scope/cart]",
+      }),
+    );
+
+    expect(body).toContain("**Files:** `packages/@scope/cart/index.ts`, `src/cart.ts`");
+    expect(body).toContain("```mermaid\nflowchart LR\n  checkout --> scope[@scope/cart]\n```");
+    expect(body).toContain("```mermaid\nflowchart LR\n  cart[@scope/cart]\n```");
+    expect(filed).toContain("**Files:** `packages/@scope/cart/index.ts`, `src/cart.ts`");
+  });
+
+  it.each([
+    ["a backtick", "src/cart`.ts @alice", "src/cart`.ts @\u200balice"],
+    ["a line break", "src/cart.ts\n\n@alice", "src/cart.ts\n\n@\u200balice"],
+  ])("still mentions nobody from a path with %s in it, which could break out of its code span", (_, path, stripped) => {
+    const { body, filed } = landed(aCandidate({ files: [path, "src/@scope/cart.ts"] }));
+
+    for (const text of [body, filed]) {
+      expect(text).toContain(`**Files:** \`${stripped}\`, \`src/@scope/cart.ts\``);
+      expect(text).not.toMatch(/@alice/);
+    }
   });
 
   it("gives the filled Audit no state label, assignee, review request or mention, and leaves it open", () => {

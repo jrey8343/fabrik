@@ -52,21 +52,30 @@ export function landAudit(event: AuditFinished, context: IssueContext, named: re
   };
 }
 
-/** The Auditor's output with an @-mention in none of its text, Mermaid source and paths included. */
+/**
+ * The Auditor's output with an @-mention in none of its prose. GitHub
+ * notifies nobody from code, so its file paths, each set in a code span, and
+ * its Mermaid source, which the Kit fences and which holds no fence of its own
+ * (src/loop/auditOutput.ts), stay as written: a path such as
+ * `packages/@scope/x` stays intact.
+ */
 function silenced({ candidates, topRecommendation }: AuditOutput): AuditOutput {
   return {
     candidates: candidates.map((candidate) => ({
       ...candidate,
       title: withoutMentions(candidate.title),
-      files: candidate.files.map(withoutMentions),
+      files: candidate.files.map(pathInCodeSpan),
       problem: withoutMentions(candidate.problem),
       solution: withoutMentions(candidate.solution),
       benefits: withoutMentions(candidate.benefits),
-      before: withoutMentions(candidate.before),
-      after: withoutMentions(candidate.after),
     })),
     topRecommendation: topRecommendation === null ? null : withoutMentions(topRecommendation),
   };
+}
+
+/** A path as written, unless a backtick or a line break in it could break out of its code span: then it mentions nobody either. */
+function pathInCodeSpan(path: string): string {
+  return /[`\r\n]/.test(path) ? withoutMentions(path) : path;
 }
 
 /** A clean Audit: one line, then its audit marker. */
