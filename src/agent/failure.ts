@@ -3,6 +3,7 @@
 // stream. A job cancelled by its timeout leaves nothing, and the push job
 // works that out itself (src/loop/failures.ts). Pure, no I/O.
 import type { FailureReport, ReportedFailure } from "../loop/types.ts";
+import { readStream, type AgentStream } from "./stream.ts";
 
 /** The artifact's file name, the same in the agent job and the push job. */
 export const AGENT_FAILURE_FILE = "agent-failure.json";
@@ -21,17 +22,6 @@ export class MissingVerdictError extends Error {
   override name = "MissingVerdictError";
 }
 
-type Message = Record<string, unknown>;
-
-function parse(line: string): Message | null {
-  try {
-    const value: unknown = JSON.parse(line);
-    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Message) : null;
-  } catch {
-    return null;
-  }
-}
-
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -45,15 +35,15 @@ const PREFLIGHT_REFUSAL = /Metered-billing preflight (refused the run|could not 
 const ROUTE_LINE = /::error title=Metered-billing route::(.*)/g;
 
 /** A provider error the stream reported, if the run never recovered from it. */
-function providerError(messages: readonly Message[]): { error: string; detail: string; resetsAt?: string } | null {
-  const results = messages.filter((m) => m["type"] === "result");
-  const last = results.at(-1);
+function providerError({
+  result: last,
+  rateLimits,
+  apiRetries: retries,
+}: AgentStream): { error: string; detail: string; resetsAt?: string } | null {
   // A run that ended in a clean result recovered from any retries along the way.
-  if (last !== undefined && last["is_error"] !== true) return null;
+  if (last !== null && last["is_error"] !== true) return null;
 
-  const rejected = messages
-    .map((m) => (m["type"] === "rate_limit_event" ? (m["rate_limit_info"] as Message | undefined) : undefined))
-    .filter((info): info is Message => info?.["status"] === "rejected");
+  const rejected = rateLimits.filter((info) => info["status"] === "rejected");
   const weekly = rejected.find((info) => String(info["rateLimitType"] ?? "").startsWith("seven_day"));
   if (weekly !== undefined) {
     const resetsAt = weekly["resetsAt"];
@@ -62,7 +52,6 @@ function providerError(messages: readonly Message[]): { error: string; detail: s
     return { error: "weekly_limit", detail: `resets at ${at}`, resetsAt: at };
   }
 
-  const retries = messages.filter((m) => m["type"] === "system" && m["subtype"] === "api_retry");
   const auth = retries.find((m) => m["error"] === "authentication_failed");
   const retry = auth ?? retries.at(-1);
   if (retry !== undefined) {
@@ -76,7 +65,7 @@ function providerError(messages: readonly Message[]): { error: string; detail: s
     return { error: "rate_limit", detail: `rate limit (${String(limit["rateLimitType"] ?? "unknown")})` };
   }
 
-  if (last !== undefined) {
+  if (last !== null) {
     return { error: "result", detail: typeof last["result"] === "string" ? last["result"] : "the CLI returned an error" };
   }
   return null;
@@ -93,7 +82,7 @@ export function failureReportFor({ error, lines, initRefused }: FailureEvidence)
     return { failure: "metered-billing", detail: routes.join("; ") };
   }
 
-  const provider = providerError(lines.map(parse).filter((m): m is Message => m !== null));
+  const provider = providerError(readStream(lines));
   if (provider !== null) {
     const failure: ReportedFailure =
       provider.error === "authentication_failed"
@@ -125,7 +114,7 @@ const REPORTED: readonly ReportedFailure[] = [
 
 /** Reads the artifact's text; anything unreadable counts as a crash, so a notice still goes out. */
 export function readFailureReport(text: string): FailureReport {
-  const value = parse(text);
+  const value = jsonObjectOf(text);
   const failure = value?.["failure"];
   if (typeof failure !== "string" || !REPORTED.includes(failure as ReportedFailure)) {
     return { failure: "crash", detail: `${AGENT_FAILURE_FILE} was unreadable` };
@@ -137,4 +126,14 @@ export function readFailureReport(text: string): FailureReport {
     detail: typeof detail === "string" ? detail : "",
     ...(typeof resetsAt === "string" && !Number.isNaN(Date.parse(resetsAt)) ? { resetsAt } : {}),
   };
+}
+
+/** The failure artifact as a JSON object, or null if it is anything else. */
+function jsonObjectOf(text: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(text);
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }

@@ -51,7 +51,8 @@ import {
 import { sentBackContext } from "./design.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
-import { initMessageOf, missingSkills, runSummary } from "./summary.ts";
+import { readStream } from "./stream.ts";
+import { missingSkills, runSummary } from "./summary.ts";
 import { TRANSCRIPT_FILE, transcriptWriter } from "./transcript.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
@@ -338,8 +339,9 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
         onAgentStreamEvent(event) {
           if (event.type !== "raw") return;
           lines.push(event.line);
-          if (init.refused === null && initMessageOf([event.line]) !== null) {
-            const check = checkInitMessage(JSON.parse(event.line));
+          const initMessage = init.refused === null ? readStream([event.line]).init : null;
+          if (initMessage !== null) {
+            const check = checkInitMessage(initMessage);
             init.refused = check.kind === "refuse" ? check.routes : [];
             if (check.kind === "refuse") abort.abort(new Error(check.routes.join("; ")));
           }
