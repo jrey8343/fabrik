@@ -36,6 +36,24 @@ _Avoid_: target repo, client repo, project
 The first Product repo used to prove the Kit against real stakes: Penrith Physiotherapy & Sports Centre.
 _Avoid_: test repo, demo
 
+## The product
+
+**Product intent**:
+Who a Product repo's product serves, why it exists, how its success is measured, and what it deliberately doesn't do.
+_Avoid_: product vision, goals, requirements
+
+**Vision**:
+A Product repo's written statement of its Product intent, which only the Operator changes.
+_Avoid_: mission, strategy, PRD
+
+**Roadmap**:
+A Product repo's Now / Next / Later list of what it means to build, kept by the Operator by hand. Not a Map.
+_Avoid_: backlog, plan, Map
+
+**End user**:
+A person the product in a Product repo serves, as its Vision describes them; never the Operator.
+_Avoid_: user, avatar, persona, customer
+
 ## People and agents
 
 **Operator**:
@@ -49,6 +67,10 @@ _Avoid_: worker, coder, builder
 **Reviewer**:
 An agent on a frontier model that judges an Implementer's pull request against the ticket and the Product repo's standards.
 _Avoid_: checker, critic, QA
+
+**Auditor**:
+An agent on a frontier model that reads a Product repo's recent changes on a schedule and files deepening opportunities as one Audit, changing nothing.
+_Avoid_: architect, critic
 
 ## The loop
 
@@ -103,6 +125,10 @@ _Avoid_: manual brief, human brief
 **Pairing session**:
 The Operator working through an issue only they can do with an agent beside them, step by step, ending with what was done recorded on the issue.
 _Avoid_: walkthrough, hand-off
+
+**Audit**:
+The issue an Auditor files: up to three refactoring candidates for the Operator to file as issues or set aside, closed by the Operator when done.
+_Avoid_: architecture review, report
 
 **Fast path**:
 Triage sending an issue straight to an Implementer, skipping the Design session.
