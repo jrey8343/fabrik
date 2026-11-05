@@ -148,6 +148,7 @@ jobs:
       - name: Prepare the agent job
         uses: ./kit/.github/actions/prepare-agent
         with:
+          role: triage
           github-token: ${{ github.token }}
           issue: ${{ github.event.issue.number }}
 
@@ -244,6 +245,7 @@ jobs:
       - name: Prepare the agent job
         uses: ./kit/.github/actions/prepare-agent
         with:
+          role: design
           github-token: ${{ github.token }}
           issue: ${{ github.event.issue.number }}
 
@@ -377,6 +379,8 @@ jobs:
       - name: Prepare the agent job
         uses: ./kit/.github/actions/prepare-agent
         with:
+          # A Step-up run is an Implement run, so it gets implement's Extra skills too.
+          role: implement
           github-token: ${{ github.token }}
           issue: ${{ needs.kit.outputs.ticket }}
           pull-request: ${{ needs.kit.outputs.pull-request }}
@@ -551,6 +555,7 @@ jobs:
       - name: Prepare the agent job
         uses: ./kit/.github/actions/prepare-agent
         with:
+          role: review
           github-token: ${{ github.token }}
           issue: ${{ needs.kit.outputs.ticket }}
           pull-request: ${{ needs.kit.outputs.pull-request }}

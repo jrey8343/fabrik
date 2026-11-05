@@ -78,7 +78,7 @@ const BASE_URL = archiveUrl("mattpocock/skills", LOCKED_SHA);
 const OPERATOR_URL = archiveUrl(OPERATOR_SKILLS, OPERATOR_SHA);
 const OTHER_URL = archiveUrl(OTHER_SKILLS, OTHER_SHA);
 
-/** Extra skills are dormant behind a switch until switch-on; these tests turn it on. */
+/** Extra skills are switched on as shipped; these tests name the switch so they never depend on it. */
 const switchedOn = { extraSkills: true } as const;
 
 async function cpDir(from: string, to: string): Promise<void> {
