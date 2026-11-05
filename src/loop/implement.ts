@@ -52,7 +52,10 @@ export function startImplementer(
   if (whyNotBuildable(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
   const { implement, stepUp } = config.roles;
   // The second retry Steps up; the first run and the first retry use the Implementer's model.
-  const { model, effort } = issue.emptyDiffs >= MAX_RETRIES ? stepUp : implement;
+  const stepsUp = issue.emptyDiffs >= MAX_RETRIES;
+  const { model, effort } = stepsUp ? stepUp : implement;
+  // Each empty diff so far was an Execution flaw, so this run is the Retry after the last one.
+  const retry = issue.emptyDiffs === 0 ? {} : { retry: issue.emptyDiffs, stepUp: stepsUp };
   return {
     kind: "act",
     actions: [
@@ -64,6 +67,7 @@ export function startImplementer(
         model,
         effort,
         timeoutMinutes: implement.timeoutMinutes,
+        ...retry,
       },
     ],
   };

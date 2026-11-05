@@ -456,6 +456,9 @@ export type Action =
       readonly pullRequest?: number;
       /** For a Request-changes run: the Operator's review, which is its input. It isn't a retry. */
       readonly requestChanges?: { readonly review: number };
+      /** For an Implement run that is a Retry: its Retry number, and whether it Steps up. */
+      readonly retry?: number;
+      readonly stepUp?: boolean;
       readonly model: string;
       readonly effort: string | null;
       readonly timeoutMinutes: number;
