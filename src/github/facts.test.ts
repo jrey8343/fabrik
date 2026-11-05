@@ -78,6 +78,7 @@ interface RawRepo {
   openIssues?: unknown[];
   defaultBranchCommits?: unknown[];
   needsDesignIssues?: unknown[];
+  monitorIssues?: unknown[];
 }
 
 /** A read-only GraphQL API over `raw`, answering each facts query with one page. */
@@ -93,6 +94,10 @@ function repoWith(raw: RawRepo) {
       if (query.includes("labels: [$needsDesign]")) {
         expect(variables["needsDesign"]).toBe("needs-design");
         return answer({ repository: { owner: { login: "jrey8343" }, issues: page(raw.needsDesignIssues) } });
+      }
+      if (query.includes("labels: [$monitor]")) {
+        expect(variables["monitor"]).toBe("fabrik:monitor");
+        return answer({ repository: { issues: page(raw.monitorIssues) } });
       }
       if (query.includes("filterBy: { since: $since }")) return answer({ repository: { issues: page(raw.updatedIssues) } });
       if (query.includes("issues(states: OPEN")) return answer({ repository: { issues: page(raw.openIssues) } });
@@ -352,6 +357,25 @@ describe("Gathering a Product repo's GitHub facts", () => {
       // Read from the issues, as the scheduled tick reads them: the summary's token can't read workflow runs.
       designTurnsInProgress: [5],
     });
+  });
+
+  it("holds the open fabrik:monitor issues, who opened them and their bodies, so Held can read the Monitor's held count", async () => {
+    const body = "<!-- fabrik:monitor sentry:4504 -->\n<!-- fabrik:monitor-stats -->\n- Held: 3 error groups waiting for a slot\n<!-- /fabrik:monitor-stats -->";
+    const github = repoWith({
+      monitorIssues: [
+        { number: 41, body, author: APP },
+        { number: 42, body: "Quoting it", author: OPERATOR },
+        { number: 43, body: "", author: null },
+      ],
+    });
+
+    const { monitorIssues } = await gatherGitHubFacts(github, repo, NOW);
+
+    expect(monitorIssues).toEqual([
+      { number: 41, author: "fabrik-app[bot]", body },
+      { number: 42, author: "jrey8343", body: "Quoting it" },
+      { number: 43, author: "ghost", body: "" },
+    ]);
   });
 
   it("holds the default branch's commit messages in the window", async () => {
