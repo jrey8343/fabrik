@@ -53,6 +53,14 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
   };
 }
 
+/** A run's cost fields when one of its models has an unknown cost basis: no figure for it, and no total. */
+export const UNKNOWN_COST_BASIS: Pick<RunRecord, "totalCostUsd" | "modelUsage"> = {
+  totalCostUsd: null,
+  modelUsage: {
+    "claude-unpriced": { inputTokens: 10, outputTokens: 20, cacheWriteTokens: 0, cacheReadTokens: 0, costUsd: null, costBasis: "unknown" },
+  },
+};
+
 /** An agent PR the Fabrik App opened for Ticket 7, merged at `mergedAt`. */
 export function aMergedPullRequest(mergedAt: string, overrides: Partial<AgentPullRequestFacts> = {}): AgentPullRequestFacts {
   return {

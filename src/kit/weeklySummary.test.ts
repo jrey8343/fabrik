@@ -13,6 +13,7 @@ import {
   aTicketTimeline,
   aVerdictComment,
   factsOf,
+  UNKNOWN_COST_BASIS,
 } from "../__fixtures__/weeklySummary.ts";
 import type { Verdict } from "../loop/types.ts";
 import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
@@ -101,11 +102,31 @@ describe("the Weekly summary", () => {
       input({
         records: [
           aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
-          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", totalCostUsd: null }),
+          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", ...UNKNOWN_COST_BASIS }),
         ],
       }),
     );
     expect(result).toMatchObject({ kind: "summary", summary: { cost: { thisWeek: 1, lastWeek: 0 }, unknownCost: { thisWeek: 1, lastWeek: 0 } } });
+  });
+
+  it("doesn't count a run with no cost figure, such as one its timeout cut off, as one of unknown cost basis", () => {
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", jobResult: "cancelled", totalCostUsd: null, transcript: null }),
+        ],
+        facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-05T00:00:00Z")] })],
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "summary",
+      summary: {
+        cost: { thisWeek: 1 },
+        unknownCost: { thisWeek: 0 },
+        costPerMergedPullRequest: { thisWeek: { usd: 1, unknownCost: 0 } },
+      },
+    });
   });
 
   it("counts the agent PRs merged in the week across every Product repo", () => {
@@ -640,7 +661,7 @@ describe("the Weekly summary", () => {
         input({
           records: [
             aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
-            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", totalCostUsd: null, retry: 1 }),
+            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", ...UNKNOWN_COST_BASIS, retry: 1 }),
           ],
           facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-04T00:00:00Z")] })],
         }),
@@ -711,7 +732,7 @@ describe("the Weekly summary", () => {
       const result = weeklySummary(
         input({
           records: [
-            aRunRecord({ issue: 3, role: "triage", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: null }),
+            aRunRecord({ issue: 3, role: "triage", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", ...UNKNOWN_COST_BASIS }),
             aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 2 }),
           ],
           facts: [factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-05T00:00:00Z")], { number: 3 })] })],
@@ -760,7 +781,7 @@ describe("the Weekly summary", () => {
         input({
           records: [
             aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
-            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", totalCostUsd: null }),
+            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", ...UNKNOWN_COST_BASIS }),
           ],
           facts: [factsOf({ tickets: [aTicketTimeline([], { closedAt: "2026-11-04T00:00:00Z" })] })],
         }),
@@ -775,7 +796,7 @@ describe("the Weekly summary", () => {
         aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1.5, retry: 1 }),
         aRunRecord({
           endedAt: "2026-11-05T00:00:00Z",
-          totalCostUsd: null,
+          ...UNKNOWN_COST_BASIS,
           stepUp: true,
           // Friday 13 November 2026, 10:00 in Sydney.
           rateLimit: { status: "allowed", rateLimitType: "seven_day", utilization: 0.62, resetsAt: 1_794_524_400 },
@@ -835,10 +856,10 @@ describe("the Weekly summary", () => {
         input({
           records: [
             aRunRecord({ issue: 7, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2 }),
-            aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: null, retry: 1 }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", ...UNKNOWN_COST_BASIS, retry: 1 }),
             aRunRecord({ issue: 8, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 1.5 }),
             aRunRecord({ issue: 9, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 0.25 }),
-            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-26T00:00:00Z", totalCostUsd: null }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-26T00:00:00Z", ...UNKNOWN_COST_BASIS }),
             aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 1 }),
           ],
           facts: [

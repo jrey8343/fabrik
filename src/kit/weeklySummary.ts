@@ -6,7 +6,7 @@ import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { InfrastructureFailure } from "../loop/types.ts";
-import { type RateLimitReading, type RunRecord, WEEKLY_LIMIT } from "./runRecord.ts";
+import { type RateLimitReading, type RunRecord, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
 export interface LabelEvent {
@@ -338,10 +338,11 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
       pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt) ? [mergedPullRequestOf(facts, pullRequest, pullRequest.mergedAt)] : [],
     ),
   );
+  const { usd: cost, unknownCost } = costOf(records);
   return {
     records: records.length,
-    cost: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
-    unknownCost: records.filter((record) => record.totalCostUsd === null).length,
+    cost,
+    unknownCost,
     costPerMergedPullRequest: costPerMergedPullRequestOf(week, input),
     costPerSpec: costPerSpecOf(week, input),
     spendNeverMerged: spendNeverMergedOf(week, input),
@@ -529,12 +530,21 @@ function endedBy(week: Week, records: readonly RunRecord[]): RunRecord[] {
   return records.filter((record) => Date.parse(record.endedAt) < week.end);
 }
 
-/** The summed cost of these records, leaving out (and counting) those whose cost basis is unknown. */
+/**
+ * The summed cost of these records, leaving out (and counting) those whose
+ * cost basis is unknown. A run with no cost figure at all, one that ended
+ * without a result, such as a timeout, adds nothing and isn't counted.
+ */
 function costOf(records: readonly RunRecord[]): CostFigure & { readonly usd: number } {
   return {
     usd: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
-    unknownCost: records.filter((record) => record.totalCostUsd === null).length,
+    unknownCost: records.filter(hasUnknownCostBasis).length,
   };
+}
+
+/** Whether any of the run's models has an unknown cost basis, which leaves the run with no total (src/kit/runRecord.ts). */
+function hasUnknownCostBasis(record: RunRecord): boolean {
+  return Object.values(record.modelUsage).some((usage) => usage.costBasis === UNKNOWN_COST_BASIS);
 }
 
 /** When the Ticket was dispatched: its first `agent:implement` (a Retry adds it again), or null. */

@@ -233,13 +233,13 @@ function costOf(usage: StreamMessage): ModelCost {
     outputTokens: numberOr(usage["outputTokens"]),
     cacheWriteTokens: numberOr(usage["cacheCreationInputTokens"]),
     cacheReadTokens: numberOr(usage["cacheReadInputTokens"]),
-    costUsd: costBasis === UNKNOWN_COST ? null : numberOr(usage["costUSD"]),
+    costUsd: costBasis === UNKNOWN_COST_BASIS ? null : numberOr(usage["costUSD"]),
     costBasis,
   };
 }
 
 /** The `costBasis` the CLI gives a model it has no price for. */
-const UNKNOWN_COST = "unknown";
+export const UNKNOWN_COST_BASIS = "unknown";
 
 function readingOf(info: StreamMessage | null): RateLimitReading | null {
   if (info === null) return null;
