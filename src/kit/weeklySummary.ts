@@ -661,14 +661,19 @@ function answerOf(issue: OpenIssueFacts): string | null {
   return issue.comments.find((comment) => !comment.byBot && Date.parse(comment.at) > asked)?.at ?? null;
 }
 
-/** An open Ticket's latest record, if it ended in an Infrastructure failure: the run nothing has picked up again. */
+/**
+ * An open Ticket's latest record, if it ended in an Infrastructure failure:
+ * the run nothing has picked up again. A judge run's record (role `score`) is
+ * left out: scoring a run never picks its Ticket up, and a judge's own failure
+ * never leaves the Ticket stuck.
+ */
 function failedLastRunOf(
   issue: OpenIssueFacts,
   repo: string,
   records: readonly RunRecord[],
 ): { readonly endedAt: string; readonly failure: InfrastructureFailure } | null {
   const latest = records
-    .filter((record) => record.repo === repo && record.issue === issue.number)
+    .filter((record) => record.repo === repo && record.issue === issue.number && record.role !== "score")
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
     .at(-1);
   if (latest === undefined || latest.infrastructureFailure === null) return null;

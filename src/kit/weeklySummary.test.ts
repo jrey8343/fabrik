@@ -372,6 +372,26 @@ describe("the Weekly summary", () => {
       ];
       expect(stuckIn({ openIssues: [anOpenIssue({ number: 13 }), anOpenIssue({ number: 14 })] }, records)).toEqual([]);
     });
+
+    it("a judge run's record neither hides the failed run it scored nor is listed for failing itself", () => {
+      const records = [
+        aRunRecord({ endedAt: hoursAgo(30), jobResult: "cancelled", infrastructureFailure: "timeout" }),
+        aRunRecord({ role: "score", endedAt: hoursAgo(29), baseSha: null }), // scored the timed-out run, after it
+        aRunRecord({ issue: 9, endedAt: hoursAgo(40) }),
+        aRunRecord({ role: "score", issue: 9, endedAt: hoursAgo(39), baseSha: null, jobResult: "failure", infrastructureFailure: "crash" }),
+      ];
+      expect(stuckIn({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" }), anOpenIssue({ number: 9 })] }, records)).toEqual([
+        {
+          kind: "infrastructure-failure",
+          number: 7,
+          title: "Build the thing",
+          url: "https://github.com/owner/product/issues/7",
+          since: hoursAgo(30),
+          age: 30 * HOUR,
+          failure: "timeout",
+        },
+      ]);
+    });
   });
 
   describe("Human touches per merged PR", () => {
