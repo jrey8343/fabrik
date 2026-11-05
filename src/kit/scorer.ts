@@ -221,7 +221,7 @@ function resultOf(rubrics: readonly Rubric[], outcome: ScoringOutcome): Pick<Sco
  * its pass from the rubric's threshold. Null, so the output is invalid as a
  * whole, unless it's a JudgeOutput answering each rubric exactly once with a
  * score from 0 to 1 and one of that rubric's labels. The judge checks its own
- * answer with this too (src/kit/judge.ts), so it's asked to fix what the
+ * answer with this too (src/kit/judgeLaunch.ts), so it's asked to fix what the
  * score file would refuse.
  */
 export function scoreEntries(rubrics: readonly Rubric[], output: unknown): readonly ScoreEntry[] | null {

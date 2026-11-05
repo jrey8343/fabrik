@@ -435,6 +435,31 @@ describe("The weekly summary workflow", () => {
 });
 
 
+/**
+ * What a Kit source file imports at run time: every import and re-export but
+ * `import type` and `export type`, the only ones Node strips whole.
+ */
+function runtimeImportsOf(source: string): string[] {
+  const statements = source.matchAll(/^(?:import|export)\s+(type\s+)?(?:[\w*{}\s,]+?\s+from\s+)?["']([^"']+)["'];?$/gm);
+  return [...statements].filter((match) => match[1] === undefined).map((match) => match[2]!);
+}
+
+/** Each package a Kit program reaches through its imports at run time, as `<file> imports <package>`. */
+function packagesReachedBy(program: string): string[] {
+  const seen = new Set<string>();
+  const reached: string[] = [];
+  const visit = (file: URL) => {
+    if (seen.has(file.href)) return;
+    seen.add(file.href);
+    for (const specifier of runtimeImportsOf(readFileSync(file, "utf8"))) {
+      if (specifier.startsWith(".")) visit(new URL(specifier, file));
+      else if (!specifier.startsWith("node:")) reached.push(`${file.href.slice(root.href.length)} imports ${specifier}`);
+    }
+  };
+  visit(new URL(program, root));
+  return reached;
+}
+
 describe("The Kit's composite actions", () => {
   it.each(actions)("$name leaves reading and writing GitHub to the Kit's Node programs, never inline gh calls", ({ text }) => {
     expect(text).not.toMatch(/\bgh (api|issue|pr|repo|release|run|workflow) /);
@@ -444,6 +469,21 @@ describe("The Kit's composite actions", () => {
     const programs = [...text.matchAll(/run: node (?:kit\/)?(src\/\S+)/g)].map((match) => match[1]!);
 
     for (const program of programs) expect(existsSync(new URL(program, root)), program).toBe(true);
+  });
+
+  // Push-job-shaped programs (src/main.ts, the record writers) run without `npm ci`: only the agent's actions install Sandcastle.
+  it.each(actions.filter(({ text }) => !text.includes("run: npm ci")))(
+    "$name, which installs nothing, runs only programs that import no package at run time",
+    ({ text }) => {
+      const programs = [...text.matchAll(/run: node (?:kit\/)?(src\/\S+)/g)].map((match) => match[1]!);
+
+      expect(programs.length).toBeGreaterThan(0);
+      for (const program of programs) expect(packagesReachedBy(program), program).toEqual([]);
+    },
+  );
+
+  it("can tell a program that imports a package at run time", () => {
+    expect(packagesReachedBy("src/kit/judge-main.ts")).toEqual(expect.arrayContaining(["src/kit/judge-main.ts imports @ai-hero/sandcastle"]));
   });
 });
 

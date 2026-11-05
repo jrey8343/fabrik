@@ -1,7 +1,7 @@
 // The judge job's program (#149): the Kit's fixed judge model (JUDGE_MODEL),
 // at its default effort, scores one finished Implementer run on the Kit's
 // rubrics from its transcript and its Ticket, in one read. It runs with no
-// tools (src/kit/judge.ts) through the same Sandcastle runner,
+// tools (src/kit/judgeLaunch.ts) through the same Sandcastle runner,
 // metered-billing preflight and init check as the agent roles
 // (src/agent/launch.ts), in an empty directory: never a Product checkout,
 // never the Kit's. It holds no GitHub token. It leaves its answer, checked
@@ -25,16 +25,8 @@ import { readyHook, schemaOf, setAgentEnv, streamWatch, writeOutputs, writeSumma
 import { runSummary } from "../agent/summary.ts";
 import { readTranscriptGzip, TRANSCRIPT_FILE } from "../agent/transcript.ts";
 import { readBytesIfPresent } from "./checkout.ts";
-import {
-  JUDGE_FAILURE_FILE,
-  JUDGE_JOB,
-  JUDGE_RESULT_FILE,
-  judgeClaudeArgs,
-  judgeFailureText,
-  judgeResultText,
-  readJudgeOutput,
-  withoutTools,
-} from "./judge.ts";
+import { JUDGE_FAILURE_FILE, JUDGE_JOB, JUDGE_RESULT_FILE, judgeFailureText, judgeResultText } from "./judge.ts";
+import { judgeClaudeArgs, readJudgeOutput, withoutTools } from "./judgeLaunch.ts";
 import { loadRubrics } from "./rubrics.ts";
 import { JUDGE_MODEL, JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 import { JUDGE_OUTPUT_TAG, type JudgedTicket, judgePrompt } from "./scorerPrompt.ts";
