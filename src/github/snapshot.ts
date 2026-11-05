@@ -13,7 +13,7 @@ import type {
   TicketSnapshot,
 } from "../loop/types.ts";
 import type { GitHub, Repo } from "./client.ts";
-import { countEmptyDiffs, designSessionOf, requestChangesRunIn, verdictsIn } from "./threads.ts";
+import { countEmptyDiffs, designSessionOf, pushedSinceVerdictIn, requestChangesRunIn, verdictsIn } from "./threads.ts";
 
 const ISSUE_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -387,6 +387,7 @@ async function gatherPullRequest(
       // Only a bot's markers count, so nobody can fake a Verdict or a Request-changes run by quoting one.
       verdicts: verdictsIn(botComments),
       requestChangesRun: requestChangesRunIn(botComments),
+      pushedSinceVerdict: pushedSinceVerdictIn(botComments),
       changesRequested: changesRequestedOf(pullRequest.reviews.nodes[0]),
     },
     dispatch: null,

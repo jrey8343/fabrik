@@ -6,7 +6,7 @@ import { whyNotReviewable } from "./agentPullRequest.ts";
 import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
 import { REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
-import { retryAfterFlaw } from "./retry.ts";
+import { retryAfterFlaw, whyAwaitingRun } from "./retry.ts";
 import { verdictMarker } from "./markers.ts";
 import { parseVerdict } from "./verdict.ts";
 import type {
@@ -25,11 +25,13 @@ type RedChecks = Extract<LoopEvent, { kind: "required-checks-finished" }>;
 type Reviewed = Extract<LoopEvent, { kind: "review-run-finished" }>;
 
 /**
- * A push to an agent draft PR, or agent:review added to it, starts a Review.
- * The Review job waits for the PR's required checks before anything else.
+ * A push to an agent draft PR, or agent:review added to it, starts a Review,
+ * unless a Retry or Request-changes run is in flight on it: that run's push
+ * starts the next one. The Review job waits for the PR's required checks
+ * before anything else.
  */
-export function startReview(pullRequest: PullRequestSnapshot, config: KitConfig): Plan {
-  const why = whyNotReviewable(pullRequest);
+export function startReview(pullRequest: PullRequestSnapshot, operator: string, config: KitConfig): Plan {
+  const why = whyNotReviewable(pullRequest) ?? whyAwaitingRun(pullRequest, operator);
   if (why !== null) return { kind: "nothing", reason: why };
   const { model, effort, timeoutMinutes } = config.roles.review;
   return {
@@ -80,7 +82,7 @@ export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
 /** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once. */
 function landVerdict(
   event: RedChecks | Reviewed,
-  { pullRequest }: Snapshot,
+  { pullRequest, operator }: Snapshot,
   decide: (pullRequest: PullRequestSnapshot) => Plan,
 ): Plan {
   if (pullRequest === null) {
@@ -94,6 +96,9 @@ function landVerdict(
   if (pullRequest.verdicts.some((record) => record.headSha === event.headSha)) {
     return { kind: "nothing", reason: `#${pullRequest.number} already has a Verdict on ${event.headSha.slice(0, 7)}` };
   }
+  // A Review that started before the run was called for lands nothing either.
+  const awaiting = whyAwaitingRun(pullRequest, operator);
+  if (awaiting !== null) return { kind: "nothing", reason: awaiting };
   return decide(pullRequest);
 }
 

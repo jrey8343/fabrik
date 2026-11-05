@@ -45,6 +45,13 @@ export interface BranchChanges {
    * change even when the run made none of its own.
    */
   readonly updatedFromMain?: boolean;
+  /**
+   * For a run on its agent PR's own branch whose branch moved while it ran
+   * (ADR-0006): the head the push job rebased the run's own commits onto, and
+   * whether that conflicted. Without a conflict, `net` and `commits` hold only
+   * the run's own changes, as rebased; with one, there's nothing to push.
+   */
+  readonly rebase?: { readonly onto: string; readonly conflicted: boolean };
 }
 
 /** Something that happened in a Product repo that the Loop may act on. */
@@ -200,6 +207,12 @@ export interface PullRequestSnapshot {
   readonly verdicts: readonly VerdictRecord[];
   /** Whether its latest push came from a Request-changes run, so a Verdict on it is marked as one. */
   readonly requestChangesRun: boolean;
+  /**
+   * Whether a Retry or Request-changes run has pushed to it since its latest
+   * Verdict, read from the Kit's note of the push. Until one has, the run that
+   * Verdict (or the Operator's review) called for is still in flight (src/loop/retry.ts).
+   */
+  readonly pushedSinceVerdict: boolean;
   /** The latest review that requested changes on it, if any: what a stalled Request-changes run resumes from. */
   readonly changesRequested: ChangesRequestedReview | null;
 }

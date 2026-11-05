@@ -163,7 +163,7 @@ describe("Starting a retry", () => {
   it.each([
     ["has no Verdict", aPullRequest()],
     ["has a pass as its latest Verdict", aPullRequest({ verdicts: [earlier("pass", { headSha: HEAD_SHA })] })],
-    ["has moved on from its Execution flaw", flawedPullRequest([], { headSha: "b".repeat(40) })],
+    ["has pushed a fix since its Execution flaw", { ...flawedPullRequest(), headSha: "b".repeat(40), pushedSinceVerdict: true }],
     ["is a person's PR", aPullRequest({ isAgent: false, verdicts: flawedPullRequest().verdicts })],
     ["has left draft", aPullRequest({ draft: false, verdicts: flawedPullRequest().verdicts })],
     ["is closed", aPullRequest({ open: false, verdicts: flawedPullRequest().verdicts })],
@@ -195,7 +195,7 @@ function startedRuns(plan: Plan): Action[] {
 
 describe("A Verdict when the retries are used up", () => {
   it("a third Execution flaw is posted but starts no retry (it goes back to design: backToDesign.test.ts)", () => {
-    const pullRequest = aPullRequest({ verdicts: [earlier("execution-flaw"), earlier("execution-flaw", { source: "ci" })] });
+    const pullRequest = aPullRequest({ pushedSinceVerdict: true, verdicts: [earlier("execution-flaw"), earlier("execution-flaw", { source: "ci" })] });
     const plan = planFor(reviewed("verdict: execution-flaw\n\nStill throws."), snapshotOfPullRequest(pullRequest), kitConfig());
 
     expect(actionsOf(plan)[0]).toMatchObject({ kind: "comment", issue: 50 });
@@ -233,13 +233,13 @@ describe("A retry's branch", () => {
     const plan = planFor(retried(), retrySnapshot(), kitConfig());
 
     const actions = actionsOf(plan);
-    expect(actions[0]).toEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
-    expect(actions.map((action) => action.kind)).toEqual(["push-branch", "edit-issue-body", "comment"]);
-    expect(actions[2]).toMatchObject({ kind: "comment", issue: 50 });
-    expect(actions[2]).toHaveProperty("body", expect.stringContaining("Guards the empty-cart case the Reviewer flagged"));
-    expect(actions[2]).not.toHaveProperty("body", expect.stringContaining("Shows the empty state"));
+    expect(actions.at(-1)).toEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(actions[1]).toMatchObject({ kind: "comment", issue: 50 });
+    expect(actions[1]).toHaveProperty("body", expect.stringContaining("Guards the empty-cart case the Reviewer flagged"));
+    expect(actions[1]).not.toHaveProperty("body", expect.stringContaining("Shows the empty state"));
     expect(notificationsOf(plan, "jrey")).toEqual([]);
-    expect(actions[2]).not.toHaveProperty("body", expect.stringContaining("@someone"));
+    expect(actions[1]).not.toHaveProperty("body", expect.stringContaining("@someone"));
   });
 
   it("replaces the PR body with the refreshed summary, so the next Review reads the PR as it now stands", () => {
@@ -262,7 +262,6 @@ describe("A retry's branch", () => {
   });
 
   it.each([
-    ["the PR has moved on from the head the retry built on", flawedPullRequest([], { headSha: "b".repeat(40) }), { headSha: "b".repeat(40) }],
     ["the PR has left draft", aPullRequest({ draft: false }), {}],
     ["the PR is closed", aPullRequest({ open: false }), {}],
     ["the PR is for another Ticket", aPullRequest({ ticket: 8 }), {}],
@@ -334,6 +333,66 @@ describe("A retry's branch", () => {
   });
 });
 
+describe("A retry whose branch moved while it ran (ADR-0006)", () => {
+  const MOVED = "b".repeat(40);
+  /** The PR, now at MOVED: the Operator pushed while the retry, built on HEAD_SHA, ran. */
+  const movedSnapshot = (pullRequest = flawedPullRequest()) => retrySnapshot({ ...pullRequest, headSha: MOVED });
+  const rebased = (conflicted: boolean, onto = MOVED) =>
+    retried({
+      changes: conflicted
+        ? { net: [], commits: [], rebase: { onto, conflicted } }
+        : { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }], rebase: { onto, conflicted } },
+    });
+
+  it("is pushed rebased onto the new head, with its note and refreshed body as usual", () => {
+    const actions = actionsOf(planFor(rebased(false), movedSnapshot(), kitConfig()));
+
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(actions[1]).toHaveProperty("body", expect.stringMatching(/^<!-- fabrik:retry-push -->\n/));
+  });
+
+  it("that conflicts pushes nothing, says its work was discarded, and starts the same retry again, using no retry", () => {
+    const plan = planFor(rebased(true), movedSnapshot(), kitConfig());
+
+    const actions = actionsOf(plan);
+    expect(actions.map((action) => action.kind)).toEqual(["comment", "add-labels"]);
+    expect(actions[0]).toMatchObject({ kind: "comment", issue: 50 });
+    const body = (actions[0] as Extract<Action, { kind: "comment" }>).body;
+    expect(body).toContain("discarded");
+    expect(body).toContain("Retry 1 of 2 starts again on bbbbbbb");
+    expect(verdictsPostedIn([body])).toEqual([]);
+    expect(body).not.toMatch(/^<!--/);
+    expect(actions[1]).toEqual(RETRY_TRIGGER);
+    expect(notificationsOf(plan, "jrey")).toEqual([]);
+  });
+
+  it("is pushed onto the head the push job rebased it onto, even when the snapshot's head lags behind it: the push's lease guards a real move", () => {
+    const actions = actionsOf(planFor(rebased(false, "c".repeat(40)), movedSnapshot(), kitConfig()));
+
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+  });
+
+  it("a Request-changes run that conflicts starts again from the same review", () => {
+    const pullRequest = aPullRequest({
+      verdicts: [earlier("pass", { headSha: HEAD_SHA })],
+      changesRequested: { review: 9, reviewer: "jrey", reviewerIsBot: false, commitSha: HEAD_SHA },
+    });
+    const event = { ...rebased(true), fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true } };
+
+    const actions = actionsOf(planFor(event, movedSnapshot(pullRequest), kitConfig()));
+
+    expect(actions.map((action) => action.kind)).toEqual(["comment", "add-labels"]);
+    expect(actions[0]).toHaveProperty("body", expect.stringContaining("The Operator's Request-changes run starts again on bbbbbbb"));
+  });
+
+  it("that changed nothing is still an empty diff, not a restart", () => {
+    const plan = planFor(retried({ changes: { net: [], commits: [] } }), movedSnapshot(), kitConfig());
+
+    const comments = actionsOf(plan).flatMap((action) => (action.kind === "comment" ? [action.body] : []));
+    expect(verdictsPostedIn(comments)).toEqual([expect.objectContaining({ source: "empty-diff" })]);
+  });
+});
+
 describe("A retry that fails for Infrastructure", () => {
   it("comments on the PR, names agent:implement on the Ticket as the label to re-add, and uses up no retry", () => {
     const plan = planFor(
@@ -365,7 +424,7 @@ describe("Retries stay silent", () => {
     ["red CI", [], redChecks()],
     ["the second Execution flaw, a Step-up", [earlier("execution-flaw")], reviewed("verdict: execution-flaw\n\nStill throws.")],
   ])("%s notifies nobody", (_, before, event) => {
-    const pullRequest = aPullRequest({ verdicts: before });
+    const pullRequest = aPullRequest({ verdicts: before, pushedSinceVerdict: true });
     const plan = planFor(event, snapshotOfPullRequest(pullRequest, { operator: "jrey" }), kitConfig());
 
     expect(actionsOf(plan)).toContainEqual(RETRY_TRIGGER);

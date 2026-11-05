@@ -237,7 +237,7 @@ describe("A Request-changes run's branch", () => {
   it("is pushed onto the PR with a silent note that marks the push as a Request-changes run's", () => {
     const plan = planFor(requestChangesPushed(), pushSnapshot(), kitConfig());
 
-    expect(actionsOf(plan)[0]).toEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+    expect(actionsOf(plan)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
     expect(notificationsOf(plan)).toEqual([]);
     expect(commentsOf(plan)[0]).toContain("Renamed the total as the Operator asked.");
     // The note's marker says the PR's latest push came from a Request-changes run.
@@ -258,7 +258,7 @@ describe("A Request-changes run's branch", () => {
   it("that only brings main in, to fix a conflict, is pushed: bringing the PR up to date is a change", () => {
     const plan = planFor(requestChangesPushed({ net: [], commits: [], updatedFromMain: true }), pushSnapshot(), kitConfig());
 
-    expect(actionsOf(plan)[0]).toEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+    expect(actionsOf(plan)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
   });
 
   it("that changes nothing is an Execution flaw marked as from a Request-changes run, so it uses no retry", () => {
@@ -284,6 +284,7 @@ describe("Retries after a Request-changes run", () => {
     // Retry 1 fixed a flaw and passed; the Operator requested changes; that run's push had a flaw; its retry flawed again.
     const plan = flawOn(
       aPullRequest({
+        pushedSinceVerdict: true,
         verdicts: [earlier("execution-flaw"), earlier("pass"), earlier("execution-flaw", { requestChanges: true })],
       }),
     );
@@ -295,6 +296,7 @@ describe("Retries after a Request-changes run", () => {
   it("still run out: two counted flaws before this one send the Ticket back to design", () => {
     const plan = flawOn(
       aPullRequest({
+        pushedSinceVerdict: true,
         verdicts: [earlier("execution-flaw"), earlier("execution-flaw", { requestChanges: true }), earlier("execution-flaw")],
       }),
     );

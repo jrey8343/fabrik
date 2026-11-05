@@ -28,11 +28,16 @@ interface Remote {
   readonly token: string;
 }
 
-/** Runs git in the empty repository the branch is rebuilt in. */
-type Git = (...args: string[]) => Promise<string>;
+/** Runs git in the empty repository the branch is rebuilt in; `with` runs it with more environment, such as a commit's identity. */
+type Git = ((...args: string[]) => Promise<string>) & {
+  with(more: Readonly<Record<string, string>>): (...args: string[]) => Promise<string>;
+};
 
 /** Where the remote's default branch (the PR's base, main) is fetched to. */
 const MAIN_REF = "refs/fabrik/main";
+
+/** Where the PR's branch, as it is on the remote now, is fetched to. */
+const HEAD_REF = "refs/fabrik/head";
 
 /**
  * Rebuilds `branch` from `bundlePath` and reads what it changes. A branch with
@@ -56,7 +61,11 @@ export async function rebuildAgentBranch(
     GIT_CONFIG_KEY_1: "core.hooksPath",
     GIT_CONFIG_VALUE_1: "/dev/null",
   };
-  const git: Git = async (...args) => (await run("git", args, { cwd: dir, env, maxBuffer: 64 * 1024 * 1024 })).stdout;
+  const runIn =
+    (more: Readonly<Record<string, string>>) =>
+    async (...args: string[]) =>
+      (await run("git", args, { cwd: dir, env: { ...env, ...more }, maxBuffer: 64 * 1024 * 1024 })).stdout;
+  const git: Git = Object.assign(runIn({}), { with: runIn });
 
   await git("init", "--quiet", "--template=");
   if (branch.head === null) {
@@ -85,12 +94,12 @@ function diff(git: Git, from: string, to: string): Promise<ChangedPath[]> {
 }
 
 /**
- * What each commit in `range` changes on its own. A merge shows only what was
- * changed by hand on top of the merge git would make (remerge), so merging
+ * What each commit in `revisions` changes on its own. A merge shows only what
+ * was changed by hand on top of the merge git would make (remerge), so merging
  * main in doesn't count main's own changes.
  */
-function commitsIn(git: Git, range: string): Promise<ChangedPath[]> {
-  return git("log", "--format=", "--name-status", "-z", "-M", "--diff-merges=remerge", "--no-ext-diff", range).then(
+function commitsIn(git: Git, ...revisions: string[]): Promise<ChangedPath[]> {
+  return git("log", "--format=", "--name-status", "-z", "-M", "--diff-merges=remerge", "--no-ext-diff", ...revisions, "--").then(
     parseNameStatus,
   );
 }
@@ -129,29 +138,96 @@ async function cutFromMain(git: Git, url: string, branch: BuiltBranch, bundlePat
  * changes are judged: its commits main doesn't hold, and the paths it changed
  * that don't now read as main has them. Its push may replace the PR's branch
  * (a rebase doesn't fast-forward), but only while that branch is still at the
- * head the run built on, and it never touches any other branch.
+ * head it lands on, and it never touches any other branch. If the branch moved
+ * while the run worked, the run's own commits are rebased onto where it is
+ * now (ADR-0006), and the commits in between, being someone else's, aren't
+ * judged as the run's.
  */
 async function onItsOwnBranch(git: Git, url: string, branch: BuiltBranch, bundlePath: string): Promise<AgentBranchGit> {
   const ref = `refs/heads/${branch.name}`;
   await git("fetch", "--quiet", url, branch.base.sha);
   await git("fetch", "--quiet", url, `+HEAD:${MAIN_REF}`);
-  const tip = await fetchBundle(git, branch, bundlePath);
+  const built = await fetchBundle(git, branch, bundlePath);
   const main = (await git("rev-parse", "--verify", `${MAIN_REF}^{commit}`)).trim();
+  const head = (await headNow(git, url, branch)) ?? branch.base.sha;
+  const moved = head !== branch.base.sha;
+
+  let tip = built;
+  if (moved) {
+    const rebased = await rebaseOnto(git, branch.base.sha, built, head);
+    if (rebased === null) {
+      return {
+        changes: { net: [], commits: [], updatedFromMain: false, rebase: { onto: head, conflicted: true } },
+        push: () => Promise.reject(new Error(`${branch.name} conflicts with ${head}, so there's nothing to push`)),
+      };
+    }
+    await git("update-ref", ref, rebased);
+    tip = rebased;
+  }
 
   const unlikeMain = new Set((await git("diff", "--name-only", "-z", "--no-ext-diff", main, tip)).split("\0").filter(Boolean));
   // A path the branch now holds just as main does came from main, not from this run.
-  const net = (await diff(git, branch.base.sha, tip)).filter(
+  const net = (await diff(git, head, tip)).filter(
     (change) => unlikeMain.has(change.path) || (change.from !== undefined && unlikeMain.has(change.from)),
   );
   return {
     changes: {
       net,
-      commits: await commitsIn(git, `${main}..${tip}`),
-      updatedFromMain: !(await isAncestor(git, main, branch.base.sha)) && (await isAncestor(git, main, tip)),
+      // Only the run's own: neither main's nor the PR's commits it landed on, whoever pushed them.
+      commits: await commitsIn(git, tip, `^${main}`, `^${head}`),
+      updatedFromMain: !(await isAncestor(git, main, head)) && (await isAncestor(git, main, tip)),
+      ...(moved ? { rebase: { onto: head, conflicted: false } } : {}),
     },
     async push(name) {
       if (name !== branch.name) throw new Error(`Asked to push ${name}, but the bundle holds ${branch.name}`);
-      await git("push", "--quiet", `--force-with-lease=${ref}:${branch.base.sha}`, url, `${ref}:${ref}`);
+      await git("push", "--quiet", `--force-with-lease=${ref}:${head}`, url, `${ref}:${ref}`);
     },
   };
+}
+
+/** Where the PR's branch is on the remote now, or null if it's gone. */
+async function headNow(git: Git, url: string, branch: BuiltBranch): Promise<string | null> {
+  try {
+    await git("fetch", "--quiet", url, `+refs/heads/${branch.name}:${HEAD_REF}`);
+  } catch {
+    return null;
+  }
+  return (await git("rev-parse", "--verify", `${HEAD_REF}^{commit}`)).trim();
+}
+
+/**
+ * Replays the run's commits, `base` to `tip` along their first parents, onto
+ * `onto`, without a working tree: merge-tree merges each one's change in, and
+ * the commit is remade with its author, committer and message. A merge the
+ * run made keeps its other parents, so merging main in carries across. Null
+ * on a conflict, or when the run rewrote the history it built on, whose own
+ * commits can't then be told apart.
+ */
+async function rebaseOnto(git: Git, base: string, tip: string, onto: string): Promise<string | null> {
+  if (!(await isAncestor(git, base, tip))) return null;
+  const commits = (await git("rev-list", "--reverse", "--first-parent", `${base}..${tip}`)).split("\n").filter(Boolean);
+  let current = onto;
+  for (const commit of commits) {
+    const [, parent, ...others] = (await git("rev-list", "--parents", "-n", "1", commit)).trim().split(" ");
+    if (parent === undefined) return null;
+    // Exits non-zero on a conflict.
+    const tree = await git("merge-tree", "--write-tree", `--merge-base=${parent}`, current, commit).then(
+      (out) => out.split("\n")[0]?.trim() ?? "",
+      () => "",
+    );
+    if (tree === "") return null;
+    const [authorName = "", authorEmail = "", authorDate = "", committerName = "", committerEmail = "", message = ""] = (
+      await git("log", "-1", "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%B", commit)
+    ).split("\0");
+    const identity = {
+      GIT_AUTHOR_NAME: authorName,
+      GIT_AUTHOR_EMAIL: authorEmail,
+      GIT_AUTHOR_DATE: authorDate,
+      GIT_COMMITTER_NAME: committerName,
+      GIT_COMMITTER_EMAIL: committerEmail,
+    };
+    const parents = [current, ...others].flatMap((sha) => ["-p", sha]);
+    current = (await git.with(identity)("commit-tree", tree, ...parents, "-m", message.replace(/\n+$/, ""))).trim();
+  }
+  return current;
 }

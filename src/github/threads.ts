@@ -9,7 +9,9 @@ import {
   EMPTY_DIFF_MARKER,
   LIVE_OUTCOME_MARKER,
   REQUEST_CHANGES_RUN_MARKER,
+  RETRY_PUSH_MARKER,
   SESSION_FINISHED,
+  UNMARKED_RETRY_PUSH,
   VERDICT_MARKER,
 } from "../loop/markers.ts";
 import type { IssueSnapshot, Verdict, VerdictRecord } from "../loop/types.ts";
@@ -52,6 +54,26 @@ export function requestChangesRunIn(commentBodies: readonly string[]): boolean {
     else if (verdictsIn([body]).length > 0) latest = false;
   }
   return latest;
+}
+
+/**
+ * Whether a Retry or Request-changes run has pushed to a PR since its latest
+ * Verdict, from the Fabrik App's comments on it, oldest first: the Kit's note
+ * of such a push comes after the last Verdict. A Retry's note from before the
+ * marker counts by its opening words.
+ */
+export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean {
+  let pushed = false;
+  for (const body of commentBodies) {
+    if (isPushNote(body)) pushed = true;
+    else if (verdictsIn([body]).length > 0) pushed = false;
+  }
+  return pushed;
+}
+
+/** Whether a comment is the Kit's note of a Retry's or Request-changes run's push: that run's outcome. */
+function isPushNote(body: string): boolean {
+  return body.startsWith(RETRY_PUSH_MARKER) || body.startsWith(REQUEST_CHANGES_RUN_MARKER) || body.startsWith(UNMARKED_RETRY_PUSH);
 }
 
 /**

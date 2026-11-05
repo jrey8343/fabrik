@@ -167,6 +167,108 @@ describe("A retry that only adds commits", () => {
 
     expect(paths(branch.changes.net)).toEqual(["src/feature.ts"]);
     expect(branch.changes.updatedFromMain).toBe(false);
+    expect(branch.changes.rebase).toBeUndefined();
     expect(await git(remote, "rev-parse", `refs/heads/${BRANCH}`)).toBe(tip);
+  });
+});
+
+/** The Operator pushes these files to the PR's branch while the run works, as a commit on top of the head it built on. */
+async function operatorPushes(files: Record<string, string>): Promise<string> {
+  const other = join(root, "operator");
+  await git(root, "clone", "--quiet", "--branch", BRANCH, remote, other);
+  const moved = await commit(other, files, "The Operator's change");
+  await git(other, "push", "--quiet", "origin", BRANCH);
+  return moved;
+}
+
+describe("A retry whose branch moved while it ran (ADR-0006)", () => {
+  it("is rebased onto the new head: its own commits land on top of the Operator's, and only they count as its changes", async () => {
+    const moved = await operatorPushes({ "src/other.ts": "the Operator's\n" });
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix one");
+    await commit(clone, { "src/cart.ts": "cart fixed\n" }, "Fix two");
+
+    const branch = await rebuild(prHead);
+    await branch.push(BRANCH);
+
+    expect(branch.changes.rebase).toEqual({ onto: moved, conflicted: false });
+    expect(paths(branch.changes.net)).toEqual(["src/cart.ts", "src/feature.ts"]);
+    expect(paths(branch.changes.commits)).toEqual(["src/cart.ts", "src/feature.ts"]);
+    const pushed = await git(remote, "rev-parse", `refs/heads/${BRANCH}`);
+    expect(await git(remote, "log", "--format=%s", `${moved}..${pushed}`)).toBe("Fix two\nFix one");
+    expect(await git(remote, "rev-parse", `${pushed}~2`)).toBe(moved);
+    expect(await git(remote, "show", `${pushed}:src/other.ts`)).toBe("the Operator's");
+    expect(await git(remote, "show", `${pushed}:src/feature.ts`)).toBe("feature v2");
+    expect(await git(remote, "log", "-1", "--format=%an <%ae>", pushed)).toBe("Test <test@example.com>");
+  });
+
+  it("that conflicts with the new head has nothing to push, and says so", async () => {
+    const moved = await operatorPushes({ "src/feature.ts": "the Operator's feature\n" });
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix");
+
+    const branch = await rebuild(prHead);
+
+    expect(branch.changes.rebase).toEqual({ onto: moved, conflicted: true });
+    await expect(branch.push(BRANCH)).rejects.toThrow();
+    expect(await git(remote, "rev-parse", `refs/heads/${BRANCH}`)).toBe(moved);
+  });
+
+  it("isn't refused for a trust-root file the Operator's commit touched", async () => {
+    await operatorPushes({ "AGENTS.md": "the Operator's rules\n" });
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix");
+
+    const branch = await rebuild(prHead);
+
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "allow" });
+  });
+
+  it("resumed on a head the Operator pushed before it started, isn't refused for their trust-root change either", async () => {
+    const operatorHead = await operatorPushes({ "AGENTS.md": "the Operator's rules\n" });
+    await git(clone, "fetch", "--quiet", "origin");
+    await git(clone, "checkout", "--quiet", "-B", BRANCH, `origin/${BRANCH}`);
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix");
+
+    const branch = await rebuild(operatorHead);
+
+    expect(branch.changes.rebase).toBeUndefined();
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "allow" });
+  });
+
+  it("is still refused for a trust-root file its own commit touches", async () => {
+    await operatorPushes({ "src/other.ts": "the Operator's\n" });
+    await commit(clone, { ".github/workflows/ci.yml": "weaker ci\n" }, "Sneak");
+
+    const branch = await rebuild(prHead);
+
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({
+      kind: "refuse",
+      paths: [".github/workflows/ci.yml"],
+    });
+  });
+
+  it("carries a merge of main it made across, judging only its own changes", async () => {
+    const moved = await operatorPushes({ "src/other.ts": "the Operator's\n" });
+    await git(clone, "merge", "--quiet", "--no-edit", "origin/main");
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix");
+
+    const branch = await rebuild(prHead);
+    await branch.push(BRANCH);
+
+    expect(branch.changes.rebase).toEqual({ onto: moved, conflicted: false });
+    expect(paths(branch.changes.net)).toEqual(["src/feature.ts"]);
+    expect(branch.changes.updatedFromMain).toBe(true);
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "allow" });
+    const pushed = await git(remote, "rev-parse", `refs/heads/${BRANCH}`);
+    expect(await git(remote, "show", `${pushed}:AGENTS.md`)).toBe("rules");
+    expect(await git(remote, "show", `${pushed}:src/other.ts`)).toBe("the Operator's");
+  });
+
+  it("that rewrote the branch's history, by rebasing onto main, counts as a conflict", async () => {
+    const moved = await operatorPushes({ "src/other.ts": "the Operator's\n" });
+    await git(clone, "rebase", "--quiet", "origin/main");
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix");
+
+    const branch = await rebuild(prHead);
+
+    expect(branch.changes.rebase).toEqual({ onto: moved, conflicted: true });
   });
 });
