@@ -2,7 +2,8 @@
 // snapshot per Product repo, the Operator and now, the one issue filed for the
 // week that just ended, or skip in a quiet week. Pure, no I/O, no model call.
 import { verdictsIn } from "../github/threads.ts";
-import { DISPATCH_LABEL, NEEDS_INFO, READY_FOR_HUMAN } from "../loop/labels.ts";
+import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
+import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_HUMAN } from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { InfrastructureFailure } from "../loop/types.ts";
 import type { RateLimitReading, RunRecord } from "./runRecord.ts";
@@ -462,9 +463,71 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
       "",
     );
   }
+  lines.push(subscriptionUsage(weeklyLimit, timeZone), "");
+  for (const repo of summary.repos) lines.push(...repoLines(repo));
   // The Operator's one mention, last: the week's only scheduled push.
-  lines.push(subscriptionUsage(weeklyLimit, timeZone), "", `@${operator}`);
+  lines.push(`@${operator}`);
   return `${lines.join("\n")}\n`;
+}
+
+/** How many of a repo's Waiting on you items show before the rest collapse into `<details>`. */
+const SHOWN_ITEMS = 10;
+
+function repoLines({ repo, waitingOnYou, stuck }: RepoSection): string[] {
+  const lines = [`## ${repo}`, "", "### Waiting on you", ""];
+  if (waitingOnYou.length === 0) lines.push("Nothing waiting on you.", "");
+  else {
+    lines.push(...waitingOnYou.slice(0, SHOWN_ITEMS).map(waitingLine), "");
+    const rest = waitingOnYou.slice(SHOWN_ITEMS);
+    if (rest.length > 0) lines.push(`<details><summary>${rest.length} more</summary>`, "", ...rest.map(waitingLine), "", "</details>", "");
+  }
+  if (stuck.length > 0) lines.push("### Stuck", "", ...stuck.map(stuckLine), "");
+  lines.push(liveLinks(repo), "");
+  return lines;
+}
+
+function waitingLine(item: WaitingItem): string {
+  switch (item.kind) {
+    case "design-round":
+      return itemLine(item, `Design round unanswered for ${duration(item.age)}`);
+    case "ready-for-human":
+      return itemLine(item, `ready-for-human for ${duration(item.age)}`);
+    case "merge-gate":
+      return itemLine(item, `at the Merge gate, Operator wait ${duration(item.operatorWait)}`);
+  }
+}
+
+function stuckLine(item: StuckItem): string {
+  switch (item.kind) {
+    case "needs-info-answered":
+      return itemLine(item, `needs-info answered ${duration(item.age)} ago, not picked up`);
+    case "idle-draft":
+      return itemLine(item, `a draft with no activity for ${duration(item.age)}`);
+    case "infrastructure-failure":
+      return itemLine(item, `last run ended in an Infrastructure failure (${item.failure}) ${duration(item.age)} ago`);
+  }
+}
+
+function itemLine({ number, url, title }: ItemBase, state: string): string {
+  return `- [#${number}](${url}) ${title}: ${state}`;
+}
+
+/** GitHub searches to look between summaries. */
+function liveLinks(repo: string): string {
+  const search = (list: "issues" | "pulls", query: string) => `https://github.com/${repo}/${list}?q=${encodeURIComponent(query)}`;
+  return [
+    `Live: [ready-for-human](${search("issues", `is:issue is:open label:${READY_FOR_HUMAN}`)})`,
+    `[open agent PRs](${search("pulls", `is:pr is:open head:${AGENT_BRANCH_PREFIX}`)})`,
+    `[needs-design](${search("issues", `is:issue is:open label:${NEEDS_DESIGN}`)})`,
+  ].join(" · ");
+}
+
+/** An age in whole hours under two days, else whole days. */
+function duration(ms: number): string {
+  const hours = Math.floor(ms / (60 * 60 * 1000));
+  if (hours < 1) return "under an hour";
+  if (hours < 48) return hours === 1 ? "1 hour" : `${hours} hours`;
+  return `${Math.floor(hours / 24)} days`;
 }
 
 function subscriptionUsage({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading | null>, timeZone: string): string {

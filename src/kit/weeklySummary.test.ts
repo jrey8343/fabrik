@@ -384,8 +384,115 @@ describe("the Weekly summary", () => {
 
     it("has no section for a feature that hasn't shipped, not even an empty one", () => {
       const { body } = rendered();
-      expect(body.match(/^#+ .*$/gm)).toEqual(["## Metrics"]);
+      expect(body.match(/^#+ .*$/gm)).toEqual(["## Metrics", "## owner/product", "### Waiting on you"]);
       expect(body).not.toMatch(/Held|Retro|Audit|Map|Monitor|escape|score/i);
+    });
+  });
+
+  describe("rendered per repo", () => {
+    const HOUR = 60 * 60 * 1000;
+    const hoursAgo = (hours: number) => new Date(Date.parse(NOW) - hours * HOUR).toISOString();
+    const head = "h".repeat(40);
+    const bodyOf = (...facts: ReturnType<typeof factsOf>[]) => {
+      const result = weeklySummary(input({ records: [aRunRecord()], facts }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.body;
+    };
+    const readyForHuman = (number: number, hours: number) =>
+      anOpenIssue({ number, title: `Operator work ${number}`, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", hoursAgo(hours))] });
+
+    it("gives each repo a section listing what waits on the Operator, with its age and any Operator wait", () => {
+      const body = bodyOf(
+        factsOf({
+          openIssues: [
+            anOpenIssue({ number: 12, title: "Design the thing", comments: [aDesignRound(2, hoursAgo(72))] }),
+            readyForHuman(13, 30),
+          ],
+          openPullRequests: [anOpenPullRequest({ draft: false, comments: [aVerdictComment("pass", head, hoursAgo(5))] })],
+        }),
+        factsOf({ repo: "owner/other" }),
+      );
+      expect(body).toContain(
+        [
+          "## owner/product",
+          "",
+          "### Waiting on you",
+          "",
+          "- [#12](https://github.com/owner/product/issues/12) Design the thing: Design round unanswered for 3 days",
+          "- [#13](https://github.com/owner/product/issues/13) Operator work 13: ready-for-human for 30 hours",
+          "- [#50](https://github.com/owner/product/pull/50) Build the thing: at the Merge gate, Operator wait 5 hours",
+          "",
+        ].join("\n"),
+      );
+      expect(body).toContain(["## owner/other", "", "### Waiting on you", "", "Nothing waiting on you.", ""].join("\n"));
+    });
+
+    it("collapses the 11th item onward in a repo into details", () => {
+      const body = bodyOf(factsOf({ openIssues: Array.from({ length: 12 }, (_, i) => readyForHuman(100 + i, 100 - i)) }));
+      const shown = body.slice(0, body.indexOf("<details>"));
+      expect(shown).toContain("#109");
+      expect(shown).not.toContain("#110");
+      expect(body).toContain(
+        [
+          "<details><summary>2 more</summary>",
+          "",
+          "- [#110](https://github.com/owner/product/issues/110) Operator work 110: ready-for-human for 3 days",
+          "- [#111](https://github.com/owner/product/issues/111) Operator work 111: ready-for-human for 3 days",
+          "",
+          "</details>",
+        ].join("\n"),
+      );
+    });
+
+    it("lists the repo's Stuck work, and leaves Stuck out when nothing is", () => {
+      const stuckBody = bodyOf(
+        factsOf({
+          openIssues: [
+            anOpenIssue({
+              number: 20,
+              title: "It crashes",
+              labels: ["needs-info"],
+              labelEvents: [aLabelAdded("needs-info", hoursAgo(50))],
+              comments: [aComment("Version 2.", hoursAgo(26), { author: "someone", byBot: false })],
+            }),
+            anOpenIssue({ number: 7, title: "Build the other thing" }),
+          ],
+          openPullRequests: [anOpenPullRequest({ number: 51, title: "Build it", createdAt: hoursAgo(25) })],
+        }),
+      );
+      expect(stuckBody).toContain(
+        [
+          "### Stuck",
+          "",
+          "- [#20](https://github.com/owner/product/issues/20) It crashes: needs-info answered 26 hours ago, not picked up",
+          "- [#51](https://github.com/owner/product/pull/51) Build it: a draft with no activity for 25 hours",
+          "",
+        ].join("\n"),
+      );
+      const failedBody = weeklySummary(
+        input({
+          records: [aRunRecord({ endedAt: hoursAgo(49), jobResult: "cancelled", infrastructureFailure: "timeout" })],
+          facts: [factsOf({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" })] })],
+        }),
+      );
+      expect(failedBody).toMatchObject({
+        body: expect.stringContaining("- [#7](https://github.com/owner/product/issues/7) Build the thing: last run ended in an Infrastructure failure (timeout) 2 days ago"),
+      });
+      expect(bodyOf(factsOf())).not.toContain("Stuck");
+    });
+
+    it("links each repo's live searches for ready-for-human issues, open agent PRs and needs-design issues", () => {
+      expect(bodyOf(factsOf())).toContain(
+        "Live: [ready-for-human](https://github.com/owner/product/issues?q=is%3Aissue%20is%3Aopen%20label%3Aready-for-human)" +
+          " · [open agent PRs](https://github.com/owner/product/pulls?q=is%3Apr%20is%3Aopen%20head%3Afabrik%2Fticket-)" +
+          " · [needs-design](https://github.com/owner/product/issues?q=is%3Aissue%20is%3Aopen%20label%3Aneeds-design)",
+      );
+    });
+
+    it("keeps the Operator's one mention last, after every repo", () => {
+      const body = bodyOf(factsOf({ openIssues: [readyForHuman(13, 30)] }), factsOf({ repo: "owner/other" }));
+      expect(body.match(/@operator\b/g)).toHaveLength(1);
+      expect(body.trimEnd().endsWith("@operator")).toBe(true);
     });
   });
 
