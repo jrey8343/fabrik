@@ -30,7 +30,7 @@ Choose exactly one **state**:
 2. **No design, product or priority question is open.** There is one obvious way to build it, and nothing about it needs the Operator to decide.
 3. **It's a two-way door.** The change is cheap to undo: no data migration, no public API break, nothing irreversible.
 4. **Testable acceptance criteria can be written.** You can state, as checks a test could make, what done means.
-5. **It touches no trust-root file.** Building it needs no change to `AGENTS.md`, `CLAUDE.md`, any `.claude/settings*` file, skills, prompts, the `.fabrik/` folder, or anything under `.github/workflows/`.
+5. **It touches no trust-root file.** Building it needs no change to `AGENTS.md`, `CLAUDE.md`, `CODING_STANDARDS.md` at the repo root, any `.claude/settings*` file, skills, prompts, the `.fabrik/` folder, or anything under `.github/workflows/`.
 
 **Any doubt on any test sends the issue to `needs-design`.** Err toward asking the Operator. The Fast path is for work that is safe and clear, not merely likely to be fine.
 
