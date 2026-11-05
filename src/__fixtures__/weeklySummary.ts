@@ -1,7 +1,7 @@
 // Small builders for the Weekly summary's tests, matching anIssue, aPullRequest
 // and snapshotOf (./snapshots.ts): say only what a test cares about.
 import type { RunRecord } from "../kit/runRecord.ts";
-import type { AgentPullRequestFacts, GitHubFacts, LabelEvent, TicketFacts } from "../kit/weeklySummary.ts";
+import type { AgentPullRequestFacts, GitHubFacts, LabelEvent, SpecFacts, TicketFacts } from "../kit/weeklySummary.ts";
 
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -50,12 +50,17 @@ export function aLabelAdded(label: string, at: string, overrides: Partial<LabelE
   return { label, action: "labeled", actor: "fabrik-app[bot]", at, ...overrides };
 }
 
-/** Ticket 7 with this label timeline. */
+/** Ticket 7, still open, with this label timeline. */
 export function aTicketTimeline(labelEvents: readonly LabelEvent[], overrides: Partial<TicketFacts> = {}): TicketFacts {
-  return { number: 7, labelEvents, ...overrides };
+  return { number: 7, labelEvents, closedAt: null, ...overrides };
+}
+
+/** Spec 3, the parent of Ticket 7, with this label timeline. */
+export function aSpec(labelEvents: readonly LabelEvent[], overrides: Partial<SpecFacts> = {}): SpecFacts {
+  return { number: 3, labelEvents, tickets: [7], ...overrides };
 }
 
 /** The GitHub facts of `owner/product`, with nothing in them unless a test says so. */
 export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
-  return { repo: "owner/product", pullRequests: [], tickets: [], ...overrides };
+  return { repo: "owner/product", pullRequests: [], tickets: [], specs: [], ...overrides };
 }
