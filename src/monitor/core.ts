@@ -2,7 +2,7 @@
 // groups read this tick and every `fabrik:monitor` issue, what the Monitor
 // files, rewrites and closes, and the step summary's lines. Pure, no I/O: the
 // program (src/monitor/main.ts) gathers the facts and applies the plan.
-import type { KitConfig } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, type KitConfig } from "../kit/config.ts";
 import { type Label, MONITOR_LABEL, WONTFIX } from "../loop/labels.ts";
 import { monitorMarkerIn, RED_MAIN_MARKER, sentryGroupMarker } from "../loop/markers.ts";
 import type { FrameFacts, GroupFacts, LatestEventFacts } from "./sentry.ts";
@@ -14,7 +14,7 @@ export interface MonitorInput {
   readonly sentry: SentryRead | null;
   /** Every issue in the Product repo carrying fabrik:monitor, open or closed. */
   readonly issues: readonly MonitorIssue[];
-  /** The most open error issues the Monitor keeps at once; the Kit default of 5 when not given. */
+  /** The Kit config's `caps.monitor_issues`: the most open error issues the Monitor keeps at once, 0 pausing new ones; the Kit default when not given. */
   readonly cap?: number;
   /** ISO 8601. */
   readonly now: string;
@@ -100,9 +100,13 @@ export function monitorPlanFor(input: MonitorInput): MonitorPlan {
 
 /**
  * The Kit default for the most open error issues the Monitor keeps in a
- * Product repo. Past it, new groups are held until a slot frees up.
+ * Product repo, which `caps.monitor_issues` can only lower. Past it, new
+ * groups are held until a slot frees up.
  */
-const MONITOR_ISSUES_CAP = 5;
+const MONITOR_ISSUES_CAP = DEFAULT_KIT_CONFIG.caps.monitorIssues;
+
+/** What a cap of 0 does: every group that would be filed is held, and nothing else changes. */
+const FILINGS_PAUSED = "new error filings are paused by `caps.monitor_issues: 0`";
 
 /** The 1Password item holding the Sentry token, and its vault, which the push service account reads (ADR-0004). */
 const SENTRY_TOKEN_ITEM = "`Sentry token` item in the `Fabrik App` 1Password vault";
@@ -191,7 +195,8 @@ function productionErrors({ monitor, sentry, issues, cap = MONITOR_ISSUES_CAP }:
     );
   }
   if (held > 0) {
-    summary.push(`Held ${held} error group${held === 1 ? "" : "s"}: the cap of ${cap} open error issues is full.`);
+    const why = cap === 0 ? FILINGS_PAUSED : `the cap of ${cap} open error issues is full`;
+    summary.push(`Held ${held} error group${held === 1 ? "" : "s"}: ${why}.`);
   } else if (open.length === 0) {
     summary.push("No production error needs a new issue.");
   }
@@ -359,9 +364,10 @@ function statsLinesOf(group: GroupFacts, heldLine: string | null, release = rele
 /** How the stats block's held line starts. */
 const HELD_LINE = "- Held: ";
 
-/** The held line for this many groups held under the cap. */
+/** The held line for this many groups held under the cap, or while a cap of 0 pauses new error filings. */
 function heldLineOf(held: number, cap: number): string {
-  return `${HELD_LINE}${held} error group${held === 1 ? "" : "s"} waiting for a slot under the cap of ${cap} open error issues`;
+  const until = cap === 0 ? `while ${FILINGS_PAUSED}` : `for a slot under the cap of ${cap} open error issues`;
+  return `${HELD_LINE}${held} error group${held === 1 ? "" : "s"} waiting ${until}`;
 }
 
 /** The held line and the count it starts with, inside a stats block. */
