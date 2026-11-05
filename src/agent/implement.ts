@@ -12,7 +12,7 @@ import { sandboxEnv } from "../kit/secrets.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { verdictsIn } from "../github/threads.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
-import { givenOperatorComments, operatorCommentsSection } from "./operatorComments.ts";
+import { givenOperatorComments, operatorCommentId, operatorCommentsSection } from "./operatorComments.ts";
 import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -129,15 +129,14 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
 }
 
 /**
- * What a Request-changes run's prompt carries beyond the Ticket: the PR, and
- * the Operator's review that asked for the changes, its inline comments
- * included, then the Operator's other comments on the PR. The Kit job's plan named that review only once it checked the
- * Operator wrote it, so this is the Operator speaking.
+ * What a Request-changes run's prompt carries beyond the Ticket: the PR, the
+ * Operator's review that asked for the changes, and the Operator's other
+ * comments on the PR. The review's own inline comments are shown once, in the
+ * review, each under its id, so the run can still name them as weighed. The
+ * Kit job's plan named that review only once it checked the Operator wrote it,
+ * so this is the Operator speaking.
  */
-export async function requestChangesContext(
-  pullRequestFile: string,
-  reviewFile: string,
-): Promise<PullRequestRunContext> {
+export async function requestChangesContext(pullRequestFile: string, reviewFile: string): Promise<PullRequestRunContext> {
   const pullRequest = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
     title?: unknown;
@@ -148,17 +147,24 @@ export async function requestChangesContext(
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   const { review, comments } = (JSON.parse(await readFile(reviewFile, "utf8")) ?? {}) as {
     review?: { body?: unknown; state?: unknown };
-    comments?: { path?: unknown; line?: unknown; body?: unknown }[];
+    comments?: { id?: unknown; path?: unknown; line?: unknown; body?: unknown }[];
   };
   if (typeof review?.state !== "string" || review.state.toLowerCase() !== "changes_requested") {
     throw new Error(`FABRIK_REVIEW_FILE isn't a review requesting changes on #${number}`);
   }
   const body = typeof review.body === "string" ? review.body.trim() : "";
-  const inline = (comments ?? []).flatMap((comment) =>
-    typeof comment.body === "string" && typeof comment.path === "string"
-      ? [`### \`${comment.path}\`${typeof comment.line === "number" ? ` line ${comment.line}` : ""}`, comment.body.trimEnd()]
-      : [],
-  );
+  const inReview = new Set<string>();
+  const inline = (comments ?? []).flatMap((comment) => {
+    if (typeof comment.body !== "string" || typeof comment.path !== "string") return [];
+    const place = `\`${comment.path}\`${typeof comment.line === "number" ? ` line ${comment.line}` : ""}`;
+    if (typeof comment.id !== "number") return [`### ${place}`, comment.body.trimEnd()];
+    const id = operatorCommentId("inline", comment.id);
+    inReview.add(id);
+    return [`### \`${id}\`: ${place}`, comment.body.trimEnd()];
+  });
+  const others = Array.isArray(pullRequest.operatorComments)
+    ? (pullRequest.operatorComments as { id?: unknown }[]).filter(({ id }) => typeof id !== "string" || !inReview.has(id))
+    : [];
   return {
     pullRequest: number,
     parts: [
@@ -168,7 +174,7 @@ export async function requestChangesContext(
       "## The Operator's requested changes",
       body === "" ? "(The review has no summary; see its comments below.)" : body,
       ...(inline.length === 0 ? [] : ["## The Operator's comments on the code", ...inline]),
-      ...operatorCommentsSection(pullRequest.operatorComments),
+      ...operatorCommentsSection(others),
     ],
     operatorComments: givenOperatorComments(pullRequest.operatorComments),
   };

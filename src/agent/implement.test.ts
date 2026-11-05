@@ -93,6 +93,25 @@ describe("A run on an existing PR is shown the Operator's comments on it, apart 
     expect(text).toContain("The empty state should say \"Nothing here yet\".");
   });
 
+  it("a Request-changes run shows each of its review's inline comments once, in the review, under its id", async () => {
+    const review = await fileOf({
+      review: { state: "CHANGES_REQUESTED", body: "Rename the total." },
+      comments: [{ id: 4, path: "src/cart.ts", line: 12, body: "Also add a coupon field." }],
+    });
+
+    const { parts, operatorComments: given } = await requestChangesContext(
+      await fileOf({ ...pullRequest, operatorComments }),
+      review,
+    );
+
+    const text = parts.join("\n");
+    expect(text.split("Also add a coupon field.")).toHaveLength(2);
+    const requested = text.slice(text.indexOf("## The Operator's requested changes"), text.indexOf(OWN_SECTION));
+    expect(requested).toContain("### `inline-4`: `src/cart.ts` line 12\nAlso add a coupon field.");
+    expect(text.slice(text.indexOf(OWN_SECTION))).toContain("`conversation-3`");
+    expect(given.map((comment) => comment.id)).toEqual(["conversation-3", "inline-4"]);
+  });
+
   it("a retry and a Request-changes run each pass out the id and link of every comment they were given", async () => {
     const review = await fileOf({ review: { state: "CHANGES_REQUESTED", body: "Rename the total." }, comments: [] });
     const file = await fileOf({ ...pullRequest, operatorComments });
