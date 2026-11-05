@@ -17,7 +17,7 @@ import {
   WONTFIX,
 } from "./labels.ts";
 import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
-import { acknowledgeComment } from "./operatorComments.ts";
+import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
 import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
