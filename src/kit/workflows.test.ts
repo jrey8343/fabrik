@@ -25,8 +25,8 @@ describe("The Kit's workflows", () => {
     for (const action of local) expect(existsSync(new URL(`${action}/action.yml`, root)), action).toBe(true);
   });
 
-  it("loop.yml leaves reading GitHub to the Kit's Node program, never inline gh calls", () => {
-    expect(loop).not.toMatch(/\bgh (api|issue|pr) /);
+  it.each(workflows)("$path leaves reading GitHub to the Kit's Node program, never inline gh calls", ({ text }) => {
+    expect(text).not.toMatch(/\bgh (api|issue|pr|repo|release|run|workflow) /);
   });
 
   // Kept for reading a failed or timed-out run. Never fabrik-agent-*: the push job
@@ -48,7 +48,7 @@ describe("The Kit's workflows", () => {
   );
 
   // What the Run record (src/kit/runRecord.ts) needs of how each run started.
-  // Nothing in the push job reads them yet.
+  // The write the Run record action reads them from the push job's FABRIK_NEEDS.
   it("loop.yml's Kit job passes out which run it planned: its Retry number, Step-up and Request changes", () => {
     const kit = jobOf("kit");
 
@@ -71,10 +71,21 @@ describe("The Kit's workflows", () => {
     },
   );
 
-  it("loop.yml's push job reads none of the Run record's new outputs yet", () => {
-    const push = jobOf("push");
+  // Run records (ADR-0009): written after the Loop has applied its plan, whatever
+  // happened to it, and never able to fail or stall the push job.
+  it("loop.yml's push job writes the Run record after Run the Loop, always, and never fails on it", () => {
+    const steps = jobOf("push").split(/\n(?=      - )/);
+    const loopStep = steps.findIndex((step) => step.includes("name: Run the Loop"));
+    const recordStep = steps.findIndex((step) => step.includes("uses: ./kit/.github/actions/write-run-record"));
+    const record = steps[recordStep] ?? "";
 
-    for (const output of ["retry", "step-up", "request-changes", "base-sha"]) expect(push).not.toContain(`outputs.${output}`);
+    expect(recordStep, "the push job has no write the Run record step").toBeGreaterThan(-1);
+    expect(recordStep).toBeGreaterThan(loopStep);
+    expect(loopStep).toBeGreaterThan(-1);
+    expect(record).toContain("if: always()");
+    expect(record).toContain("continue-on-error: true");
+    expect(record).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
+    expect(record).toContain("role: ${{ needs.kit.outputs.route }}");
   });
 });
 

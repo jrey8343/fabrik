@@ -704,6 +704,18 @@ jobs:
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
 
+      # The run's Run record and transcript, to the fabrik-runs store (ADR-0009).
+      # always(), so a Loop that failed still leaves its record; continue-on-error,
+      # so a store problem never fails the push job or stalls the Loop. Without
+      # fabrik-runs it writes one step-summary line naming the setup step.
+      - name: Write the Run record
+        if: always()
+        continue-on-error: true
+        uses: ./kit/.github/actions/write-run-record
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          role: ${{ needs.kit.outputs.route }}
+
   # Dispatch (ADR-0001): runs when the push job's plan asked for a check, on a
   # fresh snapshot taken after that plan's labels landed. Like the push job, it
   # never checks out or runs Product code.
