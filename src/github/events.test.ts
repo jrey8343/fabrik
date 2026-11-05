@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loopEventFrom } from "./events.ts";
+import { agentRunEventFrom, loopEventFrom } from "./events.ts";
 
 describe("A push", () => {
   const push = (overrides: Record<string, unknown> = {}) => ({
@@ -120,6 +120,25 @@ describe("A comment on an issue", () => {
       commenter: "operator",
       commenterIsBot: false,
       body: "Yes, the second option.",
+      comment: 7003,
     });
+  });
+});
+
+describe("A finished Design-session turn", () => {
+  const result = { role: "design", issue: 7, output: "{}" } as const;
+
+  it("names the Operator's reply that started it", () => {
+    expect(agentRunEventFrom(result, null, null, 7003)).toEqual({
+      kind: "agent-run-finished",
+      role: "design",
+      issue: 7,
+      output: "{}",
+      startedBy: 7003,
+    });
+  });
+
+  it("names no reply when adding needs-design started it", () => {
+    expect(agentRunEventFrom(result)).toEqual({ kind: "agent-run-finished", role: "design", issue: 7, output: "{}" });
   });
 });

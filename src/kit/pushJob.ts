@@ -24,6 +24,8 @@ export type PushJobInput =
       readonly pullRequest: number | null;
       /** For a Request-changes run: the Operator's review. */
       readonly review: number | null;
+      /** For a Design-session turn the Operator's reply started: that comment, which must still exist for the turn to post. */
+      readonly startedBy: number | null;
     }
   | {
       readonly kind: "review";
@@ -46,10 +48,11 @@ const FAILED = ["failure", "cancelled"];
 
 /**
  * What the push job applies. `eventIssue` is the Actions event's issue number,
- * the run's subject for Triage and Design; an Implement or Review run's
+ * the run's subject for Triage and Design, and `eventComment` its comment's id
+ * when a comment on that issue started the run; an Implement or Review run's
  * Ticket and PR come from the Kit job's plan, which no agent can rewrite.
  */
-export function pushJobInput(needs: Needs, eventIssue: number | null): PushJobInput {
+export function pushJobInput(needs: Needs, eventIssue: number | null, eventComment: number | null = null): PushJobInput {
   const kit = needs["kit"];
   if (kit?.result !== "success") return { kind: "nothing", reason: "the Kit job didn't succeed" };
   const route = kit.outputs["route"] ?? "";
@@ -72,6 +75,8 @@ export function pushJobInput(needs: Needs, eventIssue: number | null): PushJobIn
         issue,
         pullRequest: route === "implement" ? pullRequest : null,
         review: route === "implement" ? numberOr(kit.outputs["review"]) : null,
+        // A Design turn routed from a comment answers that reply (src/loop/design.ts).
+        startedBy: route === "design" ? eventComment : null,
       };
     }
     case "review": {

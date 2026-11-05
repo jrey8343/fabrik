@@ -285,7 +285,7 @@ describe("Applying Triage output", () => {
 
 describe("A reply on a needs-info issue", () => {
   const commented = (commenter: string, commenterIsBot: boolean) =>
-    ({ kind: "issue-comment-created", issue: 7, commenter, commenterIsBot, body: "yes" }) as const;
+    ({ kind: "issue-comment-created", issue: 7, commenter, commenterIsBot, body: "yes", comment: 9001 }) as const;
 
   it("sends the issue back to needs-triage when a person replies", () => {
     const issue = anIssue({ number: 7, author: "kate", labels: ["bug", "needs-info"] });

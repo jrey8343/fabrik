@@ -44,6 +44,7 @@ export function loopEventFrom(
       commenter: comment.user.login,
       commenterIsBot: comment.user.type === "Bot",
       body: comment.body ?? "",
+      comment: comment.id,
     };
   }
   if (eventName === "issues" && payload["action"] === "closed") {
@@ -114,16 +115,20 @@ function changesKitConfig(payload: Record<string, unknown>): boolean {
 
 /**
  * Turns the result an agent job passed out as an artifact (src/agent/result.ts)
- * into the Loop event its push job applies.
+ * into the Loop event its push job applies. `startedBy` is the Operator's
+ * reply that started a Design-session turn, which the push job reads from its
+ * own Actions event, never from the agent's result.
  */
 export function agentRunEventFrom(
   result: AgentRunResult,
   changes: BranchChanges | null = null,
   retry: { readonly pullRequest: number; readonly runUrl: string; readonly requestChanges?: boolean } | null = null,
+  startedBy: number | null = null,
 ): LoopEvent {
   if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
   if (result.role !== "implement") {
-    return { kind: "agent-run-finished", role: result.role, issue: result.issue, output: result.output };
+    const finished = { kind: "agent-run-finished", role: result.role, issue: result.issue, output: result.output } as const;
+    return result.role === "design" && startedBy !== null ? { ...finished, startedBy } : finished;
   }
   if (result.branch === undefined || changes === null) {
     throw new Error("An Implement run's result needs the branch it built and the paths that branch changes");

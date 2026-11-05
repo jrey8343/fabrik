@@ -10,6 +10,7 @@ import type {
   PullRequestSnapshot,
   Snapshot,
   SpecSnapshot,
+  StartingComment,
   TicketSnapshot,
 } from "../loop/types.ts";
 import type { GitHub, Repo } from "./client.ts";
@@ -168,17 +169,32 @@ export async function gatherSnapshot(
   operator: string | null,
   actions: GitHub | null = null,
 ): Promise<Snapshot> {
-  const [{ owner, kitIssues }, part] = await Promise.all([
+  const [{ owner, kitIssues }, part, startingComment] = await Promise.all([
     gatherKitIssues(github, repo),
     gatherEventPart(github, repo, event, operator, actions),
+    gatherStartingComment(github, repo, event),
   ]);
   // A closed Ticket may be its Spec's last.
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
   // By default the Operator owns the Product repos they run Fabrik in.
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, spec, operator: operator ?? owner, kitIssues }
-    : { ...part, spec, kitIssues };
+    ? { issue: null, pullRequest: null, dispatch: null, spec, operator: operator ?? owner, kitIssues, startingComment }
+    : { ...part, spec, kitIssues, startingComment };
+}
+
+/**
+ * For a Design-session turn the Operator's reply started: whether that reply
+ * is still on the issue. Only a 404 means it was deleted; any other failed
+ * read fails the run, as every failed read does, and never counts as deleted.
+ */
+async function gatherStartingComment(github: GitHub, repo: Repo, event: LoopEvent): Promise<StartingComment | null> {
+  if (event.kind !== "agent-run-finished" || event.startedBy === undefined) return null;
+  const id = event.startedBy;
+  const comment = await github.rest("GET", `/repos/${repo.owner}/${repo.name}/issues/comments/${id}`, undefined, {
+    allowNotFound: true,
+  });
+  return { id, exists: comment !== null };
 }
 
 // A Spec's Tickets and the merged PRs that closed each. A Spec with more than 100 Tickets is far past v1.
@@ -281,7 +297,7 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment">;
 
 const KIT_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $labels: [String!]!) {

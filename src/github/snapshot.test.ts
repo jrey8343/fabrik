@@ -141,3 +141,77 @@ describe("Gathering a Dispatch check's Tickets", () => {
     expect(snapshot.dispatch?.tickets).toMatchObject([{ number: 6, openBlockers: [10], notPlannedBlockers: [9] }]);
   });
 });
+
+describe("Gathering a Design-session turn's starting reply", () => {
+  const issueData = {
+    repository: {
+      owner: { login: "acme" },
+      issue: {
+        number: 7,
+        state: "OPEN",
+        author: { login: "someone" },
+        labels: { nodes: [{ name: "needs-design" }] },
+        parent: null,
+        comments: { nodes: [] },
+        closedByPullRequestsReferences: { nodes: [] },
+        blockedBy: { nodes: [] },
+        blocking: { nodes: [] },
+      },
+    },
+  };
+
+  /** The Fabrik App's API, where GET on the reply answers as `reply` does. */
+  function githubWhere(reply: (options: { allowNotFound?: boolean }) => unknown) {
+    const reads: string[] = [];
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        return query.includes("issue(number: $number)") ? issueData : { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+      async rest(method: string, path: string, _body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<unknown> {
+        reads.push(`${method} ${path}`);
+        return reply(options);
+      },
+    } as unknown as GitHub;
+    return { github, reads };
+  }
+
+  const turn = (startedBy?: number) =>
+    ({ kind: "agent-run-finished", role: "design", issue: 7, output: "{}", ...(startedBy === undefined ? {} : { startedBy }) }) as const;
+
+  it("finds the reply still there", async () => {
+    const { github, reads } = githubWhere(() => ({ id: 7003 }));
+
+    const snapshot = await gatherSnapshot(github, repo, turn(7003), null);
+
+    expect(snapshot.startingComment).toEqual({ id: 7003, exists: true });
+    expect(reads).toEqual(["GET /repos/acme/shop/issues/comments/7003"]);
+  });
+
+  it("finds the reply gone when GitHub no longer has it", async () => {
+    const { github } = githubWhere((options) => {
+      expect(options.allowNotFound).toBe(true);
+      return null;
+    });
+
+    const snapshot = await gatherSnapshot(github, repo, turn(7003), null);
+
+    expect(snapshot.startingComment).toEqual({ id: 7003, exists: false });
+  });
+
+  it("fails, rather than calling the reply deleted, when the read itself fails", async () => {
+    const { github } = githubWhere(() => {
+      throw new Error("GitHub GET /repos/acme/shop/issues/comments/7003 failed: 502");
+    });
+
+    await expect(gatherSnapshot(github, repo, turn(7003), null)).rejects.toThrow("502");
+  });
+
+  it("reads no reply for a turn adding needs-design started", async () => {
+    const { github, reads } = githubWhere(() => ({ id: 1 }));
+
+    const snapshot = await gatherSnapshot(github, repo, turn(), null);
+
+    expect(snapshot.startingComment).toBeNull();
+    expect(reads).toEqual([]);
+  });
+});
