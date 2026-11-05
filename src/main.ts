@@ -9,7 +9,7 @@ import { type AgentBranchGit, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { applyPlan, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { GitHub, type Repo } from "./github/client.ts";
-import { agentFailureEventFrom, agentRunEventFrom, loopEventFrom, reviewEventFrom } from "./github/events.ts";
+import { agentFailureEventFrom, agentRunEventFrom, auditEventFrom, loopEventFrom, reviewEventFrom } from "./github/events.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
@@ -156,6 +156,7 @@ async function agentResultEvent(
   if (result.role !== input.role) throw new Error(`The agent's result is a ${result.role} result, not ${input.role}`);
   if (result.issue !== input.issue) throw new Error(`The agent's result is for #${result.issue}, not #${input.issue}`);
   const source = `the ${result.role} run on #${result.issue}`;
+  if (result.role === "audit") return { event: auditEventFrom(result, thisRunUrl()), source, branch: null };
   if (result.role !== "implement") {
     return { event: agentRunEventFrom(result, null, null, input.startedBy), source, branch: null };
   }

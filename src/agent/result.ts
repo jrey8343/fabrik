@@ -3,7 +3,7 @@
 // through the Loop rules core, which checks the output against its contract.
 // An Implement run also passes the branch it built, as a git bundle beside it.
 import { isGivenOperatorComment } from "../loop/considered.ts";
-import { AGENT_ROLES, type AgentRole, type GivenOperatorComment } from "../loop/types.ts";
+import { AGENT_ROLES, type AgentRole, type AuditWindow, type GivenOperatorComment } from "../loop/types.ts";
 
 /** The branch an Implement run built, which the push job reads back from the bundle. */
 export interface BuiltBranch {
@@ -29,6 +29,11 @@ export interface AgentRunResult {
    * the comment it posts links only those.
    */
   readonly operatorComments?: readonly GivenOperatorComment[];
+  /**
+   * For an Audit run: the hot-spot window the Kit gave it, recorded from its
+   * input before the agent ran, so the Audit says what it looked at first.
+   */
+  readonly window?: AuditWindow;
 }
 
 /** The artifact's file name, the same in both jobs. */
@@ -45,7 +50,7 @@ const REF = /^[A-Za-z0-9._/-]+$/;
 export function readAgentRunResult(text: string): AgentRunResult {
   const value: unknown = JSON.parse(text);
   if (typeof value !== "object" || value === null) throw new Error(`${AGENT_RESULT_FILE} is not a JSON object`);
-  const { role, issue, output, branch, operatorComments } = value as Record<string, unknown>;
+  const { role, issue, output, branch, operatorComments, window } = value as Record<string, unknown>;
   if (typeof role !== "string" || !AGENT_ROLES.includes(role as AgentRole)) {
     throw new Error(`${AGENT_RESULT_FILE} names an unknown role: ${JSON.stringify(role)}`);
   }
@@ -53,7 +58,10 @@ export function readAgentRunResult(text: string): AgentRunResult {
     throw new Error(`${AGENT_RESULT_FILE} names no issue`);
   }
   if (typeof output !== "string") throw new Error(`${AGENT_RESULT_FILE} has no output text`);
-  const given = operatorComments === undefined ? {} : { operatorComments: readGiven(operatorComments) };
+  const given = {
+    ...(operatorComments === undefined ? {} : { operatorComments: readGiven(operatorComments) }),
+    ...(window === undefined ? {} : { window: readWindow(window) }),
+  };
   if (role !== "implement") return { role: role as AgentRole, issue, output, ...given };
   return { role, issue, output, branch: readBranch(branch), ...given };
 }
@@ -63,6 +71,19 @@ function readGiven(value: unknown): GivenOperatorComment[] {
     throw new Error(`${AGENT_RESULT_FILE} has Operator comments that aren't each an id and a link`);
   }
   return value.map(({ id, url }) => ({ id, url }));
+}
+
+function readWindow(value: unknown): AuditWindow {
+  const fail = (): never => {
+    throw new Error(`${AGENT_RESULT_FILE} has a window that's neither since an Audit's commit nor a number of days`);
+  };
+  if (typeof value !== "object" || value === null) return fail();
+  const { kind, audit, commit, days } = value as Record<string, unknown>;
+  if (kind === "since-audit" && Number.isInteger(audit) && (audit as number) > 0 && typeof commit === "string" && SHA.test(commit)) {
+    return { kind, audit: audit as number, commit };
+  }
+  if (kind === "last-days" && Number.isInteger(days) && (days as number) > 0) return { kind, days: days as number };
+  return fail();
 }
 
 function readBranch(value: unknown): BuiltBranch {
