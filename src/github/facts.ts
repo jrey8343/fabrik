@@ -381,10 +381,6 @@ function labelEventsOf(nodes: readonly RawLabelEvent[]): LabelEvent[] {
   }));
 }
 
-/**
- * A login as REST and the summary spell it. GraphQL gives a GitHub App's bot
- * user without its `[bot]` suffix; a deleted account is `ghost`.
- */
 interface InstallationRepositories {
   total_count: number;
   repositories: { full_name: string; name: string; owner: { login: string }; default_branch: string }[];
