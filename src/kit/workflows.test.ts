@@ -51,7 +51,7 @@ describe("The Kit's workflows", () => {
 
   // Kept for reading a failed or timed-out run. Never fabrik-agent-*: the push job
   // downloads those, and reads an empty download as a timeout.
-  it.each(["triage", "design", "implement", "review"])(
+  it.each(["triage", "design", "implement", "review", "audit"])(
     "loop.yml's %s job always uploads its gzipped transcript, apart from the push job's artifacts",
     (job) => {
       const body = loop.split(/\n(?=  [a-z-]+:\n)/).find((section) => section.startsWith(`  ${job}:\n`))!;
@@ -77,7 +77,7 @@ describe("The Kit's workflows", () => {
     expect(kit).toContain("request-changes: ${{ steps.route.outputs.request-changes }}");
   });
 
-  it.each(["triage", "design", "implement", "review"])(
+  it.each(["triage", "design", "implement", "review", "audit"])(
     "loop.yml's %s job passes out the model and effort it ran and the commit it started from",
     (job) => {
       const body = jobIn(loop, job);
@@ -119,7 +119,7 @@ describe("The Kit's workflows", () => {
   });
 
   // A Step-up run is an Implement run on a stronger model, so it gets implement's Extra skills.
-  it.each(["triage", "design", "implement", "review"])(
+  it.each(["triage", "design", "implement", "review", "audit"])(
     "loop.yml's %s job passes its role to prepare-agent, which fetches the skills before any secret loads",
     (role) => {
       const steps = stepsOf(jobIn(loop, role));
@@ -131,6 +131,13 @@ describe("The Kit's workflows", () => {
       expect(firstSecret).toBeGreaterThan(prepare);
     },
   );
+
+  it("prepare-agent hands an Auditor run's marked commit to the agent-inputs step, which reads its inputs for it", () => {
+    const inputs = prepareAgent.split(/\n(?=    - )/).find((step) => step.includes("src/agent/inputs.ts"));
+
+    expect(prepareAgent).toMatch(/\n  audit-commit:\n\s+description: .*\n\s+required: false\n\s+default: ""\n/);
+    expect(inputs).toContain("FABRIK_AUDIT_COMMIT: ${{ inputs.audit-commit }}");
+  });
 
   it("prepare-agent installs the Base skills plus its role's Extra skills, and holds no secret", () => {
     expect(prepareAgent).toMatch(/\n  role:\n\s+description: .*\n\s+required: true\n/);
@@ -193,6 +200,53 @@ function job(name: string): string {
   if (body === undefined) throw new Error(`loop.yml has no ${name} job`);
   return body;
 }
+
+describe("loop.yml's Audit job", () => {
+  const audit = (): string => job("audit");
+  const checkout = (): string => stepsOf(audit()).find((step) => step.includes("uses: actions/checkout@") && !step.includes("repository:"))!;
+
+  it("holds only read permissions", () => {
+    const permissions = /\n    permissions:\n((?: {6}.*\n)+)/.exec(audit())?.[1] ?? "";
+
+    expect(permissions.trim().split("\n").map((line) => line.trim())).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
+  });
+
+  it("holds only the agent service account, which loads the Claude token, and no GitHub write credential", () => {
+    expect(audit()).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}");
+    expect(audit()).not.toContain("OP_PUSH_TOKEN");
+    expect(audit()).not.toContain("OP_IMPLEMENT_TOKEN");
+    expect(audit()).not.toContain("id-token");
+    expect(audit()).not.toMatch(/GH_TOKEN|create-github-app-token/);
+  });
+
+  it("checks out the Product repo at the pending Audit's marked commit, with its full history and no credential left behind", () => {
+    expect(checkout()).toContain("path: product");
+    expect(checkout()).toContain("ref: ${{ needs.kit.outputs.audit-commit }}");
+    expect(checkout()).toContain("fetch-depth: 0");
+    expect(checkout()).toContain("persist-credentials: false");
+    expect(job("kit")).toContain("audit-commit: ${{ steps.route.outputs.audit-commit }}");
+  });
+
+  it("runs only when the Kit job routed to it, within the Auditor's timeout", () => {
+    expect(audit()).toContain("if: needs.kit.outputs.route == 'audit'");
+    expect(audit()).toContain("timeout-minutes: ${{ fromJSON(needs.kit.outputs.audit-timeout-minutes) }}");
+    expect(job("kit")).toContain("audit-timeout-minutes: ${{ steps.route.outputs.audit-timeout-minutes }}");
+  });
+
+  it("is in the push job's needs, so the push job fills in or fails the Audit once it has ended", () => {
+    const needs = /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ");
+
+    expect(needs).toContain("audit");
+  });
+});
+
+describe("schedule.yml's tick, which opens the pending Audit", () => {
+  it("holds only the push service account, so the Auditor's run needs no change to the shim", () => {
+    expect(schedule).toMatch(/on:\n {2}workflow_call:\n {4}secrets:\n {6}OP_PUSH_TOKEN:\n(?: {8}.*\n)+\n/);
+    expect(schedule).not.toContain("OP_AGENT_TOKEN");
+    expect(schedule).not.toContain("OP_IMPLEMENT_TOKEN");
+  });
+});
 
 describe("loop.yml's Design queue job", () => {
   const queue = (): string => job("design-queue");

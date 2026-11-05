@@ -1,0 +1,79 @@
+// The Audits in a Product repo (#150), read from the `fabrik:audit` issues the
+// Fabrik App opened through their marker lines (src/loop/markers.ts). The
+// tick opens each one pending; the Auditor's run fills it in or fails it.
+import { AUDIT_LABEL } from "./labels.ts";
+import { auditMarksIn } from "./markers.ts";
+import type { AuditIssueSnapshot, IssueSnapshot, KitConfig, Plan } from "./types.ts";
+
+/** An Audit as the Kit reads it from its issue. */
+export interface Audit {
+  readonly number: number;
+  readonly open: boolean;
+  /** When the tick opened it, as an ISO 8601 time. */
+  readonly createdAt: string;
+  /** The commit it reads, from its audit marker, or null when its body has none. */
+  readonly commit: string | null;
+  /** Whether it's still waiting on its run. */
+  readonly pending: boolean;
+  /** Whether its run failed, which leaves it closed and never the last Audit. */
+  readonly failed: boolean;
+  /** Whether its run filled it with candidates; a clean Audit, which closed itself, has none. */
+  readonly filled: boolean;
+}
+
+/**
+ * The heading a filled Audit ends its candidates with (src/loop/auditLanding.ts).
+ * Only a filled Audit has it, so it's how a filled Audit is told from a clean one.
+ */
+export const TOP_RECOMMENDATION_HEADING = "## Top recommendation";
+
+/**
+ * The Audits among these `fabrik:audit` issues, newest first. Only an issue
+ * the Fabrik App opened is one: a person's issue with the label or a quoted
+ * marker counts for nothing.
+ */
+export function auditsIn(issues: readonly AuditIssueSnapshot[]): Audit[] {
+  return issues
+    .filter((issue) => issue.byApp)
+    .map(({ number, open, createdAt, body }) => {
+      const marks = auditMarksIn(body);
+      const filled = !marks.pending && !marks.failed && body.split("\n").some((line) => line.trim() === TOP_RECOMMENDATION_HEADING);
+      return { number, open, createdAt, ...marks, filled };
+    })
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.number - a.number);
+}
+
+/**
+ * The last Audit: the newest one the Fabrik App opened whose run didn't fail,
+ * whatever its state, or null before the first.
+ */
+export function lastAudit(issues: readonly AuditIssueSnapshot[]): Audit | null {
+  return auditsIn(issues).find((audit) => !audit.failed) ?? null;
+}
+
+/**
+ * Whether this issue is the Fabrik App's open Audit still waiting on its run:
+ * the only issue an Auditor run starts for, or fails. A person's issue with
+ * the label or a quoted marker never is.
+ */
+export function isPendingAudit(issue: IssueSnapshot): boolean {
+  return issue.open && issue.byApp && issue.labels.includes(AUDIT_LABEL) && auditMarksIn(issue.body).pending;
+}
+
+/**
+ * The plan for the App's pending Audit, once it's opened: an Auditor run on
+ * roles.audit's model, effort and timeout, reading up to the Audit's marked
+ * commit, which its job checks out. One whose body has lost its audit marker
+ * names nothing to read, so it starts nothing.
+ */
+export function startAuditorRun(audit: IssueSnapshot, config: KitConfig): Plan {
+  const { commit } = auditMarksIn(audit.body);
+  if (commit === null) {
+    return { kind: "nothing", reason: `#${audit.number} is a pending Audit with no audit marker, so it names no commit to read` };
+  }
+  const { model, effort, timeoutMinutes } = config.roles.audit;
+  return {
+    kind: "act",
+    actions: [{ kind: "start-agent-run", role: "audit", issue: audit.number, commit, model, effort, timeoutMinutes }],
+  };
+}

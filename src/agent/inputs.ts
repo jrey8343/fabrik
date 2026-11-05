@@ -10,12 +10,20 @@
 //                                in operatorComments (sentBack carries them too, for the closed PR)
 //   FABRIK_PULL_REQUEST_COMMENTS "true" for a retry, whose PR file carries the PR's comments and their authors' kind
 //   FABRIK_REVIEW                optional, a Request-changes run's review on that PR: writes review.json
+//   FABRIK_AUDIT_COMMIT          for an Auditor run, the pending Audit's marked commit (FABRIK_ISSUE is the
+//                                Audit): writes audit.json, the Auditor's inputs (readAuditInputs)
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { GitHub, type Repo } from "../github/client.ts";
+import { GitHub, pagesOf, type Repo } from "../github/client.ts";
+import { gatherAuditSlice } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
+import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
+import { type Audit, auditsIn, lastAudit } from "../loop/audit.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
+import { fromAuditIn } from "../loop/markers.ts";
+import type { AuditIssueSnapshot, AuditWindow } from "../loop/types.ts";
+import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
 import { operatorCommentId, type OperatorComment } from "./operatorComments.ts";
 
 /** What these reads need of a GitHub client. */
@@ -327,6 +335,225 @@ export async function readReview(github: Reader, repo: Repo, pullRequest: number
   return { review: await github.rest("GET", path), comments };
 }
 
+// --- An Auditor run's inputs (#150) -----------------------------------------
+
+/** The Audit an Auditor run fills in: the pending one, at the commit its audit marker names. */
+export interface PendingAudit {
+  readonly number: number;
+  /** The marked commit, which the job checks out. */
+  readonly commit: string;
+}
+
+/** An agent PR merged in the hot-spot window, which is all the Auditor may name under "Introduced by". */
+export interface MergedAgentPullRequest {
+  readonly number: number;
+  readonly title: string;
+  readonly mergeCommit: string | null;
+  readonly headRefName: string;
+  readonly mergedAt: string;
+  /** The repo paths it changed. */
+  readonly files: readonly string[];
+}
+
+/** One of the last closed Audits that had candidates, which the Auditor doesn't repeat itself against. */
+export interface ClosedAudit {
+  readonly number: number;
+  readonly title: string;
+  readonly commit: string | null;
+  /** How the Operator closed it: completed when they filed something, not planned otherwise. */
+  readonly closedAs: AuditIssueSnapshot["stateReason"];
+  /** The filled Audit, its candidates' cards included. */
+  readonly body: string;
+  /** What the Operator wrote on it, oldest first: context, never a trigger (ADR-0007). */
+  readonly operatorComments: readonly { readonly url: string; readonly createdAt: string; readonly body: string }[];
+}
+
+/** An open issue filed from an Audit, whose candidate the Auditor skips while it's open. */
+export interface FiledCandidate {
+  readonly number: number;
+  readonly title: string;
+  /** The Audit its `From audit #n` line names. */
+  readonly fromAudit: number;
+  readonly body: string;
+}
+
+/** Where the inputs step writes an Auditor run's inputs, beside issue.json. */
+export const AUDIT_INPUTS_FILE = "audit.json";
+
+/** What an Auditor run is given beyond the pending Audit's own issue, written to AUDIT_INPUTS_FILE. */
+export interface AuditInputs {
+  /** The pending Audit, which the Auditor's prompt names with its marked commit. */
+  readonly audit: PendingAudit;
+  /** The hot-spot window, which the agent job copies into its result for the landing to name. */
+  readonly window: AuditWindow;
+  /** The files merged agent PRs keep changing with no doc changed beside them (src/agent/comprehensionDrift.ts). */
+  readonly drift: readonly DriftFile[];
+  readonly closedAudits: readonly ClosedAudit[];
+  readonly filedCandidates: readonly FiledCandidate[];
+  readonly pullRequests: readonly MergedAgentPullRequest[];
+}
+
+/** How many closed Audits the Auditor weighs the Operator's rejections from. */
+const CLOSED_AUDITS = 3;
+
+const MERGED_PULL_REQUESTS_QUERY = `
+  query ($owner: String!, $name: String!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequests(states: MERGED, first: 50, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
+        pageInfo { hasNextPage endCursor }
+        nodes { number title mergedAt updatedAt headRefName author { __typename } mergeCommit { oid } }
+      }
+    }
+  }
+`;
+
+interface MergedPullRequestNode {
+  number: number;
+  title: string;
+  mergedAt: string;
+  updatedAt: string;
+  headRefName: string;
+  author: { __typename: string } | null;
+  mergeCommit: { oid: string } | null;
+}
+
+const OPEN_ISSUES_QUERY = `
+  query ($owner: String!, $name: String!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { number title body }
+      }
+    }
+  }
+`;
+
+const DAY_MS = 86_400_000;
+
+/** How far back the window falls back to, from the pending Audit. */
+const FALLBACK_DAYS = 30;
+
+/** Whether `from` is an ancestor of `to` on GitHub; a commit GitHub no longer has (a force-push) isn't. */
+async function isAncestor(github: Reader, repo: Repo, from: string, to: string): Promise<boolean> {
+  const path = `/repos/${repo.owner}/${repo.name}/compare/${from}...${to}?per_page=1`;
+  const comparison = (await github.rest("GET", path, undefined, { allowNotFound: true })) as { status?: string } | null;
+  return comparison?.status === "ahead" || comparison?.status === "identical";
+}
+
+/**
+ * What an Auditor run is given, read through the job's read-only token, for
+ * the pending Audit at its marked commit:
+ * - the hot-spot window, from the last Audit's commit to the marked commit, or
+ *   the 30 days before the pending Audit on a first run or when that commit
+ *   isn't an ancestor of the marked one (a force-push);
+ * - the comprehension drift over those 30 days;
+ * - the last 3 closed Audits that had candidates, with the Operator's comments;
+ * - the open issues filed from an Audit, by their `From audit #n` line;
+ * - the agent PRs merged in the window, with their changed files.
+ * Only Audits the Fabrik App opened count, and a failed one is never the last
+ * Audit (src/loop/audit.ts). Everything here is data for the Auditor, never
+ * instructions to it.
+ */
+export async function readAuditInputs(github: Reader, repo: Repo, audit: PendingAudit, operator: string): Promise<AuditInputs> {
+  const { issues } = await gatherAuditSlice(github, repo);
+  const audits = auditsIn(issues);
+  const pendingAudit = audits.find((each) => each.number === audit.number);
+  if (pendingAudit === undefined) throw new Error(`Audit #${audit.number} isn't an Audit the Fabrik App opened`);
+  const openedAt = pendingAudit.createdAt;
+  const last = lastAudit(issues.filter((issue) => issue.number !== audit.number));
+
+  // The window starts at the last Audit's commit, when the tick opened it, or 30 days back.
+  const window = await windowOf(github, repo, last, audit.commit);
+  const until = Date.parse(openedAt);
+  const since = window.kind === "since-audit" && last !== null ? Date.parse(last.createdAt) : until - FALLBACK_DAYS * DAY_MS;
+  // The agent PRs merged in the window, or in the 30 days drift looks back over, whichever reaches further.
+  const earliest = Math.min(since, until - DRIFT_DAYS * DAY_MS);
+  const merged = await pagesOf<MergedPullRequestNode>(
+    github,
+    MERGED_PULL_REQUESTS_QUERY,
+    repo,
+    {},
+    (data) => data.repository.pullRequests,
+    (page) => page.some((pr) => Date.parse(pr.updatedAt) < earliest),
+  );
+  const byApp = (pr: MergedPullRequestNode): boolean => pr.author?.__typename === "Bot";
+  const agentPullRequests = await Promise.all(
+    merged
+      .filter((pr) => {
+        const at = Date.parse(pr.mergedAt);
+        return at >= earliest && at <= until && isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: byApp(pr) });
+      })
+      .map(async (pr) => {
+        const changed = await allPages<{ filename: string }>(github, `/repos/${repo.owner}/${repo.name}/pulls/${pr.number}/files`);
+        return { pr, files: changed.map((file) => file.filename) };
+      }),
+  );
+  const drift = comprehensionDrift(
+    agentPullRequests.map(({ pr, files }) => ({ mergedAt: pr.mergedAt, headRef: pr.headRefName, authorIsBot: byApp(pr), files })),
+    openedAt,
+  );
+  const pullRequests = agentPullRequests
+    .filter(({ pr }) => Date.parse(pr.mergedAt) > since)
+    .map(({ pr, files }) => ({
+      number: pr.number,
+      title: pr.title,
+      mergeCommit: pr.mergeCommit?.oid ?? null,
+      headRefName: pr.headRefName,
+      mergedAt: pr.mergedAt,
+      files,
+    }));
+  const closedAudits = await Promise.all(
+    audits
+      .filter((each) => !each.open && each.filled)
+      .slice(0, CLOSED_AUDITS)
+      .map(async ({ number, commit }) => {
+        const issue = issues.find((each) => each.number === number);
+        return {
+          number,
+          title: issue?.title ?? "",
+          commit,
+          closedAs: issue?.stateReason ?? null,
+          body: issue?.body ?? "",
+          operatorComments: await operatorCommentsOnIssue(github, repo, number, operator),
+        };
+      }),
+  );
+  const open = await pagesOf<{ number: number; title: string; body: string }>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues);
+  const filedCandidates = open.flatMap(({ number, title, body }) => {
+    const fromAudit = fromAuditIn(body);
+    return fromAudit === null ? [] : [{ number, title, fromAudit, body }];
+  });
+  return { audit, window, drift, closedAudits, filedCandidates, pullRequests };
+}
+
+/** The Operator's comments on an issue, oldest first; bots' and other people's are left out. */
+async function operatorCommentsOnIssue(
+  github: Reader,
+  repo: Repo,
+  issue: number,
+  operator: string,
+): Promise<ClosedAudit["operatorComments"]> {
+  const comments = await allPages<{ user: RestUser | null; body: string | null; created_at: string; html_url: string }>(
+    github,
+    `/repos/${repo.owner}/${repo.name}/issues/${issue}/comments`,
+  );
+  return comments
+    .filter((comment) => comment.user?.login === operator && comment.user.type !== "Bot")
+    .map((comment) => ({ url: comment.html_url, createdAt: comment.created_at, body: comment.body ?? "" }));
+}
+
+/**
+ * What changed since the last Audit's commit, up to the marked commit; or the
+ * 30 days up to the marked commit on a first run, or when that commit isn't
+ * an ancestor of the marked one (a force-push).
+ */
+async function windowOf(github: Reader, repo: Repo, last: Audit | null, to: string): Promise<AuditWindow> {
+  if (last === null || last.commit === null || !(await isAncestor(github, repo, last.commit, to))) {
+    return { kind: "last-days", days: FALLBACK_DAYS };
+  }
+  return { kind: "since-audit", audit: last.number, commit: last.commit };
+}
+
 function optionalNumber(name: string): number | null {
   const text = process.env[name] ?? "";
   if (text === "") return null;
@@ -358,6 +585,8 @@ async function main(outDir: string): Promise<void> {
   if (issueNumber === null) throw new Error("FABRIK_ISSUE is not set");
   const pullRequest = optionalNumber("FABRIK_PULL_REQUEST");
   const review = optionalNumber("FABRIK_REVIEW");
+  const auditCommit = process.env["FABRIK_AUDIT_COMMIT"] ?? "";
+  if (auditCommit !== "" && !/^[0-9a-f]{40}$/.test(auditCommit)) throw new Error("FABRIK_AUDIT_COMMIT is not a full commit SHA");
 
   const operator = await operatorOf(PRODUCT_DIR, owner);
   const { issue, spec } = await readIssue(github, repo, issueNumber, operator);
@@ -370,6 +599,10 @@ async function main(outDir: string): Promise<void> {
       JSON.stringify(await readPullRequest(github, repo, pullRequest, { withComments, operator })),
     );
     if (review !== null) await writeFile(join(outDir, "review.json"), JSON.stringify(await readReview(github, repo, pullRequest, review)));
+  }
+  if (auditCommit !== "") {
+    const inputs = await readAuditInputs(github, repo, { number: issueNumber, commit: auditCommit }, operator);
+    await writeFile(join(outDir, AUDIT_INPUTS_FILE), JSON.stringify(inputs));
   }
 }
 

@@ -6,8 +6,10 @@ import type {
   AgentPullRequestFacts,
   CommentFacts,
   CommitFacts,
+  EscapeMarkerIssueFacts,
   GitHubFacts,
   LabelEvent,
+  OpenAuditFacts,
   OpenIssueFacts,
   OpenPullRequestFacts,
   ReviewFacts,
@@ -52,6 +54,11 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     transcript: null,
     ...overrides,
   };
+}
+
+/** An Auditor's run on Audit 90 in `owner/product`, costing $1. */
+export function anAuditRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
+  return aRunRecord({ role: "audit", issue: 90, pullRequest: null, ...overrides });
 }
 
 /** A run's cost fields when one of its models has an unknown cost basis: no figure for it, and no total. */
@@ -152,8 +159,20 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     openIssues: [],
     openPullRequests: [],
     designQueue: { issues: [], designTurnsInProgress: [] },
+    escapeMarkerIssues: [],
+    openAudits: [],
     ...overrides,
   };
+}
+
+/** Issue 80, "Make the cart module deeper", which the Operator opened on 2026-11-03 with `body`, still open. */
+export function anEscapeMarkerIssue(body: string, overrides: Partial<EscapeMarkerIssueFacts> = {}): EscapeMarkerIssueFacts {
+  return { number: 80, title: "Make the cart module deeper", author: "operator", createdAt: "2026-11-03T00:00:00Z", state: "open", body, ...overrides };
+}
+
+/** Audit 90, which the Fabrik App opened on 2026-11-01 and nobody has closed. */
+export function anOpenAudit(overrides: Partial<OpenAuditFacts> = {}): OpenAuditFacts {
+  return { number: 90, title: "Audit: week of 2026-10-26", author: "fabrik-app[bot]", createdAt: "2026-11-01T00:00:00Z", ...overrides };
 }
 
 /** The Fabrik App's comment `body` at `at`; a person's with `{ author, byBot: false }`. */

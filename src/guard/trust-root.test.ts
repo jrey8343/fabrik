@@ -24,6 +24,7 @@ describe("Trust-root guard", () => {
     ["the Kit's Implement prompt", "prompts/implement.md"],
     ["the Kit's Triage prompt", "prompts/triage.md"],
     ["the Kit's Design prompt", "prompts/design.md"],
+    ["the Kit's Audit prompt", "prompts/audit.md"],
     ["the Kit's Efficiency rubric", "prompts/scorers/efficiency.md"],
     ["a new rubric beside the Kit's", "prompts/scorers/verbosity.md"],
     ["the Kit config", ".fabrik/config.yml"],

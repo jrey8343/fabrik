@@ -1,7 +1,10 @@
-// The markers the Kit's comments open with. The core writes them; the adapter
-// reads a thread's comments back through them into the snapshot
-// (src/github/threads.ts), so the Loop's history lives on GitHub alone.
-import type { VerdictRecord } from "./types.ts";
+// The markers the Kit's comments open with, and the marker lines it puts in
+// issue bodies: an Audit's own, and the `From audit #n` line and escape marker
+// an Audit candidate's filed issue ends with (#150). The core writes them; the
+// adapter reads a thread's comments back through them into the snapshot
+// (src/github/threads.ts), and the body lines are read from the issues
+// themselves, so the Loop's history lives on GitHub alone.
+import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
@@ -47,3 +50,99 @@ export const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 
 /** The first line of the Kit's note that a Ticket came back to design from an agent PR. */
 export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
+
+/**
+ * An Architectural escape's record (#150): `<!-- fabrik:escape <strength> #<pr> #<pr> -->`,
+ * the hidden line an Audit candidate's prefilled issue body ends with when it
+ * traces to merged agent PRs. It can sit anywhere in a body, since a Design
+ * session's rewrite carries it forward, and the Operator may paste one by hand.
+ */
+const ESCAPE_MARKER = /<!--\s*fabrik:escape(\s[^>]*?)?\s*-->/;
+
+/**
+ * A line that is an escape marker and nothing else, matched against the line
+ * with its outer whitespace trimmed: the line a Design session's rewrite
+ * carries forward (src/loop/carriedLines.ts).
+ */
+export const ESCAPE_MARKER_LINE = new RegExp(`^${ESCAPE_MARKER.source}$`);
+
+/** What an escape marker says, read as written. */
+export interface EscapeMarker {
+  /** The word in the Strength's place, known or not, or null when the marker opens with a PR. */
+  readonly strength: string | null;
+  /** The PR numbers it names, in order. */
+  readonly pullRequests: readonly number[];
+}
+
+/** The escape marker for a candidate of this Strength that traces to these merged agent PRs, which escapeMarkerIn reads back. */
+export function escapeMarker(strength: Strength, pullRequests: readonly number[]): string {
+  return `<!-- fabrik:escape ${[strength, ...pullRequests.map((pullRequest) => `#${pullRequest}`)].join(" ")} -->`;
+}
+
+/** The first escape marker in `body`, or null if it has none. */
+export function escapeMarkerIn(body: string): EscapeMarker | null {
+  const match = ESCAPE_MARKER.exec(body);
+  if (match === null) return null;
+  const words = (match[1] ?? "").split(/\s+/).filter((word) => word !== "");
+  const first = words[0];
+  return {
+    strength: first === undefined || first.startsWith("#") ? null : first,
+    pullRequests: words.flatMap((word) => {
+      const pullRequest = /^#([1-9][0-9]*)$/.exec(word);
+      return pullRequest === null ? [] : [Number(pullRequest[1])];
+    }),
+  };
+}
+
+/**
+ * The line an Audit candidate's filed issue ends with, naming the Audit it
+ * came from (#150), matched against a whole line with its outer whitespace
+ * trimmed. A Design session's rewrite carries it forward.
+ */
+export const FROM_AUDIT_LINE = /^From audit #([1-9][0-9]*)$/;
+
+/** The `From audit #n` line for a candidate filed from Audit #`audit`, which fromAuditIn reads back. */
+export function fromAuditLine(audit: number): string {
+  return `From audit #${audit}`;
+}
+
+/** The Audit the first `From audit #n` line in `body` names, or null if it has none. */
+export function fromAuditIn(body: string): number | null {
+  const line = body
+    .split("\n")
+    .map((each) => FROM_AUDIT_LINE.exec(each.trim()))
+    .find((match) => match !== null);
+  return line === undefined || line === null ? null : Number(line[1]);
+}
+
+/**
+ * An Audit's marker line (#150): `<!-- fabrik:audit <sha> -->`, the commit the
+ * Audit reads, which was the default branch's head when the tick opened it.
+ * Its body keeps the line through every state.
+ */
+export function auditMarker(sha: string): string {
+  return `<!-- fabrik:audit ${sha} -->`;
+}
+
+/** The marker line on an Audit still waiting on its run. */
+export const AUDIT_PENDING_MARKER = "<!-- fabrik:audit-pending -->";
+
+/** The marker line on an Audit whose run failed, in place of the pending one. */
+export const AUDIT_FAILED_MARKER = "<!-- fabrik:audit-failed -->";
+
+const AUDIT_MARKER = /^<!-- fabrik:audit ([0-9a-f]{40}) -->$/;
+
+/** What an Audit's body says through its marker lines. Only a body the Fabrik App wrote is read for them. */
+export interface AuditMarks {
+  /** The commit its audit marker names, or null when it has none. */
+  readonly commit: string | null;
+  readonly pending: boolean;
+  readonly failed: boolean;
+}
+
+/** The Audit marker lines in `body`, each matched against a whole line with its outer whitespace trimmed. */
+export function auditMarksIn(body: string): AuditMarks {
+  const lines = body.split("\n").map((line) => line.trim());
+  const commit = lines.map((line) => AUDIT_MARKER.exec(line)?.[1]).find((sha) => sha !== undefined) ?? null;
+  return { commit, pending: lines.includes(AUDIT_PENDING_MARKER), failed: lines.includes(AUDIT_FAILED_MARKER) };
+}

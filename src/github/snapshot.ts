@@ -2,20 +2,24 @@
 // needs, fresh rather than from the event payload, into the snapshot the core
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
 import {
+  INSTRUCTED_ROLES,
   instructionsPath,
   KIT_CONFIG_PATH,
   type KitConfigSources,
-  PHASES,
   SKILLS_SOURCES_LOCK_PATH,
 } from "../kit/config.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
-import { DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
+import { parseAuditOutput } from "../loop/auditOutput.ts";
+import { AUDIT_LABEL, DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
+  AuditIssueSnapshot,
+  AuditSnapshot,
   DesignQueueIssue,
   DesignQueueSnapshot,
   KitIssueSnapshot,
   LoopEvent,
+  NamedPullRequestSnapshot,
   PullRequestSnapshot,
   Snapshot,
   SpecSnapshot,
@@ -32,7 +36,8 @@ const ISSUE_QUERY = `
       issue(number: $number) {
         number
         state
-        author { login }
+        author { login __typename }
+        body
         labels(first: 100) { nodes { name } }
         parent { number }
         comments(last: 100) { nodes { body createdAt author { __typename } } }
@@ -57,7 +62,8 @@ interface IssueQueryResult {
     issue: {
       number: number;
       state: "OPEN" | "CLOSED";
-      author: { login: string } | null;
+      author: { login: string; __typename: string } | null;
+      body: string;
       labels: { nodes: { name: string }[] };
       parent: { number: number } | null;
       comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
@@ -245,18 +251,109 @@ export async function gatherSnapshot(
   operator: string | null,
   actions: GitHub | null = null,
 ): Promise<Snapshot> {
-  const [{ owner, kitIssues }, part, startingComment] = await Promise.all([
+  const [{ owner, kitIssues }, part, startingComment, audit, namedPullRequests] = await Promise.all([
     gatherKitIssues(github, repo),
     gatherEventPart(github, repo, event, operator, actions),
     gatherStartingComment(github, repo, event),
+    event.kind === "scheduled-tick" ? gatherAuditSlice(github, repo) : null,
+    event.kind === "audit-run-finished" ? gatherNamedPullRequests(github, repo, event.output) : null,
   ]);
   // A closed Ticket may be its Spec's last.
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
   // By default the Operator owns the Product repos they run Fabrik in.
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment }
-    : { ...part, spec, kitIssues, startingComment };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment, audit, namedPullRequests }
+    : { ...part, spec, kitIssues, startingComment, audit, namedPullRequests };
+}
+
+// The newest Audit issues, open and closed: enough to hold this week's, any
+// open one, the last Audit and the last closed Audits the Auditor reads, since
+// a week opens at most three.
+const AUDIT_QUERY = `
+  query ($owner: String!, $name: String!, $label: String!) {
+    repository(owner: $owner, name: $name) {
+      defaultBranchRef { target { oid } }
+      issues(labels: [$label], states: [OPEN, CLOSED], first: 50, orderBy: { field: CREATED_AT, direction: DESC }) {
+        nodes { number title state stateReason createdAt body author { __typename } }
+      }
+    }
+  }
+`;
+
+interface AuditQueryResult {
+  repository: {
+    defaultBranchRef: { target: { oid: string } } | null;
+    issues: {
+      nodes: {
+        number: number;
+        title: string;
+        state: "OPEN" | "CLOSED";
+        stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
+        createdAt: string;
+        body: string;
+        author: { __typename: string } | null;
+      }[];
+    };
+  };
+}
+
+/**
+ * The default branch's head, and the newest `fabrik:audit` issues with
+ * whether a bot (the Fabrik App) opened each: what the audit gate weighs on a
+ * scheduled tick, and what an Auditor run's inputs read the Audits from
+ * (src/agent/inputs.ts), so the two read the same Audits.
+ */
+export async function gatherAuditSlice(github: Pick<GitHub, "graphql">, repo: Repo): Promise<AuditSnapshot> {
+  const data = await github.graphql<AuditQueryResult>(AUDIT_QUERY, { owner: repo.owner, name: repo.name, label: AUDIT_LABEL });
+  return {
+    head: data.repository.defaultBranchRef?.target.oid ?? null,
+    issues: data.repository.issues.nodes.map((issue) => ({
+      number: issue.number,
+      title: issue.title,
+      open: issue.state === "OPEN",
+      stateReason: issue.stateReason === null ? null : (issue.stateReason.toLowerCase() as AuditIssueSnapshot["stateReason"]),
+      createdAt: issue.createdAt,
+      byApp: issue.author?.__typename === "Bot",
+      body: issue.body,
+    })),
+  };
+}
+
+/** A PR as the REST API returns it: the fields an Auditor's named PRs are read from. */
+interface RestPullRequest {
+  number: number;
+  merged: boolean;
+  head: { ref: string };
+  user: { type: string } | null;
+}
+
+/**
+ * For an Audit run finishing: each PR its reply names under "Introduced by",
+ * once. A number GitHub has no PR for is left out, and a reply that breaks
+ * its contract names none, since the core fails its Audit.
+ */
+async function gatherNamedPullRequests(github: GitHub, repo: Repo, output: string): Promise<NamedPullRequestSnapshot[]> {
+  const parsed = parseAuditOutput(output);
+  const named = parsed.ok ? [...new Set(parsed.output.candidates.flatMap((candidate) => candidate.introducedBy))] : [];
+  const pulls = await Promise.all(
+    named.map(
+      (number) =>
+        github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`, undefined, { allowNotFound: true }) as Promise<RestPullRequest | null>,
+    ),
+  );
+  return pulls.flatMap((pull) =>
+    pull === null
+      ? []
+      : [
+          {
+            number: pull.number,
+            merged: pull.merged,
+            headRef: pull.head.ref,
+            isAgent: isAgentPullRequest({ headRef: pull.head.ref, authorIsBot: pull.user?.type === "Bot" }),
+          },
+        ],
+  );
 }
 
 /**
@@ -375,7 +472,7 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "namedPullRequests">;
 
 const KIT_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $labels: [String!]!) {
@@ -438,6 +535,8 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       number: issue.number,
       open: issue.state === "OPEN",
       author: issue.author?.login ?? "ghost",
+      byApp: issue.author?.__typename === "Bot",
+      body: issue.body,
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
@@ -746,11 +845,11 @@ export async function readKitConfigSources(
   const [config, skillsLock, ...instructions] = await Promise.all([
     github.fileText(repo, KIT_CONFIG_PATH, ref),
     github.fileText(repo, SKILLS_SOURCES_LOCK_PATH, ref),
-    ...PHASES.map((phase) => github.fileText(repo, instructionsPath(phase), ref)),
+    ...INSTRUCTED_ROLES.map((role) => github.fileText(repo, instructionsPath(role), ref)),
   ]);
   return {
     config: config ?? null,
     skillsLock: skillsLock ?? null,
-    instructions: Object.fromEntries(PHASES.map((phase, i) => [phase, instructions[i] ?? null])),
+    instructions: Object.fromEntries(INSTRUCTED_ROLES.map((role, i) => [role, instructions[i] ?? null])),
   };
 }

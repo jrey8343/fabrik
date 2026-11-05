@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, kitConfig, notificationsOf, repoSnapshot, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, kitConfig, notificationsOf, snapshotOf, tickSnapshot } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
@@ -218,7 +218,7 @@ describe("The weekly-limit issue", () => {
     kitIssueOpenedBy(planFor(weeklyLimit(7, resetsAt), snapshotOf(anIssue({ number: 7 })), kitConfig()), 41);
 
   it("a scheduled tick after the reset closes the issue, quietly, and restarts no Ticket", () => {
-    const plan = planFor(tick("2026-11-09T04:05:00.000Z"), repoSnapshot({ kitIssues: [openLimitIssue()] }), kitConfig());
+    const plan = planFor(tick("2026-11-09T04:05:00.000Z"), tickSnapshot({ kitIssues: [openLimitIssue()] }), kitConfig());
 
     expect(notificationsOf(plan)).toEqual([]);
     expect(plan).toEqual({
@@ -236,7 +236,7 @@ describe("The weekly-limit issue", () => {
   });
 
   it("a scheduled tick before the reset leaves the issue open, and only asks for a Design queue check", () => {
-    const plan = planFor(tick("2026-11-09T03:55:00.000Z"), repoSnapshot({ kitIssues: [openLimitIssue()] }), kitConfig());
+    const plan = planFor(tick("2026-11-09T03:55:00.000Z"), tickSnapshot({ kitIssues: [openLimitIssue()] }), kitConfig());
 
     expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
   });
@@ -264,7 +264,7 @@ describe("The weekly-limit issue", () => {
   });
 
   it("a scheduled tick with no weekly-limit issue open only asks for a Design queue check", () => {
-    expect(planFor(tick("2026-11-09T04:05:00.000Z"), repoSnapshot(), kitConfig())).toEqual({
+    expect(planFor(tick("2026-11-09T04:05:00.000Z"), tickSnapshot(), kitConfig())).toEqual({
       kind: "act",
       actions: [{ kind: "check-design-queue" }],
     });

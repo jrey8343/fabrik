@@ -43,6 +43,17 @@ describe("What the push job applies", () => {
     expect(pushJobInput(needs("triage", { triage: ok() }), 12, 7003)).toMatchObject({ kind: "agent-result", startedBy: null });
   });
 
+  it("applies an Auditor run's result for the event's issue, the pending Audit, once the Audit job succeeded", () => {
+    expect(pushJobInput(needs("audit", { audit: ok() }), 98)).toEqual({
+      kind: "agent-result",
+      role: "audit",
+      issue: 98,
+      pullRequest: null,
+      review: null,
+      startedBy: null,
+    });
+  });
+
   it("applies an Implement run's result for the Ticket the Kit job's plan named, with a retry's PR and a Request-changes run's review", () => {
     const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", review: "900" }), 50);
 
@@ -88,6 +99,13 @@ describe("What the push job applies", () => {
     const input = pushJobInput(needs("design", { design: { result, outputs: { "secrets-step": "failure" } } }), 12);
 
     expect(input).toEqual({ kind: "agent-failure", role: "design", issue: 12, jobResult: result, secretsStep: "failure" });
+  });
+
+  // A timeout cancels the job: the Audit then fails, rather than staying pending and blocking the next one.
+  it.each(["failure", "cancelled"])("gives an Auditor run's failure on the pending Audit when the Audit job's result is %s", (result) => {
+    const input = pushJobInput(needs("audit", { audit: { result, outputs: { "secrets-step": "success" } } }), 98);
+
+    expect(input).toEqual({ kind: "agent-failure", role: "audit", issue: 98, jobResult: result, secretsStep: "success" });
   });
 
   it("names the Ticket for a failed Implement or Review run, where the core finds its PR", () => {

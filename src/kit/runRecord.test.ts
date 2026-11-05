@@ -6,6 +6,7 @@ import { agentRunEnded, type JudgeRunEnd, judgeRunRecordFor, type RunEnd, runRec
 const KIT_SHA = "f".repeat(40);
 const BASE_SHA = "b".repeat(40);
 const HEAD_SHA = "a".repeat(40);
+const MARKED_SHA = "c".repeat(40);
 const roles = kitConfig().roles;
 
 const line = (message: unknown) => JSON.stringify(message);
@@ -168,6 +169,88 @@ describe("The Run record a run's end yields", () => {
     )?.record;
 
     expect(record).toMatchObject({ role: "review", issue: 7, pullRequest: 50, baseSha: HEAD_SHA, jobResult: "success", durationMs: 90_000 });
+  });
+
+  describe("an Auditor run's record is for the pending Audit, starting from its marked commit", () => {
+    /** The Audit job on the pending Audit #98 ended `result`; its base-sha is the marked commit it checked out. */
+    const audit = (result: string, overrides: Partial<RunEnd> = {}) =>
+      runRecordFor(
+        runEnd({
+          needs: needs("audit", { audit: job(result, { "base-sha": MARKED_SHA }) }),
+          eventIssue: 98,
+          agentResult: result === "success" ? agentResult("audit", 98) : null,
+          ...overrides,
+        }),
+      );
+
+    it("a passing Audit run is for the Audit, with no PR, Retry, Step-up, Request changes or Verdict", () => {
+      const files = audit("success");
+
+      expect(files?.record).toMatchObject({
+        role: "audit",
+        issue: 98,
+        pullRequest: null,
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: MARKED_SHA,
+        verdict: null,
+        jobResult: "success",
+        infrastructureFailure: null,
+        totalCostUsd: 1.25,
+      });
+      expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-audit.json");
+      expect(files?.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-1-audit.jsonl.gz");
+    });
+
+    it("a failed Audit run whose 1Password load failed is recorded on roles.audit's model, the agent never having started", () => {
+      const files = audit("failure", {
+        needs: needs("audit", { audit: job("failure", { "secrets-step": "failure", "base-sha": MARKED_SHA, model: "", effort: "" }) }, { model: "", effort: "" }),
+        transcript: null,
+      });
+
+      expect(files?.record).toMatchObject({
+        role: "audit",
+        issue: 98,
+        pullRequest: null,
+        baseSha: MARKED_SHA,
+        jobResult: "failure",
+        infrastructureFailure: "unreachable-1password",
+        model: roles.audit.model,
+        verdict: null,
+        turns: null,
+        transcript: null,
+      });
+    });
+
+    it("a failed Audit run is recorded as the Infrastructure failure its report names", () => {
+      const files = audit("failure", { failureReport: JSON.stringify({ failure: "missing-output", detail: "no <audit> tag" }), transcript: [init] });
+
+      expect(files?.record).toMatchObject({ role: "audit", issue: 98, pullRequest: null, jobResult: "failure", infrastructureFailure: "missing-output" });
+    });
+
+    it("an Audit run timed out by its timeout-minutes, with its transcript, gets a record with no result fields", () => {
+      const files = audit("cancelled", { transcript: [init] });
+
+      expect(files?.record).toMatchObject({
+        role: "audit",
+        issue: 98,
+        pullRequest: null,
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: MARKED_SHA,
+        verdict: null,
+        jobResult: "cancelled",
+        infrastructureFailure: "timeout",
+        subtype: null,
+        durationMs: null,
+        turns: null,
+        totalCostUsd: null,
+        modelUsage: {},
+        transcript: "transcripts/acme/widgets/2026-11/9001-1-audit.jsonl.gz",
+      });
+    });
   });
 
   describe("an Implement run says which run it was", () => {
