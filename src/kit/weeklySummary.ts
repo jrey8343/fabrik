@@ -840,7 +840,16 @@ function stuckLine(item: StuckItem): string {
 }
 
 function itemLine({ number, url, title }: ItemBase, state: string): string {
-  return `- [#${number}](${url}) ${title}: ${state}`;
+  return `- [#${number}](${url}) ${escapedTitle(title)}: ${state}`;
+}
+
+/**
+ * A title as plain text in the body: an `@` gets a zero-width space after it,
+ * so it mentions nobody (the Operator's is the body's one mention), and
+ * brackets and angle brackets are backslash-escaped, so they open no link or tag.
+ */
+function escapedTitle(title: string): string {
+  return title.replaceAll("@", "@&#8203;").replace(/[[\]<>]/g, (character) => `\\${character}`);
 }
 
 /** GitHub searches to look between summaries. */

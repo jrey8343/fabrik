@@ -923,6 +923,14 @@ describe("the Weekly summary", () => {
     const readyForHuman = (number: number, hours: number) =>
       anOpenIssue({ number, title: `Operator work ${number}`, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", hoursAgo(hours))] });
 
+    it("escapes an item's title, so it can't mention anyone but the Operator or break its link", () => {
+      const body = bodyOf(
+        factsOf({ openIssues: [anOpenIssue({ number: 13, title: "Ask @someone about [x] and <b>", labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", hoursAgo(30))] })] }),
+      );
+      expect(body).toContain("- [#13](https://github.com/owner/product/issues/13) Ask @&#8203;someone about \\[x\\] and \\<b\\>: ready-for-human for 30 hours");
+      expect(body.match(/@(?!&#8203;)\w/g)).toEqual(["@o"]);
+    });
+
     it("gives each repo a section listing what waits on the Operator, with its age and any Operator wait", () => {
       const body = bodyOf(
         factsOf({
