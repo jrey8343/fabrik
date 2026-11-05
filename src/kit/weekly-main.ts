@@ -7,7 +7,8 @@
 //   node src/kit/weekly-main.ts
 // Reads two Fabrik App tokens: FABRIK_STORE_TOKEN, with Issues write and
 // Contents read on the store alone, and FABRIK_PRODUCTS_TOKEN, read-only on
-// the Product repos. FABRIK_STORE_DIR is the store's checkout.
+// the Product repos. FABRIK_STORE_DIR is the store's checkout, and
+// FABRIK_APP_SLUG the Fabrik App's slug, which names its label events.
 import { appendFile, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gatherGitHubFacts, productReposOf } from "../github/facts.ts";
@@ -44,13 +45,14 @@ async function readRunRecords(storeDir: string): Promise<RunRecord[]> {
   return records.filter((record) => record.schema === 1);
 }
 
-const ISSUES = `/repos/${RUN_STORE.owner}/${RUN_STORE.name}`;
+/** The store repo's REST path, for its issues and labels. */
+const STORE_API = `/repos/${RUN_STORE.owner}/${RUN_STORE.name}`;
 
 /** The Weekly summaries already filed, newest first. */
 async function summaryIssues(store: GitHub): Promise<SummaryIssue[]> {
   const issues = (await store.rest(
     "GET",
-    `${ISSUES}/issues?labels=${encodeURIComponent(WEEKLY_SUMMARY_LABEL)}&state=all&sort=created&direction=desc&per_page=100`,
+    `${STORE_API}/issues?labels=${encodeURIComponent(WEEKLY_SUMMARY_LABEL)}&state=all&sort=created&direction=desc&per_page=100`,
   )) as { number: number; title: string; state: string; pull_request?: unknown }[];
   return issues
     .filter((issue) => issue.pull_request === undefined)
@@ -63,7 +65,7 @@ async function file(store: GitHub, filing: WeeklyFiling): Promise<string> {
       return "A quiet week: nothing ran and nothing is waiting or stuck, so no summary was filed.";
     case "file": {
       await ensureLabel(store);
-      const issue = (await store.rest("POST", `${ISSUES}/issues`, {
+      const issue = (await store.rest("POST", `${STORE_API}/issues`, {
         title: filing.title,
         body: filing.body,
         labels: [WEEKLY_SUMMARY_LABEL],
@@ -72,7 +74,7 @@ async function file(store: GitHub, filing: WeeklyFiling): Promise<string> {
       return `Filed #${issue.number}${closedNote(filing.close)}.`;
     }
     case "update":
-      await store.rest("PATCH", `${ISSUES}/issues/${filing.issue}`, { body: filing.body });
+      await store.rest("PATCH", `${STORE_API}/issues/${filing.issue}`, { body: filing.body });
       await closeAll(store, filing.close);
       return `Updated this week's summary, #${filing.issue}, in place${closedNote(filing.close)}.`;
   }
@@ -80,7 +82,7 @@ async function file(store: GitHub, filing: WeeklyFiling): Promise<string> {
 
 async function ensureLabel(store: GitHub): Promise<void> {
   try {
-    await store.rest("POST", `${ISSUES}/labels`, { name: WEEKLY_SUMMARY_LABEL, color: "5319e7", description: "The Fabrik Weekly summary" });
+    await store.rest("POST", `${STORE_API}/labels`, { name: WEEKLY_SUMMARY_LABEL, color: "5319e7", description: "The Fabrik Weekly summary" });
   } catch (error) {
     // 422: it's already there.
     if (!(error instanceof GitHubError && error.status === 422)) throw error;
@@ -89,7 +91,7 @@ async function ensureLabel(store: GitHub): Promise<void> {
 
 async function closeAll(store: GitHub, issues: readonly number[]): Promise<void> {
   for (const issue of issues) {
-    await store.rest("PATCH", `${ISSUES}/issues/${issue}`, { state: "closed", state_reason: "completed" });
+    await store.rest("PATCH", `${STORE_API}/issues/${issue}`, { state: "closed", state_reason: "completed" });
   }
 }
 
@@ -109,7 +111,14 @@ async function main(): Promise<string> {
   const repos = await productReposOf(products);
   const facts = await Promise.all(repos.map((repo) => gatherGitHubFacts(products, repo, now)));
 
-  const result = weeklySummary({ records, facts, operator: RUN_STORE.owner, timeZone, now: new Date(now).toISOString() });
+  const result = weeklySummary({
+    records,
+    facts,
+    operator: RUN_STORE.owner,
+    appLogin: `${required("FABRIK_APP_SLUG")}[bot]`,
+    timeZone,
+    now: new Date(now).toISOString(),
+  });
   return file(store, weeklyFilingOf(result, await summaryIssues(store)));
 }
 

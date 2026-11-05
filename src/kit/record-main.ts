@@ -10,17 +10,16 @@
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { gunzipSync } from "node:zlib";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
 import { AGENT_RESULT_FILE } from "../agent/result.ts";
-import { TRANSCRIPT_FILE } from "../agent/transcript.ts";
+import { readTranscriptGzip, TRANSCRIPT_FILE } from "../agent/transcript.ts";
 import { GitHub, type Repo } from "../github/client.ts";
 import { readKitConfigSources } from "../github/snapshot.ts";
-import { readIfPresent } from "./checkout.ts";
+import { readBytesIfPresent, readIfPresent } from "./checkout.ts";
 import { resolveKitConfig } from "./config.ts";
 import type { Needs } from "./pushJob.ts";
 import { type RecordOutcome, recordWriteSummary, writeRunRecord } from "./recordWriter.ts";
-import { runRecordFor } from "./runRecord.ts";
+import { agentRunEnded, runRecordFor } from "./runRecord.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -34,53 +33,50 @@ async function report(line: string): Promise<void> {
   if (summary !== undefined && summary !== "") await appendFile(summary, `### Run record\n\n${line}\n`);
 }
 
-/** The transcript the agent job kept, gzipped as loop.yml uploads it, or null if none survived the run. */
-async function readTranscript(): Promise<Buffer | null> {
-  const dir = process.env["FABRIK_TRANSCRIPT_DIR"] || join(required("RUNNER_TEMP"), "transcript");
-  try {
-    return await readFile(join(dir, `${TRANSCRIPT_FILE}.gz`));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
 async function outcome(): Promise<RecordOutcome> {
   const [owner, name] = required("GITHUB_REPOSITORY").split("/");
   if (owner === undefined || name === undefined) throw new Error("GITHUB_REPOSITORY is not owner/name");
   const repo: Repo = { owner, name };
   const apiUrl = process.env["GITHUB_API_URL"];
 
+  // Settled before anything is read through a token, so nothing can fail ahead of the quiet line.
+  const needs = JSON.parse(required("FABRIK_NEEDS")) as Needs;
+  const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
+  const issue = (payload["issue"] as { number?: unknown } | undefined)?.number;
+  const eventIssue = typeof issue === "number" ? issue : null;
+  if (!agentRunEnded(needs, eventIssue)) return { kind: "no-record" };
+  // No store, or the Fabrik App not installed on it: setup hasn't got that far, which never fails the run.
+  const storeToken = process.env["FABRIK_STORE_TOKEN"] ?? "";
+  if (storeToken === "") return { kind: "no-store-token" };
+  // Every record names the Kit commit that wrote it: without one, write none.
+  const kitSha = needs["kit"]?.outputs["sha"] ?? "";
+  if (kitSha === "") throw new Error("The Kit job passed out no sha, so the Run record can't name its Kit commit");
+
   const config = resolveKitConfig(
     await readKitConfigSources(new GitHub(required("FABRIK_PRODUCT_TOKEN"), apiUrl), repo, required("GITHUB_SHA")),
   );
   if (!config.ok) throw new Error(`The Kit config is invalid: ${config.errors.join("; ")}`);
 
-  const needs = JSON.parse(required("FABRIK_NEEDS")) as Needs;
-  const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
-  const eventIssue = (payload["issue"] as { number?: unknown } | undefined)?.number;
   const agentDir = process.env["FABRIK_AGENT_DIR"] || join(required("RUNNER_TEMP"), "agent");
-  const transcript = await readTranscript();
+  const transcriptDir = process.env["FABRIK_TRANSCRIPT_DIR"] || join(required("RUNNER_TEMP"), "transcript");
+  // Gzipped as loop.yml uploads it; cut off by a timeout, it keeps the lines that decoded.
+  const gzip = await readBytesIfPresent(join(transcriptDir, `${TRANSCRIPT_FILE}.gz`));
+  const transcript = gzip === null ? null : readTranscriptGzip(gzip);
 
   const files = runRecordFor({
     needs,
-    eventIssue: typeof eventIssue === "number" ? eventIssue : null,
+    eventIssue,
     repo: `${owner}/${name}`,
     runId: Number(required("GITHUB_RUN_ID")),
     runAttempt: Number(required("GITHUB_RUN_ATTEMPT")),
-    kitSha: needs["kit"]?.outputs["sha"] ?? "",
+    kitSha,
     endedAt: new Date().toISOString(),
     roles: config.config.roles,
     agentResult: await readIfPresent(join(agentDir, AGENT_RESULT_FILE)),
     failureReport: await readIfPresent(join(agentDir, AGENT_FAILURE_FILE)),
-    transcript: transcript === null ? null : gunzipSync(transcript).toString("utf8").split("\n").filter((line) => line !== ""),
+    transcript: transcript?.lines ?? null,
   });
-  if (files === null) return { kind: "no-record" };
-
-  // No store, or the Fabrik App not installed on it: setup hasn't got that far, which never fails the run.
-  const storeToken = process.env["FABRIK_STORE_TOKEN"] ?? "";
-  if (storeToken === "") return { kind: "no-store-token" };
-  return writeRunRecord(new GitHub(storeToken, apiUrl), files, transcript, (ms) => sleep(ms));
+  return writeRunRecord(new GitHub(storeToken, apiUrl), files, transcript?.gzip ?? null, (ms) => sleep(ms));
 }
 
 outcome()

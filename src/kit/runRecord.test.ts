@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import type { Needs } from "./pushJob.ts";
-import { type RunEnd, runRecordFor } from "./runRecord.ts";
+import { agentRunEnded, type RunEnd, runRecordFor } from "./runRecord.ts";
 
 const KIT_SHA = "f".repeat(40);
 const BASE_SHA = "b".repeat(40);
@@ -243,6 +243,15 @@ describe("The Run record a run's end yields", () => {
     it("there was nothing to do", () => {
       expect(runRecordFor(runEnd({ needs: needs("none"), agentResult: null, transcript: null }))).toBeNull();
     });
+
+    it("is known from the jobs alone, before anything else is read", () => {
+      const red = { result: "success", outputs: { checks: "red", "head-sha": HEAD_SHA, failed: '["build"]' } };
+
+      expect(agentRunEnded(needs("push"), null)).toBe(false);
+      expect(agentRunEnded(needs("review", { "review-checks": red, review: { result: "skipped", outputs: {} } }, { ticket: "7", "pull-request": "50" }), 50)).toBe(false);
+      expect(agentRunEnded(needs("triage", { triage: job("success") }), 12)).toBe(true);
+      expect(agentRunEnded(needs("triage", { triage: job("cancelled") }), 12)).toBe(true);
+    });
   });
 
   describe("a run that failed is recorded as its Infrastructure failure", () => {
@@ -377,6 +386,25 @@ describe("The Run record a run's end yields", () => {
       utilization: 0.81,
       resetsAt: 1_800_500_000,
     });
+  });
+
+  it("keeps the last weekly-limit reading even when a five-hour one came after it", () => {
+    const limit = (info: Record<string, unknown>) => line({ type: "rate_limit_event", rate_limit_info: info });
+    const transcript = [
+      init,
+      limit({ status: "allowed", rateLimitType: "seven_day", utilization: 0.4, resetsAt: 1_800_500_000 }),
+      limit({ status: "allowed", rateLimitType: "five_hour", utilization: 0.9, resetsAt: 1_800_000_000 }),
+      result(),
+    ];
+
+    expect(runRecordFor(runEnd({ transcript }))?.record.rateLimit).toMatchObject({ rateLimitType: "seven_day", utilization: 0.4 });
+  });
+
+  it("has no weekly-limit reading when the stream reported only five-hour ones", () => {
+    const limit = (info: Record<string, unknown>) => line({ type: "rate_limit_event", rate_limit_info: info });
+    const transcript = [init, limit({ status: "allowed", rateLimitType: "five_hour", utilization: 0.9, resetsAt: 1_800_000_000 }), result()];
+
+    expect(runRecordFor(runEnd({ transcript }))?.record.rateLimit).toBeNull();
   });
 
   it("counts permission denials and API retries", () => {

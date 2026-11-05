@@ -3,9 +3,15 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigResult, PHASES, resolveKitConfig } from "./config.ts";
 
+/** The file's text, or null if it isn't there. */
 export async function readIfPresent(path: string): Promise<string | null> {
+  return (await readBytesIfPresent(path))?.toString("utf8") ?? null;
+}
+
+/** The file's bytes, or null if it isn't there. */
+export async function readBytesIfPresent(path: string): Promise<Buffer | null> {
   try {
-    return await readFile(path, "utf8");
+    return await readFile(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;

@@ -5,9 +5,10 @@
 # write only, and runs src/kit/record-main.ts, which builds the record
 # (src/kit/runRecord.ts) and writes it (src/kit/recordWriter.ts).
 #
-# When fabrik-runs doesn't exist or the Fabrik App isn't installed on it, the
-# store's token can't be minted: the program writes one step-summary line
-# naming the setup step, and the action ends successfully. A non-private store
+# When fabrik-runs doesn't exist or the Fabrik App isn't installed on it,
+# src/kit/find-store-main.ts finds no store, the store's token isn't minted,
+# and no step fails: the program writes one step-summary line naming the setup
+# step, and the action ends successfully. A non-private store
 # gets nothing written. The push job runs it after Run the Loop, with
 # `if: always()` and `continue-on-error: true`, so it never fails the job:
 #   - uses: ./kit/.github/actions/write-run-record
@@ -59,10 +60,22 @@ runs:
         private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
         permission-contents: read
 
-    # Fails when fabrik-runs doesn't exist or the Fabrik App isn't installed on
-    # it. That's setup not done yet, which the program names, not a failure.
+    # Asks as the App itself whether it's installed on fabrik-runs, so a store
+    # setup hasn't made yet fails no step. Its key never leaves this step.
+    - name: Find the fabrik-runs store
+      id: find-store
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        FABRIK_APP_CLIENT_ID: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        FABRIK_APP_PRIVATE_KEY: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+      run: node src/kit/find-store-main.ts
+
+    # Minted only for a store the App is on; skipped, the program names the setup step.
     - name: Mint a Fabrik App token for the fabrik-runs store
       id: store
+      if: steps.find-store.outputs.installed == 'true'
       continue-on-error: true
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:

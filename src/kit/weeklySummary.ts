@@ -6,7 +6,7 @@ import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { InfrastructureFailure } from "../loop/types.ts";
-import type { RateLimitReading, RunRecord } from "./runRecord.ts";
+import { type RateLimitReading, type RunRecord, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
 export interface LabelEvent {
@@ -145,6 +145,8 @@ export interface WeeklySummaryInput {
   readonly facts: readonly GitHubFacts[];
   /** The Operator's GitHub login, the owner of the store. */
   readonly operator: string;
+  /** The Fabrik App's bot login, its slug with `[bot]`, as label events name it. */
+  readonly appLogin: string;
   /** The Operator's IANA time zone, such as `Australia/Sydney`. */
   readonly timeZone: string;
   /** The filing time, ISO 8601. */
@@ -331,21 +333,21 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
   const records = input.records
     .filter((record) => within(week, record.endedAt))
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
-  const pullRequests = input.facts.flatMap((facts) => facts.pullRequests);
   const tickets = input.facts.flatMap((facts) => facts.tickets);
   const merged = input.facts.flatMap((facts) =>
     facts.pullRequests.flatMap((pullRequest) =>
       pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt) ? [mergedPullRequestOf(facts, pullRequest, pullRequest.mergedAt)] : [],
     ),
   );
+  const { usd: cost, unknownCost } = costOf(records);
   return {
     records: records.length,
-    cost: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
-    unknownCost: records.filter((record) => record.totalCostUsd === null).length,
-    costPerMergedPullRequest: costPerMergedPullRequestOf(week, input),
+    cost,
+    unknownCost,
+    costPerMergedPullRequest: costPerMergedPullRequestOf(week, input.records, merged),
     costPerSpec: costPerSpecOf(week, input),
     spendNeverMerged: spendNeverMergedOf(week, input),
-    weeklyLimit: records.findLast((record) => record.rateLimit !== null)?.rateLimit ?? null,
+    weeklyLimit: records.findLast((record) => record.rateLimit?.rateLimitType === WEEKLY_LIMIT)?.rateLimit ?? null,
     humanTouches: mean(merged.map((pullRequest) => humanTouchesOf(pullRequest, input.operator))),
     cycleTimeMs: median(merged.flatMap(({ dispatch, mergedAt }) => (dispatch === null ? [] : [Date.parse(mergedAt) - Date.parse(dispatch)]))),
     operatorWaitMs: median(
@@ -355,7 +357,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
       }),
     ),
     revertRate: revertRateOf(week, input.facts),
-    mergedPullRequests: pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt)).length,
+    mergedPullRequests: merged.length,
     ticketsDispatched: tickets.filter((ticket) => {
       const dispatch = dispatchOf(ticket);
       return dispatch !== null && within(week, dispatch);
@@ -365,8 +367,9 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
   };
 }
 
-/** An agent PR merged in the week, with its Ticket and when that was dispatched. */
+/** An agent PR merged in the week, with its repo, its Ticket and when that was dispatched. */
 interface MergedPullRequest {
+  readonly repo: string;
   readonly pullRequest: AgentPullRequestFacts;
   readonly mergedAt: string;
   readonly ticket: TicketFacts | null;
@@ -375,7 +378,7 @@ interface MergedPullRequest {
 
 function mergedPullRequestOf(facts: GitHubFacts, pullRequest: AgentPullRequestFacts, mergedAt: string): MergedPullRequest {
   const ticket = facts.tickets.find((candidate) => candidate.number === pullRequest.ticket) ?? null;
-  return { pullRequest, mergedAt, ticket, dispatch: ticket === null ? null : dispatchOf(ticket) };
+  return { repo: facts.repo, pullRequest, mergedAt, ticket, dispatch: ticket === null ? null : dispatchOf(ticket) };
 }
 
 /**
@@ -451,20 +454,13 @@ function mean(values: readonly number[]): number | null {
 /** The roles whose runs build a Ticket: Implement (Retries and Step-ups among them) and Review. */
 const BUILD_ROLES: readonly RunRecord["role"][] = ["implement", "review"];
 
-function costPerMergedPullRequestOf(week: Week, input: WeeklySummaryInput): CostFigure {
-  const ended = endedBy(week, input.records);
-  const perPullRequest = input.facts.flatMap((facts) =>
-    facts.pullRequests
-      .filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt))
-      .map((pullRequest) =>
-        ended.filter(
-          (record) =>
-            record.repo === facts.repo &&
-            pullRequest.ticket !== null &&
-            record.issue === pullRequest.ticket &&
-            BUILD_ROLES.includes(record.role),
-        ),
-      ),
+function costPerMergedPullRequestOf(week: Week, records: readonly RunRecord[], merged: readonly MergedPullRequest[]): CostFigure {
+  const ended = endedBy(week, records);
+  const perPullRequest = merged.map(({ repo, pullRequest }) =>
+    ended.filter(
+      (record) =>
+        record.repo === repo && pullRequest.ticket !== null && record.issue === pullRequest.ticket && BUILD_ROLES.includes(record.role),
+    ),
   );
   return averageCostOf(perPullRequest);
 }
@@ -473,7 +469,7 @@ function costPerSpecOf(week: Week, input: WeeklySummaryInput): CostFigure {
   const ended = endedBy(week, input.records);
   const perSpec = input.facts.flatMap((facts) =>
     facts.specs
-      .filter((spec) => leftDesignIn(week, spec))
+      .filter((spec) => leftDesignIn(week, spec, input.appLogin))
       .map((spec) =>
         ended.filter(
           (record) =>
@@ -502,20 +498,15 @@ function spendNeverMergedOf(week: Week, input: WeeklySummaryInput): CostFigure {
   );
 }
 
-/** Whether the App gave the Spec its ready label, ending its Design session, in the week. */
-function leftDesignIn(week: Week, spec: SpecFacts): boolean {
+/** Whether the Fabrik App gave the Spec its ready label, ending its Design session, in the week. */
+function leftDesignIn(week: Week, spec: SpecFacts, appLogin: string): boolean {
   return spec.labelEvents.some(
     (event) =>
       (event.label === READY_FOR_AGENT || event.label === READY_FOR_HUMAN) &&
       event.action === "labeled" &&
-      byTheApp(event) &&
+      event.actor === appLogin &&
       within(week, event.at),
   );
-}
-
-/** Whether a GitHub App made the label event: its login is the App's slug with `[bot]`. */
-function byTheApp(event: LabelEvent): boolean {
-  return event.actor.endsWith("[bot]");
 }
 
 /** Each group's summed cost, averaged over the groups, or null for no groups. */
@@ -529,12 +520,21 @@ function endedBy(week: Week, records: readonly RunRecord[]): RunRecord[] {
   return records.filter((record) => Date.parse(record.endedAt) < week.end);
 }
 
-/** The summed cost of these records, leaving out (and counting) those whose cost basis is unknown. */
+/**
+ * The summed cost of these records, leaving out (and counting) those whose
+ * cost basis is unknown. A run with no cost figure at all, one that ended
+ * without a result, such as a timeout, adds nothing and isn't counted.
+ */
 function costOf(records: readonly RunRecord[]): CostFigure & { readonly usd: number } {
   return {
     usd: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
-    unknownCost: records.filter((record) => record.totalCostUsd === null).length,
+    unknownCost: records.filter(hasUnknownCostBasis).length,
   };
+}
+
+/** Whether any of the run's models has an unknown cost basis, which leaves the run with no total (src/kit/runRecord.ts). */
+function hasUnknownCostBasis(record: RunRecord): boolean {
+  return Object.values(record.modelUsage).some((usage) => usage.costBasis === UNKNOWN_COST_BASIS);
 }
 
 /** When the Ticket was dispatched: its first `agent:implement` (a Retry adds it again), or null. */
@@ -840,7 +840,16 @@ function stuckLine(item: StuckItem): string {
 }
 
 function itemLine({ number, url, title }: ItemBase, state: string): string {
-  return `- [#${number}](${url}) ${title}: ${state}`;
+  return `- [#${number}](${url}) ${escapedTitle(title)}: ${state}`;
+}
+
+/**
+ * A title as plain text in the body: an `@` gets a zero-width space after it,
+ * so it mentions nobody (the Operator's is the body's one mention), and
+ * brackets and angle brackets are backslash-escaped, so they open no link or tag.
+ */
+function escapedTitle(title: string): string {
+  return title.replaceAll("@", "@&#8203;").replace(/[[\]<>]/g, (character) => `\\${character}`);
 }
 
 /** GitHub searches to look between summaries. */

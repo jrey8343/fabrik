@@ -47,6 +47,9 @@ export interface ModelCost {
   readonly costBasis: string | null;
 }
 
+/** The `rateLimitType` of the Subscription's weekly limit; the stream reports its five-hour one too. */
+export const WEEKLY_LIMIT = "seven_day";
+
 /** The last weekly-limit reading the stream reported, raw. */
 export interface RateLimitReading {
   readonly status: string | null;
@@ -113,16 +116,20 @@ interface EndedRun {
   readonly failure: InfrastructureFailure | null;
 }
 
+/** Whether an agent run ended, so there's a record to write: known from the jobs alone, before anything else is read. */
+export function agentRunEnded(needs: Needs, eventIssue: number | null): boolean {
+  return endedRun({ needs, eventIssue, failureReport: null }) !== null;
+}
+
 /** Which agent run ended, or null when none did: red checks, routing to push, or nothing to do. */
-function endedRun(end: RunEnd): EndedRun | null {
+function endedRun(end: Pick<RunEnd, "needs" | "eventIssue" | "failureReport">): EndedRun | null {
   const input = pushJobInput(end.needs, end.eventIssue);
   switch (input.kind) {
     case "agent-result":
       return { role: input.role, issue: input.issue, pullRequest: input.pullRequest, job: end.needs[input.role], failure: null };
     case "review": {
       if (!input.withResult) return null;
-      const ticket = countOf(end.needs["kit"]?.outputs["ticket"]) ?? input.pullRequest;
-      return { role: "review", issue: ticket, pullRequest: input.pullRequest, job: end.needs["review"], failure: null };
+      return { role: "review", issue: input.ticket, pullRequest: input.pullRequest, job: end.needs["review"], failure: null };
     }
     case "agent-failure": {
       const { role, issue, jobResult, secretsStep } = input;
@@ -182,7 +189,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     // A run with any model of unknown cost basis has no total either: never a guessed figure.
     totalCostUsd: Object.values(modelUsage).some((usage) => usage.costUsd === null) ? null : numberOr(last?.["total_cost_usd"]),
     modelUsage,
-    rateLimit: readingOf(stream?.lastRateLimit ?? null),
+    rateLimit: readingOf(stream?.rateLimits.findLast((info) => info["rateLimitType"] === WEEKLY_LIMIT) ?? null),
     transcript: transcriptPath,
   };
   return { record, recordPath, transcriptPath };
@@ -231,13 +238,13 @@ function costOf(usage: StreamMessage): ModelCost {
     outputTokens: numberOr(usage["outputTokens"]),
     cacheWriteTokens: numberOr(usage["cacheCreationInputTokens"]),
     cacheReadTokens: numberOr(usage["cacheReadInputTokens"]),
-    costUsd: costBasis === UNKNOWN_COST ? null : numberOr(usage["costUSD"]),
+    costUsd: costBasis === UNKNOWN_COST_BASIS ? null : numberOr(usage["costUSD"]),
     costBasis,
   };
 }
 
 /** The `costBasis` the CLI gives a model it has no price for. */
-const UNKNOWN_COST = "unknown";
+export const UNKNOWN_COST_BASIS = "unknown";
 
 function readingOf(info: StreamMessage | null): RateLimitReading | null {
   if (info === null) return null;

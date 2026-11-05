@@ -113,6 +113,17 @@ describe("The write the Run record action", () => {
     expect(storeToken).toContain("continue-on-error: true");
   });
 
+  // A missing store is setup not done: one quiet line, and no step's error annotation on every run.
+  it("mints the store's token only once the program has found the Fabrik App on fabrik-runs", () => {
+    const find = steps.find((step) => step.includes("id: find-store"));
+    const program = /run: node (src\/\S+)/.exec(find ?? "")?.[1];
+
+    expect(find, "no step finds the store").toBeDefined();
+    expect(existsSync(new URL(program!, root))).toBe(true);
+    expect(steps.indexOf(find!)).toBeLessThan(steps.indexOf(storeToken!));
+    expect(storeToken).toContain("if: steps.find-store.outputs.installed == 'true'");
+  });
+
   it("takes the role's transcript, and a missing one is fine", () => {
     const download = steps.find((step) => step.includes("actions/download-artifact@"));
 
@@ -153,6 +164,12 @@ describe("The weekly summary workflow", () => {
     expect(products).toMatch(/owner: jrey8343\n/);
     expect(products).not.toContain("repositories:");
     expect(permissionsOf(products)).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
+  });
+
+  it("tells the program the Fabrik App's slug, from the token it minted, to tell its label events from other Apps'", () => {
+    const run = steps.find((step) => step.includes("run: node src/kit/weekly-main.ts"));
+
+    expect(run).toContain("FABRIK_APP_SLUG: ${{ steps.store.outputs.app-slug }}");
   });
 
   it("reads the store's records from a sparse checkout of runs/, never its transcripts", () => {

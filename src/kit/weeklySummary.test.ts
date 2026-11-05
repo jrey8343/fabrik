@@ -13,6 +13,7 @@ import {
   aTicketTimeline,
   aVerdictComment,
   factsOf,
+  UNKNOWN_COST_BASIS,
 } from "../__fixtures__/weeklySummary.ts";
 import type { Verdict } from "../loop/types.ts";
 import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
@@ -23,7 +24,7 @@ import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type T
 const NOW = "2026-11-08T20:00:00Z";
 
 function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput {
-  return { records: [], facts: [factsOf()], operator: "operator", timeZone: "Australia/Sydney", now: NOW, ...overrides };
+  return { records: [], facts: [factsOf()], operator: "operator", appLogin: "fabrik-app[bot]", timeZone: "Australia/Sydney", now: NOW, ...overrides };
 }
 
 describe("the Weekly summary", () => {
@@ -79,6 +80,18 @@ describe("the Weekly summary", () => {
     });
   });
 
+  it("reports Subscription usage from weekly-limit readings only, never a later five-hour one", () => {
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ endedAt: "2026-11-05T00:00:00Z", rateLimit: { status: "allowed", rateLimitType: "seven_day", utilization: 0.3, resetsAt: 1_794_000_000 } }),
+          aRunRecord({ endedAt: "2026-11-06T00:00:00Z", rateLimit: { status: "allowed", rateLimitType: "five_hour", utilization: 0.95, resetsAt: 1_793_500_000 } }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ kind: "summary", summary: { weeklyLimit: { thisWeek: { rateLimitType: "seven_day", utilization: 0.3 } } } });
+  });
+
   it("reports no weekly-limit reading in a week whose records read none", () => {
     const result = weeklySummary(input({ records: [aRunRecord({ endedAt: "2026-11-06T00:00:00Z", rateLimit: null })] }));
     expect(result).toMatchObject({ kind: "summary", summary: { weeklyLimit: { thisWeek: null, lastWeek: null } } });
@@ -89,11 +102,31 @@ describe("the Weekly summary", () => {
       input({
         records: [
           aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
-          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", totalCostUsd: null }),
+          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", ...UNKNOWN_COST_BASIS }),
         ],
       }),
     );
     expect(result).toMatchObject({ kind: "summary", summary: { cost: { thisWeek: 1, lastWeek: 0 }, unknownCost: { thisWeek: 1, lastWeek: 0 } } });
+  });
+
+  it("doesn't count a run with no cost figure, such as one its timeout cut off, as one of unknown cost basis", () => {
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", jobResult: "cancelled", totalCostUsd: null, transcript: null }),
+        ],
+        facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-05T00:00:00Z")] })],
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "summary",
+      summary: {
+        cost: { thisWeek: 1 },
+        unknownCost: { thisWeek: 0 },
+        costPerMergedPullRequest: { thisWeek: { usd: 1, unknownCost: 0 } },
+      },
+    });
   });
 
   it("counts the agent PRs merged in the week across every Product repo", () => {
@@ -628,7 +661,7 @@ describe("the Weekly summary", () => {
         input({
           records: [
             aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
-            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", totalCostUsd: null, retry: 1 }),
+            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", ...UNKNOWN_COST_BASIS, retry: 1 }),
           ],
           facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-04T00:00:00Z")] })],
         }),
@@ -695,11 +728,23 @@ describe("the Weekly summary", () => {
       expect(result).toMatchObject({ kind: "summary", summary: { costPerSpec: { thisWeek: { usd: null } } } });
     });
 
+    it("counts only a Spec the Fabrik App moved out of design, not one another App labelled", () => {
+      const result = weeklySummary(
+        input({
+          records: [aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T00:00:00Z" })],
+          facts: [
+            factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-04T00:00:00Z", { actor: "other-app[bot]" })], { number: 3 })] }),
+          ],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerSpec: { thisWeek: { usd: null } } } });
+    });
+
     it("leaves a run whose cost basis is unknown out of the sum, and counts it", () => {
       const result = weeklySummary(
         input({
           records: [
-            aRunRecord({ issue: 3, role: "triage", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: null }),
+            aRunRecord({ issue: 3, role: "triage", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", ...UNKNOWN_COST_BASIS }),
             aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 2 }),
           ],
           facts: [factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-05T00:00:00Z")], { number: 3 })] })],
@@ -748,7 +793,7 @@ describe("the Weekly summary", () => {
         input({
           records: [
             aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
-            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", totalCostUsd: null }),
+            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", ...UNKNOWN_COST_BASIS }),
           ],
           facts: [factsOf({ tickets: [aTicketTimeline([], { closedAt: "2026-11-04T00:00:00Z" })] })],
         }),
@@ -763,7 +808,7 @@ describe("the Weekly summary", () => {
         aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1.5, retry: 1 }),
         aRunRecord({
           endedAt: "2026-11-05T00:00:00Z",
-          totalCostUsd: null,
+          ...UNKNOWN_COST_BASIS,
           stepUp: true,
           // Friday 13 November 2026, 10:00 in Sydney.
           rateLimit: { status: "allowed", rateLimitType: "seven_day", utilization: 0.62, resetsAt: 1_794_524_400 },
@@ -823,10 +868,10 @@ describe("the Weekly summary", () => {
         input({
           records: [
             aRunRecord({ issue: 7, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2 }),
-            aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: null, retry: 1 }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", ...UNKNOWN_COST_BASIS, retry: 1 }),
             aRunRecord({ issue: 8, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 1.5 }),
             aRunRecord({ issue: 9, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 0.25 }),
-            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-26T00:00:00Z", totalCostUsd: null }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-26T00:00:00Z", ...UNKNOWN_COST_BASIS }),
             aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 1 }),
           ],
           facts: [
@@ -877,6 +922,14 @@ describe("the Weekly summary", () => {
     };
     const readyForHuman = (number: number, hours: number) =>
       anOpenIssue({ number, title: `Operator work ${number}`, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", hoursAgo(hours))] });
+
+    it("escapes an item's title, so it can't mention anyone but the Operator or break its link", () => {
+      const body = bodyOf(
+        factsOf({ openIssues: [anOpenIssue({ number: 13, title: "Ask @someone about [x] and <b>", labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", hoursAgo(30))] })] }),
+      );
+      expect(body).toContain("- [#13](https://github.com/owner/product/issues/13) Ask @&#8203;someone about \\[x\\] and \\<b\\>: ready-for-human for 30 hours");
+      expect(body.match(/@(?!&#8203;)\w/g)).toEqual(["@o"]);
+    });
 
     it("gives each repo a section listing what waits on the Operator, with its age and any Operator wait", () => {
       const body = bodyOf(

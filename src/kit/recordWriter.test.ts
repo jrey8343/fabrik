@@ -15,9 +15,11 @@ function files(overrides: Partial<RunRecordFiles> = {}): RunRecordFiles {
 
 /**
  * The fabrik-runs store through the Contents API: its visibility, the files it
- * already holds, and how many parallel commits beat each write to a path.
+ * already holds, how many parallel commits beat each write to a path, and the
+ * paths it refuses (422) for some other reason. Its 422 for a file already
+ * there says nothing of a `sha`: the writer looks rather than reading the text.
  */
-function storeWith(options: { private?: boolean; files?: string[]; conflicts?: Record<string, number> } = {}) {
+function storeWith(options: { private?: boolean; files?: string[]; conflicts?: Record<string, number>; refused?: string[] } = {}) {
   const held = new Map<string, string>((options.files ?? []).map((path) => [path, "earlier"]));
   const conflicts = { ...options.conflicts };
   const writes: string[] = [];
@@ -26,7 +28,13 @@ function storeWith(options: { private?: boolean; files?: string[]; conflicts?: R
     writes,
     async rest(method: string, path: string, body?: unknown): Promise<unknown> {
       if (method === "GET" && path === "/repos/jrey8343/fabrik-runs") return { private: options.private ?? true };
-      const put = /^\/repos\/jrey8343\/fabrik-runs\/contents\/(.+)$/.exec(path);
+      const contents = /^\/repos\/jrey8343\/fabrik-runs\/contents\/(.+)$/.exec(path);
+      if (method === "GET" && contents !== null) {
+        const file = decodeURIComponent(contents[1] ?? "");
+        if (!held.has(file)) throw new GitHubError(`GET ${path} failed: 404 Not Found`, 404);
+        return { path: file, sha: "s".repeat(40) };
+      }
+      const put = contents;
       if (method === "PUT" && put !== null) {
         const file = decodeURIComponent(put[1] ?? "");
         const { content, sha } = body as { content: string; sha?: string };
@@ -35,7 +43,9 @@ function storeWith(options: { private?: boolean; files?: string[]; conflicts?: R
           conflicts[file] = (conflicts[file] ?? 0) - 1;
           throw new GitHubError(`PUT ${path} failed: 409 is at abc but expected def`, 409);
         }
-        if (held.has(file) && sha === undefined) throw new GitHubError(`PUT ${path} failed: 422 "sha" wasn't supplied`, 422);
+        if ((held.has(file) && sha === undefined) || (options.refused ?? []).includes(file)) {
+          throw new GitHubError(`PUT ${path} failed: 422 Invalid request.`, 422);
+        }
         held.set(file, content);
         return { content: { path: file } };
       }
@@ -65,6 +75,12 @@ describe("Writing a run's Run record to the store", () => {
 
     expect(write).toEqual({ kind: "written", written: [RECORD_PATH], existing: [TRANSCRIPT_PATH] });
     expect(store.held.get(TRANSCRIPT_PATH)).toBe("earlier");
+  });
+
+  it("fails on a write the store refuses for a file that isn't there", async () => {
+    const store = storeWith({ refused: [RECORD_PATH] });
+
+    await expect(writeRunRecord(store, files(), TRANSCRIPT, noWait)).rejects.toThrow(/422/);
   });
 
   it("retries a write a parallel commit beat, waiting longer each time", async () => {
