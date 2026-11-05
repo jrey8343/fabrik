@@ -21,7 +21,7 @@ export function pinCaller(template: string, release: string): string {
  * pinned to an earlier major is migrated to it. Within a major, Dependabot owns
  * the pin, so a hand-edited caller is repaired at the release it already pins.
  */
-export function callerUpdate(existing: string | null, template: string, release: string): FileUpdate {
+export function callerUpdate(existing: string | null, template: string, release: string, path = CALLER_PATH): FileUpdate {
   const fresh = pinCaller(template, release);
   if (existing === null) return { content: fresh };
   const pins = checkCallerWorkflow(existing);
@@ -30,11 +30,20 @@ export function callerUpdate(existing: string | null, template: string, release:
   if (order < 0) return { content: fresh };
   if (order > 0) {
     return {
-      note: `${CALLER_PATH} pins Fabrik ${pins.release}, a later major release than ${release}: run the setup skill from ${pins.release} instead. The caller workflow was left as it is.`,
+      note: `${path} pins Fabrik ${pins.release}, a later major release than ${release}: run the setup skill from ${pins.release} instead. The caller workflow was left as it is.`,
     };
   }
   const repaired = pinCaller(template, pins.release);
   return existing === repaired ? null : { content: repaired };
+}
+
+// --- The fabrik-runs store's caller workflow ----------------------------------
+
+export const STORE_CALLER_PATH = ".github/workflows/weekly-summary.yml";
+
+/** The store caller template with its Monday-morning schedule in the Operator's time zone. */
+export function scheduleIn(template: string, timeZone: string): string {
+  return template.replace(/^(\s+timezone:\s*)\S.*$/m, `$1${JSON.stringify(timeZone)}`);
 }
 
 /** Semver majors, where each 0.x minor is a major of its own. */
