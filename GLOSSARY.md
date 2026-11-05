@@ -16,6 +16,18 @@ _Avoid_: framework, service, template
 The settings a Product repo owns that tell the Kit how to work there, such as how to build and test it in a Sandbox.
 _Avoid_: Fabrik config, settings, manifest
 
+**Skills source**:
+A public repository of skills, pinned at one commit, that agents' skills come from.
+_Avoid_: skills repo, plugin, marketplace
+
+**Base skills**:
+The skills the Kit pins for every Product repo and every role, from one Skills source that moves only with a Kit release.
+_Avoid_: core skills, default skills
+
+**Extra skill**:
+A skill a Product repo pins from its own Skills source and gives to particular roles on top of the Base skills.
+_Avoid_: custom skill, plugin, add-on
+
 **Product repo**:
 A repository holding a real product that has adopted the Kit, where the Loop's work actually lands.
 _Avoid_: target repo, client repo, project
