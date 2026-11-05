@@ -81,7 +81,7 @@ export function aMonitorIssue(overrides: Partial<MonitorIssue> = {}): MonitorIss
     stateReason: null,
     closedAt: null,
     labels: ["fabrik:monitor", "bug", "ready-for-agent"],
-    authorIsApp: true,
+    byApp: true,
     body: aMonitorIssueBody(),
     closedByMonitor: false,
     ...overrides,

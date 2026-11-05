@@ -2,10 +2,10 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  INSTRUCTED_ROLES,
   instructionsPath,
   KIT_CONFIG_PATH,
   type KitConfigResult,
-  PHASES,
   resolveKitConfig,
   SKILLS_SOURCES_LOCK_PATH,
 } from "./config.ts";
@@ -30,11 +30,11 @@ export async function readKitConfigFromCheckout(productDir: string): Promise<Kit
   const [config, skillsLock, ...instructions] = await Promise.all([
     readIfPresent(join(productDir, KIT_CONFIG_PATH)),
     readIfPresent(join(productDir, SKILLS_SOURCES_LOCK_PATH)),
-    ...PHASES.map((phase) => readIfPresent(join(productDir, instructionsPath(phase)))),
+    ...INSTRUCTED_ROLES.map((role) => readIfPresent(join(productDir, instructionsPath(role)))),
   ]);
   return resolveKitConfig({
     config: config ?? null,
     skillsLock: skillsLock ?? null,
-    instructions: Object.fromEntries(PHASES.map((phase, i) => [phase, instructions[i] ?? null])),
+    instructions: Object.fromEntries(INSTRUCTED_ROLES.map((role, i) => [role, instructions[i] ?? null])),
   });
 }

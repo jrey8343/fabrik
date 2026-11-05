@@ -58,7 +58,7 @@ async function monitorIssues(github: Pick<GitHub, "rest">, repo: Repo, appLogin:
       stateReason: issue.state_reason,
       closedAt: issue.closed_at,
       labels: issue.labels.map((label) => label.name),
-      authorIsApp: issue.user?.login === appLogin,
+      byApp: issue.user?.login === appLogin,
       body: issue.body ?? "",
       closedByMonitor: false,
     }));

@@ -337,6 +337,7 @@ describe("Labels", () => {
     "enhancement",
     "fabrik:token-rotation",
     "fabrik:weekly-limit",
+    "fabrik:audit",
     "fabrik:monitor",
   ];
 
@@ -500,12 +501,14 @@ describe("The starters the Product repo then owns", () => {
         design: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
         implement: { model: "claude-sonnet-5-5", effort: null, timeout_minutes: 60 },
         review: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
+        audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
         dispatch: { timeout_minutes: 10 },
         step_up: { model: "claude-opus-5-5", effort: null },
       },
       max_in_flight: 2,
       caps: { design_sessions: 2, monitor_issues: 5 },
       monitor: { errors: null, red_main: true },
+      audit: { day: "sunday" },
       operator: null,
     });
     expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({

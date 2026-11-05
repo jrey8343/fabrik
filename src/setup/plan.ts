@@ -4,6 +4,7 @@
 import { KIT_CONFIG_PATH, resolveKitConfig } from "../kit/config.ts";
 import {
   ALL_LABELS,
+  AUDIT_LABEL,
   BUG,
   DESIGN_LABEL,
   DISPATCH_LABEL,
@@ -362,6 +363,7 @@ const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly
   [ENHANCEMENT]: { color: "a2eeef", description: "New feature or request" },
   [TOKEN_ROTATION_LABEL]: { color: "b60205", description: "Fabrik: the Claude token needs rotating" },
   [WEEKLY_LIMIT_LABEL]: { color: "b60205", description: "Fabrik: the subscription's weekly limit is reached" },
+  [AUDIT_LABEL]: { color: "c5def5", description: "Fabrik: the week's Audit of deepening opportunities, which the Auditor files" },
   [MONITOR_LABEL]: { color: "e99695", description: "Fabrik: filed by the Monitor for a production error or a red main" },
 };
 

@@ -237,14 +237,14 @@ function timeOf(iso: string): number {
 }
 
 /** What telling an open error issue, and the one showing the held count, reads of a Monitor issue. */
-type OpenErrorIssueFacts = Pick<MonitorIssue, "number" | "open" | "authorIsApp" | "body">;
+type OpenErrorIssueFacts = Pick<MonitorIssue, "number" | "open" | "byApp" | "body">;
 
 /**
  * Whether the issue takes a slot under the cap: an open issue the Fabrik App
  * filed for a Sentry group. Red main's issue never does.
  */
 function isOpenErrorIssue(issue: OpenErrorIssueFacts): boolean {
-  return issue.open && issue.authorIsApp && monitorMarkerIn(issue.body)?.kind === "sentry";
+  return issue.open && issue.byApp && monitorMarkerIn(issue.body)?.kind === "sentry";
 }
 
 /**

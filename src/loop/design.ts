@@ -2,6 +2,7 @@
 // Each turn rebuilds its context from the issue thread, so nothing is held here
 // between turns beyond what the thread itself shows.
 import type { SentBack } from "./backToDesign.ts";
+import { withCarriedLines } from "./carriedLines.ts";
 import { consideredSection } from "./considered.ts";
 import {
   dependencyOrder,
@@ -436,7 +437,7 @@ function commaList(issues: readonly CreatedIssue[]): (string | CreatedIssue)[] {
 /** The small outcome: the issue becomes its own agent brief, ready for an Implementer. */
 function rewriteAsBrief(issueNumber: number, comment: string, brief: AgentBrief, issue: IssueSnapshot): Action[] {
   return [
-    { kind: "edit-issue-body", issue: issueNumber, body: [...markerLineOf(keptMarker(issue)), briefBody(brief)].join("\n") },
+    { kind: "edit-issue-body", issue: issueNumber, body: rewrittenBody(briefBody(brief), issue) },
     {
       kind: "comment",
       issue: issueNumber,
@@ -475,12 +476,16 @@ function supersedeBySpec(
       kind: "create-issue",
       key: SPEC.created,
       title: withoutMentions(output.spec.title),
-      body: [
-        ...markerLineOf(marker),
-        withoutMentions(output.spec.body),
-        "",
-        `<sub>Written by the Fabrik Design session on #${issueNumber}, which this Spec supersedes.</sub>`,
-      ].join("\n"),
+      // The Spec takes the issue's place, so it carries the issue's marker lines.
+      body: rewrittenBody(
+        [
+          withoutMentions(output.spec.body),
+          "",
+          `<sub>Written by the Fabrik Design session on #${issueNumber}, which this Spec supersedes.</sub>`,
+        ].join("\n"),
+        issue,
+        marker,
+      ),
       labels: [...readyLabels(issue), ...monitorLabel],
       parent: null,
       blockedBy: [],
@@ -545,18 +550,20 @@ function rewriteAsOperatorBrief(
     {
       kind: "edit-issue-body",
       issue: issueNumber,
-      body: [
-        ...markerLineOf(keptMarker(issue)),
-        "## Operator brief",
-        "",
-        withoutMentions(brief.summary),
-        "",
-        "## Steps",
-        "",
-        ...taskList(brief.steps),
-        "",
-        "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
-      ].join("\n"),
+      body: rewrittenBody(
+        [
+          "## Operator brief",
+          "",
+          withoutMentions(brief.summary),
+          "",
+          "## Steps",
+          "",
+          ...taskList(brief.steps),
+          "",
+          "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
+        ].join("\n"),
+        issue,
+      ),
     },
     {
       kind: "comment",
@@ -595,12 +602,17 @@ function briefBody(brief: AgentBrief): string {
  * App's, so a marker in an issue anyone else opened is never kept.
  */
 function keptMarker(issue: IssueSnapshot): MonitorMarker | null {
-  return issue.authorIsApp ? monitorMarkerIn(issue.body) : null;
+  return issue.byApp ? monitorMarkerIn(issue.body) : null;
 }
 
-/** The kept marker's line, to open a body with, or none. */
-function markerLineOf(marker: MonitorMarker | null): string[] {
-  return marker === null ? [] : [monitorMarkerLine(marker)];
+/**
+ * The body a session's rewrite leaves: `rewritten`, opened by the kept
+ * Monitor marker's line (#148) and ended with the From audit and escape lines
+ * of the issue's old body (src/loop/carriedLines.ts, #150), so whatever reads
+ * those lines still finds them.
+ */
+function rewrittenBody(rewritten: string, issue: IssueSnapshot, marker: MonitorMarker | null = keptMarker(issue)): string {
+  return withCarriedLines(marker === null ? rewritten : [monitorMarkerLine(marker), rewritten].join("\n"), issue.body);
 }
 
 /** Why a session on this issue can't take a turn now, or null when it can. */

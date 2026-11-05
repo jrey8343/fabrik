@@ -1,5 +1,6 @@
 // The Kit config: loaded from a Product repo's .fabrik/ folder, with every v1
 // default filled in, and validated at the start of every run. Pure, no I/O.
+import { AGENT_ROLES, type AgentRole as AgentRoleName } from "../loop/types.ts";
 import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
 
 export interface AgentRole {
@@ -23,6 +24,8 @@ export interface KitConfig {
     readonly design: AgentRole;
     readonly implement: AgentRole;
     readonly review: AgentRole;
+    /** The Auditor; it takes no Extra skills (ADR-0008). */
+    readonly audit: AgentRole;
     readonly dispatch: { readonly timeoutMinutes: number };
     readonly stepUp: { readonly model: string; readonly effort: string | null };
   };
@@ -42,9 +45,14 @@ export interface KitConfig {
     /** Whether the Monitor files an issue while the default branch's CI is red. */
     readonly redMain: boolean;
   };
+  readonly audit: {
+    /** The UTC day of the week the Audit runs; null turns the Audit off. */
+    readonly day: AuditDay | null;
+  };
   /** The Operator's GitHub login; null means the Product repo's owner. */
   readonly operator: string | null;
-  readonly instructions: Readonly<Record<Phase, string | null>>;
+  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's included. */
+  readonly instructions: Readonly<Record<InstructedRole, string | null>>;
   /** The Product repo's own Skills sources, from .fabrik/skills.lock.json. */
   readonly skillsSources: readonly SkillsSource[];
   /** Each role's Extra skills, picked from those sources; a Step-up run uses implement's. */
@@ -80,9 +88,22 @@ export interface ExtraSkill {
   readonly name: string;
 }
 
+export const AUDIT_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
+
+export type AuditDay = (typeof AUDIT_DAYS)[number];
+
 export type Phase = "triage" | "design" | "implement" | "review";
 
 export const PHASES: readonly Phase[] = ["triage", "design", "implement", "review"];
+
+/**
+ * The roles a Product repo can give its own instructions in .fabrik/<role>.md:
+ * every AFK role, so every Phase and the Auditor, which takes no Extra skills
+ * (ADR-0008) and so is no Phase.
+ */
+export type InstructedRole = AgentRoleName;
+
+export const INSTRUCTED_ROLES: readonly InstructedRole[] = AGENT_ROLES;
 
 /** Every Extra skill the given roles pick, each once however many of them pick it. */
 export function picksIn(config: KitConfig, roles: readonly Phase[] = PHASES): readonly ExtraSkill[] {
@@ -97,15 +118,15 @@ export function picksIn(config: KitConfig, roles: readonly Phase[] = PHASES): re
 export interface KitConfigSources {
   /** The text of .fabrik/config.json. */
   readonly config: string | null;
-  /** The text of each .fabrik/<phase>.md the Product repo provides. */
-  readonly instructions?: Readonly<Partial<Record<Phase, string | null>>>;
+  /** The text of each .fabrik/<role>.md the Product repo provides. */
+  readonly instructions?: Readonly<Partial<Record<InstructedRole, string | null>>>;
   /** The text of .fabrik/skills.lock.json. */
   readonly skillsLock?: string | null;
 }
 
-/** Where each optional per-phase instruction file lives in a Product repo. */
-export function instructionsPath(phase: Phase): string {
-  return `.fabrik/${phase}.md`;
+/** Where each optional per-role instruction file lives in a Product repo. */
+export function instructionsPath(role: InstructedRole): string {
+  return `.fabrik/${role}.md`;
 }
 
 export type KitConfigResult =
@@ -122,14 +143,17 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     design: { model: OPUS, effort: null, timeoutMinutes: 30 },
     implement: { model: SONNET, effort: null, timeoutMinutes: 60 },
     review: { model: OPUS, effort: null, timeoutMinutes: 30 },
+    audit: { model: OPUS, effort: null, timeoutMinutes: 45 },
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: OPUS, effort: null },
   },
   maxInFlight: 2,
   caps: { designSessions: 2, monitorIssues: 5 },
   monitor: { errors: null, redMain: true },
+  // Sunday, so a fresh Audit is open by Monday's Weekly summary and misses the Monday skills bump.
+  audit: { day: "sunday" },
   operator: null,
-  instructions: { triage: null, design: null, implement: null, review: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
 };
@@ -294,10 +318,10 @@ function checkSha(sha: string): string | null {
 }
 
 function readInstructions(files: NonNullable<KitConfigSources["instructions"]>): KitConfig["instructions"] {
-  const instructions: Record<Phase, string | null> = { ...DEFAULT_KIT_CONFIG.instructions };
-  for (const phase of PHASES) {
-    const text = files[phase];
-    if (text !== undefined && text !== null && text.trim() !== "") instructions[phase] = text;
+  const instructions: Record<InstructedRole, string | null> = { ...DEFAULT_KIT_CONFIG.instructions };
+  for (const role of INSTRUCTED_ROLES) {
+    const text = files[role];
+    if (text !== undefined && text !== null && text.trim() !== "") instructions[role] = text;
   }
   return instructions;
 }
@@ -318,16 +342,18 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
       secrets: sandbox.envMap("secrets", requireOpReference) ?? defaults.sandbox.secrets,
     },
     roles: {
-      triage: readAgentRole(roles.object("triage"), defaults.roles.triage, picks, "triage"),
-      design: readAgentRole(roles.object("design"), defaults.roles.design, picks, "design"),
-      implement: readAgentRole(roles.object("implement"), defaults.roles.implement, picks, "implement"),
-      review: readAgentRole(roles.object("review"), defaults.roles.review, picks, "review"),
+      triage: readPickingRole(roles.object("triage"), defaults.roles.triage, picks, "triage"),
+      design: readPickingRole(roles.object("design"), defaults.roles.design, picks, "design"),
+      implement: readPickingRole(roles.object("implement"), defaults.roles.implement, picks, "implement"),
+      review: readPickingRole(roles.object("review"), defaults.roles.review, picks, "review"),
+      audit: readAgentRole(roles.object("audit"), defaults.roles.audit),
       dispatch: readDispatch(roles.object("dispatch"), defaults.roles.dispatch),
       stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp),
     },
     maxInFlight: file.wholeNumber("max_in_flight", 0) ?? defaults.maxInFlight,
     caps: readCaps(file.object("caps"), defaults.caps),
     monitor: readMonitor(file.object("monitor"), defaults.monitor),
+    audit: readAudit(file.object("audit"), defaults.audit),
     operator: orDefault(file.nullableString("operator", checkLogin), defaults.operator),
   };
 }
@@ -337,10 +363,16 @@ function orDefault<T>(value: T | null | undefined, fallback: T | null): T | null
   return value === undefined ? fallback : value;
 }
 
-function readAgentRole(role: Reader, defaults: AgentRole, picks: Picks, phase: Phase): AgentRole {
+/** A role that takes Extra skill picks (ADR-0008), collecting its `skills` into `picks`. */
+function readPickingRole(role: Reader, defaults: AgentRole, picks: Picks, phase: Phase): AgentRole {
   const skills = role.stringList("skills");
   if (skills !== undefined) picks[phase] = skills;
   else if (role.has("skills")) picks[phase] = null;
+  return readAgentRole(role, defaults);
+}
+
+/** An AFK role's model, effort and timeout. A role that doesn't read `skills` refuses it as unknown. */
+function readAgentRole(role: Reader, defaults: AgentRole): AgentRole {
   return {
     model: role.string("model", refuseFable) ?? defaults.model,
     effort: orDefault(role.nullableString("effort", checkEffort), defaults.effort),
@@ -399,6 +431,17 @@ function checkSentrySlug(slug: string): string | null {
 
 function checkHttpsUrl(url: string): string | null {
   return URL.parse(url)?.protocol === "https:" ? null : "the Sentry token is sent there, so it must be an https:// URL";
+}
+
+function readAudit(audit: Reader, defaults: KitConfig["audit"]): KitConfig["audit"] {
+  // checkAuditDay refuses anything but a day, so the string is an AuditDay.
+  const day = audit.nullableString("day", checkAuditDay) as AuditDay | null | undefined;
+  return { day: orDefault(day, defaults.day) };
+}
+
+function checkAuditDay(day: string): string | null {
+  if ((AUDIT_DAYS as readonly string[]).includes(day)) return null;
+  return `the Audit day must be one of ${AUDIT_DAYS.join(", ")}, or null to turn the Audit off`;
 }
 
 function readStepUp(role: Reader, defaults: KitConfig["roles"]["stepUp"]): KitConfig["roles"]["stepUp"] {

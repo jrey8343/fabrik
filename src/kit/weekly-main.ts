@@ -113,7 +113,7 @@ async function main(): Promise<string> {
   // No scores/ until scoring has run.
   const scoreFiles = await readStoreFiles<ScoreFile>(storeDir, "scores");
   const repos = await productReposOf(products);
-  const facts = await Promise.all(repos.map((repo) => gatherGitHubFacts(products, repo, now)));
+  const facts = await Promise.all(repos.map((repo) => gatherGitHubFacts(products, repo, now, RUN_STORE.owner)));
 
   const result = weeklySummary({
     records,

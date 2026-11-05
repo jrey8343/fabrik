@@ -436,6 +436,40 @@ describe("Gathering an issue's blocked-by edges", () => {
 });
 
 describe("Gathering an issue's body", () => {
+  it("holds the body as it stands, so a Design session's rewrite can carry its marker lines forward", async () => {
+    const body = "Booking and billing share one module.\n\nFrom audit #40\n<!-- fabrik:escape strong #31 -->";
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issue: {
+                number: 6,
+                state: "OPEN",
+                author: { login: "someone" },
+                // GitHub answers only the fields the query selects.
+                ...(/^\s*body$/m.test(query) ? { body } : {}),
+                labels: { nodes: [{ name: "needs-design" }] },
+                parent: null,
+                comments: { nodes: [] },
+                timelineItems: { nodes: [] },
+                closedByPullRequestsReferences: { nodes: [] },
+                blockedBy: { nodes: [] },
+                blocking: { nodes: [] },
+              },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 6, label: "needs-design" }, null, null);
+
+    expect(snapshot.issue?.body).toBe(body);
+  });
+
   /** The issue as GitHub holds it, opened by `author`. */
   function githubWith(author: { login: string; __typename: string } | null) {
     return {
@@ -472,7 +506,7 @@ describe("Gathering an issue's body", () => {
   it("holds the body as it stands, and that the Fabrik App opened it, so a Design session keeps its Monitor marker", async () => {
     const snapshot = await gatherSnapshot(githubWith({ login: "fabrik-app", __typename: "Bot" }), repo, event, null, appLogin);
 
-    expect(snapshot.issue).toMatchObject({ body: "<!-- fabrik:monitor sentry:4504 -->\n## Production error", authorIsApp: true });
+    expect(snapshot.issue).toMatchObject({ body: "<!-- fabrik:monitor sentry:4504 -->\n## Production error", byApp: true });
   });
 
   it.each([
@@ -482,13 +516,16 @@ describe("Gathering an issue's body", () => {
   ])("holds that %s, not the Fabrik App, opened it", async (_, author) => {
     const snapshot = await gatherSnapshot(githubWith(author), repo, event, null, appLogin);
 
-    expect(snapshot.issue).toMatchObject({ authorIsApp: false });
+    expect(snapshot.issue).toMatchObject({ byApp: false });
   });
 
-  it("holds that the Fabrik App didn't open it when the run doesn't know the App's login, as the Kit job, which only routes, doesn't", async () => {
-    const snapshot = await gatherSnapshot(githubWith({ login: "fabrik-app", __typename: "Bot" }), repo, event, null, null);
+  // The Kit job routes the App's pending Audit to its Auditor run, which it couldn't if no issue were the App's.
+  it("takes any bot, but never a person, for the Fabrik App when the run doesn't know the App's login, as the Kit job, which only routes, doesn't", async () => {
+    const byBot = await gatherSnapshot(githubWith({ login: "fabrik-app", __typename: "Bot" }), repo, event, null, null);
+    const byPerson = await gatherSnapshot(githubWith({ login: "fabrik-app", __typename: "User" }), repo, event, null, null);
 
-    expect(snapshot.issue).toMatchObject({ authorIsApp: false });
+    expect(byBot.issue).toMatchObject({ byApp: true });
+    expect(byPerson.issue).toMatchObject({ byApp: false });
   });
 
   it("keeps no Monitor marker in the Spec a Design session writes from an issue another bot opened", async () => {
@@ -511,6 +548,49 @@ describe("Gathering an issue's body", () => {
     expect(spec?.kind).toBe("create-issue");
     expect(spec?.kind === "create-issue" ? spec.body : "").not.toContain("fabrik:monitor");
     expect(spec?.kind === "create-issue" ? spec.labels : []).not.toContain("fabrik:monitor");
+  });
+});
+
+describe("Gathering who opened an issue", () => {
+  /** The issue as gathered, opened by this account, which GitHub names without its [bot] suffix. */
+  async function openedBy(author: { login: string; __typename: string }) {
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          // GitHub answers only the fields the query selects.
+          const issueQuery = query.slice(query.indexOf("issue(number: $number)"));
+          const selectsType = /^\s*author \{[^}]*__typename/m.test(issueQuery);
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issue: {
+                number: 98,
+                state: "OPEN",
+                author: selectsType ? author : { login: author.login },
+                body: "",
+                labels: { nodes: [{ name: "fabrik:audit" }] },
+                parent: null,
+                comments: { nodes: [] },
+                timelineItems: { nodes: [] },
+                closedByPullRequestsReferences: { nodes: [] },
+                blockedBy: { nodes: [] },
+                blocking: { nodes: [] },
+              },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+    return (await gatherSnapshot(github, repo, { kind: "issue-opened", issue: 98 }, null, "fabrik-app[bot]")).issue;
+  }
+
+  it("says the Fabrik App opened it when its bot did, so its Audit markers are read", async () => {
+    expect(await openedBy({ login: "fabrik-app", __typename: "Bot" })).toMatchObject({ author: "fabrik-app", byApp: true });
+  });
+
+  it("says the App didn't when a person did, whatever their login", async () => {
+    expect(await openedBy({ login: "fabrik-app", __typename: "User" })).toMatchObject({ author: "fabrik-app", byApp: false });
   });
 });
 
@@ -629,6 +709,164 @@ describe("Gathering a Dispatch check's Tickets", () => {
   });
 });
 
+describe("Gathering a scheduled tick's audit slice", () => {
+  const HEAD = "c".repeat(40);
+
+  /** The read-only API, holding this default branch head and these `fabrik:audit` issues, newest first. */
+  function githubWith(defaultBranchRef: { target: { oid: string } } | null, nodes: unknown[]) {
+    return {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("defaultBranchRef")) {
+          expect(variables["label"]).toBe("fabrik:audit");
+          return { repository: { defaultBranchRef, issues: { nodes } } };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+  }
+
+  const tick = { kind: "scheduled-tick", now: "2026-11-08T04:00:00.000Z" } as const;
+
+  it("holds the default branch's head and each Audit issue, open or closed, with its title, telling the Fabrik App's from a person's or another bot's", async () => {
+    const github = githubWith({ target: { oid: HEAD } }, [
+      { number: 97, title: "My audit", state: "OPEN", stateReason: null, createdAt: "2026-11-08T00:05:00Z", body: "Quoting <!-- fabrik:audit-pending -->", author: { login: "jrey8343", __typename: "User" } },
+      { number: 96, title: "Audit: week of 2026-11-02", state: "OPEN", stateReason: null, createdAt: "2026-11-08T00:04:30Z", body: "<!-- fabrik:audit-pending -->", author: { login: "other-app", __typename: "Bot" } },
+      { number: 95, title: "Audit: week of 2026-11-02", state: "CLOSED", stateReason: "NOT_PLANNED", createdAt: "2026-11-08T00:04:00Z", body: "failed", author: { login: "fabrik-app", __typename: "Bot" } },
+      { number: 90, title: "Audit: week of 2026-10-26", state: "CLOSED", stateReason: "COMPLETED", createdAt: "2026-11-01T00:05:00Z", body: "filled", author: { login: "fabrik-app", __typename: "Bot" } },
+      { number: 85, title: "Audit: week of 2026-10-19", state: "OPEN", stateReason: "REOPENED", createdAt: "2026-10-25T00:05:00Z", body: "", author: null },
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, "fabrik-app[bot]");
+
+    expect(snapshot.audit).toEqual({
+      head: HEAD,
+      issues: [
+        { number: 97, title: "My audit", open: true, stateReason: null, createdAt: "2026-11-08T00:05:00Z", byApp: false, body: "Quoting <!-- fabrik:audit-pending -->" },
+        { number: 96, title: "Audit: week of 2026-11-02", open: true, stateReason: null, createdAt: "2026-11-08T00:04:30Z", byApp: false, body: "<!-- fabrik:audit-pending -->" },
+        { number: 95, title: "Audit: week of 2026-11-02", open: false, stateReason: "not_planned", createdAt: "2026-11-08T00:04:00Z", byApp: true, body: "failed" },
+        { number: 90, title: "Audit: week of 2026-10-26", open: false, stateReason: "completed", createdAt: "2026-11-01T00:05:00Z", byApp: true, body: "filled" },
+        { number: 85, title: "Audit: week of 2026-10-19", open: true, stateReason: "reopened", createdAt: "2026-10-25T00:05:00Z", byApp: false, body: "" },
+      ],
+    });
+  });
+
+  it("holds no head for a repo whose default branch has no commits", async () => {
+    const snapshot = await gatherSnapshot(githubWith(null, []), repo, tick, null, "fabrik-app[bot]");
+
+    expect(snapshot.audit).toEqual({ head: null, issues: [] });
+  });
+
+  it("isn't gathered for any other event", async () => {
+    const snapshot = await gatherSnapshot(githubWith({ target: { oid: HEAD } }, []), repo, { kind: "kit-config-changed" }, null, "fabrik-app[bot]");
+
+    expect(snapshot.audit).toBeNull();
+  });
+});
+
+describe("Gathering the PRs an Auditor named", () => {
+  /** The read-only API, holding Audit #97 and these PRs by number; any other number is no PR, which GitHub answers with a 404. */
+  function githubWith(pulls: Record<number, unknown>) {
+    return {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issue: {
+                number: 97,
+                state: "OPEN",
+                author: { login: "fabrik-app", __typename: "Bot" },
+                body: "Reading.\n\n<!-- fabrik:audit-pending -->",
+                labels: { nodes: [{ name: "fabrik:audit" }] },
+                parent: null,
+                comments: { nodes: [] },
+                timelineItems: { nodes: [] },
+                closedByPullRequestsReferences: { nodes: [] },
+                blockedBy: { nodes: [] },
+                blocking: { nodes: [] },
+              },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+      async rest(method: string, path: string, _body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<unknown> {
+        const pull = /^\/repos\/acme\/shop\/pulls\/(\d+)$/.exec(path);
+        if (method !== "GET" || pull === null) throw new Error(`Unexpected call: ${method} ${path}`);
+        const found = pulls[Number(pull[1])];
+        if (found !== undefined) return found;
+        // As the real client does: a 404 is null only when the call allows it.
+        if (options.allowNotFound === true) return null;
+        throw new Error(`GitHub GET ${path} failed: 404`);
+      },
+    } as unknown as GitHub;
+  }
+
+  const pull = (number: number, merged: boolean, ref: string, type: string) => ({ number, merged, head: { ref }, user: { type } });
+
+  function finished(output: unknown): LoopEvent {
+    return {
+      kind: "audit-run-finished",
+      issue: 97,
+      output: typeof output === "string" ? output : JSON.stringify(output),
+      window: { kind: "last-days", days: 30 },
+      runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+      repoUrl: "https://github.com/acme/shop",
+    };
+  }
+
+  const candidate = (introducedBy: number[]) => ({
+    title: "Make the cart module deeper",
+    files: ["src/cart.ts"],
+    problem: "p",
+    solution: "s",
+    benefits: "b",
+    before: "flowchart LR\n  a",
+    after: "flowchart LR\n  b",
+    strength: "strong",
+    introducedBy,
+  });
+
+  it("holds each PR the reply names once, telling a merged agent PR from the rest and leaving out a number that's no PR, beside the Audit", async () => {
+    const github = githubWith({
+      31: pull(31, true, "fabrik/ticket-7", "Bot"),
+      40: pull(40, false, "fabrik/ticket-8", "Bot"),
+      41: pull(41, true, "feature/cart", "User"),
+      42: pull(42, true, "fabrik/ticket-9", "User"),
+    });
+
+    const snapshot = await gatherSnapshot(
+      github,
+      repo,
+      finished({ candidates: [candidate([31, 40, 404]), candidate([41, 42, 31])], topRecommendation: "Make the cart module deeper" }),
+      null,
+      "fabrik-app[bot]",
+    );
+
+    expect(snapshot.namedPullRequests).toEqual([
+      { number: 31, merged: true, headRef: "fabrik/ticket-7", isAgent: true },
+      { number: 40, merged: false, headRef: "fabrik/ticket-8", isAgent: true },
+      { number: 41, merged: true, headRef: "feature/cart", isAgent: false },
+      { number: 42, merged: true, headRef: "fabrik/ticket-9", isAgent: false },
+    ]);
+    expect(snapshot.issue).toMatchObject({ number: 97, byApp: true, labels: ["fabrik:audit"] });
+  });
+
+  it("holds no PRs for a reply that breaks its contract, whose Audit the core then fails", async () => {
+    const github = githubWith({ 31: pull(31, true, "fabrik/ticket-7", "Bot") });
+
+    const snapshot = await gatherSnapshot(github, repo, finished("not JSON, though it names #31"), null, "fabrik-app[bot]");
+
+    expect(snapshot.namedPullRequests).toEqual([]);
+  });
+
+  it("isn't gathered for any other event", async () => {
+    const snapshot = await gatherSnapshot(githubWith({}), repo, { kind: "kit-config-changed" }, null, "fabrik-app[bot]");
+
+    expect(snapshot.namedPullRequests).toBeNull();
+  });
+});
+
 describe("Gathering a Design-session turn's starting reply", () => {
   const issueData = {
     repository: {
@@ -705,11 +943,12 @@ describe("Gathering a Design-session turn's starting reply", () => {
 });
 
 describe("Reading the Kit config folder through the API", () => {
-  it("reads the Skills sources lockfile beside config.json and the phase instructions, at the ref", async () => {
+  it("reads the Skills sources lockfile beside config.json and each role's instructions, the Auditor's too, at the ref", async () => {
     const files: Record<string, string> = {
       ".fabrik/config.json": `{ "roles": { "review": { "skills": ["jrey8343/skills/event-storming"] } } }`,
       ".fabrik/skills.lock.json": `[{ "repository": "jrey8343/skills", "sha": "${"a".repeat(40)}" }]`,
       ".fabrik/review.md": "Check the deciders.\n",
+      ".fabrik/audit.md": "Booking first.\n",
     };
     const github = {
       async fileText(at: typeof repo, path: string, ref: string): Promise<string | null> {
@@ -724,6 +963,7 @@ describe("Reading the Kit config folder through the API", () => {
     const result = resolveKitConfig(sources);
     expect(result.ok && result.config.extraSkills.review).toEqual([{ source: "jrey8343/skills", name: "event-storming" }]);
     expect(result.ok && result.config.instructions.review).toBe("Check the deciders.\n");
+    expect(result.ok && result.config.instructions.audit).toBe("Booking first.\n");
   });
 
   it("gives no lockfile when the Product repo has none", async () => {
