@@ -1,0 +1,74 @@
+# Writes what scoring a run came to (#149) to the fabrik-runs store
+# (src/kit/runStore.ts): the judge run's transcript, its Run record (role
+# `score`) and the score file, each create-only and retrying on conflict, so a
+# re-run with the same rubrics leaves the files it finds as they were. It is the
+# judge run's own push job (ADR-0009): it runs no agent and no Product code,
+# gets a token scoped to fabrik-runs with Contents write only from the
+# store-token action, as the write the Run record action does, and runs
+# src/kit/score-record-main.ts, which reads the scored run's record from the
+# store, builds the judge's record and the score file from the judge job's
+# artifacts, writes them, and writes one step-summary line saying what it
+# scored or why it didn't.
+#
+# The score-record job runs it after the judge job, whether that succeeded or
+# failed, unless the run was cancelled, with continue-on-error, after checking
+# out the Kit alone into kit/:
+#   - uses: ./kit/.github/actions/write-score-record
+#     with:
+#       op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+#       record: <the scored run's record path, from the push job>
+# The job's env carries FABRIK_NEEDS (toJSON(needs)), with the Kit job as
+# `kit` and the judge job as `score` (JUDGE_JOB in src/kit/judge.ts).
+name: Write the score record
+description: Writes the judge's transcript, its Run record and the score file to the fabrik-runs store.
+
+inputs:
+  op-push-token:
+    description: The push service account's token (secrets.OP_PUSH_TOKEN), which reads the Fabrik App vault.
+    required: true
+  record:
+    description: The scored run's Run record's path in the store, which the push job passed out.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24
+
+    # Kept for 7 days by the judge job; a judge whose run never started leaves none.
+    - name: Take the judge's transcript
+      continue-on-error: true
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: fabrik-transcript-score
+        path: ${{ runner.temp }}/judge-transcript
+
+    # Its answer, or its failure report. A judge that timed out leaves neither,
+    # and src/kit/score-record-main.ts expects that.
+    - name: Take the judge's answer or failure report
+      continue-on-error: true
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        pattern: fabrik-judge-*
+        merge-multiple: true
+        path: ${{ runner.temp }}/judge
+
+    # The store's token alone; empty for a store the App isn't on, and the program says no score was written.
+    - name: Mint the Fabrik App's token for the fabrik-runs store
+      id: tokens
+      uses: ./kit/.github/actions/store-token
+      with:
+        op-push-token: ${{ inputs.op-push-token }}
+
+    - name: Write the scores
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        FABRIK_STORE_TOKEN: ${{ steps.tokens.outputs.store-token }}
+        FABRIK_SCORED_RECORD: ${{ inputs.record }}
+        FABRIK_JUDGE_DIR: ${{ runner.temp }}/judge
+        FABRIK_TRANSCRIPT_DIR: ${{ runner.temp }}/judge-transcript
+      run: node src/kit/score-record-main.ts

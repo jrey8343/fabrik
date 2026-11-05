@@ -12,6 +12,9 @@ import {
   anAuditRunRecord,
   aReview,
   aRunRecord,
+  aScoreEntry,
+  aScoreFile,
+  aSkippedScoreFile,
   aSpec,
   aTicketTimeline,
   aVerdictComment,
@@ -28,7 +31,7 @@ import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type T
 const NOW = "2026-11-08T20:00:00Z";
 
 function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput {
-  return { records: [], facts: [factsOf()], operator: "operator", appLogin: "fabrik-app[bot]", timeZone: "Australia/Sydney", now: NOW, ...overrides };
+  return { records: [], scoreFiles: [], facts: [factsOf()], operator: "operator", appLogin: "fabrik-app[bot]", timeZone: "Australia/Sydney", now: NOW, ...overrides };
 }
 
 describe("the Weekly summary", () => {
@@ -412,6 +415,26 @@ describe("the Weekly summary", () => {
         aRunRecord({ role: "design", issue: 14, pullRequest: null, endedAt: hoursAgo(40), infrastructureFailure: "timeout" }),
       ];
       expect(stuckIn({ openIssues: [anOpenIssue({ number: 13 }), anOpenIssue({ number: 14 })] }, records)).toEqual([]);
+    });
+
+    it("a judge run's record neither hides the failed run it scored nor is listed for failing itself", () => {
+      const records = [
+        aRunRecord({ endedAt: hoursAgo(30), jobResult: "cancelled", infrastructureFailure: "timeout" }),
+        aRunRecord({ role: "score", endedAt: hoursAgo(29), baseSha: null }), // scored the timed-out run, after it
+        aRunRecord({ issue: 9, endedAt: hoursAgo(40) }),
+        aRunRecord({ role: "score", issue: 9, endedAt: hoursAgo(39), baseSha: null, jobResult: "failure", infrastructureFailure: "crash" }),
+      ];
+      expect(stuckIn({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" }), anOpenIssue({ number: 9 })] }, records)).toEqual([
+        {
+          kind: "infrastructure-failure",
+          number: 7,
+          title: "Build the thing",
+          url: "https://github.com/owner/product/issues/7",
+          since: hoursAgo(30),
+          age: 30 * HOUR,
+          failure: "timeout",
+        },
+      ]);
     });
   });
 
@@ -1051,6 +1074,19 @@ describe("the Weekly summary", () => {
       expect(result).toMatchObject({ kind: "summary", summary: { costPerMergedPullRequest: { thisWeek: { usd: 1 } } } });
     });
 
+    it("never counts the record of a judge run that scored a run on the Ticket", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ endedAt: "2026-11-03T00:05:00Z", totalCostUsd: 0.25, role: "score", baseSha: null }),
+          ],
+          facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-03T06:00:00Z")] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { cost: { thisWeek: 1.25 }, costPerMergedPullRequest: { thisWeek: { usd: 1 } } } });
+    });
+
     it("leaves a run whose cost basis is unknown out of the sum, and counts it", () => {
       const result = weeklySummary(
         input({
@@ -1109,6 +1145,19 @@ describe("the Weekly summary", () => {
         }),
       );
       expect(result).toMatchObject({ kind: "summary", summary: { costPerSpec: { thisWeek: { usd: 1.75 } } } });
+    });
+
+    it("never counts the record of a judge run that scored a run on one of its Tickets", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ issue: 7, role: "score", baseSha: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 0.25 }),
+          ],
+          facts: [factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-05T00:00:00Z")], { number: 3, tickets: [7] })] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { cost: { thisWeek: 1.25 }, costPerSpec: { thisWeek: { usd: 1 } } } });
     });
 
     it("counts only a Spec the App moved out of design, not one the Operator labelled", () => {
@@ -1194,6 +1243,19 @@ describe("the Weekly summary", () => {
         }),
       );
       expect(result).toMatchObject({ kind: "summary", summary: { spendNeverMerged: { thisWeek: { usd: 1, unknownCost: 1 } } } });
+    });
+
+    it("never counts the record of a judge run that scored a run on the Ticket", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ endedAt: "2026-11-03T00:05:00Z", totalCostUsd: 0.25, role: "score", baseSha: null }),
+          ],
+          facts: [factsOf({ tickets: [aTicketTimeline([], { closedAt: "2026-11-04T00:00:00Z" })] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { cost: { thisWeek: 1.25 }, spendNeverMerged: { thisWeek: { usd: 1 } } } });
     });
   });
 
@@ -1302,7 +1364,7 @@ describe("the Weekly summary", () => {
     it("has no section for a feature that hasn't shipped, not even an empty one", () => {
       const { body } = rendered();
       expect(body.match(/^#+ .*$/gm)).toEqual(["## Metrics", "## owner/product", "### Waiting on you"]);
-      expect(body).not.toMatch(/Held|Retro|Map|Monitor|score/i);
+      expect(body).not.toMatch(/Held|Retro|Map|Monitor/i);
     });
 
     it("shows the architectural escape rate and its Strengths in a week with no escapes, and no escapes list", () => {
@@ -1518,6 +1580,230 @@ describe("the Weekly summary", () => {
     it("keeps a week with no records but held work from being skipped", () => {
       const result = weeklySummary(input({ facts: [factsOf({ designQueue: { issues: [aDesignQueueIssue()], designTurnsInProgress: [] } })] }));
       expect(result.kind).toBe("summary");
+    });
+  });
+
+  describe("Scores", () => {
+    it("gives each rubric its runs scored, median score and share passing, from the score files of the week's runs", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ runId: 1, endedAt: "2026-11-03T00:00:00Z" }),
+            aRunRecord({ runId: 2, endedAt: "2026-11-04T00:00:00Z" }),
+            aRunRecord({ runId: 3, endedAt: "2026-11-05T00:00:00Z" }),
+          ],
+          scoreFiles: [
+            aScoreFile({ runId: 1, entries: [aScoreEntry({ score: 0.9 })] }),
+            aScoreFile({ runId: 2, entries: [aScoreEntry({ score: 0.6, pass: false })] }),
+            aScoreFile({ runId: 3, entries: [aScoreEntry({ score: 0.75 })] }),
+          ],
+        }),
+      );
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { scores: { thisWeek: { rubrics: [{ scorer: "efficiency", version: 1, runsScored: 3, medianScore: 0.75, passing: 2 / 3 }] } } },
+      });
+    });
+
+    it("keeps each rubric version apart, so scores from different versions never mix, listing them in the Kit's order", () => {
+      const result = weeklySummary(
+        input({
+          records: [aRunRecord({ runId: 1 }), aRunRecord({ runId: 2 })],
+          scoreFiles: [
+            aScoreFile({
+              runId: 1,
+              entries: [
+                aScoreEntry({ scorer: "skill-use", score: 0.5, pass: false }),
+                aScoreEntry({ scorer: "efficiency", version: 2, score: 0.9 }),
+              ],
+            }),
+            aScoreFile({
+              runId: 2,
+              entries: [aScoreEntry({ scorer: "efficiency", score: 0.4, pass: false }), aScoreEntry({ scorer: "ticket-compliance", score: 1 })],
+            }),
+          ],
+        }),
+      );
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      expect(result.summary.scores.thisWeek.rubrics).toEqual([
+        { scorer: "efficiency", version: 1, runsScored: 1, medianScore: 0.4, passing: 0 },
+        { scorer: "efficiency", version: 2, runsScored: 1, medianScore: 0.9, passing: 1 },
+        { scorer: "ticket-compliance", version: 1, runsScored: 1, medianScore: 1, passing: 1 },
+        { scorer: "skill-use", version: 1, runsScored: 1, medianScore: 0.5, passing: 0 },
+      ]);
+    });
+
+    it("counts the runs picked for scoring that were skipped, by reason", () => {
+      const nearLimit = { status: "allowed", rateLimitType: "seven_day", utilization: 0.8, resetsAt: 1_794_000_000 };
+      const result = weeklySummary(
+        input({
+          records: [1, 2, 3, 4].map((runId) => aRunRecord({ runId })).concat(aRunRecord({ runId: 5, endedAt: "2026-10-28T00:00:00Z" })),
+          scoreFiles: [
+            aSkippedScoreFile({ reason: "weekly-limit", rateLimit: nearLimit }, { runId: 1 }),
+            aSkippedScoreFile({ reason: "weekly-limit", rateLimit: nearLimit }, { runId: 2 }),
+            aSkippedScoreFile({ reason: "judge-output-invalid" }, { runId: 3 }),
+            aScoreFile({ runId: 4 }),
+            aSkippedScoreFile({ reason: "no-transcript" }, { runId: 5 }), // last week's
+          ],
+        }),
+      );
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      expect(result.summary.scores.thisWeek.skips).toEqual({
+        "weekly-limit": 2,
+        "no-transcript": 0,
+        "infrastructure-failure": 0,
+        "judge-failed": 0,
+        "judge-output-invalid": 1,
+      });
+      expect(result.summary.scores.lastWeek.skips).toMatchObject({ "no-transcript": 1, "weekly-limit": 0 });
+    });
+
+    it("gives scoring's cost, the judge runs' summed cost, as a share of the week's, leaving out and counting a judge run of unknown cost", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ totalCostUsd: 9.5 }),
+            aRunRecord({ role: "score", baseSha: null, totalCostUsd: 0.25 }),
+            aRunRecord({ role: "score", baseSha: null, totalCostUsd: 0.25 }),
+            aRunRecord({ role: "score", baseSha: null, ...UNKNOWN_COST_BASIS }),
+            aRunRecord({ role: "score", baseSha: null, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 0.4 }), // last week's
+          ],
+          scoreFiles: [aScoreFile()],
+        }),
+      );
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: {
+          cost: { thisWeek: 10, lastWeek: 0.4 },
+          scoringCost: { thisWeek: { usd: 0.5, share: 0.05, unknownCost: 1 }, lastWeek: { usd: 0.4, share: 1, unknownCost: 0 } },
+        },
+      });
+    });
+
+    it("gives scoring no share of the cost in a week that cost nothing", () => {
+      const result = weeklySummary(input({ records: [aRunRecord({ totalCostUsd: 0 })], scoreFiles: [aScoreFile()] }));
+      expect(result).toMatchObject({ kind: "summary", summary: { scoringCost: { thisWeek: { usd: 0, share: null }, lastWeek: { usd: 0, share: null } } } });
+    });
+
+    describe("rendered", () => {
+      const judgeRun = (overrides: Parameters<typeof aRunRecord>[0]) => aRunRecord({ role: "score", baseSha: null, ...overrides });
+      const scoredWeek = input({
+        records: [
+          aRunRecord({ runId: 1, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 9.5 }),
+          ...[2, 4, 5, 6].map((runId) => aRunRecord({ runId, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 0 })),
+          judgeRun({ runId: 1, endedAt: "2026-11-03T00:05:00Z", totalCostUsd: 0.25 }),
+          judgeRun({ runId: 2, endedAt: "2026-11-04T00:05:00Z", totalCostUsd: 0.25 }),
+          judgeRun({ runId: 5, endedAt: "2026-11-04T00:05:00Z", ...UNKNOWN_COST_BASIS }),
+          aRunRecord({ runId: 3, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2.25 }),
+          judgeRun({ runId: 3, endedAt: "2026-10-28T00:05:00Z", totalCostUsd: 0.25 }),
+        ],
+        scoreFiles: [
+          aScoreFile({
+            runId: 1,
+            entries: [aScoreEntry({ score: 0.9 }), aScoreEntry({ scorer: "ticket-compliance", threshold: 0.8, score: 0.6, pass: false })],
+          }),
+          aScoreFile({
+            runId: 2,
+            entries: [aScoreEntry({ score: 0.6, pass: false }), aScoreEntry({ scorer: "ticket-compliance", threshold: 0.8, score: 0.8 })],
+          }),
+          aSkippedScoreFile({ reason: "weekly-limit", rateLimit: { status: "rejected", rateLimitType: "seven_day", utilization: 1, resetsAt: null } }, { runId: 4 }),
+          aSkippedScoreFile({ reason: "judge-failed" }, { runId: 5 }),
+          aSkippedScoreFile({ reason: "no-transcript" }, { runId: 6 }),
+          aScoreFile({ runId: 3, entries: [aScoreEntry({ score: 0.5, pass: false })] }),
+        ],
+      });
+      const bodyOf = (week: WeeklySummaryInput) => {
+        const result = weeklySummary(week);
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result.body;
+      };
+
+      it("shows each rubric version's runs scored, median score and share passing, this week and last week, with the change", () => {
+        expect(bodyOf(scoredWeek)).toContain(
+          [
+            "## Scores",
+            "",
+            "| | This week | Last week | Change |",
+            "| --- | ---: | ---: | ---: |",
+            "| Efficiency v1: runs scored | 2 | 1 | +1 |",
+            "| Efficiency v1: median score | 0.75 | 0.50 | +0.25 |",
+            "| Efficiency v1: passing | 50% | 0% | +50 pts |",
+            "| Ticket compliance v1: runs scored | 2 | 0 | +2 |",
+            "| Ticket compliance v1: median score | 0.70 | – | – |",
+            "| Ticket compliance v1: passing | 50% | – | – |",
+          ].join("\n"),
+        );
+      });
+
+      it("shows what scoring cost and its share of the cost, this week and last week, and how many judge runs it leaves out", () => {
+        const body = bodyOf(scoredWeek);
+        // This week $0.50 of $10.00, last week $0.25 of $2.50.
+        expect(body).toContain(["| Scoring cost | $0.50 | $0.25 | +$0.25 |", "| Scoring's share of the cost | 5% | 10% | -5 pts |", ""].join("\n"));
+        expect(body).toContain("1 run with an unknown cost basis is left out of the scoring cost.");
+        expect(body).toContain("| API-equivalent cost | $10.00 | $2.50 | +$7.50 |");
+      });
+
+      it("says how many runs picked for scoring were skipped this week, and why, and says nothing of skips in a week with none", () => {
+        expect(bodyOf(scoredWeek)).toContain("3 runs picked for scoring were skipped: 1 weekly-limit, 1 no-transcript, 1 judge-failed.");
+        const oneSkip = bodyOf(input({ records: [aRunRecord()], scoreFiles: [aSkippedScoreFile({ reason: "infrastructure-failure" })] }));
+        expect(oneSkip).toContain("1 run picked for scoring was skipped: 1 infrastructure-failure.");
+        expect(bodyOf(input({ records: [aRunRecord()], scoreFiles: [aScoreFile()] }))).not.toContain("skipped");
+      });
+
+      it("sits after the Subscription usage, before Held and the first repo's section", () => {
+        const body = bodyOf({ ...scoredWeek, facts: [factsOf({ designQueue: { issues: [aDesignQueueIssue()], designTurnsInProgress: [] } })] });
+        expect(body.match(/^#+ .*$/gm)).toEqual(["## Metrics", "## Scores", "## Held", "## owner/product", "### Waiting on you"]);
+        expect(body.indexOf("Subscription usage")).toBeLessThan(body.indexOf("## Scores"));
+      });
+
+      it("is left out of a week with no score files, even one with judge runs or with score files last week", () => {
+        const body = bodyOf(
+          input({
+            records: [aRunRecord(), judgeRun({ totalCostUsd: 0.25 }), aRunRecord({ runId: 3, endedAt: "2026-10-28T00:00:00Z" })],
+            scoreFiles: [aScoreFile({ runId: 3 })],
+          }),
+        );
+        expect(body).not.toMatch(/Scor/);
+      });
+
+      it("never shows a run's own scores, and never puts a low score or a skip in Waiting on you or Stuck", () => {
+        const HOUR = 60 * 60 * 1000;
+        const longAgo = new Date(Date.parse(NOW) - 30 * HOUR).toISOString();
+        const result = weeklySummary(
+          input({
+            records: [aRunRecord({ runId: 1, endedAt: longAgo }), aRunRecord({ runId: 2, endedAt: longAgo })],
+            scoreFiles: [
+              aScoreFile({ runId: 1, entries: [aScoreEntry({ score: 0.1, pass: false, label: "dead-end-loop", rationale: "Looped on one failing test." })] }),
+              aSkippedScoreFile({ reason: "judge-output-invalid" }, { runId: 2 }),
+            ],
+            facts: [factsOf({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" })] })],
+          }),
+        );
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        expect(result.summary.repos).toMatchObject([{ waitingOnYou: [], stuck: [] }]);
+        expect(result.body).not.toMatch(/dead-end-loop|Looped|runs\/|scores\/|#7\b|\b[12]-1-implement\b/);
+      });
+    });
+
+    it("places a score file in the week its scored run ended, even when scoring ended after the week turned", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ runId: 1, endedAt: "2026-11-01T12:58:00Z" }), // Sunday 23:58 in Sydney: last week
+            aRunRecord({ runId: 1, role: "score", baseSha: null, endedAt: "2026-11-01T13:03:00Z" }), // its judge run, this week
+          ],
+          scoreFiles: [aScoreFile({ runId: 1, scoredAt: "2026-11-01T13:04:00Z", entries: [aScoreEntry()] })],
+        }),
+      );
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { scores: { thisWeek: { rubrics: [] }, lastWeek: { rubrics: [{ scorer: "efficiency", runsScored: 1 }] } } },
+      });
+    });
+
+    it("keeps a week with only score files from being skipped, placing one whose record isn't in the store by when it was scored", () => {
+      const result = weeklySummary(input({ scoreFiles: [aScoreFile({ scoredAt: "2026-11-04T12:05:00Z", entries: [aScoreEntry()] })] }));
+      expect(result).toMatchObject({ kind: "summary", summary: { scores: { thisWeek: { rubrics: [{ scorer: "efficiency", runsScored: 1 }] } } } });
     });
   });
 

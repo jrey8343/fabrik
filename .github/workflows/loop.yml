@@ -16,6 +16,11 @@
 #   pinned. When the agent job failed or was cancelled (its timeout-minutes
 #   included), it posts the failure notice instead.
 #
+# Scoring (#149) follows the same split. The push job's record step plans
+# whether the Implement run it recorded is scored. When it is, the judge job
+# (`score`) runs the judge with no tools and no write credential, and the
+# score-record job, the judge run's own push job, writes what it came to.
+#
 # The steps these jobs share are composite actions in .github/actions/, used
 # from the Kit's own checkout at kit/: prepare-agent readies an agent job, and
 # run-loop runs the Loop as the Fabrik App.
@@ -809,6 +814,10 @@ jobs:
       dispatch: ${{ steps.loop.outputs.dispatch }}
       # "true" when the plan asked for a Design queue check.
       design-queue: ${{ steps.loop.outputs.design-queue }}
+      # "true" when the scoring plan picked the run for the judge job (#149), and
+      # the path of the scored run's Run record in the store, for the score-record job.
+      score: ${{ steps.record.outputs.score }}
+      record: ${{ steps.record.outputs.record }}
     env:
       # How each job ended and what it passed out, none of which the agent can rewrite.
       FABRIK_NEEDS: ${{ toJSON(needs) }}
@@ -840,8 +849,11 @@ jobs:
       # The run's Run record and transcript, to the fabrik-runs store (ADR-0009).
       # always(), so a Loop that failed still leaves its record; continue-on-error,
       # so a store problem never fails the push job or stalls the Loop. Without
-      # fabrik-runs it writes one step-summary line naming the setup step.
+      # fabrik-runs it writes one step-summary line naming the setup step. For a
+      # record in the store it then runs the scoring plan (#149): it writes a
+      # skip's score file itself, and asks the judge job for a score.
       - name: Write the Run record
+        id: record
         if: always()
         continue-on-error: true
         uses: ./kit/.github/actions/write-run-record
@@ -919,3 +931,79 @@ jobs:
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
           actions-token: ${{ github.token }}
+
+  # The judge (#149): scores the Implement run the push job just recorded, when
+  # the push job's scoring plan picked it, from the run's transcript and its
+  # Ticket, with the Kit's fixed judge model and no tools. Like an agent job,
+  # it holds no write credential (ADR-0002): it checks out only the Kit, reads
+  # the Ticket with the read-only token, and loads only the Claude token,
+  # through the agent service account (ADR-0004). It runs after the push job,
+  # beside Dispatch and the Design queue check, so it never blocks or delays
+  # the Loop. Never named like the Implement job, so Dispatch's count of
+  # Implement runs in flight passes it by. Its key is JUDGE_JOB in src/kit/judge.ts.
+  score:
+    name: Score
+    needs: [kit, push]
+    if: ${{ !cancelled() && needs.push.outputs.score == 'true' }}
+    runs-on: ubuntu-latest
+    # The Kit's, not Kit config's: JUDGE_TIMEOUT_MINUTES in src/kit/runStore.ts (a test holds the two together).
+    timeout-minutes: 15
+    permissions:
+      # Only to read the Ticket the scored run built.
+      issues: read
+    outputs:
+      # For the judge's Run record, as an agent job passes out its own: a failed
+      # 1Password step means the judge never started.
+      secrets-step: ${{ steps.judge.outputs.secrets-step }}
+      model: ${{ steps.judge.outputs.model }}
+      effort: ${{ steps.judge.outputs.effort }}
+    steps:
+      # The run-judge action checks nothing out, so this is all the job has.
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Run the judge
+        id: judge
+        uses: ./kit/.github/actions/run-judge
+        with:
+          op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
+          github-token: ${{ github.token }}
+          ticket: ${{ needs.kit.outputs.ticket }}
+
+  # The judge run's own push job (ADR-0009's addendum): it writes the judge's
+  # transcript, its Run record (role `score`) and the score file to fabrik-runs.
+  # It runs after the judge job whether that succeeded or failed, so a failed
+  # judge still leaves its record and a judge-failed score file, unless the run
+  # was cancelled. continue-on-error, so scoring never fails the run.
+  score-record:
+    name: Score record
+    needs: [kit, push, score]
+    if: ${{ !cancelled() && needs.score.result != 'skipped' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      # How the judge job ended and what it passed out (the `score` entry), and the
+      # Kit job's sha, none of which the judge can rewrite.
+      FABRIK_NEEDS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # Mints a token for fabrik-runs alone, with Contents write, through the push service account.
+      - name: Write the score record
+        uses: ./kit/.github/actions/write-score-record
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          record: ${{ needs.push.outputs.record }}

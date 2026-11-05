@@ -1,13 +1,16 @@
-// The Weekly summary (ADR-0009): from the store's Run records, a GitHub facts
-// snapshot per Product repo, the Operator and now, the one issue filed for the
-// week that just ended, or skip in a quiet week. Pure, no I/O, no model call.
+// The Weekly summary (ADR-0009): from the store's Run records and score files,
+// a GitHub facts snapshot per Product repo, the Operator and now, the one issue
+// filed for the week that just ended, or skip in a quiet week. Pure, no I/O, no
+// model call.
 import { verdictsIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_ROUND_MARKER, escapeMarkerIn } from "../loop/markers.ts";
 import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
-import { type RateLimitReading, type RunRecord, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
+import { rubricId, SCORERS } from "./rubrics.ts";
+import { type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
+import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
 export interface LabelEvent {
@@ -177,6 +180,8 @@ export interface GitHubFacts {
 
 export interface WeeklySummaryInput {
   readonly records: readonly RunRecord[];
+  /** The store's score files: a picked run's scores, or why it has none (src/kit/scorer.ts). */
+  readonly scoreFiles: readonly ScoreFile[];
   readonly facts: readonly GitHubFacts[];
   /** The Operator's GitHub login, the owner of the store. */
   readonly operator: string;
@@ -205,7 +210,7 @@ export interface CostFigure {
 export interface WeeklySummary {
   /** The Monday the week began on, in the Operator's time zone, as `yyyy-mm-dd`. */
   readonly week: string;
-  /** The API-equivalent cost of every record that ended in the week, in USD. */
+  /** The API-equivalent cost of every record that ended in the week, in USD, judge runs' included. */
   readonly cost: WeekOverWeek<number>;
   /** How many of the week's records the cost leaves out, their cost basis being unknown. */
   readonly unknownCost: WeekOverWeek<number>;
@@ -254,8 +259,41 @@ export interface WeeklySummary {
     /** Records of a Step-up. */
     readonly stepUps: WeekOverWeek<number>;
   };
+  /** What the score files of the week's runs say. */
+  readonly scores: WeekOverWeek<WeekScores>;
+  /** What scoring cost: the week's judge runs (role `score`), which the cost includes. */
+  readonly scoringCost: WeekOverWeek<ScoringCost>;
   /** One section per Product repo, in the order the facts came. */
   readonly repos: readonly RepoSection[];
+}
+
+/** The summed cost of a week's judge runs, in USD, and its share of the week's cost. */
+export interface ScoringCost {
+  readonly usd: number;
+  /** From 0 to 1, or null in a week that cost nothing. */
+  readonly share: number | null;
+  /** How many judge runs it leaves out, their cost basis being unknown. */
+  readonly unknownCost: number;
+}
+
+/** What the score files of the runs that ended in a week say. */
+export interface WeekScores {
+  /** How many score files the week's runs have, scores and skips alike. */
+  readonly scoreFiles: number;
+  /** Each rubric version the week's runs were scored under, in the Kit's order of Scorers. */
+  readonly rubrics: readonly RubricScores[];
+  /** How many of the week's runs picked for scoring were skipped, by reason. */
+  readonly skips: Readonly<Record<ScoreSkip["reason"], number>>;
+}
+
+/** How the week's runs scored under one rubric version. */
+export interface RubricScores {
+  readonly scorer: string;
+  readonly version: number;
+  readonly runsScored: number;
+  readonly medianScore: number;
+  /** The share of the runs scored that passed, from 0 to 1. */
+  readonly passing: number;
 }
 
 /** What one Product repo has waiting on the Operator, as of the filing. */
@@ -390,7 +428,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
   const repos = input.facts.map((facts) => repoSectionOf(facts, input));
   // Held work counts too, so a queue never sits unseen through a week nothing ran.
   const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null);
-  if (thisWeek.records === 0 && quiet) return { kind: "skip" };
+  if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && quiet) return { kind: "skip" };
   const change = <K extends keyof WeekMetrics>(metric: K): WeekOverWeek<WeekMetrics[K]> => ({
     thisWeek: thisWeek[metric],
     lastWeek: lastWeek[metric],
@@ -416,6 +454,8 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
       retries: change("retries"),
       stepUps: change("stepUps"),
     },
+    scores: change("scores"),
+    scoringCost: change("scoringCost"),
     repos,
   };
   return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
@@ -441,6 +481,8 @@ interface WeekMetrics {
   readonly ticketsDispatched: number;
   readonly retries: number;
   readonly stepUps: number;
+  readonly scores: WeekScores;
+  readonly scoringCost: ScoringCost;
 }
 
 function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
@@ -454,6 +496,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     ),
   );
   const { usd: cost, unknownCost } = costOf(records);
+  const scoring = costOf(records.filter((record) => record.role === "score"));
   const escapeWindow = escapeWindowOf(week);
   const escapes = escapesIn(escapeWindow, input.facts, input.operator);
   return {
@@ -482,7 +525,51 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     }).length,
     retries: records.filter((record) => record.role === "implement" && record.retry > 0).length,
     stepUps: records.filter((record) => record.stepUp).length,
+    scores: scoresOf(week, input),
+    scoringCost: { usd: scoring.usd, share: cost === 0 ? null : scoring.usd / cost, unknownCost: scoring.unknownCost },
   };
+}
+
+/** What the score files of the week's runs say: per rubric version, how the runs scored. */
+function scoresOf(week: Week, input: WeeklySummaryInput): WeekScores {
+  const endedAt = new Map(input.records.map((record) => [runKey(record), record.endedAt]));
+  // A score file whose record isn't in the store goes by when it was scored: minutes after its run ended.
+  const files = input.scoreFiles.filter((file) => within(week, endedAt.get(runKey(file)) ?? file.scoredAt));
+  const byRubric = new Map<string, { readonly scorer: string; readonly version: number; readonly entries: ScoreEntry[] }>();
+  for (const entry of files.flatMap((file) => file.entries ?? [])) {
+    const id = rubricId({ name: entry.scorer, version: entry.version });
+    const rubric = byRubric.get(id) ?? { scorer: entry.scorer, version: entry.version, entries: [] };
+    rubric.entries.push(entry);
+    byRubric.set(id, rubric);
+  }
+  const rubrics = [...byRubric.values()].map(
+    ({ scorer, version, entries }): RubricScores => ({
+      scorer,
+      version,
+      runsScored: entries.length,
+      medianScore: median(entries.map((entry) => entry.score)) ?? 0,
+      passing: entries.filter((entry) => entry.pass).length / entries.length,
+    }),
+  );
+  // The scoring plan's reasons, then the judge's: the order the section lists them in.
+  const skips: Record<ScoreSkip["reason"], number> = {
+    "weekly-limit": 0,
+    "no-transcript": 0,
+    "infrastructure-failure": 0,
+    "judge-failed": 0,
+    "judge-output-invalid": 0,
+  };
+  for (const { skip } of files) if (skip !== null) skips[skip.reason] += 1;
+  return { scoreFiles: files.length, rubrics: rubrics.toSorted(inKitOrder), skips };
+}
+
+/** The Kit's order of Scorers (a Scorer it no longer has goes after them, by name), each Scorer's versions oldest first. */
+function inKitOrder(a: RubricScores, b: RubricScores): number {
+  const rank = (scorer: string) => {
+    const index = (SCORERS as readonly string[]).indexOf(scorer);
+    return index === -1 ? SCORERS.length : index;
+  };
+  return rank(a.scorer) - rank(b.scorer) || a.scorer.localeCompare(b.scorer) || a.version - b.version;
 }
 
 /** An agent PR merged in the week, with its repo, its Ticket and when that was dispatched. */
@@ -855,14 +942,19 @@ function answerOf(issue: OpenIssueFacts): string | null {
   return issue.comments.find((comment) => !comment.byBot && Date.parse(comment.at) > asked)?.at ?? null;
 }
 
-/** An open Ticket's latest record, if it ended in an Infrastructure failure: the run nothing has picked up again. */
+/**
+ * An open Ticket's latest record, if it ended in an Infrastructure failure:
+ * the run nothing has picked up again. A judge run's record (role `score`) is
+ * left out: scoring a run never picks its Ticket up, and a judge's own failure
+ * never leaves the Ticket stuck.
+ */
 function failedLastRunOf(
   issue: OpenIssueFacts,
   repo: string,
   records: readonly RunRecord[],
 ): { readonly endedAt: string; readonly failure: InfrastructureFailure } | null {
   const latest = records
-    .filter((record) => record.repo === repo && record.issue === issue.number)
+    .filter((record) => record.repo === repo && record.issue === issue.number && record.role !== "score")
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
     .at(-1);
   if (latest === undefined || latest.infrastructureFailure === null) return null;
@@ -974,31 +1066,22 @@ function localTime(time: number, timeZone: string): string {
 }
 
 // Rendering. Only shipped features get a section: the Retro, Map and Monitor
-// issues and scores add theirs when their Specs ship. Held shows only what
-// the Design-session cap holds, until the Monitor and Ideas and Maps caps add
+// issues add theirs when their Specs ship. Scores shows only in a week with
+// score files, and never a run's own scores. Held shows only what the
+// Design-session cap holds, until the Monitor and Ideas and Maps caps add
 // their lines.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
   const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
-  const row = (name: string, { thisWeek, lastWeek }: WeekOverWeek<number | null>, format: (value: number) => string) =>
-    `| ${name} | ${orNone(thisWeek, format)} | ${orNone(lastWeek, format)} | ${
-      thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, format)
-    } |`;
-  const count = (value: number) => String(value);
   const share = ({ reverted, merged }: RevertRate) => (merged === 0 ? null : reverted / merged);
-  const percent = (value: number) => `${Math.round(value * 100)}%`;
-  const reverts = { thisWeek: share(revertRate.thisWeek), lastWeek: share(revertRate.lastWeek) };
   const revertCell = (rate: RevertRate) => orNone(share(rate), (value) => `${percent(value)} (${rate.reverted} of ${rate.merged})`);
-  /** The change between two shares, in whole percentage points. */
-  const pointsChange = (thisWeek: number | null, lastWeek: number | null) =>
-    thisWeek === null || lastWeek === null ? NONE : signed(Math.round(thisWeek * 100) - Math.round(lastWeek * 100), (points) => `${points} pts`);
-  const revertChange = pointsChange(reverts.thisWeek, reverts.lastWeek);
+  const revertChange = pointsChange({ thisWeek: share(revertRate.thisWeek), lastWeek: share(revertRate.lastWeek) });
   const escapeShare = ({ escaped, merged }: EscapeRate) => (merged === 0 ? null : escaped / merged);
   const escapeCell = (rate: EscapeRate) => {
     const value = escapeShare(rate);
     return value === null ? "no merged agent PRs" : `${rate.escaped} of ${rate.merged} (${percent(value)})`;
   };
-  const escapeChange = pointsChange(escapeShare(escapeRate.thisWeek), escapeShare(escapeRate.lastWeek));
+  const escapeChange = pointsChange({ thisWeek: escapeShare(escapeRate.thisWeek), lastWeek: escapeShare(escapeRate.lastWeek) });
   const costRow = (name: string, figure: WeekOverWeek<CostFigure>) => {
     const thisWeek = figure.thisWeek.usd;
     const lastWeek = figure.lastWeek.usd;
@@ -1044,6 +1127,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     if (leftOut > 0) lines.push(`${runsWithUnknownCost(leftOut)} left out of ${name}.`, "");
   }
   lines.push(subscriptionUsage(weeklyLimit, timeZone), "");
+  lines.push(...scoresLines(summary.scores, summary.scoringCost));
   lines.push(...heldLines(summary.repos));
   for (const repo of summary.repos) {
     lines.push(...repoLines(repo, summary.escapesThisWeek.filter((escape) => escape.repo === repo.repo)));
@@ -1058,6 +1142,48 @@ function escapesByStrengthLine(counts: EscapesByStrength): string {
   const known = STRENGTHS.map((strength) => `${counts[strength]} ${STRENGTH_LABELS[strength]}`);
   const all = counts.none === 0 ? known : [...known, `${counts.none} with no known Strength`];
   return `Architectural escapes by Strength (90 days): ${all.join(", ")}.`;
+}
+
+/**
+ * The Scores section: each rubric version the week's runs were scored under,
+ * against the same version last week, and what scoring cost, or nothing at
+ * all in a week with no score files.
+ */
+function scoresLines({ thisWeek, lastWeek }: WeekOverWeek<WeekScores>, scoringCost: WeekOverWeek<ScoringCost>): string[] {
+  if (thisWeek.scoreFiles === 0) return [];
+  const rows = thisWeek.rubrics.flatMap((rubric) => {
+    const before = lastWeek.rubrics.find(({ scorer, version }) => scorer === rubric.scorer && version === rubric.version);
+    const name = `${scorerName(rubric.scorer)} v${rubric.version}`;
+    return [
+      row(`${name}: runs scored`, { thisWeek: rubric.runsScored, lastWeek: before?.runsScored ?? 0 }, count),
+      row(`${name}: median score`, { thisWeek: rubric.medianScore, lastWeek: before?.medianScore ?? null }, (score) => score.toFixed(2)),
+      shareRow(`${name}: passing`, { thisWeek: rubric.passing, lastWeek: before?.passing ?? null }),
+    ];
+  });
+  const lines = [
+    "## Scores",
+    "",
+    "| | This week | Last week | Change |",
+    "| --- | ---: | ---: | ---: |",
+    ...rows,
+    row("Scoring cost", { thisWeek: scoringCost.thisWeek.usd, lastWeek: scoringCost.lastWeek.usd }, dollars),
+    shareRow("Scoring's share of the cost", { thisWeek: scoringCost.thisWeek.share, lastWeek: scoringCost.lastWeek.share }),
+    "",
+  ];
+  const skips = Object.entries(thisWeek.skips).filter(([, runs]) => runs > 0);
+  const skipped = skips.reduce((sum, [, runs]) => sum + runs, 0);
+  if (skipped > 0) {
+    const picked = skipped === 1 ? "1 run picked for scoring was" : `${skipped} runs picked for scoring were`;
+    lines.push(`${picked} skipped: ${skips.map(([reason, runs]) => `${runs} ${reason}`).join(", ")}.`, "");
+  }
+  const leftOut = scoringCost.thisWeek.unknownCost;
+  if (leftOut > 0) lines.push(`${runsWithUnknownCost(leftOut)} left out of the scoring cost.`, "");
+  return lines;
+}
+
+/** A Scorer as the summary names it: `ticket-compliance` is Ticket compliance. */
+function scorerName(scorer: string): string {
+  return `${scorer.charAt(0).toUpperCase()}${scorer.slice(1).replaceAll("-", " ")}`;
 }
 
 /** The Held section: a line per repo and source with work held, or nothing at all when no repo has any. */
@@ -1165,6 +1291,31 @@ function subscriptionUsage({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading
   const usage =
     now === null ? "Subscription usage: no weekly-limit reading this week." : `Subscription usage: ${now} of the weekly limit${resets}.`;
   return before === null ? usage : `${usage} Last week: ${before}.`;
+}
+
+/** A table row: the figure this week and last week, and the change, with a dash where either has nothing to show. */
+function row(name: string, { thisWeek, lastWeek }: WeekOverWeek<number | null>, format: (value: number) => string): string {
+  const change = thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, format);
+  return `| ${name} | ${orNone(thisWeek, format)} | ${orNone(lastWeek, format)} | ${change} |`;
+}
+
+/** A table row for a share, from 0 to 1: as a percentage, with the change in percentage points. */
+function shareRow(name: string, shares: WeekOverWeek<number | null>): string {
+  return `| ${name} | ${orNone(shares.thisWeek, percent)} | ${orNone(shares.lastWeek, percent)} | ${pointsChange(shares)} |`;
+}
+
+/** The change in a share, in points between the percentages shown, or a dash where either week has none. */
+function pointsChange({ thisWeek, lastWeek }: WeekOverWeek<number | null>): string {
+  if (thisWeek === null || lastWeek === null) return NONE;
+  return signed(Math.round(thisWeek * 100) - Math.round(lastWeek * 100), (points) => `${points} pts`);
+}
+
+function count(value: number): string {
+  return String(value);
+}
+
+function percent(share: number): string {
+  return `${Math.round(share * 100)}%`;
 }
 
 /** What the table shows for a figure with nothing to average over. */

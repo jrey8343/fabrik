@@ -1,8 +1,10 @@
 // The Run record (ADR-0009): from what the push job knows when an AFK agent
 // run ends, the one schema 1 record of that run, and the paths it and its
-// transcript take in the store, or no record when no agent run ended. The
-// stream is read through the one stream-json reader (src/agent/stream.ts).
-// The paths are inside the store, RUN_STORE (src/kit/runStore.ts). Pure, no I/O.
+// transcript take in the store, or no record when no agent run ended. A judge
+// run, scoring a finished run, gets a record too, in role `score`, from what
+// the score-record job knows when it ends. The stream is read through the one
+// stream-json reader (src/agent/stream.ts). The paths are inside the store,
+// RUN_STORE (src/kit/runStore.ts). Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
@@ -58,6 +60,9 @@ export interface RateLimitReading {
   readonly resetsAt: number | null;
 }
 
+/** A record's role: the agent role that ran, or `score` for a judge run scoring a finished run. */
+export type RunRecordRole = AgentRole | "score";
+
 /** One AFK agent run, schema 1. */
 export interface RunRecord {
   readonly schema: 1;
@@ -65,8 +70,11 @@ export interface RunRecord {
   readonly repo: string;
   readonly runId: number;
   readonly runAttempt: number;
-  readonly role: AgentRole;
-  /** The run's subject: the Ticket for Implement and Review, the event's issue for Triage and Design, the pending Audit for the Auditor. */
+  readonly role: RunRecordRole;
+  /**
+   * The run's subject: the Ticket for Implement and Review, the event's issue
+   * for Triage and Design, the pending Audit for the Auditor, the scored run's for a judge run.
+   */
   readonly issue: number;
   readonly pullRequest: number | null;
   readonly endedAt: string;
@@ -137,11 +145,7 @@ function endedRun(end: Pick<RunEnd, "needs" | "eventIssue" | "failureReport">): 
     case "agent-failure": {
       const { role, issue, jobResult, secretsStep } = input;
       const job = failedJob(end.needs, role);
-      const failure = infrastructureFailureOf({
-        jobResult: jobResult === "cancelled" ? "cancelled" : "failure",
-        secretsStep: secretsStep === "failure" ? "failure" : null,
-        report: end.failureReport === null ? null : readFailureReport(end.failureReport),
-      });
+      const failure = failureOf(jobResult, secretsStep, end.failureReport);
       const kit = end.needs["kit"]?.outputs ?? {};
       const pullRequest = role === "review" || role === "implement" ? countOf(kit["pull-request"]) : null;
       return { role, issue, pullRequest, job, failure };
@@ -158,13 +162,9 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
   const { role, issue, pullRequest, job } = ran;
   const kit = end.needs["kit"]?.outputs ?? {};
   const agent = job?.outputs ?? {};
-  const stream = end.transcript === null ? null : readStream(end.transcript);
-  const last = stream?.result ?? null;
-  const { recordPath, transcriptPath } = pathsFor(end, role);
+  const { recordPath, transcriptPath } = pathsFor({ ...end, role }, end.transcript !== null);
   const implement = role === "implement";
-  const modelUsage = Object.fromEntries(Object.entries(stream?.modelUsage ?? {}).map(([model, usage]) => [model, costOf(usage)]));
-  const record: RunRecord = {
-    schema: 1,
+  const facts: RunFacts = {
     kitSha: end.kitSha,
     repo: end.repo,
     runId: end.runId,
@@ -179,11 +179,91 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     requestChanges: implement && kit["request-changes"] === "true",
     baseSha: nonEmpty(agent["base-sha"]),
     jobResult: job?.result ?? "unknown",
+    infrastructureFailure: ran.failure,
+    verdict: role === "review" ? verdictOf(end.agentResult) : null,
+  };
+  return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
+}
+
+/** What the score-record job knows when a judge run, scoring a finished run, ends. */
+export interface JudgeRunEnd {
+  /** The scored run's record: the judge run is for its subject, in the same workflow run and attempt. */
+  readonly scored: RunRecord;
+  /** The judge job's `needs.<job>`: how it ended, and the outputs it passed out as an agent job does (`secrets-step`, `model`, `effort`). */
+  readonly judge: NeededJob;
+  /** The Kit's fixed judge model, which the record names when the judge job passed out none. */
+  readonly judgeModel: string;
+  /** The Kit commit writing the record. */
+  readonly kitSha: string;
+  /** When the score-record job ran, as an ISO 8601 time. */
+  readonly endedAt: string;
+  /** The judge's failure report artifact's text, or null if there was none. */
+  readonly failureReport: string | null;
+  /** The judge's transcript's stream-json lines, or null if no transcript survived its run. */
+  readonly transcript: readonly string[] | null;
+}
+
+/**
+ * The judge run's record, in role `score`, and its paths beside the scored
+ * run's. Its subject is the scored run's; what ran, how it ended, the effort
+ * it spent, its cost and its weekly-limit reading are its own.
+ */
+export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
+  const { scored, judge } = end;
+  // In the scored run's month, so the two sit side by side even when the judge ends in the next one.
+  const { recordPath, transcriptPath } = pathsFor({ ...scored, role: "score" }, end.transcript !== null);
+  const facts: RunFacts = {
+    kitSha: end.kitSha,
+    repo: scored.repo,
+    runId: scored.runId,
+    runAttempt: scored.runAttempt,
+    role: "score",
+    issue: scored.issue,
+    pullRequest: scored.pullRequest,
+    endedAt: end.endedAt,
+    ...whatRan(judge.outputs, {}, { model: end.judgeModel, effort: null }),
+    retry: 0,
+    stepUp: false,
+    requestChanges: false,
+    baseSha: null,
+    jobResult: judge.result,
+    infrastructureFailure: failureOf(judge.result, judge.outputs["secrets-step"], end.failureReport),
+    verdict: null,
+  };
+  return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
+}
+
+/** The fields a run's own stream gives its record, whatever its role. */
+type StreamField =
+  | "subtype"
+  | "isError"
+  | "terminalReason"
+  | "durationMs"
+  | "apiDurationMs"
+  | "turns"
+  | "permissionDenials"
+  | "apiRetries"
+  | "totalCostUsd"
+  | "modelUsage"
+  | "rateLimit";
+
+/** What a record says that its run's stream doesn't: which run it was, for what, and how its job ended. */
+type RunFacts = Omit<RunRecord, "schema" | "transcript" | StreamField>;
+
+/** The record of a run from its facts and its own stream, with no stream fields when no transcript survived it. */
+function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcriptPath: string | null): RunRecord {
+  const stream = transcript === null ? null : readStream(transcript);
+  const last = stream?.result ?? null;
+  const modelUsage = Object.fromEntries(Object.entries(stream?.modelUsage ?? {}).map(([model, usage]) => [model, costOf(usage)]));
+  const { infrastructureFailure, verdict, ...ran } = facts;
+  return {
+    schema: 1,
+    ...ran,
     subtype: stringOr(last?.["subtype"]),
     isError: typeof last?.["is_error"] === "boolean" ? last["is_error"] : null,
     terminalReason: stringOr(last?.["terminal_reason"]),
-    infrastructureFailure: ran.failure,
-    verdict: role === "review" ? verdictOf(end.agentResult) : null,
+    infrastructureFailure,
+    verdict,
     durationMs: numberOr(last?.["duration_ms"]),
     apiDurationMs: numberOr(last?.["duration_api_ms"]),
     turns: numberOr(last?.["num_turns"]),
@@ -195,7 +275,6 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     rateLimit: readingOf(stream?.rateLimits.findLast((info) => info["rateLimitType"] === WEEKLY_LIMIT) ?? null),
     transcript: transcriptPath,
   };
-  return { record, recordPath, transcriptPath };
 }
 
 /**
@@ -209,6 +288,16 @@ function failedJob(needs: Needs, role: AgentRole): NeededJob | undefined {
 }
 
 const FAILED = ["failure", "cancelled"];
+
+/** A failed or cancelled job's Infrastructure failure, classified as the failure notice classifies it, or null for a job that didn't fail. */
+function failureOf(jobResult: string, secretsStep: string | undefined, failureReport: string | null): InfrastructureFailure | null {
+  if (!FAILED.includes(jobResult)) return null;
+  return infrastructureFailureOf({
+    jobResult: jobResult === "cancelled" ? "cancelled" : "failure",
+    secretsStep: secretsStep === "failure" ? "failure" : null,
+    report: failureReport === null ? null : readFailureReport(failureReport),
+  });
+}
 
 /** The Reviewer's Verdict, or null when it gave none. */
 function verdictOf(agentResult: string | null): Verdict | null {
@@ -259,13 +348,43 @@ function readingOf(info: StreamMessage | null): RateLimitReading | null {
   };
 }
 
-function pathsFor(end: RunEnd, role: AgentRole): { recordPath: string; transcriptPath: string | null } {
-  const month = new Date(end.endedAt).toISOString().slice(0, 7);
-  const name = `${end.repo}/${month}/${end.runId}-${end.runAttempt}-${role}`;
+/** Where a record and its transcript go, by the run's name in the store. */
+function pathsFor(run: StoredRun, withTranscript: boolean): { recordPath: string; transcriptPath: string | null } {
+  const name = runStoreName(run);
   return {
     recordPath: `runs/${name}.json`,
-    transcriptPath: end.transcript === null ? null : `transcripts/${name}.jsonl.gz`,
+    transcriptPath: withTranscript ? `transcripts/${name}.jsonl.gz` : null,
   };
+}
+
+/**
+ * A run in one role, as the store tells it from every other: its repo, its
+ * workflow run and attempt, and the role. Its record, transcript and score
+ * files, and the commits that write them, all name it.
+ */
+export type RunIdentity = Pick<RunRecord, "repo" | "runId" | "runAttempt" | "role">;
+
+/** A run as the store files it: who it is, and when it ended, whose month its files sit in. */
+export type StoredRun = RunIdentity & Pick<RunRecord, "endedAt">;
+
+/**
+ * A run's name in the store, which its record, its transcript and its score
+ * files share: the run's repo, the month (UTC) it ended, its workflow run and
+ * attempt, and the role.
+ */
+export function runStoreName(run: StoredRun): string {
+  const month = new Date(run.endedAt).toISOString().slice(0, 7);
+  return `${run.repo}/${month}/${runName(run)}`;
+}
+
+/** A run's key whatever month it ended: its name in the store without the month, which a score file's run shares with its record. */
+export function runKey(run: RunIdentity): string {
+  return `${run.repo}/${runName(run)}`;
+}
+
+/** A run's name within its repo and month: its workflow run, attempt and role. */
+function runName({ runId, runAttempt, role }: RunIdentity): string {
+  return `${runId}-${runAttempt}-${role}`;
 }
 
 /** A positive whole number from a job output, or null. */
