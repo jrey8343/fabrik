@@ -1,0 +1,258 @@
+// While a Retry is in flight, from the Verdict that calls for it until it
+// pushes, ends in an empty diff or is refused, a Review on any other head posts
+// no Verdict (ADR-0006). These tests replay a PR's thread: each plan's comments
+// are posted, and the next snapshot reads them back as the adapter does.
+import { describe, expect, it } from "vitest";
+import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { pushedSinceVerdictIn, requestChangesRunIn, verdictsIn } from "../github/threads.ts";
+import { planFor } from "./rules.ts";
+import type { Action, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
+
+const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
+const A = "a".repeat(40);
+const B = "b".repeat(40);
+const C = "c".repeat(40);
+const D = "d".repeat(40);
+
+/** PR #50 for Ticket #7, whose thread grows as plans post comments on it. */
+class Thread {
+  readonly comments: string[] = [];
+  headSha: string;
+  draft = true;
+  changesRequested: PullRequestSnapshot["changesRequested"] = null;
+
+  constructor(headSha: string) {
+    this.headSha = headSha;
+  }
+
+  pullRequest(): PullRequestSnapshot {
+    return aPullRequest({
+      headSha: this.headSha,
+      draft: this.draft,
+      verdicts: verdictsIn(this.comments),
+      requestChangesRun: requestChangesRunIn(this.comments),
+      pushedSinceVerdict: pushedSinceVerdictIn(this.comments),
+      changesRequested: this.changesRequested,
+    });
+  }
+
+  snapshot(): Snapshot {
+    return snapshotOfPullRequest(this.pullRequest());
+  }
+
+  /** The snapshot an event on Ticket #7 gets: the Ticket, with this PR open for it. */
+  ticketSnapshot(): Snapshot {
+    return snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }), {
+      pullRequest: this.pullRequest(),
+    });
+  }
+
+  /** Plans the event against the thread as it stands, and posts the plan's PR comments to it. */
+  plan(event: LoopEvent, snapshot = this.snapshot()): Plan {
+    const plan = planFor(event, snapshot, kitConfig());
+    if (plan.kind === "act") {
+      for (const action of plan.actions) {
+        if (action.kind === "comment" && action.issue === 50) this.comments.push(action.body);
+      }
+    }
+    return plan;
+  }
+
+  /** A push lands, and the Review it starts finishes red, as penrith#33's Operator pushes did. */
+  pushRed(headSha: string): { started: Plan; landed: Plan } {
+    this.headSha = headSha;
+    const started = this.plan({ kind: "pull-request-pushed", pullRequest: 50 });
+    const landed = this.plan(redChecks(headSha));
+    return { started, landed };
+  }
+
+  /** The Implement run that fixes `fixes` finishes and pushes `to`. */
+  retryPushes(fixes: string, to: string, requestChanges = false): Plan {
+    const plan = this.plan(retried(fixes, requestChanges), this.ticketSnapshot());
+    if (plan.kind === "act" && plan.actions.some((action) => action.kind === "push-branch")) this.headSha = to;
+    return plan;
+  }
+}
+
+function redChecks(headSha: string): LoopEvent {
+  return { kind: "required-checks-finished", pullRequest: 50, headSha, failed: ["build"], runUrl: RUN };
+}
+
+function reviewed(headSha: string, output: string): LoopEvent {
+  return { kind: "review-run-finished", pullRequest: 50, headSha, output, runUrl: RUN };
+}
+
+function retried(headSha: string, requestChanges = false): LoopEvent {
+  return {
+    kind: "implement-run-finished",
+    issue: 7,
+    output: JSON.stringify({ title: "Handle the empty cart", summary: "Handles the empty cart.", fix: "Fixed the build." }),
+    branch: "fabrik/ticket-7",
+    base: "fabrik/ticket-7",
+    changes: { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }] },
+    fixes: { pullRequest: 50, headSha, runUrl: RUN, ...(requestChanges ? { requestChanges: true } : {}) },
+  };
+}
+
+const RETRY_TRIGGER: Action = { kind: "add-labels", issue: 7, labels: ["agent:implement"] };
+
+function actionsOf(plan: Plan): readonly Action[] {
+  return plan.kind === "act" ? plan.actions : [];
+}
+
+function verdictLines(thread: Thread): string[] {
+  return thread.comments.filter((body) => body.startsWith("<!-- fabrik:verdict ")).map((body) => /Retry .*|Back to design.*/.exec(body)?.[0] ?? "");
+}
+
+describe("A Review while a Retry is in flight", () => {
+  it("replays penrith#33: the Operator's red head gets no Verdict, and the Retry's push is what counts as the next flaw", () => {
+    const thread = new Thread(A);
+    // The Implementer's head A is red: Retry 1 is owed.
+    expect(actionsOf(thread.pushRed(A).landed)).toContainEqual(RETRY_TRIGGER);
+
+    // The Operator pushes a red B while Retry 1 runs: no Review, no Verdict, no retry.
+    const operatorPush = thread.pushRed(B);
+    expect(operatorPush.started).toEqual({ kind: "nothing", reason: expect.stringMatching(/Retry 1 .*in flight/) });
+    expect(operatorPush.landed).toMatchObject({ kind: "nothing", reason: expect.stringMatching(/Retry 1 .*in flight/) });
+
+    // Retry 1, built on A, pushes C (until #108 it must have built on the head it lands on).
+    expect(actionsOf(thread.retryPushes(B, C))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+
+    // C is red: that's flaw 2, which steps up.
+    const retryHead = thread.pushRed(C);
+    expect(actionsOf(retryHead.started)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", role: "review" }));
+    expect(actionsOf(retryHead.landed)).toContainEqual(RETRY_TRIGGER);
+    expect(verdictLines(thread)).toEqual([
+      expect.stringMatching(/^Retry 1 of 2 starts now:/),
+      expect.stringMatching(/^Retry 2 of 2 starts now, stepped up:/),
+    ]);
+  });
+
+  it("a Reviewer's Verdict on another head lands nothing while the Retry is in flight, however its Review started", () => {
+    const thread = new Thread(A);
+    thread.pushRed(A);
+    thread.headSha = D;
+
+    expect(thread.plan(reviewed(D, "verdict: execution-flaw\n\nStill broken.")).kind).toBe("nothing");
+    expect(verdictsIn(thread.comments)).toHaveLength(1);
+  });
+
+  it("posts no Verdict while the Retry is stalled after an Infrastructure failure, which posts no Retry outcome", () => {
+    const thread = new Thread(A);
+    thread.pushRed(A);
+    thread.plan(
+      {
+        kind: "agent-run-failed",
+        role: "implement",
+        issue: 7,
+        runUrl: RUN,
+        jobResult: "failure",
+        secretsStep: "success",
+        report: null,
+      },
+      thread.ticketSnapshot(),
+    );
+
+    const operatorPush = thread.pushRed(B);
+    expect(operatorPush.started.kind).toBe("nothing");
+    expect(operatorPush.landed.kind).toBe("nothing");
+    expect(verdictsIn(thread.comments)).toHaveLength(1);
+  });
+
+  it("re-adding agent:implement resumes the stalled Retry on the head the Operator pushed meanwhile, using no retry", () => {
+    const thread = new Thread(A);
+    thread.pushRed(A);
+    thread.pushRed(B);
+
+    const plan = thread.plan({ kind: "label-added", issue: 7, label: "agent:implement" }, thread.ticketSnapshot());
+
+    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", role: "implement", model: "claude-sonnet-5-5" }));
+  });
+
+  it("an empty-diff Retry is an outcome, but its own flaw calls for the next Retry, which is then in flight", () => {
+    const thread = new Thread(A);
+    thread.pushRed(A);
+    thread.plan({ ...retried(A), changes: { net: [], commits: [] } } as LoopEvent, thread.ticketSnapshot());
+
+    expect(verdictLines(thread).at(-1)).toMatch(/^Retry 2 of 2 starts now, stepped up:/);
+    expect(thread.pushRed(B).landed.kind).toBe("nothing");
+  });
+
+  it("once a Retry has pushed, Reviews of later heads post Verdicts as today, the Operator's included", () => {
+    const thread = new Thread(A);
+    thread.pushRed(A);
+    thread.retryPushes(A, B);
+    thread.plan(reviewed(B, "verdict: pass"));
+
+    // The Operator pushes C after the pass: it's reviewed, and its flaw counts as flaw 2.
+    thread.headSha = C;
+    expect(actionsOf(thread.plan({ kind: "pull-request-pushed", pullRequest: 50 }))).not.toEqual([]);
+    expect(actionsOf(thread.plan(redChecks(C)))).toContainEqual(RETRY_TRIGGER);
+    expect(verdictLines(thread).at(-1)).toMatch(/^Retry 2 of 2 starts now, stepped up:/);
+  });
+
+  it("with no Retry left, the third flaw is still posted and sends the Ticket back to design, with no Retry in flight", () => {
+    const thread = new Thread(A);
+    thread.pushRed(A);
+    thread.retryPushes(A, B);
+    thread.pushRed(B);
+    thread.retryPushes(B, C);
+    const third = thread.pushRed(C).landed;
+
+    expect(thread.comments.at(-1)).toContain("This is the PR's third Execution flaw");
+    expect(actionsOf(third)).toContainEqual({ kind: "close-pull-request", pullRequest: 50 });
+    expect(actionsOf(third)).not.toContainEqual(RETRY_TRIGGER);
+    const resumed = thread.plan({ kind: "label-added", issue: 7, label: "agent:implement" }, thread.ticketSnapshot());
+    expect(actionsOf(resumed).filter((action) => action.kind === "start-agent-run")).toEqual([]);
+  });
+
+  it("a PR whose Retry pushed before push comments were marked reads as no longer in flight", () => {
+    const thread = new Thread(A);
+    thread.pushRed(A);
+    // The note an older Kit posted for a Retry's push, with no marker.
+    thread.comments.push("The Implementer pushed a fix for the Execution flaw to `fabrik/ticket-7`; Review runs again on it.\n\nFixed it.");
+
+    expect(actionsOf(thread.pushRed(B).landed)).toContainEqual(RETRY_TRIGGER);
+  });
+});
+
+describe("A Review while a Request-changes run is in flight", () => {
+  /** A PR that passed on A and went to the Merge gate, where the Operator requested changes. */
+  function changesRequestedOnA(): Thread {
+    const thread = new Thread(A);
+    thread.plan(reviewed(A, "verdict: pass"));
+    thread.draft = false;
+    thread.changesRequested = { review: 9, reviewer: "operator", reviewerIsBot: false, commitSha: A };
+    const plan = thread.plan({ kind: "pull-request-changes-requested", pullRequest: 50, review: 9, reviewer: "operator", reviewerIsBot: false });
+    expect(actionsOf(plan)).toContainEqual({ kind: "convert-to-draft", pullRequest: 50 });
+    thread.draft = true;
+    return thread;
+  }
+
+  it("posts no Verdict on a head the Operator pushes meanwhile", () => {
+    const thread = changesRequestedOnA();
+
+    const operatorPush = thread.pushRed(B);
+    expect(operatorPush.started).toEqual({ kind: "nothing", reason: expect.stringMatching(/Request-changes run .*in flight/) });
+    expect(operatorPush.landed.kind).toBe("nothing");
+  });
+
+  it("once it pushes, its head's Verdict is marked as from the run and uses no retry", () => {
+    const thread = changesRequestedOnA();
+    thread.pushRed(B);
+    thread.retryPushes(B, C, true);
+    thread.pushRed(C);
+
+    expect(verdictsIn(thread.comments).at(-1)).toEqual({ verdict: "execution-flaw", source: "ci", requestChanges: true, headSha: C });
+    expect(verdictLines(thread).at(-1)).toMatch(/^Retry 1 of 2 starts now:/);
+  });
+
+  it("a stalled run resumes on the head the Operator pushed meanwhile", () => {
+    const thread = changesRequestedOnA();
+    thread.pushRed(B);
+
+    const plan = thread.plan({ kind: "label-added", issue: 7, label: "agent:implement" }, thread.ticketSnapshot());
+
+    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", requestChanges: { review: 9 } }));
+  });
+});

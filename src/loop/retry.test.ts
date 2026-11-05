@@ -163,7 +163,7 @@ describe("Starting a retry", () => {
   it.each([
     ["has no Verdict", aPullRequest()],
     ["has a pass as its latest Verdict", aPullRequest({ verdicts: [earlier("pass", { headSha: HEAD_SHA })] })],
-    ["has moved on from its Execution flaw", flawedPullRequest([], { headSha: "b".repeat(40) })],
+    ["has pushed a fix since its Execution flaw", { ...flawedPullRequest(), headSha: "b".repeat(40), pushedSinceVerdict: true }],
     ["is a person's PR", aPullRequest({ isAgent: false, verdicts: flawedPullRequest().verdicts })],
     ["has left draft", aPullRequest({ draft: false, verdicts: flawedPullRequest().verdicts })],
     ["is closed", aPullRequest({ open: false, verdicts: flawedPullRequest().verdicts })],
@@ -195,7 +195,7 @@ function startedRuns(plan: Plan): Action[] {
 
 describe("A Verdict when the retries are used up", () => {
   it("a third Execution flaw is posted but starts no retry (it goes back to design: backToDesign.test.ts)", () => {
-    const pullRequest = aPullRequest({ verdicts: [earlier("execution-flaw"), earlier("execution-flaw", { source: "ci" })] });
+    const pullRequest = aPullRequest({ pushedSinceVerdict: true, verdicts: [earlier("execution-flaw"), earlier("execution-flaw", { source: "ci" })] });
     const plan = planFor(reviewed("verdict: execution-flaw\n\nStill throws."), snapshotOfPullRequest(pullRequest), kitConfig());
 
     expect(actionsOf(plan)[0]).toMatchObject({ kind: "comment", issue: 50 });
@@ -365,7 +365,7 @@ describe("Retries stay silent", () => {
     ["red CI", [], redChecks()],
     ["the second Execution flaw, a Step-up", [earlier("execution-flaw")], reviewed("verdict: execution-flaw\n\nStill throws.")],
   ])("%s notifies nobody", (_, before, event) => {
-    const pullRequest = aPullRequest({ verdicts: before });
+    const pullRequest = aPullRequest({ verdicts: before, pushedSinceVerdict: true });
     const plan = planFor(event, snapshotOfPullRequest(pullRequest, { operator: "jrey" }), kitConfig());
 
     expect(actionsOf(plan)).toContainEqual(RETRY_TRIGGER);

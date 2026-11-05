@@ -284,6 +284,7 @@ describe("Retries after a Request-changes run", () => {
     // Retry 1 fixed a flaw and passed; the Operator requested changes; that run's push had a flaw; its retry flawed again.
     const plan = flawOn(
       aPullRequest({
+        pushedSinceVerdict: true,
         verdicts: [earlier("execution-flaw"), earlier("pass"), earlier("execution-flaw", { requestChanges: true })],
       }),
     );
@@ -295,6 +296,7 @@ describe("Retries after a Request-changes run", () => {
   it("still run out: two counted flaws before this one send the Ticket back to design", () => {
     const plan = flawOn(
       aPullRequest({
+        pushedSinceVerdict: true,
         verdicts: [earlier("execution-flaw"), earlier("execution-flaw", { requestChanges: true }), earlier("execution-flaw")],
       }),
     );

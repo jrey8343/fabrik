@@ -14,6 +14,12 @@ export function verdictMarker(record: VerdictRecord): string {
 /** The first line of the Kit's note on a PR that a Request-changes run pushed to it. */
 export const REQUEST_CHANGES_RUN_MARKER = "<!-- fabrik:request-changes-run -->";
 
+/** The first line of the Kit's note on a PR that a Retry pushed to it: the Retry's outcome, which ends its time in flight. */
+export const RETRY_PUSH_MARKER = "<!-- fabrik:retry-push -->";
+
+/** How the note of a Retry's push opened before it carried RETRY_PUSH_MARKER, so older PRs read the same. */
+export const UNMARKED_RETRY_PUSH = "The Implementer pushed a fix for the Execution flaw to ";
+
 /** The first line of the Kit's comment on a Ticket whose Implement run changed nothing. */
 export const EMPTY_DIFF_MARKER = "<!-- fabrik:empty-diff -->";
 

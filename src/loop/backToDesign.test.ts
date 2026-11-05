@@ -54,7 +54,7 @@ describe("A Design flaw sends the Ticket back to design", () => {
 });
 
 /** Two Execution flaws already on the PR, so the next is its third. */
-const usedUp = aPullRequest({ verdicts: [earlier("execution-flaw"), earlier("execution-flaw", { source: "ci" })] });
+const usedUp = aPullRequest({ pushedSinceVerdict: true, verdicts: [earlier("execution-flaw"), earlier("execution-flaw", { source: "ci" })] });
 
 /** The second retry's push job, holding a branch that changed nothing on the PR it fixes. */
 const emptySecondRetry: LoopEvent = {
@@ -91,7 +91,7 @@ describe("A third Execution flaw counts as a Design flaw", () => {
   });
 
   it("a second Execution flaw still retries, and leaves the Ticket and its PR as they are", () => {
-    const pullRequest = aPullRequest({ verdicts: [earlier("execution-flaw")] });
+    const pullRequest = aPullRequest({ pushedSinceVerdict: true, verdicts: [earlier("execution-flaw")] });
     const plan = planFor(reviewed("verdict: execution-flaw\n\nStill throws."), snapshotOfPullRequest(pullRequest), kitConfig());
 
     expect(actionsOf(plan).map((action) => action.kind)).not.toContain("close-pull-request");
@@ -100,6 +100,7 @@ describe("A third Execution flaw counts as a Design flaw", () => {
 
   it("Execution flaws from Request-changes runs don't count toward the third", () => {
     const pullRequest = aPullRequest({
+      pushedSinceVerdict: true,
       verdicts: [earlier("execution-flaw"), earlier("execution-flaw", { requestChanges: true })],
     });
     const plan = planFor(reviewed("verdict: execution-flaw\n\nStill throws."), snapshotOfPullRequest(pullRequest), kitConfig());

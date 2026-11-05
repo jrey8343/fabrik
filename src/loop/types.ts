@@ -200,6 +200,12 @@ export interface PullRequestSnapshot {
   readonly verdicts: readonly VerdictRecord[];
   /** Whether its latest push came from a Request-changes run, so a Verdict on it is marked as one. */
   readonly requestChangesRun: boolean;
+  /**
+   * Whether a Retry or Request-changes run has pushed to it since its latest
+   * Verdict, read from the Kit's note of the push. Until one has, the run that
+   * Verdict (or the Operator's review) called for is still in flight (src/loop/retry.ts).
+   */
+  readonly pushedSinceVerdict: boolean;
   /** The latest review that requested changes on it, if any: what a stalled Request-changes run resumes from. */
   readonly changesRequested: ChangesRequestedReview | null;
 }

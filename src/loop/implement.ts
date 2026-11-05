@@ -5,7 +5,7 @@ import { parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
-import { EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER } from "./markers.ts";
+import { EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER } from "./markers.ts";
 import { owedRequestChangesRun } from "./mergeGate.ts";
 import { MAX_RETRIES, owedRetry } from "./retry.ts";
 import { verdictActions } from "./review.ts";
@@ -45,7 +45,7 @@ export function startImplementer(
     const resumed =
       pullRequest === null || pullRequest.number !== open || pullRequest.ticket !== issueNumber
         ? null
-        : (owedRetry(pullRequest, config) ?? owedRequestChangesRun(pullRequest, operator, config));
+        : (owedRetry(pullRequest, operator, config) ?? owedRequestChangesRun(pullRequest, operator, config));
     return { kind: "act", actions: resumed === null ? [removeLabel] : [removeLabel, resumed] };
   }
   if (whyNotBuildable(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
@@ -167,8 +167,8 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         kind: "comment",
         issue: pullRequest.number,
         body: [
-          // Marks the push, so the Verdict Review gives it is marked as from a Request-changes run.
-          ...(requestChanges ? [REQUEST_CHANGES_RUN_MARKER] : []),
+          // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
+          requestChanges ? REQUEST_CHANGES_RUN_MARKER : RETRY_PUSH_MARKER,
           requestChanges
             ? `The Implementer pushed the Operator's requested changes to \`${branch}\`; Review runs again on it.`
             : `The Implementer pushed a fix for the Execution flaw to \`${branch}\`; Review runs again on it.`,

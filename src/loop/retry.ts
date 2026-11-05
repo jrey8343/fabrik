@@ -1,7 +1,9 @@
 // Execution-flaw retries: an Execution flaw on an agent PR re-runs the
 // Implementer on the same branch with the findings as input, then Review runs
 // again. Retries are counted from the PR's earlier Verdict comments alone, and
-// stay silent: no mention, assignment or review request.
+// stay silent: no mention, assignment or review request. While one is in
+// flight, no other head gets a Verdict, so each flaw starts exactly one
+// Implementer attempt (ADR-0006).
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { DISPATCH_LABEL } from "./labels.ts";
 import type { Action, KitConfig, PullRequestSnapshot, VerdictRecord } from "./types.ts";
@@ -32,21 +34,58 @@ export function retryAfterFlaw(pullRequest: PullRequestSnapshot): { readonly lin
   };
 }
 
+/** The Implement run an agent PR's latest Verdict, or the Operator's review, called for, that hasn't pushed yet. */
+export type RunInFlight =
+  | { readonly kind: "retry"; readonly retry: number }
+  | { readonly kind: "request-changes"; readonly review: number };
+
 /**
- * The retry an agent draft PR is owed, when its latest Verdict, on its head,
- * is an Execution flaw with a retry left; otherwise null. The first retry runs
- * on the Implementer's model and the second Steps up, for this PR only. An
- * Infrastructure failure posts no Verdict, so resuming after one runs the same
- * retry again and uses none up.
+ * The run in flight on this PR, read from its comments alone, or null. A
+ * Retry is in flight from the Execution flaw that calls for it until a Retry
+ * outcome: its push, or its empty-diff Verdict (which may call for the next
+ * one). A Request-changes run is in flight from the Operator's review
+ * requesting changes on the head that passed until its push. An
+ * Infrastructure failure posts no outcome, so the run stays in flight until
+ * agent:implement resumes it; a trust-root refusal closes the PR.
+ */
+export function runInFlight(pullRequest: PullRequestSnapshot, operator: string): RunInFlight | null {
+  const latest = pullRequest.verdicts.at(-1);
+  if (latest === undefined || pullRequest.pushedSinceVerdict) return null;
+  if (latest.verdict === "execution-flaw") {
+    const retry = retryNumber(pullRequest.verdicts.slice(0, -1));
+    return retry > MAX_RETRIES ? null : { kind: "retry", retry };
+  }
+  const review = pullRequest.changesRequested;
+  if (latest.verdict !== "pass" || review === null || review.reviewerIsBot || review.reviewer !== operator) return null;
+  return review.commitSha === latest.headSha ? { kind: "request-changes", review: review.review } : null;
+}
+
+/** Why a Review on this PR posts no Verdict, while a run is in flight on it; otherwise null. */
+export function whyAwaitingRun(pullRequest: PullRequestSnapshot, operator: string): string | null {
+  const run = runInFlight(pullRequest, operator);
+  if (run === null) return null;
+  const name = run.kind === "retry" ? `Retry ${run.retry} of ${MAX_RETRIES}` : "The Operator's Request-changes run";
+  return `${name} on #${pullRequest.number} is still in flight, so ${pullRequest.headSha.slice(0, 7)} gets no Verdict: the run's push starts the next Review`;
+}
+
+/**
+ * The retry an agent draft PR is owed: the one in flight, on whatever head the
+ * PR is at now, the Operator's pushes included; otherwise null. The first
+ * retry runs on the Implementer's model and the second Steps up, for this PR
+ * only. An Infrastructure failure posts no Verdict, so resuming after one runs
+ * the same retry again and uses none up.
  */
 export function owedRetry(
   pullRequest: PullRequestSnapshot,
+  operator: string,
   config: KitConfig,
 ): Extract<Action, { kind: "start-agent-run" }> | null {
-  if (whyNotRetryable(pullRequest) !== null || pullRequest.ticket === null) return null;
+  if (whyNotReviewable(pullRequest) !== null || pullRequest.ticket === null) return null;
+  const run = runInFlight(pullRequest, operator);
+  if (run?.kind !== "retry") return null;
   const { implement, stepUp } = config.roles;
   // Never a cheaper model, and never a skipped Step-up, whatever the weekly pool says.
-  const { model, effort } = retryNumber(pullRequest.verdicts.slice(0, -1)) === MAX_RETRIES ? stepUp : implement;
+  const { model, effort } = run.retry === MAX_RETRIES ? stepUp : implement;
   return {
     kind: "start-agent-run",
     role: "implement",
@@ -56,18 +95,4 @@ export function owedRetry(
     effort,
     timeoutMinutes: implement.timeoutMinutes,
   };
-}
-
-/** Why this PR has no retry to run now, or null when it has. */
-function whyNotRetryable(pullRequest: PullRequestSnapshot): string | null {
-  const why = whyNotReviewable(pullRequest);
-  if (why !== null) return why;
-  const latest = pullRequest.verdicts.at(-1);
-  if (latest === undefined) return `#${pullRequest.number} has no Verdict to fix`;
-  if (latest.verdict !== "execution-flaw") return `#${pullRequest.number}'s latest Verdict isn't an Execution flaw`;
-  if (latest.headSha !== pullRequest.headSha) return `#${pullRequest.number} has moved on from its Execution flaw`;
-  if (retryNumber(pullRequest.verdicts.slice(0, -1)) > MAX_RETRIES) {
-    return `#${pullRequest.number} has used its ${MAX_RETRIES} retries`;
-  }
-  return null;
 }
