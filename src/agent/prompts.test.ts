@@ -7,6 +7,9 @@ import { OPERATOR_COMMENTS_HEADING } from "./operatorComments.ts";
 
 const prompt = (role: string) => readFile(join(import.meta.dirname, "..", "..", "prompts", `${role}.md`), "utf8");
 
+/** The body of a prompt's `## <heading>` section, up to the next `## ` heading. */
+const section = (text: string, heading: string) => text.split(`\n## ${heading}\n`)[1]?.split("\n## ")[0] ?? "";
+
 describe("The prompts of the runs that read an agent PR", () => {
   it.each(["review", "implement", "design"])("%s names the section the Operator's comments arrive under", async (role) => {
     // The prompt's weighing rules point at the section the run's context sets the comments out under.
@@ -26,5 +29,19 @@ describe("The prompts of the runs that read an agent PR", () => {
     const example: unknown = JSON.parse(/<implement>\n([\s\S]*?)\n<\/implement>/.exec(text)?.[1] ?? "null");
     expect(readPullRequestRunOutput(example)).toMatchObject({ ok: true, output: { operatorCommentsConsidered: ["conversation-3"] } });
     expect(text).toContain("- `operatorCommentsConsidered`");
+  });
+});
+
+describe("Questions for the Operator", () => {
+  it("the Implementer is told to ask them under one fixed heading in its summary", async () => {
+    expect(section(await prompt("implement"), "Your output")).toContain('"Questions for the Operator"');
+  });
+
+  it("a retry or Request-changes run is told to drop the questions the Operator has answered", async () => {
+    expect(section(await prompt("implement"), "The Operator's comments")).toContain('"Questions for the Operator"');
+  });
+
+  it("the Reviewer is told an Operator comment may answer them", async () => {
+    expect(section(await prompt("review"), "The Operator's comments")).toContain('"Questions for the Operator"');
   });
 });

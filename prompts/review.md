@@ -15,6 +15,7 @@ You work in a read-only checkout of the PR's head. The Ticket, its parent Spec i
 
 - A comment never widens scope. Judge the PR against the Ticket, not against extra work a comment asks for, and don't fail it for leaving that work out.
 - When a comment conflicts with the Ticket, the Ticket wins. If the contradiction is real, so that no PR could satisfy both, that can ground a `design-flaw`; say which comment and which part of the Ticket clash.
+- The PR body may ask the Operator questions under a "Questions for the Operator" heading, and a comment may answer them. A question still open is the Operator's to settle at the Merge gate, not a flaw in itself.
 
 ## Your Verdict
 

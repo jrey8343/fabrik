@@ -35,6 +35,7 @@ On a retry or a Request-changes run, "The Operator's comments on the pull reques
 
 - A comment never widens scope. If one asks for more than the findings or the requested changes, don't build it: name the request in your `fix`, and say it needs a Request-changes review or a change to the Ticket.
 - When a comment conflicts with the Ticket, the Ticket wins. Say so in your `fix`, naming the comment.
+- Drop from your `summary`'s "Questions for the Operator" section any question a comment has answered, and the heading too once none are left open.
 
 ## What you must not change
 
@@ -64,5 +65,6 @@ When you have committed your work, end your reply with exactly one `<implement>`
 
 - `title` is one non-empty line. Don't put the Ticket number in it.
 - `summary` is non-empty Markdown. The Kit adds `Closes #<ticket>` itself. Don't @-mention anyone.
+- If you need the Operator's input, put every question for them in `summary` under one heading, "Questions for the Operator", and nowhere else in it. Leave the heading out when you have none.
 - `fix` is non-empty Markdown on a retry or a Request-changes run, which the Kit posts as a comment on the PR. Leave it out on a first run. Don't @-mention anyone.
 - `operatorCommentsConsidered` lists, on a retry or a Request-changes run, the id of each comment under "The Operator's comments on the pull request" that you weighed, exactly as its heading gives it (such as `conversation-3`, `review-5` or `inline-9`). Leave it out, or leave it empty, if you weighed none, and always on a first run. The Kit ends your `fix` comment with a link to each one; it ignores an id it didn't give you.
