@@ -249,6 +249,8 @@ export interface IssueSnapshot {
    * Whether the Fabrik App itself opened it, not a person or any other bot:
    * only then is its body read for an Audit's markers (src/loop/audit.ts), and
    * only then does a Design session keep its body's Monitor marker (src/loop/design.ts).
+   * A run that doesn't know the App's login, and so writes nothing, takes any
+   * bot for the App (src/github/snapshot.ts's byAppOf).
    */
   readonly byApp: boolean;
   /**
@@ -460,7 +462,10 @@ export interface AuditIssueSnapshot {
   readonly stateReason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
   /** When it was opened, as an ISO 8601 time. */
   readonly createdAt: string;
-  /** Whether the Fabrik App itself opened it, not a person or any other bot. Only the App's body is read for markers. */
+  /**
+   * Whether the Fabrik App itself opened it, not a person or any other bot, as
+   * IssueSnapshot.byApp says. Only the App's body is read for markers.
+   */
   readonly byApp: boolean;
   readonly body: string;
 }
