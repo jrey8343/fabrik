@@ -57,6 +57,11 @@ const MONITOR_MARKER = /^(<!-- fabrik:monitor (?:sentry:\S+|red-main) -->)$/m;
 /** The marker line of the Monitor's red-main issue. */
 export const RED_MAIN_MARKER = "<!-- fabrik:monitor red-main -->";
 
+/** The marker line of the Monitor's issue for this Sentry group. */
+export function sentryGroupMarker(groupId: string): string {
+  return `<!-- fabrik:monitor sentry:${groupId} -->`;
+}
+
 /** The Monitor marker line in this body, or null when it has none. */
 export function monitorMarkerIn(body: string): string | null {
   return MONITOR_MARKER.exec(body)?.[1] ?? null;

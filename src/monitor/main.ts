@@ -1,0 +1,245 @@
+// The Monitor's program (#148): reads the Product repo's Kit config from the
+// default branch and checks it as the Loop does, lists every fabrik:monitor
+// issue and the Sentry project's unresolved `error` and `fatal` groups, plans
+// with the Monitor core (src/monitor/core.ts), files what the plan says, and
+// writes the step summary. It talks to GitHub and Sentry through their APIs
+// alone: it never checks out or runs Product code, makes no model call and
+// writes no Run record. Nothing runs it yet; switch-on wires it into the
+// scheduled tick as its own job.
+//   node src/monitor/main.ts
+// Reads FABRIK_APP_TOKEN, the Fabrik App's token on the Product repo, and
+// FABRIK_APP_SLUG, the App's slug, which names the issues it opened. When
+// monitor.errors is set, FABRIK_SENTRY_TOKEN is the Sentry token, empty when
+// its 1Password item is missing or couldn't be read. A Sentry API error is a
+// warning in the step summary, never a failed run.
+import { appendFile } from "node:fs/promises";
+import { GitHub, type Repo } from "../github/client.ts";
+import { readKitConfigSources } from "../github/snapshot.ts";
+import { callerWorkflowPath, checkKit } from "../kit/caller.ts";
+import { type KitConfig, type MonitorErrors, resolveKitConfig } from "../kit/config.ts";
+import { MONITOR_LABEL } from "../loop/labels.ts";
+import { type MonitorInput, type MonitorIssue, type MonitorPlan, monitorPlanFor, type SentryRead } from "./core.ts";
+import { type GroupFacts, groupFactsOf, type RawSentryEvent, type RawSentryGroup, withLatestEvent } from "./sentry.ts";
+
+function required(name: string): string {
+  const value = process.env[name];
+  if (value === undefined || value === "") throw new Error(`${name} is not set`);
+  return value;
+}
+
+async function report(lines: readonly string[]): Promise<void> {
+  const text = lines.map((line) => `- ${line}`).join("\n");
+  console.log(text);
+  const summary = process.env["GITHUB_STEP_SUMMARY"];
+  if (summary !== undefined && summary !== "") await appendFile(summary, `### Monitor\n\n${text}\n`);
+}
+
+/**
+ * Loads and checks the Product repo's Kit config and caller workflow at the
+ * commit this run is for, the default branch's head on the scheduled tick, as
+ * the Loop does (src/main.ts). Returns null, having reported why, when either is invalid.
+ */
+async function loadKit(github: GitHub, repo: Repo): Promise<KitConfig | null> {
+  const ref = required("GITHUB_SHA");
+  const path = callerWorkflowPath(required("GITHUB_WORKFLOW_REF"), repo);
+  const [sources, text] = await Promise.all([readKitConfigSources(github, repo, ref), github.fileText(repo, path, ref)]);
+  const check = checkKit(resolveKitConfig(sources), { path, text });
+  if (!check.ok) {
+    for (const error of check.errors) console.log(`::error title=Invalid Kit config::${error}`);
+    await report([`The Kit config is invalid, so the Monitor did nothing: ${check.errors.join("; ")}`]);
+    return null;
+  }
+  return check.config;
+}
+
+/** An issue in GitHub's REST listing; pull requests come in it too. */
+interface RawIssue {
+  readonly number: number;
+  readonly state: string;
+  readonly state_reason: string | null;
+  readonly closed_at: string | null;
+  readonly labels: readonly { readonly name: string }[];
+  readonly user: { readonly login: string } | null;
+  readonly body: string | null;
+  readonly pull_request?: unknown;
+}
+
+/** Every issue carrying fabrik:monitor, open or closed. */
+async function monitorIssues(github: GitHub, repo: Repo, appLogin: string): Promise<MonitorIssue[]> {
+  const issues: MonitorIssue[] = [];
+  for (let page = 1; ; page++) {
+    const batch = (await github.rest(
+      "GET",
+      `/repos/${repo.owner}/${repo.name}/issues?labels=${encodeURIComponent(MONITOR_LABEL)}&state=all&per_page=100&page=${page}`,
+    )) as RawIssue[];
+    for (const issue of batch) {
+      if (issue.pull_request !== undefined) continue;
+      issues.push({
+        number: issue.number,
+        open: issue.state === "open",
+        stateReason: issue.state_reason,
+        closedAt: issue.closed_at,
+        labels: issue.labels.map((label) => label.name),
+        byApp: issue.user?.login === appLogin,
+        body: issue.body ?? "",
+      });
+    }
+    if (batch.length < 100) return issues;
+  }
+}
+
+/** A failed Sentry API call, with the status it failed with, or null when it got no answer. */
+class SentryError extends Error {
+  readonly status: number | null;
+
+  constructor(message: string, status: number | null) {
+    super(message);
+    this.name = "SentryError";
+    this.status = status;
+  }
+}
+
+type SentryGet = (path: string) => Promise<Response>;
+
+/** GETs from the Sentry host `monitor.errors.url` names, with the token. */
+function sentryClient(errors: MonitorErrors, token: string): SentryGet {
+  const host = errors.url.replace(/\/+$/, "");
+  return async (path) => {
+    let response: Response;
+    try {
+      response = await fetch(`${host}${path}`, { headers: { accept: "application/json", authorization: `Bearer ${token}` } });
+    } catch (error) {
+      throw new SentryError(`Sentry at ${host} didn't answer: ${error instanceof Error ? error.message : String(error)}`, null);
+    }
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 200);
+      throw new SentryError(`Sentry answered GET ${path.split("?")[0]} with ${response.status}: ${detail}`, response.status);
+    }
+    return response;
+  };
+}
+
+/** The most pages of 100 groups the Monitor lists in one tick. */
+const LISTING_PAGES = 10;
+
+/** The `next` cursor in a Sentry `Link` header, or null when there are no more results. */
+function nextCursor(link: string | null): string | null {
+  return /<[^>]*>;\s*rel="next";\s*results="true";\s*cursor="([^"]+)"/.exec(link ?? "")?.[1] ?? null;
+}
+
+/** What reading Sentry gave, and any lines for the step summary that the reading itself adds. */
+interface SentryReading {
+  readonly sentry: SentryRead | null;
+  readonly notes: readonly string[];
+}
+
+/** The project's unresolved `error` and `fatal` groups, with their 24-hour stats, as group facts. */
+async function readGroups(get: SentryGet, errors: MonitorErrors): Promise<SentryReading> {
+  const query = new URLSearchParams({ query: "is:unresolved level:[error,fatal]", statsPeriod: "24h", limit: "100" });
+  const listing: RawSentryGroup[] = [];
+  const notes: string[] = [];
+  for (let page = 1; ; page++) {
+    const response = await get(`/api/0/projects/${errors.org}/${errors.project}/issues/?${query}`);
+    listing.push(...((await response.json()) as RawSentryGroup[]));
+    const cursor = nextCursor(response.headers.get("link"));
+    if (cursor === null) break;
+    if (page === LISTING_PAGES) {
+      notes.push(`Warning: Sentry lists more than ${LISTING_PAGES * 100} unresolved \`error\` and \`fatal\` groups, so only the ${LISTING_PAGES * 100} it gave first were read.`);
+      break;
+    }
+    query.set("cursor", cursor);
+  }
+  const groupsWithoutStats = listing.filter((group) => group.stats?.["24h"] === undefined).length;
+  return { sentry: { kind: "read", groups: groupFactsOf(listing), groupsWithoutStats }, notes };
+}
+
+/** Reads Sentry when monitor.errors is set, turning a missing or refused token and any API error into what the core reports. */
+async function readSentry(errors: MonitorErrors | null): Promise<SentryReading> {
+  if (errors === null) return { sentry: null, notes: [] };
+  const token = process.env["FABRIK_SENTRY_TOKEN"] ?? "";
+  if (token === "") return { sentry: { kind: "no-token" }, notes: [] };
+  try {
+    return await readGroups(sentryClient(errors, token), errors);
+  } catch (error) {
+    if (error instanceof SentryError && (error.status === 401 || error.status === 403)) {
+      return { sentry: { kind: "token-rejected", status: error.status }, notes: [] };
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(`::warning title=Sentry unreachable::${message}`);
+    return { sentry: { kind: "failed", error: message }, notes: [] };
+  }
+}
+
+/**
+ * The input with the latest event read for each group the first plan files,
+ * and only those. A group whose latest event can't be read is filed without
+ * it, with a warning.
+ */
+async function withLatestEvents(
+  input: MonitorInput,
+  plan: MonitorPlan,
+  errors: MonitorErrors | null,
+): Promise<{ readonly input: MonitorInput; readonly notes: readonly string[] }> {
+  const filing = new Set(plan.open.flatMap((issue) => (issue.sentryGroup === null ? [] : [issue.sentryGroup])));
+  if (errors === null || input.sentry?.kind !== "read" || filing.size === 0) return { input, notes: [] };
+  const get = sentryClient(errors, process.env["FABRIK_SENTRY_TOKEN"] ?? "");
+  const notes: string[] = [];
+  const groups: GroupFacts[] = [];
+  for (const group of input.sentry.groups) {
+    if (!filing.has(group.id)) {
+      groups.push(group);
+      continue;
+    }
+    try {
+      const response = await get(`/api/0/organizations/${errors.org}/issues/${encodeURIComponent(group.id)}/events/latest/`);
+      groups.push(withLatestEvent(group, (await response.json()) as RawSentryEvent));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(`::warning title=Sentry unreachable::${message}`);
+      notes.push(`Warning: the latest event of Sentry's ${group.shortId} couldn't be read, so its issue shows no release or frames: ${message}`);
+      groups.push(group);
+    }
+  }
+  return { input: { ...input, sentry: { ...input.sentry, groups } }, notes };
+}
+
+/** Files each issue the plan opens, returning a step-summary line for each. */
+async function apply(github: GitHub, repo: Repo, plan: MonitorPlan): Promise<string[]> {
+  const lines: string[] = [];
+  for (const issue of plan.open) {
+    // Labels go on with the issue, so the issues.opened run it starts already sees them.
+    const filed = (await github.rest("POST", `/repos/${repo.owner}/${repo.name}/issues`, {
+      title: issue.title,
+      body: issue.body,
+      labels: issue.labels,
+    })) as { number: number };
+    lines.push(`Filed #${filed.number}: ${issue.title}`);
+  }
+  return lines;
+}
+
+async function main(): Promise<void> {
+  const [owner, name] = required("GITHUB_REPOSITORY").split("/");
+  if (owner === undefined || name === undefined) throw new Error("GITHUB_REPOSITORY is not owner/name");
+  const repo: Repo = { owner, name };
+  const github = new GitHub(required("FABRIK_APP_TOKEN"), process.env["GITHUB_API_URL"] || undefined);
+
+  const config = await loadKit(github, repo);
+  if (config === null) {
+    process.exitCode = 1;
+    return;
+  }
+  const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
+  const { errors } = config.monitor;
+  const [issues, reading] = await Promise.all([monitorIssues(github, repo, appLogin), readSentry(errors)]);
+  const listed: MonitorInput = { monitor: config.monitor, sentry: reading.sentry, issues, now: new Date().toISOString() };
+  const read = await withLatestEvents(listed, monitorPlanFor(listed), errors);
+  const plan = monitorPlanFor(read.input);
+  const filed = await apply(github, repo, plan);
+  await report([...filed, ...reading.notes, ...read.notes, ...plan.summary]);
+}
+
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exitCode = 1;
+});
