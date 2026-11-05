@@ -253,6 +253,7 @@ async function gatherEventPart(
     case "pull-request-left-draft":
     case "pull-request-closed":
     case "pull-request-changes-requested":
+    case "pull-request-commented":
       return gatherPullRequest(github, repo, event.pullRequest, operator);
     case "dispatch-check":
       if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");

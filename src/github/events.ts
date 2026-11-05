@@ -26,9 +26,17 @@ export function loopEventFrom(
   }
   if (eventName === "issue_comment" && payload["action"] === "created") {
     const issue = payload["issue"] as { number: number; pull_request?: unknown };
+    const comment = payload["comment"] as { id: number; user: { login: string; type: string }; body?: string | null };
     // A comment on a PR is not a reply on an issue.
-    if (issue.pull_request !== undefined) return null;
-    const comment = payload["comment"] as { user: { login: string; type: string }; body?: string | null };
+    if (issue.pull_request !== undefined) {
+      return {
+        kind: "pull-request-commented",
+        pullRequest: issue.number,
+        commenter: comment.user.login,
+        commenterIsBot: comment.user.type === "Bot",
+        on: { kind: "conversation", comment: comment.id },
+      };
+    }
     return {
       kind: "issue-comment-created",
       issue: issue.number,
@@ -60,10 +68,22 @@ export function loopEventFrom(
   // both are trust roots its push job refuses (ADR-0005).
   if (eventName === "pull_request_review" && payload["action"] === "submitted") {
     const review = payload["review"] as { id: number; state: string; user: { login: string; type: string } };
-    if (review.state.toLowerCase() !== "changes_requested") return null;
+    const pullRequest = (payload["pull_request"] as { number: number }).number;
+    const state = review.state.toLowerCase();
+    // A Comment or Approve review, which a lone inline comment or a thread reply also submits.
+    if (state === "commented" || state === "approved") {
+      return {
+        kind: "pull-request-commented",
+        pullRequest,
+        commenter: review.user.login,
+        commenterIsBot: review.user.type === "Bot",
+        on: { kind: "review", review: review.id },
+      };
+    }
+    if (state !== "changes_requested") return null;
     return {
       kind: "pull-request-changes-requested",
-      pullRequest: (payload["pull_request"] as { number: number }).number,
+      pullRequest,
       review: review.id,
       reviewer: review.user.login,
       reviewerIsBot: review.user.type === "Bot",

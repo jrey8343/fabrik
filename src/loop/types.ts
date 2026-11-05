@@ -152,6 +152,20 @@ export type LoopEvent =
       readonly reviewer: string;
       readonly reviewerIsBot: boolean;
     }
+  | {
+      /**
+       * A comment on a PR: in its conversation, or a submitted review that
+       * doesn't request changes. An Operator comment on an agent PR is context
+       * for the next run that reads it, never a trigger (ADR-0007).
+       */
+      readonly kind: "pull-request-commented";
+      readonly pullRequest: number;
+      /** The login of whoever wrote it. */
+      readonly commenter: string;
+      readonly commenterIsBot: boolean;
+      /** Where it was made: a conversation comment, or a review, whose inline comments carry its reactions. */
+      readonly on: PullRequestCommentPlace;
+    }
   | { readonly kind: "pull-request-left-draft"; readonly pullRequest: number }
   | { readonly kind: "pull-request-closed"; readonly pullRequest: number }
   /** A Dispatch check, which an earlier plan asked for with `check-dispatch`. */
@@ -164,6 +178,15 @@ export type LoopEvent =
       /** When the tick ran, as an ISO 8601 time. */
       readonly now: string;
     };
+
+/**
+ * Where a PR comment was made: a conversation comment, by its id, or a
+ * submitted review, by its id. GitHub takes reactions on a review's inline
+ * comments but not on the review itself.
+ */
+export type PullRequestCommentPlace =
+  | { readonly kind: "conversation"; readonly comment: number }
+  | { readonly kind: "review"; readonly review: number };
 
 /** An issue as the core sees it, gathered fresh by the GitHub adapter. */
 export interface IssueSnapshot {
@@ -417,6 +440,16 @@ export type Action =
   | { readonly kind: "convert-to-draft"; readonly pullRequest: number }
   /** Takes a draft PR out of draft. */
   | { readonly kind: "mark-ready-for-review"; readonly pullRequest: number }
+  | {
+      /**
+       * Reacts to a PR comment, so its author sees it arrived: the conversation
+       * comment itself, or each inline comment of a review.
+       */
+      readonly kind: "react";
+      readonly pullRequest: number;
+      readonly on: PullRequestCommentPlace;
+      readonly content: "eyes";
+    }
   /** Requests a review on a PR: the Merge gate's one notification. */
   | { readonly kind: "request-review"; readonly pullRequest: number; readonly reviewer: string }
   /** Run a Dispatch check, in the Dispatch job, once the rest of this plan has landed. */

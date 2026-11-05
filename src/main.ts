@@ -84,6 +84,10 @@ function describeAction(action: Action): string {
       return `- take #${action.pullRequest} out of draft`;
     case "request-review":
       return `- request ${action.reviewer}'s review on #${action.pullRequest}`;
+    case "react":
+      return action.on.kind === "conversation"
+        ? `- react ${action.content} to comment ${action.on.comment} on #${action.pullRequest}`
+        : `- react ${action.content} to each inline comment of review ${action.on.review} on #${action.pullRequest}`;
   }
 }
 
