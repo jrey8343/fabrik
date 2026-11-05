@@ -14,8 +14,8 @@
 //                                Audit): writes audit.json, the Auditor's inputs (readAuditInputs)
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { GitHub, pagesOf, type Repo } from "../github/client.ts";
-import { gatherAuditSlice } from "../github/snapshot.ts";
+import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
+import { gatherAuditSliceFor } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
@@ -110,16 +110,6 @@ type IssueComment = NonNullable<IssueQueryResult["repository"]["issue"]>["commen
 
 /** Past this many characters, the sent-back PR's diff is cut short; its file list stays whole. */
 export const SENT_BACK_DIFF_LIMIT = 60_000;
-
-/** Every item of a paginated REST list. */
-async function allPages<T>(github: Reader, path: string): Promise<T[]> {
-  const items: T[] = [];
-  for (let page = 1; ; page++) {
-    const batch = (await github.rest("GET", `${path}?per_page=100&page=${page}`)) as T[];
-    items.push(...batch);
-    if (batch.length < 100) return items;
-  }
-}
 
 interface RestUser {
   readonly login: string;
@@ -450,12 +440,13 @@ async function isAncestor(github: Reader, repo: Repo, from: string, to: string):
  * - the last 3 closed Audits that had candidates, with the Operator's comments;
  * - the open issues filed from an Audit, by their `From audit #n` line;
  * - the agent PRs merged in the window, with their changed files.
- * Only Audits the Fabrik App opened count, and a failed one is never the last
- * Audit (src/loop/audit.ts). Everything here is data for the Auditor, never
- * instructions to it.
+ * Only Audits the Fabrik App opened count, as the audit gate counts them,
+ * and a failed one is never the last Audit (src/loop/audit.ts). Everything
+ * here is data for the Auditor, never instructions to it.
  */
 export async function readAuditInputs(github: Reader, repo: Repo, audit: PendingAudit, operator: string): Promise<AuditInputs> {
-  const { issues } = await gatherAuditSlice(github, repo);
+  // The job holds no Fabrik App token, so it takes the bot that opened the pending Audit for the App (gatherAuditSliceFor).
+  const { issues } = await gatherAuditSliceFor(github, repo, audit.number);
   const audits = auditsIn(issues);
   const pendingAudit = audits.find((each) => each.number === audit.number);
   if (pendingAudit === undefined) throw new Error(`Audit #${audit.number} isn't an Audit the Fabrik App opened`);

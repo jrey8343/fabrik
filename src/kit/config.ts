@@ -35,6 +35,15 @@ export interface KitConfig {
   readonly caps: {
     /** How many Design sessions may hold a slot at once; 0 pauses new ones. */
     readonly designSessions: number;
+    /** How many open error issues the Monitor keeps at once; 0 pauses new error filings (#148). */
+    readonly monitorIssues: number;
+  };
+  /** What the Monitor watches in this Product repo (#148). */
+  readonly monitor: {
+    /** Where the Monitor reads production errors; null leaves them off. */
+    readonly errors: MonitorErrors | null;
+    /** Whether the Monitor files an issue while the default branch's CI is red. */
+    readonly redMain: boolean;
   };
   readonly audit: {
     /** The UTC day of the week the Audit runs; null turns the Audit off. */
@@ -48,6 +57,19 @@ export interface KitConfig {
   readonly skillsSources: readonly SkillsSource[];
   /** Each role's Extra skills, picked from those sources; a Step-up run uses implement's. */
   readonly extraSkills: Readonly<Record<Phase, readonly ExtraSkill[]>>;
+}
+
+/** The Sentry project the Monitor reads a Product repo's production errors from. */
+export interface MonitorErrors {
+  readonly provider: "sentry";
+  /** The Sentry organization's slug. */
+  readonly org: string;
+  /** The Sentry project's slug. */
+  readonly project: string;
+  /** The Sentry host: sentry.io, another Sentry region, or a Sentry-compatible host. */
+  readonly url: string;
+  /** How many events in 24 hours an `error` group needs before it's filed; a `fatal` one needs none. */
+  readonly minEvents: number;
 }
 
 /** A Skills source a Product repo pins: a public repository at one commit. */
@@ -126,7 +148,8 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     stepUp: { model: OPUS, effort: null },
   },
   maxInFlight: 2,
-  caps: { designSessions: 2 },
+  caps: { designSessions: 2, monitorIssues: 5 },
+  monitor: { errors: null, redMain: true },
   // Sunday, so a fresh Audit is open by Monday's Weekly summary and misses the Monday skills bump.
   audit: { day: "sunday" },
   operator: null,
@@ -329,6 +352,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     },
     maxInFlight: file.wholeNumber("max_in_flight", 0) ?? defaults.maxInFlight,
     caps: readCaps(file.object("caps"), defaults.caps),
+    monitor: readMonitor(file.object("monitor"), defaults.monitor),
     audit: readAudit(file.object("audit"), defaults.audit),
     operator: orDefault(file.nullableString("operator", checkLogin), defaults.operator),
   };
@@ -366,7 +390,47 @@ function readDispatch(role: Reader, defaults: KitConfig["roles"]["dispatch"]): K
  * Specs register their caps here.
  */
 function readCaps(caps: Reader, defaults: KitConfig["caps"]): KitConfig["caps"] {
-  return { designSessions: caps.cap("design_sessions", defaults.designSessions) ?? defaults.designSessions };
+  return {
+    designSessions: caps.cap("design_sessions", defaults.designSessions) ?? defaults.designSessions,
+    monitorIssues: caps.cap("monitor_issues", defaults.monitorIssues) ?? defaults.monitorIssues,
+  };
+}
+
+function readMonitor(monitor: Reader, defaults: KitConfig["monitor"]): KitConfig["monitor"] {
+  const errors = monitor.nullableObject("errors");
+  return {
+    errors: errors === undefined ? defaults.errors : errors === null ? null : readMonitorErrors(errors),
+    redMain: monitor.boolean("red_main") ?? defaults.redMain,
+  };
+}
+
+/** Where `monitor.errors` points when it leaves these out. */
+const MONITOR_ERRORS_DEFAULTS = { url: "https://sentry.io", minEvents: 3 } as const;
+
+function readMonitorErrors(errors: Reader): MonitorErrors | null {
+  const provider = errors.requiredString("provider", checkErrorProvider);
+  const org = errors.requiredString("org", checkSentrySlug);
+  const project = errors.requiredString("project", checkSentrySlug);
+  const url = errors.string("url", checkHttpsUrl) ?? MONITOR_ERRORS_DEFAULTS.url;
+  const minEvents = errors.positiveInteger("min_events") ?? MONITOR_ERRORS_DEFAULTS.minEvents;
+  if (provider === undefined || org === undefined || project === undefined) return null;
+  return { provider: "sentry", org, project, url, minEvents };
+}
+
+/** GlitchTip and other Sentry-compatible hosts are reached through `url`, not a provider of their own. */
+function checkErrorProvider(provider: string): string | null {
+  return provider === "sentry" ? null : "the only provider is sentry; point url at a Sentry-compatible host";
+}
+
+/** A Sentry organization or project slug, as it appears in the Sentry URL; it goes into API paths as it is. */
+const SENTRY_SLUG = /^[a-z0-9_-]+$/;
+
+function checkSentrySlug(slug: string): string | null {
+  return SENTRY_SLUG.test(slug) ? null : "a Sentry slug is lowercase letters, digits, hyphens and underscores";
+}
+
+function checkHttpsUrl(url: string): string | null {
+  return URL.parse(url)?.protocol === "https:" ? null : "the Sentry token is sent there, so it must be an https:// URL";
 }
 
 function readAudit(audit: Reader, defaults: KitConfig["audit"]): KitConfig["audit"] {
@@ -507,6 +571,24 @@ class Reader {
     const value = this.wholeNumber(key, 0);
     if (value === undefined || value <= kitDefault) return value;
     this.#fail(`${this.#field(key)} is ${value}, but a cap can only be lowered: the Kit default is ${kitDefault}`);
+    return undefined;
+  }
+
+  /** An object, or null to say "none"; undefined when left out or not an object. */
+  nullableObject(key: string): Reader | null | undefined {
+    const value = this.#take(key);
+    if (value === undefined || value === null) return value;
+    if (typeof value !== "object" || Array.isArray(value)) {
+      this.#fail(`${this.#field(key)} must be an object or null`);
+      return undefined;
+    }
+    return new Reader(value, this.#field(key), this.#context);
+  }
+
+  boolean(key: string): boolean | undefined {
+    const value = this.#take(key);
+    if (value === undefined || typeof value === "boolean") return value;
+    this.#fail(`${this.#field(key)} must be true or false`);
     return undefined;
   }
 

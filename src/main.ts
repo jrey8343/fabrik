@@ -290,7 +290,10 @@ async function main(): Promise<void> {
   const actionsToken = process.env["FABRIK_ACTIONS_TOKEN"];
   const actions =
     actionsToken === undefined || actionsToken === "" ? null : new GitHub(actionsToken, process.env["GITHUB_API_URL"]);
-  const snapshot = await gatherSnapshot(github, repo, event, config.operator, actions);
+  // The Fabrik App's bot login, so only the App's own issues count as its: a Design session keeps only their
+  // Monitor marker, and only the App's Audits are read for their markers.
+  const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
+  const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions);
   const plan = planFor(event, snapshot, config);
   await applyPlan(github, repo, plan, branch);
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.

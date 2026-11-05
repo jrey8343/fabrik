@@ -245,9 +245,20 @@ export interface IssueSnapshot {
   readonly number: number;
   readonly open: boolean;
   readonly author: string;
-  /** Whether it was opened by a bot (the Fabrik App), as an agent PR is. Only a bot's body is read for an Audit's markers. */
+  /**
+   * Whether the Fabrik App itself opened it, not a person or any other bot:
+   * only then is its body read for an Audit's markers (src/loop/audit.ts), and
+   * only then does a Design session keep its body's Monitor marker (src/loop/design.ts).
+   * The Kit job, which only routes and doesn't know the App's login, takes any
+   * bot for the App, so another bot's look-alike pending Audit costs one
+   * Auditor run, whose result the push job, which knows the login, drops
+   * (src/github/snapshot.ts's byAppOf).
+   */
   readonly byApp: boolean;
-  /** Its Markdown body as it stands, whose marker lines a Design session's rewrite carries forward (src/loop/carriedLines.ts). */
+  /**
+   * Its Markdown body as it stands, whose marker lines a Design session's
+   * rewrite carries forward (src/loop/carriedLines.ts, src/loop/design.ts).
+   */
   readonly body: string;
   readonly labels: readonly string[];
   /** The parent issue's number, or null if it isn't a sub-issue. */
@@ -453,7 +464,10 @@ export interface AuditIssueSnapshot {
   readonly stateReason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
   /** When it was opened, as an ISO 8601 time. */
   readonly createdAt: string;
-  /** Whether it was opened by a bot (the Fabrik App), as an agent PR is. Only a bot's body is read for markers. */
+  /**
+   * Whether the Fabrik App itself opened it, not a person or any other bot, as
+   * IssueSnapshot.byApp says. Only the App's body is read for markers.
+   */
   readonly byApp: boolean;
   readonly body: string;
 }

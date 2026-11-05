@@ -8,6 +8,7 @@ import {
   anEscapeMarkerIssue,
   anOpenAudit,
   anOpenIssue,
+  anOpenMonitorIssue,
   anOpenPullRequest,
   anAuditRunRecord,
   aReview,
@@ -21,6 +22,7 @@ import {
   factsOf,
   UNKNOWN_COST_BASIS,
 } from "../__fixtures__/weeklySummary.ts";
+import { aMonitorIssueBody, AGROUP_STATS } from "../__fixtures__/monitor.ts";
 import { aDesignQueueIssue } from "../__fixtures__/snapshots.ts";
 import type { Verdict } from "../loop/types.ts";
 import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
@@ -1527,7 +1529,7 @@ describe("the Weekly summary", () => {
           },
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR } });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR }, monitor: null });
       expect(result.body).toContain(["## Held", "", "- owner/product: 2 needs-design issues waiting for a Design session slot, the oldest for 3 days", ""].join("\n"));
     });
 
@@ -1546,7 +1548,7 @@ describe("the Weekly summary", () => {
           },
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR } });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR }, monitor: null });
       expect(result.body).toContain("- owner/product: 1 needs-design issue waiting for a Design session slot, for 5 hours");
     });
 
@@ -1557,7 +1559,7 @@ describe("the Weekly summary", () => {
       );
       expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
         ["owner/quiet", null],
-        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR } }],
+        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR }, monitor: null }],
       ]);
       expect(result.body).toContain(["## Held", "", "- owner/busy: 1 needs-design issue waiting for a Design session slot, for 30 hours", ""].join("\n"));
       expect(result.body).not.toContain("- owner/quiet:");
@@ -1577,8 +1579,96 @@ describe("the Weekly summary", () => {
       expect(body.indexOf("Subscription usage")).toBeLessThan(body.indexOf("## Held"));
     });
 
-    it("keeps a week with no records but held work from being skipped", () => {
-      const result = weeklySummary(input({ facts: [factsOf({ designQueue: { issues: [aDesignQueueIssue()], designTurnsInProgress: [] } })] }));
+    /** A Monitor error issue's body whose stats block ends with this held line, as the Monitor writes one. */
+    const heldBody = (heldLine: string) => aMonitorIssueBody([...AGROUP_STATS, heldLine]);
+    const HELD_3 = "- Held: 3 error groups waiting for a slot under the cap of 5 open error issues";
+
+    it("counts the error groups the Monitor holds from the held line in its newest open error issue's stats block, linking that issue", () => {
+      const result = summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) })] }));
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 } });
+      expect(result.body).toContain(
+        ["## Held", "", "- owner/product: 3 error groups waiting for a Monitor issue slot, counted in [#41](https://github.com/owner/product/issues/41)", ""].join("\n"),
+      );
+    });
+
+    it.each([
+      ["whose newest open error issue's stats block has no held line", [anOpenMonitorIssue()]],
+      ["with no open Monitor issue", []],
+    ])("gives a repo %s no Monitor line", (_, monitorIssues) => {
+      const result = summaryOf(
+        factsOf({ repo: "owner/quiet", monitorIssues }),
+        factsOf({ repo: "owner/busy", monitorIssues: [anOpenMonitorIssue({ body: heldBody(HELD_3) })] }),
+      );
+      expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
+        ["owner/quiet", null],
+        ["owner/busy", { designSessions: null, monitor: { groups: 3, issue: 41 } }],
+      ]);
+      expect(result.body).not.toContain("- owner/quiet:");
+    });
+
+    it("ignores a held line in an issue the Fabrik App didn't file, however new, so quoting one fakes nothing", () => {
+      const quoted = anOpenMonitorIssue({ number: 50, author: "someone", body: heldBody("- Held: 9 error groups waiting for a slot under the cap of 5 open error issues") });
+      expect(summaryOf(factsOf({ monitorIssues: [quoted] })).summary.repos[0]?.held).toBeNull();
+      expect(summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), quoted] })).summary.repos[0]?.held).toEqual({
+        designSessions: null,
+        monitor: { groups: 3, issue: 41 },
+      });
+    });
+
+    it("reads only the newest open error issue, so an older one's stale held line counts for nothing", () => {
+      const result = summaryOf(
+        factsOf({
+          monitorIssues: [
+            anOpenMonitorIssue({ number: 45, body: heldBody("- Held: 2 error groups waiting for a slot under the cap of 5 open error issues") }),
+            anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }),
+          ],
+        }),
+      );
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 2, issue: 45 } });
+      expect(summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), anOpenMonitorIssue({ number: 45 })] })).summary.repos[0]?.held).toBeNull();
+    });
+
+    it("passes over an open issue with no stats block, such as a Spec that kept its marker, as the Monitor does", () => {
+      const spec = anOpenMonitorIssue({ number: 60, body: "<!-- fabrik:monitor sentry:4504 -->\n## Problem Statement\n\nBookings fail." });
+      const result = summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), spec] }));
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 } });
+    });
+
+    it("never reads red main's issue, which takes no slot under the cap", () => {
+      const redMain = anOpenMonitorIssue({ number: 60, body: heldBody(HELD_3).replace("<!-- fabrik:monitor sentry:4504 -->", "<!-- fabrik:monitor red-main -->") });
+      expect(summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41 }), redMain] })).summary.repos[0]?.held).toBeNull();
+    });
+
+    it("says 1 error group for one held", () => {
+      const { body } = summaryOf(
+        factsOf({ monitorIssues: [anOpenMonitorIssue({ body: heldBody("- Held: 1 error group waiting for a slot under the cap of 5 open error issues") })] }),
+      );
+      expect(body).toContain("- owner/product: 1 error group waiting for a Monitor issue slot, counted in [#41](https://github.com/owner/product/issues/41)");
+    });
+
+    it("gives a repo holding both Design work and error groups a line for each", () => {
+      const { body } = summaryOf(
+        factsOf({
+          designQueue: { issues: [aDesignQueueIssue({ neededDesignAt: hoursAgo(30) })], designTurnsInProgress: [] },
+          monitorIssues: [anOpenMonitorIssue({ body: heldBody(HELD_3) })],
+        }),
+      );
+      expect(body).toContain(
+        [
+          "## Held",
+          "",
+          "- owner/product: 1 needs-design issue waiting for a Design session slot, for 30 hours",
+          "- owner/product: 3 error groups waiting for a Monitor issue slot, counted in [#41](https://github.com/owner/product/issues/41)",
+          "",
+        ].join("\n"),
+      );
+    });
+
+    it.each([
+      ["Design work", factsOf({ designQueue: { issues: [aDesignQueueIssue()], designTurnsInProgress: [] } })],
+      ["error groups", factsOf({ monitorIssues: [anOpenMonitorIssue({ body: heldBody(HELD_3) })] })],
+    ])("keeps a week with no records but held %s from being skipped", (_, facts) => {
+      const result = weeklySummary(input({ facts: [facts] }));
       expect(result.kind).toBe("summary");
     });
   });

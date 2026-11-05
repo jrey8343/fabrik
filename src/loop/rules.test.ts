@@ -55,6 +55,17 @@ describe("Intake", () => {
     expect(plan.kind).toBe("act");
   });
 
+  it("adds needs-triage to an issue the Monitor filed, as fabrik:monitor isn't one of the Kit's own labels", () => {
+    const issue = anIssue({ number: 7, author: "fabrik-app[bot]", byApp: true, labels: ["fabrik:monitor"] });
+
+    const plan = planFor({ kind: "issue-opened", issue: 7 }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [{ kind: "add-labels", issue: 7, labels: ["needs-triage"] }],
+    });
+  });
+
   it("leaves a new sub-issue alone, because a skill made it under its parent", () => {
     const issue = anIssue({ number: 7, parent: 3 });
 

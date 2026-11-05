@@ -8,6 +8,7 @@ import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HU
 import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_ROUND_MARKER, escapeMarkerIn } from "../loop/markers.ts";
 import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
 import { type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
@@ -128,6 +129,14 @@ export interface OpenPullRequestFacts {
   readonly labelEvents: readonly LabelEvent[];
 }
 
+/** An open `fabrik:monitor` issue, as Held reads the Monitor's held count from it. */
+export interface MonitorIssueFacts {
+  readonly number: number;
+  /** Who opened it: only the Fabrik App's issues count, so quoting a held line fakes nothing. */
+  readonly author: string;
+  readonly body: string;
+}
+
 /**
  * An issue the Operator opened whose body has a `fabrik:escape` marker, such
  * as an Audit candidate filed through its Open as issue link.
@@ -172,6 +181,11 @@ export interface GitHubFacts {
    * the Design queue check reads them: Held counts the ones waiting for a slot.
    */
   readonly designQueue: DesignQueueSnapshot;
+  /**
+   * The repo's open `fabrik:monitor` issues: Held counts the error groups the
+   * Monitor holds from the newest error issue among them that has a stats block.
+   */
+  readonly monitorIssues: readonly MonitorIssueFacts[];
   /** The issues the Operator opened in the last 97 days whose body has an escape marker. */
   readonly escapeMarkerIssues: readonly EscapeMarkerIssueFacts[];
   /** The repo's open `fabrik:audit` issues, whoever opened them. */
@@ -312,6 +326,8 @@ export interface RepoSection {
 export interface Held {
   /** The `needs-design` issues waiting for a Design session slot (caps.design_sessions). */
   readonly designSessions: HeldDesignSessions | null;
+  /** The Sentry error groups waiting for a slot under the Monitor's cap of open error issues (caps.monitor_issues). */
+  readonly monitor: HeldMonitor | null;
 }
 
 export interface HeldDesignSessions {
@@ -321,6 +337,13 @@ export interface HeldDesignSessions {
   readonly oldestSince: string;
   /** How long the oldest has waited at the filing, in milliseconds. */
   readonly oldestAge: number;
+}
+
+export interface HeldMonitor {
+  /** How many error groups the Monitor holds. */
+  readonly groups: number;
+  /** The open error issue whose stats block shows that count: the newest with a stats block. */
+  readonly issue: number;
 }
 
 interface ItemBase {
@@ -849,7 +872,7 @@ function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: 
     // An open Audit waits on the Operator, so it also keeps a quiet week from being skipped.
     waitingOnYou: oldestFirst([...waitingOnYou(facts, items), ...openAuditsOf(facts, appLogin, items)]),
     stuck: stuck(facts, records, items, now),
-    held: heldIn(facts, now),
+    held: heldIn(facts, appLogin, now),
   };
 }
 
@@ -859,9 +882,10 @@ function openAuditsOf({ openAudits }: GitHubFacts, appLogin: string, items: Item
 }
 
 /** What a cap holds in the repo, or null when nothing is held. */
-function heldIn({ designQueue }: GitHubFacts, now: number): Held | null {
+function heldIn({ designQueue, monitorIssues }: GitHubFacts, appLogin: string, now: number): Held | null {
   const designSessions = heldDesignSessionsOf(designQueue, now);
-  return designSessions === null ? null : { designSessions };
+  const monitor = heldMonitorOf(monitorIssues, appLogin);
+  return designSessions === null && monitor === null ? null : { designSessions, monitor };
 }
 
 /**
@@ -873,6 +897,20 @@ function heldDesignSessionsOf(queue: DesignQueueSnapshot, now: number): HeldDesi
   const oldestSince = waiting.map((issue) => issue.neededDesignAt).toSorted((a, b) => Date.parse(a) - Date.parse(b))[0];
   if (oldestSince === undefined) return null;
   return { waiting: waiting.length, oldestSince, oldestAge: now - Date.parse(oldestSince) };
+}
+
+/**
+ * The error groups the Monitor holds, from the held line in the stats block
+ * of the open error issue the Monitor shows it in, found and read by the
+ * Monitor's own rule (heldCountHolder) and parser (heldCountIn), so the
+ * summary and the Monitor can't disagree. Null when that block has no held line.
+ */
+function heldMonitorOf(issues: readonly MonitorIssueFacts[], appLogin: string): HeldMonitor | null {
+  const holder = heldCountHolder(
+    issues.map((issue) => ({ number: issue.number, open: true, byApp: issue.author === appLogin, body: issue.body })),
+  );
+  const groups = holder === null ? 0 : (heldCountIn(holder.body) ?? 0);
+  return holder === null || groups === 0 ? null : { groups, issue: holder.number };
 }
 
 /** Builds a repo's items, aged as of the filing. */
@@ -1067,8 +1105,8 @@ function localTime(time: number, timeZone: string): string {
 
 // Rendering. Only shipped features get a section: the Retro, Map and Monitor
 // issues add theirs when their Specs ship. Scores shows only in a week with
-// score files, and never a run's own scores. Held shows only what the
-// Design-session cap holds, until the Monitor and Ideas and Maps caps add
+// score files, and never a run's own scores. Held shows what the
+// Design-session and Monitor caps hold, until the Ideas and Maps caps add
 // their lines.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
@@ -1189,11 +1227,19 @@ function scorerName(scorer: string): string {
 /** The Held section: a line per repo and source with work held, or nothing at all when no repo has any. */
 function heldLines(repos: readonly RepoSection[]): string[] {
   const lines = repos.flatMap(({ repo, held }) => {
+    const shown: string[] = [];
     const design = held?.designSessions ?? null;
-    if (design === null) return [];
-    const issues = design.waiting === 1 ? "1 needs-design issue" : `${design.waiting} needs-design issues`;
-    const oldest = design.waiting === 1 ? `for ${duration(design.oldestAge)}` : `the oldest for ${duration(design.oldestAge)}`;
-    return [`- ${repo}: ${issues} waiting for a Design session slot, ${oldest}`];
+    if (design !== null) {
+      const issues = design.waiting === 1 ? "1 needs-design issue" : `${design.waiting} needs-design issues`;
+      const oldest = design.waiting === 1 ? `for ${duration(design.oldestAge)}` : `the oldest for ${duration(design.oldestAge)}`;
+      shown.push(`- ${repo}: ${issues} waiting for a Design session slot, ${oldest}`);
+    }
+    const monitor = held?.monitor ?? null;
+    if (monitor !== null) {
+      const groups = monitor.groups === 1 ? "1 error group" : `${monitor.groups} error groups`;
+      shown.push(`- ${repo}: ${groups} waiting for a Monitor issue slot, counted in [#${monitor.issue}](https://github.com/${repo}/issues/${monitor.issue})`);
+    }
+    return shown;
   });
   return lines.length === 0 ? [] : ["## Held", "", ...lines, ""];
 }

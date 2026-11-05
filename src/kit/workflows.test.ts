@@ -192,6 +192,70 @@ describe("The Kit's workflows", () => {
       expect(push).toContain("run: node kit/src/skills/source-bumps-main.ts");
     });
   });
+
+  // The Monitor (#148): plain Kit code on the hourly tick, reading GitHub and Sentry through their APIs alone.
+  describe("schedule.yml's Monitor job", () => {
+    const monitor = jobIn(schedule, "monitor");
+    const steps = stepsOf(monitor);
+    const step = (pattern: string) => steps.findIndex((candidate) => candidate.includes(pattern));
+    const programOf = (run: string | undefined) => /run: node kit\/(src\/\S+)/.exec(run ?? "")?.[1];
+    const gate = step("run: node kit/src/monitor/errors-set.ts");
+    const sentry = step("op://Fabrik App/Sentry token/credential");
+    const run = step("run: node kit/src/monitor/main.ts");
+
+    it("checks out only the Kit, at its pinned commit, and holds no GITHUB_TOKEN permissions", () => {
+      const checkouts = steps.filter((candidate) => candidate.includes("uses: actions/checkout@"));
+
+      expect(checkouts).toHaveLength(1);
+      expect(checkouts[0]).toContain("repository: jrey8343/fabrik");
+      expect(checkouts[0]).toContain("ref: ${{ needs.kit.outputs.sha }}");
+      expect(checkouts[0]).toContain("persist-credentials: false");
+      expect(monitor).toMatch(/\n {4}permissions: \{\}\n/);
+    });
+
+    // So the weekly-limit issue being open, or the tick failing, never stops it, and a Sentry outage never stops the tick.
+    it("runs on every tick in its own concurrency group, needing only the Kit job", () => {
+      expect(monitor).toMatch(/concurrency:\n\s+group: fabrik-monitor\n\s+cancel-in-progress: false\n/);
+      expect(monitor).toMatch(/\n {4}needs: kit\n/);
+      expect(monitor.slice(0, monitor.indexOf("\n    steps:"))).not.toMatch(/\n {4}if:/);
+      expect(jobIn(schedule, "tick")).not.toContain("monitor");
+    });
+
+    it("mints a Fabrik App token through the push service account, and runs the Monitor with it and the App's slug", () => {
+      const key = steps[step("op://Fabrik App/Fabrik App/private-key")]!;
+      const mint = steps[step("actions/create-github-app-token@")]!;
+
+      expect(key).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}");
+      expect(mint).toContain("id: app");
+      // An unaccepted Checks: read would fail the mint, so it asks for whatever the installation has.
+      expect(mint).not.toMatch(/permission-/);
+      expect(steps[run]).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
+      expect(steps[run]).toContain("FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}");
+      expect(existsSync(new URL(programOf(steps[run])!, root))).toBe(true);
+    });
+
+    it("reads whether the default branch's Kit config sets monitor.errors through the API, before any Sentry token loads", () => {
+      expect(gate).toBeGreaterThan(step("actions/create-github-app-token@"));
+      expect(steps[gate]).toContain("id: config");
+      expect(steps[gate]).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
+      expect(existsSync(new URL(programOf(steps[gate])!, root))).toBe(true);
+      expect(sentry).toBeGreaterThan(gate);
+    });
+
+    it("loads the Sentry token only when monitor.errors is set, in a step that can't fail the job, and hands it to the Monitor", () => {
+      expect(steps[sentry]).toContain("id: sentry");
+      expect(steps[sentry]).toContain("if: steps.config.outputs.errors == 'true'");
+      expect(steps[sentry]).toContain("continue-on-error: true");
+      expect(steps[sentry]).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}");
+      expect(run).toBeGreaterThan(sentry);
+      expect(steps[run]).toContain("FABRIK_SENTRY_TOKEN: ${{ steps.sentry.outputs.SENTRY_TOKEN }}");
+    });
+
+    it("makes no model call and writes no Run record: no Claude token, no agent and no Run record action", () => {
+      expect(monitor).not.toContain("op://Fabrik/");
+      expect(monitor).not.toContain("./kit/.github/actions/");
+    });
+  });
 });
 
 /** A job's section of loop.yml, from its key to the next job's. */
@@ -200,6 +264,20 @@ function job(name: string): string {
   if (body === undefined) throw new Error(`loop.yml has no ${name} job`);
   return body;
 }
+
+describe("The run the Loop action", () => {
+  const action = readFileSync(new URL(".github/actions/run-loop/action.yml", root), "utf8");
+  const steps = action.split(/\n(?=    - )/).slice(1);
+
+  it("runs the Loop with the token it mints and the Fabrik App's slug, so only the App's own issues count as its", () => {
+    const mint = steps.find((step) => step.includes("uses: actions/create-github-app-token@"))!;
+    const run = steps.find((step) => step.includes("run: node src/main.ts"))!;
+
+    expect(mint).toContain("id: app");
+    expect(run).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
+    expect(run).toContain("FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}");
+  });
+});
 
 describe("loop.yml's Audit job", () => {
   const audit = (): string => job("audit");

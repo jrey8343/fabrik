@@ -11,8 +11,17 @@ import {
   type OperatorBrief,
   type SpecTicket,
 } from "./designOutput.ts";
-import { DESIGN_LABEL, isCategoryLabel, type Label, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, WONTFIX } from "./labels.ts";
-import { designRoundMarker, LIVE_OUTCOME_MARKER, SESSION_FINISHED } from "./markers.ts";
+import {
+  DESIGN_LABEL,
+  isCategoryLabel,
+  type Label,
+  MONITOR_LABEL,
+  NEEDS_DESIGN,
+  READY_FOR_AGENT,
+  READY_FOR_HUMAN,
+  WONTFIX,
+} from "./labels.ts";
+import { designRoundMarker, LIVE_OUTCOME_MARKER, type MonitorMarker, monitorMarkerIn, monitorMarkerLine, SESSION_FINISHED } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { AgentBrief } from "./triageOutput.ts";
 import { startAgentRun } from "./runs.ts";
@@ -232,7 +241,10 @@ function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: Issue
   if (output.kind === "brief") {
     // Only the Operator can do an Operator brief's work, so it waits for them, not Dispatch.
     return "operator" in output.brief
-      ? { kind: "act", actions: [...rewriteAsOperatorBrief(issueNumber, output.comment, output.brief, snapshot.issue, snapshot.operator), CHECK_DESIGN_QUEUE] }
+      ? {
+          kind: "act",
+          actions: [...rewriteAsOperatorBrief(issueNumber, output.comment, output.brief, snapshot.issue, snapshot.operator), CHECK_DESIGN_QUEUE],
+        }
       : { kind: "act", actions: [...rewriteAsBrief(issueNumber, output.comment, output.brief, snapshot.issue), checkDispatch, CHECK_DESIGN_QUEUE] };
   }
   const landed =
@@ -425,7 +437,7 @@ function commaList(issues: readonly CreatedIssue[]): (string | CreatedIssue)[] {
 /** The small outcome: the issue becomes its own agent brief, ready for an Implementer. */
 function rewriteAsBrief(issueNumber: number, comment: string, brief: AgentBrief, issue: IssueSnapshot): Action[] {
   return [
-    { kind: "edit-issue-body", issue: issueNumber, body: withCarriedLines(briefBody(brief), issue.body) },
+    { kind: "edit-issue-body", issue: issueNumber, body: rewrittenBody(briefBody(brief), issue) },
     {
       kind: "comment",
       issue: issueNumber,
@@ -455,21 +467,26 @@ function supersedeBySpec(
   operator: string,
 ): Action[] {
   const tickets = ticketActions(output.tickets, issue, SPEC, operator);
+  const marker = keptMarker(issue);
+  // The Monitor finds its issues by their label, so a Spec that keeps a Sentry group's marker is the
+  // group's open issue to it. One that keeps red main's goes without, so the Monitor never closes it once main is green.
+  const monitorLabel: Label[] = marker?.kind === "sentry" ? [MONITOR_LABEL] : [];
   return [
     {
       kind: "create-issue",
       key: SPEC.created,
       title: withoutMentions(output.spec.title),
       // The Spec takes the issue's place, so it carries the issue's marker lines.
-      body: withCarriedLines(
+      body: rewrittenBody(
         [
           withoutMentions(output.spec.body),
           "",
           `<sub>Written by the Fabrik Design session on #${issueNumber}, which this Spec supersedes.</sub>`,
         ].join("\n"),
-        issue.body,
+        issue,
+        marker,
       ),
-      labels: readyLabels(issue),
+      labels: [...readyLabels(issue), ...monitorLabel],
       parent: null,
       blockedBy: [],
     },
@@ -522,12 +539,18 @@ function roundComment(
  * assigned to the Operator, ready for a Pairing session. The assignment is
  * its one notification, so the comment mentions nobody.
  */
-function rewriteAsOperatorBrief(issueNumber: number, comment: string, brief: OperatorBrief, issue: IssueSnapshot, operator: string): Action[] {
+function rewriteAsOperatorBrief(
+  issueNumber: number,
+  comment: string,
+  brief: OperatorBrief,
+  issue: IssueSnapshot,
+  operator: string,
+): Action[] {
   return [
     {
       kind: "edit-issue-body",
       issue: issueNumber,
-      body: withCarriedLines(
+      body: rewrittenBody(
         [
           "## Operator brief",
           "",
@@ -539,7 +562,7 @@ function rewriteAsOperatorBrief(issueNumber: number, comment: string, brief: Ope
           "",
           "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
         ].join("\n"),
-        issue.body,
+        issue,
       ),
     },
     {
@@ -569,6 +592,28 @@ function briefBody(brief: AgentBrief): string {
     "",
     "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
   ].join("\n");
+}
+
+/**
+ * The Monitor marker of the issue a session rewrites, whose line opens the
+ * body it becomes, so the Monitor still finds the issue's group and never
+ * files it a second time (#148). Only the line is kept, never the Monitor
+ * block. The Monitor reads only the Fabrik App's markers, and a Spec is the
+ * App's, so a marker in an issue anyone else opened is never kept.
+ */
+function keptMarker(issue: IssueSnapshot): MonitorMarker | null {
+  return issue.byApp ? monitorMarkerIn(issue.body) : null;
+}
+
+/**
+ * The body a session's rewrite leaves: `rewritten`, opened by the kept
+ * Monitor marker's line (#148) and ended with the From audit and escape lines
+ * of the issue's old body (src/loop/carriedLines.ts, #150), so whatever reads
+ * those lines still finds them. A line the old body quotes as code, as a
+ * Monitor issue quotes its Sentry error, is never carried.
+ */
+function rewrittenBody(rewritten: string, issue: IssueSnapshot, marker: MonitorMarker | null = keptMarker(issue)): string {
+  return withCarriedLines(marker === null ? rewritten : [monitorMarkerLine(marker), rewritten].join("\n"), issue.body);
 }
 
 /** Why a session on this issue can't take a turn now, or null when it can. */

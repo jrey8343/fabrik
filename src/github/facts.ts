@@ -10,6 +10,7 @@ import type {
   EscapeMarkerIssueFacts,
   GitHubFacts,
   LabelEvent,
+  MonitorIssueFacts,
   OpenAuditFacts,
   OpenIssueFacts,
   OpenPullRequestFacts,
@@ -18,11 +19,11 @@ import type {
   TicketFacts,
 } from "../kit/weeklySummary.ts";
 import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest.ts";
-import { AUDIT_LABEL } from "../loop/labels.ts";
+import { AUDIT_LABEL, MONITOR_LABEL } from "../loop/labels.ts";
 import { escapeMarkerIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import { type GitHub, pagesOf, type Repo } from "./client.ts";
-import { gatherDesignQueueSlice } from "./snapshot.ts";
+import { gatherDesignQueueSlice, loginOf } from "./snapshot.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -43,7 +44,7 @@ const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(now - ESCAPE_WINDOWS_REACH_MS).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, escapeMarkerIssues, openAudits] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, escapeMarkerIssues, openAudits] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
@@ -52,6 +53,7 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     // The Design queue check's own slice, so Held and the check can't disagree. Its token can't read
     // workflow runs, so it reads Design turns in progress from the issues, as the scheduled tick does.
     gatherDesignQueueSlice(github, null, repo),
+    pagesOf<RawMonitorIssue>(github, MONITOR_ISSUES_QUERY, repo, { monitor: MONITOR_LABEL }, (data) => data.repository.issues),
     gatherEscapeMarkerIssues(github, repo, operator, escapeSince),
     pagesOf<RawAudit>(github, OPEN_AUDITS_QUERY, repo, { audit: AUDIT_LABEL }, (data) => data.repository.issues),
   ]);
@@ -66,6 +68,7 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     openIssues: openIssues.map(openIssueOf),
     openPullRequests: open.filter(isAgent).map(openPullRequestOf),
     designQueue,
+    monitorIssues: monitorIssues.map(monitorIssueOf),
     escapeMarkerIssues,
     openAudits: openAudits.map(openAuditOf),
   };
@@ -152,6 +155,18 @@ const OPEN_ISSUES_QUERY = `
       issues(states: OPEN, first: 25, after: $after) {
         ${PAGE_INFO}
         nodes { ${ISSUE_FIELDS} }
+      }
+    }
+  }
+`;
+
+// The open Monitor issues, with their bodies: Held reads the Monitor's held count from their stats blocks.
+const MONITOR_ISSUES_QUERY = `
+  query ($owner: String!, $name: String!, $after: String, $monitor: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, labels: [$monitor], first: 25, after: $after) {
+        ${PAGE_INFO}
+        nodes { number body author ${ACTOR} }
       }
     }
   }
@@ -257,6 +272,12 @@ interface RawIssue {
   timelineItems: { nodes: RawLabelEvent[] };
   blockedBy: { nodes: { number: number; labels: { nodes: { name: string }[] } }[] };
   subIssues: { nodes: { number: number }[] };
+}
+
+interface RawMonitorIssue {
+  number: number;
+  body: string;
+  author: RawActor | null;
 }
 
 interface RawOpenedIssue {
@@ -403,6 +424,10 @@ function openIssueOf(issue: RawIssue): OpenIssueFacts {
   };
 }
 
+function monitorIssueOf(issue: RawMonitorIssue): MonitorIssueFacts {
+  return { number: issue.number, author: loginOf(issue.author), body: issue.body };
+}
+
 function openAuditOf(audit: RawAudit): OpenAuditFacts {
   return { number: audit.number, title: audit.title, author: loginOf(audit.author), createdAt: audit.createdAt };
 }
@@ -418,15 +443,6 @@ function labelEventsOf(nodes: readonly RawLabelEvent[]): LabelEvent[] {
     actor: loginOf(event.actor),
     at: event.createdAt,
   }));
-}
-
-/**
- * A login as REST and the summary spell it. GraphQL gives a GitHub App's bot
- * user without its `[bot]` suffix; a deleted account is `ghost`.
- */
-function loginOf(actor: RawActor | null): string {
-  if (actor === null) return "ghost";
-  return actor.__typename === "Bot" && !actor.login.endsWith("[bot]") ? `${actor.login}[bot]` : actor.login;
 }
 
 interface InstallationRepositories {

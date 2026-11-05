@@ -1,9 +1,10 @@
 // The markers the Kit's comments open with, and the marker lines it puts in
-// issue bodies: an Audit's own, and the `From audit #n` line and escape marker
-// an Audit candidate's filed issue ends with (#150). The core writes them; the
-// adapter reads a thread's comments back through them into the snapshot
-// (src/github/threads.ts), and the body lines are read from the issues
-// themselves, so the Loop's history lives on GitHub alone.
+// issue bodies: a Monitor issue's marker line and the Monitor's note closing
+// its red-main issue (#148), an Audit's own, and the `From audit #n` line and
+// escape marker an Audit candidate's filed issue ends with (#150). The core
+// writes them; the adapter reads a thread's comments back through them into
+// the snapshot (src/github/threads.ts), and the body lines are read from the
+// issues themselves, so the Loop's history lives on GitHub alone.
 import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
@@ -50,6 +51,35 @@ export const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 
 /** The first line of the Kit's note that a Ticket came back to design from an agent PR. */
 export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
+
+/** What a Monitor issue's marker line says it tracks (#148): a Sentry group, or red main. */
+export type MonitorMarker = { readonly kind: "sentry"; readonly group: string } | { readonly kind: "red-main" };
+
+/**
+ * A Monitor issue's marker line, naming the Sentry group or the red main it
+ * tracks. Only the line itself counts, never the Monitor block's markers.
+ */
+const MONITOR_MARKER = /^<!-- fabrik:monitor (?:sentry:(\S+)|red-main) -->$/m;
+
+/** The Monitor marker in this body, or null when it has none. */
+export function monitorMarkerIn(body: string): MonitorMarker | null {
+  const match = MONITOR_MARKER.exec(body);
+  if (match === null) return null;
+  const group = match[1];
+  return group === undefined ? { kind: "red-main" } : { kind: "sentry", group };
+}
+
+/** The marker line a Monitor issue's body opens with, for what it tracks. */
+export function monitorMarkerLine(marker: MonitorMarker): string {
+  return marker.kind === "sentry" ? `<!-- fabrik:monitor sentry:${marker.group} -->` : "<!-- fabrik:monitor red-main -->";
+}
+
+/**
+ * The first line of the Monitor's note closing its red-main issue once the
+ * default branch is green: its only comment, which tells its own close apart
+ * from anyone else's.
+ */
+export const RED_MAIN_GREEN_MARKER = "<!-- fabrik:monitor-green -->";
 
 /**
  * An Architectural escape's record (#150): `<!-- fabrik:escape <strength> #<pr> #<pr> -->`,
@@ -106,13 +136,52 @@ export function fromAuditLine(audit: number): string {
   return `From audit #${audit}`;
 }
 
-/** The Audit the first `From audit #n` line in `body` names, or null if it has none. */
+/**
+ * The Audit the first `From audit #n` line in `body` names, or null if it has
+ * none. A line quoted as code isn't one (see linesOutsideCode).
+ */
 export function fromAuditIn(body: string): number | null {
-  const line = body
-    .split("\n")
+  const line = linesOutsideCode(body)
     .map((each) => FROM_AUDIT_LINE.exec(each.trim()))
     .find((match) => match !== null);
   return line === undefined || line === null ? null : Number(line[1]);
+}
+
+/**
+ * The lines of a Markdown body outside its fenced code blocks: the only lines
+ * read as a `From audit` line, or carried forward as a marker line by a
+ * Design session's rewrite (src/loop/carriedLines.ts). A line quoted as code
+ * is data, such as the Sentry error title a Monitor issue fences (#148),
+ * never a marker line. A fence that never closes quotes nothing: a filed
+ * Audit candidate's body cut short to fit its link (src/loop/followUps.ts)
+ * can leave one open above the trailer it ends with.
+ */
+export function linesOutsideCode(body: string): string[] {
+  const lines = body.split("\n");
+  const outside: string[] = [];
+  for (let at = 0; at < lines.length; at++) {
+    const line = lines[at] ?? "";
+    const fence = fenceOpenedBy(line);
+    const closing = fence === null ? -1 : lines.findIndex((each, i) => i > at && closesFence(fence, each));
+    if (closing === -1) outside.push(line);
+    else at = closing;
+  }
+  return outside;
+}
+
+/** The fence a line opens a fenced code block with, as CommonMark reads it, or null when it opens none. */
+function fenceOpenedBy(line: string): string | null {
+  const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+  if (match === null) return null;
+  const [, fence = "", info = ""] = match;
+  // A backtick fence's info string has no backtick: such a line is inline code.
+  return fence.startsWith("`") && info.includes("`") ? null : fence;
+}
+
+/** Whether a line closes the block `fence` opened: the same character, at least as many, and nothing after. */
+function closesFence(fence: string, line: string): boolean {
+  const closing = /^ {0,3}(`{3,}|~{3,})[ \t\r]*$/.exec(line)?.[1];
+  return closing !== undefined && closing[0] === fence[0] && closing.length >= fence.length;
 }
 
 /**

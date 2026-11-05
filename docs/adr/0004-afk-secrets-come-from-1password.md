@@ -6,7 +6,7 @@ Every secret an AFK job needs comes from 1Password at run time, not from repo Ac
 |---|---|---|
 | agent | `Fabrik` (the Claude token) | Triage, Dispatch, Review, the judge |
 | implement | `Fabrik` + `Fabrik Sandbox · <product>` (that repo's test secrets) | Implement |
-| push | `Fabrik App` (App ID + private key) | the push jobs (ADR-0002), the score-record job among them (ADR-0009) |
+| push | `Fabrik App` (App ID + private key, and the `Sentry token`) | the push jobs (ADR-0002), the score-record job among them (ADR-0009), and the Monitor |
 
 Even an agent that dumps memory reaches only the token it already has and, in Implement, its own repo's test secrets. The Scorers' judge job (#149) is an agent job of this kind: beside the Claude token its job holds only the read-only `github.token` it reads the Ticket with, and no write credential (ADR-0002), so that is all a judge that dumps memory reaches. Kit config in `.fabrik/` lists test secrets as `op://` references. A Kit step resolves them with the service-account token in that step's env only, using `load-secrets-action` in output mode and never `configure`. The agent step then gets just the resolved values.
 
@@ -19,6 +19,6 @@ Even an agent that dumps memory reaches only the token it already has and, in Im
 
 ## Consequences
 
-- 1Password is a hard dependency of every run. It has no SLA, and the action neither retries nor caches. A failed load is an infrastructure failure, not an Execution flaw, so it doesn't use up the Ticket's retries.
+- 1Password is a hard dependency of every run. It has no SLA, and the action neither retries nor caches. A failed load is an infrastructure failure, not an Execution flaw, so it doesn't use up the Ticket's retries. The one optional load is the Monitor's `Sentry token`, which can't fail its job: production errors are opt-in, so a missing or unreadable token is a quiet dormant note in the step summary, never a failure.
 - Service-account permissions can't be changed after creation. The Fabrik setup skill creates the three accounts per repo with `op service-account create`, with no expiry, and stores them with `gh secret set`. 1Password's limit of 100 accounts caps Fabrik at about 33 Product repos.
 - Rotating the Claude token is one edit to a 1Password item, and every repo picks it up on its next run. The token is stored as an API Credential with its expiry date, so Watchtower warns three months ahead. That warning only shows inside the app; the backstop is a run failing loudly with `authentication_failed`.

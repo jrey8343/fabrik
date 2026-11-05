@@ -49,8 +49,22 @@ export const AUDIT_LABEL = "fabrik:audit";
 export const KIT_ISSUE_LABELS = [TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL, AUDIT_LABEL] as const;
 export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
 
+/**
+ * The label on each issue the Monitor files (#148), by which it finds its own
+ * issues. It isn't one of KIT_ISSUE_LABELS, so Intake still sends a Monitor
+ * issue to Triage.
+ */
+export const MONITOR_LABEL = "fabrik:monitor";
+
 /** A label the Kit itself adds or removes. Labels read from GitHub stay plain strings: anyone can add any label. */
-export type Label = StateLabel | CategoryLabel | typeof DISPATCH_LABEL | typeof DESIGN_LABEL | typeof REVIEW_LABEL | KitIssueLabel;
+export type Label =
+  | StateLabel
+  | CategoryLabel
+  | typeof DISPATCH_LABEL
+  | typeof DESIGN_LABEL
+  | typeof REVIEW_LABEL
+  | KitIssueLabel
+  | typeof MONITOR_LABEL;
 
 /** Every label the Kit uses, so the setup skill can create each one. */
 export const ALL_LABELS: readonly Label[] = [
@@ -60,6 +74,7 @@ export const ALL_LABELS: readonly Label[] = [
   REVIEW_LABEL,
   ...CATEGORY_LABELS,
   ...KIT_ISSUE_LABELS,
+  MONITOR_LABEL,
 ];
 
 export function isStateLabel(label: string): label is StateLabel {

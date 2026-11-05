@@ -9,6 +9,7 @@ import type {
   EscapeMarkerIssueFacts,
   GitHubFacts,
   LabelEvent,
+  MonitorIssueFacts,
   OpenAuditFacts,
   OpenIssueFacts,
   OpenPullRequestFacts,
@@ -18,6 +19,7 @@ import type {
 } from "../kit/weeklySummary.ts";
 import { designRoundMarker, verdictMarker } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
+import { aMonitorIssueBody } from "./monitor.ts";
 
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -159,6 +161,7 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     openIssues: [],
     openPullRequests: [],
     designQueue: { issues: [], designTurnsInProgress: [] },
+    monitorIssues: [],
     escapeMarkerIssues: [],
     openAudits: [],
     ...overrides,
@@ -208,4 +211,9 @@ export function anOpenPullRequest(overrides: Partial<OpenPullRequestFacts> = {})
     labelEvents: [],
     ...overrides,
   };
+}
+
+/** Open issue 41, the Fabrik App's Monitor error issue for Sentry group 4504, its stats block holding no held line unless a test's body says so. */
+export function anOpenMonitorIssue(overrides: Partial<MonitorIssueFacts> = {}): MonitorIssueFacts {
+  return { number: 41, author: "fabrik-app[bot]", body: aMonitorIssueBody(), ...overrides };
 }

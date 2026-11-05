@@ -204,12 +204,13 @@ finish() {
 # created the labels, vaults and service accounts, and protected the branch.
 # Run it from the Product repo's checkout:
 #   bash .claude/skills/fabrik-setup/wizard.sh
-# Nothing it captures is written to disk: the Fabrik App's key and the Claude
-# token go straight into 1Password, where the Kit's jobs read them (ADR-0004).
+# Nothing it captures is written to disk: the Fabrik App's key, the Claude token
+# and the Sentry token go straight into 1Password, where the Kit's jobs read
+# them (ADR-0004).
 
 run_wizard() {
 
-TOTAL_STAGES=5
+TOTAL_STAGES=6
 
 for tool in gh op; do
   command -v "$tool" >/dev/null 2>&1 || { warn "$tool isn't installed; install it and sign in, then re-run."; exit 1; }
@@ -229,11 +230,15 @@ banner "Fabrik setup for $REPO"
 # ── 1. The Fabrik App on this repo ─────────────────────────────────────────
 stage "Install the Fabrik App on $REPO"
 say "Every label, comment and push the Loop makes comes from the Fabrik App."
-say "It needs Issues, Pull requests and Contents (read and write), and never 'workflows'."
+say "It needs Issues, Pull requests and Contents (read and write), Checks (read), and never 'workflows'."
+say "Checks (read) is how the Monitor sees main go red."
 ask FABRIK_APP_SLUG "The Fabrik App's slug (the last part of github.com/apps/<slug>):"
+say "If the App lacks Checks (read), add it first:"
+step "At https://github.com/settings/apps/${FABRIK_APP_SLUG}/permissions, set Repository permissions → Checks to Read-only, then Save changes."
 open_url "https://github.com/apps/${FABRIK_APP_SLUG}/installations/new"
 step "Pick the account that owns $REPO."
 step "Choose 'Only select repositories', add $REPO (keep the repos it already has), then Install or Save."
+step "If GitHub shows a request for new permissions (Checks: read), review it and accept."
 pause "Press Enter once $REPO is in the App's repository list."
 
 # ── 1b. The Fabrik App on the fabrik-runs store ───────────────────────────
@@ -307,7 +312,52 @@ else
   pause
 fi
 
-# ── 4. GitHub mobile: push only when it's your move ───────────────────────
+# ── 4. The Sentry token ───────────────────────────────────────────────────
+stage "The Sentry token"
+say "The Monitor files an issue for each production error Sentry reports, once"
+say "monitor.errors in .fabrik/config.json names your Sentry org and project."
+say "It reads Sentry with the 'Sentry token' API Credential in the 'Fabrik App' vault."
+SENTRY_TOKEN_EXISTS=0
+op item get "Sentry token" --vault "Fabrik App" >/dev/null 2>&1 && SENTRY_TOKEN_EXISTS=1
+if (( SENTRY_TOKEN_EXISTS )) && ! confirm "1Password already holds a Sentry token, which every Product repo shares. Replace it with a new one?"; then
+  say "Keeping the current Sentry token."
+  pause
+elif (( ! SENTRY_TOKEN_EXISTS )) && ! confirm "Does $REPO report production errors to Sentry?"; then
+  say "Skipping the Sentry token. Re-run the wizard once $REPO reports to Sentry."
+  pause
+else
+  open_url "https://sentry.io/settings/account/api/auth-tokens/new-token/"
+  step "Create a token with the scopes Issue & Event: Read (event:read) and Project: Read (project:read)."
+  note "An internal integration's token works too. An organization token (sntrys_…) doesn't: its scopes don't cover issues."
+  note "On another Sentry host, use its token page, and set monitor.errors.url to that host."
+  ask_secret SENTRY_TOKEN "Paste the token (hidden):"
+  if [[ "$SENTRY_TOKEN" == sntrys_* ]]; then
+    warn "That's an organization token, whose scopes don't cover issues."
+    if (( SENTRY_TOKEN_EXISTS )); then
+      say "Keeping the current Sentry token."
+    else
+      SKIPPED+=("the 'Sentry token' item in the 'Fabrik App' vault (a token with event:read and project:read)")
+    fi
+  else
+    if (( SENTRY_TOKEN_EXISTS )); then
+      # Archived, not deleted, so the old token stays in the item's history.
+      op item delete "Sentry token" --vault "Fabrik App" --archive
+    fi
+    TEMPLATE=$(umask 077 && mktemp)
+    SENTRY_TOKEN="$SENTRY_TOKEN" node -e '
+      const item = { title: "Sentry token", category: "API_CREDENTIAL", fields: [
+        { id: "credential", type: "CONCEALED", label: "credential", value: process.env.SENTRY_TOKEN },
+      ] };
+      process.stdout.write(JSON.stringify(item));' > "$TEMPLATE"
+    op item create --vault "Fabrik App" --template "$TEMPLATE" >/dev/null
+    rm -f "$TEMPLATE"
+    say "${GREEN}✓ stored${RESET} the Sentry token"
+  fi
+  unset SENTRY_TOKEN
+  pause
+fi
+
+# ── 5. GitHub mobile: push only when it's your move ───────────────────────
 stage "GitHub mobile notifications"
 say "The Loop buzzes you only when it's your move: a review request at the Merge gate,"
 say "an assignment for ready-for-human work, and an @-mention for Design rounds,"
@@ -320,7 +370,7 @@ step "On the web page that opened, under 'System' → 'Actions', make sure nothi
 note "The setting names may differ slightly between app versions: match them by meaning."
 pause "Press Enter once push is set."
 
-# ── 5. Watch the repo ─────────────────────────────────────────────────────
+# ── 6. Watch the repo ─────────────────────────────────────────────────────
 stage "Watch $REPO on All activity"
 say "Watching on All activity puts every Loop event in your GitHub inbox, without a push."
 if confirm "Watch $REPO on All activity now, with gh?"; then

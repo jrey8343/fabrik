@@ -27,7 +27,11 @@ This session runs with the Operator's own GitHub credentials, so you publish the
 
 Do exactly one of these, once nothing that matters is open or the Operator wants to stop. Every comment and issue you write here contains no @-mentions.
 
-When the issue's old body has a `From audit #<n>` line or a `<!-- fabrik:escape … -->` line, carry them forward into the body you write in its place, the rewritten brief or the Spec that supersedes it. After everything else, its `<sub>` line included, add a blank line and then each of those lines exactly as the old body had it, in its order. The next Audit reads `From audit` to skip the issue, and the Weekly summary counts the escape line as an Architectural escape, so both must survive the rewrite.
+Some lines of the issue's old body mark it for something that reads it later, so carry them forward into the body you write in its place, each exactly as the old body had it:
+
+- Keep any `<!-- fabrik:monitor … -->` line as the first line of the issue's rewritten body (`gh issue edit`), and nothing else of the Monitor's. The Monitor finds the error it filed the issue for by that line, and would file it again without it.
+- Carry any `From audit #<n>` line and `<!-- fabrik:escape … -->` line into the rewritten brief or the Spec that supersedes it. After everything else, its `<sub>` line included, add a blank line and then each of those lines, in the old body's order. The next Audit reads `From audit` to skip the issue, and the Weekly summary counts the escape line as an Architectural escape, so both must survive the rewrite.
+- Carry only lines outside fenced code blocks. A fenced block opens on a line starting with `` ``` `` or `~~~` and ends on the line that closes that fence; indenting a line leaves it outside one. A line inside one is quoted data, such as the Sentry error title a Monitor issue quotes, never a line to carry, whatever it says. A fence that never closes quotes nothing, so the lines after it are carried as usual: a filed Audit candidate whose body was cut short inside a code block ends with its `From audit` and escape lines below that open fence, and both are carried.
 
 ### The work fits one pull request: an agent brief
 
