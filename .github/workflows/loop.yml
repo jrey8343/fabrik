@@ -675,8 +675,7 @@ jobs:
   # branch at the pending Audit's marked commit, with its full history for git
   # log and blame, no GitHub write credential, and only the agent service
   # account. It gets the Base skills alone, runs none of the code, and passes
-  # its Audit out as an artifact for the push job to fill in. Defined but not
-  # yet routed to: the push job doesn't need it until the Auditor is switched on.
+  # its Audit out as an artifact for the push job to fill in.
   audit:
     name: Audit
     needs: kit
@@ -800,7 +799,7 @@ jobs:
   # after a cancelled agent job.
   push:
     name: Push
-    needs: [kit, triage, design, implement, review-checks, review]
+    needs: [kit, triage, design, implement, review-checks, review, audit]
     if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none'
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -43,10 +43,9 @@ describe("the Weekly summary", () => {
     expect(weeklySummary(input({ facts: [factsOf({ repo: "owner/quiet" }), facts] })).kind).toBe("summary");
   });
 
-  it("isn't skipped in a week with no records but an open Audit, once the Auditor is switched on", () => {
+  it("isn't skipped in a week with no records but an open Audit", () => {
     const facts = [factsOf({ repo: "owner/quiet" }), factsOf({ openAudits: [anOpenAudit()] })];
-    expect(weeklySummary(input({ facts }), { auditor: true }).kind).toBe("summary");
-    expect(weeklySummary(input({ facts }))).toEqual({ kind: "skip" });
+    expect(weeklySummary(input({ facts })).kind).toBe("summary");
   });
 
   it("covers Monday to Monday in the Operator's time zone, with last week beside it", () => {
@@ -276,15 +275,15 @@ describe("the Weekly summary", () => {
       ]);
     });
 
-    describe("once the Auditor is switched on", () => {
-      const switchedOn = (facts: Parameters<typeof factsOf>[0]) => {
-        const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }), { auditor: true });
+    describe("with an open Audit", () => {
+      const waitingIn = (facts: Parameters<typeof factsOf>[0]) => {
+        const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }));
         if (result.kind !== "summary") throw new Error("expected a summary");
         return result.summary.repos[0]?.waitingOnYou;
       };
 
       it("lists the Fabrik App's open Audit, filled or still pending, aged from when it was opened", () => {
-        const waiting = switchedOn({
+        const waiting = waitingIn({
           openIssues: [anOpenIssue({ number: 13, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-06T20:00:00Z")] })],
           openAudits: [anOpenAudit({ number: 90, title: "Audit: week of 2026-11-02", createdAt: "2026-11-02T20:00:00Z" })],
         });
@@ -302,7 +301,7 @@ describe("the Weekly summary", () => {
       });
 
       it("never lists a fabrik:audit issue someone other than the Fabrik App opened", () => {
-        const waiting = switchedOn({
+        const waiting = waitingIn({
           openAudits: [anOpenAudit({ author: "operator" }), anOpenAudit({ number: 91, author: "other-app[bot]" })],
         });
         expect(waiting).toEqual([]);
@@ -848,9 +847,9 @@ describe("the Weekly summary", () => {
       });
     });
 
-    describe("rendered, once the Auditor is switched on", () => {
+    describe("rendered", () => {
       const bodyOf = (facts: Partial<GitHubFacts>) => {
-        const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }), { auditor: true });
+        const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }));
         if (result.kind !== "summary") throw new Error("expected a summary");
         return result.body;
       };
@@ -908,7 +907,6 @@ describe("the Weekly summary", () => {
               factsOf({ repo: "owner/other" }),
             ],
           }),
-          { auditor: true },
         );
         if (result.kind !== "summary") throw new Error("expected a summary");
         expect(result.body).toContain(
@@ -942,33 +940,20 @@ describe("the Weekly summary", () => {
       });
     });
 
-    it("shows none of it in the rendered summary until the Auditor is switched on", () => {
-      const pullRequests = [merged(50, 3), merged(51, 20)];
-      const withEscapes = weeklySummary(
-        input({
-          records: [aRunRecord()],
-          facts: [factsOf({ pullRequests, escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #51 -->")] })],
-        }),
-      );
-      const without = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf({ pullRequests })] }));
-      expect(withEscapes).toMatchObject({ kind: "summary", summary: { escapeRate: { thisWeek: { escaped: 2, merged: 2 } } } });
-      expect(withEscapes.kind === "summary" && withEscapes.body).toBe(without.kind === "summary" && without.body);
-      expect(withEscapes).toMatchObject({ body: expect.not.stringMatching(/escape|Strength/i) });
-    });
-
-    it("shows no open Audit and no escapes list in the rendered summary until the Auditor is switched on, though it holds the escapes", () => {
+    it("shows the open Audit beside the rate and the escapes list in the rendered summary", () => {
       const records = [aRunRecord({ role: "review", verdict: "pass", endedAt: "2026-11-02T18:00:00Z" })];
       const pullRequests = [aMergedPullRequest(daysBeforeTheWeekEnds(5), { commits: [aCommit(daysBeforeTheWeekEnds(6))] })];
-      const withAuditor = weeklySummary(
+      const result = weeklySummary(
         input({
           records,
           facts: [factsOf({ pullRequests, openAudits: [anOpenAudit()], escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->")] })],
         }),
       );
-      const without = weeklySummary(input({ records, facts: [factsOf({ pullRequests })] }));
-      expect(withAuditor).toMatchObject({ kind: "summary", summary: { escapesThisWeek: [{ number: 80, pullRequests: [{ number: 50 }] }] } });
-      expect(withAuditor.kind === "summary" && withAuditor.body).toBe(without.kind === "summary" && without.body);
-      expect(withAuditor).toMatchObject({ body: expect.not.stringMatching(/Audit|escape/i) });
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      expect(result.body).toContain("| Architectural escape rate (90 days) | 1 of 1 (100%) |");
+      expect(result.body).toContain("Architectural escapes by Strength (90 days): 1 Strong, 0 Worth exploring, 0 Speculative.");
+      expect(result.body).toContain("- [#90](https://github.com/owner/product/issues/90) Audit: week of 2026-10-26: Audit open for ");
+      expect(result.body).toContain("### Architectural escapes this week\n\n- [#80](https://github.com/owner/product/issues/80)\n");
     });
   });
 
@@ -1306,7 +1291,14 @@ describe("the Weekly summary", () => {
     it("has no section for a feature that hasn't shipped, not even an empty one", () => {
       const { body } = rendered();
       expect(body.match(/^#+ .*$/gm)).toEqual(["## Metrics", "## owner/product", "### Waiting on you"]);
-      expect(body).not.toMatch(/Held|Retro|Audit|Map|Monitor|escape|score/i);
+      expect(body).not.toMatch(/Held|Retro|Map|Monitor|score/i);
+    });
+
+    it("shows the architectural escape rate and its Strengths in a week with no escapes, and no escapes list", () => {
+      const { body } = rendered();
+      expect(body).toContain("| Architectural escape rate (90 days) | 0 of 2 (0%) | 0 of 1 (0%) | 0 pts |");
+      expect(body).toContain("Architectural escapes by Strength (90 days): 0 Strong, 0 Worth exploring, 0 Speculative.");
+      expect(body).not.toMatch(/Audit|escapes this week/);
     });
   });
 
@@ -1356,10 +1348,10 @@ describe("the Weekly summary", () => {
       expect(body).toContain(["## owner/other", "", "### Waiting on you", "", "Nothing waiting on you.", ""].join("\n"));
     });
 
-    it("lists an open Audit with how long it has been open, once the Auditor is switched on", () => {
+    it("lists an open Audit with how long it has been open", () => {
       const facts = factsOf({ openIssues: [readyForHuman(13, 30)], openAudits: [anOpenAudit({ title: "Audit: week of 2026-11-02", createdAt: hoursAgo(50) })] });
-      const switchedOn = weeklySummary(input({ records: [aRunRecord()], facts: [facts] }), { auditor: true });
-      expect(switchedOn).toMatchObject({
+      const summary = weeklySummary(input({ records: [aRunRecord()], facts: [facts] }));
+      expect(summary).toMatchObject({
         body: expect.stringContaining(
           [
             "### Waiting on you",
@@ -1370,7 +1362,6 @@ describe("the Weekly summary", () => {
           ].join("\n"),
         ),
       });
-      expect(bodyOf(facts)).toBe(bodyOf(factsOf({ openIssues: [readyForHuman(13, 30)] })));
     });
 
     it("collapses the 11th item onward in a repo into details", () => {

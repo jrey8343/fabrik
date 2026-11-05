@@ -13,8 +13,8 @@ import { scheduledTickWithAuditGate } from "./auditGate.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AuditIssueSnapshot, KitConfig, KitIssueSnapshot, Plan } from "./types.ts";
 
-// The audit gate is dormant: the scheduled-tick rule doesn't call it until the
-// switch-on Ticket (#214), so these tests run the tick as it will be then.
+// The audit gate's own cases run the tick's plan without the Design queue
+// check the scheduled-tick rule adds after it, so each says why it opens nothing.
 
 /** The default branch's head on these ticks. */
 const HEAD = "c0ffee5".padEnd(40, "0");
@@ -259,8 +259,8 @@ describe("The pending Audit's issue", () => {
   });
 });
 
-describe("Until the Auditor is switched on (#214)", () => {
-  it("the scheduled-tick rule opens no Audit, even with one due, and does only what it did before", () => {
+describe("The scheduled-tick rule", () => {
+  it("opens the pending Audit when one is due, alongside closing the weekly-limit issue, then asks for a Design queue check", () => {
     const snapshot = repoSnapshot({
       kitIssues: [weeklyLimitIssue("2026-11-08T03:00:00.000Z")],
       audit: { head: HEAD, issues: [] },
@@ -273,8 +273,18 @@ describe("Until the Auditor is switched on (#214)", () => {
       actions: [
         expect.objectContaining({ kind: "comment", issue: 41 }),
         { kind: "close", issue: 41, reason: "completed" },
+        expect.objectContaining({ kind: "open-issue", title: "Audit: week of 2026-11-02", labels: ["fabrik:audit"], assignees: [] }),
         { kind: "check-design-queue" },
       ],
     });
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("opens no Audit with audit.day null, and does only what it did before the Auditor", () => {
+    const snapshot = repoSnapshot({ audit: { head: HEAD, issues: [] } });
+
+    const plan = planFor({ kind: "scheduled-tick", now: SUNDAY }, snapshot, kitConfig({ audit: { day: null } }));
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
   });
 });

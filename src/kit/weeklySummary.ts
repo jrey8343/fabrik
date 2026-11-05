@@ -378,26 +378,12 @@ export type WeeklySummaryResult =
       readonly body: string;
     };
 
-/**
- * The Kit-internal switch for the Weekly summary's Auditor lines (#150).
- * While it's off, the summary still computes the architectural escape rate
- * and this week's escapes, but its body shows none of them, and an open Audit
- * waits on nobody, so a release cut before switch-on reads as if the Auditor
- * didn't exist.
- */
-export const AUDITOR_SWITCHED_ON = false;
-
-export interface WeeklySummaryOptions {
-  /** Overrides the switch; only tests pass it. */
-  readonly auditor?: boolean;
-}
-
 /** The summary to file for the week that just ended, or skip. */
-export function weeklySummary(input: WeeklySummaryInput, { auditor = AUDITOR_SWITCHED_ON }: WeeklySummaryOptions = {}): WeeklySummaryResult {
+export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
-  const repos = input.facts.map((facts) => repoSectionOf(facts, input, auditor));
+  const repos = input.facts.map((facts) => repoSectionOf(facts, input));
   // Held work counts too, so a queue never sits unseen through a week nothing ran.
   const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null);
   if (thisWeek.records === 0 && quiet) return { kind: "skip" };
@@ -428,7 +414,7 @@ export function weeklySummary(input: WeeklySummaryInput, { auditor = AUDITOR_SWI
     },
     repos,
   };
-  return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input, auditor) };
+  return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
 }
 
 // The metrics: one week's figures, computed the same way for any week.
@@ -762,14 +748,13 @@ function dispatchOf(ticket: TicketFacts): string | null {
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
-function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: WeeklySummaryInput, auditor: boolean): RepoSection {
+function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: WeeklySummaryInput): RepoSection {
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
-  // Until switch-on an open Audit waits on nobody, so it neither shows nor keeps a quiet week from being skipped.
-  const audits = auditor ? openAuditsOf(facts, appLogin, items) : [];
   return {
     repo: facts.repo,
-    waitingOnYou: oldestFirst([...waitingOnYou(facts, items), ...audits]),
+    // An open Audit waits on the Operator, so it also keeps a quiet week from being skipped.
+    waitingOnYou: oldestFirst([...waitingOnYou(facts, items), ...openAuditsOf(facts, appLogin, items)]),
     stuck: stuck(facts, records, items, now),
     held: heldIn(facts, now),
   };
@@ -983,13 +968,11 @@ function localTime(time: number, timeZone: string): string {
 }
 
 // Rendering. Only shipped features get a section: the Retro, Map and Monitor
-// issues and scores add theirs when their Specs ship. The architectural
-// escape rate's lines, the open Audit in Waiting on you and each repo's
-// escapes this week are written but wait for AUDITOR_SWITCHED_ON. Held shows
-// only what the Design-session cap holds, until the Monitor and Ideas and
-// Maps caps add their lines.
+// issues and scores add theirs when their Specs ship. Held shows only what
+// the Design-session cap holds, until the Monitor and Ideas and Maps caps add
+// their lines.
 
-function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput, auditor: boolean): string {
+function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
   const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
   const row = (name: string, { thisWeek, lastWeek }: WeekOverWeek<number | null>, format: (value: number) => string) =>
     `| ${name} | ${orNone(thisWeek, format)} | ${orNone(lastWeek, format)} | ${
@@ -1010,7 +993,6 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     return value === null ? "no merged agent PRs" : `${rate.escaped} of ${rate.merged} (${percent(value)})`;
   };
   const escapeChange = pointsChange(escapeShare(escapeRate.thisWeek), escapeShare(escapeRate.lastWeek));
-  const escapeRateRow = `| Architectural escape rate (90 days) | ${escapeCell(escapeRate.thisWeek)} | ${escapeCell(escapeRate.lastWeek)} | ${escapeChange} |`;
   const costRow = (name: string, figure: WeekOverWeek<CostFigure>) => {
     const thisWeek = figure.thisWeek.usd;
     const lastWeek = figure.lastWeek.usd;
@@ -1040,10 +1022,11 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     row("Cycle time (median)", cycleTimeMs, hours),
     row("Operator wait (median)", operatorWaitMs, hours),
     `| Revert rate (30 days) | ${revertCell(revertRate.thisWeek)} | ${revertCell(revertRate.lastWeek)} | ${revertChange} |`,
-    ...(auditor ? [escapeRateRow] : []),
+    `| Architectural escape rate (90 days) | ${escapeCell(escapeRate.thisWeek)} | ${escapeCell(escapeRate.lastWeek)} | ${escapeChange} |`,
+    "",
+    escapesByStrengthLine(summary.escapesByStrength.thisWeek),
     "",
   ];
-  if (auditor) lines.push(escapesByStrengthLine(summary.escapesByStrength.thisWeek), "");
   if (unknownCost.thisWeek > 0) {
     lines.push(
 `${runsWithUnknownCost(unknownCost.thisWeek)} left out of the cost.`,
@@ -1057,8 +1040,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
   lines.push(subscriptionUsage(weeklyLimit, timeZone), "");
   lines.push(...heldLines(summary.repos));
   for (const repo of summary.repos) {
-    const escapes = auditor ? summary.escapesThisWeek.filter((escape) => escape.repo === repo.repo) : [];
-    lines.push(...repoLines(repo, escapes));
+    lines.push(...repoLines(repo, summary.escapesThisWeek.filter((escape) => escape.repo === repo.repo)));
   }
   // The Operator's one mention, last: the week's only scheduled push.
   lines.push(`@${operator}`);

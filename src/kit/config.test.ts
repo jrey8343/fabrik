@@ -234,11 +234,13 @@ describe("Kit config", () => {
         design: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
         implement: { model: "claude-sonnet-5-5", effort: null, timeout_minutes: 60 },
         review: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
+        audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
         dispatch: { timeout_minutes: 10 },
         step_up: { model: "claude-opus-5-5", effort: null },
       },
       max_in_flight: 2,
       caps: { design_sessions: 2 },
+      audit: { day: "sunday" },
       operator: null,
     };
 
@@ -399,6 +401,13 @@ describe("The Audit's Kit config", () => {
 describe("The Kit config template", () => {
   it("spells out caps.design_sessions at its Kit default", () => {
     expect(JSON.parse(template)).toMatchObject({ caps: { design_sessions: 2 } });
+  });
+
+  it("spells out audit.day and roles.audit at their Kit defaults", () => {
+    expect(JSON.parse(template)).toMatchObject({
+      audit: { day: "sunday" },
+      roles: { audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 } },
+    });
   });
 
   it("resolves to every Kit default", () => {
