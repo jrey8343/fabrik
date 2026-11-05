@@ -16,6 +16,18 @@ _Avoid_: framework, service, template
 The settings a Product repo owns that tell the Kit how to work there, such as how to build and test it in a Sandbox.
 _Avoid_: Fabrik config, settings, manifest
 
+**Skills source**:
+A public repository of skills, pinned at one commit, that agents' skills come from.
+_Avoid_: skills repo, plugin, marketplace
+
+**Base skills**:
+The skills the Kit pins for every Product repo and every role, from one Skills source that moves only with a Kit release.
+_Avoid_: core skills, default skills
+
+**Extra skill**:
+A skill a Product repo pins from its own Skills source and gives to particular roles on top of the Base skills.
+_Avoid_: custom skill, plugin, add-on
+
 **Product repo**:
 A repository holding a real product that has adopted the Kit, where the Loop's work actually lands.
 _Avoid_: target repo, client repo, project
@@ -81,8 +93,12 @@ One child question of a Map, resolved by research, a prototype, a grilling or a 
 _Avoid_: ticket, task
 
 **Operator step**:
-A piece of a Spec only the Operator can do, such as a trust-root edit, a secret or a repo setting, which Tickets can wait on.
-_Avoid_: manual ticket, human task
+A piece of a Spec only the Operator can do, such as a trust-root edit, a secret, a repo setting or facts fetched from another system, which Tickets can wait on or which can wait on them.
+_Avoid_: manual ticket, human task, ready-for-human Ticket, "For the Operator" section
+
+**Operator brief**:
+An issue rewritten by a Design session as Operator work that needs no Ticket, ready for a Pairing session.
+_Avoid_: manual brief, human brief
 
 **Pairing session**:
 The Operator working through an issue only they can do with an agent beside them, step by step, ending with what was done recorded on the issue.
