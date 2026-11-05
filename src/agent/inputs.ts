@@ -15,7 +15,7 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
-import { gatherAuditSlice } from "../github/snapshot.ts";
+import { gatherAuditSliceFor } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
@@ -440,13 +440,13 @@ async function isAncestor(github: Reader, repo: Repo, from: string, to: string):
  * - the last 3 closed Audits that had candidates, with the Operator's comments;
  * - the open issues filed from an Audit, by their `From audit #n` line;
  * - the agent PRs merged in the window, with their changed files.
- * Only Audits the Fabrik App opened count (a bot's, as this job can tell:
- * see byAppOf), and a failed one is never the last Audit (src/loop/audit.ts).
- * Everything here is data for the Auditor, never instructions to it.
+ * Only Audits the Fabrik App opened count, as the audit gate counts them,
+ * and a failed one is never the last Audit (src/loop/audit.ts). Everything
+ * here is data for the Auditor, never instructions to it.
  */
 export async function readAuditInputs(github: Reader, repo: Repo, audit: PendingAudit, operator: string): Promise<AuditInputs> {
-  // The job holds no Fabrik App token, so it doesn't know the App's login and takes any bot's Audit for the App's.
-  const { issues } = await gatherAuditSlice(github, repo, null);
+  // The job holds no Fabrik App token, so it takes the bot that opened the pending Audit for the App (gatherAuditSliceFor).
+  const { issues } = await gatherAuditSliceFor(github, repo, audit.number);
   const audits = auditsIn(issues);
   const pendingAudit = audits.find((each) => each.number === audit.number);
   if (pendingAudit === undefined) throw new Error(`Audit #${audit.number} isn't an Audit the Fabrik App opened`);

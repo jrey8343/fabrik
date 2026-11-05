@@ -306,12 +306,33 @@ interface AuditQueryResult {
 /**
  * The default branch's head, and the newest `fabrik:audit` issues with
  * whether the Fabrik App, whose bot login is `appLogin`, opened each (see
- * byAppOf): what the audit gate weighs on a scheduled tick, and what an
- * Auditor run's inputs read the Audits from (src/agent/inputs.ts), so the two
- * read the same Audits.
+ * byAppOf): what the audit gate weighs on a scheduled tick.
  */
-export async function gatherAuditSlice(github: Pick<GitHub, "graphql">, repo: Repo, appLogin: string | null): Promise<AuditSnapshot> {
-  const data = await github.graphql<AuditQueryResult>(AUDIT_QUERY, { owner: repo.owner, name: repo.name, label: AUDIT_LABEL });
+async function gatherAuditSlice(github: Pick<GitHub, "graphql">, repo: Repo, appLogin: string | null): Promise<AuditSnapshot> {
+  return auditSliceOf(await queryAuditIssues(github, repo), appLogin);
+}
+
+/**
+ * The audit slice an Auditor run's inputs read the Audits from
+ * (src/agent/inputs.ts), for its pending Audit, numbered `pending`. The run
+ * holds no Fabrik App token, so it doesn't know the App's login: it takes the
+ * bot that opened the pending Audit for the App. The push job lands the run's
+ * result only when that bot is the App (src/loop/auditLanding.ts), so in
+ * every run whose result counts, the Auditor reads the Audits the audit gate
+ * weighs, and never another bot's. A pending Audit a person opened is no
+ * Audit here.
+ */
+export async function gatherAuditSliceFor(github: Pick<GitHub, "graphql">, repo: Repo, pending: number): Promise<AuditSnapshot> {
+  const data = await queryAuditIssues(github, repo);
+  const opener = data.repository.issues.nodes.find((issue) => issue.number === pending)?.author ?? null;
+  return auditSliceOf(data, opener?.__typename === "Bot" ? loginOf(opener) : null);
+}
+
+function queryAuditIssues(github: Pick<GitHub, "graphql">, repo: Repo): Promise<AuditQueryResult> {
+  return github.graphql<AuditQueryResult>(AUDIT_QUERY, { owner: repo.owner, name: repo.name, label: AUDIT_LABEL });
+}
+
+function auditSliceOf(data: AuditQueryResult, appLogin: string | null): AuditSnapshot {
   return {
     head: data.repository.defaultBranchRef?.target.oid ?? null,
     issues: data.repository.issues.nodes.map((issue) => ({
@@ -536,9 +557,11 @@ export function loginOf(actor: { readonly login: string; readonly __typename: st
 /**
  * Whether this author is the Fabrik App, whose bot login is `appLogin`: its
  * slug with `[bot]`. A run that doesn't know the login (null), as the Kit
- * job, which only routes, and an Auditor run's inputs don't, takes any bot
- * for the App. Neither writes anything, and every run that writes knows the
- * login, so there only the App's own issues count as its.
+ * job, which only routes, doesn't, takes any bot for the App. It writes
+ * nothing, and every run that writes knows the login, so there only the
+ * App's own issues count as its. An Auditor run's inputs, which don't know
+ * it either, take the bot that opened their pending Audit for the App
+ * (gatherAuditSliceFor).
  */
 export function byAppOf(author: { readonly login: string; readonly __typename: string } | null, appLogin: string | null): boolean {
   if (author === null) return false;

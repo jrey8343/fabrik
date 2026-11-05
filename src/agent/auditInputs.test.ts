@@ -25,6 +25,9 @@ const filledBody = (commit: string) =>
     auditMarker(commit),
   ].join("\n");
 
+/** The Fabrik App's bot, as GraphQL names it: without its [bot] suffix. */
+const APP = { login: "fabrik-app", __typename: "Bot" };
+
 /** A `fabrik:audit` issue as GraphQL gives it: the Fabrik App's, filled and closed, unless said otherwise. */
 function anAudit(
   number: number,
@@ -35,6 +38,7 @@ function anAudit(
     stateReason = state === "CLOSED" ? "COMPLETED" : null,
     body,
     byApp = true,
+    author = byApp ? APP : { login: "someone", __typename: "User" },
     title = `Audit: week of ${createdAt.slice(0, 10)}`,
   }: {
     commit?: string;
@@ -43,10 +47,11 @@ function anAudit(
     stateReason?: string | null;
     body?: string;
     byApp?: boolean;
+    author?: { login: string; __typename: string };
     title?: string;
   } = {},
 ) {
-  return { number, title, state, stateReason, createdAt, body: body ?? filledBody(commit), author: { __typename: byApp ? "Bot" : "User" } };
+  return { number, title, state, stateReason, createdAt, body: body ?? filledBody(commit), author };
 }
 
 /** The pending Audit the run is for: #45, marked at sha("b"). */
@@ -133,6 +138,33 @@ describe("The Audit's inputs", () => {
         files: ["src/booking/slots.ts", "src/booking/slots.test.ts"],
       },
     ]);
+  });
+
+  // The job holds no App token, so it can't tell the App's bot from another but by the pending Audit's own.
+  it("read only the Audits the pending Audit's own bot opened, as the audit gate reads only the App's: another bot's is never the last Audit", async () => {
+    const otherBot = { login: "other-app", __typename: "Bot" };
+    const github = gitHub({
+      audits: [
+        pending,
+        anAudit(44, { commit: sha("c"), createdAt: daysBefore(2), author: otherBot }),
+        anAudit(43, { commit: sha("c"), createdAt: daysBefore(3), state: "OPEN", body: `Reading.\n\n${auditMarker(sha("c"))}\n${AUDIT_PENDING_MARKER}`, author: otherBot }),
+        anAudit(40, { commit: sha("a"), createdAt: daysBefore(7) }),
+      ],
+      rest: { ...compare(sha("a"), sha("b"), "ahead"), ...compare(sha("c"), sha("b"), "ahead") },
+    });
+
+    const inputs = await read(github);
+
+    expect(inputs.window).toEqual({ kind: "since-audit", audit: 40, commit: sha("a") });
+    expect(inputs.closedAudits.map((audit) => audit.number)).toEqual([40]);
+  });
+
+  it("read nothing for a pending Audit a person opened, which is no Audit", async () => {
+    const byPerson = { ...pending, author: { login: "fabrik-app", __typename: "User" } };
+
+    await expect(read(gitHub({ audits: [byPerson, anAudit(40, { commit: sha("a") })] }))).rejects.toThrow(
+      "Audit #45 isn't an Audit the Fabrik App opened",
+    );
   });
 
   const thirtyDays = { kind: "last-days", days: 30 };
