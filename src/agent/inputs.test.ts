@@ -99,6 +99,9 @@ describe("An agent job's inputs", () => {
       head: { ref: "fabrik/ticket-7", sha: sha("c") },
     });
     const branch = (number: number) => ({
+      [`/repos/acme/shop/issues/${number}/comments`]: [],
+      [`/repos/acme/shop/pulls/${number}/comments`]: [],
+      [`/repos/acme/shop/pulls/${number}/reviews`]: [],
       [`/repos/acme/shop/pulls/${number}`]: closedPullRequest(number),
       [`/repos/acme/shop/pulls/${number}/commits`]: [{ sha: sha("c"), commit: { message: "Add the waitlist table" } }],
       [`/repos/acme/shop/pulls/${number}/files`]: [
@@ -156,6 +159,7 @@ describe("An agent job's inputs", () => {
           { verdict: "design-flaw", source: "reviewer", headSha: sha("c"), comment: verdict("design-flaw", sha("c"), "The Ticket contradicts its Spec.") },
         ],
         operatorReviews: [],
+        operatorComments: [],
         commits: [{ sha: sha("c"), message: "Add the waitlist table" }],
         files: [{ filename: "src/waitlist.ts", status: "added", additions: 2, deletions: 0 }],
         diff: "diff --git a/src/waitlist.ts b/src/waitlist.ts\n@@ -0,0 +1,2 @@\n+export const waitlist = [];\n+",
@@ -189,7 +193,44 @@ describe("An agent job's inputs", () => {
           },
         ],
       });
-      expect(github.paths.some((path) => path.includes("/issues/50/comments"))).toBe(false);
+    });
+
+    const operatorSaid = {
+      id: 11,
+      user: { login: "operator", type: "User" },
+      body: "The waitlist is per clinic, not per slot.",
+      created_at: "2026-11-01T12:00:00Z",
+      html_url: "https://github.com/acme/shop/pull/50#issuecomment-11",
+    };
+    const driveBy = { ...operatorSaid, id: 12, user: { login: "someone-else", type: "User" }, body: "Drive-by." };
+    const fedComment = {
+      id: "conversation-11",
+      url: "https://github.com/acme/shop/pull/50#issuecomment-11",
+      where: { kind: "conversation" },
+      createdAt: "2026-11-01T12:00:00Z",
+      body: "The waitlist is per clinic, not per slot.",
+    };
+
+    it("gets the Operator's comments on the closed PR when a Verdict sent it back, and nobody else's", async () => {
+      const github = gitHub(ticketPage([backFromVerdict(50)]), {
+        ...branch(50),
+        "/repos/acme/shop/issues/50/comments": [bot(verdict("design-flaw", sha("c"), "Contradicts the Spec.")), operatorSaid, driveBy],
+      });
+
+      const sentBack = sentBackOf((await readIssue(github, repo, 7, "operator")).issue);
+
+      expect(sentBack).toMatchObject({ sentBackBy: "verdict", operatorComments: [fedComment] });
+    });
+
+    it("gets the Operator's comments on the closed PR when the Operator sent it back, and nobody else's", async () => {
+      const github = gitHub(ticketPage([{ body: "<!-- fabrik:back-to-design 50 operator -->\n**Back to design.**", bot: true }]), {
+        ...branch(50),
+        "/repos/acme/shop/issues/50/comments": [operatorSaid, driveBy],
+      });
+
+      const sentBack = sentBackOf((await readIssue(github, repo, 7, "operator")).issue);
+
+      expect(sentBack).toMatchObject({ sentBackBy: "operator", verdicts: [], operatorComments: [fedComment] });
     });
 
     it("gets only the latest closed PR when the Ticket came back more than once", async () => {
@@ -249,23 +290,56 @@ describe("An agent job's inputs", () => {
     },
   };
 
-  it("gives the Reviewer the PR without its comments, so earlier Verdicts don't steer it", async () => {
-    expect(await readPullRequest(graphqlReturning(pullRequest), repo, 50, false)).toEqual({
+  /** The PR over GraphQL, and its comment lists over REST: a Verdict and fix comment from the Kit, and one from the Operator. */
+  const withThread = (): Reader => ({
+    graphql: async <T>() => pullRequest as T,
+    rest: async (_method: string, path: string) => {
+      const [route, query] = path.split("?");
+      if (!/(^|&)page=1(&|$)/.test(query ?? "")) return [];
+      switch (route) {
+        case "/repos/acme/shop/issues/50/comments":
+          return [
+            { id: 1, user: { login: "fabrik-app[bot]", type: "Bot" }, body: "<!-- fabrik:verdict … -->", created_at: "2026-11-01T00:00:00Z", html_url: "https://github.com/acme/shop/pull/50#issuecomment-1" },
+            { id: 2, user: { login: "fabrik-app[bot]", type: "Bot" }, body: "<!-- fabrik:fix -->\nFixed.", created_at: "2026-11-02T00:00:00Z", html_url: "https://github.com/acme/shop/pull/50#issuecomment-2" },
+            { id: 3, user: { login: "operator", type: "User" }, body: "Keep the copy short.", created_at: "2026-11-03T00:00:00Z", html_url: "https://github.com/acme/shop/pull/50#issuecomment-3" },
+          ];
+        case "/repos/acme/shop/pulls/50/comments":
+        case "/repos/acme/shop/pulls/50/reviews":
+          return [];
+        default:
+          throw new Error(`unexpected REST call ${path}`);
+      }
+    },
+  });
+  const operatorComments = [
+    {
+      id: "conversation-3",
+      url: "https://github.com/acme/shop/pull/50#issuecomment-3",
+      where: { kind: "conversation" },
+      createdAt: "2026-11-03T00:00:00Z",
+      body: "Keep the copy short.",
+    },
+  ];
+
+  it("gives the Reviewer the PR and the Operator's comments, never the Verdicts or fix comments, so earlier runs don't steer it", async () => {
+    expect(await readPullRequest(withThread(), repo, 50, false, "operator")).toEqual({
       number: 50,
       title: "Add a waitlist",
       body: "Closes #7",
       baseRefName: "main",
       headRefName: "fabrik/ticket-7",
       headRefOid: "a".repeat(40),
+      operatorComments,
     });
   });
 
-  it("gives a retry the PR's body, to refresh, and its comments with their authors' kind, so only the Fabrik App's Verdicts count", async () => {
-    expect(await readPullRequest(graphqlReturning(pullRequest), repo, 50, true)).toEqual({
+  it("gives a retry the PR's body, to refresh, its comments with their authors' kind, so only the Fabrik App's Verdicts count, and the Operator's comments apart", async () => {
+    expect(await readPullRequest(withThread(), repo, 50, true, "operator")).toEqual({
       number: 50,
       title: "Add a waitlist",
       body: "Closes #7",
       comments: [{ body: "<!-- fabrik:verdict … -->", author: { __typename: "Bot" } }],
+      operatorComments,
     });
   });
 });
