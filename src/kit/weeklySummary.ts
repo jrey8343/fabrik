@@ -404,10 +404,20 @@ function localTime(time: number, timeZone: string): string {
 // their Specs ship.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
-  const { cost, unknownCost, weeklyLimit, counts } = summary;
-  const row = (name: string, { thisWeek, lastWeek }: WeekOverWeek<number>, format: (value: number) => string) =>
-    `| ${name} | ${format(thisWeek)} | ${format(lastWeek)} | ${signed(thisWeek - lastWeek, format)} |`;
+  const { cost, unknownCost, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, counts } = summary;
+  const row = (name: string, { thisWeek, lastWeek }: WeekOverWeek<number | null>, format: (value: number) => string) =>
+    `| ${name} | ${orNone(thisWeek, format)} | ${orNone(lastWeek, format)} | ${
+      thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, format)
+    } |`;
   const count = (value: number) => String(value);
+  const share = ({ reverted, merged }: RevertRate) => (merged === 0 ? null : reverted / merged);
+  const percent = (value: number) => `${Math.round(value * 100)}%`;
+  const reverts = { thisWeek: share(revertRate.thisWeek), lastWeek: share(revertRate.lastWeek) };
+  const revertCell = (rate: RevertRate) => orNone(share(rate), (value) => `${percent(value)} (${rate.reverted} of ${rate.merged})`);
+  const revertChange =
+    reverts.thisWeek === null || reverts.lastWeek === null
+      ? NONE
+      : signed(Math.round(reverts.thisWeek * 100) - Math.round(reverts.lastWeek * 100), (points) => `${points} pts`);
   const lines = [
     "## Metrics",
     "",
@@ -418,6 +428,10 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     row("Tickets dispatched", counts.ticketsDispatched, count),
     row("Retries", counts.retries, count),
     row("Step-ups", counts.stepUps, count),
+    row("Human touches per merged PR", humanTouches, (value) => value.toFixed(1)),
+    row("Cycle time (median)", cycleTimeMs, hours),
+    row("Operator wait (median)", operatorWaitMs, hours),
+    `| Revert rate (30 days) | ${revertCell(revertRate.thisWeek)} | ${revertCell(revertRate.lastWeek)} | ${revertChange} |`,
     "",
   ];
   if (unknownCost.thisWeek > 0) {
@@ -443,6 +457,17 @@ function subscriptionUsage({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading
   const usage =
     now === null ? "Subscription usage: no weekly-limit reading this week." : `Subscription usage: ${now} of the weekly limit${resets}.`;
   return before === null ? usage : `${usage} Last week: ${before}.`;
+}
+
+/** What a cell shows when a week has no value for its metric. */
+const NONE = "–";
+
+function orNone(value: number | null, format: (value: number) => string): string {
+  return value === null ? NONE : format(value);
+}
+
+function hours(ms: number): string {
+  return `${(ms / (60 * 60 * 1000)).toFixed(1)}h`;
 }
 
 function dollars(value: number): string {

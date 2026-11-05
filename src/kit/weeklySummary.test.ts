@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { aCommit, aLabelAdded, aMergedPullRequest, aReview, aRunRecord, aTicketTimeline, factsOf } from "../__fixtures__/weeklySummary.ts";
-import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
+import {
+  aCommit,
+  aLabelAdded,
+  aMergedPullRequest,
+  aReview,
+  aRunRecord,
+  aTicketTimeline,
+  aVerdictComment,
+  factsOf,
+} from "../__fixtures__/weeklySummary.ts";
+import { type AgentPullRequestFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
 // week it covers runs from Monday 2 November 00:00 to Monday 9 November 00:00
@@ -288,13 +297,7 @@ describe("the Weekly summary", () => {
     });
 
     it("runs Operator wait from the last passing Verdict, read through its marker, to the merge", () => {
-      const verdict = (verdict: string, at: string, overrides: Partial<CommentFacts> = {}): CommentFacts => ({
-        author: "fabrik-app[bot]",
-        byApp: true,
-        body: `<!-- fabrik:verdict {"verdict":"${verdict}","source":"reviewer","requestChanges":false,"headSha":"abc"} -->\nThe Reviewer's Verdict.`,
-        at,
-        ...overrides,
-      });
+      const verdict = aVerdictComment;
       const summary = summaryOf(
         factsOf({
           pullRequests: [
@@ -381,7 +384,24 @@ describe("the Weekly summary", () => {
         }),
         aRunRecord({ endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2.25 }),
       ],
-      facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-04T00:00:00Z")] })],
+      facts: [
+        factsOf({
+          pullRequests: [
+            // Dispatched 24 hours before its merge, one Request changes, passed 6 hours before it.
+            aMergedPullRequest("2026-11-04T00:00:00Z", {
+              reviews: [aReview("2026-11-03T12:00:00Z")],
+              comments: [aVerdictComment("pass", "2026-11-03T18:00:00Z")],
+            }),
+            // Last week's: 24 hours, no touch, no passing Verdict, reverted this week.
+            aMergedPullRequest("2026-10-29T00:00:00Z", { number: 49, ticket: 6, mergeSha: "9".repeat(40) }),
+          ],
+          tickets: [
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z")]),
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-10-28T00:00:00Z")], { number: 6 }),
+          ],
+          defaultBranchCommits: [{ message: `This reverts commit ${"9".repeat(40)}.`, at: "2026-11-04T00:00:00Z" }],
+        }),
+      ],
     });
     const rendered = () => {
       const result = weeklySummary(week);
@@ -396,8 +416,12 @@ describe("the Weekly summary", () => {
     it("shows each figure this week and last week, with the change", () => {
       const { body } = rendered();
       expect(body).toContain("| API-equivalent cost | $1.50 | $2.25 | -$0.75 |");
-      expect(body).toContain("| Merged agent PRs | 1 | 0 | +1 |");
-      expect(body).toContain("| Tickets dispatched | 0 | 0 | 0 |");
+      expect(body).toContain("| Merged agent PRs | 1 | 1 | 0 |");
+      expect(body).toContain("| Tickets dispatched | 1 | 1 | 0 |");
+      expect(body).toContain("| Human touches per merged PR | 1.0 | 0.0 | +1.0 |");
+      expect(body).toContain("| Cycle time (median) | 24.0h | 24.0h | 0.0h |");
+      expect(body).toContain("| Operator wait (median) | 6.0h | – | – |");
+      expect(body).toContain("| Revert rate (30 days) | 50% (1 of 2) | 0% (0 of 1) | +50 pts |");
       expect(body).toContain("| Retries | 1 | 0 | +1 |");
       expect(body).toContain("| Step-ups | 1 | 0 | +1 |");
     });

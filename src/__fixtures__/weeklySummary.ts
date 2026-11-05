@@ -1,7 +1,17 @@
 // Small builders for the Weekly summary's tests, matching anIssue, aPullRequest
 // and snapshotOf (./snapshots.ts): say only what a test cares about.
 import type { RunRecord } from "../kit/runRecord.ts";
-import type { AgentPullRequestFacts, CommitFacts, GitHubFacts, LabelEvent, ReviewFacts, TicketFacts } from "../kit/weeklySummary.ts";
+import { verdictMarker } from "../loop/markers.ts";
+import type { Verdict } from "../loop/types.ts";
+import type {
+  AgentPullRequestFacts,
+  CommentFacts,
+  CommitFacts,
+  GitHubFacts,
+  LabelEvent,
+  ReviewFacts,
+  TicketFacts,
+} from "../kit/weeklySummary.ts";
 
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -59,6 +69,12 @@ export function aMergedPullRequest(mergedAt: string, overrides: Partial<AgentPul
 /** The Operator requesting changes at `at`. */
 export function aReview(at: string, overrides: Partial<ReviewFacts> = {}): ReviewFacts {
   return { author: "operator", state: "changes-requested", at, ...overrides };
+}
+
+/** The Fabrik App's Verdict comment at `at`, opening with the Verdict marker. */
+export function aVerdictComment(verdict: Verdict, at: string, overrides: Partial<CommentFacts> = {}): CommentFacts {
+  const marker = verdictMarker({ verdict, source: "reviewer", requestChanges: false, headSha: "a".repeat(40) });
+  return { author: "fabrik-app[bot]", byApp: true, body: `${marker}\nThe Reviewer's Verdict.`, at, ...overrides };
 }
 
 /** A commit someone other than the Fabrik App made at `at`. */
