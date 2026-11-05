@@ -177,3 +177,13 @@ _Avoid_: approval, sign-off
 **Operator comment**:
 A comment the Operator leaves on an agent pull request, which every later agent run reading that pull request weighs as the Operator's own words, never as a request for work: a change the Operator wants built still goes through Request changes.
 _Avoid_: PR feedback, reply
+
+## Measuring the factory
+
+**Run record**:
+The durable account of one AFK agent run in one role: its model, cost, outcome and transcript, written once when the run ends and never changed.
+_Avoid_: run log, telemetry, step summary
+
+**Human touch**:
+Each time the Operator steps into a Ticket's path between Dispatch and merge: a push to its branch, a Request changes, a Retry or Step-up they asked for, or a Pairing session or Operator step on it. The merge, Design-session answers and Operator comments are not touches.
+_Avoid_: intervention, manual fix
