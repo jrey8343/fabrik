@@ -150,7 +150,7 @@ A passing PR leaves draft and requests the Operator's review. Only the Operator 
 
 ## How loud each kind is
 
-The Kit pushes to the Operator's phone only when it is their move, through GitHub mobile's @-mentions, assignments and review requests ([#22](https://github.com/jrey8343/fabrik/issues/22)). Each event pushes once, by one of them.
+The Kit pushes to the Operator's phone only when it is their move, and once a week for the Weekly summary, through GitHub mobile's @-mentions, assignments and review requests ([#22](https://github.com/jrey8343/fabrik/issues/22)). Each event pushes once, by one of them.
 
 | Kind | Level | How |
 |---|---|---|
@@ -161,11 +161,13 @@ The Kit pushes to the Operator's phone only when it is their move, through GitHu
 | `ready-for-human` | Push | Assigns the Operator. |
 | Claude token expired or revoked | Push, once per repo | The rotation issue assigns the Operator. |
 | Weekly usage limit reached | Push, once per window per repo | The weekly-limit issue @-mentions the Operator. |
+| Weekly summary | Push, once a week | The Weekly summary issue in `fabrik-runs` @-mentions the Operator once, for every Product repo, and closes last week's. A week with nothing to report files nothing. |
 | Implement draft PR, Execution-flaw retry, back-to-design note | Silent | The PR and the Verdict are the record. |
 | Fast path, Design session finished, Spec closed, `wontfix` | Silent | |
+| Skills-source bump PR | Silent | The PR requests no review; the Operator merges it when they choose. |
 
 - **Held work is silent.** Work a full cap holds (see `caps` in the [Kit config](#kit-config)) waits with no comment, label or notification. It pushes when its slot opens, as a Design session's round 1 does.
-- **There is no push budget.** Every push is the Operator's move, so the Kit never holds one back: it caps the sources, never the pushes.
+- **There is no push budget.** Every push but the Weekly summary is the Operator's move, and the Weekly summary is one a week, so the Kit never holds one back: it caps the sources, never the pushes.
 
 ## Kit config
 
