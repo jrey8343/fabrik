@@ -145,6 +145,8 @@ export interface WeeklySummaryInput {
   readonly facts: readonly GitHubFacts[];
   /** The Operator's GitHub login, the owner of the store. */
   readonly operator: string;
+  /** The Fabrik App's bot login, its slug with `[bot]`, as label events name it. */
+  readonly appLogin: string;
   /** The Operator's IANA time zone, such as `Australia/Sydney`. */
   readonly timeZone: string;
   /** The filing time, ISO 8601. */
@@ -467,7 +469,7 @@ function costPerSpecOf(week: Week, input: WeeklySummaryInput): CostFigure {
   const ended = endedBy(week, input.records);
   const perSpec = input.facts.flatMap((facts) =>
     facts.specs
-      .filter((spec) => leftDesignIn(week, spec))
+      .filter((spec) => leftDesignIn(week, spec, input.appLogin))
       .map((spec) =>
         ended.filter(
           (record) =>
@@ -496,20 +498,15 @@ function spendNeverMergedOf(week: Week, input: WeeklySummaryInput): CostFigure {
   );
 }
 
-/** Whether the App gave the Spec its ready label, ending its Design session, in the week. */
-function leftDesignIn(week: Week, spec: SpecFacts): boolean {
+/** Whether the Fabrik App gave the Spec its ready label, ending its Design session, in the week. */
+function leftDesignIn(week: Week, spec: SpecFacts, appLogin: string): boolean {
   return spec.labelEvents.some(
     (event) =>
       (event.label === READY_FOR_AGENT || event.label === READY_FOR_HUMAN) &&
       event.action === "labeled" &&
-      byTheApp(event) &&
+      event.actor === appLogin &&
       within(week, event.at),
   );
-}
-
-/** Whether a GitHub App made the label event: its login is the App's slug with `[bot]`. */
-function byTheApp(event: LabelEvent): boolean {
-  return event.actor.endsWith("[bot]");
 }
 
 /** Each group's summed cost, averaged over the groups, or null for no groups. */

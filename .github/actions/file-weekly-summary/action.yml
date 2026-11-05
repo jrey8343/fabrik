@@ -74,5 +74,6 @@ runs:
       env:
         FABRIK_STORE_TOKEN: ${{ steps.store.outputs.token }}
         FABRIK_PRODUCTS_TOKEN: ${{ steps.products.outputs.token }}
+        FABRIK_APP_SLUG: ${{ steps.store.outputs.app-slug }}
         FABRIK_STORE_DIR: ${{ github.workspace }}/store
       run: node src/kit/weekly-main.ts

@@ -155,6 +155,12 @@ describe("The weekly summary workflow", () => {
     expect(permissionsOf(products)).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
   });
 
+  it("tells the program the Fabrik App's slug, from the token it minted, to tell its label events from other Apps'", () => {
+    const run = steps.find((step) => step.includes("run: node src/kit/weekly-main.ts"));
+
+    expect(run).toContain("FABRIK_APP_SLUG: ${{ steps.store.outputs.app-slug }}");
+  });
+
   it("reads the store's records from a sparse checkout of runs/, never its transcripts", () => {
     const checkout = steps.find((step) => step.includes("uses: actions/checkout@"));
 

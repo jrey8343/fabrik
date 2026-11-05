@@ -24,7 +24,7 @@ import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type T
 const NOW = "2026-11-08T20:00:00Z";
 
 function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput {
-  return { records: [], facts: [factsOf()], operator: "operator", timeZone: "Australia/Sydney", now: NOW, ...overrides };
+  return { records: [], facts: [factsOf()], operator: "operator", appLogin: "fabrik-app[bot]", timeZone: "Australia/Sydney", now: NOW, ...overrides };
 }
 
 describe("the Weekly summary", () => {
@@ -722,6 +722,18 @@ describe("the Weekly summary", () => {
           records: [aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T00:00:00Z" })],
           facts: [
             factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-04T00:00:00Z", { actor: "operator" })], { number: 3 })] }),
+          ],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerSpec: { thisWeek: { usd: null } } } });
+    });
+
+    it("counts only a Spec the Fabrik App moved out of design, not one another App labelled", () => {
+      const result = weeklySummary(
+        input({
+          records: [aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T00:00:00Z" })],
+          facts: [
+            factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-04T00:00:00Z", { actor: "other-app[bot]" })], { number: 3 })] }),
           ],
         }),
       );
