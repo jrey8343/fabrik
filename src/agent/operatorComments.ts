@@ -3,6 +3,7 @@
 // `operatorComments` for a Review, a retry or a Request-changes run, and under
 // the issue's `sentBack.operatorComments` for the Design session that follows a
 // return. Each is context for the run, never a request for work.
+import type { GivenOperatorComment } from "../loop/types.ts";
 
 /** Where on the PR the Operator wrote the comment. */
 export type OperatorCommentPlace =
@@ -19,6 +20,18 @@ export interface OperatorComment {
   readonly createdAt: string;
   /** The body as it stood when the run read its inputs. */
   readonly body: string;
+}
+
+/**
+ * The id and link of each Operator comment in a run's input file: what the
+ * agent job passes out beside the run's output, so its Verdict or fix comment
+ * links only comments the run was given (src/loop/considered.ts).
+ */
+export function givenOperatorComments(comments: unknown): GivenOperatorComment[] {
+  if (!Array.isArray(comments)) return [];
+  return (comments as { id?: unknown; url?: unknown }[]).flatMap(({ id, url }) =>
+    typeof id === "string" && typeof url === "string" ? [{ id, url }] : [],
+  );
 }
 
 /** The heading every run's prompt sets the Operator's comments out under. */

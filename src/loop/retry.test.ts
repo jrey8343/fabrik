@@ -393,6 +393,65 @@ describe("A retry whose branch moved while it ran (ADR-0006)", () => {
   });
 });
 
+describe("A retry's fix comment and the Operator comments it weighed", () => {
+  const given = [
+    { id: "conversation-3", url: "https://github.com/acme/shop/pull/50#issuecomment-3" },
+    { id: "review-5", url: "https://github.com/acme/shop/pull/50#pullrequestreview-5" },
+  ];
+
+  function weighing(operatorCommentsConsidered: unknown, operatorComments: typeof given | undefined) {
+    return retried({
+      output: JSON.stringify({
+        title: "Handle the empty cart",
+        summary: "Shows the empty state for an empty cart.",
+        fix: "Guards the empty-cart case, keeping the copy the Operator settled.",
+        operatorCommentsConsidered,
+      }),
+      fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, ...(operatorComments === undefined ? {} : { operatorComments }) },
+    });
+  }
+
+  function fixCommentOf(plan: Plan): string {
+    const [body] = actionsOf(plan).flatMap((action) => (action.kind === "comment" ? [action.body] : []));
+    return body ?? "";
+  }
+
+  it("ends with an Operator comments considered section, one link per comment it was given", () => {
+    const body = fixCommentOf(planFor(weighing(["review-5", "conversation-3"], given), retrySnapshot(), kitConfig()));
+
+    expect(body).toMatch(
+      /keeping the copy the Operator settled\.\n\n### Operator comments considered\n\n- \[`conversation-3`\]\(https:\/\/github\.com\/acme\/shop\/pull\/50#issuecomment-3\)\n- \[`review-5`\]\(https:\/\/github\.com\/acme\/shop\/pull\/50#pullrequestreview-5\)$/,
+    );
+  });
+
+  it("never links an id it wasn't given, and still lands", () => {
+    const plan = planFor(weighing(["conversation-3", "inline-77"], given), retrySnapshot(), kitConfig());
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(fixCommentOf(plan)).toContain("- [`conversation-3`]");
+    expect(fixCommentOf(plan)).not.toContain("inline-77");
+    expect(fixCommentOf(plan)).not.toContain("review-5");
+  });
+
+  it.each([
+    ["names none", undefined, given],
+    ["names an empty list", [], given],
+    ["names only ids it wasn't given", ["inline-77"], given],
+    ["names a comment but was given none", ["conversation-3"], undefined],
+  ])("leaves the section out when the run %s", (_, named, operatorComments) => {
+    const body = fixCommentOf(planFor(weighing(named, operatorComments), retrySnapshot(), kitConfig()));
+
+    expect(body).not.toContain("Operator comments considered");
+    expect(body).toMatch(/keeping the copy the Operator settled\.$/);
+  });
+
+  it("a list of ids that isn't a list of strings breaks the contract", () => {
+    const plan = planFor(weighing("conversation-3", given), retrySnapshot(), kitConfig());
+
+    expect(plan).toMatchObject({ kind: "fail", failure: "infrastructure" });
+  });
+});
+
 describe("A retry that fails for Infrastructure", () => {
   it("comments on the PR, names agent:implement on the Ticket as the label to re-add, and uses up no retry", () => {
     const plan = planFor(

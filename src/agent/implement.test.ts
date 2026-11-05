@@ -93,6 +93,18 @@ describe("A run on an existing PR is shown the Operator's comments on it, apart 
     expect(text).toContain("The empty state should say \"Nothing here yet\".");
   });
 
+  it("a retry and a Request-changes run each pass out the id and link of every comment they were given", async () => {
+    const review = await fileOf({ review: { state: "CHANGES_REQUESTED", body: "Rename the total." }, comments: [] });
+    const file = await fileOf({ ...pullRequest, operatorComments });
+    const given = [
+      { id: "conversation-3", url: "https://github.com/acme/shop/pull/50#issuecomment-3" },
+      { id: "inline-4", url: "https://github.com/acme/shop/pull/50#discussion_r4" },
+    ];
+
+    expect((await retryContext(file)).operatorComments).toEqual(given);
+    expect((await requestChangesContext(file, review)).operatorComments).toEqual(given);
+  });
+
   it("says so when the Operator hasn't commented", async () => {
     const { parts } = await retryContext(await fileOf({ ...pullRequest, operatorComments: [] }));
 

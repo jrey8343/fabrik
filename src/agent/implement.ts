@@ -11,7 +11,8 @@ import type { KitConfig } from "../kit/config.ts";
 import { sandboxEnv } from "../kit/secrets.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { verdictsIn } from "../github/threads.ts";
-import { operatorCommentsSection } from "./operatorComments.ts";
+import type { GivenOperatorComment } from "../loop/types.ts";
+import { givenOperatorComments, operatorCommentsSection } from "./operatorComments.ts";
 import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -80,11 +81,21 @@ function currentDescription(body: unknown): string[] {
 }
 
 /**
+ * A run on an existing PR's prompt parts beyond the Ticket, and the Operator
+ * comments it was given, which its result passes out.
+ */
+export interface PullRequestRunContext {
+  readonly pullRequest: number;
+  readonly parts: string[];
+  readonly operatorComments: GivenOperatorComment[];
+}
+
+/**
  * What a retry's prompt carries beyond the Ticket: the PR it fixes, the
  * findings of that PR's latest Verdict, the Fabrik App's comment with a marker,
  * and the Operator's comments on the PR, set apart from the findings.
  */
-export async function retryContext(pullRequestFile: string): Promise<{ pullRequest: number; parts: string[] }> {
+export async function retryContext(pullRequestFile: string): Promise<PullRequestRunContext> {
   const value: unknown = JSON.parse(await readFile(pullRequestFile, "utf8"));
   const { number, title, body, comments, operatorComments } = (value ?? {}) as {
     number?: unknown;
@@ -113,6 +124,7 @@ export async function retryContext(pullRequestFile: string): Promise<{ pullReque
       latest.trimEnd(),
       ...operatorCommentsSection(operatorComments),
     ],
+    operatorComments: givenOperatorComments(operatorComments),
   };
 }
 
@@ -125,7 +137,7 @@ export async function retryContext(pullRequestFile: string): Promise<{ pullReque
 export async function requestChangesContext(
   pullRequestFile: string,
   reviewFile: string,
-): Promise<{ pullRequest: number; parts: string[] }> {
+): Promise<PullRequestRunContext> {
   const pullRequest = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
     title?: unknown;
@@ -158,6 +170,7 @@ export async function requestChangesContext(
       ...(inline.length === 0 ? [] : ["## The Operator's comments on the code", ...inline]),
       ...operatorCommentsSection(pullRequest.operatorComments),
     ],
+    operatorComments: givenOperatorComments(pullRequest.operatorComments),
   };
 }
 

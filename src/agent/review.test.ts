@@ -2,8 +2,12 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { aPullRequest, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { reviewEventFrom } from "../github/events.ts";
 import { verdictMarker } from "../loop/markers.ts";
+import { planFor } from "../loop/rules.ts";
 import { readPullRequest, type Reader } from "./inputs.ts";
+import { readAgentRunResult } from "./result.ts";
 import { reviewContext } from "./review.ts";
 
 async function inputs(pullRequest: unknown): Promise<{ productDir: string; pullRequestFile: string; specFile: string }> {
@@ -55,7 +59,7 @@ describe("A Review's context", () => {
     expect(text.split("Yes, the parking copy is right.").length).toBe(2);
   });
 
-  it("replays penrith#39: the Operator's answer on the PR reaches the Review after the retry, and the Verdict and fix comment don't", async () => {
+  it("replays penrith#39: the Operator's answer on the PR reaches the Review after the retry, the Verdict and fix comment don't, and its Verdict lists the answer as considered", async () => {
     const bot = { login: "fabrik-app[bot]", type: "Bot" };
     const at = (n: number) => `2026-10-2${n}T00:00:00Z`;
     const conversation = [
@@ -92,7 +96,8 @@ describe("A Review's context", () => {
     // The Review's input step, then the Review's prompt.
     const read = await readPullRequest(github, { owner: "jrey8343", name: "penrith" }, 39, false, "operator");
     const { productDir, pullRequestFile, specFile } = await inputs(read);
-    const text = (await reviewContext(productDir, pullRequestFile, specFile)).parts.join("\n");
+    const context = await reviewContext(productDir, pullRequestFile, specFile);
+    const text = context.parts.join("\n");
 
     expect(text).toContain("## The Operator's comments on the pull request");
     expect(text).toContain("### `conversation-2`: in the conversation, 2026-10-22T00:00:00Z\nThe parking copy is right: free after 6pm.");
@@ -100,5 +105,28 @@ describe("A Review's context", () => {
     expect(text).not.toContain("The map link is broken.");
     expect(text).not.toContain("The map link now opens the clinic.");
     expect(text).not.toContain("Make parking paid.");
+
+    // The Reviewer weighs the answer, and names the drive-by too, which it was never given.
+    const reply = "verdict: pass\n\nThe parking copy is as the Operator confirmed.\n\noperator comments considered: conversation-2, conversation-4";
+    // The agent job's artifact, as the Review's push job reads it back.
+    const artifact = JSON.stringify({ role: "review", issue: 39, output: reply, operatorComments: context.operatorComments });
+    const event = reviewEventFrom({
+      pullRequest: 39,
+      headSha: "c".repeat(40),
+      runUrl: "https://github.com/jrey8343/penrith/actions/runs/7",
+      failedChecks: [],
+      result: readAgentRunResult(artifact),
+    });
+    const plan = planFor(
+      event,
+      snapshotOfPullRequest(aPullRequest({ number: 39, ticket: 12, headSha: "c".repeat(40) })),
+      kitConfig(),
+    );
+
+    const verdict = plan.kind === "act" ? plan.actions.flatMap((action) => (action.kind === "comment" ? [action.body] : []))[0] : "";
+    expect(verdict).toMatch(
+      /\n### Operator comments considered\n\n- \[`conversation-2`\]\(https:\/\/github\.com\/jrey8343\/penrith\/pull\/39#issuecomment-2\)$/,
+    );
+    expect(verdict).not.toContain("conversation-4");
   });
 });

@@ -4,15 +4,19 @@
 // Spec and the repo's glossary and ADRs. The Reviewer holds no GitHub
 // credential and runs none of the PR's code.
 import { readFile } from "node:fs/promises";
+import type { GivenOperatorComment } from "../loop/types.ts";
 import { ticketContext } from "./implement.ts";
-import { operatorCommentsSection } from "./operatorComments.ts";
+import { givenOperatorComments, operatorCommentsSection } from "./operatorComments.ts";
 
-/** What the Reviewer's prompt carries beyond the Ticket, and the PR its result is for. */
+/**
+ * What the Reviewer's prompt carries beyond the Ticket, the PR its result is
+ * for, and the Operator comments it was given, which its result passes out.
+ */
 export async function reviewContext(
   productDir: string,
   pullRequestFile: string,
   specFile: string,
-): Promise<{ pullRequest: number; parts: string[] }> {
+): Promise<{ pullRequest: number; parts: string[]; operatorComments: GivenOperatorComment[] }> {
   const { operatorComments, ...pullRequest } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
     operatorComments?: unknown;
@@ -29,5 +33,6 @@ export async function reviewContext(
       ...operatorCommentsSection(operatorComments),
       ...(await ticketContext(productDir, specFile)),
     ],
+    operatorComments: givenOperatorComments(operatorComments),
   };
 }

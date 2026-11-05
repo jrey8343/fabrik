@@ -13,6 +13,11 @@ export interface ImplementOutput {
    * while `summary` replaces its body. A first run leaves it out.
    */
   readonly fix?: string;
+  /**
+   * For a run on an existing PR: the ids of the Operator comments it weighed,
+   * which its fix comment links when the run was given them (src/loop/considered.ts).
+   */
+  readonly operatorCommentsConsidered?: readonly string[];
 }
 
 export type ImplementOutputResult =
@@ -31,13 +36,16 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return { ok: false, errors: ["Implementer output must be a JSON object"] };
   }
-  const { title, summary, fix } = value as Record<string, unknown>;
+  const { title, summary, fix, operatorCommentsConsidered: considered } = value as Record<string, unknown>;
   const errors: string[] = [];
   if (!isText(title) || title.includes("\n") || title.length > MAX_TITLE) {
     errors.push(`title must be one non-empty line of at most ${MAX_TITLE} characters`);
   }
   if (!isText(summary)) errors.push("summary must be non-empty Markdown");
   if (fix !== undefined && !isText(fix)) errors.push("fix, when given, must be non-empty Markdown");
+  if (considered !== undefined && !(Array.isArray(considered) && considered.every((id) => typeof id === "string"))) {
+    errors.push("operatorCommentsConsidered, when given, must be a list of Operator comment ids");
+  }
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
@@ -45,6 +53,7 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
       title: (title as string).trim(),
       summary: (summary as string).trim(),
       ...(fix === undefined ? {} : { fix: (fix as string).trim() }),
+      ...(considered === undefined ? {} : { operatorCommentsConsidered: considered as string[] }),
     },
   };
 }

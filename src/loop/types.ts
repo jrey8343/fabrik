@@ -54,6 +54,17 @@ export interface BranchChanges {
   readonly rebase?: { readonly onto: string; readonly conflicted: boolean };
 }
 
+/**
+ * An Operator comment an agent run was given, as its agent job recorded it
+ * from the input the Kit wrote, never from the agent's own text: what a
+ * Verdict or fix comment links when the run names it as weighed (ADR-0007).
+ */
+export interface GivenOperatorComment {
+  /** `conversation-<id>`, `review-<id>` or `inline-<id>` (src/agent/operatorComments.ts). */
+  readonly id: string;
+  readonly url: string;
+}
+
 /** Something that happened in a Product repo that the Loop may act on. */
 export type LoopEvent =
   | { readonly kind: "issue-opened"; readonly issue: number }
@@ -100,6 +111,8 @@ export type LoopEvent =
         readonly runUrl: string;
         /** Whether the run was the Operator's Request changes rather than a retry. */
         readonly requestChanges?: boolean;
+        /** The Operator comments on the PR the run was given; none when left out. */
+        readonly operatorComments?: readonly GivenOperatorComment[];
       };
     }
   | {
@@ -141,6 +154,8 @@ export type LoopEvent =
       /** The Reviewer's reply, unparsed: a Verdict line, then its findings (src/loop/verdict.ts). */
       readonly output: string;
       readonly runUrl: string;
+      /** The Operator comments the Reviewer was given; none when left out. */
+      readonly operatorComments?: readonly GivenOperatorComment[];
     }
   | {
       /** A review that requests changes was submitted on a PR: at the Merge gate, the Operator's ask for another run. */

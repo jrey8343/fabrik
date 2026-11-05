@@ -127,7 +127,15 @@ export function agentRunEventFrom(
     base: result.branch.base.ref,
     changes,
     // A retry's branch starts at the PR head it built on, which the core checks is still the PR's.
-    ...(retry === null ? {} : { fixes: { ...retry, headSha: result.branch.base.sha } }),
+    ...(retry === null
+      ? {}
+      : {
+          fixes: {
+            ...retry,
+            headSha: result.branch.base.sha,
+            ...(result.operatorComments === undefined ? {} : { operatorComments: result.operatorComments }),
+          },
+        }),
   };
 }
 
@@ -150,7 +158,14 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
   }
   if (result.role !== "review") throw new Error(`A Review's push job was handed a ${result.role} result`);
   if (result.issue !== pullRequest) throw new Error(`The Reviewer's result is for #${result.issue}, not #${pullRequest}`);
-  return { kind: "review-run-finished", pullRequest, headSha, output: result.output, runUrl };
+  return {
+    kind: "review-run-finished",
+    pullRequest,
+    headSha,
+    output: result.output,
+    runUrl,
+    ...(result.operatorComments === undefined ? {} : { operatorComments: result.operatorComments }),
+  };
 }
 
 /** What the push job knows about the agent job it follows (src/kit/pushJob.ts). */

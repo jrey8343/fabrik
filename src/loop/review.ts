@@ -4,6 +4,7 @@
 // comment with its marker. Routing flaws onward is for later rules.
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
+import { consideredSection } from "./considered.ts";
 import { REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw, whyAwaitingRun } from "./retry.ts";
@@ -66,7 +67,14 @@ export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
     if (!parsed.ok) {
       return { kind: "fail", failure: "infrastructure", reason: `The Review of #${pullRequest.number} gave no valid Verdict: ${parsed.error}` };
     }
-    const actions = verdictActions(event, pullRequest, parsed.verdict, "reviewer", withoutMentions(parsed.findings));
+    const actions = verdictActions(
+      event,
+      pullRequest,
+      parsed.verdict,
+      "reviewer",
+      withoutMentions(parsed.findings),
+      consideredSection(parsed.considered, event.operatorComments),
+    );
     if (parsed.verdict !== "pass") return { kind: "act", actions };
     return {
       kind: "act",
@@ -121,7 +129,8 @@ const VERDICT_COMMENT: PostedComment = { posted: "verdict" };
  * The Verdict comment (it mentions nobody), and agent:review off so re-adding
  * it is a fresh event. An Execution flaw then starts its retry, if one is
  * left; a Design flaw, or an Execution flaw with none left, sends the Ticket
- * back to design.
+ * back to design. A Reviewer's Verdict ends with the Operator comments it
+ * weighed, as `considered` (src/loop/considered.ts) renders them.
  */
 export function verdictActions(
   event: { readonly headSha: string; readonly runUrl: string },
@@ -129,6 +138,7 @@ export function verdictActions(
   verdict: Verdict,
   source: VerdictRecord["source"],
   findings: string,
+  considered: readonly string[] = [],
 ): Action[] {
   const record: VerdictRecord = { verdict, source, requestChanges: pullRequest.requestChangesRun, headSha: event.headSha };
   const by = BY[source];
@@ -142,6 +152,7 @@ export function verdictActions(
     ...(next === null ? [] : ["", next.line]),
     "",
     `[The run](${event.runUrl})`,
+    ...considered,
   ].join("\n");
   const reviewLabelOff: Action[] = pullRequest.labels.includes(REVIEW_LABEL)
     ? [{ kind: "remove-label", issue: pullRequest.number, label: REVIEW_LABEL }]
