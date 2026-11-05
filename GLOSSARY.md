@@ -90,6 +90,10 @@ _Avoid_: autonomous, background
 Work that only resolves through a live exchange with the Operator speaking for themselves; an agent never stands in for the Operator's side.
 _Avoid_: interactive, manual
 
+**Monitor**:
+The Kit's scheduled check of a Product repo's production errors and default-branch CI that files one issue per problem for Triage, fixing nothing and never reopening what the Operator closed.
+_Avoid_: alerting, watcher, monitor agent
+
 **Intake**:
 The rule that gives a new issue `needs-triage`, unless a skill made it or it already has a state, so Triage sees it.
 _Avoid_: inbox, new-issue hook
