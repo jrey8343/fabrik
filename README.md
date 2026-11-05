@@ -64,13 +64,15 @@ A person's reply on a `needs-info` issue swaps `needs-info` for `needs-triage`, 
 
 ## Design session (async)
 
-Adding `needs-design` to an open issue starts a Design session. Each turn is a fresh run of the Design-session agent job (Opus 5.5, 30 minutes by default, `roles.design` in the Kit config, plus `.fabrik/design.md` when present), one at a time per issue, rebuilding its context from the issue thread, the issue's parent Spec when it has one, and the repo. A turn ends in one of these ways (see [Back to design](#back-to-design) for splitting a Ticket):
+Adding `needs-design` to an open issue starts a Design session, once a slot is free. Each turn is a fresh run of the Design-session agent job (Opus 5.5, 30 minutes by default, `roles.design` in the Kit config, plus `.fabrik/design.md` when present), one at a time per issue, rebuilding its context from the issue thread, the issue's parent Spec when it has one, and the repo. A turn ends in one of these ways (see [Back to design](#back-to-design) for splitting a Ticket):
 
 - **The next round**: the Fabrik App posts numbered questions with recommended answers, @-mentioning the Operator. The Operator's reply starts the next turn. Comments from anyone else, and from any bot, do nothing. A turn answers the reply as it read it: edit the reply before the turn starts and it sees the edit; to change an answer after that, post a new reply, since an edit never starts a turn. Delete the reply before its turn posts and the turn posts nothing; only a turn that fails still posts its failure notice.
 - **An agent brief**: the issue body is rewritten in place as the brief and its acceptance criteria, a closing comment (no mention) records the decisions, and `needs-design` is swapped for `ready-for-agent`. Finishing the session counts as the Operator approving it.
 - **Not planned**: when the Operator decides the issue won't be built, the session finishes as not planned (`{ "kind": "not-planned", "comment": … }`). The closing comment (no mention) gives the session's reasoning, `needs-design` is swapped for `wontfix`, and the issue closes with state reason *not planned*. It works the same on a Ticket that came back to design. Its work never lands, so the issues it blocks stay blocked: Dispatch treats a blocker closed as not planned as still blocking until the Operator removes the edge, and the closing comment names those issues. The reasoning lives only in that comment.
 
 Only rounds notify: the Kit strips @-mentions from everything the agent writes.
+
+At most `caps.design_sessions` Design sessions (2 by default) are open in a Product repo at once. A session holds its slot from its first turn until it ends: while a turn runs, after a round, and after a turn fails. Any outcome above, a live outcome, closing the issue or removing `needs-design` frees it. Adding `needs-design` by any route (Triage, the Operator, a Design flaw, Retries used up, an empty diff or the Merge gate) runs a Design queue check, which adds `agent:design` to start round 1 when a slot is free; the label comes off as the turn starts. While both slots are taken the issue just waits: it keeps `needs-design`, gets no comment or label, and nobody is notified. The run's step summary says which issues wait. When a slot frees, re-designs (a Ticket sent back to design) start first, then the oldest by when it got `needs-design`, then the lowest number. A queue check runs whenever a session ends, an issue closes, the Kit config changes and on the hourly tick, so a slot freed by removing `needs-design` by hand is used within the hour. The Operator's comment on a waiting issue starts nothing: round 1 reads the whole thread, so it is context. A live outcome on a waiting issue still lands.
 
 A turn that fails for Infrastructure leaves `needs-design` on the issue, so it stays in its session: the failure notice asks the Operator to reply, and their reply runs the turn again.
 
@@ -145,6 +147,25 @@ A passing PR leaves draft and requests the Operator's review. Only the Operator 
 - **Request changes**: a review from the Operator that requests changes on an agent PR out of draft puts it back in draft and starts one Implementer run on the Step-up model, on the PR's branch, with the review and its inline comments as input. It isn't a retry. Its push carries a `<!-- fabrik:request-changes-run -->` note, so the Verdict Review gives it is marked as from a Request-changes run and uses no retry; later retries count as before. On a pass the PR leaves draft and the Operator's review is requested again, the event's one notification. To fix a conflict, ask for a rebase in the review: the Implementer merges `origin/main` into the branch, since the Kit only fast-forwards it. A review from anyone else, or on a draft PR, does nothing. The caller workflow runs on `pull_request_review` (submitted) for this. GitHub has no `_target` form of that event, so the run uses the PR's copy of the caller workflow and Kit config, which an agent branch can never change (ADR-0005).
 - **Send it back**: adding `needs-design` to an open agent PR takes the Design-flaw route: the PR closes unmerged, keeping its branch, and the Ticket swaps `ready-for-agent` for `needs-design`. The note's marker is `<!-- fabrik:back-to-design <pr> operator -->`, and round 1 says the Operator sent the Ticket back.
 
+## How loud each kind is
+
+The Kit pushes to the Operator's phone only when it is their move, through GitHub mobile's @-mentions, assignments and review requests ([#22](https://github.com/jrey8343/fabrik/issues/22)). Each event pushes once, by one of them.
+
+| Kind | Level | How |
+|---|---|---|
+| Design-session round | Push | @-mentions the Operator. Round 1 is the push for a Ticket sent back to design too. |
+| Merge gate | Push | Requests the Operator's review. |
+| A Kit run fails | Push | The failure notice @-mentions the Operator. |
+| `needs-info` | Push | Triage's comment @-mentions the issue's author. |
+| `ready-for-human` | Push | Assigns the Operator. |
+| Claude token expired or revoked | Push, once per repo | The rotation issue assigns the Operator. |
+| Weekly usage limit reached | Push, once per window per repo | The weekly-limit issue @-mentions the Operator. |
+| Implement draft PR, Execution-flaw retry, back-to-design note | Silent | The PR and the Verdict are the record. |
+| Fast path, Design session finished, Spec closed, `wontfix` | Silent | |
+
+- **Held work is silent.** Work a full cap holds (see `caps` in the [Kit config](#kit-config)) waits with no comment, label or notification. It pushes when its slot opens, as a Design session's round 1 does.
+- **There is no push budget.** Every push is the Operator's move, so the Kit never holds one back: it caps the sources, never the pushes.
+
 ## Kit config
 
 A Product repo's Kit config lives in `.fabrik/`. Every file is optional and every field has a default, so a release never needs a config edit. An invalid config, or an unknown field, fails the run with a message naming the field.
@@ -170,6 +191,7 @@ A Product repo's Kit config lives in `.fabrik/`. Every file is optional and ever
     "step_up": { "model": "claude-opus-5-5", "effort": null }
   },
   "max_in_flight": 2,
+  "caps": { "design_sessions": 2 },
   "operator": null
 }
 ```
@@ -178,5 +200,6 @@ A Product repo's Kit config lives in `.fabrik/`. Every file is optional and ever
 - `sandbox.env` holds non-secret values. `sandbox.secrets` maps an env var name to an `op://` reference; a literal secret is refused.
 - A model naming Fable (or the `best` alias) is refused in every role, because Fable can bill metered usage.
 - `max_in_flight` caps how many Tickets are in flight at once: open agent draft PRs, Implement runs in progress, and Tickets dispatched but not yet started. Set it to `0` to pause Dispatch: the Kit adds `agent:implement` to no new Ticket, while Intake, Triage, Design, Review, the Merge gate, retries and Request-changes runs carry on. Set it back above `0` and Dispatch resumes straight away: a push to the default branch that changes `.fabrik/config.json` runs a Dispatch check. A Product repo set up before the caller workflow had this `push` trigger gets it by re-running setup; until then Dispatch resumes at the next Dispatch check, such as when an issue closes.
+- `caps` holds the attention budget: per-repo caps on what the Loop opens in front of the Operator. A cap can only be lowered: a value above its Kit default is a Kit config error that names the field and the default. `caps.design_sessions` (default 2) caps how many Design sessions are open in the repo at once; set it to `1`, or to `0` to pause new Design sessions while those already open carry on. Raising it back starts waiting issues straight away, as the config push runs a Design queue check. See [Design session (async)](#design-session-async).
 - `operator` is the Operator's GitHub login: the one person whose comments drive a Design session, whom its rounds and failure notices @-mention, and to whom `ready-for-human` work is assigned. `null` means the repo's owner; set it for a repo an organization owns.
 - Per-phase instructions are optional Markdown files: `.fabrik/triage.md`, `.fabrik/design.md`, `.fabrik/implement.md` and `.fabrik/review.md`.
