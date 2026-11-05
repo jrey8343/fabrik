@@ -16,6 +16,8 @@
 //   review                   for a Request-changes run, the Operator's review id; else empty
 //   model, effort            the model and effort the plan chose for its agent run (a Step-up, say),
 //                            empty when it starts none or leaves effort to the CLI
+//   retry                    for an Implement run, its Retry number (0 for a first or Request-changes run); else empty
+//   step-up, request-changes "true" when the run Steps up, or is the Operator's Request-changes run; else "false"
 //   dispatch-timeout-minutes the Dispatch job's Kit config timeout
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
@@ -95,6 +97,10 @@ async function main(productDir: string): Promise<void> {
     review: run?.requestChanges === undefined ? "" : String(run.requestChanges.review),
     model: run?.model ?? "",
     effort: run?.effort ?? "",
+    // Which run it is, for its Run record: nothing reads these before the push job writes one.
+    retry: run?.role === "implement" ? String(run.retry ?? 0) : "",
+    "step-up": String(run?.stepUp === true),
+    "request-changes": String(run?.requestChanges !== undefined),
     "dispatch-timeout-minutes": String(config.roles.dispatch.timeoutMinutes),
   };
   await appendFile(
