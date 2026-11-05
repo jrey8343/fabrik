@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { pushedSinceVerdictIn, requestChangesRunIn, verdictsIn } from "../github/threads.ts";
 import { planFor } from "./rules.ts";
-import type { Action, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
+import type { Action, BranchChanges, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const A = "a".repeat(40);
@@ -66,9 +66,10 @@ class Thread {
     return { started, landed };
   }
 
-  /** The Implement run that fixes `fixes` finishes and pushes `to`. */
-  retryPushes(fixes: string, to: string, requestChanges = false): Plan {
-    const plan = this.plan(retried(fixes, requestChanges), this.ticketSnapshot());
+  /** The Implement run built on `fixes` finishes and, if its plan pushes, the PR is at `to`. */
+  retryPushes(fixes: string, to: string, requestChanges = false, rebase?: BranchChanges["rebase"]): Plan {
+    const event = retried(fixes, requestChanges);
+    const plan = this.plan(rebase === undefined ? event : { ...event, changes: { ...event.changes, rebase } }, this.ticketSnapshot());
     if (plan.kind === "act" && plan.actions.some((action) => action.kind === "push-branch")) this.headSha = to;
     return plan;
   }
@@ -82,7 +83,7 @@ function reviewed(headSha: string, output: string): LoopEvent {
   return { kind: "review-run-finished", pullRequest: 50, headSha, output, runUrl: RUN };
 }
 
-function retried(headSha: string, requestChanges = false): LoopEvent {
+function retried(headSha: string, requestChanges = false): Extract<LoopEvent, { kind: "implement-run-finished" }> {
   return {
     kind: "implement-run-finished",
     issue: 7,
@@ -115,13 +116,38 @@ describe("A Review while a Retry is in flight", () => {
     expect(operatorPush.started).toEqual({ kind: "nothing", reason: expect.stringMatching(/Retry 1 .*in flight/) });
     expect(operatorPush.landed).toMatchObject({ kind: "nothing", reason: expect.stringMatching(/Retry 1 .*in flight/) });
 
-    // Retry 1, built on A, pushes C (until #108 it must have built on the head it lands on).
-    expect(actionsOf(thread.retryPushes(B, C))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+    // Retry 1, built on A, is rebased onto B and pushed as C.
+    expect(actionsOf(thread.retryPushes(A, C, false, { onto: B, conflicted: false }))).toContainEqual({
+      kind: "push-branch",
+      branch: "fabrik/ticket-7",
+    });
 
     // C is red: that's flaw 2, which steps up.
     const retryHead = thread.pushRed(C);
     expect(actionsOf(retryHead.started)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", role: "review" }));
     expect(actionsOf(retryHead.landed)).toContainEqual(RETRY_TRIGGER);
+    expect(verdictLines(thread)).toEqual([
+      expect.stringMatching(/^Retry 1 of 2 starts now:/),
+      expect.stringMatching(/^Retry 2 of 2 starts now, stepped up:/),
+    ]);
+  });
+
+  it("a Retry whose rebase over the Operator's head conflicts restarts, still in flight, and its count is unchanged", () => {
+    const thread = new Thread(A);
+    thread.pushRed(A);
+    thread.pushRed(B);
+
+    const conflicted = thread.retryPushes(A, A, false, { onto: B, conflicted: true });
+    expect(actionsOf(conflicted)).toContainEqual(RETRY_TRIGGER);
+    expect(thread.headSha).toBe(B);
+    // The restart is Retry 1 again, on the Implementer's model, and B still gets no Verdict.
+    const resumed = thread.plan({ kind: "label-added", issue: 7, label: "agent:implement" }, thread.ticketSnapshot());
+    expect(actionsOf(resumed)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", model: "claude-sonnet-5-5" }));
+    expect(thread.pushRed(B).landed.kind).toBe("nothing");
+
+    // Rebuilt on B, it pushes C, whose flaw is flaw 2.
+    thread.retryPushes(B, C);
+    thread.pushRed(C);
     expect(verdictLines(thread)).toEqual([
       expect.stringMatching(/^Retry 1 of 2 starts now:/),
       expect.stringMatching(/^Retry 2 of 2 starts now, stepped up:/),

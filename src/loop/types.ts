@@ -45,6 +45,13 @@ export interface BranchChanges {
    * change even when the run made none of its own.
    */
   readonly updatedFromMain?: boolean;
+  /**
+   * For a run on its agent PR's own branch whose branch moved while it ran
+   * (ADR-0006): the head the push job rebased the run's own commits onto, and
+   * whether that conflicted. Without a conflict, `net` and `commits` hold only
+   * the run's own changes, as rebased; with one, there's nothing to push.
+   */
+  readonly rebase?: { readonly onto: string; readonly conflicted: boolean };
 }
 
 /** Something that happened in a Product repo that the Loop may act on. */

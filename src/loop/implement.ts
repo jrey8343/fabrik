@@ -7,7 +7,7 @@ import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
 import { EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER } from "./markers.ts";
 import { owedRequestChangesRun } from "./mergeGate.ts";
-import { MAX_RETRIES, owedRetry } from "./retry.ts";
+import { MAX_RETRIES, owedRetry, runInFlight } from "./retry.ts";
 import { verdictActions } from "./review.ts";
 import type {
   Action,
@@ -135,6 +135,12 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   }
   const stale = whyNotRetriedOnto(issueNumber, issue, fixes, pullRequest);
   if (stale !== null) return { kind: "nothing", reason: `${stale}, so the retry's branch isn't pushed` };
+  // The push job rebased the run's own commits if the branch moved (ADR-0006); a run with none has no work to lose.
+  const landsOn = changes.rebase?.onto ?? fixes.headSha;
+  const committedNothing = changes.net.length === 0 && changes.updatedFromMain !== true && changes.rebase === undefined;
+  if ((landsOn !== pullRequest.headSha || changes.rebase?.conflicted === true) && !committedNothing) {
+    return startAgain(event, fixes, pullRequest, operator, changes.rebase?.conflicted === true);
+  }
 
   const guard = checkTrustRoot([...changes.net, ...changes.commits]);
   if (guard.kind === "refuse") return refuse(issueNumber, guard.paths, operator, pullRequest.number);
@@ -192,12 +198,45 @@ function whyNotRetriedOnto(
   const why = whyNotReviewable(pullRequest);
   if (why !== null) return why;
   if (pullRequest.ticket !== issueNumber) return `#${pullRequest.number} isn't #${issueNumber}'s PR`;
-  if (pullRequest.headSha !== fixes.headSha) {
-    return `#${pullRequest.number} has moved on from ${fixes.headSha.slice(0, 7)}`;
-  }
   if (!issue.open) return `#${issueNumber} is closed`;
   if (!issue.labels.includes(READY_FOR_AGENT)) return `#${issueNumber} isn't ${READY_FOR_AGENT}`;
   return null;
+}
+
+/**
+ * A run whose commits couldn't land on the head its branch moved to: they
+ * conflicted with it, or it moved again after the push job rebased them. The
+ * Kit discards them, says so, and starts the same run again on the new head.
+ * It posts no Retry outcome, so the run stays in flight and uses no retry;
+ * re-adding agent:implement resumes it as after an Infrastructure failure.
+ * Restarts aren't capped. Like the rest of a retry, it's silent.
+ */
+function startAgain(
+  { issue: ticket, branch }: ImplementRunFinished,
+  fixes: NonNullable<ImplementRunFinished["fixes"]>,
+  pullRequest: PullRequestSnapshot,
+  operator: string,
+  conflicted: boolean,
+): Plan {
+  const run = runInFlight(pullRequest, operator);
+  if (run === null) {
+    return { kind: "nothing", reason: `#${pullRequest.number} has no run in flight to start again, so the run's branch isn't pushed` };
+  }
+  const name = run.kind === "retry" ? `Retry ${run.retry} of ${MAX_RETRIES}` : "The Operator's Request-changes run";
+  const head = pullRequest.headSha.slice(0, 7);
+  const body = [
+    `\`${branch}\` moved from ${fixes.headSha.slice(0, 7)} to ${head} while the Implementer worked, and its commits ${conflicted ? "conflict with the new head" : "couldn't be rebased onto it before it moved again"}, so the Kit discarded them.`,
+    "",
+    `${name} starts again on ${head}, using no retry.`,
+  ].join("\n");
+  return {
+    kind: "act",
+    actions: [
+      { kind: "comment", issue: pullRequest.number, body },
+      // As after an Infrastructure failure, agent:implement resumes the run in flight (startImplementer).
+      { kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] },
+    ],
+  };
 }
 
 /**
