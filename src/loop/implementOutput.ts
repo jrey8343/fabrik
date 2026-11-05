@@ -16,6 +16,7 @@ export interface ImplementOutput {
   /**
    * For a run on an existing PR: the ids of the Operator comments it weighed,
    * which its fix comment links when the run was given them (src/loop/considered.ts).
+   * Left out when the run gave anything but a list of ids: a bad list never fails the run.
    */
   readonly operatorCommentsConsidered?: readonly string[];
 }
@@ -31,6 +32,10 @@ function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
+function isIdList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((id) => typeof id === "string");
+}
+
 /** Checks an already-parsed value against the contract, naming every problem. */
 export function readImplementOutput(value: unknown): ImplementOutputResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -43,9 +48,6 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
   }
   if (!isText(summary)) errors.push("summary must be non-empty Markdown");
   if (fix !== undefined && !isText(fix)) errors.push("fix, when given, must be non-empty Markdown");
-  if (considered !== undefined && !(Array.isArray(considered) && considered.every((id) => typeof id === "string"))) {
-    errors.push("operatorCommentsConsidered, when given, must be a list of Operator comment ids");
-  }
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
@@ -53,7 +55,8 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
       title: (title as string).trim(),
       summary: (summary as string).trim(),
       ...(fix === undefined ? {} : { fix: (fix as string).trim() }),
-      ...(considered === undefined ? {} : { operatorCommentsConsidered: considered as string[] }),
+      // A malformed list never fails the run: it reads as none weighed.
+      ...(isIdList(considered) ? { operatorCommentsConsidered: considered } : {}),
     },
   };
 }

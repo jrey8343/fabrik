@@ -445,10 +445,15 @@ describe("A retry's fix comment and the Operator comments it weighed", () => {
     expect(body).toMatch(/keeping the copy the Operator settled\.$/);
   });
 
-  it("a list of ids that isn't a list of strings breaks the contract", () => {
-    const plan = planFor(weighing("conversation-3", given), retrySnapshot(), kitConfig());
+  it.each([
+    ["a bare id", "conversation-3"],
+    ["a list with a non-id in it", ["conversation-3", 5]],
+    ["an object", { id: "conversation-3" }],
+  ])("ignores a considered field that is %s: the fix still lands, weighing none", (_, named) => {
+    const plan = planFor(weighing(named, given), retrySnapshot(), kitConfig());
 
-    expect(plan).toMatchObject({ kind: "fail", failure: "infrastructure" });
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["push-branch", "edit-issue-body", "comment"]);
+    expect(fixCommentOf(plan)).not.toContain("Operator comments considered");
   });
 });
 
