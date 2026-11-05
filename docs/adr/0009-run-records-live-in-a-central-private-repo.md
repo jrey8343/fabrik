@@ -21,3 +21,7 @@ We chose this because Scorers, Replay, the Retro and the weekly summary all need
 ## Addendum: the Weekly summary is filed from `fabrik-runs`
 
 The Weekly summary is one issue per week covering every Product repo, filed in `fabrik-runs` by a scheduled workflow there. Its App token therefore also gets Issues write on `fabrik-runs` and read access to the Product repos it summarises. The push job's token stays Contents-write only, and nothing in a Product repo's agent job gains a credential. Decided in [Operator inbox and weekly summary](https://github.com/jrey8343/fabrik/issues/84).
+
+## Addendum: the score-record job is the judge run's own push job
+
+Scorers add a second job that writes to `fabrik-runs`: the score-record job, which writes the judge run's transcript, its Run record (role `score`) and the score file, each create-only. This refines "written only by the push job" rather than contradicting it. The score-record job is the judge run's own push job and has the same shape: it checks out only the Kit, runs no agent and no Product code, and mints a Fabrik App token scoped to `fabrik-runs` with Contents write only. The judge job, which runs the agent, holds no write credential, so ADR-0002's rule holds. The push job itself writes the score file of a run its scoring plan skips, with the store token it already holds. Decided in [Spec: Scorers](https://github.com/jrey8343/fabrik/issues/149).
