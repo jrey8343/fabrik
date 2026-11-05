@@ -568,6 +568,8 @@ export type Action =
       /** For an Implement run that is a Retry: its Retry number, and whether it Steps up. */
       readonly retry?: number;
       readonly stepUp?: boolean;
+      /** For an Auditor run: the pending Audit's marked commit, which its job checks out and reads up to. */
+      readonly commit?: string;
       readonly model: string;
       readonly effort: string | null;
       readonly timeoutMinutes: number;

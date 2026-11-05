@@ -55,6 +55,7 @@ jobs:
       design-timeout-minutes: ${{ steps.route.outputs.design-timeout-minutes }}
       implement-timeout-minutes: ${{ steps.route.outputs.implement-timeout-minutes }}
       review-timeout-minutes: ${{ steps.route.outputs.review-timeout-minutes }}
+      audit-timeout-minutes: ${{ steps.route.outputs.audit-timeout-minutes }}
       dispatch-timeout-minutes: ${{ steps.route.outputs.dispatch-timeout-minutes }}
       # For a Review or a retry: the agent PR, and the Ticket its branch was cut for.
       # For a first Implement run: its Ticket, with no PR.
@@ -64,6 +65,8 @@ jobs:
       branch: ${{ steps.route.outputs.branch }}
       # For a Request-changes run: the Operator's review, its input. It runs as a retry otherwise does.
       review: ${{ steps.route.outputs.review }}
+      # For an Auditor run: the pending Audit's marked commit, which the Audit job checks out.
+      audit-commit: ${{ steps.route.outputs.audit-commit }}
       # The model and effort the plan chose for its agent run, a Step-up included.
       model: ${{ steps.route.outputs.model }}
       effort: ${{ steps.route.outputs.effort }}

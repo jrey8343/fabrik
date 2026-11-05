@@ -4,17 +4,20 @@
 // agent starts on an invalid Kit; asks the Loop rules core what this event
 // calls for; and tells the workflow which job it routes to and the settings its jobs
 // need before they start, such as their timeout-minutes. Writes step outputs:
-//   route                    "triage", "design", "implement" or "review" when the plan starts that agent run,
+//   route                    "triage", "design", "implement", "review" or "audit" when the plan starts that agent run,
 //                            "push" when the push job has something to apply,
 //                            "none" when the plan is to do nothing
 //   triage-timeout-minutes   the Triage role's Kit config timeout
 //   design-timeout-minutes   the Design-session turn's Kit config timeout
 //   implement-timeout-minutes the Implement role's Kit config timeout
 //   review-timeout-minutes   the Review role's Kit config timeout
+//   audit-timeout-minutes    the Auditor's Kit config timeout
 //   pull-request, ticket     for a Review or a retry, the agent PR and the Ticket its branch was cut for;
 //                            for a first Implement run, an empty PR and its Ticket; else empty
 //   branch                   for a retry, the agent branch it builds on; else empty
 //   review                   for a Request-changes run, the Operator's review id; else empty
+//   audit-commit             for an Auditor run, the pending Audit's marked commit, which the Audit job
+//                            checks out; else empty
 //   model, effort            the model and effort the plan chose for its agent run (a Step-up, say),
 //                            empty when it starts none or leaves effort to the CLI
 //   retry                    for an Implement run, its Retry number (0 for a first or Request-changes run); else empty
@@ -97,12 +100,15 @@ async function main(productDir: string): Promise<void> {
     "design-timeout-minutes": String(config.roles.design.timeoutMinutes),
     "implement-timeout-minutes": String(config.roles.implement.timeoutMinutes),
     "review-timeout-minutes": String(config.roles.review.timeoutMinutes),
+    "audit-timeout-minutes": String(config.roles.audit.timeoutMinutes),
     "pull-request": pullRequest === null ? "" : String(pullRequest),
     ticket: (run?.role === "review" || run?.role === "implement") && ticket !== null ? String(ticket) : "",
     // A retry checks out its PR's branch; a first Implement run cuts it from the default branch.
     branch: run?.role === "implement" && run.pullRequest !== undefined ? agentBranchFor(run.issue) : "",
     // A Request-changes run's input: the Operator's review on the PR.
     review: run?.requestChanges === undefined ? "" : String(run.requestChanges.review),
+    // An Auditor run reads the Product repo up to the commit its pending Audit marks.
+    "audit-commit": run?.role === "audit" ? (run.commit ?? "") : "",
     model: run?.model ?? "",
     effort: run?.effort ?? "",
     // Which run it is, for its Run record: nothing reads these before the push job writes one.

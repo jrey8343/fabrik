@@ -45,7 +45,7 @@ function auditFailed(overrides: Partial<Extract<LoopEvent, { kind: "agent-run-fa
 }
 
 describe("The App's pending Audit, when it's opened", () => {
-  it("starts an Auditor run on roles.audit's model, effort and timeout", () => {
+  it("starts an Auditor run on roles.audit's model, effort and timeout, reading up to its marked commit", () => {
     const config = kitConfig({
       roles: { ...DEFAULT_KIT_CONFIG.roles, audit: { model: "claude-auditor", effort: "high", timeoutMinutes: 50 } },
     });
@@ -54,8 +54,26 @@ describe("The App's pending Audit, when it's opened", () => {
 
     expect(plan).toEqual({
       kind: "act",
-      actions: [{ kind: "start-agent-run", role: "audit", issue: 98, model: "claude-auditor", effort: "high", timeoutMinutes: 50 }],
+      actions: [
+        {
+          kind: "start-agent-run",
+          role: "audit",
+          issue: 98,
+          commit: AUDITED_SHA,
+          model: "claude-auditor",
+          effort: "high",
+          timeoutMinutes: 50,
+        },
+      ],
     });
+  });
+
+  it("starts no run when its body has lost its audit marker, so it names no commit to read", () => {
+    const issue = anAudit({ body: "The Auditor is reading the default branch.\n\n<!-- fabrik:audit-pending -->" });
+
+    const plan = planFor({ kind: "issue-opened", issue: 98 }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("no commit") });
   });
 });
 
