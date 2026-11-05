@@ -133,6 +133,57 @@ describe("Design queue order", () => {
   });
 });
 
+describe("Re-designs first", () => {
+  it("starts a re-design before an older new issue", () => {
+    const plan = planFor(
+      check,
+      designQueueSnapshotOf([
+        aDesignQueueIssue({ number: 3, designRounds: 1 }),
+        aDesignQueueIssue({ number: 4, neededDesignAt: "2026-11-01T09:00:00Z" }),
+        aDesignQueueIssue({ number: 9, neededDesignAt: "2026-11-03T09:00:00Z", redesign: true }),
+      ]),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "add-labels", issue: 9, labels: ["agent:design"] }] });
+  });
+
+  it("starts re-designs oldest first among themselves, the issue number breaking ties, and then the rest oldest first", () => {
+    const at = "2026-11-02T09:00:00Z";
+    const plan = planFor(
+      check,
+      designQueueSnapshotOf([
+        aDesignQueueIssue({ number: 2, neededDesignAt: "2026-10-01T09:00:00Z" }),
+        aDesignQueueIssue({ number: 8, neededDesignAt: at, redesign: true }),
+        aDesignQueueIssue({ number: 11, neededDesignAt: "2026-11-01T09:00:00Z", redesign: true }),
+        aDesignQueueIssue({ number: 5, neededDesignAt: at, redesign: true }),
+        aDesignQueueIssue({ number: 1, neededDesignAt: "2026-10-02T09:00:00Z" }),
+      ]),
+      kitConfig({ caps: { designSessions: 0 } }),
+    );
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "New Design sessions are paused because caps.design_sessions is 0, so #11, #5, #8, #2 and #1 wait",
+    });
+  });
+
+  it("holds a re-design silently when the cap is full: no comment, label or mention", () => {
+    const plan = planFor(
+      check,
+      designQueueSnapshotOf([
+        aDesignQueueIssue({ number: 3, designRounds: 1 }),
+        aDesignQueueIssue({ number: 4, designRounds: 1 }),
+        aDesignQueueIssue({ number: 9, redesign: true }),
+      ]),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({ kind: "nothing", reason: "caps.design_sessions is 2 and #3 and #4 hold slots, so #9 waits" });
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+});
+
 describe("Which sessions hold a slot", () => {
   it.each([
     ["has had a round posted", { designRounds: 1 }, {}],

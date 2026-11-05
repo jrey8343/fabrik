@@ -4,6 +4,7 @@
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
+import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
   DesignQueueIssue,
   KitIssueSnapshot,
@@ -551,11 +552,14 @@ async function gatherDesignQueue(
       const added = issue.timelineItems.nodes
         .filter((event) => event.label?.name === NEEDS_DESIGN && event.createdAt !== undefined)
         .map((event) => event.createdAt as string);
+      const session = designSessionOf(comments);
       issues.push({
         number: issue.number,
         labels: issue.labels.nodes.map((label) => label.name),
-        designRounds: designSessionOf(comments).designRounds,
+        designRounds: session.designRounds,
         turnFailed: designTurnFailedIn(comments),
+        // A third empty diff is the one that sent the Ticket back to design.
+        redesign: session.sentBack !== null || countEmptyDiffs(comments.map((comment) => comment.body)) > MAX_RETRIES,
         // The latest time it got needs-design; an issue whose timeline doesn't show it waits from when it opened.
         neededDesignAt: added.at(-1) ?? issue.createdAt,
       });

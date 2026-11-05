@@ -326,6 +326,12 @@ export interface DesignQueueIssue {
   readonly designRounds: number;
   /** Whether a Design-session turn has failed in its current Design session, read from the Kit's failure notice. */
   readonly turnFailed: boolean;
+  /**
+   * Whether its current Design session followed a Ticket going back to design:
+   * the back-to-design note (a Design flaw, Retries used up, or the Operator's
+   * needs-design at the Merge gate), or a third empty diff. A re-design starts first.
+   */
+  readonly redesign: boolean;
   /** When it last got `needs-design`, from its label timeline, as an ISO 8601 time. */
   readonly neededDesignAt: string;
 }
