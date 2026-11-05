@@ -170,6 +170,10 @@ _Avoid_: rerun, attempt
 A Verdict that the Ticket itself is wrong, so it needs a Design session.
 _Avoid_: bad spec, rejection
 
+**Follow-up**:
+Work the Reviewer names on a pass that deserves its own issue but lies outside the Ticket's scope, left for the Operator to open as an issue or ignore.
+_Avoid_: nit, suggestion
+
 **Infrastructure failure**:
 A run that fails for a reason outside the work itself, such as the model provider, the Sandbox or a credential, rather than anything the Implementer built. It never counts against a Ticket's retries.
 _Avoid_: crash, error, flake
