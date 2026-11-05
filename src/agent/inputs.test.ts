@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readIssue, readPullRequest, type Reader, SENT_BACK_DIFF_LIMIT } from "./inputs.ts";
+import { readIssue, readOperatorComments, readPullRequest, type Reader, SENT_BACK_DIFF_LIMIT } from "./inputs.ts";
 
 const repo = { owner: "acme", name: "shop" };
 
@@ -267,5 +267,135 @@ describe("An agent job's inputs", () => {
       body: "Closes #7",
       comments: [{ body: "<!-- fabrik:verdict … -->", author: { __typename: "Bot" } }],
     });
+  });
+});
+
+describe("The Operator's comments on a PR", () => {
+  const OP = { login: "operator", type: "User" };
+  const BOT = { login: "operator", type: "Bot" };
+  const OTHER = { login: "someone-else", type: "User" };
+
+  /** A GitHub answering REST list routes, paged 100 at a time, and GraphQL with `pr`. */
+  function restGitHub(routes: Record<string, unknown[]>, pr: unknown = null): Reader & { paths: string[] } {
+    const paths: string[] = [];
+    return {
+      paths,
+      graphql: async <T>() => pr as T,
+      rest: async (_method: string, path: string) => {
+        paths.push(path);
+        const [route, query] = path.split("?");
+        const items = routes[route ?? ""];
+        if (items === undefined) throw new Error(`unexpected REST call ${path}`);
+        const page = Number(/(?:^|&)page=(\d+)/.exec(query ?? "")?.[1] ?? "1");
+        return items.slice((page - 1) * 100, page * 100);
+      },
+    };
+  }
+
+  const conversation = (id: number, user: unknown, body: string, at = "2026-11-01T00:00:00Z") => ({
+    id,
+    user,
+    body,
+    created_at: at,
+    html_url: `https://github.com/acme/shop/pull/50#issuecomment-${id}`,
+  });
+  const inline = (id: number, user: unknown, body: string, at = "2026-11-01T00:00:00Z") => ({
+    id,
+    user,
+    body,
+    path: "src/cart.ts",
+    line: 12,
+    original_line: 10,
+    created_at: at,
+    html_url: `https://github.com/acme/shop/pull/50#discussion_r${id}`,
+  });
+  const review = (id: number, user: unknown, state: string, body: string, at = "2026-11-01T00:00:00Z") => ({
+    id,
+    user,
+    state,
+    body,
+    submitted_at: at,
+    html_url: `https://github.com/acme/shop/pull/50#pullrequestreview-${id}`,
+  });
+
+  const routes = (parts: { conversation?: unknown[]; inline?: unknown[]; reviews?: unknown[] }) => ({
+    "/repos/acme/shop/issues/50/comments": parts.conversation ?? [],
+    "/repos/acme/shop/pulls/50/comments": parts.inline ?? [],
+    "/repos/acme/shop/pulls/50/reviews": parts.reviews ?? [],
+  });
+
+  it("gathers the conversation, inline and non-Request-changes review comments, oldest first, each with its id, URL and place", async () => {
+    const github = restGitHub(
+      routes({
+        conversation: [conversation(1, OP, "The parking copy is right.", "2026-11-03T00:00:00Z")],
+        inline: [inline(2, OP, "Call it total.", "2026-11-01T00:00:00Z")],
+        reviews: [
+          review(3, OP, "COMMENTED", "Looks close.", "2026-11-02T00:00:00Z"),
+          review(4, OP, "CHANGES_REQUESTED", "Rename it.", "2026-11-04T00:00:00Z"),
+          review(5, OP, "PENDING", "Draft.", "2026-11-05T00:00:00Z"),
+          review(6, OP, "APPROVED", "", "2026-11-06T00:00:00Z"),
+        ],
+      }),
+    );
+
+    expect(await readOperatorComments(github, repo, 50, "operator")).toEqual([
+      {
+        id: "inline-2",
+        url: "https://github.com/acme/shop/pull/50#discussion_r2",
+        where: { kind: "inline", path: "src/cart.ts", line: 12 },
+        createdAt: "2026-11-01T00:00:00Z",
+        body: "Call it total.",
+      },
+      {
+        id: "review-3",
+        url: "https://github.com/acme/shop/pull/50#pullrequestreview-3",
+        where: { kind: "review", state: "COMMENTED" },
+        createdAt: "2026-11-02T00:00:00Z",
+        body: "Looks close.",
+      },
+      {
+        id: "conversation-1",
+        url: "https://github.com/acme/shop/pull/50#issuecomment-1",
+        where: { kind: "conversation" },
+        createdAt: "2026-11-03T00:00:00Z",
+        body: "The parking copy is right.",
+      },
+    ]);
+  });
+
+  it("leaves out bots' comments and other humans', wherever they were made", async () => {
+    const github = restGitHub(
+      routes({
+        conversation: [conversation(1, BOT, "From a bot."), conversation(2, OTHER, "Drive-by."), conversation(3, null, "Ghost.")],
+        inline: [inline(4, OTHER, "Not the Operator."), inline(5, BOT, "Bot inline.")],
+        reviews: [review(6, OTHER, "COMMENTED", "Not the Operator."), review(7, BOT, "APPROVED", "Bot review.")],
+      }),
+    );
+
+    expect(await readOperatorComments(github, repo, 50, "operator")).toEqual([]);
+  });
+
+  it("follows every page of each list", async () => {
+    const noise = (i: number) => conversation(i, OTHER, `noise ${i}`);
+    const github = restGitHub(
+      routes({
+        conversation: [...Array.from({ length: 140 }, (_, i) => noise(i + 1)), conversation(141, OP, "On page two.")],
+        inline: [...Array.from({ length: 100 }, (_, i) => inline(i + 200, OTHER, "noise")), inline(300, OP, "Inline on page two.")],
+        reviews: [...Array.from({ length: 100 }, (_, i) => review(i + 400, OTHER, "COMMENTED", "noise")), review(500, OP, "COMMENTED", "Review on page two.")],
+      }),
+    );
+
+    const comments = await readOperatorComments(github, repo, 50, "operator");
+
+    expect(comments.map((comment) => comment.body).sort()).toEqual(["Inline on page two.", "On page two.", "Review on page two."]);
+  });
+
+  it("reads each comment as it stands now: its latest edit, and nothing for one since deleted", async () => {
+    // GitHub's lists hold only comments that still exist, each with its current body.
+    const github = restGitHub(routes({ conversation: [conversation(2, OP, "Edited: use the short copy.")] }));
+
+    expect((await readOperatorComments(github, repo, 50, "operator")).map(({ id, body }) => ({ id, body }))).toEqual([
+      { id: "conversation-2", body: "Edited: use the short copy." },
+    ]);
   });
 });

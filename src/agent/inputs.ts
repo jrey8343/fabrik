@@ -15,6 +15,7 @@ import { GitHub, type Repo } from "../github/client.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
+import type { OperatorComment } from "./operatorComments.ts";
 
 /** What these reads need of a GitHub client. */
 export type Reader = Pick<GitHub, "graphql" | "rest">;
@@ -202,6 +203,63 @@ async function operatorReviewsOn(github: Reader, path: string, operator: string)
       ).map(({ path: file, line, body }) => ({ path: file, line, body })),
     })),
   );
+}
+
+/**
+ * The Operator's comments on the PR, oldest first, each as it stands now: its
+ * conversation comments, its inline review comments, and the bodies of its
+ * reviews that aren't Request changes (nor still pending, nor empty). Every
+ * page of each list is read. Bots' comments and other humans' are left out,
+ * so commenting on a PR can't steer an agent (ADR-0007).
+ */
+export async function readOperatorComments(
+  github: Reader,
+  repo: Repo,
+  pullRequest: number,
+  operator: string,
+): Promise<OperatorComment[]> {
+  const base = `/repos/${repo.owner}/${repo.name}`;
+  interface Written {
+    readonly id: number;
+    readonly user: RestUser | null;
+    readonly body: string | null;
+    readonly html_url: string;
+  }
+  const [conversation, inline, reviews] = await Promise.all([
+    allPages<Written & { created_at: string }>(github, `${base}/issues/${pullRequest}/comments`),
+    allPages<Written & { created_at: string; path: string; line: number | null; original_line?: number | null }>(
+      github,
+      `${base}/pulls/${pullRequest}/comments`,
+    ),
+    allPages<Written & { state: string; submitted_at?: string | null }>(github, `${base}/pulls/${pullRequest}/reviews`),
+  ]);
+  const theirs = (written: Written): boolean => written.user?.login === operator && written.user.type !== "Bot";
+  const comments: OperatorComment[] = [
+    ...conversation.filter(theirs).map((c) => ({
+      id: `conversation-${c.id}`,
+      url: c.html_url,
+      where: { kind: "conversation" as const },
+      createdAt: c.created_at,
+      body: c.body ?? "",
+    })),
+    ...inline.filter(theirs).map((c) => ({
+      id: `inline-${c.id}`,
+      url: c.html_url,
+      where: { kind: "inline" as const, path: c.path, line: c.line ?? c.original_line ?? null },
+      createdAt: c.created_at,
+      body: c.body ?? "",
+    })),
+    ...reviews
+      .filter((r) => theirs(r) && r.state !== "CHANGES_REQUESTED" && r.state !== "PENDING" && (r.body ?? "").trim() !== "")
+      .map((r) => ({
+        id: `review-${r.id}`,
+        url: r.html_url,
+        where: { kind: "review" as const, state: r.state },
+        createdAt: r.submitted_at ?? "",
+        body: r.body ?? "",
+      })),
+  ];
+  return comments.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
 }
 
 const PULL_REQUEST_QUERY = `
