@@ -14,13 +14,13 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 - `src/agent/` holds the **agent job** runner (`node src/agent/run.ts triage`, `design`, `implement` or `review`): Sandcastle with `noSandbox()` on the runner VM, the metered-billing preflight as the last `onSandboxReady` step, the `init` check, the step summary, and the role's output passed out as `agent-result.json`. Only agent jobs install the runtime dependencies (Sandcastle and the Claude Code CLI, pinned exactly).
 - `src/review/` holds the Review checks job's step (`node src/review/wait.ts`), which waits for an agent PR's required checks, and the pure rule for how they ended.
 - `src/preflight/` holds the metered-billing preflight (pure) and the command the hook runs.
-- `src/skills/` and `skills.lock.json` pin Matt Pocock's skills at a commit SHA and install them into a Product checkout's gitignored `.claude/skills/` (ADR-0003).
-- `src/skills/bump.ts` decides the weekly skills bump PR (`.github/workflows/skills-bump.yml`), with the upstream diff in its body; `src/skills/bump-main.ts` is its step.
+- `src/skills/` and `skills.lock.json` pin Matt Pocock's skills, the Base skills, at a commit SHA and install them into a Product checkout's gitignored `.claude/skills/` (ADR-0003), beside the Extra skills a Product repo picks from its own Skills sources (ADR-0008, see [Extra skills](#extra-skills)). `src/skills/fetch.ts <product checkout> [role]` installs them; `src/skills/pinnedManifests.ts` is the Kit job's check of the picks against each source's manifest at its pin.
+- `src/skills/bump.ts` decides the weekly skills bump PR (`.github/workflows/skills-bump.yml`), with the upstream diff in its body; `src/skills/bump-main.ts` is its step. The same planner decides a Product repo's bump PRs for its own Skills sources, which `src/skills/sourceBumps.ts` pushes from the scheduled tick (`src/skills/source-bumps-main.ts`, gated by `src/skills/source-bumps-due.ts`).
 - `src/release/` checks that each release pins Sandcastle and the Claude Code CLI at exact versions, which Dependabot bumps (`.github/dependabot.yml`). See [docs/releasing.md](docs/releasing.md) for the release process.
 - `src/kit/jobs.ts` is the Kit job's step: it checks the Kit config and the caller workflow's pins, asks the Loop rules core what the event calls for, and routes it to an agent job (when the plan starts an agent run), to the push job, or nowhere.
 - `prompts/` holds the Kit's agent prompts.
 - `.github/workflows/loop.yml` is the reusable workflow a Product repo calls. It holds wiring only. The steps its jobs share are composite actions in `.github/actions/`: `prepare-agent` readies an agent job (installs the Kit, fetches the skills, and reads the agent's inputs through `src/agent/inputs.ts`), and `run-loop` runs the Loop as the Fabrik App. After it, the push job's `write-run-record` writes the run's Run record and transcript to the `fabrik-runs` store (`src/kit/runRecord.ts`, `src/kit/recordWriter.ts`, ADR-0009). It never fails the push job, and a Product whose Operator hasn't set up `fabrik-runs` gets one step-summary line saying so.
-- `.github/workflows/schedule.yml` is the reusable scheduled tick the caller workflow runs hourly, for the Loop's time-based rules (closing the weekly-limit issue after its reset). Like the push job, it never touches Product code.
+- `.github/workflows/schedule.yml` is the reusable scheduled tick the caller workflow runs hourly, for the Loop's time-based rules (closing the weekly-limit issue after its reset), and once a week the Product repo's skills bumps. Like the push job, it never touches Product code.
 - `.github/workflows/weekly-summary.yml` is the reusable Weekly summary the `fabrik-runs` store's caller runs each Monday morning. Its `file-weekly-summary` action reads the store's Run records and every Product repo's GitHub facts (`src/github/facts.ts`), builds the summary (`src/kit/weeklySummary.ts`) and files it in `fabrik-runs` (`src/kit/weeklyFiling.ts`). It never touches Product code either.
 - `src/loop/kitIssues.ts` holds the Kit-owned issues: the "Rotate the Claude token" issue (label `fabrik:token-rotation`) and the weekly-limit issue (label `fabrik:weekly-limit`), which buzz the Operator once per repo, or once per limit window, instead of once per Ticket.
 - `templates/fabrik.yml` is the caller workflow a Product repo installs as `.github/workflows/fabrik.yml`.
@@ -181,3 +181,31 @@ A Product repo's Kit config lives in `.fabrik/`. Every file is optional and ever
 - `max_in_flight` caps how many Tickets are in flight at once: open agent draft PRs, Implement runs in progress, and Tickets dispatched but not yet started. Set it to `0` to pause Dispatch: the Kit adds `agent:implement` to no new Ticket, while Intake, Triage, Design, Review, the Merge gate, retries and Request-changes runs carry on. Set it back above `0` and Dispatch resumes straight away: a push to the default branch that changes `.fabrik/config.json` runs a Dispatch check. A Product repo set up before the caller workflow had this `push` trigger gets it by re-running setup; until then Dispatch resumes at the next Dispatch check, such as when an issue closes.
 - `operator` is the Operator's GitHub login: the one person whose comments drive a Design session, whom its rounds and failure notices @-mention, and to whom `ready-for-human` work is assigned. `null` means the repo's owner; set it for a repo an organization owns.
 - Per-phase instructions are optional Markdown files: `.fabrik/triage.md`, `.fabrik/design.md`, `.fabrik/implement.md` and `.fabrik/review.md`.
+- `roles.triage`, `roles.design`, `roles.implement` and `roles.review` each take an optional `skills` list of Extra skills (see [Extra skills](#extra-skills)). `roles.dispatch` and `roles.step_up` don't: a Step-up run is an Implement run and gets implement's.
+
+### Extra skills
+
+Every run gets the Base skills, which Fabrik's own `skills.lock.json` pins and which move only with a Kit release, plus Fabrik's own skills. A Product repo that needs more pins its own public **Skills sources** in `.fabrik/skills.lock.json` and gives **Extra skills** from them to roles in `.fabrik/config.json` (ADR-0008). A repo with neither runs exactly as before and pays nothing.
+
+`.fabrik/skills.lock.json` is a list of pins, each a repository and a full 40-character lowercase commit SHA:
+
+```json
+[{ "repository": "jrey8343/skills", "sha": "0123456789abcdef0123456789abcdef01234567" }]
+```
+
+Each role's picks name the source, then the skill by the name it installs as under `.claude/skills/` (the last segment of its folder in the source's `.claude-plugin/plugin.json`):
+
+```json
+{
+  "roles": {
+    "design": { "skills": ["jrey8343/skills/event-storming"] },
+    "review": { "skills": ["jrey8343/skills/event-storming"] },
+    "implement": { "skills": ["jrey8343/skills/deciders"] }
+  }
+}
+```
+
+- Write a source's first pin and the picks by hand; `/fabrik-setup` writes neither. After that, the Kit's scheduled tick checks each source's default branch on the Monday tick in the 04:00 UTC hour and opens, or refreshes, one PR per source on `fabrik/skills-bump/<owner>-<name>`, pushed with the Fabrik App token. It changes only that source's SHA, shows the upstream diff under the picked skills' folders, lists the other changes in one line, and flags a picked skill removed upstream as breaking. A week in which no picked skill changed opens nothing. The Loop ignores these PRs; only the Operator merges them.
+- Each AFK run installs the Base skills plus only its own role's Extra skills, before any secret loads, and its prompt gets one Kit line naming them. A local, Pairing or live Design session's `SessionStart` hook installs every pick, and warns, still installing the Base and Kit skills, when a pick is wrong.
+- Say when to use an Extra skill in that phase's instructions, `.fabrik/<phase>.md`, not in the Kit config. The Kit's line only says the skills are there and that this repo's instructions say when to use them.
+- These are Kit config errors, which stop the Loop before any agent starts: a malformed lockfile or pick; the same repository pinned twice; a pick naming an unpinned source, or a skill its source's manifest doesn't list at the pin; a pinned source no role picks from; a source with no readable manifest; and a pick named like a Base skill, a Kit skill (one of Fabrik's own) or a pick from another source. The Kit job reads each source's manifest from public GitHub at its pin, only when the repo pins a source.

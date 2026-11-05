@@ -88,6 +88,7 @@ Tell the Operator:
 - What setup did, and each note it left for them.
 - To list the CI checks that must pass in `sandbox.checks` in `.fabrik/config.json`, and the Sandbox's `setup`, `build` and `test` commands, then run `/fabrik-setup` again so branch protection requires those checks.
 - That once the Fabrik App is on `fabrik-runs`, each agent run's push job writes its Run record there, and they can run the Weekly summary by hand from the Actions tab of `fabrik-runs` (Fabrik weekly summary, Run workflow) instead of waiting for Monday.
+- That to give roles Extra skills from their own Skills sources, they pin each source by hand in `.fabrik/skills.lock.json` (`[{ "repository": "owner/name", "sha": "<full commit SHA>" }]`), pick skills under `roles.<role>.skills` in `.fabrik/config.json` (`"owner/name/skill"`, for triage, design, implement or review), and say when to use each in that phase's `.fabrik/<phase>.md`. The README's Extra skills section has the details; the Kit's weekly bump PRs keep the pins current after that.
 - That re-running `/fabrik-setup` repairs the install (a missing label, secret or shim), and that Kit updates arrive as Dependabot PRs bumping `.github/workflows/fabrik.yml`.
 
 Remove the temporary Fabrik folder once the Operator has finished the wizard.

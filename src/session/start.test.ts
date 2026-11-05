@@ -1,7 +1,17 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { aKitCheckout, aSkillsArchive, LOCKED_SHA, serving, tempDir } from "../__fixtures__/skillsArchive.ts";
+import {
+  aKitCheckout,
+  aProductCheckout,
+  archiveUrl,
+  aSkillsArchive,
+  LOCKED_SHA,
+  serving,
+  servingEach,
+  tempDir,
+} from "../__fixtures__/skillsArchive.ts";
+import type { Download } from "../skills/fetch.ts";
 import { sessionStart } from "./start.ts";
 
 const callerAt = (release: string) => `jobs:
@@ -157,6 +167,208 @@ describe("The SessionStart hook in a cloud or local session", () => {
     expect(output.hookSpecificOutput.reloadSkills).toBe(false);
     expect(output.systemMessage).toBe(
       `Fabrik didn't install its skills: Downloading https://codeload.github.com/mattpocock/skills/tar.gz/${LOCKED_SHA} failed: 503`,
+    );
+  });
+});
+
+const OPERATOR_SKILLS = "jrey8343/skills";
+const OPERATOR_SHA = "1111111111111111111111111111111111111111";
+const OTHER_SKILLS = "someone/skills";
+const OTHER_SHA = "2222222222222222222222222222222222222222";
+const BASE_URL = archiveUrl("mattpocock/skills", LOCKED_SHA);
+const OPERATOR_URL = archiveUrl(OPERATOR_SKILLS, OPERATOR_SHA);
+const OTHER_URL = archiveUrl(OTHER_SKILLS, OTHER_SHA);
+const PINS = [
+  { repository: OPERATOR_SKILLS, sha: OPERATOR_SHA },
+  { repository: OTHER_SKILLS, sha: OTHER_SHA },
+];
+
+async function upstream() {
+  return {
+    [BASE_URL]: await aSkillsArchive({ "skills/engineering/grilling": "# grilling" }),
+    [OPERATOR_URL]: await aSkillsArchive({
+      "skills/modelling/event-storming": "# event-storming",
+      "skills/modelling/deciders": "# deciders",
+    }),
+    [OTHER_URL]: await aSkillsArchive({ "skills/review/threat-model": "# threat-model" }),
+  };
+}
+
+/** A Product checkout with its caller workflow, pinning these sources and picking these Extra skills. */
+async function aProductWithPicks(
+  pins: Parameters<typeof aProductCheckout>[0],
+  picks: Parameters<typeof aProductCheckout>[1],
+): Promise<string> {
+  const product = await aProductCheckout(pins, picks);
+  await mkdir(join(product, ".github/workflows"), { recursive: true });
+  await writeFile(join(product, ".github/workflows/fabrik.yml"), callerAt("v1.2.3"));
+  return product;
+}
+
+async function installedFolders(product: string): Promise<readonly string[]> {
+  const entries = await readdir(join(product, ".claude/skills"), { withFileTypes: true });
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+}
+
+describe("The SessionStart hook with Extra skills picked, the Operator at the wheel", () => {
+  it("installs every pick across all roles beside the Base and Kit skills, and names the Extra skills in its context", async () => {
+    const product = await aProductWithPicks(PINS, {
+      triage: ["jrey8343/skills/deciders"],
+      design: ["jrey8343/skills/event-storming"],
+      review: ["someone/skills/threat-model", "jrey8343/skills/event-storming"],
+    });
+
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      download: servingEach(await upstream()).download,
+    });
+
+    expect(await installedFolders(product)).toEqual([
+      "deciders",
+      "event-storming",
+      "fabrik-live-design",
+      "grilling",
+      "threat-model",
+    ]);
+    expect(output.systemMessage).toBeUndefined();
+    expect(output.hookSpecificOutput.reloadSkills).toBe(true);
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "This repo's Extra skills are also in .claude/skills/: deciders, event-storming, threat-model.",
+    );
+  });
+
+  it("warns with the reason when a pick names a skill its source doesn't have, and still installs the Base and Kit skills", async () => {
+    const product = await aProductWithPicks([{ repository: OPERATOR_SKILLS, sha: OPERATOR_SHA }], {
+      design: ["jrey8343/skills/event-storming", "jrey8343/skills/no-such-skill"],
+    });
+
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      download: servingEach(await upstream()).download,
+    });
+
+    expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
+    expect(output.hookSpecificOutput.reloadSkills).toBe(true);
+    expect(output.systemMessage).toMatch(/^Fabrik installed its Base and Kit skills, but not this repo's Extra skills: .*no-such-skill/);
+    expect(output.hookSpecificOutput.additionalContext).not.toContain("Extra skills are also in");
+  });
+
+  it("warns with the reason when the Kit config's picks are invalid, and still installs the Base and Kit skills", async () => {
+    const product = await aProductWithPicks([], { design: ["jrey8343/skills/event-storming"] });
+
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      download: servingEach(await upstream()).download,
+    });
+
+    expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
+    expect(output.systemMessage).toMatch(/^Fabrik installed its Base and Kit skills, but not this repo's Extra skills: .*roles\.design\.skills\[0\]/);
+  });
+
+  it("warns when an Extra skills source can't be downloaded, and still installs the Base and Kit skills", async () => {
+    const product = await aProductWithPicks(PINS, {
+      design: ["jrey8343/skills/event-storming"],
+      review: ["someone/skills/threat-model"],
+    });
+    const { [OTHER_URL]: _unreachable, ...reachable } = await upstream();
+
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      download: servingEach(reachable).download,
+    });
+
+    expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
+    expect(output.hookSpecificOutput.reloadSkills).toBe(true);
+    expect(output.systemMessage).toBe(
+      `Fabrik installed its Base and Kit skills, but not this repo's Extra skills: someone/skills at 2222222 could not be downloaded: Downloading ${OTHER_URL} failed: 404`,
+    );
+  });
+
+  it("says nothing of Extra skills when the repo picks none and its Kit config is invalid for another reason", async () => {
+    const product = await aProductWithPicks([], {});
+    await writeFile(join(product, ".fabrik/config.json"), JSON.stringify({ roles: { design: { model: "best" } } }));
+
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      download: servingEach(await upstream()).download,
+    });
+
+    expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
+    expect(output.systemMessage).toBeUndefined();
+  });
+
+  it("downloads nothing at a second session start when the pins and picks haven't changed", async () => {
+    const kit = await kitWithLiveSkill();
+    const product = await aProductWithPicks(PINS, {
+      design: ["jrey8343/skills/event-storming"],
+      review: ["someone/skills/threat-model"],
+    });
+    const start = async (download: Download) =>
+      sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download });
+    await start(servingEach(await upstream()).download);
+    const again = servingEach(await upstream());
+
+    const output = await start(again.download);
+
+    expect(again.urls).toEqual([]);
+    expect(output.systemMessage).toBeUndefined();
+    expect(output.hookSpecificOutput.additionalContext).toContain("event-storming, threat-model");
+  });
+
+  it("removes a dropped pick at the next session start, and leaves a folder the Kit didn't install", async () => {
+    const kit = await kitWithLiveSkill();
+    const product = await aProductWithPicks(PINS, {
+      design: ["jrey8343/skills/event-storming", "jrey8343/skills/deciders"],
+      review: ["someone/skills/threat-model"],
+    });
+    await sessionStart({
+      kitDir: kit,
+      productDir: product,
+      release: "v1.2.3",
+      download: servingEach(await upstream()).download,
+    });
+    await mkdir(join(product, ".claude/skills/my-own-skill"));
+    await writeFile(
+      join(product, ".fabrik/config.json"),
+      JSON.stringify({ roles: { design: { skills: ["jrey8343/skills/event-storming"] } } }),
+    );
+    await writeFile(join(product, ".fabrik/skills.lock.json"), JSON.stringify([PINS[0]]));
+
+    const output = await sessionStart({
+      kitDir: kit,
+      productDir: product,
+      release: "v1.2.3",
+      download: servingEach(await upstream()).download,
+    });
+
+    expect(output.systemMessage).toBeUndefined();
+    expect(await installedFolders(product)).toEqual(["event-storming", "fabrik-live-design", "grilling", "my-own-skill"]);
+  });
+
+  it("leaves its context as it was when the repo picks no Extra skills", async () => {
+    const product = await aProductWithPicks([], {});
+
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      download: servingEach(await upstream()).download,
+    });
+
+    expect(output.systemMessage).toBeUndefined();
+    expect(output.hookSpecificOutput.additionalContext).toBe(
+      `Fabrik v1.2.3 is installed in this repo. The skills it pins (mattpocock/skills at ${LOCKED_SHA}) are in .claude/skills/, fetched by the SessionStart hook; they're gitignored, so never commit or edit them.\n` +
+        "To take an issue's Design session live, the Operator runs /fabrik-live-design <issue number>.",
     );
   });
 });

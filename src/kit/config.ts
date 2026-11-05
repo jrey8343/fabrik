@@ -1,5 +1,6 @@
 // The Kit config: loaded from a Product repo's .fabrik/ folder, with every v1
 // default filled in, and validated at the start of every run. Pure, no I/O.
+import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
 
 export interface AgentRole {
   readonly model: string;
@@ -30,11 +31,40 @@ export interface KitConfig {
   /** The Operator's GitHub login; null means the Product repo's owner. */
   readonly operator: string | null;
   readonly instructions: Readonly<Record<Phase, string | null>>;
+  /** The Product repo's own Skills sources, from .fabrik/skills.lock.json. */
+  readonly skillsSources: readonly SkillsSource[];
+  /** Each role's Extra skills, picked from those sources; a Step-up run uses implement's. */
+  readonly extraSkills: Readonly<Record<Phase, readonly ExtraSkill[]>>;
+}
+
+/** A Skills source a Product repo pins: a public repository at one commit. */
+export interface SkillsSource {
+  /** `owner/name` on GitHub. */
+  readonly repository: string;
+  /** A full 40-character lowercase commit SHA. */
+  readonly sha: string;
+}
+
+/** One skill picked for a role from a pinned Skills source. */
+export interface ExtraSkill {
+  /** The source's repository, `owner/name`, as the lockfile spells it. */
+  readonly source: string;
+  /** The name the skill installs as under .claude/skills/. */
+  readonly name: string;
 }
 
 export type Phase = "triage" | "design" | "implement" | "review";
 
 export const PHASES: readonly Phase[] = ["triage", "design", "implement", "review"];
+
+/** Every Extra skill the given roles pick, each once however many of them pick it. */
+export function picksIn(config: KitConfig, roles: readonly Phase[] = PHASES): readonly ExtraSkill[] {
+  const picks = new Map<string, ExtraSkill>();
+  for (const role of roles) {
+    for (const pick of config.extraSkills[role]) picks.set(`${pick.source}/${pick.name}`, pick);
+  }
+  return [...picks.values()];
+}
 
 /** The raw files the Kit reads from the Kit config folder; null or left out when absent. */
 export interface KitConfigSources {
@@ -42,6 +72,8 @@ export interface KitConfigSources {
   readonly config: string | null;
   /** The text of each .fabrik/<phase>.md the Product repo provides. */
   readonly instructions?: Readonly<Partial<Record<Phase, string | null>>>;
+  /** The text of .fabrik/skills.lock.json. */
+  readonly skillsLock?: string | null;
 }
 
 /** Where each optional per-phase instruction file lives in a Product repo. */
@@ -69,6 +101,8 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   maxInFlight: 2,
   operator: null,
   instructions: { triage: null, design: null, implement: null, review: null },
+  skillsSources: [],
+  extraSkills: { triage: [], design: [], implement: [], review: [] },
 };
 
 /** Where the Kit config lives in a Product repo (ADR-0005). */
@@ -86,11 +120,148 @@ export function resolveKitConfig(sources: KitConfigSources): KitConfigResult {
     }
   }
   const context: ReadContext = { errors: [], readers: [] };
-  const config = readConfig(new Reader(raw, KIT_CONFIG_PATH, context));
+  const picks: Picks = {};
+  const config = readConfig(new Reader(raw, KIT_CONFIG_PATH, context), picks);
+  const skills = readSkills(picks, sources.skillsLock ?? null, context);
   for (const reader of context.readers) reader.reportUnknownFields();
   const { errors } = context;
   if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, config: { ...config, instructions: readInstructions(sources.instructions ?? {}) } };
+  return { ok: true, config: { ...config, ...skills, instructions: readInstructions(sources.instructions ?? {}) } };
+}
+
+/**
+ * Whether the Kit config folder asks for Extra skills at all: it has a Skills
+ * sources lockfile, or some role in config.json gives a `skills` key. A repo
+ * that doesn't is untouched by Extra skills, even when its Kit config is
+ * invalid for some other reason.
+ */
+export function asksForExtraSkills(sources: Pick<KitConfigSources, "config" | "skillsLock">): boolean {
+  if (sources.skillsLock !== null && sources.skillsLock !== undefined) return true;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(sources.config ?? "");
+  } catch {
+    return false;
+  }
+  const roles = (raw as { roles?: unknown } | null)?.roles;
+  if (typeof roles !== "object" || roles === null) return false;
+  return Object.values(roles).some((role) => typeof role === "object" && role !== null && Object.hasOwn(role, "skills"));
+}
+
+/** Each pickable role's raw `skills` list, as the Kit config gives it; null when it isn't a list of strings. */
+type Picks = Partial<Record<Phase, readonly string[] | null>>;
+
+type Skills = Pick<KitConfig, "skillsSources" | "extraSkills">;
+
+/** Where a Product repo pins its own Skills sources (ADR-0008). */
+export const SKILLS_SOURCES_LOCK_PATH = ".fabrik/skills.lock.json";
+
+/**
+ * Reads the Skills sources lockfile and checks each pickable role's picks
+ * against it: every pick names a pinned source, every pin is picked from, and
+ * no two sources give a skill the same name. Checking a pick against the
+ * source's own manifest needs the network, so it happens elsewhere.
+ */
+function readSkills(picks: Picks, lockText: string | null, context: ReadContext): Skills {
+  const errorsBefore = context.errors.length;
+  const skillsSources = readSkillsSources(lockText, context);
+  // A pick against a lockfile that failed to read would only add noise.
+  const lockRead = context.errors.length === errorsBefore;
+  let picksRead = PHASES.every((phase) => picks[phase] !== null);
+  const pinned = new Map(skillsSources.map((source) => [source.repository.toLowerCase(), source.repository]));
+  const pickedFrom = new Set<string>();
+  const named = new Map<string, { readonly field: string; readonly source: string }>();
+  const extraSkills: Record<Phase, readonly ExtraSkill[]> = { ...DEFAULT_KIT_CONFIG.extraSkills };
+  for (const phase of PHASES) {
+    const role: ExtraSkill[] = [];
+    const pickedAt = new Map<string, string>();
+    (picks[phase] ?? []).forEach((pick, i) => {
+      const field = `roles.${phase}.skills[${i}]`;
+      const fail = (reason: string) => {
+        picksRead = false;
+        context.errors.push(`${field} is ${JSON.stringify(pick)}: ${reason}`);
+      };
+      const parsed = PICK.exec(pick);
+      if (parsed === null || parsed[2] === "." || parsed[2] === "..") return fail("a pick must be owner/name/skill");
+      const [, repository = "", name = ""] = parsed;
+      const source = pinned.get(repository.toLowerCase());
+      if (source === undefined) {
+        if (lockRead) fail(`${repository} has no pin in ${SKILLS_SOURCES_LOCK_PATH}`);
+        return;
+      }
+      pickedFrom.add(source.toLowerCase());
+      const key = `${source.toLowerCase()}/${name}`;
+      const twice = pickedAt.get(key);
+      if (twice !== undefined) return fail(`${twice} already picks it`);
+      pickedAt.set(key, field);
+      const clash = named.get(name);
+      if (clash !== undefined && clash.source !== source) {
+        return fail(`${clash.field} already picks a skill named ${name} from ${clash.source}`);
+      }
+      if (clash === undefined) named.set(name, { field, source });
+      role.push({ source, name });
+    });
+    extraSkills[phase] = role;
+  }
+  // A pick that failed to read may be the one meant for a pin that looks unused.
+  if (lockRead && picksRead) {
+    skillsSources.forEach((source, i) => {
+      if (!pickedFrom.has(source.repository.toLowerCase())) {
+        context.errors.push(
+          `${SKILLS_SOURCES_LOCK_PATH}[${i}] pins ${source.repository}, but no role picks a skill from it`,
+        );
+      }
+    });
+  }
+  return { skillsSources, extraSkills };
+}
+
+/** `owner/name/skill`: a pinned source's repository, then the name the skill installs as. */
+const PICK = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/;
+
+/** The pins in the Skills sources lockfile; an empty or absent file pins none. */
+function readSkillsSources(text: string | null, context: ReadContext): readonly SkillsSource[] {
+  if (text === null || text.trim() === "") return [];
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    context.errors.push(`${SKILLS_SOURCES_LOCK_PATH} is not valid JSON: ${(error as Error).message}`);
+    return [];
+  }
+  if (!Array.isArray(raw)) {
+    context.errors.push(`${SKILLS_SOURCES_LOCK_PATH} must be a list of { repository, sha } pins`);
+    return [];
+  }
+  const sources: SkillsSource[] = [];
+  const pinnedAt = new Map<string, string>();
+  raw.forEach((value: unknown, i) => {
+    const entry = `${SKILLS_SOURCES_LOCK_PATH}[${i}]`;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      context.errors.push(`${entry} must be an object`);
+      return;
+    }
+    const pin = new Reader(value, entry, context);
+    const repository = pin.requiredString("repository", checkRepository);
+    const sha = pin.requiredString("sha", checkSha);
+    if (repository === undefined || sha === undefined) return;
+    const earlier = pinnedAt.get(repository.toLowerCase());
+    if (earlier !== undefined) {
+      context.errors.push(`${entry} pins ${repository}, which ${earlier} already pins`);
+      return;
+    }
+    pinnedAt.set(repository.toLowerCase(), entry);
+    sources.push({ repository, sha });
+  });
+  return sources;
+}
+
+function checkRepository(repository: string): string | null {
+  return REPOSITORY.test(repository) ? null : "a repository must be owner/name";
+}
+
+function checkSha(sha: string): string | null {
+  return FULL_SHA.test(sha) ? null : "a pin must be a full 40-character lowercase commit SHA";
 }
 
 function readInstructions(files: NonNullable<KitConfigSources["instructions"]>): KitConfig["instructions"] {
@@ -102,7 +273,8 @@ function readInstructions(files: NonNullable<KitConfigSources["instructions"]>):
   return instructions;
 }
 
-function readConfig(file: Reader): KitConfig {
+/** Reads config.json, collecting each pickable role's `skills` into `picks`. */
+function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
   const defaults = DEFAULT_KIT_CONFIG;
   const sandbox = file.object("sandbox");
   const roles = file.object("roles");
@@ -117,10 +289,10 @@ function readConfig(file: Reader): KitConfig {
       secrets: sandbox.envMap("secrets", requireOpReference) ?? defaults.sandbox.secrets,
     },
     roles: {
-      triage: readAgentRole(roles.object("triage"), defaults.roles.triage),
-      design: readAgentRole(roles.object("design"), defaults.roles.design),
-      implement: readAgentRole(roles.object("implement"), defaults.roles.implement),
-      review: readAgentRole(roles.object("review"), defaults.roles.review),
+      triage: readAgentRole(roles.object("triage"), defaults.roles.triage, picks, "triage"),
+      design: readAgentRole(roles.object("design"), defaults.roles.design, picks, "design"),
+      implement: readAgentRole(roles.object("implement"), defaults.roles.implement, picks, "implement"),
+      review: readAgentRole(roles.object("review"), defaults.roles.review, picks, "review"),
       dispatch: readDispatch(roles.object("dispatch"), defaults.roles.dispatch),
       stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp),
     },
@@ -134,7 +306,10 @@ function orDefault<T>(value: T | null | undefined, fallback: T | null): T | null
   return value === undefined ? fallback : value;
 }
 
-function readAgentRole(role: Reader, defaults: AgentRole): AgentRole {
+function readAgentRole(role: Reader, defaults: AgentRole, picks: Picks, phase: Phase): AgentRole {
+  const skills = role.stringList("skills");
+  if (skills !== undefined) picks[phase] = skills;
+  else if (role.has("skills")) picks[phase] = null;
   return {
     model: role.string("model", refuseFable) ?? defaults.model,
     effort: orDefault(role.nullableString("effort", checkEffort), defaults.effort),
@@ -243,6 +418,16 @@ class Reader {
     return value;
   }
 
+  /** A string that must be there, refused when `check` returns a reason. */
+  requiredString(key: string, check?: (value: string) => string | null): string | undefined {
+    if (!Object.hasOwn(this.#value, key)) {
+      this.#take(key);
+      this.#fail(`${this.#field(key)} is missing`);
+      return undefined;
+    }
+    return this.string(key, check);
+  }
+
   positiveInteger(key: string): number | undefined {
     return this.wholeNumber(key, 1);
   }
@@ -297,6 +482,11 @@ class Reader {
       if (value !== undefined) result[name] = value;
     }
     return result;
+  }
+
+  /** Whether this object gives `key` at all. */
+  has(key: string): boolean {
+    return Object.hasOwn(this.#value, key);
   }
 
   /** Reports every field in this object that no read asked for. */
