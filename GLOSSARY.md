@@ -134,6 +134,10 @@ _Avoid_: walkthrough, hand-off
 The issue an Auditor files: up to three refactoring candidates for the Operator to file as issues or set aside, closed by the Operator when done.
 _Avoid_: architecture review, report
 
+**Retro**:
+The issue an agent files each week proposing up to three changes to how the factory works in a Product repo, each with its evidence, closed by the Operator when done.
+_Avoid_: retrospective, factory-tune, self-improvement run
+
 **Fast path**:
 Triage sending an issue straight to an Implementer, skipping the Design session.
 _Avoid_: fast-track, easy fix
@@ -173,6 +177,10 @@ _Avoid_: container, VM, workspace
 **Trust-root file**:
 A file in a Product repo that steers how agents behave or how their work is judged, so agents may never change it. An agent in a Pairing session counts as the Operator, so it may.
 _Avoid_: config file, protected file
+
+**Coding standards**:
+A Product repo's written rules for how its code should look, which the Reviewer judges against and only the Operator changes.
+_Avoid_: style guide, conventions, review instructions
 
 **Merge gate**:
 The rule that only the Operator merges a pull request into a Product repo's main branch; agents never push to it.
