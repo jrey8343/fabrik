@@ -2,7 +2,7 @@
 // run ends, the one schema 1 record of that run, and the paths it and its
 // transcript take in the store, or no record when no agent run ended. The
 // stream is read through the one stream-json reader (src/agent/stream.ts).
-// Pure, no I/O.
+// The paths are inside the store, RUN_STORE (src/kit/runStore.ts). Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
@@ -10,9 +10,6 @@ import { infrastructureFailureOf } from "../loop/failures.ts";
 import type { AgentRole, InfrastructureFailure, KitConfig, Verdict } from "../loop/types.ts";
 import { parseVerdict } from "../loop/verdict.ts";
 import { type NeededJob, type Needs, pushJobInput } from "./pushJob.ts";
-
-/** The central private repo every Product repo's records and transcripts go to (ADR-0009). */
-export const RUN_STORE = "jrey8343/fabrik-runs";
 
 /** What the push job knows when the run ends. */
 export interface RunEnd {
