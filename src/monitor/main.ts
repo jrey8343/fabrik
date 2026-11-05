@@ -1,11 +1,11 @@
 // The Monitor's program (#148): reads the Product repo's Kit config from the
 // default branch and checks it as the Loop does, lists every fabrik:monitor
 // issue and the Sentry project's unresolved `error` and `fatal` groups, plans
-// with the Monitor core (src/monitor/core.ts), files what the plan says, and
-// writes the step summary. It talks to GitHub and Sentry through their APIs
-// alone: it never checks out or runs Product code, makes no model call and
-// writes no Run record. Nothing runs it yet; switch-on wires it into the
-// scheduled tick as its own job.
+// with the Monitor core (src/monitor/core.ts), files and rewrites what the
+// plan says, and writes the step summary. It talks to GitHub and Sentry
+// through their APIs alone: it never checks out or runs Product code, makes no
+// model call and writes no Run record. Nothing runs it yet; switch-on wires it
+// into the scheduled tick as its own job.
 //   node src/monitor/main.ts
 // Reads FABRIK_APP_TOKEN, the Fabrik App's token on the Product repo, and
 // FABRIK_APP_SLUG, the App's slug, which names the issues it opened. When
@@ -171,9 +171,11 @@ async function readSentry(errors: MonitorErrors | null): Promise<SentryReading> 
 }
 
 /**
- * The input with the latest event read for each group the first plan files,
- * and only those. A group whose latest event can't be read is filed without
- * it, with a warning.
+ * The input with the latest event read for each group the first plan files or
+ * rewrites the stats of, and only those: a release changes only with a new
+ * event, which changes the other stats too. A group whose latest event can't
+ * be read is filed without it, or keeps the release its stats block names,
+ * with a warning.
  */
 async function withLatestEvents(
   input: MonitorInput,
@@ -181,12 +183,13 @@ async function withLatestEvents(
   errors: MonitorErrors | null,
 ): Promise<{ readonly input: MonitorInput; readonly notes: readonly string[] }> {
   const filing = new Set(plan.open.flatMap((issue) => (issue.sentryGroup === null ? [] : [issue.sentryGroup])));
-  if (errors === null || input.sentry?.kind !== "read" || filing.size === 0) return { input, notes: [] };
+  const rewriting = new Set(plan.rewrite.flatMap((rewrite) => (rewrite.sentryGroup === null ? [] : [rewrite.sentryGroup])));
+  if (errors === null || input.sentry?.kind !== "read" || filing.size + rewriting.size === 0) return { input, notes: [] };
   const get = sentryClient(errors, process.env["FABRIK_SENTRY_TOKEN"] ?? "");
   const notes: string[] = [];
   const groups: GroupFacts[] = [];
   for (const group of input.sentry.groups) {
-    if (!filing.has(group.id)) {
+    if (!filing.has(group.id) && !rewriting.has(group.id)) {
       groups.push(group);
       continue;
     }
@@ -196,14 +199,15 @@ async function withLatestEvents(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.log(`::warning title=Sentry unreachable::${message}`);
-      notes.push(`Warning: the latest event of Sentry's ${group.shortId} couldn't be read, so its issue shows no release or frames: ${message}`);
+      const shows = filing.has(group.id) ? "its issue shows no release or frames" : "its issue's stats keep the release they named";
+      notes.push(`Warning: the latest event of Sentry's ${group.shortId} couldn't be read, so ${shows}: ${message}`);
       groups.push(group);
     }
   }
   return { input: { ...input, sentry: { ...input.sentry, groups } }, notes };
 }
 
-/** Files each issue the plan opens, returning a step-summary line for each. */
+/** Files each issue the plan opens and rewrites each body it rewrites, returning a step-summary line for each. */
 async function apply(github: GitHub, repo: Repo, plan: MonitorPlan): Promise<string[]> {
   const lines: string[] = [];
   for (const issue of plan.open) {
@@ -214,6 +218,11 @@ async function apply(github: GitHub, repo: Repo, plan: MonitorPlan): Promise<str
       labels: issue.labels,
     })) as { number: number };
     lines.push(`Filed #${filed.number}: ${issue.title}`);
+  }
+  for (const rewrite of plan.rewrite) {
+    // Only the body changes: no comment, and an edit is no event the caller's workflow runs on.
+    await github.rest("PATCH", `/repos/${repo.owner}/${repo.name}/issues/${rewrite.issue}`, { body: rewrite.body });
+    lines.push(`Refreshed the stats block on #${rewrite.issue}.`);
   }
   return lines;
 }

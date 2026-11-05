@@ -43,7 +43,33 @@ export function aGroup(overrides: Partial<GroupFacts> = {}): GroupFacts {
   };
 }
 
-/** Open issue 40, filed by the Fabrik App for group 4504 and labelled fabrik:monitor. */
+/** The stats block's lines for aGroup()'s stats, as the Monitor writes them. */
+export const AGROUP_STATS: readonly string[] = [
+  "- Events in the last 24 hours: 9",
+  "- Users affected: 4",
+  "- Last seen: 2026-11-06 06:15 UTC",
+  "- Release: `clinic@1.4.0`",
+];
+
+/** A Monitor issue's body for group 4504, its stats block holding these lines. */
+export function aMonitorIssueBody(stats: readonly string[] = AGROUP_STATS): string {
+  return [
+    "<!-- fabrik:monitor sentry:4504 -->",
+    "Sentry reports a production error in this repo, `CLINIC-7`.",
+    "",
+    "- Culprit: `POST /api/book`",
+    "<!-- fabrik:monitor-stats -->",
+    ...stats,
+    "<!-- /fabrik:monitor-stats -->",
+    "",
+    "[The group in Sentry](https://acme.sentry.io/issues/4504/)",
+  ].join("\n");
+}
+
+/**
+ * Open issue 40, filed by the Fabrik App for group 4504 and labelled
+ * fabrik:monitor, its stats block showing aGroup()'s stats.
+ */
 export function aMonitorIssue(overrides: Partial<MonitorIssue> = {}): MonitorIssue {
   return {
     number: 40,
@@ -52,9 +78,14 @@ export function aMonitorIssue(overrides: Partial<MonitorIssue> = {}): MonitorIss
     closedAt: null,
     labels: ["fabrik:monitor", "bug", "ready-for-agent"],
     byApp: true,
-    body: "<!-- fabrik:monitor sentry:4504 -->\nSentry reports a production error.",
+    body: aMonitorIssueBody(),
     ...overrides,
   };
+}
+
+/** Issue 40 closed as completed on 2026-11-03 at 10:00 UTC, by its fix merging. */
+export function aClosedMonitorIssue(overrides: Partial<MonitorIssue> = {}): MonitorIssue {
+  return aMonitorIssue({ open: false, stateReason: "completed", closedAt: "2026-11-03T10:00:00Z", ...overrides });
 }
 
 /** A tick with production errors on and Sentry read, giving these groups and no Monitor issues. */
