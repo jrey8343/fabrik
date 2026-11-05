@@ -3,8 +3,9 @@
 // lockfile pins, plus the Extra skills the Product repo picks from its own
 // Skills sources. Run as
 //   node src/skills/fetch.ts <product checkout> [role]
-// where a role installs only that role's Extra skills, and none installs every
-// pick. Each download is content-addressed by commit, so the SHA is the pin.
+// where a role installs only that role's Extra skills (the Auditor's, none),
+// and none installs every pick. Each download is content-addressed by commit,
+// so the SHA is the pin.
 import { execFile } from "node:child_process";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,8 +22,18 @@ const run = promisify(execFile);
 /** The single-SHA marker the install record replaced, removed when a fetch finds it. */
 const OLD_SKILLS_MARKER = ".fabrik-skills-sha";
 
-/** Which Extra skill picks a fetch installs: one role's, or every role's (a session at the wheel). */
-export type SkillsToInstall = Phase | "every";
+/**
+ * Which Extra skill picks a fetch installs: one role's, or every role's (a
+ * session at the wheel). The Auditor takes none, so an Auditor run gets the
+ * Base skills alone (ADR-0008).
+ */
+export type SkillsToInstall = Phase | "audit" | "every";
+
+/** The roles a fetch installs the picks of. */
+function pickingRoles(install: SkillsToInstall): readonly Phase[] {
+  if (install === "every") return PHASES;
+  return install === "audit" ? [] : [install];
+}
 
 export interface FetchOptions {
   /** Which picks to install beside the Base skills; every pick unless one role is named. */
@@ -99,7 +110,7 @@ export async function fetchSkills(
   const config = resolved.ok ? resolved.config : null;
   // An invalid Kit config only costs the Extra skills when the repo asks for some.
   const configErrors = resolved.ok || !(await asksForExtraSkillsIn(productDir)) ? [] : resolved.errors;
-  const picks = config === null ? [] : picksIn(config, install === "every" ? PHASES : [install]);
+  const picks = config === null ? [] : picksIn(config, pickingRoles(install));
 
   const work = await mkdtemp(join(tmpdir(), "fabrik-skills-"));
   try {
@@ -147,7 +158,7 @@ export async function fetchSkills(
         ? configErrors
         : checkExtraSkills({
             config,
-            roles: install === "every" ? PHASES : [install],
+            roles: pickingRoles(install),
             // A source the record shows unchanged passed this check when it was installed.
             manifests: new Map(
               extras.flatMap((source) => (source.extracted === undefined ? [] : [[source.repository, source.manifest ?? null]])),
@@ -234,8 +245,9 @@ export async function readInstallRecord(productDir: string): Promise<InstallReco
 
 if (import.meta.main) {
   const [productDir, role] = process.argv.slice(2);
-  if (productDir === undefined || (role !== undefined && !(PHASES as readonly string[]).includes(role))) {
-    console.error(`Usage: node src/skills/fetch.ts <product checkout> [${PHASES.join("|")}]`);
+  const roles: readonly string[] = [...PHASES, "audit"];
+  if (productDir === undefined || (role !== undefined && !roles.includes(role))) {
+    console.error(`Usage: node src/skills/fetch.ts <product checkout> [${roles.join("|")}]`);
     process.exit(2);
   }
   const kitDir = resolve(import.meta.dirname, "..", "..");

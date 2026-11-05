@@ -55,13 +55,9 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
   };
 }
 
-/**
- * An Auditor's run on Audit 90 in `owner/product`, costing $1. Until #210
- * makes `audit` an AFK role, the type doesn't know it, but the store's
- * records are read as written.
- */
+/** An Auditor's run on Audit 90 in `owner/product`, costing $1. */
 export function anAuditRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
-  return aRunRecord({ role: "audit" as string as RunRecord["role"], issue: 90, pullRequest: null, ...overrides });
+  return aRunRecord({ role: "audit", issue: 90, pullRequest: null, ...overrides });
 }
 
 /** A run's cost fields when one of its models has an unknown cost basis: no figure for it, and no total. */

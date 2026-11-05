@@ -45,7 +45,7 @@ describe("The Kit's workflows", () => {
 
   // Kept for reading a failed or timed-out run. Never fabrik-agent-*: the push job
   // downloads those, and reads an empty download as a timeout.
-  it.each(["triage", "design", "implement", "review"])(
+  it.each(["triage", "design", "implement", "review", "audit"])(
     "loop.yml's %s job always uploads its gzipped transcript, apart from the push job's artifacts",
     (job) => {
       const body = loop.split(/\n(?=  [a-z-]+:\n)/).find((section) => section.startsWith(`  ${job}:\n`))!;
@@ -71,7 +71,7 @@ describe("The Kit's workflows", () => {
     expect(kit).toContain("request-changes: ${{ steps.route.outputs.request-changes }}");
   });
 
-  it.each(["triage", "design", "implement", "review"])(
+  it.each(["triage", "design", "implement", "review", "audit"])(
     "loop.yml's %s job passes out the model and effort it ran and the commit it started from",
     (job) => {
       const body = jobIn(loop, job);
@@ -103,7 +103,7 @@ describe("The Kit's workflows", () => {
   });
 
   // A Step-up run is an Implement run on a stronger model, so it gets implement's Extra skills.
-  it.each(["triage", "design", "implement", "review"])(
+  it.each(["triage", "design", "implement", "review", "audit"])(
     "loop.yml's %s job passes its role to prepare-agent, which fetches the skills before any secret loads",
     (role) => {
       const steps = stepsOf(jobIn(loop, role));
@@ -115,6 +115,13 @@ describe("The Kit's workflows", () => {
       expect(firstSecret).toBeGreaterThan(prepare);
     },
   );
+
+  it("prepare-agent hands an Auditor run's marked commit to the agent-inputs step, which reads its inputs for it", () => {
+    const inputs = prepareAgent.split(/\n(?=    - )/).find((step) => step.includes("src/agent/inputs.ts"));
+
+    expect(prepareAgent).toMatch(/\n  audit-commit:\n\s+description: .*\n\s+required: false\n\s+default: ""\n/);
+    expect(inputs).toContain("FABRIK_AUDIT_COMMIT: ${{ inputs.audit-commit }}");
+  });
 
   it("prepare-agent installs the Base skills plus its role's Extra skills, and holds no secret", () => {
     expect(prepareAgent).toMatch(/\n  role:\n\s+description: .*\n\s+required: true\n/);

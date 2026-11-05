@@ -3,7 +3,7 @@
 // tick opens each one pending; the Auditor's run fills it in or fails it.
 import { AUDIT_LABEL } from "./labels.ts";
 import { auditMarksIn } from "./markers.ts";
-import type { AuditIssueSnapshot, IssueSnapshot } from "./types.ts";
+import type { AuditIssueSnapshot, IssueSnapshot, KitConfig, Plan } from "./types.ts";
 
 /** An Audit as the Kit reads it from its issue. */
 export interface Audit {
@@ -58,4 +58,22 @@ export function lastAudit(issues: readonly AuditIssueSnapshot[]): Audit | null {
  */
 export function isPendingAudit(issue: IssueSnapshot): boolean {
   return issue.open && issue.byApp && issue.labels.includes(AUDIT_LABEL) && auditMarksIn(issue.body).pending;
+}
+
+/**
+ * The plan for the App's pending Audit, once it's opened: an Auditor run on
+ * roles.audit's model, effort and timeout, reading up to the Audit's marked
+ * commit, which its job checks out. One whose body has lost its audit marker
+ * names nothing to read, so it starts nothing.
+ */
+export function startAuditorRun(audit: IssueSnapshot, config: KitConfig): Plan {
+  const { commit } = auditMarksIn(audit.body);
+  if (commit === null) {
+    return { kind: "nothing", reason: `#${audit.number} is a pending Audit with no audit marker, so it names no commit to read` };
+  }
+  const { model, effort, timeoutMinutes } = config.roles.audit;
+  return {
+    kind: "act",
+    actions: [{ kind: "start-agent-run", role: "audit", issue: audit.number, commit, model, effort, timeoutMinutes }],
+  };
 }

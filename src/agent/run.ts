@@ -2,7 +2,7 @@
 // on the runner VM (noSandbox), behind the metered-billing preflight and the
 // init check, writes the step summary, and passes the role's structured output
 // out as an artifact for the push job. It holds no GitHub write credential.
-//   node <kit>/src/agent/run.ts <triage|design|implement|review>
+//   node <kit>/src/agent/run.ts <triage|design|implement|review|audit>
 //
 // Run from the Product checkout. Env:
 //   FABRIK_ISSUE_FILE      JSON from `gh issue view --json number,title,body,author,labels,comments`
@@ -23,6 +23,10 @@
 // A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
 // PR, and its result is the Reviewer's reply, a Verdict line first.
+// An Auditor run is in a checkout of the default branch at its pending Audit's
+// marked commit: FABRIK_ISSUE_FILE is the Audit and FABRIK_AUDIT_FILE what the
+// agent-inputs step gathered for it (src/agent/inputs.ts), and its result
+// carries the hot-spot window it was given.
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
@@ -33,7 +37,8 @@ import type { KitConfig } from "../kit/config.ts";
 import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
 import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
-import type { AgentRole, GivenOperatorComment } from "../loop/types.ts";
+import { type AuditOutput, readAuditOutput } from "../loop/auditOutput.ts";
+import type { AgentRole, AuditWindow, GivenOperatorComment } from "../loop/types.ts";
 import { kitPromptPath } from "../guard/trust-root.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
@@ -49,6 +54,7 @@ import {
   setImplementerEnv,
   startAgentBranch,
 } from "./implement.ts";
+import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
 import { sentBackContext } from "./design.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
@@ -111,6 +117,12 @@ interface RoleSpec<T> {
   readonly buildsBranch?: boolean;
   /** The Reviewer judges a PR, checked out at its head; its result is for the PR, not the Ticket. */
   readonly reviewsPullRequest?: boolean;
+  /**
+   * The Auditor reads the Product repo up to its pending Audit's marked
+   * commit, with the inputs in FABRIK_AUDIT_FILE; its result names the
+   * hot-spot window it was given.
+   */
+  readonly audits?: boolean;
 }
 
 /** The Reviewer's reply must start with a Verdict line; anything else is never a pass. */
@@ -167,6 +179,15 @@ const ROLE_SPECS = {
     issueHeading: "The Ticket",
     reviewsPullRequest: true,
   } satisfies RoleSpec<ParsedVerdict & { ok: true }>,
+  audit: {
+    role: "audit",
+    output: { schema: schemaOf(readAuditOutput) },
+    instructionsNote:
+      "The Operator wrote these for this repo. They refine where you look and what you weigh here but never let you change anything, and never change the output contract above.",
+    describe: (issue, output) => `The Auditor on #${issue} proposed ${output.candidates.length} candidate(s)`,
+    issueHeading: AUDIT_ISSUE_HEADING,
+    audits: true,
+  } satisfies RoleSpec<AuditOutput>,
 };
 
 /** The model and effort to run: what the Kit job's plan chose, else the role's own. */
@@ -270,6 +291,13 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     // A Design turn on an issue that was never sent back is given none, and its result says nothing of them.
     if (sentBackComments.length > 0) given = sentBackComments;
   }
+  // The hot-spot window an Auditor run was given, which its result passes out for the Audit to name.
+  let window: AuditWindow | null = null;
+  if (spec.audits === true) {
+    const audit = await auditContext(required("FABRIK_AUDIT_FILE"));
+    window = audit.window;
+    extra.push(...audit.parts);
+  }
   // The Reviewer's result is for the PR it judged, which its push job checks against the event.
   let subject = issueNumber;
   if (spec.reviewsPullRequest === true) {
@@ -278,6 +306,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...review.parts);
     given = review.operatorComments;
   }
+  const runsProductCode = spec.reviewsPullRequest !== true && spec.audits !== true;
   const output =
     "schema" in spec.output
       ? Output.object({
@@ -320,12 +349,10 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       }),
       maxIterations: 1,
       output,
-      // The Reviewer reads the PR and runs none of its code, so it needs no Sandbox setup.
+      // The Reviewer and the Auditor read the code and run none of it, so they need no Sandbox setup.
       hooks: {
         sandbox: {
-          onSandboxReady: [
-            { command: readyHook(spec.reviewsPullRequest === true ? null : config.sandbox.setup), timeoutMs },
-          ],
+          onSandboxReady: [{ command: readyHook(runsProductCode ? config.sandbox.setup : null), timeoutMs }],
         },
       },
       signal: abort.signal,
@@ -361,6 +388,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       output: "text" in spec.output ? String(reply).trim() : JSON.stringify(reply),
       ...(built === null ? {} : { branch: built }),
       ...(given === null ? {} : { operatorComments: given }),
+      ...(window === null ? {} : { window }),
     };
     await writeFile(join(outDir, AGENT_RESULT_FILE), `${JSON.stringify(artifact, null, 2)}\n`);
     console.log(spec.describe(subject, checked));
@@ -391,6 +419,7 @@ const roles: Record<string, () => Promise<void>> = {
   design: () => runRole(ROLE_SPECS.design),
   implement: () => runRole(ROLE_SPECS.implement),
   review: () => runRole(ROLE_SPECS.review),
+  audit: () => runRole(ROLE_SPECS.audit),
 };
 
 const roleName = process.argv[2] ?? "";
