@@ -191,3 +191,7 @@ _Avoid_: eval, grader, judge
 **Human touch**:
 Each time the Operator steps into a Ticket's path between Dispatch and merge: a push to its branch, a Request changes, a Retry or Step-up they asked for, or a Pairing session or Operator step on it. The merge, Design-session answers and Operator comments are not touches.
 _Avoid_: intervention, manual fix
+
+**Architectural escape**:
+An Audit candidate the Operator files as an issue that traces back to merged agent pull requests: structural decay that passed Review. Counted against those pull requests, never against a candidate the Operator set aside.
+_Avoid_: architecture regression, design debt
