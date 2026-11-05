@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MAX_AUDIT_CANDIDATES, readAuditOutput } from "../loop/auditOutput.ts";
 import { readDesignTurnOutput } from "../loop/designOutput.ts";
 import { readPullRequestRunOutput } from "../loop/implementOutput.ts";
+import { STRENGTHS } from "../loop/types.ts";
 import { CONSIDERED_PREFIX, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
 import { OPERATOR_COMMENTS_HEADING } from "./operatorComments.ts";
@@ -138,8 +139,6 @@ describe("The Auditor's prompt", () => {
     const read = readAuditOutput(example);
     expect(read).toMatchObject({ ok: true });
     const strengths = read.ok ? read.output.candidates.map((candidate) => candidate.strength) : [];
-    expect(strengths).toEqual([...strengths].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b)));
+    expect(strengths).toEqual([...strengths].sort((a, b) => STRENGTHS.indexOf(a) - STRENGTHS.indexOf(b)));
   });
 });
-
-const ORDER = ["strong", "worth-exploring", "speculative"];
