@@ -50,6 +50,10 @@ _Avoid_: worker, coder, builder
 An agent on a frontier model that judges an Implementer's pull request against the ticket and the Product repo's standards.
 _Avoid_: checker, critic, QA
 
+**Auditor**:
+An agent on a frontier model that reads a Product repo's recent changes on a schedule and files deepening opportunities as one Audit, changing nothing.
+_Avoid_: architect, critic
+
 ## The loop
 
 **Loop**:
@@ -103,6 +107,10 @@ _Avoid_: manual brief, human brief
 **Pairing session**:
 The Operator working through an issue only they can do with an agent beside them, step by step, ending with what was done recorded on the issue.
 _Avoid_: walkthrough, hand-off
+
+**Audit**:
+The issue an Auditor files: up to three refactoring candidates for the Operator to file as issues or set aside, closed by the Operator when done.
+_Avoid_: architecture review, report
 
 **Fast path**:
 Triage sending an issue straight to an Implementer, skipping the Design session.
