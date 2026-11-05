@@ -191,3 +191,60 @@ describe("Review: the Reviewer's Verdict", () => {
     expect(plan).toMatchObject({ kind: "fail", failure: "infrastructure" });
   });
 });
+
+describe("Review: the Operator comments the Reviewer weighed", () => {
+  const given = [
+    { id: "conversation-3", url: "https://github.com/acme/shop/pull/50#issuecomment-3" },
+    { id: "inline-9", url: "https://github.com/acme/shop/pull/50#discussion_r9" },
+  ];
+
+  it("the Verdict ends with an Operator comments considered section, one link per comment, from what the run was given", () => {
+    const plan = planFor(
+      reviewed("verdict: pass\n\nThe parking copy matches the Operator's answer.\n\noperator comments considered: conversation-3, inline-9", {
+        operatorComments: given,
+      }),
+      snapshotOfPullRequest(aPullRequest()),
+      kitConfig(),
+    );
+
+    const body = commentsOf(plan)[0] ?? "";
+    expect(body).toMatch(
+      /\n\n### Operator comments considered\n\n- \[`conversation-3`\]\(https:\/\/github\.com\/acme\/shop\/pull\/50#issuecomment-3\)\n- \[`inline-9`\]\(https:\/\/github\.com\/acme\/shop\/pull\/50#discussion_r9\)$/,
+    );
+    // The line naming them is the Kit's to render, not part of the findings.
+    expect(body).not.toContain("operator comments considered:");
+    expect(body).toContain("The parking copy matches the Operator's answer.");
+  });
+
+  it("an id the run wasn't given never becomes a link, and the Verdict still lands", () => {
+    const plan = planFor(
+      reviewed("verdict: execution-flaw\n\nFix the build.\n\noperator comments considered: conversation-3, conversation-404", {
+        operatorComments: given,
+      }),
+      snapshotOfPullRequest(aPullRequest()),
+      kitConfig(),
+    );
+
+    const body = commentsOf(plan)[0] ?? "";
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["comment", "add-labels"]);
+    expect(body).toContain("- [`conversation-3`](https://github.com/acme/shop/pull/50#issuecomment-3)");
+    expect(body).not.toContain("conversation-404");
+    expect(body).not.toContain("inline-9");
+  });
+
+  it.each([
+    ["names none", "verdict: pass\n\nLooks right.", given],
+    ["names only ids it wasn't given", "verdict: pass\n\nLooks right.\n\noperator comments considered: review-1", given],
+    ["names a comment but was given none", "verdict: pass\n\nLooks right.\n\noperator comments considered: conversation-3", undefined],
+  ])("a Verdict whose Reviewer %s leaves the section out", (_, output, operatorComments) => {
+    const plan = planFor(
+      reviewed(output, operatorComments === undefined ? {} : { operatorComments }),
+      snapshotOfPullRequest(aPullRequest()),
+      kitConfig(),
+    );
+
+    const body = commentsOf(plan)[0] ?? "";
+    expect(body).not.toContain("Operator comments considered");
+    expect(body).toMatch(/\[The run\]\(https:\/\/github\.com\/acme\/shop\/actions\/runs\/42\/attempts\/1\)$/);
+  });
+});

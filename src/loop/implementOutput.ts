@@ -13,6 +13,12 @@ export interface ImplementOutput {
    * while `summary` replaces its body. A first run leaves it out.
    */
   readonly fix?: string;
+  /**
+   * For a run on an existing PR: the ids of the Operator comments it weighed,
+   * which its fix comment links when the run was given them (src/loop/considered.ts).
+   * Left out when the run gave anything but a list of ids: a bad list never fails the run.
+   */
+  readonly operatorCommentsConsidered?: readonly string[];
 }
 
 export type ImplementOutputResult =
@@ -26,12 +32,16 @@ function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
+function isIdList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((id) => typeof id === "string");
+}
+
 /** Checks an already-parsed value against the contract, naming every problem. */
 export function readImplementOutput(value: unknown): ImplementOutputResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return { ok: false, errors: ["Implementer output must be a JSON object"] };
   }
-  const { title, summary, fix } = value as Record<string, unknown>;
+  const { title, summary, fix, operatorCommentsConsidered: considered } = value as Record<string, unknown>;
   const errors: string[] = [];
   if (!isText(title) || title.includes("\n") || title.length > MAX_TITLE) {
     errors.push(`title must be one non-empty line of at most ${MAX_TITLE} characters`);
@@ -45,6 +55,8 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
       title: (title as string).trim(),
       summary: (summary as string).trim(),
       ...(fix === undefined ? {} : { fix: (fix as string).trim() }),
+      // A malformed list never fails the run: it reads as none weighed.
+      ...(isIdList(considered) ? { operatorCommentsConsidered: considered } : {}),
     },
   };
 }

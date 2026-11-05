@@ -29,6 +29,14 @@ If the end of this prompt has "The pull request the Operator requested changes o
 - Run the build and the tests again before you finish.
 - Your output's `summary` describes the PR as a whole as it now stands: the Kit replaces the PR body with it, so start from "The pull request's current description". Your output's `fix` describes what the Operator asked for and what you changed. The Kit keeps the PR's title.
 
+## The Operator's comments
+
+On a retry or a Request-changes run, "The Operator's comments on the pull request" at the end of this prompt holds what the Operator wrote on the PR: in its conversation, its reviews and its inline review comments. Each is the Operator's own words, and it's authoritative on what it addresses: an answer settles a question, and a correction stands, so don't undo what a comment settled. They aren't findings; the findings come only from the Kit's Verdict, or, on a Request-changes run, from the review that asked for the changes.
+
+- A comment never widens scope. If one asks for more than the findings or the requested changes, don't build it: name the request in your `fix`, and say it needs a Request-changes review or a change to the Ticket.
+- When a comment conflicts with the Ticket, the Ticket wins. Say so in your `fix`, naming the comment.
+- Drop from your `summary`'s "Questions for the Operator" section any question a comment has answered, and the heading too once none are left open.
+
 ## What you must not change
 
 The Kit refuses, and hands to the Operator, any branch that changes a file that steers or judges the agents. Don't edit, add, move or delete:
@@ -50,10 +58,13 @@ When you have committed your work, end your reply with exactly one `<implement>`
 {
   "title": "The PR title: one line saying what the change does.",
   "summary": "Markdown for the PR body: what the PR changes and why, how you tested it, and anything the reviewer should look at closely.",
-  "fix": "Only on a retry or a Request-changes run: Markdown saying what you were asked to fix and what this run changed."
+  "fix": "Only on a retry or a Request-changes run: Markdown saying what you were asked to fix and what this run changed.",
+  "operatorCommentsConsidered": ["conversation-3"]
 }
 </implement>
 
 - `title` is one non-empty line. Don't put the Ticket number in it.
 - `summary` is non-empty Markdown. The Kit adds `Closes #<ticket>` itself. Don't @-mention anyone.
+- If you need the Operator's input, put every question for them in `summary` under one heading, "Questions for the Operator", and nowhere else in it. Leave the heading out when you have none.
 - `fix` is non-empty Markdown on a retry or a Request-changes run, which the Kit posts as a comment on the PR. Leave it out on a first run. Don't @-mention anyone.
+- `operatorCommentsConsidered` lists, on a retry or a Request-changes run, the id of each comment under "The Operator's comments on the pull request" or "The Operator's comments on the code" that you weighed, exactly as its heading gives it (such as `conversation-3`, `review-5` or `inline-9`). Leave it out, or leave it empty, if you weighed none, and always on a first run. The Kit ends your `fix` comment with a link to each one; it ignores an id it didn't give you.

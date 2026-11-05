@@ -255,6 +255,35 @@ describe("A Request-changes run's branch", () => {
     expect(commentsOf(plan)[0]).not.toContain("Adds the order total");
   });
 
+  it("ends its fix comment with the Operator comments it weighed, linking only those it was given", () => {
+    const event = requestChangesPushed();
+    if (event.kind !== "implement-run-finished" || event.fixes === undefined) throw new Error("expected a Request-changes run");
+    const plan = planFor(
+      {
+        ...event,
+        output: JSON.stringify({
+          title: "Rename the total",
+          summary: "Adds the order total, named as the Operator asked.",
+          fix: "Renamed the total as the Operator asked.",
+          operatorCommentsConsidered: ["inline-12", "conversation-999"],
+        }),
+        fixes: {
+          ...event.fixes,
+          operatorComments: [
+            { id: "conversation-4", url: "https://github.com/acme/shop/pull/50#issuecomment-4" },
+            { id: "inline-12", url: "https://github.com/acme/shop/pull/50#discussion_r12" },
+          ],
+        },
+      },
+      pushSnapshot(),
+      kitConfig(),
+    );
+
+    expect(commentsOf(plan)[0]).toMatch(
+      /Renamed the total as the Operator asked\.\n\n### Operator comments considered\n\n- \[`inline-12`\]\(https:\/\/github\.com\/acme\/shop\/pull\/50#discussion_r12\)$/,
+    );
+  });
+
   it("that only brings main in, to fix a conflict, is pushed: bringing the PR up to date is a change", () => {
     const plan = planFor(requestChangesPushed({ net: [], commits: [], updatedFromMain: true }), pushSnapshot(), kitConfig());
 

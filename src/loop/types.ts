@@ -54,6 +54,17 @@ export interface BranchChanges {
   readonly rebase?: { readonly onto: string; readonly conflicted: boolean };
 }
 
+/**
+ * An Operator comment an agent run was given, as its agent job recorded it
+ * from the input the Kit wrote, never from the agent's own text: what a
+ * Verdict or fix comment links when the run names it as weighed (ADR-0007).
+ */
+export interface GivenOperatorComment {
+  /** `conversation-<id>`, `review-<id>` or `inline-<id>`, as operatorCommentId makes it (src/agent/operatorComments.ts). */
+  readonly id: string;
+  readonly url: string;
+}
+
 /** Something that happened in a Product repo that the Loop may act on. */
 export type LoopEvent =
   | { readonly kind: "issue-opened"; readonly issue: number }
@@ -100,6 +111,8 @@ export type LoopEvent =
         readonly runUrl: string;
         /** Whether the run was the Operator's Request changes rather than a retry. */
         readonly requestChanges?: boolean;
+        /** The Operator comments on the PR the run was given; none when left out. */
+        readonly operatorComments?: readonly GivenOperatorComment[];
       };
     }
   | {
@@ -141,6 +154,8 @@ export type LoopEvent =
       /** The Reviewer's reply, unparsed: a Verdict line, then its findings (src/loop/verdict.ts). */
       readonly output: string;
       readonly runUrl: string;
+      /** The Operator comments the Reviewer was given; none when left out. */
+      readonly operatorComments?: readonly GivenOperatorComment[];
     }
   | {
       /** A review that requests changes was submitted on a PR: at the Merge gate, the Operator's ask for another run. */
@@ -151,6 +166,20 @@ export type LoopEvent =
       /** The login of whoever submitted it. */
       readonly reviewer: string;
       readonly reviewerIsBot: boolean;
+    }
+  | {
+      /**
+       * A comment on a PR: in its conversation, or a submitted review that
+       * doesn't request changes. An Operator comment on an agent PR is context
+       * for the next run that reads it, never a trigger (ADR-0007).
+       */
+      readonly kind: "pull-request-commented";
+      readonly pullRequest: number;
+      /** The login of whoever wrote it. */
+      readonly commenter: string;
+      readonly commenterIsBot: boolean;
+      /** Where it was made: a conversation comment, or a review, whose inline comments carry its reactions. */
+      readonly on: PullRequestCommentPlace;
     }
   | { readonly kind: "pull-request-left-draft"; readonly pullRequest: number }
   | { readonly kind: "pull-request-closed"; readonly pullRequest: number }
@@ -164,6 +193,15 @@ export type LoopEvent =
       /** When the tick ran, as an ISO 8601 time. */
       readonly now: string;
     };
+
+/**
+ * Where a PR comment was made: a conversation comment, by its id, or a
+ * submitted review, by its id. GitHub takes reactions on a review's inline
+ * comments but not on the review itself.
+ */
+export type PullRequestCommentPlace =
+  | { readonly kind: "conversation"; readonly comment: number }
+  | { readonly kind: "review"; readonly review: number };
 
 /** An issue as the core sees it, gathered fresh by the GitHub adapter. */
 export interface IssueSnapshot {
@@ -417,6 +455,16 @@ export type Action =
   | { readonly kind: "convert-to-draft"; readonly pullRequest: number }
   /** Takes a draft PR out of draft. */
   | { readonly kind: "mark-ready-for-review"; readonly pullRequest: number }
+  | {
+      /**
+       * Reacts to a PR comment, so its author sees it arrived: the conversation
+       * comment itself, or each inline comment of a review.
+       */
+      readonly kind: "react";
+      readonly pullRequest: number;
+      readonly on: PullRequestCommentPlace;
+      readonly content: "eyes";
+    }
   /** Requests a review on a PR: the Merge gate's one notification. */
   | { readonly kind: "request-review"; readonly pullRequest: number; readonly reviewer: string }
   /** Run a Dispatch check, in the Dispatch job, once the rest of this plan has landed. */

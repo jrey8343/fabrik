@@ -1,6 +1,7 @@
 // What a Design-session turn's prompt carries beyond the issue: when the
 // Ticket came back to design from an agent PR, that PR as src/agent/inputs.ts
 // read it into the issue's `sentBack`, set out as Markdown.
+import { operatorCommentsSection } from "./operatorComments.ts";
 
 interface SentBackInput {
   readonly pullRequest?: { readonly number?: unknown; readonly title?: unknown; readonly baseRefName?: unknown; readonly headRefName?: unknown };
@@ -12,6 +13,7 @@ interface SentBackInput {
     readonly commitId?: unknown;
     readonly comments?: readonly { readonly path?: unknown; readonly line?: unknown; readonly body?: unknown }[];
   }[];
+  readonly operatorComments?: unknown;
   readonly commits?: readonly { readonly sha?: unknown; readonly message?: unknown }[];
   readonly files?: readonly { readonly filename?: unknown; readonly status?: unknown; readonly additions?: unknown; readonly deletions?: unknown }[];
   readonly diff?: unknown;
@@ -68,6 +70,7 @@ export function sentBackContext(issue: unknown): { issue: unknown; parts: string
       );
     });
   }
+  parts.push(...operatorCommentsSection(sentBack.operatorComments, 3));
   const commits = sentBack.commits ?? [];
   const files = sentBack.files ?? [];
   parts.push(

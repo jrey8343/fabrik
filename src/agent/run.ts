@@ -32,7 +32,7 @@ import type { KitConfig } from "../kit/config.ts";
 import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
 import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
-import type { AgentRole } from "../loop/types.ts";
+import type { AgentRole, GivenOperatorComment } from "../loop/types.ts";
 import { kitPromptPath } from "../guard/trust-root.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
@@ -241,6 +241,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   // The Implementer builds on its own branch from main, with its test secrets.
   let branch: BuiltBranch | null = null;
   let onPullRequest = false;
+  // The Operator comments a run on an agent PR is given, recorded before the agent runs.
+  let given: GivenOperatorComment[] | null = null;
   const extra: string[] = [];
   if (spec.buildsBranch === true) {
     setImplementerEnv(config);
@@ -255,6 +257,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       onPullRequest = true;
       const context = reviewFile === "" ? await retryContext(retryFile) : await requestChangesContext(retryFile, reviewFile);
       extra.push(...context.parts);
+      given = context.operatorComments;
     }
   }
   if (spec.readsParentSpec === true) {
@@ -279,6 +282,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     const review = await reviewContext(productDir, required("FABRIK_PULL_REQUEST_FILE"), required("FABRIK_SPEC_FILE"));
     subject = review.pullRequest;
     extra.push(...review.parts);
+    given = review.operatorComments;
   }
   const output =
     "schema" in spec.output
@@ -353,6 +357,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       issue: subject,
       output: "text" in spec.output ? String(reply).trim() : JSON.stringify(reply),
       ...(built === null ? {} : { branch: built }),
+      ...(given === null ? {} : { operatorComments: given }),
     };
     await writeFile(join(outDir, AGENT_RESULT_FILE), `${JSON.stringify(artifact, null, 2)}\n`);
     console.log(spec.describe(subject, checked));

@@ -11,6 +11,8 @@ import type { KitConfig } from "../kit/config.ts";
 import { sandboxEnv } from "../kit/secrets.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { verdictsIn } from "../github/threads.ts";
+import type { GivenOperatorComment } from "../loop/types.ts";
+import { givenOperatorComments, operatorCommentId, operatorCommentsSection } from "./operatorComments.ts";
 import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -79,16 +81,29 @@ function currentDescription(body: unknown): string[] {
 }
 
 /**
- * What a retry's prompt carries beyond the Ticket: the PR it fixes, and the
- * findings of that PR's latest Verdict, the Fabrik App's comment with a marker.
+ * What a run that reads an agent PR (a Review, a retry or a Request-changes
+ * run) is given beyond the Ticket: the PR's number, its prompt parts, and the
+ * Operator comments among them, which its result passes out.
  */
-export async function retryContext(pullRequestFile: string): Promise<{ pullRequest: number; parts: string[] }> {
+export interface PullRequestRunContext {
+  readonly pullRequest: number;
+  readonly parts: string[];
+  readonly operatorComments: GivenOperatorComment[];
+}
+
+/**
+ * What a retry's prompt carries beyond the Ticket: the PR it fixes, the
+ * findings of that PR's latest Verdict, the Fabrik App's comment with a marker,
+ * and the Operator's comments on the PR, set apart from the findings.
+ */
+export async function retryContext(pullRequestFile: string): Promise<PullRequestRunContext> {
   const value: unknown = JSON.parse(await readFile(pullRequestFile, "utf8"));
-  const { number, title, body, comments } = (value ?? {}) as {
+  const { number, title, body, comments, operatorComments } = (value ?? {}) as {
     number?: unknown;
     title?: unknown;
     body?: unknown;
     comments?: { body?: unknown; author?: { __typename?: unknown } | null }[];
+    operatorComments?: unknown;
   };
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   // Only a bot's markers count, as in the core's snapshot, so nobody can plant findings by quoting one.
@@ -108,36 +123,49 @@ export async function retryContext(pullRequestFile: string): Promise<{ pullReque
       "## The findings to fix",
       "The latest Verdict on the PR, posted by the Kit:",
       latest.trimEnd(),
+      ...operatorCommentsSection(operatorComments),
     ],
+    operatorComments: givenOperatorComments(operatorComments),
   };
 }
 
 /**
- * What a Request-changes run's prompt carries beyond the Ticket: the PR, and
- * the Operator's review that asked for the changes, its inline comments
- * included. The Kit job's plan named that review only once it checked the
- * Operator wrote it, so this is the Operator speaking.
+ * What a Request-changes run's prompt carries beyond the Ticket: the PR, the
+ * Operator's review that asked for the changes, and the Operator's other
+ * comments on the PR. The review's own inline comments are shown once, in the
+ * review, each under its id, so the run can still name them as weighed. The
+ * Kit job's plan named that review only once it checked the Operator wrote it,
+ * so this is the Operator speaking.
  */
-export async function requestChangesContext(
-  pullRequestFile: string,
-  reviewFile: string,
-): Promise<{ pullRequest: number; parts: string[] }> {
-  const pullRequest = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as { number?: unknown; title?: unknown; body?: unknown };
+export async function requestChangesContext(pullRequestFile: string, reviewFile: string): Promise<PullRequestRunContext> {
+  const pullRequest = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
+    number?: unknown;
+    title?: unknown;
+    body?: unknown;
+    operatorComments?: unknown;
+  };
   const { number, title } = pullRequest;
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   const { review, comments } = (JSON.parse(await readFile(reviewFile, "utf8")) ?? {}) as {
     review?: { body?: unknown; state?: unknown };
-    comments?: { path?: unknown; line?: unknown; body?: unknown }[];
+    comments?: { id?: unknown; path?: unknown; line?: unknown; body?: unknown }[];
   };
   if (typeof review?.state !== "string" || review.state.toLowerCase() !== "changes_requested") {
     throw new Error(`FABRIK_REVIEW_FILE isn't a review requesting changes on #${number}`);
   }
   const body = typeof review.body === "string" ? review.body.trim() : "";
-  const inline = (comments ?? []).flatMap((comment) =>
-    typeof comment.body === "string" && typeof comment.path === "string"
-      ? [`### \`${comment.path}\`${typeof comment.line === "number" ? ` line ${comment.line}` : ""}`, comment.body.trimEnd()]
-      : [],
-  );
+  const inReview = new Set<string>();
+  const inline = (comments ?? []).flatMap((comment) => {
+    if (typeof comment.body !== "string" || typeof comment.path !== "string") return [];
+    const place = `\`${comment.path}\`${typeof comment.line === "number" ? ` line ${comment.line}` : ""}`;
+    if (typeof comment.id !== "number") return [`### ${place}`, comment.body.trimEnd()];
+    const id = operatorCommentId("inline", comment.id);
+    inReview.add(id);
+    return [`### \`${id}\`: ${place}`, comment.body.trimEnd()];
+  });
+  const others = Array.isArray(pullRequest.operatorComments)
+    ? (pullRequest.operatorComments as { id?: unknown }[]).filter(({ id }) => typeof id !== "string" || !inReview.has(id))
+    : [];
   return {
     pullRequest: number,
     parts: [
@@ -147,7 +175,9 @@ export async function requestChangesContext(
       "## The Operator's requested changes",
       body === "" ? "(The review has no summary; see its comments below.)" : body,
       ...(inline.length === 0 ? [] : ["## The Operator's comments on the code", ...inline]),
+      ...operatorCommentsSection(others),
     ],
+    operatorComments: givenOperatorComments(pullRequest.operatorComments),
   };
 }
 

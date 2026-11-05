@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
+import type { LoopEvent } from "./types.ts";
 
 describe("Intake", () => {
   it("adds needs-triage to a plain new issue", () => {
@@ -361,5 +362,62 @@ describe("Starting Triage", () => {
     const plan = planFor({ kind: "label-added", issue: 7, label: "needs-triage" }, snapshotOf(issue), kitConfig());
 
     expect(plan).toEqual({ kind: "nothing", reason: "#7 is closed" });
+  });
+});
+
+describe("An Operator comment on an agent PR", () => {
+  const commented = (
+    overrides: Partial<Extract<LoopEvent, { kind: "pull-request-commented" }>> = {},
+  ): LoopEvent => ({
+    kind: "pull-request-commented",
+    pullRequest: 50,
+    commenter: "operator",
+    commenterIsBot: false,
+    on: { kind: "conversation", comment: 7001 },
+    ...overrides,
+  });
+
+  it("in the conversation gets a 👀 reaction, and nothing else: no run, no label, no state change", () => {
+    const plan = planFor(commented(), snapshotOfPullRequest(aPullRequest()), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [{ kind: "react", pullRequest: 50, on: { kind: "conversation", comment: 7001 }, content: "eyes" }],
+    });
+  });
+
+  it("in a Comment or Approve review gets a 👀 on each of its inline comments, and nothing else", () => {
+    const plan = planFor(
+      commented({ on: { kind: "review", review: 900 } }),
+      snapshotOfPullRequest(aPullRequest({ draft: false })),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [{ kind: "react", pullRequest: 50, on: { kind: "review", review: 900 }, content: "eyes" }],
+    });
+  });
+
+  it("from a bot plans nothing", () => {
+    const plan = planFor(
+      commented({ commenter: "fabrik[bot]", commenterIsBot: true }),
+      snapshotOfPullRequest(aPullRequest()),
+      kitConfig(),
+    );
+
+    expect(plan.kind).toBe("nothing");
+  });
+
+  it("from another human plans nothing, so commenting can't steer an agent", () => {
+    const plan = planFor(commented({ commenter: "passer-by" }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+
+    expect(plan).toEqual({ kind: "nothing", reason: "passer-by isn't the Operator, so their comment on #50 is not read" });
+  });
+
+  it("on a PR that isn't an agent PR plans nothing", () => {
+    const plan = planFor(commented(), snapshotOfPullRequest(aPullRequest({ isAgent: false, ticket: null })), kitConfig());
+
+    expect(plan).toEqual({ kind: "nothing", reason: "#50 isn't an agent PR" });
   });
 });

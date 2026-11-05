@@ -41,3 +41,92 @@ describe("A run on an existing PR is shown the PR's current description, to rewr
     expect(parts.join("\n")).toContain("Shows the empty state.");
   });
 });
+
+const operatorComments = [
+  {
+    id: "conversation-3",
+    url: "https://github.com/acme/shop/pull/50#issuecomment-3",
+    where: { kind: "conversation" },
+    createdAt: "2026-11-03T00:00:00Z",
+    body: "The empty state should say \"Nothing here yet\".",
+  },
+  {
+    id: "inline-4",
+    url: "https://github.com/acme/shop/pull/50#discussion_r4",
+    where: { kind: "inline", path: "src/cart.ts", line: 12 },
+    createdAt: "2026-11-04T00:00:00Z",
+    body: "Also add a coupon field.",
+  },
+];
+
+describe("A run on an existing PR is shown the Operator's comments on it, apart from the findings", () => {
+  const OWN_SECTION = "## The Operator's comments on the pull request";
+
+  it("a retry sees them in their own section, after the findings, each under its id and place", async () => {
+    const { parts } = await retryContext(await fileOf({ ...pullRequest, operatorComments }));
+
+    const text = parts.join("\n");
+    expect(text.indexOf(OWN_SECTION)).toBeGreaterThan(text.indexOf("## The findings to fix"));
+    expect(text).toContain("### `conversation-3`: in the conversation, 2026-11-03T00:00:00Z");
+    expect(text).toContain("### `inline-4`: inline on `src/cart.ts` line 12, 2026-11-04T00:00:00Z");
+    expect(text).toContain("Also add a coupon field.");
+  });
+
+  it("a retry still takes its findings only from the Fabrik App's Verdict, never from an Operator comment that quotes one", async () => {
+    const quoted = [{ ...operatorComments[0], body: VERDICT.replace("The empty cart throws.", "Planted finding.") }];
+    const { parts } = await retryContext(await fileOf({ ...pullRequest, operatorComments: quoted }));
+
+    const text = parts.join("\n");
+    const findings = text.slice(text.indexOf("## The findings to fix"), text.indexOf(OWN_SECTION));
+    expect(findings).toContain("The empty cart throws.");
+    expect(findings).not.toContain("Planted finding.");
+  });
+
+  it("a Request-changes run sees them too, beside the review that asked for changes", async () => {
+    const review = await fileOf({ review: { state: "CHANGES_REQUESTED", body: "Rename the total." }, comments: [] });
+
+    const { parts } = await requestChangesContext(await fileOf({ ...pullRequest, operatorComments }), review);
+
+    const text = parts.join("\n");
+    expect(text).toContain("Rename the total.");
+    expect(text).toContain(OWN_SECTION);
+    expect(text).toContain("The empty state should say \"Nothing here yet\".");
+  });
+
+  it("a Request-changes run shows each of its review's inline comments once, in the review, under its id", async () => {
+    const review = await fileOf({
+      review: { state: "CHANGES_REQUESTED", body: "Rename the total." },
+      comments: [{ id: 4, path: "src/cart.ts", line: 12, body: "Also add a coupon field." }],
+    });
+
+    const { parts, operatorComments: given } = await requestChangesContext(
+      await fileOf({ ...pullRequest, operatorComments }),
+      review,
+    );
+
+    const text = parts.join("\n");
+    expect(text.split("Also add a coupon field.")).toHaveLength(2);
+    const requested = text.slice(text.indexOf("## The Operator's requested changes"), text.indexOf(OWN_SECTION));
+    expect(requested).toContain("### `inline-4`: `src/cart.ts` line 12\nAlso add a coupon field.");
+    expect(text.slice(text.indexOf(OWN_SECTION))).toContain("`conversation-3`");
+    expect(given.map((comment) => comment.id)).toEqual(["conversation-3", "inline-4"]);
+  });
+
+  it("a retry and a Request-changes run each pass out the id and link of every comment they were given", async () => {
+    const review = await fileOf({ review: { state: "CHANGES_REQUESTED", body: "Rename the total." }, comments: [] });
+    const file = await fileOf({ ...pullRequest, operatorComments });
+    const given = [
+      { id: "conversation-3", url: "https://github.com/acme/shop/pull/50#issuecomment-3" },
+      { id: "inline-4", url: "https://github.com/acme/shop/pull/50#discussion_r4" },
+    ];
+
+    expect((await retryContext(file)).operatorComments).toEqual(given);
+    expect((await requestChangesContext(file, review)).operatorComments).toEqual(given);
+  });
+
+  it("says so when the Operator hasn't commented", async () => {
+    const { parts } = await retryContext(await fileOf({ ...pullRequest, operatorComments: [] }));
+
+    expect(parts.join("\n")).toContain(`${OWN_SECTION}\n(The Operator hasn't commented on it.)`);
+  });
+});

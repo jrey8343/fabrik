@@ -6,7 +6,8 @@
 // Env: GH_TOKEN, GITHUB_REPOSITORY, GITHUB_API_URL, and
 //   FABRIK_ISSUE                 the issue or Ticket: writes issue.json and spec.json (its parent Spec, or null);
 //                                a Ticket back in design from an agent PR carries that PR in issue.json's sentBack
-//   FABRIK_PULL_REQUEST          optional, a PR: writes pull-request.json
+//   FABRIK_PULL_REQUEST          optional, a PR: writes pull-request.json, with the Operator's comments on it
+//                                in operatorComments (sentBack carries them too, for the closed PR)
 //   FABRIK_PULL_REQUEST_COMMENTS "true" for a retry, whose PR file carries the PR's comments and their authors' kind
 //   FABRIK_REVIEW                optional, a Request-changes run's review on that PR: writes review.json
 import { writeFile } from "node:fs/promises";
@@ -15,6 +16,7 @@ import { GitHub, type Repo } from "../github/client.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
+import { operatorCommentId, type OperatorComment } from "./operatorComments.ts";
 
 /** What these reads need of a GitHub client. */
 export type Reader = Pick<GitHub, "graphql" | "rest">;
@@ -119,9 +121,10 @@ interface RestUser {
 /**
  * The agent PR a Ticket came back from, for the Design session that follows:
  * what sent it back (every Verdict the Fabrik App gave it, oldest first, or
- * the Operator's reviews when the Operator did), and what its kept branch
- * built (its commits, its changed files, and its diff against the base branch,
- * cut short past SENT_BACK_DIFF_LIMIT). Nobody else's comments are included.
+ * the Operator's reviews when the Operator did), the Operator's comments on it
+ * either way, and what its kept branch built (its commits, its changed files,
+ * and its diff against the base branch, cut short past SENT_BACK_DIFF_LIMIT).
+ * Nobody else's comments are included.
  */
 export async function readSentBack(github: Reader, repo: Repo, sentBack: SentBack, operator: string): Promise<unknown> {
   const path = `/repos/${repo.owner}/${repo.name}/pulls/${sentBack.pullRequest}`;
@@ -132,9 +135,10 @@ export async function readSentBack(github: Reader, repo: Repo, sentBack: SentBac
     head: { ref: string; sha: string };
   };
   const byOperator = sentBack.verdictUrl === null;
-  const [verdicts, operatorReviews, commits, files] = await Promise.all([
+  const [verdicts, operatorReviews, operatorComments, commits, files] = await Promise.all([
     byOperator ? [] : verdictsOn(github, repo, sentBack.pullRequest),
     byOperator ? operatorReviewsOn(github, path, operator) : [],
+    readOperatorComments(github, repo, sentBack.pullRequest, operator),
     allPages<{ sha: string; commit: { message: string } }>(github, `${path}/commits`),
     allPages<{ filename: string; previous_filename?: string; status: string; additions: number; deletions: number; patch?: string }>(
       github,
@@ -161,6 +165,7 @@ export async function readSentBack(github: Reader, repo: Repo, sentBack: SentBac
     sentBackBy: byOperator ? "operator" : "verdict",
     verdicts,
     operatorReviews,
+    operatorComments,
     commits: commits.map(({ sha, commit }) => ({ sha, message: commit.message })),
     files: files.map(({ filename, status, additions, deletions }) => ({ filename, status, additions, deletions })),
     diff: truncated
@@ -204,6 +209,63 @@ async function operatorReviewsOn(github: Reader, path: string, operator: string)
   );
 }
 
+/**
+ * The Operator's comments on the PR, oldest first, each as it stands now: its
+ * conversation comments, its inline review comments, and the bodies of its
+ * reviews that aren't Request changes (nor still pending, nor empty). Every
+ * page of each list is read. Bots' comments and other humans' are left out,
+ * so commenting on a PR can't steer an agent (ADR-0007).
+ */
+export async function readOperatorComments(
+  github: Reader,
+  repo: Repo,
+  pullRequest: number,
+  operator: string,
+): Promise<OperatorComment[]> {
+  const base = `/repos/${repo.owner}/${repo.name}`;
+  interface Written {
+    readonly id: number;
+    readonly user: RestUser | null;
+    readonly body: string | null;
+    readonly html_url: string;
+  }
+  const [conversation, inline, reviews] = await Promise.all([
+    allPages<Written & { created_at: string }>(github, `${base}/issues/${pullRequest}/comments`),
+    allPages<Written & { created_at: string; path: string; line: number | null; original_line?: number | null }>(
+      github,
+      `${base}/pulls/${pullRequest}/comments`,
+    ),
+    allPages<Written & { state: string; submitted_at?: string | null }>(github, `${base}/pulls/${pullRequest}/reviews`),
+  ]);
+  const theirs = (written: Written): boolean => written.user?.login === operator && written.user.type !== "Bot";
+  const comments: OperatorComment[] = [
+    ...conversation.filter(theirs).map((c) => ({
+      id: operatorCommentId("conversation", c.id),
+      url: c.html_url,
+      where: { kind: "conversation" as const },
+      createdAt: c.created_at,
+      body: c.body ?? "",
+    })),
+    ...inline.filter(theirs).map((c) => ({
+      id: operatorCommentId("inline", c.id),
+      url: c.html_url,
+      where: { kind: "inline" as const, path: c.path, line: c.line ?? c.original_line ?? null },
+      createdAt: c.created_at,
+      body: c.body ?? "",
+    })),
+    ...reviews
+      .filter((r) => theirs(r) && r.state !== "CHANGES_REQUESTED" && r.state !== "PENDING" && (r.body ?? "").trim() !== "")
+      .map((r) => ({
+        id: operatorCommentId("review", r.id),
+        url: r.html_url,
+        where: { kind: "review" as const, state: r.state },
+        createdAt: r.submitted_at ?? "",
+        body: r.body ?? "",
+      })),
+  ];
+  return comments.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+}
+
 const PULL_REQUEST_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
     repository(owner: $owner, name: $name) {
@@ -235,18 +297,27 @@ interface PullRequestQueryResult {
 }
 
 /**
- * The PR: for a Review, what it judges (never its comments, so earlier
+ * The PR: for a Review, what it judges (never its other comments, so earlier
  * Verdicts don't steer it); for a retry, its number, title, body and comments with
  * their authors' kind, so only the Fabrik App's Verdicts count as findings.
+ * Either way, the Operator's comments on it come apart, in `operatorComments`.
  */
-export async function readPullRequest(github: Reader, repo: Repo, number: number, withComments: boolean): Promise<unknown> {
-  const data = await github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, { owner: repo.owner, name: repo.name, number });
+export async function readPullRequest(
+  github: Reader,
+  repo: Repo,
+  number: number,
+  { withComments, operator }: { readonly withComments: boolean; readonly operator: string },
+): Promise<unknown> {
+  const [data, operatorComments] = await Promise.all([
+    github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, { owner: repo.owner, name: repo.name, number }),
+    readOperatorComments(github, repo, number, operator),
+  ]);
   const pullRequest = data.repository.pullRequest;
   if (pullRequest === null) throw new Error(`Pull request #${number} not found`);
   const { title, body, baseRefName, headRefName, headRefOid, comments } = pullRequest;
   return withComments
-    ? { number, title, body, comments: comments.nodes }
-    : { number, title, body, baseRefName, headRefName, headRefOid };
+    ? { number, title, body, comments: comments.nodes, operatorComments }
+    : { number, title, body, baseRefName, headRefName, headRefOid, operatorComments };
 }
 
 /** The Operator's review requesting changes, its inline comments included. */
@@ -288,12 +359,16 @@ async function main(outDir: string): Promise<void> {
   const pullRequest = optionalNumber("FABRIK_PULL_REQUEST");
   const review = optionalNumber("FABRIK_REVIEW");
 
-  const { issue, spec } = await readIssue(github, repo, issueNumber, await operatorOf(PRODUCT_DIR, owner));
+  const operator = await operatorOf(PRODUCT_DIR, owner);
+  const { issue, spec } = await readIssue(github, repo, issueNumber, operator);
   await writeFile(join(outDir, "issue.json"), JSON.stringify(issue));
   await writeFile(join(outDir, "spec.json"), JSON.stringify(spec));
   if (pullRequest !== null) {
     const withComments = process.env["FABRIK_PULL_REQUEST_COMMENTS"] === "true";
-    await writeFile(join(outDir, "pull-request.json"), JSON.stringify(await readPullRequest(github, repo, pullRequest, withComments)));
+    await writeFile(
+      join(outDir, "pull-request.json"),
+      JSON.stringify(await readPullRequest(github, repo, pullRequest, { withComments, operator })),
+    );
     if (review !== null) await writeFile(join(outDir, "review.json"), JSON.stringify(await readReview(github, repo, pullRequest, review)));
   }
 }

@@ -2,7 +2,8 @@
 // ran for, and the structured output it emitted. The push job applies it
 // through the Loop rules core, which checks the output against its contract.
 // An Implement run also passes the branch it built, as a git bundle beside it.
-import { AGENT_ROLES, type AgentRole } from "../loop/types.ts";
+import { isGivenOperatorComment } from "../loop/considered.ts";
+import { AGENT_ROLES, type AgentRole, type GivenOperatorComment } from "../loop/types.ts";
 
 /** The branch an Implement run built, which the push job reads back from the bundle. */
 export interface BuiltBranch {
@@ -21,6 +22,12 @@ export interface AgentRunResult {
   readonly output: string;
   /** For an Implement run only. */
   readonly branch?: BuiltBranch;
+  /**
+   * For a run that read an agent PR (a Review, a retry or a Request-changes
+   * run): the Operator comments the Kit gave it, recorded from its input before
+   * the agent ran, so its Verdict or fix comment links only those.
+   */
+  readonly operatorComments?: readonly GivenOperatorComment[];
 }
 
 /** The artifact's file name, the same in both jobs. */
@@ -37,7 +44,7 @@ const REF = /^[A-Za-z0-9._/-]+$/;
 export function readAgentRunResult(text: string): AgentRunResult {
   const value: unknown = JSON.parse(text);
   if (typeof value !== "object" || value === null) throw new Error(`${AGENT_RESULT_FILE} is not a JSON object`);
-  const { role, issue, output, branch } = value as Record<string, unknown>;
+  const { role, issue, output, branch, operatorComments } = value as Record<string, unknown>;
   if (typeof role !== "string" || !AGENT_ROLES.includes(role as AgentRole)) {
     throw new Error(`${AGENT_RESULT_FILE} names an unknown role: ${JSON.stringify(role)}`);
   }
@@ -45,8 +52,16 @@ export function readAgentRunResult(text: string): AgentRunResult {
     throw new Error(`${AGENT_RESULT_FILE} names no issue`);
   }
   if (typeof output !== "string") throw new Error(`${AGENT_RESULT_FILE} has no output text`);
-  if (role !== "implement") return { role: role as AgentRole, issue, output };
-  return { role, issue, output, branch: readBranch(branch) };
+  const given = operatorComments === undefined ? {} : { operatorComments: readGiven(operatorComments) };
+  if (role !== "implement") return { role: role as AgentRole, issue, output, ...given };
+  return { role, issue, output, branch: readBranch(branch), ...given };
+}
+
+function readGiven(value: unknown): GivenOperatorComment[] {
+  if (!Array.isArray(value) || !value.every(isGivenOperatorComment)) {
+    throw new Error(`${AGENT_RESULT_FILE} has Operator comments that aren't each an id and a link`);
+  }
+  return value.map(({ id, url }) => ({ id, url }));
 }
 
 function readBranch(value: unknown): BuiltBranch {

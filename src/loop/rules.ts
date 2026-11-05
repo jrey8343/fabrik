@@ -17,6 +17,7 @@ import {
   WONTFIX,
 } from "./labels.ts";
 import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
+import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
 import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
@@ -85,6 +86,9 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
       return applyReview(event, snapshot);
     case "pull-request-changes-requested":
       return requestChanges(event, snapshot, config);
+    // Context for the next run that reads the PR, never a trigger (ADR-0007).
+    case "pull-request-commented":
+      return withPullRequest(snapshot, (pullRequest) => acknowledgeComment(event, pullRequest, snapshot.operator));
     // An agent PR that leaves draft or closes no longer holds a slot.
     case "pull-request-left-draft":
     case "pull-request-closed": {

@@ -186,8 +186,31 @@ async function apply(
         reviewers: [action.reviewer],
       });
       return;
+    case "react":
+      return react(github, repo, action);
     default:
       return applyToIssue(github, `${issues}/${action.issue}`, action, made);
+  }
+}
+
+/**
+ * Reacts to a conversation comment, or to each inline comment of a review on
+ * every page: GitHub takes no reaction on the review itself.
+ */
+async function react(github: GitHubApi, repo: Repo, action: Extract<Action, { kind: "react" }>): Promise<void> {
+  const base = `/repos/${repo.owner}/${repo.name}`;
+  const body = { content: action.content };
+  if (action.on.kind === "conversation") {
+    await github.rest("POST", `${base}/issues/comments/${action.on.comment}/reactions`, body);
+    return;
+  }
+  const reviewComments = `${base}/pulls/${action.pullRequest}/reviews/${action.on.review}/comments`;
+  for (let page = 1; ; page++) {
+    const comments = (await github.rest("GET", `${reviewComments}?per_page=100&page=${page}`)) as { id: number }[];
+    for (const comment of comments) {
+      await github.rest("POST", `${base}/pulls/comments/${comment.id}/reactions`, body);
+    }
+    if (comments.length < 100) return;
   }
 }
 
@@ -207,7 +230,8 @@ async function applyToIssue(
         | "close-pull-request"
         | "convert-to-draft"
         | "mark-ready-for-review"
-        | "request-review";
+        | "request-review"
+        | "react";
     }
   >,
   { created, posted }: Made,

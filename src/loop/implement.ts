@@ -1,6 +1,7 @@
 // Implementation rules: when an Implementer starts on a Ticket, and how the
 // branch it built lands as one draft PR, or doesn't.
 import { checkTrustRoot } from "../guard/trust-root.ts";
+import { consideredSection } from "./considered.ts";
 import { parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
@@ -150,9 +151,11 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         fixes,
         // Its Verdict is the Request-changes run's, so it uses no retry.
         requestChanges ? { ...pullRequest, requestChangesRun: true } : pullRequest,
-        "execution-flaw",
-        "empty-diff",
-        `The Implementer's ${requestChanges ? "Request-changes run" : "retry"} on \`${branch}\` committed no change, so there was nothing to review.`,
+        {
+          verdict: "execution-flaw",
+          source: "empty-diff",
+          findings: `The Implementer's ${requestChanges ? "Request-changes run" : "retry"} on \`${branch}\` committed no change, so there was nothing to review.`,
+        },
       ),
     };
   }
@@ -179,6 +182,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           "",
           // Present: the on-a-PR contract above requires it.
           withoutMentions(parsed.output.fix ?? ""),
+          ...consideredSection(parsed.output.operatorCommentsConsidered ?? [], fixes.operatorComments),
         ].join("\n"),
       },
       { kind: "push-branch", branch },

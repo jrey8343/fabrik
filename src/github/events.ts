@@ -3,7 +3,14 @@
 // It holds no Loop rules; those all live in src/loop/rules.ts.
 import type { AgentRunResult } from "../agent/result.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
-import type { AgentRole, BranchChanges, FailureReport, LoopEvent } from "../loop/types.ts";
+import type {
+  AgentRole,
+  BranchChanges,
+  FailureReport,
+  GivenOperatorComment,
+  LoopEvent,
+  PullRequestCommentPlace,
+} from "../loop/types.ts";
 
 /** Maps an Actions event to the Loop event it stands for, or null if the Loop ignores it. */
 export function loopEventFrom(
@@ -26,9 +33,11 @@ export function loopEventFrom(
   }
   if (eventName === "issue_comment" && payload["action"] === "created") {
     const issue = payload["issue"] as { number: number; pull_request?: unknown };
+    const comment = payload["comment"] as { id: number; user: { login: string; type: string }; body?: string | null };
     // A comment on a PR is not a reply on an issue.
-    if (issue.pull_request !== undefined) return null;
-    const comment = payload["comment"] as { user: { login: string; type: string }; body?: string | null };
+    if (issue.pull_request !== undefined) {
+      return pullRequestCommented(issue.number, comment.user, { kind: "conversation", comment: comment.id });
+    }
     return {
       kind: "issue-comment-created",
       issue: issue.number,
@@ -60,16 +69,36 @@ export function loopEventFrom(
   // both are trust roots its push job refuses (ADR-0005).
   if (eventName === "pull_request_review" && payload["action"] === "submitted") {
     const review = payload["review"] as { id: number; state: string; user: { login: string; type: string } };
-    if (review.state.toLowerCase() !== "changes_requested") return null;
+    const pullRequest = (payload["pull_request"] as { number: number }).number;
+    const state = review.state.toLowerCase();
+    // A Comment or Approve review, which a lone inline comment or a thread reply also submits.
+    if (state === "commented" || state === "approved") {
+      return pullRequestCommented(pullRequest, review.user, { kind: "review", review: review.id });
+    }
+    if (state !== "changes_requested") return null;
     return {
       kind: "pull-request-changes-requested",
-      pullRequest: (payload["pull_request"] as { number: number }).number,
+      pullRequest,
       review: review.id,
       reviewer: review.user.login,
       reviewerIsBot: review.user.type === "Bot",
     };
   }
   return null;
+}
+
+/**
+ * A comment on a PR, or null when a bot wrote it: the Fabrik App's own
+ * Verdicts and fix comments would otherwise each start a Kit job that plans
+ * nothing (only the Operator's comments are acknowledged, ADR-0007).
+ */
+function pullRequestCommented(
+  pullRequest: number,
+  user: { readonly login: string; readonly type: string },
+  on: PullRequestCommentPlace,
+): LoopEvent | null {
+  if (user.type === "Bot") return null;
+  return { kind: "pull-request-commented", pullRequest, commenter: user.login, commenterIsBot: false, on };
 }
 
 /**
@@ -107,7 +136,15 @@ export function agentRunEventFrom(
     base: result.branch.base.ref,
     changes,
     // A retry's branch starts at the PR head it built on, which the core checks is still the PR's.
-    ...(retry === null ? {} : { fixes: { ...retry, headSha: result.branch.base.sha } }),
+    ...(retry === null
+      ? {}
+      : {
+          fixes: {
+            ...retry,
+            headSha: result.branch.base.sha,
+            ...givenTo(result),
+          },
+        }),
   };
 }
 
@@ -130,7 +167,19 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
   }
   if (result.role !== "review") throw new Error(`A Review's push job was handed a ${result.role} result`);
   if (result.issue !== pullRequest) throw new Error(`The Reviewer's result is for #${result.issue}, not #${pullRequest}`);
-  return { kind: "review-run-finished", pullRequest, headSha, output: result.output, runUrl };
+  return {
+    kind: "review-run-finished",
+    pullRequest,
+    headSha,
+    output: result.output,
+    runUrl,
+    ...givenTo(result),
+  };
+}
+
+/** The Operator comments a run was given, for its event to carry; nothing when its result has none. */
+function givenTo(result: AgentRunResult): { operatorComments?: readonly GivenOperatorComment[] } {
+  return result.operatorComments === undefined ? {} : { operatorComments: result.operatorComments };
 }
 
 /** What the push job knows about the agent job it follows (src/kit/pushJob.ts). */
