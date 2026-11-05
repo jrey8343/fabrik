@@ -1,6 +1,9 @@
 // Failure notices: an agent run that fails for a reason outside the work is an
 // Infrastructure failure. It's never retried and never counts against a
-// Ticket's retries; the Operator gets one comment saying how to resume it.
+// Ticket's retries; the Operator gets one comment saying how to resume it. A
+// failed Auditor run goes to failAudit instead, which fails its Audit with no
+// trigger to re-add, since the scheduled tick opens the next one
+// (src/loop/auditFailure.ts).
 import { failAudit } from "./auditFailure.ts";
 import { repoWideNotice } from "./kitIssues.ts";
 import { DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
