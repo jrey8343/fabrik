@@ -6,6 +6,7 @@ import type { SentBack } from "../loop/backToDesign.ts";
 import {
   BACK_TO_DESIGN_MARKER,
   DESIGN_ROUND_MARKER,
+  DESIGN_TURN_FAILED_MARKER,
   EMPTY_DIFF_MARKER,
   LIVE_OUTCOME_MARKER,
   REQUEST_CHANGES_RUN_MARKER,
@@ -108,6 +109,23 @@ export function designSessionOf(
     else if (isDesignSessionComment(body)) session = { designRounds: 0, sentBack: null };
   }
   return session;
+}
+
+/**
+ * Whether a Design-session turn has failed in an issue's current session, from
+ * its comments oldest first: the Kit's failure notice for the turn, with no
+ * end of the session, and no return starting a new one, since. Only a bot's
+ * notice counts, so nobody can fake one by quoting it.
+ */
+export function designTurnFailedIn(comments: readonly { readonly body: string; readonly byBot: boolean }[]): boolean {
+  let failed = false;
+  for (const { body, byBot } of comments) {
+    if (byBot && body.startsWith(DESIGN_TURN_FAILED_MARKER)) failed = true;
+    else if ((byBot && sentBackIn(body) !== null) || body.startsWith(SESSION_FINISHED) || LIVE_OUTCOME_MARKER.test(body)) {
+      failed = false;
+    }
+  }
+  return failed;
 }
 
 /** Whether a comment is part of a Design session: a round, or the session's end, async or live. */

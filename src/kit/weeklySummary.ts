@@ -4,8 +4,9 @@
 import { verdictsIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
+import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
-import type { InfrastructureFailure } from "../loop/types.ts";
+import type { DesignQueueSnapshot, InfrastructureFailure } from "../loop/types.ts";
 import { type RateLimitReading, type RunRecord, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
@@ -138,6 +139,11 @@ export interface GitHubFacts {
   readonly openIssues: readonly OpenIssueFacts[];
   /** The repo's open agent PRs. */
   readonly openPullRequests: readonly OpenPullRequestFacts[];
+  /**
+   * The repo's open `needs-design` issues with their slot-holding signals, as
+   * the Design queue check reads them: Held counts the ones waiting for a slot.
+   */
+  readonly designQueue: DesignQueueSnapshot;
 }
 
 export interface WeeklySummaryInput {
@@ -225,6 +231,23 @@ export interface RepoSection {
   readonly waitingOnYou: readonly WaitingItem[];
   /** Loop work that hasn't moved in more than 24 hours, longest-stuck first. */
   readonly stuck: readonly StuckItem[];
+  /** The work a cap holds in the repo, or null when it holds nothing. */
+  readonly held: Held | null;
+}
+
+/** The work a cap holds in one Product repo, by source: null for a source holding nothing. */
+export interface Held {
+  /** The `needs-design` issues waiting for a Design session slot (caps.design_sessions). */
+  readonly designSessions: HeldDesignSessions | null;
+}
+
+export interface HeldDesignSessions {
+  /** How many open `needs-design` issues hold no slot. */
+  readonly waiting: number;
+  /** When the oldest waiting issue got `needs-design`, ISO 8601. */
+  readonly oldestSince: string;
+  /** How long the oldest has waited at the filing, in milliseconds. */
+  readonly oldestAge: number;
 }
 
 interface ItemBase {
@@ -280,7 +303,8 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
   const repos = input.facts.map((facts) => repoSectionOf(facts, input.records, Date.parse(input.now)));
-  const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0);
+  // Held work counts too, so a queue never sits unseen through a week nothing ran.
+  const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null);
   if (thisWeek.records === 0 && quiet) return { kind: "skip" };
   const change = <K extends keyof WeekMetrics>(metric: K): WeekOverWeek<WeekMetrics[K]> => ({
     thisWeek: thisWeek[metric],
@@ -550,7 +574,24 @@ const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
 function repoSectionOf(facts: GitHubFacts, records: readonly RunRecord[], now: number): RepoSection {
   const items = itemsIn(facts.repo, now);
-  return { repo: facts.repo, waitingOnYou: waitingOnYou(facts, items), stuck: stuck(facts, records, items, now) };
+  return { repo: facts.repo, waitingOnYou: waitingOnYou(facts, items), stuck: stuck(facts, records, items, now), held: heldIn(facts, now) };
+}
+
+/** What a cap holds in the repo, or null when nothing is held. */
+function heldIn({ designQueue }: GitHubFacts, now: number): Held | null {
+  const designSessions = heldDesignSessionsOf(designQueue, now);
+  return designSessions === null ? null : { designSessions };
+}
+
+/**
+ * The `needs-design` issues waiting for a Design session slot: by the Design
+ * queue check's own rule (holdsSlot), so the summary and the check can't disagree.
+ */
+function heldDesignSessionsOf(queue: DesignQueueSnapshot, now: number): HeldDesignSessions | null {
+  const waiting = queue.issues.filter((issue) => !holdsSlot(issue, queue));
+  const oldestSince = waiting.map((issue) => issue.neededDesignAt).toSorted((a, b) => Date.parse(a) - Date.parse(b))[0];
+  if (oldestSince === undefined) return null;
+  return { waiting: waiting.length, oldestSince, oldestAge: now - Date.parse(oldestSince) };
 }
 
 /** Builds a repo's items, aged as of the filing. */
@@ -734,9 +775,10 @@ function localTime(time: number, timeZone: string): string {
   return new Date(wallClock(time, timeZone).asUtc).toISOString().slice(0, 16).replace("T", " ");
 }
 
-// Rendering. Only shipped features get a section: Held, the Retro, Audit, Map
-// and Monitor issues, the architectural escape rate and scores add theirs when
-// their Specs ship.
+// Rendering. Only shipped features get a section: the Retro, Audit, Map and
+// Monitor issues, the architectural escape rate and scores add theirs when
+// their Specs ship. Held shows only what the Design-session cap holds, until
+// the Monitor and Ideas and Maps caps add their lines.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
   const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, counts } = summary;
@@ -795,10 +837,23 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     if (leftOut > 0) lines.push(`${runsWithUnknownCost(leftOut)} left out of ${name}.`, "");
   }
   lines.push(subscriptionUsage(weeklyLimit, timeZone), "");
+  lines.push(...heldLines(summary.repos));
   for (const repo of summary.repos) lines.push(...repoLines(repo));
   // The Operator's one mention, last: the week's only scheduled push.
   lines.push(`@${operator}`);
   return `${lines.join("\n")}\n`;
+}
+
+/** The Held section: a line per repo and source with work held, or nothing at all when no repo has any. */
+function heldLines(repos: readonly RepoSection[]): string[] {
+  const lines = repos.flatMap(({ repo, held }) => {
+    const design = held?.designSessions ?? null;
+    if (design === null) return [];
+    const issues = design.waiting === 1 ? "1 needs-design issue" : `${design.waiting} needs-design issues`;
+    const oldest = design.waiting === 1 ? `for ${duration(design.oldestAge)}` : `the oldest for ${duration(design.oldestAge)}`;
+    return [`- ${repo}: ${issues} waiting for a Design session slot, ${oldest}`];
+  });
+  return lines.length === 0 ? [] : ["## Held", "", ...lines, ""];
 }
 
 /** How many of a repo's Waiting on you items show before the rest collapse into `<details>`. */

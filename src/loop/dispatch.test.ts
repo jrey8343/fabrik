@@ -173,13 +173,13 @@ describe("What triggers a Dispatch check", () => {
 
     const plan = planFor({ kind: "issue-closed", issue: 9 }, snapshotOf(issue), kitConfig());
 
-    expect(plan).toEqual(checkDispatch);
+    expect(plan.kind === "act" && plan.actions).toContainEqual({ kind: "check-dispatch" });
   });
 
   it("a change to the Kit config, so raising max_in_flight from 0 resumes Dispatch straight away", () => {
     const plan = planFor({ kind: "kit-config-changed" }, repoSnapshot(), kitConfig());
 
-    expect(plan).toEqual(checkDispatch);
+    expect(plan.kind === "act" && plan.actions).toContainEqual({ kind: "check-dispatch" });
   });
 
   it("the Fast path, after Triage's labels land", () => {

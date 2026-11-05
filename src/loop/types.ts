@@ -91,7 +91,7 @@ export type LoopEvent =
       /**
        * For a Design-session turn the Operator's reply started: that comment's
        * id, from the Actions event the push job runs for, never from the agent.
-       * None for the first round, which adding needs-design starts.
+       * None for the first round, which agent:design starts.
        */
       readonly startedBy?: number;
       /** For a Design turn on a Ticket sent back from an agent PR: the Operator comments on that PR it was given; none when left out. */
@@ -197,7 +197,9 @@ export type LoopEvent =
   | { readonly kind: "pull-request-closed"; readonly pullRequest: number }
   /** A Dispatch check, which an earlier plan asked for with `check-dispatch`. */
   | { readonly kind: "dispatch-check" }
-  /** A push to the default branch that changed the Kit config, which may have unpaused or widened Dispatch. */
+  /** A Design queue check, which an earlier plan asked for with `check-design-queue` (#147). */
+  | { readonly kind: "design-queue-check" }
+  /** A push to the default branch that changed the Kit config, which may have unpaused or widened Dispatch or the Design-session cap. */
   | { readonly kind: "kit-config-changed" }
   | {
       /** The scheduled Kit workflow's tick (schedule.yml), for the Loop's time-based rules. */
@@ -227,6 +229,14 @@ export interface IssueSnapshot {
   readonly openPullRequests: readonly number[];
   /** How many rounds the Kit has posted in the issue's current Design session (src/loop/design.ts). */
   readonly designRounds: number;
+  /** Whether a Design-session turn has failed in its current Design session, read from the Kit's failure notice. */
+  readonly turnFailed: boolean;
+  /**
+   * Whether the Kit took agent:design off since the issue last got
+   * needs-design: its current session's first turn has started, so it holds
+   * a Design session slot even before round 1 posts.
+   */
+  readonly firstTurnClaimed: boolean;
   /**
    * The agent PR whose Verdict sent this Ticket back to design, read from the
    * Kit's note on it (src/loop/backToDesign.ts), while the Design session that
@@ -316,6 +326,32 @@ export interface DispatchSnapshot {
   readonly implementRunsInProgress: number;
 }
 
+/** An open `needs-design` issue that a Design queue check weighs (src/loop/designQueue.ts). */
+export interface DesignQueueIssue {
+  readonly number: number;
+  readonly labels: readonly string[];
+  /** How many rounds the Kit has posted in its current Design session. */
+  readonly designRounds: number;
+  /** Whether a Design-session turn has failed in its current Design session, read from the Kit's failure notice. */
+  readonly turnFailed: boolean;
+  /**
+   * Whether its current Design session followed a Ticket going back to design:
+   * the back-to-design note (a Design flaw, Retries used up, or the Operator's
+   * needs-design at the Merge gate), or a third empty diff. A re-design starts first.
+   */
+  readonly redesign: boolean;
+  /** When it last got `needs-design`, from its label timeline, as an ISO 8601 time. */
+  readonly neededDesignAt: string;
+}
+
+/** What a Design queue check needs: the open `needs-design` issues and the Design turns in progress. */
+export interface DesignQueueSnapshot {
+  /** Every open `needs-design` issue, in any order. */
+  readonly issues: readonly DesignQueueIssue[];
+  /** The issue of each Design-session turn not yet finished: running, queued or waiting. */
+  readonly designTurnsInProgress: readonly number[];
+}
+
 /**
  * The slice of GitHub state a Loop event needs to be decided. The adapter
  * gathers only the part the event is about and leaves the rest null.
@@ -327,6 +363,8 @@ export interface Snapshot {
   readonly pullRequest: PullRequestSnapshot | null;
   /** Gathered for a Dispatch check only. */
   readonly dispatch: DispatchSnapshot | null;
+  /** Gathered for a Design queue check only. */
+  readonly designQueue: DesignQueueSnapshot | null;
   /** For an issue closing: the Spec it is a Ticket of, or null when it has no parent. */
   readonly spec: SpecSnapshot | null;
   /** The Operator's GitHub login: ready-for-human work is assigned to them, and Design rounds and failures @-mention them. */
@@ -495,7 +533,9 @@ export type Action =
   /** Requests a review on a PR: the Merge gate's one notification. */
   | { readonly kind: "request-review"; readonly pullRequest: number; readonly reviewer: string }
   /** Run a Dispatch check, in the Dispatch job, once the rest of this plan has landed. */
-  | { readonly kind: "check-dispatch" };
+  | { readonly kind: "check-dispatch" }
+  /** Run a Design queue check, in the Design queue job, once the rest of this plan has landed (#147). */
+  | { readonly kind: "check-design-queue" };
 
 /**
  * What the core decided: actions to apply, nothing (with the reason why), or

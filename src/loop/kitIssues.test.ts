@@ -230,14 +230,15 @@ describe("The weekly-limit issue", () => {
           body: "The weekly usage limit reset at 2026-11-09 04:00 UTC, so the Kit is closing this issue. Stalled Tickets stay stalled until their trigger label is re-added.",
         },
         { kind: "close", issue: 41, reason: "completed" },
+        { kind: "check-design-queue" },
       ],
     });
   });
 
-  it("a scheduled tick before the reset does nothing", () => {
+  it("a scheduled tick before the reset leaves the issue open, and only asks for a Design queue check", () => {
     const plan = planFor(tick("2026-11-09T03:55:00.000Z"), repoSnapshot({ kitIssues: [openLimitIssue()] }), kitConfig());
 
-    expect(plan).toMatchObject({ kind: "nothing" });
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
   });
 
   it("a hit in a new window, before the tick has closed the last window's issue, closes it and opens a fresh one", () => {
@@ -262,7 +263,10 @@ describe("The weekly-limit issue", () => {
     expect(plan).toMatchObject({ kind: "nothing" });
   });
 
-  it("a scheduled tick with no weekly-limit issue open does nothing", () => {
-    expect(planFor(tick("2026-11-09T04:05:00.000Z"), repoSnapshot(), kitConfig())).toMatchObject({ kind: "nothing" });
+  it("a scheduled tick with no weekly-limit issue open only asks for a Design queue check", () => {
+    expect(planFor(tick("2026-11-09T04:05:00.000Z"), repoSnapshot(), kitConfig())).toEqual({
+      kind: "act",
+      actions: [{ kind: "check-design-queue" }],
+    });
   });
 });

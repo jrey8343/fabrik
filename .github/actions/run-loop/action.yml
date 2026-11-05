@@ -1,13 +1,13 @@
 # Runs the Loop as the Fabrik App: loads the App key through the push service
 # account, mints an App token, and runs src/main.ts, which gathers the snapshot,
 # asks the Loop rules core for a plan and applies it. Every job that changes
-# GitHub uses this: the push job, the claim job, the Dispatch job and the
-# scheduled tick. None of them checks out or runs Product code.
+# GitHub uses this: the push job, the claim job, the Dispatch job, the
+# Design queue job and the scheduled tick. None of them checks out or runs Product code.
 #
 # Use it after checking out the Kit at the pinned commit into `kit/`:
 #   - uses: ./kit/.github/actions/run-loop
 # The job's own env carries whatever src/main.ts reads for it (FABRIK_NEEDS,
-# FABRIK_DISPATCH_CHECK).
+# FABRIK_DISPATCH_CHECK, FABRIK_DESIGN_QUEUE_CHECK).
 name: Run the Loop
 description: Mints a Fabrik App token and runs the Loop rules core on this run's event.
 
@@ -16,7 +16,7 @@ inputs:
     description: The push service account's token (secrets.OP_PUSH_TOKEN), which reads the Fabrik App vault.
     required: true
   actions-token:
-    description: For the Dispatch job only, a token that can read workflow runs (its GITHUB_TOKEN); the Fabrik App has no Actions permission.
+    description: For the Dispatch job and loop.yml's Design queue job only, a token that can read workflow runs (its GITHUB_TOKEN); the Fabrik App has no Actions permission. The scheduled tick's Design queue job has none.
     required: false
     default: ""
 
@@ -24,6 +24,9 @@ outputs:
   dispatch:
     description: '"true" when the plan asked for a Dispatch check.'
     value: ${{ steps.loop.outputs.dispatch }}
+  design-queue:
+    description: '"true" when the plan asked for a Design queue check.'
+    value: ${{ steps.loop.outputs.design-queue }}
 
 runs:
   using: composite

@@ -171,6 +171,65 @@ describe("The Kit's workflows", () => {
   });
 });
 
+/** A job's section of loop.yml, from its key to the next job's. */
+function job(name: string): string {
+  const body = loop.split(/\n(?=  [a-z-]+:\n)/).find((section) => section.startsWith(`  ${name}:\n`));
+  if (body === undefined) throw new Error(`loop.yml has no ${name} job`);
+  return body;
+}
+
+describe("loop.yml's Design queue job", () => {
+  const queue = (): string => job("design-queue");
+
+  it("runs a Design queue check when the push job's plan asked for one", () => {
+    expect(queue()).toContain("needs.push.outputs.design-queue == 'true'");
+    expect(job("push")).toContain("design-queue: ${{ steps.loop.outputs.design-queue }}");
+    expect(queue()).toContain('FABRIK_DESIGN_QUEUE_CHECK: "true"');
+  });
+
+  it("runs queue checks one at a time in a per-repo concurrency group, so two can't fill the same free slot", () => {
+    expect(queue()).toMatch(/concurrency:\n\s+group: fabrik-design-queue\n\s+cancel-in-progress: false\n/);
+  });
+
+  it("reads Design-session turns in progress with its own read-only token", () => {
+    expect(queue()).toMatch(/permissions:\n(?:\s+#.*\n)*\s+actions: read\n/);
+    expect(queue()).toContain("actions-token: ${{ github.token }}");
+  });
+});
+
+describe("loop.yml's claim job", () => {
+  it("takes agent:design off as the Design session's first turn starts, as it takes agent:implement off", () => {
+    expect(job("implement-claim")).toContain(
+      "if: needs.kit.outputs.route == 'implement' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')",
+    );
+  });
+});
+
+describe("schedule.yml's Design queue job", () => {
+  const schedule = workflows.find((workflow) => workflow.path.endsWith("schedule.yml"))!.text;
+  const scheduleJob = (name: string): string => {
+    const body = schedule.split(/\n(?=  [a-z-]+:\n)/).find((section) => section.startsWith(`  ${name}:\n`));
+    if (body === undefined) throw new Error(`schedule.yml has no ${name} job`);
+    return body;
+  };
+
+  it("runs a Design queue check when the tick's plan asked for one", () => {
+    expect(scheduleJob("tick")).toContain("design-queue: ${{ steps.loop.outputs.design-queue }}");
+    expect(scheduleJob("tick")).toMatch(/id: loop\n\s+uses: \.\/kit\/\.github\/actions\/run-loop/);
+    expect(scheduleJob("design-queue")).toContain("needs.tick.outputs.design-queue == 'true'");
+    expect(scheduleJob("design-queue")).toContain('FABRIK_DESIGN_QUEUE_CHECK: "true"');
+  });
+
+  it("shares loop.yml's per-repo concurrency group, so a tick's check and an event's can't fill the same free slot", () => {
+    expect(scheduleJob("design-queue")).toMatch(/concurrency:\n\s+group: fabrik-design-queue\n\s+cancel-in-progress: false\n/);
+  });
+
+  it("asks for no permission the caller's tick job doesn't grant, so taking it needs no change to the shim", () => {
+    expect(scheduleJob("design-queue")).toContain("permissions: {}");
+    expect(scheduleJob("design-queue")).not.toContain("actions-token");
+  });
+});
+
 describe("The write the Run record action", () => {
   const action = readFileSync(new URL(".github/actions/write-run-record/action.yml", root), "utf8");
   const steps = action.split(/\n(?=    - )/);

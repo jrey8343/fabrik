@@ -3,6 +3,7 @@
 // Ticket's retries; the Operator gets one comment saying how to resume it.
 import { repoWideNotice } from "./kitIssues.ts";
 import { DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
+import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
 import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
@@ -84,6 +85,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     resetsAt: run.report?.resetsAt ?? null,
   });
   const body = [
+    ...(run.role === "design" ? [DESIGN_TURN_FAILED_MARKER] : []),
     `${repoWide === null ? `@${operator} ` : ""}${failedRun} failed: ${howItFailed(failure, run, config)}.`,
     ...detail,
     "",

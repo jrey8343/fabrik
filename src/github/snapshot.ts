@@ -9,8 +9,11 @@ import {
   SKILLS_SOURCES_LOCK_PATH,
 } from "../kit/config.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
-import { KIT_ISSUE_LABELS, READY_FOR_AGENT } from "../loop/labels.ts";
+import { DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
+import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
+  DesignQueueIssue,
+  DesignQueueSnapshot,
   KitIssueSnapshot,
   LoopEvent,
   PullRequestSnapshot,
@@ -20,7 +23,7 @@ import type {
   TicketSnapshot,
 } from "../loop/types.ts";
 import type { GitHub, Repo } from "./client.ts";
-import { countEmptyDiffs, designSessionOf, pushedSinceVerdictIn, requestChangesRunIn, verdictsIn } from "./threads.ts";
+import { countEmptyDiffs, designSessionOf, designTurnFailedIn, pushedSinceVerdictIn, requestChangesRunIn, verdictsIn } from "./threads.ts";
 
 const ISSUE_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -32,7 +35,14 @@ const ISSUE_QUERY = `
         author { login }
         labels(first: 100) { nodes { name } }
         parent { number }
-        comments(last: 100) { nodes { body author { __typename } } }
+        comments(last: 100) { nodes { body createdAt author { __typename } } }
+        timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT], last: 100) {
+          nodes {
+            __typename
+            ... on LabeledEvent { createdAt label { name } }
+            ... on UnlabeledEvent { createdAt label { name } actor { __typename } }
+          }
+        }
         closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number } }
         blockedBy(first: 50) { nodes { number state repository { nameWithOwner } } }
         blocking(first: 50) { nodes { number state repository { nameWithOwner } } }
@@ -50,7 +60,9 @@ interface IssueQueryResult {
       author: { login: string } | null;
       labels: { nodes: { name: string }[] };
       parent: { number: number } | null;
-      comments: { nodes: { body: string; author: { __typename: string } | null }[] };
+      comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
+      // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
+      timelineItems: { nodes: LabelTimelineItem[] };
       closedByPullRequestsReferences: { nodes: { number: number }[] };
       blockedBy: DependencyEdges;
       blocking: DependencyEdges;
@@ -154,12 +166,70 @@ interface DispatchQueryResult {
   };
 }
 
+// Pages through every open needs-design issue, with the thread and label
+// timeline that say whether it holds a Design session slot and how long it has waited.
+const DESIGN_QUEUE_QUERY = `
+  query ($owner: String!, $name: String!, $after: String, $needsDesign: String!) {
+    repository(owner: $owner, name: $name) {
+      owner { login }
+      issues(states: OPEN, labels: [$needsDesign], first: 50, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          number
+          createdAt
+          labels(first: 100) { nodes { name } }
+          comments(last: 100) { nodes { body createdAt author { __typename } } }
+          timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT], last: 100) {
+            nodes {
+              __typename
+              ... on LabeledEvent { createdAt label { name } }
+              ... on UnlabeledEvent { createdAt label { name } actor { __typename } }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+/** A label coming on or off an issue, oldest first, as ISSUE_QUERY and DESIGN_QUEUE_QUERY read it. */
+interface LabelTimelineItem {
+  __typename?: string;
+  createdAt?: string;
+  label?: { name: string };
+  actor?: { __typename: string } | null;
+}
+
+interface DesignQueueQueryResult {
+  repository: {
+    owner: { login: string };
+    issues: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: {
+        number: number;
+        createdAt: string;
+        labels: { nodes: { name: string }[] };
+        comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
+        // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
+        timelineItems: { nodes: LabelTimelineItem[] };
+      }[];
+    };
+  };
+}
+
 /**
  * The name of the Implement job in .github/workflows/loop.yml (a test holds
  * the two together). Called from a Product repo's caller workflow, it shows
  * up as `<caller job> / Implement`.
  */
 export const IMPLEMENT_JOB_NAME = "Implement";
+
+/**
+ * The name of the Design job in .github/workflows/loop.yml, which follows it
+ * with ` #<issue>` (a test holds the two together). Called from a Product
+ * repo's caller workflow, it shows up as `<caller job> / Design-session turn #7`.
+ */
+export const DESIGN_JOB_NAME = "Design-session turn";
 
 /**
  * Reads the current GitHub state the event needs, fresh rather than from the
@@ -185,7 +255,7 @@ export async function gatherSnapshot(
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
   // By default the Operator owns the Product repos they run Fabrik in.
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, spec, operator: operator ?? owner, kitIssues, startingComment }
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment }
     : { ...part, spec, kitIssues, startingComment };
 }
 
@@ -280,6 +350,8 @@ async function gatherEventPart(
     case "dispatch-check":
       if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");
       return gatherDispatch(github, actions, repo, operator);
+    case "design-queue-check":
+      return gatherDesignQueue(github, actions, repo, operator);
     case "kit-config-changed":
     case "scheduled-tick":
       return null;
@@ -354,6 +426,13 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
   if (issue === null) {
     throw new Error(`Issue #${number} not found in ${repo.owner}/${repo.name}`);
   }
+  const comments = issue.comments.nodes.map((comment) => ({
+    body: comment.body,
+    createdAt: comment.createdAt,
+    byBot: comment.author?.__typename === "Bot",
+  }));
+  const timeline = issue.timelineItems.nodes;
+  const thisSession = commentsSince(lastNeededDesignAt(timeline), comments);
   return {
     issue: {
       number: issue.number,
@@ -362,15 +441,17 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
-      ...designSessionOf(
-        issue.comments.nodes.map((comment) => ({ body: comment.body, byBot: comment.author?.__typename === "Bot" })),
-      ),
-      emptyDiffs: countEmptyDiffs(issue.comments.nodes.map((comment) => comment.body)),
+      designRounds: designSessionOf(thisSession).designRounds,
+      sentBack: designSessionOf(comments).sentBack,
+      turnFailed: designTurnFailedIn(thisSession),
+      firstTurnClaimed: firstTurnClaimed(timeline),
+      emptyDiffs: countEmptyDiffs(comments.map((comment) => comment.body)),
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),
     },
     pullRequest: null,
     dispatch: null,
+    designQueue: null,
     // By default the Operator owns the Product repos they run Fabrik in.
     operator: operator ?? data.repository.owner.login,
   };
@@ -414,6 +495,7 @@ async function gatherPullRequest(
       changesRequested: changesRequestedOf(pullRequest.reviews.nodes[0]),
     },
     dispatch: null,
+    designQueue: null,
     operator: operator ?? data.repository.owner.login,
   };
 }
@@ -476,12 +558,129 @@ async function gatherDispatch(
       openAgentDraftPullRequests,
       implementRunsInProgress: await countImplementRuns(actions, repo),
     },
+    designQueue: null,
     operator: operator ?? page.repository.owner.login,
   };
 }
 
+/** A Design queue check's slice, and the repo's owner, the Operator unless one is named. */
+async function gatherDesignQueue(
+  github: GitHub,
+  actions: GitHub | null,
+  repo: Repo,
+  operator: string | null,
+): Promise<EventPart> {
+  const { designQueue, owner } = await gatherDesignQueueSlice(github, actions, repo);
+  return { issue: null, pullRequest: null, dispatch: null, designQueue, operator: operator ?? owner };
+}
+
+/**
+ * The open needs-design issues with their slot-holding signals, and the
+ * Design turns in progress: what the Design queue check decides on, and what
+ * the Weekly summary's Held section counts. With a token that can read
+ * workflow runs (the Design queue job's), the turns in progress are read from
+ * their jobs. Without one, as on the scheduled tick (its caller grants no
+ * Actions permission) and the Weekly summary (its Product-repo token can't
+ * read Actions), they are read from the issues instead, erring toward holding
+ * a slot: see firstTurnClaimed.
+ */
+export async function gatherDesignQueueSlice(
+  github: Pick<GitHub, "graphql">,
+  actions: Pick<GitHub, "rest"> | null,
+  repo: Repo,
+): Promise<{ readonly designQueue: DesignQueueSnapshot; readonly owner: string }> {
+  const issues: DesignQueueIssue[] = [];
+  const claimed: number[] = [];
+  let after: string | null = null;
+  let page: DesignQueueQueryResult;
+  do {
+    page = await github.graphql<DesignQueueQueryResult>(DESIGN_QUEUE_QUERY, {
+      owner: repo.owner,
+      name: repo.name,
+      after,
+      needsDesign: NEEDS_DESIGN,
+    });
+    for (const issue of page.repository.issues.nodes) {
+      const comments = issue.comments.nodes.map((comment) => ({
+        body: comment.body,
+        createdAt: comment.createdAt,
+        byBot: comment.author?.__typename === "Bot",
+      }));
+      const timeline = issue.timelineItems.nodes;
+      const neededDesignAt = lastNeededDesignAt(timeline);
+      const thisSession = commentsSince(neededDesignAt, comments);
+      const session = designSessionOf(comments);
+      if (firstTurnClaimed(timeline)) claimed.push(issue.number);
+      issues.push({
+        number: issue.number,
+        labels: issue.labels.nodes.map((label) => label.name),
+        designRounds: designSessionOf(thisSession).designRounds,
+        turnFailed: designTurnFailedIn(thisSession),
+        // A third empty diff is the one that sent the Ticket back to design.
+        redesign: session.sentBack !== null || countEmptyDiffs(comments.map((comment) => comment.body)) > MAX_RETRIES,
+        // The latest time it got needs-design; an issue whose timeline doesn't show it waits from when it opened.
+        neededDesignAt: neededDesignAt ?? issue.createdAt,
+      });
+    }
+    after = page.repository.issues.pageInfo.hasNextPage ? page.repository.issues.pageInfo.endCursor : null;
+  } while (after !== null);
+
+  return {
+    designQueue: {
+      issues,
+      designTurnsInProgress: actions === null ? claimed.sort((a, b) => a - b) : await designTurnsInProgress(actions, repo),
+    },
+    owner: page.repository.owner.login,
+  };
+}
+
+/** The latest time an issue got needs-design, from its label timeline; null if it doesn't show it. */
+function lastNeededDesignAt(timeline: readonly LabelTimelineItem[]): string | null {
+  return timeline.filter((event) => isLabeled(event, NEEDS_DESIGN)).at(-1)?.createdAt ?? null;
+}
+
+/**
+ * The comments posted since an issue last got needs-design: its current
+ * Design session's. Adding needs-design starts a new session, so a round or
+ * failure notice from one the Operator abandoned by taking the label off
+ * doesn't count toward it.
+ */
+function commentsSince<C extends { readonly createdAt: string }>(neededDesignAt: string | null, comments: readonly C[]): readonly C[] {
+  if (neededDesignAt === null) return comments;
+  const start = Date.parse(neededDesignAt);
+  return comments.filter((comment) => Date.parse(comment.createdAt) >= start);
+}
+
+function isLabeled(event: LabelTimelineItem, name: string): boolean {
+  return event.__typename === "LabeledEvent" && event.label?.name === name;
+}
+
+/**
+ * Whether the Kit took agent:design off since the issue last got
+ * needs-design: the claim job does that as the session's first turn starts.
+ * Read without the Actions API, it takes a first turn as still in progress
+ * until its round or failure notice shows in the thread, so a check never
+ * starts a second session in that gap. Only a bot taking it off counts.
+ */
+function firstTurnClaimed(timeline: readonly LabelTimelineItem[]): boolean {
+  let claimed = false;
+  for (const event of timeline) {
+    if (isLabeled(event, NEEDS_DESIGN)) claimed = false;
+    else if (event.__typename === "UnlabeledEvent" && event.label?.name === DESIGN_LABEL && event.actor?.__typename === "Bot") {
+      claimed = true;
+    }
+  }
+  return claimed;
+}
+
 /** Workflow-run statuses, short of completed, whose Implement job may still hold a slot. */
 const UNFINISHED_RUNS = ["in_progress", "queued", "waiting", "pending", "requested"] as const;
+
+interface Job {
+  name: string;
+  status: string;
+  conclusion: string | null;
+}
 
 /**
  * Implement jobs not yet finished, across every workflow run in the repo:
@@ -490,6 +689,36 @@ const UNFINISHED_RUNS = ["in_progress", "queued", "waiting", "pending", "request
  * uncounted between the label coming off and the run starting.
  */
 export async function countImplementRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<number> {
+  const jobs = await jobsOfUnfinishedRuns(github, repo);
+  return jobs
+    .filter((job) => job.status !== "completed")
+    .filter(({ name }) => name === IMPLEMENT_JOB_NAME || name.endsWith(` / ${IMPLEMENT_JOB_NAME}`)).length;
+}
+
+const DESIGN_JOB = new RegExp(`^(?:.+ / )?${DESIGN_JOB_NAME} #([1-9][0-9]*)$`);
+
+/**
+ * The issue of each Design-session turn not yet finished, across every
+ * workflow run in the repo, read from its job's name, lowest number first. A
+ * turn is in progress until its whole run finishes: running, queued or
+ * waiting behind its issue's concurrency group, and also after its job is
+ * done while the push job is still posting its round or failure notice, so no
+ * slot goes uncounted before the thread shows it. A Design job skipped
+ * because the run went another way is no turn.
+ */
+export async function designTurnsInProgress(github: Pick<GitHub, "rest">, repo: Repo): Promise<number[]> {
+  const jobs = await jobsOfUnfinishedRuns(github, repo);
+  const issues = new Set(
+    jobs
+      .filter((job) => job.conclusion !== "skipped")
+      .flatMap((job) => DESIGN_JOB.exec(job.name)?.[1] ?? [])
+      .map(Number),
+  );
+  return [...issues].sort((a, b) => a - b);
+}
+
+/** Every job, finished or not, of every workflow run not yet completed. */
+async function jobsOfUnfinishedRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<Job[]> {
   const base = `/repos/${repo.owner}/${repo.name}/actions`;
   const runIds = new Set<number>();
   for (const status of UNFINISHED_RUNS) {
@@ -498,18 +727,14 @@ export async function countImplementRuns(github: Pick<GitHub, "rest">, repo: Rep
     };
     for (const run of runs.workflow_runs) runIds.add(run.id);
   }
-  let count = 0;
+  const jobs: Job[] = [];
   for (const id of runIds) {
-    const jobs = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as {
-      jobs: { name: string; status: string }[];
+    const page = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as {
+      jobs: { name: string; status: string; conclusion?: string | null }[];
     };
-    count += jobs.jobs.filter(
-      (job) =>
-        job.status !== "completed" &&
-        (job.name === IMPLEMENT_JOB_NAME || job.name.endsWith(` / ${IMPLEMENT_JOB_NAME}`)),
-    ).length;
+    jobs.push(...page.jobs.map((job) => ({ name: job.name, status: job.status, conclusion: job.conclusion ?? null })));
   }
-  return count;
+  return jobs;
 }
 
 /** Reads the Kit config folder's files from the Product repo at `ref`, through the API. */

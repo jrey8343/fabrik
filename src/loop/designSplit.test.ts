@@ -60,6 +60,7 @@ describe("A Design session splits a Ticket into sibling Tickets", () => {
         ],
       },
       { kind: "check-dispatch" },
+      { kind: "check-design-queue" },
     ]);
   });
 

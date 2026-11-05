@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { resolveKitConfig } from "./config.ts";
+
+const root = new URL("../../", import.meta.url);
+const template = readFileSync(new URL("templates/fabrik-config.json", root), "utf8");
+const readme = readFileSync(new URL("README.md", root), "utf8");
 
 const DEFAULTS = {
   sandbox: { setup: null, build: null, test: null, checks: [], env: {}, secrets: {} },
@@ -12,6 +17,7 @@ const DEFAULTS = {
     stepUp: { model: "claude-opus-5-5", effort: null },
   },
   maxInFlight: 2,
+  caps: { designSessions: 2 },
   operator: null,
   instructions: { triage: null, design: null, implement: null, review: null },
   skillsSources: [],
@@ -98,6 +104,8 @@ describe("Kit config", () => {
     [`{ "roles": { "implementer": {} } }`, "roles.implementer is not a Kit config field"],
     [`{ "roles": { "review": { "timeout": 5 } } }`, "roles.review.timeout is not a Kit config field"],
     [`{ "roles": { "dispatch": { "model": "claude-opus-5-5" } } }`, "roles.dispatch.model is not a Kit config field"],
+    [`{ "caps": { "retro": 1 } }`, "caps.retro is not a Kit config field"],
+    [`{ "caps": { "audit": 1 } }`, "caps.audit is not a Kit config field"],
   ])("fails an unknown field, naming it: %s", (text, error) => {
     expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
   });
@@ -110,6 +118,11 @@ describe("Kit config", () => {
     [`{ "roles": { "triage": { "timeout_minutes": 2.5 } } }`, "roles.triage.timeout_minutes must be a whole number of at least 1"],
     [`{ "roles": { "implement": { "model": 5 } } }`, "roles.implement.model must be a string"],
     [`{ "roles": [] }`, "roles must be an object"],
+    [`{ "caps": [] }`, "caps must be an object"],
+    [`{ "caps": { "design_sessions": -1 } }`, "caps.design_sessions must be a whole number of at least 0"],
+    [`{ "caps": { "design_sessions": 1.5 } }`, "caps.design_sessions must be a whole number of at least 0"],
+    [`{ "caps": { "design_sessions": "1" } }`, "caps.design_sessions must be a whole number of at least 0"],
+    [`{ "caps": { "design_sessions": null } }`, "caps.design_sessions must be a whole number of at least 0"],
     [`{ "roles": { "review": { "effort": "extreme" } } }`, `roles.review.effort is "extreme": effort must be one of low, medium, high, xhigh, max`],
     [`[]`, ".fabrik/config.json must be an object"],
   ])("fails a mistyped field, naming it: %s", (text, error) => {
@@ -215,6 +228,7 @@ describe("Kit config", () => {
         step_up: { model: "claude-opus-5-5", effort: null },
       },
       max_in_flight: 2,
+      caps: { design_sessions: 2 },
       operator: null,
     };
 
@@ -246,6 +260,33 @@ describe("Kit config", () => {
     expect(result.ok && result.config.maxInFlight).toBe(0);
   });
 
+  it("gives a Product repo whose config never sets caps the Kit default of 2 Design sessions", () => {
+    const result = resolveKitConfig({ config: `{ "max_in_flight": 1, "operator": "jrey8343" }` });
+
+    expect(result.ok && result.config.caps).toEqual({ designSessions: 2 });
+  });
+
+  it.each([1, 0])("honours lowering caps.design_sessions to %i", (cap) => {
+    const result = resolveKitConfig({ config: `{ "caps": { "design_sessions": ${cap} } }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, caps: { designSessions: cap } } });
+  });
+
+  it("keeps the Kit default when caps.design_sessions is set to it", () => {
+    const result = resolveKitConfig({ config: `{ "caps": { "design_sessions": 2 } }` });
+
+    expect(result).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it.each([3, 99])("refuses raising caps.design_sessions to %i, naming the field, the value and the Kit default", (cap) => {
+    const result = resolveKitConfig({ config: `{ "caps": { "design_sessions": ${cap} } }` });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [`caps.design_sessions is ${cap}, but a cap can only be lowered: the Kit default is 2`],
+    });
+  });
+
   it("names the Operator when the config gives a login, leaving null to mean the repo's owner", () => {
     const result = resolveKitConfig({ config: `{ "operator": "jrey8343" }` });
 
@@ -261,6 +302,23 @@ describe("Kit config", () => {
       });
     },
   );
+});
+
+describe("The Kit config template", () => {
+  it("spells out caps.design_sessions at its Kit default", () => {
+    expect(JSON.parse(template)).toMatchObject({ caps: { design_sessions: 2 } });
+  });
+
+  it("resolves to every Kit default", () => {
+    expect(resolveKitConfig({ config: template })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it("is the defaults block the README's Kit config section shows", () => {
+    const section = readme.slice(readme.indexOf("## Kit config"));
+    const block = /```json\n([\s\S]*?)```/.exec(section)?.[1];
+
+    expect(block).toBe(template);
+  });
 });
 
 describe("Skills sources and Extra skill picks", () => {

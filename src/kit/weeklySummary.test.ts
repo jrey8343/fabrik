@@ -15,6 +15,7 @@ import {
   factsOf,
   UNKNOWN_COST_BASIS,
 } from "../__fixtures__/weeklySummary.ts";
+import { aDesignQueueIssue } from "../__fixtures__/snapshots.ts";
 import type { Verdict } from "../loop/types.ts";
 import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
@@ -1023,6 +1024,83 @@ describe("the Weekly summary", () => {
       const body = bodyOf(factsOf({ openIssues: [readyForHuman(13, 30)] }), factsOf({ repo: "owner/other" }));
       expect(body.match(/@operator\b/g)).toHaveLength(1);
       expect(body.trimEnd().endsWith("@operator")).toBe(true);
+    });
+  });
+
+  describe("Held", () => {
+    const HOUR = 60 * 60 * 1000;
+    const hoursAgo = (hours: number) => new Date(Date.parse(NOW) - hours * HOUR).toISOString();
+    const summaryOf = (...facts: GitHubFacts[]) => {
+      const result = weeklySummary(input({ records: [aRunRecord()], facts }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result;
+    };
+
+    it("counts a repo's needs-design issues waiting for a Design session slot, aged from when the oldest got needs-design", () => {
+      const result = summaryOf(
+        factsOf({
+          designQueue: {
+            issues: [
+              aDesignQueueIssue({ number: 21, neededDesignAt: hoursAgo(30) }),
+              aDesignQueueIssue({ number: 22, neededDesignAt: hoursAgo(80) }),
+            ],
+            designTurnsInProgress: [],
+          },
+        }),
+      );
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR } });
+      expect(result.body).toContain(["## Held", "", "- owner/product: 2 needs-design issues waiting for a Design session slot, the oldest for 3 days", ""].join("\n"));
+    });
+
+    it("never counts an issue holding a slot: a round posted, a turn failed or in progress, or agent:design given", () => {
+      const result = summaryOf(
+        factsOf({
+          designQueue: {
+            issues: [
+              aDesignQueueIssue({ number: 21, neededDesignAt: hoursAgo(200), designRounds: 1 }),
+              aDesignQueueIssue({ number: 22, neededDesignAt: hoursAgo(190), turnFailed: true }),
+              aDesignQueueIssue({ number: 23, neededDesignAt: hoursAgo(180) }),
+              aDesignQueueIssue({ number: 24, neededDesignAt: hoursAgo(170), labels: ["needs-design", "agent:design"] }),
+              aDesignQueueIssue({ number: 25, neededDesignAt: hoursAgo(5) }),
+            ],
+            designTurnsInProgress: [23],
+          },
+        }),
+      );
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR } });
+      expect(result.body).toContain("- owner/product: 1 needs-design issue waiting for a Design session slot, for 5 hours");
+    });
+
+    it("leaves out a repo with nothing held", () => {
+      const result = summaryOf(
+        factsOf({ repo: "owner/quiet", designQueue: { issues: [aDesignQueueIssue({ designRounds: 2 })], designTurnsInProgress: [] } }),
+        factsOf({ repo: "owner/busy", designQueue: { issues: [aDesignQueueIssue({ neededDesignAt: hoursAgo(30) })], designTurnsInProgress: [] } }),
+      );
+      expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
+        ["owner/quiet", null],
+        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR } }],
+      ]);
+      expect(result.body).toContain(["## Held", "", "- owner/busy: 1 needs-design issue waiting for a Design session slot, for 30 hours", ""].join("\n"));
+      expect(result.body).not.toContain("- owner/quiet:");
+    });
+
+    it("has no Held section when no repo has anything held", () => {
+      const { body } = summaryOf(
+        factsOf({ designQueue: { issues: [aDesignQueueIssue({ designRounds: 1 })], designTurnsInProgress: [] } }),
+        factsOf({ repo: "owner/other" }),
+      );
+      expect(body).not.toContain("Held");
+    });
+
+    it("sits between the Subscription usage and the first repo's section", () => {
+      const { body } = summaryOf(factsOf({ designQueue: { issues: [aDesignQueueIssue()], designTurnsInProgress: [] } }));
+      expect(body.match(/^#+ .*$/gm)).toEqual(["## Metrics", "## Held", "## owner/product", "### Waiting on you"]);
+      expect(body.indexOf("Subscription usage")).toBeLessThan(body.indexOf("## Held"));
+    });
+
+    it("keeps a week with no records but held work from being skipped", () => {
+      const result = weeklySummary(input({ facts: [factsOf({ designQueue: { issues: [aDesignQueueIssue()], designTurnsInProgress: [] } })] }));
+      expect(result.kind).toBe("summary");
     });
   });
 

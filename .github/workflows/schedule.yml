@@ -2,9 +2,9 @@
 # .github/workflows/fabrik.yml on its schedule.
 #
 # This file is wiring only. It runs the Loop's time-based rules (closing the
-# weekly-limit issue after its reset) through the Loop rules core, which
-# src/main.ts runs as a `scheduled-tick` event, and once a week the Product
-# repo's skills bumps for its own Skills sources.
+# weekly-limit issue after its reset, and a Design queue check) through the
+# Loop rules core, which src/main.ts runs as a `scheduled-tick` event, and once
+# a week the Product repo's skills bumps for its own Skills sources.
 #
 # Like the Loop's push job (ADR-0002), the tick and skills bump jobs run on a
 # fresh VM, load the Fabrik App key through the push service account, mint an
@@ -62,6 +62,9 @@ jobs:
       group: fabrik-tick
       cancel-in-progress: false
     permissions: {}
+    outputs:
+      # "true" when the plan asked for a Design queue check.
+      design-queue: ${{ steps.loop.outputs.design-queue }}
     steps:
       - name: Check out the Kit (never the Product repo)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -72,6 +75,41 @@ jobs:
           persist-credentials: false
 
       - name: Run the Loop's scheduled rules
+        id: loop
+        uses: ./kit/.github/actions/run-loop
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+
+  # The hourly Design queue check (#147), which catches a slot freed by an
+  # event the Loop doesn't watch, such as needs-design coming off by hand.
+  # The caller grants this workflow no Actions permission, so it passes no
+  # actions token and the check reads first turns in progress from the issues
+  # (src/github/snapshot.ts).
+  design-queue:
+    name: Design queue
+    needs: [kit, tick]
+    if: ${{ !cancelled() && needs.tick.result == 'success' && needs.tick.outputs.design-queue == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # loop.yml's Design queue job's group: one check at a time per repo, so two
+    # can't both fill the same free slot.
+    concurrency:
+      group: fabrik-design-queue
+      cancel-in-progress: false
+    permissions: {}
+    env:
+      FABRIK_DESIGN_QUEUE_CHECK: "true"
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # The App token adds agent:design, so the label starts the Design-session turn.
+      - name: Run a Design queue check
         uses: ./kit/.github/actions/run-loop
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}

@@ -29,7 +29,7 @@ describe("Spec closing", () => {
   it("the last Ticket closing closes its Spec as completed, with a comment linking each Ticket's PR, then runs a Dispatch check", () => {
     const actions = actionsOf(planFor(closed, snapshotOf(ticket, { spec: spec() }), kitConfig()));
 
-    expect(actions.map((action) => action.kind)).toEqual(["comment", "close", "check-dispatch"]);
+    expect(actions.map((action) => action.kind)).toEqual(["comment", "close", "check-dispatch", "check-design-queue"]);
     expect(actions[1]).toEqual({ kind: "close", issue: 3, reason: "completed" });
     const body = actions[0]?.kind === "comment" ? actions[0].body : "";
     expect(actions[0]).toMatchObject({ kind: "comment", issue: 3 });
@@ -56,7 +56,7 @@ describe("Spec closing", () => {
 
     expect(planFor(closed, snapshotOf(ticket, { spec: openSibling }), kitConfig())).toEqual({
       kind: "act",
-      actions: [{ kind: "check-dispatch" }],
+      actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }],
     });
   });
 
@@ -74,14 +74,14 @@ describe("Spec closing", () => {
   it("does nothing more to a Spec that's already closed", () => {
     expect(planFor(closed, snapshotOf(ticket, { spec: spec({ open: false }) }), kitConfig())).toEqual({
       kind: "act",
-      actions: [{ kind: "check-dispatch" }],
+      actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }],
     });
   });
 
   it("closes a ready-for-human Spec the same way", () => {
     const actions = actionsOf(planFor(closed, snapshotOf(ticket, { spec: spec({ labels: ["ready-for-human"] }) }), kitConfig()));
 
-    expect(actions.map((action) => action.kind)).toEqual(["comment", "close", "check-dispatch"]);
+    expect(actions.map((action) => action.kind)).toEqual(["comment", "close", "check-dispatch", "check-design-queue"]);
   });
 
   it.each([
@@ -91,14 +91,14 @@ describe("Spec closing", () => {
   ])("leaves %s open with no comment when its last child closes, and only runs a Dispatch check", (_, labels) => {
     expect(planFor(closed, snapshotOf(ticket, { spec: spec({ labels }) }), kitConfig())).toEqual({
       kind: "act",
-      actions: [{ kind: "check-dispatch" }],
+      actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }],
     });
   });
 
   it("an issue with no parent Spec only runs a Dispatch check", () => {
     expect(planFor(closed, snapshotOf({ ...ticket, parent: null }), kitConfig())).toEqual({
       kind: "act",
-      actions: [{ kind: "check-dispatch" }],
+      actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }],
     });
   });
 });

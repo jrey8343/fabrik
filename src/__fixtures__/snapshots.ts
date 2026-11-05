@@ -1,6 +1,8 @@
 // Small builders for the core's tests: say only what a test cares about.
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import type {
+  DesignQueueIssue,
+  DesignQueueSnapshot,
   DispatchSnapshot,
   IssueSnapshot,
   KitConfig,
@@ -20,6 +22,8 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     parent: null,
     openPullRequests: [],
     designRounds: 0,
+    turnFailed: false,
+    firstTurnClaimed: false,
     sentBack: null,
     emptyDiffs: 0,
     openBlockers: [],
@@ -30,7 +34,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, ...overrides };
+  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
@@ -59,7 +63,7 @@ export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
   overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, ...overrides };
+  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -85,6 +89,37 @@ export function dispatchSnapshotOf(
     issue: null,
     pullRequest: null,
     dispatch: { tickets, openAgentDraftPullRequests: 0, implementRunsInProgress: 0, ...inFlight },
+    designQueue: null,
+    spec: null,
+    operator: "operator",
+    kitIssues: [],
+    startingComment: null,
+  };
+}
+
+/** An open needs-design issue that holds no Design session slot (no round, no turn failed, no agent:design) and is no re-design. */
+export function aDesignQueueIssue(overrides: Partial<DesignQueueIssue> = {}): DesignQueueIssue {
+  return {
+    number: 1,
+    labels: ["enhancement", "needs-design"],
+    designRounds: 0,
+    turnFailed: false,
+    redesign: false,
+    neededDesignAt: "2026-11-01T09:00:00Z",
+    ...overrides,
+  };
+}
+
+/** A Design queue check's snapshot: these needs-design issues and, by default, no Design turn in progress. */
+export function designQueueSnapshotOf(
+  issues: readonly DesignQueueIssue[],
+  inProgress: Partial<Omit<DesignQueueSnapshot, "issues">> = {},
+): Snapshot {
+  return {
+    issue: null,
+    pullRequest: null,
+    dispatch: null,
+    designQueue: { issues, designTurnsInProgress: [], ...inProgress },
     spec: null,
     operator: "operator",
     kitIssues: [],
@@ -94,7 +129,7 @@ export function dispatchSnapshotOf(
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
 export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, ...overrides };
+  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, ...overrides };
 }
 
 /**

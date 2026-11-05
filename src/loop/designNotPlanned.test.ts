@@ -24,6 +24,7 @@ describe("A Design session finishes as not planned", () => {
         { kind: "remove-label", issue: 7, label: "needs-design" },
         { kind: "add-labels", issue: 7, labels: ["wontfix"] },
         { kind: "close", issue: 7, reason: "not_planned" },
+        { kind: "check-design-queue" },
       ],
     });
   });
@@ -68,6 +69,7 @@ describe("A Design session finishes as not planned", () => {
         { kind: "remove-label", issue: 7, label: "needs-design" },
         { kind: "add-labels", issue: 7, labels: ["wontfix"] },
         { kind: "close", issue: 7, reason: "not_planned" },
+        { kind: "check-design-queue" },
       ],
     });
   });
