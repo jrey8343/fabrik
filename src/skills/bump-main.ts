@@ -6,62 +6,15 @@
 // Writes step outputs: bump ("true" or "false"), branch, title, body-file.
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { planSkillsBump, type UpstreamSkills } from "./bump.ts";
-import { readSkillsLock, SKILLS_LOCK_PATH, type SkillsLock } from "./lock.ts";
-
-const API = "https://api.github.com";
-const MANIFEST = ".claude-plugin/plugin.json";
-
-function headers(accept: string): Record<string, string> {
-  const token = process.env["GH_TOKEN"];
-  return {
-    accept,
-    "x-github-api-version": "2022-11-28",
-    ...(token === undefined || token === "" ? {} : { authorization: `Bearer ${token}` }),
-  };
-}
-
-async function get(path: string, accept = "application/vnd.github+json"): Promise<Response> {
-  const response = await fetch(`${API}${path}`, { headers: headers(accept) });
-  if (!response.ok) throw new Error(`GitHub GET ${path} failed: ${response.status} ${await response.text()}`);
-  return response;
-}
-
-async function upstreamSkills(lock: SkillsLock): Promise<UpstreamSkills> {
-  const repo = `/repos/${lock.repository}`;
-  const head = (await (await get(`${repo}/commits/main`, "application/vnd.github.sha")).text()).trim();
-  const compare = (await (await get(`${repo}/compare/${lock.sha}...${head}`)).json()) as {
-    status: UpstreamSkills["status"];
-    ahead_by: number;
-    commits: { sha: string; commit: { message: string } }[];
-  };
-  const manifest = async (sha: string) =>
-    (await get(`${repo}/contents/${MANIFEST}?ref=${sha}`, "application/vnd.github.raw+json")).text();
-
-  // GitHub refuses a diff past its size limits; the compare link still works then.
-  let diff: string;
-  try {
-    diff = await (await get(`${repo}/compare/${lock.sha}...${head}`, "application/vnd.github.diff")).text();
-  } catch (error) {
-    diff = `# GitHub returned no diff (${error instanceof Error ? error.message.split("\n")[0] : error}).\n# See the compare link.\n`;
-  }
-
-  return {
-    head,
-    status: compare.status,
-    aheadBy: compare.ahead_by,
-    commits: compare.commits.map((commit) => ({ sha: commit.sha, message: commit.commit.message })),
-    diff,
-    manifestAtPin: await manifest(lock.sha),
-    manifestAtHead: await manifest(head),
-  };
-}
+import { planSkillsBump } from "./bump.ts";
+import { readSkillsLock, SKILLS_LOCK_PATH } from "./lock.ts";
+import { publicGet, readUpstreamSkills } from "./upstream.ts";
 
 async function main(outDir: string): Promise<void> {
   const kitDir = resolve(import.meta.dirname, "..", "..");
   const lockPath = join(kitDir, SKILLS_LOCK_PATH);
   const lock = readSkillsLock(await readFile(lockPath, "utf8"));
-  const plan = planSkillsBump(lock, await upstreamSkills(lock));
+  const plan = planSkillsBump(lock, await readUpstreamSkills(publicGet(process.env["GH_TOKEN"]), lock, "main"));
 
   const outputs: Record<string, string> = { bump: String(plan.kind === "pull-request") };
   if (plan.kind === "pull-request") {
