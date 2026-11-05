@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { loadRubrics, RUBRIC_HASHES, readRubric, rubricContentHash, rubricSet, rubricVersionErrors } from "./rubrics.ts";
+import { loadRubrics } from "./kitFiles.ts";
+import { RUBRIC_HASHES, readRubric, rubricContentHash, rubricSet, rubricVersionErrors } from "./rubrics.ts";
 
 /** A rubric file, with whatever front-matter lines the case changes. */
 function rubricFile(fields: Record<string, string> = {}, text = "Judge the run.\n\n- `clean`: nothing wasted.\n- `slow`: time wasted.\n"): string {

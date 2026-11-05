@@ -5,7 +5,7 @@
 // (src/kit/scoreRecord.ts).
 import { Buffer } from "node:buffer";
 import { type GitHub, GitHubError } from "../github/client.ts";
-import type { RunRecord, RunRecordFiles } from "./runRecord.ts";
+import type { RunIdentity, RunRecordFiles } from "./runRecord.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "./runStore.ts";
 
 /** The store's REST API: the writer reads its visibility and creates files. */
@@ -54,7 +54,7 @@ export async function writeStoreFiles(
 }
 
 /** The commit message of a run's files in the store: the repo, the run and the role. */
-export function storeCommitMessage(record: Pick<RunRecord, "repo" | "runId" | "runAttempt" | "role">): string {
+export function storeCommitMessage(record: RunIdentity): string {
   return `${record.repo} run ${record.runId}-${record.runAttempt} (${record.role})`;
 }
 
@@ -136,24 +136,39 @@ async function isThere(store: StoreApi, contents: string): Promise<boolean> {
 const UNPROCESSABLE = 422;
 const NOT_FOUND = 404;
 
-/** How the record writer ended: a write, or no token for the store because setup hasn't made or reached it. */
-export type RecordOutcome = RecordWrite | { readonly kind: "no-store-token" };
+/** How a write to the store ended, or that there was no token for the store because setup hasn't made or reached it. */
+export type StoreOutcome = StoreWrite | { readonly kind: "no-store-token" };
+
+/**
+ * The step-summary words on a write of `what` (a "Run record", a "score") to
+ * the store, the one place they're worded: why nothing was written, or what
+ * was and what the store already held and left as it was.
+ */
+export function storeWriteSummary(what: string, outcome: StoreOutcome): string {
+  switch (outcome.kind) {
+    case "no-store-token":
+      return `No ${what} written: the Fabrik App couldn't get a token for ${RUN_STORE_REPO}.`;
+    case "public-store":
+      return `No ${what} written: ${RUN_STORE_REPO} isn't private, and the Kit writes nothing to a store others can read. Make it private.`;
+    case "written":
+      return [
+        ...(outcome.written.length === 0 ? [] : [`Written to ${RUN_STORE_REPO}: ${outcome.written.join(", ")}.`]),
+        ...(outcome.existing.length === 0 ? [] : [`Already there, left as it was: ${outcome.existing.join(", ")}.`]),
+      ].join(" ");
+  }
+}
+
+/** How the record writer ended: a write, no agent run to record, or no token for the store. */
+export type RecordOutcome = { readonly kind: "no-record" } | StoreOutcome;
 
 /** The record writer's one step-summary line. */
 export function recordWriteSummary(outcome: RecordOutcome): string {
   switch (outcome.kind) {
-    case "no-store-token":
-      return (
-        `No Run record written: the Fabrik App couldn't get a token for ${RUN_STORE_REPO}. ` +
-        `Run fabrik-setup to create the store, then install the Fabrik App on ${RUN_STORE_REPO}.`
-      );
-    case "public-store":
-      return `No Run record written: ${RUN_STORE_REPO} isn't private, and records never go to a store others can read. Make it private.`;
     case "no-record":
       return "No Run record: no agent run ended in this run.";
-    case "written": {
-      const written = `Run record written to ${RUN_STORE_REPO}: ${outcome.written.join(", ")}.`;
-      return outcome.existing.length === 0 ? written : `${written} Already there, left as it was: ${outcome.existing.join(", ")}.`;
-    }
+    case "no-store-token":
+      return `${storeWriteSummary("Run record", outcome)} Run fabrik-setup to create the store, then install the Fabrik App on ${RUN_STORE_REPO}.`;
+    default:
+      return storeWriteSummary("Run record", outcome);
   }
 }

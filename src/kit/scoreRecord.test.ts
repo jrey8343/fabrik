@@ -173,7 +173,7 @@ describe("The score-record job's step-summary line", () => {
 
   it("says why nothing was written to a store that isn't private", () => {
     expect(scoreRecordSummary({ kind: "public-store" })).toBe(
-      "No score written: jrey8343/fabrik-runs isn't private, and scores never go to a store others can read. Make it private.",
+      "No score written: jrey8343/fabrik-runs isn't private, and the Kit writes nothing to a store others can read. Make it private.",
     );
   });
 });
@@ -263,6 +263,15 @@ describe("The push job's step-summary line on scoring", () => {
 
     expect(recordedRunScoringSummary({ kind: "skip", score: skip.file, write: { kind: "written", written: [skip.path], existing: [] } })).toBe(
       `Not scored: no transcript of the run survived, so run 1007-1 on #7 gets a no-transcript score file. Written to jrey8343/fabrik-runs: ${skip.path}.`,
+    );
+  });
+
+  it("says why a skip's score file wasn't written to a store that isn't private", () => {
+    const outcome: ScoringOutcome = { kind: "skip", skip: { reason: "no-transcript" } };
+    const skip = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: "2026-11-04T12:01:00Z", outcome });
+
+    expect(recordedRunScoringSummary({ kind: "skip", score: skip.file, write: { kind: "public-store" } })).toBe(
+      "No score written: jrey8343/fabrik-runs isn't private, and the Kit writes nothing to a store others can read. Make it private.",
     );
   });
 });

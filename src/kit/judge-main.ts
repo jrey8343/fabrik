@@ -1,10 +1,11 @@
 // The judge job's program (#149): the Kit's fixed judge model (JUDGE_MODEL),
 // at its default effort, scores one finished Implementer run on the Kit's
 // rubrics from its transcript and its Ticket, in one read. It runs with no
-// tools (src/kit/judge.ts) through the same Sandcastle runner,
+// tools (src/kit/judgeLaunch.ts) through the same Sandcastle runner,
 // metered-billing preflight and init check as the agent roles
 // (src/agent/launch.ts), in an empty directory: never a Product checkout,
-// never the Kit's. It holds no GitHub token. It leaves its answer, checked
+// never the Kit's. Its env holds no GitHub token, and its job holds only the
+// read-only one, which reads the Ticket (ADR-0004). It leaves its answer, checked
 // against the rubrics, or its failure report, for the score-record job, and
 // its transcript beside them.
 //   node src/kit/judge-main.ts
@@ -18,26 +19,18 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { claudeCode, Output, run } from "@ai-hero/sandcastle";
+import { claudeCode, run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
-import { failureReportFor } from "../agent/failure.ts";
-import { readyHook, schemaOf, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "../agent/launch.ts";
+import { leaveFailureReport, readyHook, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "../agent/launch.ts";
 import { runSummary } from "../agent/summary.ts";
 import { readTranscriptGzip, TRANSCRIPT_FILE } from "../agent/transcript.ts";
+import type { FailureReport } from "../loop/types.ts";
 import { readBytesIfPresent } from "./checkout.ts";
-import {
-  JUDGE_FAILURE_FILE,
-  JUDGE_JOB,
-  JUDGE_RESULT_FILE,
-  judgeClaudeArgs,
-  judgeFailureText,
-  judgeResultText,
-  readJudgeOutput,
-  withoutTools,
-} from "./judge.ts";
-import { loadRubrics } from "./rubrics.ts";
+import { JUDGE_FAILURE_FILE, JUDGE_JOB, JUDGE_RESULT_FILE, judgeFailureText, judgeResultText } from "./judge.ts";
+import { judgeClaudeArgs, judgeOutput, withoutTools } from "./judgeLaunch.ts";
+import { loadRubrics } from "./kitFiles.ts";
 import { JUDGE_MODEL, JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
-import { JUDGE_OUTPUT_TAG, type JudgedTicket, judgePrompt } from "./scorerPrompt.ts";
+import { type JudgedTicket, judgePrompt } from "./scorerPrompt.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -86,7 +79,7 @@ async function main(): Promise<void> {
       cwd: await emptyWorkingDir(),
       prompt,
       maxIterations: 1,
-      output: Output.object({ tag: JUDGE_OUTPUT_TAG, schema: schemaOf(readJudgeOutput(rubrics)), maxRetries: 1 }),
+      output: judgeOutput(rubrics),
       // No setup: the judge runs nothing, so only the preflight.
       hooks: { sandbox: { onSandboxReady: [{ command: readyHook(null), timeoutMs: JUDGE_TIMEOUT_MINUTES * 60_000 }] } },
       signal: abort.signal,
@@ -97,11 +90,9 @@ async function main(): Promise<void> {
     await writeFile(join(outDir, JUDGE_RESULT_FILE), judgeResultText((result as { output?: unknown }).output, trimmed));
     console.log(`The judge scored the run on ${rubrics.map((rubric) => rubric.name).join(", ")}${trimmed ? ", from a trimmed transcript" : ""}`);
   } catch (error) {
-    for (const route of watch.initRefused() ?? []) console.log(`::error title=Metered-billing route::${route}`);
     // Left for the score-record job, which writes the judge's record and a judge-failed or judge-output-invalid score file.
-    const report = failureReportFor({ error, lines: watch.lines, initRefused: watch.initRefused() });
-    await writeFile(join(outDir, JUDGE_FAILURE_FILE), judgeFailureText(report, digestTrimmed));
-    console.log(`::error title=The judge failed (${report.failure})::${report.detail}`);
+    const text = (report: FailureReport) => judgeFailureText(report, digestTrimmed);
+    await leaveFailureReport(error, watch, { path: join(outDir, JUDGE_FAILURE_FILE), title: "The judge failed", text });
     throw error;
   } finally {
     await writeSummary(runSummary({ role: JUDGE_JOB, effort: null, lines: watch.lines }));

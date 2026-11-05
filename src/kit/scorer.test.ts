@@ -141,7 +141,7 @@ function judgeOutput(answers: Record<string, Partial<{ score: unknown; label: un
 describe("The score file", () => {
   const scored = implementRun();
 
-  it("a judged run's file names the scored run, its record, the judge and each rubric's score", () => {
+  it("a judged run's file names the scored run, its record, the rubric set, the judge and each rubric's score", () => {
     const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: { kind: "judged", judge, output: judgeOutput() } });
 
     expect(file).toEqual({
@@ -155,6 +155,7 @@ describe("The score file", () => {
       pullRequest: 50,
       record: SCORED_PATH,
       scoredAt: SCORED_AT,
+      rubrics: ["efficiency@1", "ticket-compliance@1", "skill-use@1"],
       judge: { model: "claude-sonnet-5", record: JUDGE_RECORD },
       digestTrimmed: false,
       skip: null,
@@ -191,7 +192,7 @@ describe("The score file", () => {
   describe("records a skip with its reason and no scores", () => {
     const rateLimit = { status: "allowed", rateLimitType: "seven_day", utilization: 0.8, resetsAt: 1_800_500_000 };
 
-    it("a weekly-limit skip from the plan names no judge and keeps the reading", () => {
+    it("a weekly-limit skip from the plan names the rubric set but no judge, and keeps the reading", () => {
       const plan = scoringPlan(implementRun({ retry: 1, rateLimit }));
       if (plan.kind !== "skip") throw new Error(`expected a skip, not ${plan.kind}`);
       const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: plan });
@@ -207,6 +208,7 @@ describe("The score file", () => {
         pullRequest: 50,
         record: SCORED_PATH,
         scoredAt: SCORED_AT,
+        rubrics: ["efficiency@1", "ticket-compliance@1", "skill-use@1"],
         judge: null,
         digestTrimmed: null,
         skip: { reason: "weekly-limit", rateLimit },
@@ -243,6 +245,17 @@ describe("The score file", () => {
       const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: { kind: "judge-failed", judge: early } });
 
       expect(file).toMatchObject({ judge: { model: "claude-sonnet-5", record: JUDGE_RECORD }, digestTrimmed: null, skip: { reason: "judge-failed" } });
+    });
+
+    it.each([
+      ["a skip from the plan", { kind: "skip", skip: { reason: "no-transcript" } }],
+      ["a judge that failed", { kind: "judge-failed", judge }],
+      ["a judge whose output wasn't valid", { kind: "judged", judge, output: {} }],
+    ] as const)("%s still names each rubric's name and version", (_, outcome) => {
+      const bumped = RUBRICS.map((rubric) => (rubric.name === "ticket-compliance" ? { ...rubric, version: 3 } : rubric));
+      const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: bumped, scoredAt: SCORED_AT, outcome });
+
+      expect(file.rubrics).toEqual(["efficiency@1", "ticket-compliance@3", "skill-use@1"]);
     });
 
     it("a skip goes where the scores would have", () => {

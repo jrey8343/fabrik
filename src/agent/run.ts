@@ -30,6 +30,7 @@ import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
+import { KIT_DIR } from "../kit/kitFiles.ts";
 import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
 import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
@@ -37,7 +38,7 @@ import type { AgentRole, GivenOperatorComment } from "../loop/types.ts";
 import { kitPromptPath } from "../guard/trust-root.ts";
 import { readInstallRecord } from "../skills/fetch.ts";
 import { type ParsedVerdict, parseVerdict } from "../loop/verdict.ts";
-import { AGENT_FAILURE_FILE, failureReportFor, MissingVerdictError } from "./failure.ts";
+import { AGENT_FAILURE_FILE, MissingVerdictError } from "./failure.ts";
 import {
   bundleAgentBranch,
   continueAgentBranch,
@@ -48,7 +49,7 @@ import {
   startAgentBranch,
 } from "./implement.ts";
 import { sentBackContext } from "./design.ts";
-import { claudeArgs, KIT_DIR, readyHook, schemaOf, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "./launch.ts";
+import { claudeArgs, leaveFailureReport, readyHook, schemaOf, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "./launch.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
@@ -288,11 +289,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     await writeFile(join(outDir, AGENT_RESULT_FILE), `${JSON.stringify(artifact, null, 2)}\n`);
     console.log(spec.describe(subject, checked));
   } catch (error) {
-    for (const route of watch.initRefused() ?? []) console.log(`::error title=Metered-billing route::${route}`);
     // Left for the push job, which posts the failure notice (loop.yml).
-    const report = failureReportFor({ error, lines: watch.lines, initRefused: watch.initRefused() });
-    await writeFile(join(outDir, AGENT_FAILURE_FILE), `${JSON.stringify(report, null, 2)}\n`);
-    console.log(`::error title=Infrastructure failure (${report.failure})::${report.detail}`);
+    await leaveFailureReport(error, watch, { path: join(outDir, AGENT_FAILURE_FILE), title: "Infrastructure failure" });
     throw error;
   } finally {
     // The install record src/skills/fetch.ts wrote last, naming each source and the skills from it.

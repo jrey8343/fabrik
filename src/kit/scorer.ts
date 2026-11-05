@@ -3,6 +3,7 @@
 // (src/kit/runStore.ts). The judge prompt is src/kit/scorerPrompt.ts. Pure,
 // no I/O.
 import { createHash } from "node:crypto";
+import { isObject } from "../agent/stream.ts";
 import { type Rubric, rubricSet } from "./rubrics.ts";
 import { type RateLimitReading, type RunRecord, type RunRecordRole, runStoreName } from "./runRecord.ts";
 
@@ -155,6 +156,8 @@ export interface ScoreFile {
   /** The scored run's Run record's store path. */
   readonly record: string;
   readonly scoredAt: string;
+  /** The rubric set the run was scored, or skipped, under: each rubric's `name@version`, in the rubrics' order. */
+  readonly rubrics: readonly string[];
   /** The judge's model and Run record path, or null for a skip decided before any judge ran. */
   readonly judge: { readonly model: string; readonly record: string } | null;
   /** Whether the judge read a trimmed digest; null when no judge ran, or it failed before it built its prompt. */
@@ -165,14 +168,15 @@ export interface ScoreFile {
 }
 
 /** A score file and where it goes in the store. */
-export interface ScoreFileFiles {
+export interface ScoreFileWithPath {
   readonly file: ScoreFile;
   readonly path: string;
 }
 
 /** The score file of a picked run: its scores, or why it has none. */
-export function scoreFileFor(input: ScoreFileInput): ScoreFileFiles {
+export function scoreFileFor(input: ScoreFileInput): ScoreFileWithPath {
   const { scored, rubrics, outcome } = input;
+  const set = rubricSet(rubrics);
   const file: ScoreFile = {
     schema: 1,
     kitSha: scored.kitSha,
@@ -184,11 +188,12 @@ export function scoreFileFor(input: ScoreFileInput): ScoreFileFiles {
     pullRequest: scored.pullRequest,
     record: input.scoredPath,
     scoredAt: input.scoredAt,
+    rubrics: set.pairs,
     ...judgeOf(outcome),
     ...resultOf(rubrics, outcome),
   };
   // Beside the scored run's record, and named by the rubric set, so re-scoring under new rubric versions writes a new file.
-  return { file, path: `scores/${runStoreName(scored, scored.role)}-${rubricSet(rubrics).hash}.json` };
+  return { file, path: `scores/${runStoreName(scored)}-${set.hash}.json` };
 }
 
 /** The judge a score file names, if one ran. */
@@ -216,9 +221,9 @@ function resultOf(rubrics: readonly Rubric[], outcome: ScoringOutcome): Pick<Sco
  * Each rubric's score from the judge's output, in the rubrics' order, with
  * its pass from the rubric's threshold. Null, so the output is invalid as a
  * whole, unless it's a JudgeOutput answering each rubric exactly once with a
- * score from 0 to 1 and one of that rubric's labels. The judge checks its own
- * answer with this too (src/kit/judge.ts), so it's asked to fix what the
- * score file would refuse.
+ * score from 0 to 1 and one of that rubric's labels. The judge's run checks
+ * its answer with this too (src/kit/judgeLaunch.ts), so an answer the score
+ * file would refuse fails the judge, with the reasons in its failure report.
  */
 export function scoreEntries(rubrics: readonly Rubric[], output: unknown): readonly ScoreEntry[] | null {
   const answers = answersOf(output);
@@ -251,8 +256,4 @@ function isAnswer(value: unknown): value is JudgeAnswer {
     typeof value["label"] === "string" &&
     typeof value["rationale"] === "string"
   );
-}
-
-function isObject(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

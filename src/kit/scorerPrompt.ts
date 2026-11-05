@@ -3,7 +3,8 @@
 // gives the Ticket and a compact digest of the run's transcript, read through
 // the stream reader and held to a character budget, as fenced data; then the
 // rubrics; then the answer the judge owes, one per rubric, in one tag and
-// against a schema the rubrics make. Pure, no I/O. Nothing runs the judge yet.
+// against a schema the rubrics make. The judge job builds it in
+// src/kit/judge-main.ts. Pure, no I/O.
 import { readStream, type StreamMessage, type StreamStep } from "../agent/stream.ts";
 import type { Rubric } from "./rubrics.ts";
 import type { JudgeAnswer, JudgeOutput } from "./scorer.ts";

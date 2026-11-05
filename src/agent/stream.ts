@@ -54,7 +54,8 @@ export interface StreamToolCall {
 /** One step of an agent's work: text it wrote or a tool call it made. */
 export type StreamStep = StreamText | StreamToolCall;
 
-function isObject(value: unknown): value is StreamMessage {
+/** Whether a parsed JSON value is an object: not null, and not an array. */
+export function isObject(value: unknown): value is StreamMessage {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

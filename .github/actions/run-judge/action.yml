@@ -1,12 +1,14 @@
 # Runs the judge (#149): the Kit's fixed judge model (JUDGE_MODEL in
 # src/kit/runStore.ts) scores one finished Implementer run on the Kit's
-# rubrics, from the run's transcript and its Ticket. It holds no write
-# credential (ADR-0002): it reads the Ticket through the job's read-only
-# GITHUB_TOKEN in a step of its own, loads only the Claude token, through the
-# agent service account (ADR-0004), and runs src/kit/judge-main.ts, which runs
-# the judge with no tools, behind the metered-billing preflight, in an empty
-# directory. It checks out nothing: the judge job checks out the Kit alone into
-# kit/, never the Product repo, before using it:
+# rubrics, from the run's transcript and its Ticket. Its job holds no write
+# credential (ADR-0002): only the read-only GITHUB_TOKEN, which reads the
+# Ticket, and the Claude token, loaded through the agent service account
+# (ADR-0004). The job, not the step, is the security boundary (ADR-0004), so
+# those two are all a judge that read the runner's memory could reach. It runs
+# src/kit/judge-main.ts, which runs the judge with no tools, behind the
+# metered-billing preflight, in an empty directory. It checks out nothing: the
+# judge job checks out the Kit alone into kit/, never the Product repo, before
+# using it:
 #   - uses: ./kit/.github/actions/run-judge
 #     with:
 #       op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
@@ -63,7 +65,9 @@ runs:
         name: fabrik-transcript-implement
         path: ${{ runner.temp }}/scored-transcript
 
-    # Before the Claude token loads, and in a step of its own, so the judge never holds a GitHub token.
+    # Before the Claude token loads, and in a step of its own, so the token stays
+    # out of the judge's env. Not a boundary (ADR-0004): what keeps the judge from
+    # writing is that its job holds only this read-only token.
     - name: Read the Ticket
       shell: bash
       working-directory: ${{ github.action_path }}/../../..

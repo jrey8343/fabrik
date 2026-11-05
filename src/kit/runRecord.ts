@@ -156,7 +156,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
   const { role, issue, pullRequest, job } = ran;
   const kit = end.needs["kit"]?.outputs ?? {};
   const agent = job?.outputs ?? {};
-  const { recordPath, transcriptPath } = pathsFor(end, role, end.transcript !== null);
+  const { recordPath, transcriptPath } = pathsFor({ ...end, role }, end.transcript !== null);
   const implement = role === "implement";
   const facts: RunFacts = {
     kitSha: end.kitSha,
@@ -205,7 +205,7 @@ export interface JudgeRunEnd {
 export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
   const { scored, judge } = end;
   // In the scored run's month, so the two sit side by side even when the judge ends in the next one.
-  const { recordPath, transcriptPath } = pathsFor(scored, "score", end.transcript !== null);
+  const { recordPath, transcriptPath } = pathsFor({ ...scored, role: "score" }, end.transcript !== null);
   const facts: RunFacts = {
     kitSha: end.kitSha,
     repo: scored.repo,
@@ -343,12 +343,8 @@ function readingOf(info: StreamMessage | null): RateLimitReading | null {
 }
 
 /** Where a record and its transcript go, by the run's name in the store. */
-function pathsFor(
-  run: Pick<RunRecord, "repo" | "endedAt" | "runId" | "runAttempt">,
-  role: RunRecordRole,
-  withTranscript: boolean,
-): { recordPath: string; transcriptPath: string | null } {
-  const name = runStoreName(run, role);
+function pathsFor(run: StoredRun, withTranscript: boolean): { recordPath: string; transcriptPath: string | null } {
+  const name = runStoreName(run);
   return {
     recordPath: `runs/${name}.json`,
     transcriptPath: withTranscript ? `transcripts/${name}.jsonl.gz` : null,
@@ -356,13 +352,33 @@ function pathsFor(
 }
 
 /**
+ * A run in one role, as the store tells it from every other: its repo, its
+ * workflow run and attempt, and the role. Its record, transcript and score
+ * files, and the commits that write them, all name it.
+ */
+export type RunIdentity = Pick<RunRecord, "repo" | "runId" | "runAttempt" | "role">;
+
+/** A run as the store files it: who it is, and when it ended, whose month its files sit in. */
+export type StoredRun = RunIdentity & Pick<RunRecord, "endedAt">;
+
+/**
  * A run's name in the store, which its record, its transcript and its score
  * files share: the run's repo, the month (UTC) it ended, its workflow run and
  * attempt, and the role.
  */
-export function runStoreName(run: Pick<RunRecord, "repo" | "endedAt" | "runId" | "runAttempt">, role: RunRecordRole): string {
+export function runStoreName(run: StoredRun): string {
   const month = new Date(run.endedAt).toISOString().slice(0, 7);
-  return `${run.repo}/${month}/${run.runId}-${run.runAttempt}-${role}`;
+  return `${run.repo}/${month}/${runName(run)}`;
+}
+
+/** A run's key whatever month it ended: its name in the store without the month, which a score file's run shares with its record. */
+export function runKey(run: RunIdentity): string {
+  return `${run.repo}/${runName(run)}`;
+}
+
+/** A run's name within its repo and month: its workflow run, attempt and role. */
+function runName({ runId, runAttempt, role }: RunIdentity): string {
+  return `${runId}-${runAttempt}-${role}`;
 }
 
 /** A positive whole number from a job output, or null. */

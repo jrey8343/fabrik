@@ -3,18 +3,14 @@
 // Each file holds the rubric's name, version, pass threshold and labels in
 // front matter, then the rubric text. A rubric's version names its content:
 // the version guard fails any rubric that changed without a version bump.
-// Everything here is pure but loadRubrics, which reads the files.
+// Pure, no I/O: src/kit/kitFiles.ts reads the files.
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
 
 /** The Kit's Scorers, in the order the Kit lists them. */
 export const SCORERS = ["efficiency", "ticket-compliance", "skill-use"] as const;
 
 /** Where the Kit keeps the rubrics, relative to its own root: `<name>.md` for each Scorer. */
 export const RUBRICS_DIR = "prompts/scorers";
-
-const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 
 /** One Scorer's rubric, as its file holds it. */
 export interface Rubric {
@@ -128,14 +124,4 @@ export function rubricVersionErrors(rubrics: readonly Rubric[], recorded: Readon
     }
     return [];
   });
-}
-
-/** The Kit's rubrics, one per Scorer in the Kit's order, read from its rubric files. */
-export async function loadRubrics(kitDir: string = KIT_DIR): Promise<readonly Rubric[]> {
-  return Promise.all(
-    SCORERS.map(async (name) => {
-      const path = `${RUBRICS_DIR}/${name}.md`;
-      return readRubric(await readFile(join(kitDir, path), "utf8"), path);
-    }),
-  );
 }

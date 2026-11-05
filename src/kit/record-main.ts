@@ -21,9 +21,9 @@ import { GitHub, type Repo } from "../github/client.ts";
 import { readKitConfigSources } from "../github/snapshot.ts";
 import { readBytesIfPresent, readIfPresent } from "./checkout.ts";
 import { resolveKitConfig } from "./config.ts";
+import { loadRubrics } from "./kitFiles.ts";
 import type { Needs } from "./pushJob.ts";
 import { type RecordOutcome, type RecordWrite, recordWriteSummary, writeRunRecord } from "./recordWriter.ts";
-import { loadRubrics } from "./rubrics.ts";
 import { agentRunEnded, runRecordFor, type RunRecordFiles } from "./runRecord.ts";
 import { recordedRunScoringSummary, scoreRecordedRun } from "./scoreRecord.ts";
 
