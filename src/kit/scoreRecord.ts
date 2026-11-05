@@ -9,7 +9,7 @@ import { type RecordWrite, type StoreApi, type StoreFile, type StoreWrite, store
 import type { Rubric } from "./rubrics.ts";
 import type { RunRecord, RunRecordFiles } from "./runRecord.ts";
 import { RUN_STORE_REPO } from "./runStore.ts";
-import { type ScoreFile, type ScoreFileFiles, scoreFileFor, type ScoreSkip, scoringPlan } from "./scorer.ts";
+import { type ScoreFile, type ScoreFileWithPath, scoreFileFor, type ScoreSkip, scoringPlan } from "./scorer.ts";
 
 /** A judge run's files, as the score-record job writes them. */
 export interface ScoreRecordFiles {
@@ -18,7 +18,7 @@ export interface ScoreRecordFiles {
   /** The judge's gzipped transcript, or null if none survived its run. */
   readonly judgeTranscriptGzip: Uint8Array | null;
   /** The score file, and where it goes. */
-  readonly score: ScoreFileFiles;
+  readonly score: ScoreFileWithPath;
 }
 
 /** What writing a judge run's files came to. */

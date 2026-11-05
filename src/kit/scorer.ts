@@ -168,13 +168,13 @@ export interface ScoreFile {
 }
 
 /** A score file and where it goes in the store. */
-export interface ScoreFileFiles {
+export interface ScoreFileWithPath {
   readonly file: ScoreFile;
   readonly path: string;
 }
 
 /** The score file of a picked run: its scores, or why it has none. */
-export function scoreFileFor(input: ScoreFileInput): ScoreFileFiles {
+export function scoreFileFor(input: ScoreFileInput): ScoreFileWithPath {
   const { scored, rubrics, outcome } = input;
   const set = rubricSet(rubrics);
   const file: ScoreFile = {
