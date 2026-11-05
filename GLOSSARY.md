@@ -72,6 +72,10 @@ _Avoid_: checker, critic, QA
 An agent on a frontier model that reads a Product repo's recent changes on a schedule and files deepening opportunities as one Audit, changing nothing.
 _Avoid_: architect, critic
 
+**Researcher**:
+An agent that resolves one research Decision on a Map by reading primary sources and recording its findings, deciding nothing.
+_Avoid_: investigator, scout
+
 ## The loop
 
 **Loop**:
