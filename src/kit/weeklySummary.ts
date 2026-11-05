@@ -1,7 +1,7 @@
 // The Weekly summary (ADR-0009): from the store's Run records, a GitHub facts
 // snapshot per Product repo, the Operator and now, the one issue filed for the
 // week that just ended, or skip in a quiet week. Pure, no I/O, no model call.
-import type { RunRecord } from "./runRecord.ts";
+import type { RateLimitReading, RunRecord } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
 export interface LabelEvent {
@@ -60,6 +60,10 @@ export interface WeeklySummary {
   readonly week: string;
   /** The API-equivalent cost of every record that ended in the week, in USD. */
   readonly cost: WeekOverWeek<number>;
+  /** How many of the week's records the cost leaves out, their cost basis being unknown. */
+  readonly unknownCost: WeekOverWeek<number>;
+  /** The latest weekly-limit reading across the week's records, or null if none read one. */
+  readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
 }
 
 export type WeeklySummaryResult =
@@ -68,21 +72,44 @@ export type WeeklySummaryResult =
 
 /** The summary to file for the week that just ended, or skip. */
 export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
-  const { thisWeek, lastWeek } = weeksEndingAt(Date.parse(input.now), input.timeZone);
-  const recordsIn = (week: Week) => input.records.filter((record) => within(week, record.endedAt));
-  const records = { thisWeek: recordsIn(thisWeek), lastWeek: recordsIn(lastWeek) };
-  if (records.thisWeek.length === 0) return { kind: "skip" };
+  const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
+  const thisWeek = metricsOf(weeks.thisWeek, input);
+  const lastWeek = metricsOf(weeks.lastWeek, input);
+  if (thisWeek.records === 0) return { kind: "skip" };
+  const change = <K extends keyof WeekMetrics>(metric: K): WeekOverWeek<WeekMetrics[K]> => ({
+    thisWeek: thisWeek[metric],
+    lastWeek: lastWeek[metric],
+  });
   return {
     kind: "summary",
     summary: {
-      week: thisWeek.monday,
-      cost: { thisWeek: totalCost(records.thisWeek), lastWeek: totalCost(records.lastWeek) },
+      week: weeks.thisWeek.monday,
+      cost: change("cost"),
+      unknownCost: change("unknownCost"),
+      weeklyLimit: change("weeklyLimit"),
     },
   };
 }
 
-function totalCost(records: readonly RunRecord[]): number {
-  return records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0);
+// The metrics: one week's figures, computed the same way for any week.
+
+interface WeekMetrics {
+  readonly records: number;
+  readonly cost: number;
+  readonly unknownCost: number;
+  readonly weeklyLimit: RateLimitReading | null;
+}
+
+function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
+  const records = input.records
+    .filter((record) => within(week, record.endedAt))
+    .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
+  return {
+    records: records.length,
+    cost: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
+    unknownCost: records.filter((record) => record.totalCostUsd === null).length,
+    weeklyLimit: records.findLast((record) => record.rateLimit !== null)?.rateLimit ?? null,
+  };
 }
 
 // The week: Monday 00:00 to Monday 00:00 in the Operator's time zone.

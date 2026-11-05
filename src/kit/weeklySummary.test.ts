@@ -34,6 +34,46 @@ describe("the Weekly summary", () => {
     expect(result.summary.cost).toEqual({ thisWeek: 1.75, lastWeek: 2 });
   });
 
+  it("reports Subscription usage as the latest weekly-limit reading across the week's records", () => {
+    const reading = (utilization: number, resetsAt: number) => ({ status: "allowed", rateLimitType: "seven_day", utilization, resetsAt });
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ endedAt: "2026-11-06T00:00:00Z", rateLimit: reading(0.62, 1_794_000_000) }), // the latest reading
+          aRunRecord({ endedAt: "2026-11-03T00:00:00Z", rateLimit: reading(0.4, 1_793_000_000) }),
+          aRunRecord({ endedAt: "2026-11-07T00:00:00Z", rateLimit: null }), // later, but read none
+          aRunRecord({ endedAt: "2026-10-28T00:00:00Z", rateLimit: reading(0.9, 1_792_000_000) }), // last week
+        ],
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "summary",
+      summary: {
+        weeklyLimit: {
+          thisWeek: { utilization: 0.62, resetsAt: 1_794_000_000 },
+          lastWeek: { utilization: 0.9, resetsAt: 1_792_000_000 },
+        },
+      },
+    });
+  });
+
+  it("reports no weekly-limit reading in a week whose records read none", () => {
+    const result = weeklySummary(input({ records: [aRunRecord({ endedAt: "2026-11-06T00:00:00Z", rateLimit: null })] }));
+    expect(result).toMatchObject({ kind: "summary", summary: { weeklyLimit: { thisWeek: null, lastWeek: null } } });
+  });
+
+  it("leaves a run whose cost basis is unknown out of the cost, and counts it", () => {
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", totalCostUsd: null }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ kind: "summary", summary: { cost: { thisWeek: 1, lastWeek: 0 }, unknownCost: { thisWeek: 1, lastWeek: 0 } } });
+  });
+
   it("keeps Monday 00:00 local across a daylight-saving change", () => {
     // Los Angeles left daylight saving on Sunday 1 November 2026: last week
     // began at 00:00 PDT (07:00Z) and this week at 00:00 PST (08:00Z).
