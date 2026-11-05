@@ -33,6 +33,7 @@ const ISSUE_QUERY = `
         number
         state
         author { login }
+        body
         labels(first: 100) { nodes { name } }
         parent { number }
         comments(last: 100) { nodes { body createdAt author { __typename } } }
@@ -58,6 +59,7 @@ interface IssueQueryResult {
       number: number;
       state: "OPEN" | "CLOSED";
       author: { login: string } | null;
+      body: string;
       labels: { nodes: { name: string }[] };
       parent: { number: number } | null;
       comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
@@ -438,6 +440,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       number: issue.number,
       open: issue.state === "OPEN",
       author: issue.author?.login ?? "ghost",
+      body: issue.body,
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
