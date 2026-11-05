@@ -184,6 +184,10 @@ _Avoid_: PR feedback, reply
 The durable account of one AFK agent run in one role: its model, cost, outcome and transcript, written once when the run ends and never changed.
 _Avoid_: run log, telemetry, step summary
 
+**Scorer**:
+A Kit-owned rubric that a judge model applies to one finished run's transcript, scoring 0–1 how the run worked, never what it built.
+_Avoid_: eval, grader, judge
+
 **Human touch**:
 Each time the Operator steps into a Ticket's path between Dispatch and merge: a push to its branch, a Request changes, a Retry or Step-up they asked for, or a Pairing session or Operator step on it. The merge, Design-session answers and Operator comments are not touches.
 _Avoid_: intervention, manual fix
