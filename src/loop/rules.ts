@@ -1,8 +1,9 @@
-import { answerRound, applyTurn, startSession, turnStartFrom } from "./design.ts";
+import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom } from "./design.ts";
 import { failureNotice } from "./failures.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import { scheduledTick } from "./kitIssues.ts";
 import {
+  DESIGN_LABEL,
   DISPATCH_LABEL,
   isCategoryLabel,
   isKitIssueLabel,
@@ -21,6 +22,7 @@ import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
 import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
+import { checkDesignQueue } from "./designQueue.ts";
 import { dispatch } from "./dispatch.ts";
 import { applyRedChecks, applyReview, startReview } from "./review.ts";
 import type {
@@ -109,6 +111,10 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
       return snapshot.dispatch === null
         ? missingFromSnapshot("the Tickets a Dispatch check weighs")
         : dispatch(snapshot.dispatch, config);
+    case "design-queue-check":
+      return snapshot.designQueue === null
+        ? missingFromSnapshot("the needs-design issues a Design queue check weighs")
+        : checkDesignQueue(snapshot.designQueue, config);
     case "kit-config-changed":
       // max_in_flight may have gone up, or from 0 back above it, so see what can start now.
       return { kind: "act", actions: [CHECK_DISPATCH] };
@@ -137,7 +143,8 @@ function missingFromSnapshot(what: string): Plan {
 
 /**
  * Adding needs-triage starts Triage, adding needs-design starts a Design
- * session, and adding agent:implement starts (or resumes) an Implement run.
+ * session (as does agent:design, which the Design queue check adds), and
+ * adding agent:implement starts (or resumes) an Implement run.
  */
 function labelAdded(
   issueNumber: number,
@@ -147,6 +154,7 @@ function labelAdded(
   config: KitConfig,
 ): Plan {
   if (label === NEEDS_DESIGN) return startSession(issueNumber, context, config);
+  if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config);
   if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };

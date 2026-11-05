@@ -74,6 +74,8 @@ function describeAction(action: Action): string {
       return `- a ${action.role} run on #${action.issue}${action.pullRequest === undefined ? "" : `, ${action.requestChanges === undefined ? "retrying" : "with the Operator's requested changes on"} #${action.pullRequest}`} (${action.model}), which the Kit job routes to its agent job`;
     case "check-dispatch":
       return "- run a Dispatch check";
+    case "check-design-queue":
+      return "- run a Design queue check";
     case "push-branch":
       return `- push ${action.branch}`;
     case "open-pull-request":

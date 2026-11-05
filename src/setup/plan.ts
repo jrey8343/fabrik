@@ -5,6 +5,7 @@ import { KIT_CONFIG_PATH, resolveKitConfig } from "../kit/config.ts";
 import {
   ALL_LABELS,
   BUG,
+  DESIGN_LABEL,
   DISPATCH_LABEL,
   ENHANCEMENT,
   type Label as LoopLabel,
@@ -249,6 +250,7 @@ const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly
   [READY_FOR_HUMAN]: { color: "1d76db", description: "Fabrik: needs the Operator to build it" },
   [WONTFIX]: { color: "ffffff", description: "Fabrik: will not be actioned" },
   [DISPATCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes an Implementer (the Kit adds it)" },
+  [DESIGN_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Design session's first turn (the Kit adds it)" },
   [REVIEW_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes a Review" },
   [BUG]: { color: "d73a4a", description: "Something isn't working" },
   [ENHANCEMENT]: { color: "a2eeef", description: "New feature or request" },

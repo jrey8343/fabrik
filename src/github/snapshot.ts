@@ -179,7 +179,7 @@ export async function gatherSnapshot(
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
   // By default the Operator owns the Product repos they run Fabrik in.
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, spec, operator: operator ?? owner, kitIssues, startingComment }
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment }
     : { ...part, spec, kitIssues, startingComment };
 }
 
@@ -274,6 +274,8 @@ async function gatherEventPart(
     case "dispatch-check":
       if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");
       return gatherDispatch(github, actions, repo, operator);
+    case "design-queue-check":
+      throw new Error("Not gathered yet");
     case "kit-config-changed":
     case "scheduled-tick":
       return null;
@@ -365,6 +367,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
     },
     pullRequest: null,
     dispatch: null,
+    designQueue: null,
     // By default the Operator owns the Product repos they run Fabrik in.
     operator: operator ?? data.repository.owner.login,
   };
@@ -408,6 +411,7 @@ async function gatherPullRequest(
       changesRequested: changesRequestedOf(pullRequest.reviews.nodes[0]),
     },
     dispatch: null,
+    designQueue: null,
     operator: operator ?? data.repository.owner.login,
   };
 }
@@ -470,6 +474,7 @@ async function gatherDispatch(
       openAgentDraftPullRequests,
       implementRunsInProgress: await countImplementRuns(actions, repo),
     },
+    designQueue: null,
     operator: operator ?? page.repository.owner.login,
   };
 }
