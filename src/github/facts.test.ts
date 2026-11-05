@@ -203,4 +203,144 @@ describe("Gathering a Product repo's GitHub facts", () => {
       { label: "agent:review", action: "unlabeled", actor: "fabrik-app[bot]", at: "2026-11-03T04:00:00Z" },
     ]);
   });
+
+  it("holds every issue that moved in the window or is still open as a Ticket, and those with sub-issues as Specs", async () => {
+    const github = repoWith({
+      updatedIssues: [
+        aRawIssue({
+          number: 7,
+          state: "CLOSED",
+          closedAt: "2026-11-04T00:00:00Z",
+          timelineItems: { nodes: [aRawLabelEvent("agent:implement", "2026-11-02T00:00:00Z")] },
+          blockedBy: { nodes: [{ number: 5, labels: { nodes: [{ name: "ready-for-human" }] } }] },
+        }),
+        aRawIssue({ number: 3, subIssues: { nodes: [{ number: 7 }, { number: 8 }] } }),
+      ],
+      openIssues: [aRawIssue({ number: 3, subIssues: { nodes: [{ number: 7 }, { number: 8 }] } }), aRawIssue({ number: 1 })],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW);
+
+    expect(facts.tickets).toEqual([
+      {
+        number: 7,
+        labelEvents: [{ label: "agent:implement", action: "labeled", actor: "fabrik-app[bot]", at: "2026-11-02T00:00:00Z" }],
+        blockedBy: [{ number: 5, labels: ["ready-for-human"] }],
+        closedAt: "2026-11-04T00:00:00Z",
+      },
+      { number: 3, labelEvents: [], blockedBy: [], closedAt: null },
+      { number: 1, labelEvents: [], blockedBy: [], closedAt: null },
+    ]);
+    expect(facts.specs).toEqual([{ number: 3, labelEvents: [], tickets: [7, 8] }]);
+  });
+
+  it("holds every open issue, however long it has sat, with its labels and comments", async () => {
+    const github = repoWith({
+      openIssues: [
+        aRawIssue({
+          number: 12,
+          title: "Which way?",
+          createdAt: "2025-01-01T00:00:00Z",
+          labels: { nodes: [{ name: "needs-info" }] },
+          comments: {
+            nodes: [
+              { body: "A question", createdAt: "2026-11-01T00:00:00Z", author: APP },
+              { body: "An answer", createdAt: "2026-11-02T00:00:00Z", author: null },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW);
+
+    expect(facts.openIssues).toEqual([
+      {
+        number: 12,
+        title: "Which way?",
+        labels: ["needs-info"],
+        createdAt: "2025-01-01T00:00:00Z",
+        comments: [
+          { author: "fabrik-app[bot]", byBot: true, body: "A question", at: "2026-11-01T00:00:00Z" },
+          { author: "ghost", byBot: false, body: "An answer", at: "2026-11-02T00:00:00Z" },
+        ],
+        labelEvents: [],
+      },
+    ]);
+  });
+
+  it("holds the open agent PRs alone, with their head, draft state and activity", async () => {
+    const github = repoWith({
+      openPullRequests: [
+        {
+          number: 50,
+          title: "Build the thing",
+          isDraft: true,
+          headRefOid: "h".repeat(40),
+          headRefName: "fabrik/ticket-7",
+          createdAt: "2026-11-01T00:00:00Z",
+          author: APP,
+          commits: { nodes: [{ commit: { committedDate: "2026-11-02T00:00:00Z" } }] },
+          comments: { nodes: [] },
+          timelineItems: { nodes: [] },
+        },
+        {
+          number: 52,
+          title: "A person's PR",
+          isDraft: false,
+          headRefOid: "a".repeat(40),
+          headRefName: "fabrik/ticket-9",
+          createdAt: "2026-11-01T00:00:00Z",
+          author: OPERATOR,
+          commits: { nodes: [] },
+          comments: { nodes: [] },
+          timelineItems: { nodes: [] },
+        },
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW);
+
+    expect(facts.openPullRequests).toEqual([
+      {
+        number: 50,
+        title: "Build the thing",
+        draft: true,
+        headSha: "h".repeat(40),
+        createdAt: "2026-11-01T00:00:00Z",
+        commits: [{ at: "2026-11-02T00:00:00Z" }],
+        comments: [],
+        labelEvents: [],
+      },
+    ]);
+  });
+
+  it("holds the default branch's commit messages in the window", async () => {
+    const github = repoWith({
+      defaultBranchCommits: [{ message: `Revert "Build the thing"\n\nThis reverts commit ${"c".repeat(40)}.`, committedDate: "2026-11-05T00:00:00Z" }],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW);
+
+    expect(facts.defaultBranchCommits).toEqual([
+      { message: `Revert "Build the thing"\n\nThis reverts commit ${"c".repeat(40)}.`, at: "2026-11-05T00:00:00Z" },
+    ]);
+  });
 });
+
+/** Issue 7, open since 2026-10-01, with nothing on it unless a test says so. */
+function aRawIssue(overrides: Record<string, unknown> = {}) {
+  return {
+    number: 7,
+    title: "A Ticket",
+    state: "OPEN",
+    createdAt: "2026-10-01T00:00:00Z",
+    closedAt: null,
+    labels: { nodes: [] },
+    comments: { nodes: [] },
+    timelineItems: { nodes: [] },
+    blockedBy: { nodes: [] },
+    subIssues: { nodes: [] },
+    ...overrides,
+  };
+}
