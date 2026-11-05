@@ -209,6 +209,7 @@ async function finishedReviewEvent(
     pullRequest: input.pullRequest,
     headSha: input.headSha,
     runUrl: thisRunUrl(),
+    repoUrl: `${required("GITHUB_SERVER_URL")}/${required("GITHUB_REPOSITORY")}`,
     failedChecks: input.failedChecks,
     result,
   });

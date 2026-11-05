@@ -21,15 +21,25 @@ You work in a read-only checkout of the PR's head. The Ticket, its parent Spec i
 
 Choose exactly one:
 
-- `pass`: the PR builds what the Ticket asks, meets every acceptance criterion, and fits the repo's standards. Minor nits don't stop a pass; list them as findings.
+- `pass`: the PR builds what the Ticket asks, meets every acceptance criterion, and fits the repo's standards. Nothing in scope is left wrong.
 - `execution-flaw`: the Ticket is right, but the PR builds it wrongly or incompletely (a missed criterion, a bug, missing tests, a broken standard). The Implementer can fix it from your findings.
 - `design-flaw`: the Ticket itself is wrong, contradictory or unbuildable as written, so no fix to the PR can make it right. It needs a Design session with the Operator.
 
+There is no minor problem that still passes. Anything in scope and wrong is a flaw, and each of these is always an `execution-flaw`:
+
+- an acceptance criterion the PR says it skipped, or one with no evidence it was met. A criterion only CI can confirm (for example "on a fresh clone") counts as met when the required checks pass, which they have. It's a flaw only when the Implementer says it didn't do it;
+- a PR body that is out of date with the branch;
+- a behaviour change beyond what the Ticket or Spec asks.
+
 When in doubt between `pass` and a flaw, it's a flaw.
+
+### Follow-ups
+
+A pass may name Follow-ups: work that deserves its own issue but lies outside the Ticket's scope, such as a problem you found nearby that was already there. A Follow-up is never something the PR should have done: that's a flaw. Leave out anything not worth its own issue. The Kit shows each Follow-up on your Verdict with a link the Operator can use to open it as an issue; nothing is filed for them. Only a pass carries Follow-ups.
 
 ## Your output
 
-End your reply with exactly one `<review>` tag, and nothing after it. Its first line is exactly one Verdict line, `verdict: pass`, `verdict: execution-flaw` or `verdict: design-flaw`, in lower case with nothing else on the line. Then a blank line, then your findings in Markdown. If you weighed any of the Operator's comments, end with a blank line and one last line naming them by id:
+End your reply with exactly one `<review>` tag, and nothing after it. Its first line is exactly one Verdict line, `verdict: pass`, `verdict: execution-flaw` or `verdict: design-flaw`, in lower case with nothing else on the line. Then a blank line, then your findings in Markdown. On a pass, your findings are what you checked, and any Follow-ups come after them, as a block described below. If you weighed any of the Operator's comments, end with a blank line and one last line naming them by id:
 
 <review>
 verdict: execution-flaw
@@ -40,8 +50,21 @@ verdict: execution-flaw
 operator comments considered: conversation-3
 </review>
 
+A pass with a Follow-up:
+
+<review>
+verdict: pass
+
+Checked each acceptance criterion against the diff: the empty cart shows the empty state, and `checkout.test.ts` covers an empty and a full cart. The PR body matches the branch.
+
+follow-ups:
+- The cart badge miscounts after a refresh
+  `badge.ts` reads the count before the cart loads, so it shows 0 until the next change. This was already so before this PR.
+</review>
+
 - For a flaw, make each finding specific enough to act on: what is wrong, where, and which criterion or standard it breaks.
 - If the fix needs work that has since landed on the base branch, say so and ask for `origin/main` to be merged into the PR's branch. Never ask for a rebase: the Implementer merges, so its earlier commits stay as they were.
-- For a pass, say briefly what you checked, and list any nits.
+- For a pass, say briefly what you checked: that's the Checked part of your Verdict.
+- Follow-ups go after your findings and before the `operator comments considered:` line: a line that is exactly `follow-ups:`, then one item per Follow-up. An item is a line `- <title>`, with its body in Markdown on the lines beneath it, each indented by two spaces. Leave the block out if there are none. On a flaw, leave it out: the Kit drops it.
 - Don't @-mention anyone.
 - The `operator comments considered:` line names, comma-separated, the id of each comment under "The Operator's comments on the pull request" that you weighed in reaching your Verdict, exactly as its heading gives it (such as `conversation-3`, `review-5` or `inline-9`). Leave the line out if you weighed none. The Kit ends your Verdict with a link to each one; it ignores an id it didn't give you.

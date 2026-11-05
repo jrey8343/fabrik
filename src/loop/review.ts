@@ -5,6 +5,7 @@
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
 import { consideredSection } from "./considered.ts";
+import { followUpsSection } from "./followUps.ts";
 import { REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw, whyAwaitingRun } from "./retry.ts";
@@ -67,10 +68,13 @@ export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
     if (!parsed.ok) {
       return { kind: "fail", failure: "infrastructure", reason: `The Review of #${pullRequest.number} gave no valid Verdict: ${parsed.error}` };
     }
+    const findings = withoutMentions(parsed.findings);
     const actions = verdictActions(event, pullRequest, {
       verdict: parsed.verdict,
       source: "reviewer",
-      findings: withoutMentions(parsed.findings),
+      // A pass is what the Reviewer checked, then any Follow-ups; a flaw is its findings.
+      findings: parsed.verdict === "pass" && findings !== "" ? `### Checked\n\n${findings}` : findings,
+      followUps: followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number),
       considered: consideredSection(parsed.considered, event.operatorComments),
     });
     if (parsed.verdict !== "pass") return { kind: "act", actions };
@@ -127,7 +131,8 @@ const VERDICT_COMMENT: PostedComment = { posted: "verdict" };
  * The Verdict comment (it mentions nobody), and agent:review off so re-adding
  * it is a fresh event. An Execution flaw then starts its retry, if one is
  * left; a Design flaw, or an Execution flaw with none left, sends the Ticket
- * back to design. A Reviewer's Verdict ends with the Operator comments it
+ * back to design. A pass's Follow-ups (src/loop/followUps.ts) follow its
+ * findings. A Reviewer's Verdict ends with the Operator comments it
  * weighed, as `considered` (src/loop/considered.ts) renders them.
  */
 export function verdictActions(
@@ -137,11 +142,13 @@ export function verdictActions(
     verdict,
     source,
     findings,
+    followUps = [],
     considered = [],
   }: {
     readonly verdict: Verdict;
     readonly source: VerdictRecord["source"];
     readonly findings: string;
+    readonly followUps?: readonly string[];
     readonly considered?: readonly string[];
   },
 ): Action[] {
@@ -154,6 +161,7 @@ export function verdictActions(
     "",
     `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}.`,
     ...(findings === "" ? [] : ["", findings]),
+    ...followUps,
     ...(next === null ? [] : ["", next.line]),
     "",
     `[The run](${event.runUrl})`,

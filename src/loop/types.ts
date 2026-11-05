@@ -154,6 +154,8 @@ export type LoopEvent =
       /** The Reviewer's reply, unparsed: a Verdict line, then its findings (src/loop/verdict.ts). */
       readonly output: string;
       readonly runUrl: string;
+      /** The Product repo's web address, such as `https://github.com/acme/shop`, which a pass's Follow-ups open issues on. */
+      readonly repoUrl: string;
       /** The Operator comments the Reviewer was given; none when left out. */
       readonly operatorComments?: readonly GivenOperatorComment[];
     }

@@ -304,7 +304,7 @@ describe("A Request-changes run's branch", () => {
 describe("Retries after a Request-changes run", () => {
   const flawOn = (pullRequest: PullRequestSnapshot) =>
     planFor(
-      { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output: "verdict: execution-flaw\n\nStill wrong.", runUrl: RUN },
+      { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output: "verdict: execution-flaw\n\nStill wrong.", runUrl: RUN, repoUrl: "https://github.com/acme/shop" },
       snapshotOfPullRequest(pullRequest),
       kitConfig(),
     );
