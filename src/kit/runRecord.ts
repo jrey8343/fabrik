@@ -342,18 +342,27 @@ function readingOf(info: StreamMessage | null): RateLimitReading | null {
   };
 }
 
-/** Where a record and its transcript go: under the run's repo, the month it ended, its workflow run and attempt, and the role. */
+/** Where a record and its transcript go, by the run's name in the store. */
 function pathsFor(
   run: Pick<RunRecord, "repo" | "endedAt" | "runId" | "runAttempt">,
   role: RunRecordRole,
   withTranscript: boolean,
 ): { recordPath: string; transcriptPath: string | null } {
-  const month = new Date(run.endedAt).toISOString().slice(0, 7);
-  const name = `${run.repo}/${month}/${run.runId}-${run.runAttempt}-${role}`;
+  const name = runStoreName(run, role);
   return {
     recordPath: `runs/${name}.json`,
     transcriptPath: withTranscript ? `transcripts/${name}.jsonl.gz` : null,
   };
+}
+
+/**
+ * A run's name in the store, which its record, its transcript and its score
+ * files share: the run's repo, the month (UTC) it ended, its workflow run and
+ * attempt, and the role.
+ */
+export function runStoreName(run: Pick<RunRecord, "repo" | "endedAt" | "runId" | "runAttempt">, role: RunRecordRole): string {
+  const month = new Date(run.endedAt).toISOString().slice(0, 7);
+  return `${run.repo}/${month}/${run.runId}-${run.runAttempt}-${role}`;
 }
 
 /** A positive whole number from a job output, or null. */
