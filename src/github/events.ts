@@ -126,6 +126,7 @@ export function agentRunEventFrom(
   startedBy: number | null = null,
 ): LoopEvent {
   if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
+  if (result.role === "audit") throw new Error("An Auditor's result is applied through its own event, not agentRunEventFrom");
   if (result.role !== "implement") {
     const finished = {
       kind: "agent-run-finished",

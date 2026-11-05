@@ -1,12 +1,16 @@
 // Failure notices: an agent run that fails for a reason outside the work is an
 // Infrastructure failure. It's never retried and never counts against a
 // Ticket's retries; the Operator gets one comment saying how to resume it.
+import { failAudit } from "./auditFailure.ts";
 import { repoWideNotice } from "./kitIssues.ts";
 import { DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
 import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
+
+/** A role whose failed run gets a failure notice: a failed Auditor run fails its Audit instead (src/loop/auditFailure.ts). */
+type NoticedRole = Exclude<AgentRole, "audit">;
 
 /**
  * The label whose adding starts each role's agent job, so re-adding it
@@ -15,13 +19,13 @@ type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
  * the turn again. agent:implement on a Ticket with an open agent PR resumes
  * that PR's retry or Request-changes run (src/loop/implement.ts).
  */
-const TRIGGER_LABELS: Readonly<Record<Exclude<AgentRole, "design">, Label>> = {
+const TRIGGER_LABELS: Readonly<Record<Exclude<NoticedRole, "design">, Label>> = {
   triage: NEEDS_TRIAGE,
   implement: DISPATCH_LABEL,
   review: REVIEW_LABEL,
 };
 
-const ROLE_NAMES: Readonly<Record<AgentRole, string>> = {
+const ROLE_NAMES: Readonly<Record<NoticedRole, string>> = {
   triage: "Triage",
   design: "Design-session turn",
   implement: "Implement",
@@ -67,6 +71,11 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
 export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig): Plan {
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
+  // The scheduled tick tries a failed Audit again, so there's no trigger label to re-add.
+  if (run.role === "audit") {
+    const how = howItFailed(failure, run, config);
+    return failAudit(context, { failure, how, runUrl: run.runUrl, resetsAt: run.report?.resetsAt ?? null });
+  }
   const pullRequest = issue.openPullRequests[0];
   const target = pullRequest ?? run.issue;
   // The review trigger lives on the PR; every other role's on the issue.

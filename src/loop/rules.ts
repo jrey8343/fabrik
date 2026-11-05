@@ -1,3 +1,4 @@
+import { isPendingAudit } from "./audit.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom } from "./design.ts";
 import { failureNotice } from "./failures.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
@@ -40,7 +41,10 @@ import type {
 export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
   switch (event.kind) {
     case "issue-opened":
-      return withIssue(snapshot, ({ issue }) => intake(event.issue, issue));
+      // The App opens a pending Audit for the Auditor to fill in; Intake never sorts it.
+      return withIssue(snapshot, ({ issue }) =>
+        isPendingAudit(issue) ? startAgentRun("audit", event.issue, config) : intake(event.issue, issue),
+      );
     case "label-added":
       return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, snapshot.pullRequest, config));
     case "issue-comment-created":
