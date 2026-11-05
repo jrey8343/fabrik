@@ -159,8 +159,8 @@ function missingFromSnapshot(what: string): Plan {
 }
 
 /**
- * Adding needs-triage starts Triage, adding needs-design starts a Design
- * session (as does agent:design, which the Design queue check adds), and
+ * Adding needs-triage starts Triage; adding needs-design asks for a Design
+ * queue check, whose agent:design starts the Design session's first turn; and
  * adding agent:implement starts (or resumes) an Implement run.
  */
 function labelAdded(

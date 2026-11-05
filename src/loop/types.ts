@@ -91,7 +91,7 @@ export type LoopEvent =
       /**
        * For a Design-session turn the Operator's reply started: that comment's
        * id, from the Actions event the push job runs for, never from the agent.
-       * None for the first round, which adding needs-design starts.
+       * None for the first round, which agent:design starts.
        */
       readonly startedBy?: number;
       /** For a Design turn on a Ticket sent back from an agent PR: the Operator comments on that PR it was given; none when left out. */
@@ -199,7 +199,7 @@ export type LoopEvent =
   | { readonly kind: "dispatch-check" }
   /** A Design queue check, which an earlier plan asked for with `check-design-queue` (#147). */
   | { readonly kind: "design-queue-check" }
-  /** A push to the default branch that changed the Kit config, which may have unpaused or widened Dispatch. */
+  /** A push to the default branch that changed the Kit config, which may have unpaused or widened Dispatch or the Design-session cap. */
   | { readonly kind: "kit-config-changed" }
   | {
       /** The scheduled Kit workflow's tick (schedule.yml), for the Loop's time-based rules. */
