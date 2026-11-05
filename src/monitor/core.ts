@@ -5,7 +5,7 @@
 // program (src/monitor/main.ts) gathers the facts and applies the plan.
 import type { KitConfig } from "../kit/config.ts";
 import { type Label, MONITOR_LABEL, WONTFIX } from "../loop/labels.ts";
-import { monitorMarkerIn, sentryGroupMarker } from "../loop/markers.ts";
+import { monitorMarkerIn, RED_MAIN_MARKER, sentryGroupMarker } from "../loop/markers.ts";
 import { type MainChecksRead, redMainPlan } from "./redMain.ts";
 import type { FrameFacts, GroupFacts, LatestEventFacts } from "./sentry.ts";
 
@@ -20,6 +20,8 @@ export interface MonitorInput {
   readonly gatingChecks: readonly string[];
   /** What reading the default branch's commits and their check runs gave this tick, or null when `monitor.redMain` is off and they weren't read. */
   readonly mainChecks: MainChecksRead | null;
+  /** The most open error issues the Monitor keeps at once; the Kit default of 5 when not given. */
+  readonly cap?: number;
   /** ISO 8601. */
   readonly now: string;
 }
@@ -61,7 +63,7 @@ export interface MonitorIssue {
 
 /** What the Monitor does this tick. */
 export interface MonitorPlan {
-  /** Issues to file in the Product repo. */
+  /** Issues to file in the Product repo, in this order, so the last is the newest. */
   readonly open: readonly IssueToOpen[];
   /** Monitor issues whose body is rewritten in place. */
   readonly rewrite: readonly BodyRewrite[];
@@ -81,7 +83,11 @@ export interface IssueToOpen {
 
 export interface BodyRewrite {
   readonly issue: number;
-  /** The Sentry group whose stats it refreshes, whose latest release the block names once read; null for red main's. */
+  /**
+   * The Sentry group whose stats it refreshes, whose latest release the block
+   * names once read; null when it refreshes none, as red main's and one that
+   * only puts in or takes out the held line don't.
+   */
   readonly sentryGroup: string | null;
   readonly body: string;
 }
@@ -93,11 +99,11 @@ export interface IssueToClose {
 
 /**
  * What the Monitor files, rewrites and closes this tick, and what it tells the
- * step summary. Which groups it files never depends on their latest events,
- * and a stats rewrite with no latest event keeps the release its block names,
- * so the program plans once with the groups as listed, reads the latest event
- * of each group that plan files or rewrites alone, and plans again for the
- * bodies.
+ * step summary. Which groups it files and holds never depends on their
+ * latest events, and a stats rewrite with no latest event keeps the release
+ * its block names, so the program plans once with the groups as listed, reads
+ * the latest event of each group that plan files or rewrites the stats of
+ * alone, and plans again for the bodies.
  */
 export function monitorPlanFor(input: MonitorInput): MonitorPlan {
   const errors = productionErrors(input);
@@ -110,6 +116,12 @@ export function monitorPlanFor(input: MonitorInput): MonitorPlan {
   };
 }
 
+/**
+ * The Kit default for the most open error issues the Monitor keeps in a
+ * Product repo. Past it, new groups are held until a slot frees up.
+ */
+const MONITOR_ISSUES_CAP = 5;
+
 /** The 1Password item holding the Sentry token, and its vault, which the push service account reads (ADR-0004). */
 const SENTRY_TOKEN_ITEM = "`Sentry token` item in the `Fabrik App` 1Password vault";
 
@@ -118,11 +130,13 @@ const SENTRY_TOKEN_ITEM = "`Sentry token` item in the `Fabrik App` 1Password vau
  * the newest of the Fabrik App's issues carrying its marker decides: none
  * files one; an open one has its stats block rewritten; one closed as
  * completed before Sentry last saw the group files a regression; any other
- * closed one, nothing. It never comments on, closes or reopens an error issue.
- * A source that isn't set up, or that Sentry refuses, is a quiet note, never
- * a failure.
+ * closed one, nothing. Those to file fill the cap's free slots, the
+ * highest-ranked first, and the rest are held: their count shows in the stats
+ * block of the newest open error issue and in no other. It never comments on,
+ * closes or reopens an error issue. A source that isn't set up, or that
+ * Sentry refuses, is a quiet note, never a failure.
  */
-function productionErrors({ monitor, sentry, issues }: MonitorInput): Pick<MonitorPlan, "open" | "rewrite" | "summary"> {
+function productionErrors({ monitor, sentry, issues, cap = MONITOR_ISSUES_CAP }: MonitorInput): Pick<MonitorPlan, "open" | "rewrite" | "summary"> {
   if (monitor.errors === null || sentry === null) {
     return {
       open: [],
@@ -156,19 +170,37 @@ function productionErrors({ monitor, sentry, issues }: MonitorInput): Pick<Monit
   }
   const { minEvents } = monitor.errors;
   const newest = newestByMarker(issues);
-  const open: IssueToOpen[] = [];
-  const rewrite: BodyRewrite[] = [];
+  const candidates: Candidate[] = [];
+  /** Each open issue whose group qualifies, by number: the newest of the App's issues for it. */
+  const refreshing = new Map<number, GroupFacts>();
   for (const group of sentry.groups) {
     if (!qualifies(group, minEvents)) continue;
     const issue = newest.get(sentryGroupMarker(group.id));
     if (issue === undefined) {
-      open.push(errorIssueFor(group, null));
+      candidates.push({ group, regressedFrom: null });
     } else if (issue.open) {
-      const refreshed = statsRewriteFor(issue, group);
-      if (refreshed !== null) rewrite.push(refreshed);
+      refreshing.set(issue.number, group);
     } else if (regressedSince(issue, group)) {
-      open.push(errorIssueFor(group, issue.number));
+      candidates.push({ group, regressedFrom: issue.number });
     }
+  }
+  const openErrorIssues = issues.filter(isOpenErrorIssue);
+  const filing = candidates.toSorted(byRank).slice(0, Math.max(0, cap - openErrorIssues.length));
+  const held = candidates.length - filing.length;
+  const heldLine = held === 0 ? null : heldLineOf(held, cap);
+  const open = filing.map(({ group, regressedFrom }, i) =>
+    errorIssueFor(group, regressedFrom, i === filing.length - 1 ? heldLine : null),
+  );
+  // The newest open error issue shows the held line: the last one filed now,
+  // as GitHub numbers them in the order they're filed, or else the newest
+  // already open whose body has a stats block to show it in.
+  const holder = filing.length > 0 ? null : newestWithStatsBlock(openErrorIssues);
+  const rewrite: BodyRewrite[] = [];
+  for (const issue of openErrorIssues) {
+    const line = issue === holder ? heldLine : null;
+    const group = refreshing.get(issue.number);
+    const rewritten = group === undefined ? heldRewriteFor(issue, line) : statsRewriteFor(issue, group, line);
+    if (rewritten !== null) rewrite.push(rewritten);
   }
   const summary: string[] = [];
   if (sentry.groupsWithoutStats > 0) {
@@ -176,8 +208,65 @@ function productionErrors({ monitor, sentry, issues }: MonitorInput): Pick<Monit
       `Sentry gave no 24-hour stats for ${sentry.groupsWithoutStats} group${sentry.groupsWithoutStats === 1 ? "" : "s"}, so their events count as none: an \`error\` group isn't filed until Sentry gives its stats again.`,
     );
   }
-  if (open.length === 0) summary.push("No production error needs a new issue.");
+  if (held > 0) {
+    summary.push(`Held ${held} error group${held === 1 ? "" : "s"}: the cap of ${cap} open error issues is full.`);
+  } else if (open.length === 0) {
+    summary.push("No production error needs a new issue.");
+  }
   return { open, rewrite, summary };
+}
+
+/** A qualifying group with no open issue: filed new, or as regressed from its issue numbered `regressedFrom`. */
+interface Candidate {
+  readonly group: GroupFacts;
+  readonly regressedFrom: number | null;
+}
+
+/**
+ * The order candidates take the free slots in: `fatal` before `error`, then
+ * the most users affected, the most events in 24 hours, the earliest first
+ * seen, and last the lowest group id, so the same groups rank the same on
+ * every tick whatever order Sentry lists them in. Nothing it goes by comes
+ * from a group's latest event, so reading those never changes what's filed.
+ */
+function byRank({ group: a }: Candidate, { group: b }: Candidate): number {
+  return (
+    Number(b.level === "fatal") - Number(a.level === "fatal") ||
+    b.usersAffected - a.usersAffected ||
+    b.events24h - a.events24h ||
+    ascending(timeOf(a.firstSeen), timeOf(b.firstSeen)) ||
+    ascending(a.id.length, b.id.length) ||
+    ascending(a.id, b.id)
+  );
+}
+
+/** When an ISO 8601 time is, or the end of time when Sentry gave one that doesn't parse. */
+function timeOf(iso: string): number {
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? Infinity : at;
+}
+
+function ascending<T extends number | string>(a: T, b: T): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Whether the issue takes a slot under the cap: an open issue the Fabrik App
+ * filed for a Sentry group. Red main's issue never does.
+ */
+function isOpenErrorIssue(issue: MonitorIssue): boolean {
+  if (!issue.open || !issue.byApp) return false;
+  const marker = monitorMarkerIn(issue.body);
+  return marker !== null && marker !== RED_MAIN_MARKER;
+}
+
+/** The newest of these issues whose body has a stats block, or null when none has. */
+function newestWithStatsBlock(issues: readonly MonitorIssue[]): MonitorIssue | null {
+  let newest: MonitorIssue | null = null;
+  for (const issue of issues) {
+    if (statsBlockIn(issue.body) !== null && (newest === null || issue.number > newest.number)) newest = issue;
+  }
+  return newest;
 }
 
 /**
@@ -216,12 +305,15 @@ function regressedSince(issue: MonitorIssue, group: GroupFacts): boolean {
   return Date.parse(group.lastSeen) > Date.parse(issue.closedAt);
 }
 
-/** The issue to file for a group, new or regressed from the issue numbered `regressedFrom`. */
-function errorIssueFor(group: GroupFacts, regressedFrom: number | null): IssueToOpen {
+/**
+ * The issue to file for a group, new or regressed from the issue numbered
+ * `regressedFrom`, its stats block ending with this held line when it has one.
+ */
+function errorIssueFor(group: GroupFacts, regressedFrom: number | null, heldLine: string | null): IssueToOpen {
   return {
     sentryGroup: group.id,
     title: errorTitleOf(group),
-    body: errorBodyOf(group, regressedFrom),
+    body: errorBodyOf(group, regressedFrom, heldLine),
     labels: [MONITOR_LABEL],
   };
 }
@@ -240,7 +332,7 @@ const FRAMES_MAX = 10;
  * as Markdown, mention anyone, or pass for a marker. A regression's body
  * opens by naming the issue it regressed from.
  */
-function errorBodyOf(group: GroupFacts, regressedFrom: number | null): string {
+function errorBodyOf(group: GroupFacts, regressedFrom: number | null, heldLine: string | null): string {
   const event = group.latestEvent;
   return [
     sentryGroupMarker(group.id),
@@ -258,7 +350,7 @@ function errorBodyOf(group: GroupFacts, regressedFrom: number | null): string {
     `- Culprit: ${group.culprit === null ? "none given" : bodyCode(group.culprit, BODY_FIELD_MAX)}`,
     `- Level: ${group.level}`,
     `- First seen: ${readable(group.firstSeen)}`,
-    ...statsBlock(statsLinesOf(group)),
+    ...statsBlock(statsLinesOf(group, heldLine)),
     "",
     "## In-app stack frames",
     "",
@@ -271,14 +363,41 @@ function errorBodyOf(group: GroupFacts, regressedFrom: number | null): string {
 /** How the stats block's release line starts. */
 const RELEASE_LINE = "- Release: ";
 
-/** The group's stats, as its issue's stats block gives them, naming this release. */
-function statsLinesOf(group: GroupFacts, release = releaseOf(group.latestEvent)): string[] {
+/** The group's stats, as its issue's stats block gives them, naming this release, then the held line when it has one. */
+function statsLinesOf(group: GroupFacts, heldLine: string | null, release = releaseOf(group.latestEvent)): string[] {
   return [
     `- Events in the last 24 hours: ${group.events24h}`,
     `- Users affected: ${group.usersAffected}`,
     `- Last seen: ${readable(group.lastSeen)}`,
     `${RELEASE_LINE}${release}`,
+    ...(heldLine === null ? [] : [heldLine]),
   ];
+}
+
+/** How the stats block's held line starts. */
+const HELD_LINE = "- Held: ";
+
+/** The held line for this many groups held under the cap. */
+function heldLineOf(held: number, cap: number): string {
+  return `${HELD_LINE}${held} error group${held === 1 ? "" : "s"} waiting for a slot under the cap of ${cap} open error issues`;
+}
+
+/** The held line and the count it starts with, inside a stats block. */
+const HELD_COUNT = /^- Held: (\d+) /;
+
+/**
+ * The held count the body's stats block shows: 0 when the block has no held
+ * line, and null when the body has no stats block. The Monitor shows it in
+ * the newest open error issue that has a stats block, and in no other.
+ */
+export function heldCountIn(body: string): number | null {
+  const lines = statsBlockIn(body);
+  if (lines === null) return null;
+  for (const line of lines) {
+    const count = HELD_COUNT.exec(line)?.[1];
+    if (count !== undefined) return Number(count);
+  }
+  return 0;
 }
 
 /** The release the latest event names, as code. */
@@ -288,15 +407,29 @@ function releaseOf(event: LatestEventFacts | null): string {
 }
 
 /**
- * The rewrite refreshing the stats in the block of a group's open issue, or
- * null when they haven't changed or the body has no stats block. A latest
- * event that wasn't read leaves the release the block already names.
+ * The rewrite refreshing the stats in the block of a group's open issue, and
+ * putting this held line there or taking any other out, or null when nothing
+ * changed or the body has no stats block. A latest event that wasn't read
+ * leaves the release the block already names.
  */
-function statsRewriteFor(issue: MonitorIssue, group: GroupFacts): BodyRewrite | null {
+function statsRewriteFor(issue: MonitorIssue, group: GroupFacts, heldLine: string | null): BodyRewrite | null {
   const current = statsBlockIn(issue.body);
   if (current === null) return null;
   const kept = group.latestEvent === null ? current.find((line) => line.startsWith(RELEASE_LINE))?.slice(RELEASE_LINE.length) : undefined;
-  return blockRewrite(issue, group.id, statsLinesOf(group, kept));
+  return blockRewrite(issue, group.id, statsLinesOf(group, heldLine, kept));
+}
+
+/**
+ * The rewrite of an open error issue whose group doesn't qualify this tick,
+ * or isn't listed at all, putting this held line in its stats block or taking
+ * any other out and keeping the rest, or null when that changes nothing. It
+ * refreshes no group's stats.
+ */
+function heldRewriteFor(issue: MonitorIssue, heldLine: string | null): BodyRewrite | null {
+  const current = statsBlockIn(issue.body);
+  if (current === null) return null;
+  const kept = current.filter((line) => !line.startsWith(HELD_LINE));
+  return blockRewrite(issue, null, heldLine === null ? kept : [...kept, heldLine]);
 }
 
 // A Monitor issue's stats block: hidden opening and closing markers, each on a

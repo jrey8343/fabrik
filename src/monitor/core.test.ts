@@ -6,10 +6,11 @@ import {
   aMonitorIssue,
   aMonitorIssueBody,
   monitorInput,
+  openErrorIssues,
   SENTRY_ON,
 } from "../__fixtures__/monitor.ts";
 import { CLINIC_3_LATEST_EVENT, PROJECT_ISSUES_24H } from "../__fixtures__/sentry.ts";
-import { type MonitorIssue, monitorPlanFor } from "./core.ts";
+import { heldCountIn, type MonitorIssue, monitorPlanFor } from "./core.ts";
 import { type GroupFacts, groupFactsOf, withLatestEvent } from "./sentry.ts";
 
 /** The Sentry groups this plan files issues for. */
@@ -109,10 +110,10 @@ describe("Filing a Sentry group", () => {
     expect(plan.rewrite.map((rewrite) => rewrite.issue)).toEqual([40]);
   });
 
-  it("files every qualifying group, in Sentry's order", () => {
-    const plan = monitorPlanFor(monitorInput([aGroup({ id: "4510" }), aGroup({ id: "4504" })]));
+  it("files every qualifying group while the cap has slots free, the highest-ranked first", () => {
+    const plan = monitorPlanFor(monitorInput([aGroup({ id: "4510", usersAffected: 2 }), aGroup({ id: "4504", usersAffected: 7 })]));
 
-    expect(filed(plan)).toEqual(["4510", "4504"]);
+    expect(filed(plan)).toEqual(["4504", "4510"]);
   });
 });
 
@@ -402,6 +403,262 @@ describe("What the Monitor never does to an error issue", () => {
         "Regressed from #41: Sentry has seen this error again since that issue was closed as completed.",
       ],
     ]);
+  });
+});
+
+describe("The cap of 5 open error issues", () => {
+  /** The stats block's held line, for this many held groups under the cap of 5. */
+  const heldLine = (groups: number) => `- Held: ${groups} error group${groups === 1 ? "" : "s"} waiting for a slot under the cap of 5 open error issues`;
+  /** The body of issue 40 + i from openErrorIssues(), its stats block holding these lines. */
+  const openBody = (i: number, stats: readonly string[] = AGROUP_STATS) =>
+    aMonitorIssueBody(stats).replace("sentry:4504", `sentry:${4601 + i}`);
+
+  it("files no new group while 5 open error issues fill it, showing how many are held in the newest one's stats block", () => {
+    const plan = monitorPlanFor(
+      monitorInput([aGroup({ id: "4504" }), aGroup({ id: "4510" })], { issues: openErrorIssues(5) }),
+    );
+
+    expect(plan).toEqual({
+      open: [],
+      rewrite: [{ issue: 44, sentryGroup: null, body: openBody(4, [...AGROUP_STATS, heldLine(2)]) }],
+      close: [],
+      summary: ["Held 2 error groups: the cap of 5 open error issues is full."],
+    });
+  });
+
+  it("fills the free slots with the highest-ranked groups, in rank order, and holds the rest", () => {
+    const groups = [
+      aGroup({ id: "4701", level: "error", usersAffected: 2, events24h: 50 }),
+      aGroup({ id: "4702", level: "fatal", usersAffected: 1, events24h: 1 }),
+      aGroup({ id: "4703", level: "error", usersAffected: 9, events24h: 5 }),
+      aGroup({ id: "4704", level: "error", usersAffected: 3, events24h: 5 }),
+    ];
+
+    const plan = monitorPlanFor(monitorInput(groups, { issues: openErrorIssues(3) }));
+
+    expect(filed(plan)).toEqual(["4702", "4703"]);
+    expect(plan.summary).toEqual(["Held 2 error groups: the cap of 5 open error issues is full."]);
+  });
+
+  describe("ranks the groups waiting for a slot, whatever order Sentry lists them in", () => {
+    it.each([
+      ["fatal before error, with fewer users and events", { level: "fatal", usersAffected: 1, events24h: 1 }, { level: "error", usersAffected: 9, events24h: 90 }],
+      ["more users affected first, with fewer events", { usersAffected: 5, events24h: 3 }, { usersAffected: 4, events24h: 90 }],
+      ["more events in 24 hours first, as many users affected", { events24h: 10 }, { events24h: 9 }],
+      [
+        "first seen earliest first, as many users and events",
+        { firstSeen: "2026-10-20T09:30:00.000000Z" },
+        { firstSeen: "2026-11-01T09:30:00.000000Z" },
+      ],
+      ["the lower group id first, alike in all the rest", { id: "998" }, { id: "4504" }],
+    ] as const)("%s", (_rule, higher: Partial<GroupFacts>, lower: Partial<GroupFacts>) => {
+      // The higher-ranked group has the higher id, so only the rule under test puts it first.
+      const first = aGroup({ id: "4802", ...higher });
+      const second = aGroup({ id: "4801", ...lower });
+      const oneSlot = (groups: GroupFacts[]) => filed(monitorPlanFor(monitorInput(groups, { issues: openErrorIssues(4) })));
+
+      expect(oneSlot([first, second])).toEqual([first.id]);
+      expect(oneSlot([second, first])).toEqual([first.id]);
+    });
+  });
+
+  describe("the held line", () => {
+    /** Three groups waiting, ranked 4701, 4702, 4703. */
+    const waiting = [
+      aGroup({ id: "4703", usersAffected: 1 }),
+      aGroup({ id: "4701", usersAffected: 9 }),
+      aGroup({ id: "4702", usersAffected: 5 }),
+    ];
+    /** The end of a stats block holding aGroup()'s stats, then this held line. */
+    const endingWith = (line: string) => `- Release: \`clinic@1.4.0\`\n${line}\n<!-- /fabrik:monitor-stats -->`;
+    /** openErrorIssues(count), the newest one's stats block showing this many held. */
+    const newestShowingHeld = (count: number, groups: number) =>
+      openErrorIssues(count).map((issue, i) =>
+        i === count - 1 ? { ...issue, body: openBody(i, [...AGROUP_STATS, heldLine(groups)]) } : issue,
+      );
+
+    it("sits in the newest of the issues filed now, the last filed, when some are filed and some held", () => {
+      const plan = monitorPlanFor(monitorInput(waiting, { issues: openErrorIssues(3) }));
+
+      expect(filed(plan)).toEqual(["4701", "4702"]);
+      expect(plan.open[0]?.body).not.toContain("- Held:");
+      expect(plan.open[1]?.body).toContain(endingWith(heldLine(1)));
+      expect(plan.rewrite).toEqual([]);
+    });
+
+    it("comes out of the open issue that showed it when a newer issue filed now shows it", () => {
+      const plan = monitorPlanFor(monitorInput(waiting, { issues: newestShowingHeld(4, 3) }));
+
+      expect(filed(plan)).toEqual(["4701"]);
+      expect(plan.open[0]?.body).toContain(endingWith(heldLine(2)));
+      expect(plan.rewrite).toEqual([{ issue: 43, sentryGroup: null, body: openBody(3) }]);
+    });
+
+    it("moves to the newest open error issue from an older one, with nothing filed", () => {
+      const issues = openErrorIssues(5).map((issue) =>
+        issue.number === 42 ? { ...issue, body: openBody(2, [...AGROUP_STATS, heldLine(3)]) } : issue,
+      );
+
+      const plan = monitorPlanFor(monitorInput(waiting, { issues }));
+
+      expect(plan.open).toEqual([]);
+      expect(plan.rewrite).toEqual([
+        { issue: 42, sentryGroup: null, body: openBody(2) },
+        { issue: 44, sentryGroup: null, body: openBody(4, [...AGROUP_STATS, heldLine(3)]) },
+      ]);
+    });
+
+    it("goes in the same rewrite as the newest issue's refreshed stats, after them", () => {
+      const plan = monitorPlanFor(
+        monitorInput([aGroup({ id: "4605", events24h: 14 }), ...waiting], { issues: openErrorIssues(5) }),
+      );
+
+      expect(plan.rewrite).toEqual([
+        {
+          issue: 44,
+          sentryGroup: "4605",
+          body: openBody(4, ["- Events in the last 24 hours: 14", ...AGROUP_STATS.slice(1), heldLine(3)]),
+        },
+      ]);
+    });
+
+    it("leaves an issue alone that already shows the count held", () => {
+      const plan = monitorPlanFor(monitorInput(waiting, { issues: newestShowingHeld(5, 3) }));
+
+      expect(plan.rewrite).toEqual([]);
+      expect(plan.summary).toEqual(["Held 3 error groups: the cap of 5 open error issues is full."]);
+    });
+
+    it("gives a new count when it changes", () => {
+      const plan = monitorPlanFor(monitorInput(waiting, { issues: newestShowingHeld(5, 7) }));
+
+      expect(plan.rewrite).toEqual([{ issue: 44, sentryGroup: null, body: openBody(4, [...AGROUP_STATS, heldLine(3)]) }]);
+    });
+
+    it.each([
+      ["whose group Sentry doesn't list", [], null],
+      ["whose group still qualifies, its stats as they were", [aGroup({ id: "4605" })], "4605"],
+      ["whose group no longer qualifies", [aGroup({ id: "4605", status: "resolved" })], null],
+    ])("is taken out once nothing is held, from an issue %s", (_case, groups, sentryGroup) => {
+      const plan = monitorPlanFor(monitorInput(groups, { issues: newestShowingHeld(5, 2) }));
+
+      expect(plan.rewrite).toEqual([{ issue: 44, sentryGroup, body: openBody(4) }]);
+      expect(plan.summary).toEqual(["No production error needs a new issue."]);
+    });
+
+    it("skips the newest open error issue when its stats block was edited out, showing in the next newest", () => {
+      const issues = openErrorIssues(5).map((issue) =>
+        issue.number === 44 ? { ...issue, body: "<!-- fabrik:monitor sentry:4605 -->\nTriage dropped the stats." } : issue,
+      );
+
+      const plan = monitorPlanFor(monitorInput(waiting, { issues }));
+
+      expect(plan.rewrite).toEqual([{ issue: 43, sentryGroup: null, body: openBody(3, [...AGROUP_STATS, heldLine(3)]) }]);
+    });
+  });
+
+  it("doesn't count an open red-main issue, by its marker", () => {
+    const redMain = aMonitorIssue({ number: 45, body: "<!-- fabrik:monitor red-main -->\nThe default branch is red." });
+
+    const plan = monitorPlanFor(monitorInput([aGroup()], { issues: [...openErrorIssues(4), redMain] }));
+
+    expect(filed(plan)).toEqual(["4504"]);
+    expect(plan.rewrite).toEqual([]);
+  });
+
+  it("counts only open issues the Fabrik App filed for a Sentry group", () => {
+    const others = [
+      aClosedMonitorIssue({ number: 50, body: openBody(10) }),
+      aMonitorIssue({ number: 51, byApp: false, body: openBody(11) }),
+      aMonitorIssue({ number: 52, body: "A fabrik:monitor issue someone filed with no marker." }),
+    ];
+
+    const plan = monitorPlanFor(monitorInput([aGroup()], { issues: [...openErrorIssues(4), ...others] }));
+
+    expect(filed(plan)).toEqual(["4504"]);
+  });
+
+  it("counts a Spec that keeps a group's marker, as its group's open issue", () => {
+    const spec = aMonitorIssue({ number: 52, body: "<!-- fabrik:monitor sentry:4610 -->\n## Problem Statement" });
+
+    const plan = monitorPlanFor(monitorInput([aGroup()], { issues: [...openErrorIssues(4), spec] }));
+
+    expect(filed(plan)).toEqual([]);
+    expect(plan.rewrite).toEqual([{ issue: 43, sentryGroup: null, body: openBody(3, [...AGROUP_STATS, heldLine(1)]) }]);
+  });
+
+  it("drops a held group that stops qualifying from the count", () => {
+    const issues = openErrorIssues(5).map((issue) =>
+      issue.number === 44 ? { ...issue, body: openBody(4, [...AGROUP_STATS, heldLine(3)]) } : issue,
+    );
+    const groups = [aGroup({ id: "4701" }), aGroup({ id: "4702", events24h: 2 }), aGroup({ id: "4703", status: "resolved" })];
+
+    const plan = monitorPlanFor(monitorInput(groups, { issues }));
+
+    expect(plan.rewrite).toEqual([{ issue: 44, sentryGroup: null, body: openBody(4, [...AGROUP_STATS, heldLine(1)]) }]);
+    expect(plan.summary).toEqual(["Held 1 error group: the cap of 5 open error issues is full."]);
+  });
+
+  it("files the highest-ranked held group on the first tick after a slot frees up", () => {
+    const groups = [aGroup({ id: "4701", usersAffected: 1 }), aGroup({ id: "4702", usersAffected: 8 })];
+    const full = openErrorIssues(5);
+    const freed = full.map((issue) => (issue.number === 41 ? { ...issue, open: false, stateReason: "completed", closedAt: "2026-11-06T07:00:00Z" } : issue));
+
+    expect(filed(monitorPlanFor(monitorInput(groups, { issues: full })))).toEqual([]);
+    expect(filed(monitorPlanFor(monitorInput(groups, { issues: freed })))).toEqual(["4702"]);
+  });
+
+  it("holds as many as a lower cap leaves no slot for", () => {
+    const plan = monitorPlanFor(monitorInput([aGroup({ id: "4701" }), aGroup({ id: "4702" })], { issues: openErrorIssues(1), cap: 2 }));
+
+    expect(filed(plan)).toEqual(["4701"]);
+    expect(plan.open[0]?.body).toContain("- Held: 1 error group waiting for a slot under the cap of 2 open error issues\n");
+    expect(plan.summary).toEqual(["Held 1 error group: the cap of 2 open error issues is full."]);
+  });
+
+  it("files and holds the same groups whether or not their latest events have been read", () => {
+    const read = [
+      aGroup({ id: "4701", usersAffected: 2 }),
+      aGroup({ id: "4702", usersAffected: 6, latestEvent: { release: "clinic@2.0.0", frames: [] } }),
+      aGroup({ id: "4703", usersAffected: 4 }),
+    ];
+    const listed = read.map((group) => ({ ...group, latestEvent: null }));
+    const planFor = (groups: GroupFacts[]) => {
+      const plan = monitorPlanFor(monitorInput(groups, { issues: openErrorIssues(3) }));
+      return { filed: filed(plan), rewritten: plan.rewrite.map((rewrite) => rewrite.issue), summary: plan.summary };
+    };
+
+    expect(planFor(read)).toEqual(planFor(listed));
+    expect(planFor(read).filed).toEqual(["4702", "4703"]);
+  });
+});
+
+describe("Reading the held count", () => {
+  it("reads it from the held line of a body the Monitor filed", () => {
+    const groups = [aGroup({ id: "4701" }), aGroup({ id: "4702" }), aGroup({ id: "4703" })];
+    const body = monitorPlanFor(monitorInput(groups, { issues: openErrorIssues(4) })).open[0]?.body ?? "";
+
+    expect(heldCountIn(body)).toBe(2);
+  });
+
+  it("reads 0 from a stats block with no held line", () => {
+    expect(heldCountIn(aMonitorIssueBody())).toBe(0);
+  });
+
+  it("reads nothing from a body with no stats block", () => {
+    expect(heldCountIn("<!-- fabrik:monitor sentry:4504 -->\nTriage dropped the stats.")).toBeNull();
+  });
+
+  it("reads only a held line inside the stats block", () => {
+    const body = aMonitorIssueBody().replace("- Culprit:", "- Held: 9 error groups, the Operator wrote\n- Culprit:");
+
+    expect(heldCountIn(body)).toBe(0);
+  });
+
+  it("reads a held line in a body GitHub gave CRLF line endings", () => {
+    const body = aMonitorIssueBody([...AGROUP_STATS, "- Held: 12 error groups waiting for a slot under the cap of 5 open error issues"]);
+
+    expect(heldCountIn(body.replaceAll("\n", "\r\n"))).toBe(12);
   });
 });
 
