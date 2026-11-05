@@ -14,6 +14,12 @@
 #   - uses: ./kit/.github/actions/write-run-record
 # The job's env carries FABRIK_NEEDS, and the agent job's artifacts are in
 # $RUNNER_TEMP/agent, as for Run the Loop.
+#
+# For a record it wrote, or found already in the store, the program then runs
+# the scoring plan (#149). A skip's score file it writes itself, with the same
+# store token; a score it passes out as `score` and `record`, which the push
+# job passes on to the judge job and the score-record job. With no store, or
+# one that isn't private, nothing is scored.
 name: Write the Run record
 description: Writes the run's transcript and Run record to the fabrik-runs store.
 
@@ -24,6 +30,14 @@ inputs:
   role:
     description: The agent role the Kit job routed to (needs.kit.outputs.route), whose transcript the agent job kept.
     required: true
+
+outputs:
+  score:
+    description: '"true" when the scoring plan picked the run for the judge job to score.'
+    value: ${{ steps.record.outputs.score }}
+  record:
+    description: The scored run's Run record's path in the store, for the score-record job.
+    value: ${{ steps.record.outputs.record }}
 
 runs:
   using: composite
@@ -86,6 +100,7 @@ runs:
         permission-contents: write
 
     - name: Write the Run record
+      id: record
       shell: bash
       working-directory: ${{ github.action_path }}/../../..
       env:

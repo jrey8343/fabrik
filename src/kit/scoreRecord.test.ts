@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
 import { noWait, storeWith } from "../__fixtures__/store.ts";
+import type { RecordWrite } from "./recordWriter.ts";
 import type { Rubric } from "./rubrics.ts";
 import { judgeRunRecordFor } from "./runRecord.ts";
 import { scoreFileFor, type ScoringOutcome } from "./scorer.ts";
-import { type ScoreRecordFiles, scoreRecordSummary, writeScoreRecord } from "./scoreRecord.ts";
+import { recordedRunScoringSummary, type ScoreRecordFiles, scoreRecordedRun, scoreRecordSummary, writeScoreRecord } from "./scoreRecord.ts";
 
 const RUBRICS: readonly Rubric[] = [
   { name: "efficiency", version: 1, threshold: 0.7, labels: ["clean", "repeated-calls"], text: "How directly the run worked." },
@@ -173,6 +174,95 @@ describe("The score-record job's step-summary line", () => {
   it("says why nothing was written to a store that isn't private", () => {
     expect(scoreRecordSummary({ kind: "public-store" })).toBe(
       "No score written: jrey8343/fabrik-runs isn't private, and scores never go to a store others can read. Make it private.",
+    );
+  });
+});
+
+describe("The push job's scoring of the run it just recorded", () => {
+  /** A Retry on Ticket 7, always picked, whose record the push job just wrote. */
+  const retry = aRunRecord({ runId: 1008, retry: 1, transcript: "transcripts/owner/product/2026-11/1008-1-implement.jsonl.gz" });
+  const RETRY_PATH = "runs/owner/product/2026-11/1008-1-implement.json";
+  const recorded = (record = retry, write: RecordWrite = { kind: "written", written: [RETRY_PATH], existing: [] }) => ({
+    files: { record, recordPath: RETRY_PATH, transcriptPath: record.transcript },
+    write,
+  });
+
+  it("asks the judge job to score a picked run, with its record's path, and writes nothing itself", async () => {
+    const store = storeWith();
+
+    expect(await scoreRecordedRun(store, recorded(), RUBRICS, "2026-11-04T12:01:00Z", noWait)).toEqual({ kind: "score", record: RETRY_PATH });
+    expect(store.writes).toEqual([]);
+  });
+
+  it("writes a picked run's skip score file itself, beside its record, when the plan skips it", async () => {
+    const store = storeWith();
+
+    const scoring = await scoreRecordedRun(store, recorded({ ...retry, transcript: null }), RUBRICS, "2026-11-04T12:01:00Z", noWait);
+
+    expect(store.writes).toHaveLength(1);
+    const [path] = store.writes;
+    expect(path).toMatch(/^scores\/owner\/product\/2026-11\/1008-1-implement-[0-9a-f]+\.json$/);
+    expect(scoring).toMatchObject({ kind: "skip", write: { kind: "written", written: [path], existing: [] } });
+    expect(decoded(store.held.get(path!))).toMatchObject({
+      record: RETRY_PATH,
+      scoredAt: "2026-11-04T12:01:00Z",
+      judge: null,
+      digestTrimmed: null,
+      skip: { reason: "no-transcript" },
+      entries: null,
+    });
+  });
+
+  it("scores nothing when the record reached no store: one that isn't private, or no agent run to record", async () => {
+    const store = storeWith();
+    const scoredAt = "2026-11-04T12:01:00Z";
+
+    expect(await scoreRecordedRun(store, recorded(retry, { kind: "public-store" }), RUBRICS, scoredAt, noWait)).toEqual({ kind: "none" });
+    expect(await scoreRecordedRun(store, recorded({ ...retry, transcript: null }, { kind: "public-store" }), RUBRICS, scoredAt, noWait)).toEqual({
+      kind: "none",
+    });
+    expect(await scoreRecordedRun(store, { files: null, write: { kind: "no-record" } }, RUBRICS, scoredAt, noWait)).toEqual({ kind: "none" });
+    expect(store.writes).toEqual([]);
+  });
+
+  it("plans on a record the store already held, and leaves a skip score file it already holds as it was", async () => {
+    const skipped = { ...retry, transcript: null };
+    const first = storeWith();
+    await scoreRecordedRun(first, recorded(skipped), RUBRICS, "2026-11-04T12:01:00Z", noWait);
+    const store = storeWith({ files: first.writes });
+
+    const again = recorded(skipped, { kind: "written", written: [], existing: [RETRY_PATH] });
+
+    const scoring = await scoreRecordedRun(store, again, RUBRICS, "2026-11-04T12:09:00Z", noWait);
+
+    expect(scoring).toMatchObject({ kind: "skip", write: { kind: "written", written: [], existing: first.writes } });
+    expect(store.held.get(first.writes[0]!)).toBe("earlier");
+  });
+
+  it("writes nothing, and asks for no score, for a run scoring doesn't consider", async () => {
+    const store = storeWith();
+    const review = aRunRecord({ runId: 1009, role: "review", transcript: "transcripts/owner/product/2026-11/1009-1-review.jsonl.gz" });
+
+    expect(await scoreRecordedRun(store, recorded(review), RUBRICS, "2026-11-04T12:01:00Z", noWait)).toEqual({ kind: "none" });
+    expect(store.writes).toEqual([]);
+  });
+});
+
+describe("The push job's step-summary line on scoring", () => {
+  it("says nothing of a run scoring passes by, so a run that isn't sampled stays quiet", () => {
+    expect(recordedRunScoringSummary({ kind: "none" })).toBeNull();
+  });
+
+  it("says the judge job scores a picked run", () => {
+    expect(recordedRunScoringSummary({ kind: "score", record: SCORED_PATH })).toBe(`Picked for scoring: the judge job scores ${SCORED_PATH}.`);
+  });
+
+  it("says why a picked run isn't scored, and where its skip score file went", () => {
+    const outcome: ScoringOutcome = { kind: "skip", skip: { reason: "no-transcript" } };
+    const skip = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: "2026-11-04T12:01:00Z", outcome });
+
+    expect(recordedRunScoringSummary({ kind: "skip", score: skip.file, write: { kind: "written", written: [skip.path], existing: [] } })).toBe(
+      `Not scored: no transcript of the run survived, so run 1007-1 on #7 gets a no-transcript score file. Written to jrey8343/fabrik-runs: ${skip.path}.`,
     );
   });
 });
