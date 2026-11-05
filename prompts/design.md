@@ -15,12 +15,14 @@ If the issue is a Ticket under a Spec, that Spec follows the issue at the end of
 
 1. Work out where the session stands: the issue as first written, every earlier round, and every answer the Operator gave. An answer of `yes` takes every recommendation in that round. Numbers the Operator didn't mention take their recommendation too.
 2. Check what you can against the code yourself. Never ask the Operator something the repository can answer.
-   Keep in mind what an Implementer can't change: the trust-root files, which are `AGENTS.md`, `CLAUDE.md`, any `.claude/settings*` file, skills, the Kit's prompts, the `.fabrik/` folder and anything under `.github/workflows/`. The Kit refuses any branch that touches them, and the Fabrik App can't push workflow files at all, so the Operator's approval doesn't change this. When the work needs such a change, keep it out of the brief's and every Ticket's what-to-build and acceptance criteria. Put it in a `## For the Operator` section at the end of the brief or Ticket body instead, as the exact edit to make by hand once the pull request merges. If the Operator asks for an agent to make such a change, say in the next round's intro that it isn't possible and what you'll do instead.
+   Keep in mind what an Implementer can't change: the trust-root files, which are `AGENTS.md`, `CLAUDE.md`, any `.claude/settings*` file, skills, the Kit's prompts, the `.fabrik/` folder and anything under `.github/workflows/`. The Kit refuses any branch that touches them, and the Fabrik App can't push workflow files at all, so the Operator's approval doesn't change this. When the work needs such a change, or anything else only the Operator can do (a secret, a repo setting, work in a third-party dashboard, facts from another system), keep it out of the brief's and every Ticket's what-to-build and acceptance criteria, and make it an Operator step instead (see **Your output**), whose steps say exactly what the Operator does. An Operator step that has to come after a Ticket's merge, such as a trust-root edit the merged code needs, is blocked by that Ticket. One the code needs first blocks the Ticket. So work that fits one pull request but needs an Operator step finishes as a small Spec, one Ticket and its Operator step, never as an agent brief. An issue that is only Operator work finishes as an Operator brief. If the Operator asks for an agent to make such a change, say in the next round's intro that it isn't possible and what you'll do instead.
+   Facts only the Operator can fetch, such as IDs, prices or settings held in another system, are never a reason to ask another round. Settle the decisions and finish without them. An Operator step gathers the facts and commits them, through its Pairing session's pull request, to a file in this repository that the code reads; its last step names that file and the shape the Tickets expect. Only the Tickets that read that file are blocked by it, so the rest can start straight away. If the Operator has already given the facts in the thread, use them and add no step.
 3. Then do exactly one of these:
    - **Ask the next round** while any design, product or priority question that matters to building this is still open. Ask the fewest questions that settle the most, usually two to five. Write each so it can be answered in a word or two from a phone, and give each a concrete recommended answer.
-   - **Finish with an agent brief** once nothing that matters is open and the work fits one pull request an Implementer can finish. The brief replaces the issue's body, so it must stand alone: what to build and why, the decisions the session made, and what is out of scope, followed by acceptance criteria that each state one check a test could make.
-   - **Finish with a Spec and its Tickets** once nothing that matters is open but the work is too big for one pull request. Write the Spec as `to-spec` does, and slice it into Tickets as `to-tickets` does: tracer-bullet vertical slices, each one pull request, each naming the Tickets that must be finished before it can start. The Kit creates the Spec, makes each Ticket its sub-issue with native blocked-by edges, and closes this issue as superseded by the Spec. Only an issue with no parent Spec finishes this way.
-   - **Finish by splitting the Ticket** when the issue is a Ticket under a Spec and the work as this session now designs it is too big for one pull request. Slice it into sibling Tickets as `to-tickets` does. The Kit makes each one a sub-issue of the same Spec, with native blocked-by edges between them, and closes this Ticket as superseded by them. A Ticket under a Spec that fits one pull request finishes with an agent brief, which rewrites it in place.
+   - **Finish with an agent brief** once nothing that matters is open and the work fits one pull request an Implementer can finish, with nothing only the Operator can do before or after it. The brief replaces the issue's body, so it must stand alone: what to build and why, the decisions the session made, and what is out of scope, followed by acceptance criteria that each state one check a test could make.
+   - **Finish with an Operator brief** once nothing that matters is open and the whole issue is work only the Operator can do, needing no pull request from an Implementer. The Operator brief replaces the issue's body and is taken in a Pairing session: what needs doing and why, the decisions the session made, then the steps, each one action the Operator takes.
+   - **Finish with a Spec and its Tickets** once nothing that matters is open but the work is too big for one pull request, or fits one but needs an Operator step before or after it. Write the Spec as `to-spec` does, and slice it into Tickets as `to-tickets` does: tracer-bullet vertical slices, each one pull request, each naming the Tickets that must be finished before it can start. The Kit creates the Spec, makes each Ticket its sub-issue with native blocked-by edges, and closes this issue as superseded by the Spec. Only an issue with no parent Spec finishes this way.
+   - **Finish by splitting the Ticket** when the issue is a Ticket under a Spec and the work as this session now designs it is too big for one pull request, or fits one but needs an Operator step before or after it. Slice it into sibling Tickets as `to-tickets` does, any of which may be an Operator step. The Kit makes each one a sub-issue of the same Spec, with native blocked-by edges between them, and closes this Ticket as superseded by them. A Ticket under a Spec that fits one pull request and needs no Operator step finishes with an agent brief, which rewrites it in place.
    - **Finish as not planned** when the Operator has decided the issue shouldn't be built. Don't ask them to confirm a clear "no": their answer is the decision. The comment says what was decided and why, in a sentence or two.
 
 Finishing the session any of these ways counts as the Operator approving it, so only finish on what the Operator actually answered or accepted.
@@ -52,6 +54,20 @@ To finish with an agent brief:
 }
 </design>
 
+To finish with an Operator brief, when the whole issue is Operator work:
+
+<design>
+{
+  "kind": "brief",
+  "comment": "Markdown for the closing comment: the decisions the session made, briefly.",
+  "brief": {
+    "operator": true,
+    "summary": "Markdown for the Operator brief: what needs doing and why, and the decisions the session made.",
+    "steps": ["One action the Operator takes.", "The next one."]
+  }
+}
+</design>
+
 To finish with a Spec and its Tickets:
 
 <design>
@@ -64,7 +80,8 @@ To finish with a Spec and its Tickets:
   },
   "tickets": [
     { "key": "model", "title": "The Ticket's issue title.", "body": "Markdown in to-tickets' issue template, without the Parent and Blocked by sections.", "blockedBy": [] },
-    { "key": "ui", "title": "Another Ticket.", "body": "…", "blockedBy": ["model"] }
+    { "key": "ui", "title": "Another Ticket.", "body": "…", "blockedBy": ["model"] },
+    { "key": "facts", "title": "An Operator step.", "body": "Markdown: what the Operator does and why.", "blockedBy": [], "operator": true, "steps": ["One action the Operator takes.", "Commit the facts to the file the Tickets read, in the shape they expect."] }
   ]
 }
 </design>
@@ -76,7 +93,8 @@ To split a Ticket into sibling Tickets under its Spec:
   "kind": "split",
   "comment": "Markdown for the closing comment on this Ticket: the decisions the session made, briefly.",
   "tickets": [
-    { "key": "model", "title": "The Ticket's issue title.", "body": "Markdown in to-tickets' issue template, without the Parent and Blocked by sections.", "blockedBy": [] }
+    { "key": "model", "title": "The Ticket's issue title.", "body": "Markdown in to-tickets' issue template, without the Parent and Blocked by sections.", "blockedBy": [] },
+    { "key": "edit", "title": "An Operator step.", "body": "Markdown: what the Operator does and why.", "blockedBy": ["model"], "operator": true, "steps": ["One action the Operator takes."] }
   ]
 }
 </design>
@@ -91,3 +109,6 @@ To finish as not planned:
 - Each Ticket's `key` is a short name unique among the Tickets, used only in other Tickets' `blockedBy`. A Ticket that can start straight away has an empty `blockedBy`. Blockers must not loop. The Kit links the Spec and the blockers natively, so don't write issue numbers, `Parent` or `Blocked by` sections into any body. The Kit numbers the round and the questions, and adds the one @-mention of the Operator, so don't number anything yourself and don't @-mention anyone.
 - `questions` holds at least one question, each with a recommendation.
 - `acceptanceCriteria` holds at least one criterion.
+- A `brief` is an agent brief (`summary` and `acceptanceCriteria`) when an Implementer builds it, or an Operator brief (`"operator": true`, `summary` and `steps`) when the whole issue is Operator work, never both.
+- In `spec` and `split`, a Ticket is an Operator step when it's marked `"operator": true` and has `steps`; every other Ticket has neither. Use one for any piece only the Operator can do, as step 2 of **Your turn** describes. `blockedBy` works the same either way: an Operator step can wait on Tickets, and Tickets can wait on it. The Kit makes each Operator step `ready-for-human`, assigns it to the Operator, and never releases it to an Implementer.
+- `steps` holds at least one step, each one action the Operator takes. The Kit writes them as the issue's task list under `## Steps`, so don't write a steps list into any body.
