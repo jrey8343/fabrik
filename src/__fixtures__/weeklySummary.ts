@@ -113,6 +113,7 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     mergedPullRequestTitles: [],
     openIssues: [],
     openPullRequests: [],
+    designQueue: { issues: [], designTurnsInProgress: [] },
     ...overrides,
   };
 }

@@ -77,6 +77,7 @@ interface RawRepo {
   updatedIssues?: unknown[];
   openIssues?: unknown[];
   defaultBranchCommits?: unknown[];
+  needsDesignIssues?: unknown[];
 }
 
 /** A read-only GraphQL API over `raw`, answering each facts query with one page. */
@@ -89,6 +90,10 @@ function repoWith(raw: RawRepo) {
       if (query.includes("history(")) return answer({ repository: { defaultBranchRef: { target: { history: page(raw.defaultBranchCommits) } } } });
       if (query.includes("pullRequests(states: [MERGED, CLOSED]")) return answer({ repository: { pullRequests: page(raw.closedPullRequests) } });
       if (query.includes("pullRequests(states: OPEN")) return answer({ repository: { pullRequests: page(raw.openPullRequests) } });
+      if (query.includes("labels: [$needsDesign]")) {
+        expect(variables["needsDesign"]).toBe("needs-design");
+        return answer({ repository: { owner: { login: "jrey8343" }, issues: page(raw.needsDesignIssues) } });
+      }
       if (query.includes("filterBy: { since: $since }")) return answer({ repository: { issues: page(raw.updatedIssues) } });
       if (query.includes("issues(states: OPEN")) return answer({ repository: { issues: page(raw.openIssues) } });
       throw new Error(`Unexpected query: ${query}`);
@@ -315,6 +320,40 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 
+  it("holds the open needs-design issues as the Design queue check reads them, so Held tells waiting from slot-holding", async () => {
+    const github = repoWith({
+      needsDesignIssues: [
+        // Waiting: no round, no failure, no turn.
+        aRawNeedsDesignIssue(3),
+        // A round posted: holds a slot.
+        aRawNeedsDesignIssue(4, {
+          comments: { nodes: [{ body: "<!-- fabrik:design-round 1 -->\nRound 1.", createdAt: "2026-11-02T09:00:00Z", author: { __typename: "Bot" } }] },
+        }),
+        // Its first turn claimed: the Kit took agent:design off after needs-design.
+        aRawNeedsDesignIssue(5, {
+          timelineItems: {
+            nodes: [
+              { __typename: "LabeledEvent", createdAt: "2026-11-03T09:00:00Z", label: { name: "needs-design" } },
+              { __typename: "UnlabeledEvent", createdAt: "2026-11-03T09:01:00Z", label: { name: "agent:design" }, actor: { __typename: "Bot" } },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const { designQueue } = await gatherGitHubFacts(github, repo, NOW);
+
+    expect(designQueue).toEqual({
+      issues: [
+        { number: 3, labels: ["needs-design"], designRounds: 0, turnFailed: false, redesign: false, neededDesignAt: "2026-11-01T09:00:00Z" },
+        { number: 4, labels: ["needs-design"], designRounds: 1, turnFailed: false, redesign: false, neededDesignAt: "2026-11-01T09:00:00Z" },
+        { number: 5, labels: ["needs-design"], designRounds: 0, turnFailed: false, redesign: false, neededDesignAt: "2026-11-03T09:00:00Z" },
+      ],
+      // Read from the issues, as the scheduled tick reads them: the summary's token can't read workflow runs.
+      designTurnsInProgress: [5],
+    });
+  });
+
   it("holds the default branch's commit messages in the window", async () => {
     const github = repoWith({
       defaultBranchCommits: [{ message: `Revert "Build the thing"\n\nThis reverts commit ${"c".repeat(40)}.`, committedDate: "2026-11-05T00:00:00Z" }],
@@ -329,6 +368,18 @@ describe("Gathering a Product repo's GitHub facts", () => {
 });
 
 /** Issue 7, open since 2026-10-01, with nothing on it unless a test says so. */
+/** Open needs-design issue `number`, opened on 2026-10-01, which got needs-design on 2026-11-01. */
+function aRawNeedsDesignIssue(number: number, overrides: Record<string, unknown> = {}) {
+  return {
+    number,
+    createdAt: "2026-10-01T09:00:00Z",
+    labels: { nodes: [{ name: "needs-design" }] },
+    comments: { nodes: [] },
+    timelineItems: { nodes: [{ __typename: "LabeledEvent", createdAt: "2026-11-01T09:00:00Z", label: { name: "needs-design" } }] },
+    ...overrides,
+  };
+}
+
 function aRawIssue(overrides: Record<string, unknown> = {}) {
   return {
     number: 7,
