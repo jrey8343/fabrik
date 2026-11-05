@@ -127,3 +127,7 @@ _Avoid_: config file, protected file
 **Merge gate**:
 The rule that only the Operator merges a pull request into a Product repo's main branch; agents never push to it.
 _Avoid_: approval, sign-off
+
+**Operator comment**:
+A comment the Operator leaves on an agent pull request, which every later agent run reading that pull request weighs as the Operator's own words, never as a request for work: a change the Operator wants built still goes through Request changes.
+_Avoid_: PR feedback, reply
