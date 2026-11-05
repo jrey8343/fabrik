@@ -67,11 +67,11 @@ export interface KitConfigSources {
 }
 
 /**
- * The Kit-internal switch for Extra skills (#144). While it's off, picks are
- * unknown fields and the Skills sources lockfile is ignored, so a release cut
- * before switch-on behaves as if the feature didn't exist.
+ * The Kit-internal switch for Extra skills (#144), now on. While it was off,
+ * picks were unknown fields and the Skills sources lockfile was ignored, so a
+ * release cut before switch-on behaved as if the feature didn't exist.
  */
-export const EXTRA_SKILLS_SWITCHED_ON = false;
+export const EXTRA_SKILLS_SWITCHED_ON = true;
 
 export interface ResolveOptions {
   /** Overrides the switch; only tests pass it. */

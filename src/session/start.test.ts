@@ -183,7 +183,7 @@ const PINS = [
   { repository: OTHER_SKILLS, sha: OTHER_SHA },
 ];
 
-/** Extra skills are dormant behind a switch until switch-on; these tests turn it on. */
+/** Extra skills are switched on as shipped; these tests name the switch so they never depend on it. */
 const switchedOn = { extraSkills: true } as const;
 
 async function upstream() {

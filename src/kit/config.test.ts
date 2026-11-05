@@ -431,20 +431,32 @@ describe("Skills sources and Extra skill picks, with the switch on", () => {
   });
 });
 
-describe("Skills sources and Extra skill picks, with the switch off as shipped", () => {
-  it.each(["triage", "design", "implement", "review"])("refuses a pick under roles.%s as an unknown field", (role) => {
+describe("Skills sources and Extra skill picks, as shipped", () => {
+  const SHA = "a".repeat(40);
+
+  it("resolves a Product repo's pins and picks with the switch on", () => {
     const result = resolveKitConfig({
-      config: JSON.stringify({ roles: { [role]: { skills: ["jrey8343/skills/event-storming"] } } }),
-      skillsLock: JSON.stringify([{ repository: "jrey8343/skills", sha: "a".repeat(40) }]),
+      config: JSON.stringify({ roles: { design: { skills: ["jrey8343/skills/event-storming"] } } }),
+      skillsLock: JSON.stringify([{ repository: "jrey8343/skills", sha: SHA }]),
     });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        skillsSources: [{ repository: "jrey8343/skills", sha: SHA }],
+        extraSkills: { ...DEFAULTS.extraSkills, design: [{ source: "jrey8343/skills", name: "event-storming" }] },
+      },
+    });
+  });
+
+  it("resolves a repo with no lockfile and no picks exactly as before", () => {
+    expect(resolveKitConfig({ config: null })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it.each(["dispatch", "step_up"])("still refuses a pick under roles.%s as an unknown field", (role) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ roles: { [role]: { skills: [] } } }) });
 
     expect(result).toEqual({ ok: false, errors: [`roles.${role}.skills is not a Kit config field`] });
   });
-
-  it.each([`[{ "repository": "jrey8343/skills", "sha": "${"a".repeat(40)}" }]`, "not json", `{ "colour": "red" }`])(
-    "ignores the lockfile, whatever it holds: %s",
-    (skillsLock) => {
-      expect(resolveKitConfig({ config: null, skillsLock })).toEqual({ ok: true, config: DEFAULTS });
-    },
-  );
 });

@@ -1,17 +1,22 @@
 # Readies an agent job, before any secret loads: installs the Kit's pinned
-# Sandcastle and Claude Code CLI, fetches the pinned skills into the Product
-# checkout's .claude/skills, and reads what the agent is given (the issue, its
-# parent Spec, and for Implement and Review runs the PR and the Operator's
-# review) into $RUNNER_TEMP, through the job's read-only token. The agent
+# Sandcastle and Claude Code CLI, fetches the pinned skills (the Base skills
+# plus its role's Extra skills) into the Product checkout's .claude/skills, and
+# reads what the agent is given (the issue, its parent Spec, and for Implement
+# and Review runs the PR and the Operator's review) into $RUNNER_TEMP, through the job's read-only token. The agent
 # itself never gets a GitHub token.
 #
 # Use it after checking out the Product repo into `product/` and the Kit at
 # the pinned commit into `kit/`:
 #   - uses: ./kit/.github/actions/prepare-agent
+#     with:
+#       role: implement
 name: Prepare an agent job
 description: Installs the Kit, fetches the pinned skills and reads the agent's inputs.
 
 inputs:
+  role:
+    description: The agent's role (triage, design, implement or review), whose Extra skills it gets beside the Base skills. A Step-up run is an implement run.
+    required: true
   github-token:
     description: The job's read-only GITHUB_TOKEN.
     required: true
@@ -44,9 +49,13 @@ runs:
       working-directory: kit
       run: npm ci
 
+    # The Base skills plus this role's Extra skills. An install error fails the
+    # job here, before any secret loads and before claude starts.
     - name: Fetch the pinned skills into .claude/skills
       shell: bash
-      run: node kit/src/skills/fetch.ts product
+      env:
+        FABRIK_ROLE: ${{ inputs.role }}
+      run: node kit/src/skills/fetch.ts product "$FABRIK_ROLE"
 
     - name: Read the agent's inputs
       shell: bash

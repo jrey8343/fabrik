@@ -221,7 +221,7 @@ function picksToInstall(config: KitConfig, install: SkillsToInstall): readonly E
 }
 
 /** The names Fabrik's own skills install as: the folders under the Kit's skills/. */
-async function kitSkillNames(kitDir: string): Promise<readonly string[]> {
+export async function kitSkillNames(kitDir: string): Promise<readonly string[]> {
   const entries = await readdir(join(kitDir, KIT_SKILLS_DIR), { withFileTypes: true }).catch(() => []);
   return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
 }
