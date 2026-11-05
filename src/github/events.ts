@@ -127,7 +127,13 @@ export function agentRunEventFrom(
 ): LoopEvent {
   if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
   if (result.role !== "implement") {
-    const finished = { kind: "agent-run-finished", role: result.role, issue: result.issue, output: result.output } as const;
+    const finished = {
+      kind: "agent-run-finished",
+      role: result.role,
+      issue: result.issue,
+      output: result.output,
+      ...givenTo(result),
+    } as const;
     return result.role === "design" && startedBy !== null ? { ...finished, startedBy } : finished;
   }
   if (result.branch === undefined || changes === null) {

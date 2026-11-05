@@ -2,6 +2,7 @@
 // Each turn rebuilds its context from the issue thread, so nothing is held here
 // between turns beyond what the thread itself shows.
 import type { SentBack } from "./backToDesign.ts";
+import { consideredSection } from "./considered.ts";
 import {
   dependencyOrder,
   parseDesignTurnOutput,
@@ -17,6 +18,7 @@ import { startAgentRun } from "./runs.ts";
 import type {
   Action,
   CreatedIssue,
+  GivenOperatorComment,
   IssueContext,
   IssueSnapshot,
   KitConfig,
@@ -109,9 +111,17 @@ export function turnStartFrom(comment: number | undefined, found: StartingCommen
 /**
  * A finished turn posts the next round, or ends the session with its outcome.
  * A turn whose starting reply the Operator deleted posts nothing: it answered
- * a reply that is no longer there.
+ * a reply that is no longer there. Whichever comment it posts ends with the
+ * Operator comments it weighed, among those on the PR it came back from that
+ * it was `given` (ADR-0007).
  */
-export function applyTurn(issueNumber: number, text: string, snapshot: IssueContext, start: TurnStart): Plan {
+export function applyTurn(
+  issueNumber: number,
+  text: string,
+  snapshot: IssueContext,
+  start: TurnStart,
+  given: readonly GivenOperatorComment[] = [],
+): Plan {
   if (start.kind === "unchecked-reply") {
     return {
       kind: "fail",
@@ -133,10 +143,24 @@ export function applyTurn(issueNumber: number, text: string, snapshot: IssueCont
       reason: `The Design-session turn on #${issueNumber} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
     };
   }
+  const plan = landTurn(issueNumber, parsed.output, snapshot);
+  if (plan.kind !== "act") return plan;
+  const considered = consideredSection(parsed.output.operatorCommentsConsidered ?? [], given);
+  return considered.length === 0 ? plan : { ...plan, actions: plan.actions.map((action) => endedWith(action, considered)) };
+}
+
+/** The turn's one comment on the issue (a round or a closing comment), ended with `lines`; any other action as it is. */
+function endedWith(action: Action, lines: readonly string[]): Action {
+  const tail = lines.join("\n");
+  if (action.kind === "comment") return { ...action, body: `${action.body}\n${tail}` };
+  if (action.kind === "close-as-superseded") return { ...action, comment: [...action.comment, `\n${tail}`] };
+  return action;
+}
+
+function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: IssueContext): Plan {
   const notNow = whileInSession(issueNumber, snapshot.issue);
   if (notNow !== null) return notNow;
 
-  const { output } = parsed;
   if (output.kind === "round") {
     const round = snapshot.issue.designRounds + 1;
     // A session that follows a Ticket's return opens by saying why it came back.

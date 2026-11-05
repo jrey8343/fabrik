@@ -54,7 +54,13 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
           return withIssue(snapshot, ({ issue, operator }) => applyTriage(event.issue, event.output, issue, operator));
         case "design":
           return withIssue(snapshot, (context) =>
-            applyTurn(event.issue, event.output, context, turnStartFrom(event.startedBy, snapshot.startingComment)),
+            applyTurn(
+              event.issue,
+              event.output,
+              context,
+              turnStartFrom(event.startedBy, snapshot.startingComment),
+              event.operatorComments,
+            ),
           );
       }
     case "implement-run-finished":

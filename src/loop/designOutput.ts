@@ -5,6 +5,7 @@
 // (large), or, for a Ticket already under a Spec, sibling Tickets under that
 // Spec. Any Ticket in an outcome may instead be an Operator step. Or the
 // session ends as not planned: the Operator decided the issue won't be built.
+import { isCommentIdList } from "./considered.ts";
 import type { AgentBrief } from "./triageOutput.ts";
 
 export interface RoundQuestion {
@@ -13,7 +14,18 @@ export interface RoundQuestion {
   readonly recommendation: string;
 }
 
-export type DesignTurnOutput =
+export type DesignTurnOutput = DesignTurn & {
+  /**
+   * For a turn on a Ticket sent back from an agent PR: the ids of the Operator
+   * comments on that PR it weighed, which the comment it posts links when the
+   * run was given them (src/loop/considered.ts). Left out when the turn gave
+   * anything but a list of ids: as in the Implementer output, a bad list never
+   * fails the turn.
+   */
+  readonly operatorCommentsConsidered?: readonly string[];
+};
+
+type DesignTurn =
   | {
       /** The next round of questions for the Operator. */
       readonly kind: "round";
@@ -222,6 +234,12 @@ export function dependencyOrder(tickets: readonly SpecTicket[]): SpecTicket[] | 
 
 /** Checks an already-parsed value against the contract, naming every problem. */
 export function readDesignTurnOutput(value: unknown): DesignTurnOutputResult {
+  const result = readTurn(value);
+  if (!result.ok || !isObject(value) || !isCommentIdList(value.operatorCommentsConsidered)) return result;
+  return { ok: true, output: { ...result.output, operatorCommentsConsidered: value.operatorCommentsConsidered } };
+}
+
+function readTurn(value: unknown): DesignTurnOutputResult {
   if (!isObject(value)) return { ok: false, errors: ["Design-session output must be a JSON object"] };
   const errors: string[] = [];
   switch (value.kind) {

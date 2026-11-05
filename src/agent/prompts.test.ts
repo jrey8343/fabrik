@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readDesignTurnOutput } from "../loop/designOutput.ts";
 import { readPullRequestRunOutput } from "../loop/implementOutput.ts";
 import { CONSIDERED_PREFIX, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
 import { OPERATOR_COMMENTS_HEADING } from "./operatorComments.ts";
@@ -47,6 +48,13 @@ describe("The prompts of the runs that read an agent PR", () => {
     const text = await prompt("implement");
     const example: unknown = JSON.parse(/<implement>\n([\s\S]*?)\n<\/implement>/.exec(text)?.[1] ?? "null");
     expect(readPullRequestRunOutput(example)).toMatchObject({ ok: true, output: { operatorCommentsConsidered: ["conversation-3"] } });
+    expect(text).toContain("- `operatorCommentsConsidered`");
+  });
+
+  it("design describes the output field that names the Operator comments it weighed, which its round example carries", async () => {
+    const text = await prompt("design");
+    const example: unknown = JSON.parse(/<design>\n([\s\S]*?)\n<\/design>/.exec(text)?.[1] ?? "null");
+    expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "round", operatorCommentsConsidered: ["conversation-3"] } });
     expect(text).toContain("- `operatorCommentsConsidered`");
   });
 });

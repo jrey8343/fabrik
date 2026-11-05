@@ -1,6 +1,7 @@
 // The Implementer output contract: alongside its commits (passed out as a git
 // bundle), an Implement agent job emits the title and summary of the draft PR
 // its push job opens. Both sides check it, so a malformed output never half-applies.
+import { isCommentIdList } from "./considered.ts";
 
 export interface ImplementOutput {
   /** The PR title, one line. */
@@ -32,10 +33,6 @@ function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
-function isIdList(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((id) => typeof id === "string");
-}
-
 /** Checks an already-parsed value against the contract, naming every problem. */
 export function readImplementOutput(value: unknown): ImplementOutputResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -56,7 +53,7 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
       summary: (summary as string).trim(),
       ...(fix === undefined ? {} : { fix: (fix as string).trim() }),
       // A malformed list never fails the run: it reads as none weighed.
-      ...(isIdList(considered) ? { operatorCommentsConsidered: considered } : {}),
+      ...(isCommentIdList(considered) ? { operatorCommentsConsidered: considered } : {}),
     },
   };
 }

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { agentRunEventFrom } from "../github/events.ts";
+import { planFor } from "../loop/rules.ts";
 import { sentBackContext } from "./design.ts";
+import { readAgentRunResult } from "./result.ts";
 
 const issue = { number: 7, title: "Add a waitlist", body: "As a patient…", comments: [] };
 const sha = (c: string) => c.repeat(40);
@@ -20,7 +24,7 @@ const sentBack = {
 
 describe("A Design session's context from the PR a Ticket came back from", () => {
   it("leaves an issue that didn't come back as it is, with nothing added", () => {
-    expect(sentBackContext(issue)).toEqual({ issue, parts: [] });
+    expect(sentBackContext(issue)).toEqual({ issue, parts: [], operatorComments: [] });
   });
 
   it("takes the PR out of the issue and sets out its Verdicts, oldest first, then what its branch built", () => {
@@ -81,5 +85,33 @@ describe("A Design session's context from the PR a Ticket came back from", () =>
     expect(text).toContain("### The Operator's comments on the pull request");
     expect(text).toContain("#### `inline-8`: inline on `src/waitlist.ts` line 2, 2026-11-01T12:00:00Z\n\nThe waitlist is per clinic.");
     expect(text.indexOf("The waitlist is per clinic.")).toBeLessThan(text.indexOf("### What its branch built"));
+  });
+
+  it("records the id and link of each Operator comment it gives the run, for its result to pass out", () => {
+    expect(sentBackContext({ ...issue, sentBack: { ...sentBack, operatorComments } }).operatorComments).toEqual([
+      { id: "inline-8", url: "https://github.com/acme/shop/pull/50#discussion_r8" },
+    ]);
+    expect(sentBackContext({ ...issue, sentBack }).operatorComments).toEqual([]);
+  });
+
+  it("carries the comments it gave the run through to the round, which links the one the turn weighed and drops one it wasn't given", () => {
+    const context = sentBackContext({ ...issue, sentBack: { ...sentBack, operatorComments } });
+    const output = JSON.stringify({
+      kind: "round",
+      intro: "The waitlist is per clinic, as the Operator said.",
+      questions: [{ question: "Does each clinic keep its own list?", recommendation: "Yes." }],
+      operatorCommentsConsidered: ["inline-8", "conversation-4"],
+    });
+    // The agent job's artifact, as the Design session's push job reads it back.
+    const artifact = JSON.stringify({ role: "design", issue: 7, output, operatorComments: context.operatorComments });
+    const event = agentRunEventFrom(readAgentRunResult(artifact));
+    const ticket = anIssue({ number: 7, parent: 3, labels: ["enhancement", "needs-design"], sentBack: { pullRequest: 50, verdictUrl: null } });
+    const plan = planFor(event, snapshotOf(ticket, { operator: "jrey" }), kitConfig());
+
+    const [round] = plan.kind === "act" ? plan.actions.flatMap((action) => (action.kind === "comment" ? [action.body] : [])) : [];
+    expect(round).toMatch(
+      /\n### Operator comments considered\n\n- \[`inline-8`\]\(https:\/\/github\.com\/acme\/shop\/pull\/50#discussion_r8\)$/,
+    );
+    expect(round).not.toContain("conversation-4");
   });
 });

@@ -37,7 +37,8 @@ End your reply with exactly one `<design>` tag holding a JSON object, and nothin
   "intro": "One or two sentences of Markdown: where the session stands and what this round settles.",
   "questions": [
     { "question": "The question, in one sentence.", "recommendation": "Your recommended answer, short enough to accept with yes." }
-  ]
+  ],
+  "operatorCommentsConsidered": ["conversation-3"]
 }
 </design>
 
@@ -111,4 +112,5 @@ To finish as not planned:
 - `acceptanceCriteria` holds at least one criterion.
 - A `brief` is an agent brief (`summary` and `acceptanceCriteria`) when an Implementer builds it, or an Operator brief (`"operator": true`, `summary` and `steps`) when the whole issue is Operator work, never both.
 - In `spec` and `split`, a Ticket is an Operator step when it's marked `"operator": true` and has `steps`; every other Ticket has neither. Use one for any piece only the Operator can do, as step 2 of **Your turn** describes. `blockedBy` works the same either way: an Operator step can wait on Tickets, and Tickets can wait on it. The Kit makes each Operator step `ready-for-human`, assigns it to the Operator, and never releases it to an Implementer.
+- `operatorCommentsConsidered` may go on any of these. Fill it only when this prompt gives you "The Operator's comments on the pull request" this Ticket came back from: list the id of each one you weighed this turn, exactly as its heading gives it (such as `conversation-3`, `review-5` or `inline-9`). Leave it out, or leave it empty, if you weighed none, and always on an issue that didn't come back from a pull request. The Kit ends the comment it posts for this turn, the round or the closing comment, with a link to each one; it ignores an id it didn't give you.
 - `steps` holds at least one step, each one action the Operator takes. The Kit writes them as the issue's task list under `## Steps`, so don't write a steps list into any body.
