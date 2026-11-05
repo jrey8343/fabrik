@@ -73,21 +73,31 @@ export interface IssueToClose {
   readonly comment: string;
 }
 
+/** The newest of the Fabrik App's issues for each Sentry group, by the group's id, and for red main. */
+export interface NewestByMarker {
+  readonly byGroup: ReadonlyMap<string, MonitorIssue>;
+  readonly redMain: MonitorIssue | null;
+}
+
 /**
- * For each marker line, the newest issue the Fabrik App opened carrying it:
- * the one with the highest number, as GitHub numbers issues in the order
- * they're opened. A marker in anyone else's issue counts for nothing, so
- * quoting one can't silence an error.
+ * For each marker, the newest issue the Fabrik App opened carrying it: the
+ * one with the highest number, as GitHub numbers issues in the order they're
+ * opened. A marker in anyone else's issue counts for nothing, so quoting one
+ * can't silence an error.
  */
-export function newestByMarker(issues: readonly MonitorIssue[]): Map<string, MonitorIssue> {
-  const newest = new Map<string, MonitorIssue>();
+export function newestByMarker(issues: readonly MonitorIssue[]): NewestByMarker {
+  const byGroup = new Map<string, MonitorIssue>();
+  let redMain: MonitorIssue | null = null;
   for (const issue of issues) {
     const marker = issue.byApp ? monitorMarkerIn(issue.body) : null;
-    if (marker === null) continue;
-    const seen = newest.get(marker);
-    if (seen === undefined || issue.number > seen.number) newest.set(marker, issue);
+    if (marker?.kind === "sentry") {
+      const seen = byGroup.get(marker.group);
+      if (seen === undefined || issue.number > seen.number) byGroup.set(marker.group, issue);
+    } else if (marker?.kind === "red-main" && (redMain === null || issue.number > redMain.number)) {
+      redMain = issue;
+    }
   }
-  return newest;
+  return { byGroup, redMain };
 }
 
 // The Monitor block: hidden opening and closing markers, each on a line of its

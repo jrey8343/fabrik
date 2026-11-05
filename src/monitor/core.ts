@@ -5,7 +5,7 @@
 // program (src/monitor/main.ts) gathers the facts and applies the plan.
 import { DEFAULT_KIT_CONFIG, type KitConfig } from "../kit/config.ts";
 import { MONITOR_LABEL, WONTFIX } from "../loop/labels.ts";
-import { monitorMarkerIn, RED_MAIN_MARKER, sentryGroupMarker } from "../loop/markers.ts";
+import { monitorMarkerIn, monitorMarkerLine } from "../loop/markers.ts";
 import {
   ascending,
   type BodyRewrite,
@@ -137,7 +137,7 @@ function productionErrors({ monitor, sentry, issues, cap = MONITOR_ISSUES_CAP }:
   /** Each open issue whose group qualifies, by number: the newest of the App's issues for it. */
   const refreshing = new Map<number, GroupFacts>();
   for (const group of sentry.groups) {
-    const issue = newest.get(sentryGroupMarker(group.id));
+    const issue = newest.byGroup.get(group.id);
     if (issue === undefined) {
       if (qualifies(group, minEvents, group.events24h)) candidates.push({ group, regressedFrom: null });
     } else if (issue.open) {
@@ -214,9 +214,7 @@ function timeOf(iso: string): number {
  * filed for a Sentry group. Red main's issue never does.
  */
 function isOpenErrorIssue(issue: MonitorIssue): boolean {
-  if (!issue.open || !issue.byApp) return false;
-  const marker = monitorMarkerIn(issue.body);
-  return marker !== null && marker !== RED_MAIN_MARKER;
+  return issue.open && issue.byApp && monitorMarkerIn(issue.body)?.kind === "sentry";
 }
 
 /** The newest of these issues whose body has a stats block, or null when none has. */
@@ -289,7 +287,7 @@ const FRAMES_MAX = 10;
 function errorBodyOf(group: GroupFacts, regressedFrom: number | null, heldLine: string | null): string {
   const event = group.latestEvent;
   return [
-    sentryGroupMarker(group.id),
+    monitorMarkerLine({ kind: "sentry", group: group.id }),
     ...(regressedFrom === null
       ? []
       : [`Regressed from #${regressedFrom}: Sentry has seen this error again since that issue was closed as completed.`, ""]),

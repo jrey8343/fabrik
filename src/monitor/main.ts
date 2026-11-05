@@ -21,7 +21,7 @@ import { readKitConfigSources } from "../github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "../kit/caller.ts";
 import { type KitConfig, type MonitorErrors, resolveKitConfig } from "../kit/config.ts";
 import { MONITOR_LABEL } from "../loop/labels.ts";
-import { RED_MAIN_GREEN_MARKER, RED_MAIN_MARKER } from "../loop/markers.ts";
+import { RED_MAIN_GREEN_MARKER } from "../loop/markers.ts";
 import { type MonitorInput, monitorPlanFor, type SentryRead } from "./core.ts";
 import { type MonitorIssue, type MonitorPlan, newestByMarker } from "./issues.ts";
 import type { CheckRun, MainChecksRead, MainCommit } from "./redMain.ts";
@@ -187,8 +187,8 @@ interface RawTimelineEvent {
  * the App), comes after no such note.
  */
 async function withRedMainCloser(github: GitHub, repo: Repo, issues: readonly MonitorIssue[], appLogin: string): Promise<MonitorIssue[]> {
-  const newest = newestByMarker(issues).get(RED_MAIN_MARKER);
-  if (newest === undefined || newest.open) return [...issues];
+  const newest = newestByMarker(issues).redMain;
+  if (newest === null || newest.open) return [...issues];
   let noted = false;
   let byMonitor = false;
   for (let page = 1; ; page++) {

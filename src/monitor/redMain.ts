@@ -6,7 +6,7 @@
 import { CALLER_JOBS } from "../kit/caller.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { MONITOR_LABEL } from "../loop/labels.ts";
-import { RED_MAIN_GREEN_MARKER, RED_MAIN_MARKER } from "../loop/markers.ts";
+import { monitorMarkerLine, RED_MAIN_GREEN_MARKER } from "../loop/markers.ts";
 import { ascending, bodyCode, monitorBlock, type MonitorIssue, type MonitorPlan, newestByMarker, withMonitorBlock } from "./issues.ts";
 
 /** What red main's part of the plan reads of the Monitor core's input (./core.ts). */
@@ -81,7 +81,7 @@ export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: RedMa
   const state = decided[0];
   if (state === undefined) return { ...nothing, summary: [undecidedNote(mainChecks.commits.length, gatingChecks)] };
   const { commit } = state;
-  const issue = newestByMarker(issues).get(RED_MAIN_MARKER);
+  const issue = newestByMarker(issues).redMain;
   if (state.kind === "green") {
     if (issue?.open === true) return { ...nothing, close: [{ issue: issue.number, comment: greenNoteFor(commit) }] };
     return { ...nothing, summary: [`Red main: the default branch is green at ${shortSha(commit)}.`] };
@@ -93,7 +93,7 @@ export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: RedMa
     }
     return { ...nothing, summary: [`Red main: the default branch is still red at ${shortSha(commit)}, as #${issue.number} says.`] };
   }
-  if (issue !== undefined && heldClosed(issue, decided)) {
+  if (issue !== null && heldClosed(issue, decided)) {
     return {
       ...nothing,
       summary: [
@@ -175,7 +175,7 @@ const CHECK_NAME_MAX = 100;
 /** The red-main issue's body: what it tracks, then the red commit's details in its Monitor block. */
 function redMainBodyOf(commit: MainCommit, failed: readonly CheckRun[]): string {
   return [
-    RED_MAIN_MARKER,
+    monitorMarkerLine({ kind: "red-main" }),
     "The default branch is red: the newest commit on it whose gating checks have all finished failed some of them. The Monitor keeps the details below current while it stays red, and closes this issue itself once the default branch is green again.",
     "",
     ...monitorBlock(detailsOf(commit, failed)),

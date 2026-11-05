@@ -5,7 +5,7 @@ import { verdictsIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { DESIGN_ROUND_MARKER, monitorMarkerIn, RED_MAIN_MARKER } from "../loop/markers.ts";
+import { DESIGN_ROUND_MARKER, monitorMarkerIn } from "../loop/markers.ts";
 import type { DesignQueueSnapshot, InfrastructureFailure } from "../loop/types.ts";
 import { heldCountIn } from "../monitor/core.ts";
 import { type RateLimitReading, type RunRecord, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
@@ -633,8 +633,7 @@ function heldMonitorOf(issues: readonly MonitorIssueFacts[], appLogin: string): 
   let newest: HeldMonitor | null = null;
   for (const issue of issues) {
     if (issue.author !== appLogin) continue;
-    const marker = monitorMarkerIn(issue.body);
-    if (marker === null || marker === RED_MAIN_MARKER) continue;
+    if (monitorMarkerIn(issue.body)?.kind !== "sentry") continue;
     const groups = heldCountIn(issue.body);
     if (groups !== null && (newest === null || issue.number > newest.issue)) newest = { groups, issue: issue.number };
   }
