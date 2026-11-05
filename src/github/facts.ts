@@ -21,7 +21,7 @@ import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest
 import { AUDIT_LABEL } from "../loop/labels.ts";
 import { escapeMarkerIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
-import type { GitHub, Repo } from "./client.ts";
+import { type GitHub, pagesOf, type Repo } from "./client.ts";
 import { gatherDesignQueueSlice } from "./snapshot.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -277,31 +277,6 @@ interface RawAudit {
 interface RawCommit {
   message: string;
   committedDate: string;
-}
-
-interface Page<T> {
-  pageInfo: { hasNextPage: boolean; endCursor: string | null };
-  nodes: T[];
-}
-
-/** Every node of a paged connection, or only until `enough` says the rest are too old. */
-async function pagesOf<T>(
-  github: Pick<GitHub, "graphql">,
-  query: string,
-  repo: Repo,
-  variables: Record<string, unknown>,
-  connection: (data: any) => Page<T> | null,
-  enough: (page: readonly T[]) => boolean = () => false,
-): Promise<T[]> {
-  const nodes: T[] = [];
-  let after: string | null = null;
-  do {
-    const page = connection(await github.graphql(query, { owner: repo.owner, name: repo.name, after, ...variables }));
-    if (page === null) break;
-    nodes.push(...page.nodes);
-    after = page.pageInfo.hasNextPage && !enough(page.nodes) ? page.pageInfo.endCursor : null;
-  } while (after !== null);
-  return nodes;
 }
 
 /** The PRs merged or closed in the window, agent or not. */

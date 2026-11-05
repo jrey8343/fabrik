@@ -14,7 +14,7 @@
 //                                Audit): writes audit.json, the Auditor's inputs (readAuditInputs)
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { GitHub, type Repo } from "../github/client.ts";
+import { GitHub, pagesOf, type Repo } from "../github/client.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
@@ -451,29 +451,6 @@ const OPEN_ISSUES_QUERY = `
   }
 `;
 
-interface Connection<T> {
-  pageInfo: { hasNextPage: boolean; endCursor: string | null };
-  nodes: T[];
-}
-
-/** Every node of a paged GraphQL connection, or only until `enough` says the rest are too old. */
-async function nodesOf<T>(
-  github: Reader,
-  repo: Repo,
-  query: string,
-  connection: (data: any) => Connection<T>,
-  enough: (page: readonly T[]) => boolean = () => false,
-): Promise<T[]> {
-  const nodes: T[] = [];
-  let after: string | null = null;
-  do {
-    const page = connection(await github.graphql(query, { owner: repo.owner, name: repo.name, after }));
-    nodes.push(...page.nodes);
-    after = page.pageInfo.hasNextPage && !enough(page.nodes) ? page.pageInfo.endCursor : null;
-  } while (after !== null);
-  return nodes;
-}
-
 const DAY_MS = 86_400_000;
 
 /** How far back the window falls back to, from the pending Audit. */
@@ -528,10 +505,11 @@ export async function readAuditInputs(github: Reader, repo: Repo, audit: Pending
   const since = window.kind === "since-audit" && last !== null ? Date.parse(last.createdAt) : until - FALLBACK_DAYS * DAY_MS;
   // The agent PRs merged in the window, or in the 30 days drift looks back over, whichever reaches further.
   const earliest = Math.min(since, until - DRIFT_DAYS * DAY_MS);
-  const merged = await nodesOf<MergedPullRequestNode>(
+  const merged = await pagesOf<MergedPullRequestNode>(
     github,
-    repo,
     MERGED_PULL_REQUESTS_QUERY,
+    repo,
+    {},
     (data) => data.repository.pullRequests,
     (page) => page.some((pr) => Date.parse(pr.updatedAt) < earliest),
   );
@@ -577,7 +555,7 @@ export async function readAuditInputs(github: Reader, repo: Repo, audit: Pending
         };
       }),
   );
-  const open = await nodesOf<{ number: number; title: string; body: string }>(github, repo, OPEN_ISSUES_QUERY, (data) => data.repository.issues);
+  const open = await pagesOf<{ number: number; title: string; body: string }>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues);
   const filedCandidates = open.flatMap(({ number, title, body }) => {
     const fromAudit = fromAuditIn(body);
     return fromAudit === null ? [] : [{ number, title, fromAudit, body }];
