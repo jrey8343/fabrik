@@ -8,6 +8,7 @@ import type {
   LabelEvent,
   OpenIssueFacts,
   OpenPullRequestFacts,
+  SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
 import { designRoundMarker, verdictMarker } from "../loop/markers.ts";
@@ -60,14 +61,19 @@ export function aLabelAdded(label: string, at: string, overrides: Partial<LabelE
   return { label, action: "labeled", actor: "fabrik-app[bot]", at, ...overrides };
 }
 
-/** Ticket 7 with this label timeline. */
+/** Ticket 7, still open, with this label timeline. */
 export function aTicketTimeline(labelEvents: readonly LabelEvent[], overrides: Partial<TicketFacts> = {}): TicketFacts {
-  return { number: 7, labelEvents, ...overrides };
+  return { number: 7, labelEvents, closedAt: null, ...overrides };
+}
+
+/** Spec 3, the parent of Ticket 7, with this label timeline. */
+export function aSpec(labelEvents: readonly LabelEvent[], overrides: Partial<SpecFacts> = {}): SpecFacts {
+  return { number: 3, labelEvents, tickets: [7], ...overrides };
 }
 
 /** The GitHub facts of `owner/product`, with nothing in them unless a test says so. */
 export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
-  return { repo: "owner/product", pullRequests: [], tickets: [], openIssues: [], openPullRequests: [], ...overrides };
+  return { repo: "owner/product", pullRequests: [], tickets: [], specs: [], openIssues: [], openPullRequests: [], ...overrides };
 }
 
 /** The Fabrik App's comment `body` at `at`; a person's with `{ author, byBot: false }`. */
