@@ -35,7 +35,7 @@ export interface KitConfig {
     /** How many open error issues the Monitor keeps at once; 0 pauses new error filings (#148). */
     readonly monitorIssues: number;
   };
-  /** What the Monitor watches in this Product repo (#148). Nothing reads it yet. */
+  /** What the Monitor watches in this Product repo (#148). */
   readonly monitor: {
     /** Where the Monitor reads production errors; null leaves them off. */
     readonly errors: MonitorErrors | null;

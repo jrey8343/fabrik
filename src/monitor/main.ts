@@ -5,8 +5,8 @@
 // Monitor core (src/monitor/core.ts), files, rewrites and closes what the plan
 // says, and writes the step summary. It talks to GitHub and Sentry through
 // their APIs alone: it never checks out or runs Product code, makes no model
-// call and writes no Run record. Nothing runs it yet; switch-on wires it into
-// the scheduled tick as its own job.
+// call and writes no Run record. The scheduled tick runs it hourly, in its own
+// Monitor job (.github/workflows/schedule.yml).
 //   node src/monitor/main.ts
 // Reads FABRIK_APP_TOKEN, the Fabrik App's token on the Product repo, and
 // FABRIK_APP_SLUG, the App's slug, which names the issues it opened. When
