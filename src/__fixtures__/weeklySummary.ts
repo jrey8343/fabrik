@@ -4,10 +4,12 @@ import type { RunRecord } from "../kit/runRecord.ts";
 import type {
   AgentPullRequestFacts,
   CommentFacts,
+  CommitFacts,
   GitHubFacts,
   LabelEvent,
   OpenIssueFacts,
   OpenPullRequestFacts,
+  ReviewFacts,
   SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
@@ -53,7 +55,28 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
 
 /** An agent PR the Fabrik App opened for Ticket 7, merged at `mergedAt`. */
 export function aMergedPullRequest(mergedAt: string, overrides: Partial<AgentPullRequestFacts> = {}): AgentPullRequestFacts {
-  return { number: 50, ticket: 7, title: "Build the thing", mergedAt, mergeSha: "c".repeat(40), ...overrides };
+  return {
+    number: 50,
+    ticket: 7,
+    title: "Build the thing",
+    mergedAt,
+    mergeSha: "c".repeat(40),
+    commits: [],
+    reviews: [],
+    comments: [],
+    labelEvents: [],
+    ...overrides,
+  };
+}
+
+/** The Operator requesting changes at `at`. */
+export function aReview(at: string, overrides: Partial<ReviewFacts> = {}): ReviewFacts {
+  return { author: "operator", state: "changes-requested", at, ...overrides };
+}
+
+/** A commit someone other than the Fabrik App made at `at`. */
+export function aCommit(at: string, overrides: Partial<CommitFacts> = {}): CommitFacts {
+  return { byApp: false, at, ...overrides };
 }
 
 /** The App adding `label` at `at`. */
@@ -61,9 +84,9 @@ export function aLabelAdded(label: string, at: string, overrides: Partial<LabelE
   return { label, action: "labeled", actor: "fabrik-app[bot]", at, ...overrides };
 }
 
-/** Ticket 7, still open, with this label timeline. */
+/** Ticket 7, still open, with this label timeline, blocked by nothing. */
 export function aTicketTimeline(labelEvents: readonly LabelEvent[], overrides: Partial<TicketFacts> = {}): TicketFacts {
-  return { number: 7, labelEvents, closedAt: null, ...overrides };
+  return { number: 7, labelEvents, closedAt: null, blockedBy: [], ...overrides };
 }
 
 /** Spec 3, the parent of Ticket 7, with this label timeline. */
@@ -73,7 +96,17 @@ export function aSpec(labelEvents: readonly LabelEvent[], overrides: Partial<Spe
 
 /** The GitHub facts of `owner/product`, with nothing in them unless a test says so. */
 export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
-  return { repo: "owner/product", pullRequests: [], tickets: [], specs: [], openIssues: [], openPullRequests: [], ...overrides };
+  return {
+    repo: "owner/product",
+    pullRequests: [],
+    tickets: [],
+    specs: [],
+    defaultBranchCommits: [],
+    mergedPullRequestTitles: [],
+    openIssues: [],
+    openPullRequests: [],
+    ...overrides,
+  };
 }
 
 /** The Fabrik App's comment `body` at `at`; a person's with `{ author, byBot: false }`. */
@@ -87,8 +120,8 @@ export function aDesignRound(round: number, at: string): CommentFacts {
 }
 
 /** The Fabrik App's Verdict comment on `headSha` at `at`. */
-export function aVerdictComment(verdict: Verdict, headSha: string, at: string): CommentFacts {
-  return aComment(`${verdictMarker({ verdict, source: "reviewer", requestChanges: false, headSha })}\nVerdict: ${verdict}`, at);
+export function aVerdictComment(verdict: Verdict, headSha: string, at: string, overrides: Partial<CommentFacts> = {}): CommentFacts {
+  return aComment(`${verdictMarker({ verdict, source: "reviewer", requestChanges: false, headSha })}\nVerdict: ${verdict}`, at, overrides);
 }
 
 /** Open issue 12, opened on 2026-10-01, with no labels, comments or label events unless a test says so. */

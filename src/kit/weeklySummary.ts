@@ -3,7 +3,7 @@
 // week that just ended, or skip in a quiet week. Pure, no I/O, no model call.
 import { verdictsIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
-import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN } from "../loop/labels.ts";
+import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { InfrastructureFailure } from "../loop/types.ts";
 import type { RateLimitReading, RunRecord } from "./runRecord.ts";
@@ -17,12 +17,46 @@ export interface LabelEvent {
   readonly at: string;
 }
 
-/** A Ticket and its label timeline. */
+/** An issue a Ticket is blocked by. */
+export interface BlockerFacts {
+  readonly number: number;
+  /** Its labels: an Operator step's include `ready-for-human`. */
+  readonly labels: readonly string[];
+}
+
+/** A Ticket, its label timeline and what it's blocked by. */
 export interface TicketFacts {
   readonly number: number;
   readonly labelEvents: readonly LabelEvent[];
+  readonly blockedBy: readonly BlockerFacts[];
   /** ISO 8601, or null while it's open. */
   readonly closedAt: string | null;
+}
+
+/** A commit on an agent PR's branch. */
+export interface CommitFacts {
+  /** Whether the Fabrik App made it, as an agent run's push does. */
+  readonly byApp: boolean;
+  /** ISO 8601. */
+  readonly at: string;
+}
+
+/** A review left on an agent PR. */
+export interface ReviewFacts {
+  readonly author: string;
+  readonly state: "approved" | "changes-requested" | "commented" | "dismissed";
+  /** ISO 8601. */
+  readonly at: string;
+}
+
+/** A comment on an issue or a PR. */
+export interface CommentFacts {
+  readonly author: string;
+  /** Whether a bot, such as the Fabrik App, wrote it: only a bot's markers count, so quoting one fakes nothing. */
+  readonly byBot: boolean;
+  readonly body: string;
+  /** ISO 8601. */
+  readonly at: string;
 }
 
 /** A Spec, its label timeline and the Tickets that build it (its sub-issues). */
@@ -41,16 +75,26 @@ export interface AgentPullRequestFacts {
   /** ISO 8601, or null for a PR closed without merging. */
   readonly mergedAt: string | null;
   readonly mergeSha: string | null;
+  /** Its commits, oldest first. */
+  readonly commits: readonly CommitFacts[];
+  readonly reviews: readonly ReviewFacts[];
+  /** Its comments, oldest first. */
+  readonly comments: readonly CommentFacts[];
+  readonly labelEvents: readonly LabelEvent[];
 }
 
-/** A comment on an issue or a PR. */
-export interface CommentFacts {
-  readonly author: string;
-  /** Whether a bot wrote it: only a bot's markers count, so quoting one fakes nothing. */
-  readonly byBot: boolean;
-  readonly body: string;
+/** A commit on the default branch. */
+export interface DefaultBranchCommitFacts {
+  readonly message: string;
   /** ISO 8601. */
   readonly at: string;
+}
+
+/** Any PR merged in the last 30 days, agent or not, by its title. */
+export interface MergedTitleFacts {
+  readonly title: string;
+  /** ISO 8601. */
+  readonly mergedAt: string;
 }
 
 /** An open issue, as Waiting on you and Stuck read it. */
@@ -86,6 +130,9 @@ export interface GitHubFacts {
   readonly repo: string;
   readonly pullRequests: readonly AgentPullRequestFacts[];
   readonly tickets: readonly TicketFacts[];
+  /** The default branch's commits in the last 30 days. */
+  readonly defaultBranchCommits: readonly DefaultBranchCommitFacts[];
+  readonly mergedPullRequestTitles: readonly MergedTitleFacts[];
   readonly specs: readonly SpecFacts[];
   /** The repo's open issues. */
   readonly openIssues: readonly OpenIssueFacts[];
@@ -146,6 +193,14 @@ export interface WeeklySummary {
   readonly spendNeverMerged: WeekOverWeek<CostFigure>;
   /** The latest weekly-limit reading across the week's records, or null if none read one. */
   readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
+  /** Human touches per agent PR merged in the week, or null in a week with none merged. */
+  readonly humanTouches: WeekOverWeek<number | null>;
+  /** The median time from Dispatch to merge of the week's merged agent PRs, in ms, or null with none. */
+  readonly cycleTimeMs: WeekOverWeek<number | null>;
+  /** The median time from the last passing Verdict to merge of the week's merged agent PRs, in ms, or null with none. */
+  readonly operatorWaitMs: WeekOverWeek<number | null>;
+  /** Of the agent PRs merged in the 30 days to the week's end, how many were reverted in that window. */
+  readonly revertRate: WeekOverWeek<RevertRate>;
   readonly counts: {
     /** Agent PRs merged in the week, across every Product repo. */
     readonly mergedPullRequests: WeekOverWeek<number>;
@@ -202,6 +257,11 @@ export type StuckItem =
   /** An open Ticket whose latest record, ended at `since`, was an Infrastructure failure or timeout. */
   | (ItemBase & { readonly kind: "infrastructure-failure"; readonly failure: InfrastructureFailure });
 
+export interface RevertRate {
+  readonly reverted: number;
+  readonly merged: number;
+}
+
 export type WeeklySummaryResult =
   | { readonly kind: "skip" }
   | {
@@ -232,6 +292,10 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     costPerSpec: change("costPerSpec"),
     spendNeverMerged: change("spendNeverMerged"),
     weeklyLimit: change("weeklyLimit"),
+    humanTouches: change("humanTouches"),
+    cycleTimeMs: change("cycleTimeMs"),
+    operatorWaitMs: change("operatorWaitMs"),
+    revertRate: change("revertRate"),
     counts: {
       mergedPullRequests: change("mergedPullRequests"),
       ticketsDispatched: change("ticketsDispatched"),
@@ -253,6 +317,10 @@ interface WeekMetrics {
   readonly costPerSpec: CostFigure;
   readonly spendNeverMerged: CostFigure;
   readonly weeklyLimit: RateLimitReading | null;
+  readonly humanTouches: number | null;
+  readonly cycleTimeMs: number | null;
+  readonly operatorWaitMs: number | null;
+  readonly revertRate: RevertRate;
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
   readonly retries: number;
@@ -265,6 +333,11 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
   const pullRequests = input.facts.flatMap((facts) => facts.pullRequests);
   const tickets = input.facts.flatMap((facts) => facts.tickets);
+  const merged = input.facts.flatMap((facts) =>
+    facts.pullRequests.flatMap((pullRequest) =>
+      pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt) ? [mergedPullRequestOf(facts, pullRequest, pullRequest.mergedAt)] : [],
+    ),
+  );
   return {
     records: records.length,
     cost: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
@@ -273,6 +346,15 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     costPerSpec: costPerSpecOf(week, input),
     spendNeverMerged: spendNeverMergedOf(week, input),
     weeklyLimit: records.findLast((record) => record.rateLimit !== null)?.rateLimit ?? null,
+    humanTouches: mean(merged.map((pullRequest) => humanTouchesOf(pullRequest, input.operator))),
+    cycleTimeMs: median(merged.flatMap(({ dispatch, mergedAt }) => (dispatch === null ? [] : [Date.parse(mergedAt) - Date.parse(dispatch)]))),
+    operatorWaitMs: median(
+      merged.flatMap(({ pullRequest, mergedAt }) => {
+        const passed = lastPassOf(pullRequest, mergedAt);
+        return passed === null ? [] : [Date.parse(mergedAt) - Date.parse(passed)];
+      }),
+    ),
+    revertRate: revertRateOf(week, input.facts),
     mergedPullRequests: pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt)).length,
     ticketsDispatched: tickets.filter((ticket) => {
       const dispatch = dispatchOf(ticket);
@@ -281,6 +363,89 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     retries: records.filter((record) => record.role === "implement" && record.retry > 0).length,
     stepUps: records.filter((record) => record.stepUp).length,
   };
+}
+
+/** An agent PR merged in the week, with its Ticket and when that was dispatched. */
+interface MergedPullRequest {
+  readonly pullRequest: AgentPullRequestFacts;
+  readonly mergedAt: string;
+  readonly ticket: TicketFacts | null;
+  readonly dispatch: string | null;
+}
+
+function mergedPullRequestOf(facts: GitHubFacts, pullRequest: AgentPullRequestFacts, mergedAt: string): MergedPullRequest {
+  const ticket = facts.tickets.find((candidate) => candidate.number === pullRequest.ticket) ?? null;
+  return { pullRequest, mergedAt, ticket, dispatch: ticket === null ? null : dispatchOf(ticket) };
+}
+
+/**
+ * The Operator's steps into a Ticket's path between Dispatch and merge (the
+ * glossary's Human touch). The merge, Design-session answers and Operator
+ * comments are never touches.
+ */
+function humanTouchesOf({ pullRequest, mergedAt, ticket, dispatch }: MergedPullRequest, operator: string): number {
+  const before = (at: string) => Date.parse(at) <= Date.parse(mergedAt);
+  const between = (at: string) => (dispatch === null || Date.parse(at) >= Date.parse(dispatch)) && before(at);
+  // Dispatch itself adds the first agent:implement, so a label counts only after it.
+  const after = (at: string) => (dispatch === null || Date.parse(at) > Date.parse(dispatch)) && before(at);
+  // A push: a run of consecutive commits the App didn't make.
+  const commits = pullRequest.commits.filter((commit) => between(commit.at));
+  const pushes = commits.filter((commit, i) => !commit.byApp && (i === 0 || commits[i - 1]?.byApp === true)).length;
+  const requestChanges = pullRequest.reviews.filter(
+    (review) => review.author === operator && review.state === "changes-requested" && between(review.at),
+  ).length;
+  const added = [...(ticket?.labelEvents ?? []), ...pullRequest.labelEvents].filter((event) => event.action === "labeled" && after(event.at));
+  // A Retry or Step-up the Operator asked for.
+  const retriesAsked = added.filter((event) => event.actor === operator && (event.label === DISPATCH_LABEL || event.label === REVIEW_LABEL)).length;
+  // A Pairing session on the Ticket.
+  const pairing = ticket?.labelEvents.some((event) => event.label === READY_FOR_HUMAN && event.action === "labeled" && after(event.at)) ? 1 : 0;
+  const operatorSteps = ticket?.blockedBy.filter((blocker) => blocker.labels.includes(READY_FOR_HUMAN)).length ?? 0;
+  return pushes + requestChanges + retriesAsked + pairing + operatorSteps;
+}
+
+/**
+ * The agent PRs merged in the 30 days to the week's end, and how many of them
+ * a default-branch commit's `This reverts commit <merge sha>` trailer, or a
+ * merged `Revert "<title>"` PR, reverted in the same window.
+ */
+function revertRateOf(week: Week, facts: readonly GitHubFacts[]): RevertRate {
+  const window = { start: week.end - REVERT_WINDOW_MS, end: week.end };
+  const counts = facts.map((repo) => {
+    const merged = repo.pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(window, pullRequest.mergedAt));
+    const commits = repo.defaultBranchCommits.filter((commit) => within(window, commit.at));
+    const titles = repo.mergedPullRequestTitles.filter((pullRequest) => within(window, pullRequest.mergedAt));
+    const reverted = merged.filter(
+      ({ mergeSha, title }) =>
+        (mergeSha !== null && commits.some((commit) => commit.message.includes(`This reverts commit ${mergeSha}`))) ||
+        titles.some((pullRequest) => pullRequest.title === `Revert "${title}"`),
+    );
+    return { reverted: reverted.length, merged: merged.length };
+  });
+  return {
+    reverted: counts.reduce((sum, count) => sum + count.reverted, 0),
+    merged: counts.reduce((sum, count) => sum + count.merged, 0),
+  };
+}
+
+/** When the PR's last passing Verdict before its merge was given, read through the Verdict marker on the App's comments, or null. */
+function lastPassOf(pullRequest: AgentPullRequestFacts, mergedAt: string): string | null {
+  return (
+    pullRequest.comments.findLast(
+      (comment) =>
+        comment.byBot && Date.parse(comment.at) <= Date.parse(mergedAt) && verdictsIn([comment.body]).some((record) => record.verdict === "pass"),
+    )?.at ?? null
+  );
+}
+
+function median(values: readonly number[]): number | null {
+  const sorted = values.toSorted((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length === 0) return null;
+  return sorted.length % 2 === 1 ? (sorted[middle] ?? null) : ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2;
+}
+
+function mean(values: readonly number[]): number | null {
+  return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 /** The roles whose runs build a Ticket: Implement (Retries and Step-ups among them) and Review. */
@@ -508,11 +673,12 @@ interface Week {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const REVERT_WINDOW_MS = 30 * DAY_MS;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-function within(week: Week, at: string): boolean {
+function within({ start, end }: Pick<Week, "start" | "end">, at: string): boolean {
   const time = Date.parse(at);
-  return time >= week.start && time < week.end;
+  return time >= start && time < end;
 }
 
 /** The week ending at the last Monday 00:00 at or before `now`, and the week before it. */
@@ -573,10 +739,20 @@ function localTime(time: number, timeZone: string): string {
 // their Specs ship.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
-  const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, counts } = summary;
-  const row = (name: string, { thisWeek, lastWeek }: WeekOverWeek<number>, format: (value: number) => string) =>
-    `| ${name} | ${format(thisWeek)} | ${format(lastWeek)} | ${signed(thisWeek - lastWeek, format)} |`;
+  const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, counts } = summary;
+  const row = (name: string, { thisWeek, lastWeek }: WeekOverWeek<number | null>, format: (value: number) => string) =>
+    `| ${name} | ${orNone(thisWeek, format)} | ${orNone(lastWeek, format)} | ${
+      thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, format)
+    } |`;
   const count = (value: number) => String(value);
+  const share = ({ reverted, merged }: RevertRate) => (merged === 0 ? null : reverted / merged);
+  const percent = (value: number) => `${Math.round(value * 100)}%`;
+  const reverts = { thisWeek: share(revertRate.thisWeek), lastWeek: share(revertRate.lastWeek) };
+  const revertCell = (rate: RevertRate) => orNone(share(rate), (value) => `${percent(value)} (${rate.reverted} of ${rate.merged})`);
+  const revertChange =
+    reverts.thisWeek === null || reverts.lastWeek === null
+      ? NONE
+      : signed(Math.round(reverts.thisWeek * 100) - Math.round(reverts.lastWeek * 100), (points) => `${points} pts`);
   const costRow = (name: string, figure: WeekOverWeek<CostFigure>) => {
     const thisWeek = figure.thisWeek.usd;
     const lastWeek = figure.lastWeek.usd;
@@ -602,6 +778,10 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     row("Tickets dispatched", counts.ticketsDispatched, count),
     row("Retries", counts.retries, count),
     row("Step-ups", counts.stepUps, count),
+    row("Human touches per merged PR", humanTouches, (value) => value.toFixed(1)),
+    row("Cycle time (median)", cycleTimeMs, hours),
+    row("Operator wait (median)", operatorWaitMs, hours),
+    `| Revert rate (30 days) | ${revertCell(revertRate.thisWeek)} | ${revertCell(revertRate.lastWeek)} | ${revertChange} |`,
     "",
   ];
   if (unknownCost.thisWeek > 0) {
@@ -699,6 +879,14 @@ const NONE = "–";
 /** `1 run with an unknown cost basis is`, or `2 runs … are`. */
 function runsWithUnknownCost(count: number): string {
   return count === 1 ? "1 run with an unknown cost basis is" : `${count} runs with an unknown cost basis are`;
+}
+
+function orNone(value: number | null, format: (value: number) => string): string {
+  return value === null ? NONE : format(value);
+}
+
+function hours(ms: number): string {
+  return `${(ms / (60 * 60 * 1000)).toFixed(1)}h`;
 }
 
 function dollars(value: number): string {

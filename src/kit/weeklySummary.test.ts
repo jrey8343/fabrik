@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
   aComment,
+  aCommit,
   aDesignRound,
   aLabelAdded,
   aMergedPullRequest,
   anOpenIssue,
   anOpenPullRequest,
+  aReview,
   aRunRecord,
   aSpec,
   aTicketTimeline,
   aVerdictComment,
   factsOf,
 } from "../__fixtures__/weeklySummary.ts";
-import { type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
+import type { Verdict } from "../loop/types.ts";
+import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
 // week it covers runs from Monday 2 November 00:00 to Monday 9 November 00:00
@@ -337,6 +340,232 @@ describe("the Weekly summary", () => {
     });
   });
 
+  describe("Human touches per merged PR", () => {
+    // Ticket 7 dispatched on Monday, its PR merged on Friday.
+    const DISPATCH = "2026-11-02T00:00:00Z";
+    const MERGE = "2026-11-06T00:00:00Z";
+    const touches = (pullRequest: Partial<AgentPullRequestFacts>, ticket: Partial<TicketFacts> = {}, more: AgentPullRequestFacts[] = []) => {
+      const result = weeklySummary(
+        input({
+          records: [aRunRecord()],
+          facts: [
+            factsOf({
+              pullRequests: [aMergedPullRequest(MERGE, pullRequest), ...more],
+              tickets: [aTicketTimeline([aLabelAdded("agent:implement", DISPATCH)], ticket)],
+            }),
+          ],
+        }),
+      );
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary.humanTouches.thisWeek;
+    };
+
+    it("counts each run of consecutive commits not made by the Fabrik App as one push", () => {
+      const commits = [
+        aCommit("2026-11-02T01:00:00Z", { byApp: true }),
+        aCommit("2026-11-03T01:00:00Z"), // the Operator's push of two commits
+        aCommit("2026-11-03T01:01:00Z"),
+        aCommit("2026-11-04T01:00:00Z", { byApp: true }),
+        aCommit("2026-11-05T01:00:00Z"), // a second push
+      ];
+      expect(touches({ commits })).toBe(2);
+    });
+
+    it("counts each Request changes review by the Operator", () => {
+      const reviews = [
+        aReview("2026-11-03T00:00:00Z"),
+        aReview("2026-11-04T00:00:00Z"),
+        aReview("2026-11-05T00:00:00Z", { state: "approved" }),
+        aReview("2026-11-05T00:00:00Z", { author: "someone-else" }),
+      ];
+      expect(touches({ reviews })).toBe(2);
+    });
+
+    it("counts each agent:implement or agent:review the Operator added themselves", () => {
+      const byOperator = { actor: "operator" };
+      expect(
+        touches(
+          {
+            labelEvents: [
+              aLabelAdded("agent:review", "2026-11-04T00:00:00Z", byOperator),
+              aLabelAdded("agent:review", "2026-11-04T01:00:00Z"), // the App's
+            ],
+          },
+          {
+            labelEvents: [
+              aLabelAdded("agent:implement", DISPATCH),
+              aLabelAdded("agent:implement", "2026-11-03T00:00:00Z", byOperator),
+              aLabelAdded("agent:implement", "2026-11-03T01:00:00Z"), // the App's Retry
+              aLabelAdded("agent:implement", "2026-11-03T02:00:00Z", { ...byOperator, action: "unlabeled" }),
+              aLabelAdded("needs-design", "2026-11-03T03:00:00Z", byOperator),
+            ],
+          },
+        ),
+      ).toBe(2);
+    });
+
+    it("counts the Ticket being labelled ready-for-human after Dispatch, a Pairing session on it", () => {
+      expect(touches({}, { labelEvents: [aLabelAdded("agent:implement", DISPATCH), aLabelAdded("ready-for-human", "2026-11-04T00:00:00Z")] })).toBe(1);
+      expect(touches({}, { labelEvents: [aLabelAdded("ready-for-human", "2026-11-01T00:00:00Z"), aLabelAdded("agent:implement", DISPATCH)] })).toBe(0);
+    });
+
+    it("counts each Operator step the Ticket was blocked by", () => {
+      const blockedBy = [
+        { number: 3, labels: ["ready-for-human"] }, // an Operator step
+        { number: 4, labels: ["ready-for-human", "enhancement"] },
+        { number: 5, labels: ["ready-for-agent"] }, // a Ticket
+      ];
+      expect(touches({}, { blockedBy })).toBe(2);
+    });
+
+    it("never counts the merge, Design-session answers or Operator comments", () => {
+      expect(
+        touches(
+          {
+            comments: [
+              { author: "operator", byBot: false, body: "Looks good, merging.", at: "2026-11-05T00:00:00Z" },
+              { author: "operator", byBot: false, body: "Answering round 2: yes.", at: "2026-11-05T01:00:00Z" },
+            ],
+            reviews: [aReview("2026-11-05T02:00:00Z", { state: "commented" })],
+          },
+        ),
+      ).toBe(0);
+    });
+
+    it("counts only what came between Dispatch and the merge", () => {
+      const reviews = [aReview("2026-11-01T00:00:00Z"), aReview("2026-11-03T00:00:00Z"), aReview("2026-11-06T00:00:01Z")];
+      const commits = [aCommit("2026-11-01T00:00:00Z"), aCommit("2026-11-06T00:00:01Z")];
+      expect(touches({ reviews, commits })).toBe(1);
+    });
+
+    it("averages over the week's merged PRs", () => {
+      const other = aMergedPullRequest("2026-11-05T00:00:00Z", { number: 51, ticket: 8 });
+      expect(touches({ reviews: [aReview("2026-11-03T00:00:00Z")] }, {}, [other])).toBe(0.5);
+    });
+  });
+
+  describe("cycle time and Operator wait", () => {
+    const HOUR = 60 * 60 * 1000;
+    const summaryOf = (facts: GitHubFacts) => {
+      const result = weeklySummary(input({ records: [aRunRecord()], facts: [facts] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary;
+    };
+
+    it("runs cycle time from Dispatch, the first agent:implement, to the merge, as a median", () => {
+      const summary = summaryOf(
+        factsOf({
+          pullRequests: [
+            aMergedPullRequest("2026-11-03T10:00:00Z", { number: 50, ticket: 1 }),
+            aMergedPullRequest("2026-11-04T00:00:00Z", { number: 51, ticket: 2 }),
+            aMergedPullRequest("2026-11-05T00:00:00Z", { number: 52, ticket: 3 }),
+            aMergedPullRequest("2026-10-30T00:00:00Z", { number: 53, ticket: 4 }), // last week
+          ],
+          tickets: [
+            // 10 hours, a Retry's agent:implement not restarting it.
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z"), aLabelAdded("agent:implement", "2026-11-03T05:00:00Z")], {
+              number: 1,
+            }),
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z")], { number: 2 }), // 24 hours
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z")], { number: 3 }), // 48 hours
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-10-29T00:00:00Z")], { number: 4 }), // 24 hours
+          ],
+        }),
+      );
+      expect(summary.cycleTimeMs).toEqual({ thisWeek: 24 * HOUR, lastWeek: 24 * HOUR });
+    });
+
+    it("takes the middle two's mean for an even count, and none in a week with no merged PR", () => {
+      const summary = summaryOf(
+        factsOf({
+          pullRequests: [
+            aMergedPullRequest("2026-11-03T10:00:00Z", { number: 50, ticket: 1 }),
+            aMergedPullRequest("2026-11-04T00:00:00Z", { number: 51, ticket: 2 }),
+          ],
+          tickets: [
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z")], { number: 1 }), // 10 hours
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z")], { number: 2 }), // 24 hours
+          ],
+        }),
+      );
+      expect(summary.cycleTimeMs).toEqual({ thisWeek: 17 * HOUR, lastWeek: null });
+    });
+
+    it("runs Operator wait from the last passing Verdict, read through its marker, to the merge", () => {
+      const verdict = (v: Verdict, at: string, overrides: Partial<CommentFacts> = {}) => aVerdictComment(v, "a".repeat(40), at, overrides);
+      const summary = summaryOf(
+        factsOf({
+          pullRequests: [
+            aMergedPullRequest("2026-11-04T00:00:00Z", {
+              number: 50,
+              comments: [
+                verdict("pass", "2026-11-03T00:00:00Z"),
+                verdict("execution-flaw", "2026-11-03T06:00:00Z"),
+                verdict("pass", "2026-11-03T12:00:00Z"), // the last pass: 12 hours
+                verdict("pass", "2026-11-03T20:00:00Z", { byBot: false, author: "operator" }), // quoting a marker fakes nothing
+                { author: "operator", byBot: false, body: "Merging.", at: "2026-11-03T22:00:00Z" },
+              ],
+            }),
+            aMergedPullRequest("2026-11-05T00:00:00Z", { number: 51 }), // no passing Verdict: left out
+          ],
+        }),
+      );
+      expect(summary.operatorWaitMs).toEqual({ thisWeek: 12 * HOUR, lastWeek: null });
+    });
+  });
+
+  describe("revert rate", () => {
+    // This week's 30-day window runs from 2026-10-09T13:00Z to the week's end,
+    // 2026-11-08T13:00Z; last week's from 2026-10-02T13:00Z to 2026-11-01T13:00Z.
+    const sha = (n: number) => String(n).repeat(40);
+    const merged = (number: number, mergedAt: string) =>
+      aMergedPullRequest(mergedAt, { number, mergeSha: sha(number), title: `Build thing ${number}` });
+    const revertRateOf = (facts: Partial<GitHubFacts>) => {
+      const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary.revertRate;
+    };
+
+    it("counts an agent PR reverted by a default-branch commit with its merge sha's trailer", () => {
+      const rate = revertRateOf({
+        pullRequests: [merged(1, "2026-10-20T00:00:00Z"), merged(2, "2026-10-21T00:00:00Z")],
+        defaultBranchCommits: [{ message: `Revert "Build thing 1"\n\nThis reverts commit ${sha(1)}.`, at: "2026-11-04T00:00:00Z" }],
+      });
+      expect(rate).toEqual({ thisWeek: { reverted: 1, merged: 2 }, lastWeek: { reverted: 0, merged: 2 } });
+    });
+
+    it("counts an agent PR reverted by a merged PR titled Revert and its title", () => {
+      const rate = revertRateOf({
+        pullRequests: [merged(1, "2026-10-20T00:00:00Z"), merged(2, "2026-10-21T00:00:00Z")],
+        mergedPullRequestTitles: [
+          { title: 'Revert "Build thing 2"', mergedAt: "2026-10-25T00:00:00Z" },
+          { title: 'Revert "Something else"', mergedAt: "2026-10-25T00:00:00Z" },
+        ],
+      });
+      expect(rate).toEqual({ thisWeek: { reverted: 1, merged: 2 }, lastWeek: { reverted: 1, merged: 2 } });
+    });
+
+    it("doesn't count a revert outside the 30-day window, or of a PR merged outside it", () => {
+      const rate = revertRateOf({
+        pullRequests: [merged(1, "2026-10-20T00:00:00Z"), merged(2, "2026-10-05T00:00:00Z")],
+        defaultBranchCommits: [
+          { message: `This reverts commit ${sha(1)}.`, at: "2026-11-08T14:00:00Z" }, // after the week
+          { message: `This reverts commit ${sha(2)}.`, at: "2026-10-12T00:00:00Z" }, // of a PR merged before this week's window
+        ],
+      });
+      expect(rate).toEqual({ thisWeek: { reverted: 0, merged: 1 }, lastWeek: { reverted: 1, merged: 2 } });
+    });
+
+    it("counts a PR once however many ways it was reverted, and never a PR closed unmerged", () => {
+      const rate = revertRateOf({
+        pullRequests: [merged(1, "2026-10-20T00:00:00Z"), aMergedPullRequest("2026-10-20T00:00:00Z", { number: 3, mergedAt: null, mergeSha: null })],
+        defaultBranchCommits: [{ message: `This reverts commit ${sha(1)}.`, at: "2026-11-04T00:00:00Z" }],
+        mergedPullRequestTitles: [{ title: 'Revert "Build thing 1"', mergedAt: "2026-11-04T00:00:00Z" }],
+      });
+      expect(rate.thisWeek).toEqual({ reverted: 1, merged: 1 });
+    });
+  });
+
   describe("cost per merged PR", () => {
     it("averages, over the week's merged agent PRs, every Implement, Retry, Step-up and Review record on each Ticket", () => {
       const result = weeklySummary(
@@ -541,7 +770,24 @@ describe("the Weekly summary", () => {
         }),
         aRunRecord({ endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2.25 }),
       ],
-      facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-04T00:00:00Z")] })],
+      facts: [
+        factsOf({
+          pullRequests: [
+            // Dispatched 24 hours before its merge, one Request changes, passed 6 hours before it.
+            aMergedPullRequest("2026-11-04T00:00:00Z", {
+              reviews: [aReview("2026-11-03T12:00:00Z")],
+              comments: [aVerdictComment("pass", "a".repeat(40), "2026-11-03T18:00:00Z")],
+            }),
+            // Last week's: 24 hours, no touch, no passing Verdict, reverted this week.
+            aMergedPullRequest("2026-10-29T00:00:00Z", { number: 49, ticket: 6, mergeSha: "9".repeat(40) }),
+          ],
+          tickets: [
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z")]),
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-10-28T00:00:00Z")], { number: 6 }),
+          ],
+          defaultBranchCommits: [{ message: `This reverts commit ${"9".repeat(40)}.`, at: "2026-11-04T00:00:00Z" }],
+        }),
+      ],
     });
     const rendered = () => {
       const result = weeklySummary(week);
@@ -556,8 +802,12 @@ describe("the Weekly summary", () => {
     it("shows each figure this week and last week, with the change", () => {
       const { body } = rendered();
       expect(body).toContain("| API-equivalent cost | $1.50 | $2.25 | -$0.75 |");
-      expect(body).toContain("| Merged agent PRs | 1 | 0 | +1 |");
-      expect(body).toContain("| Tickets dispatched | 0 | 0 | 0 |");
+      expect(body).toContain("| Merged agent PRs | 1 | 1 | 0 |");
+      expect(body).toContain("| Tickets dispatched | 1 | 1 | 0 |");
+      expect(body).toContain("| Human touches per merged PR | 1.0 | 0.0 | +1.0 |");
+      expect(body).toContain("| Cycle time (median) | 24.0h | 24.0h | 0.0h |");
+      expect(body).toContain("| Operator wait (median) | 6.0h | – | – |");
+      expect(body).toContain("| Revert rate (30 days) | 50% (1 of 2) | 0% (0 of 1) | +50 pts |");
       expect(body).toContain("| Retries | 1 | 0 | +1 |");
       expect(body).toContain("| Step-ups | 1 | 0 | +1 |");
     });
