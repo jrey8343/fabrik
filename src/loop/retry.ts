@@ -11,6 +11,11 @@ import type { Action, KitConfig, PullRequestSnapshot, VerdictRecord } from "./ty
 /** Execution-flaw retries a Ticket gets before the next flaw counts as a Design flaw. */
 export const MAX_RETRIES = 2;
 
+/** Whether this retry Steps up: the last one does, while the first run and earlier retries use the Implementer's model. */
+export function stepsUp(retry: number): boolean {
+  return retry >= MAX_RETRIES;
+}
+
 /**
  * Which retry an Execution flaw calls for, given the Verdicts posted before it:
  * one more than the earlier Execution flaws. Verdicts from a Request-changes
@@ -28,7 +33,7 @@ export function retryAfterFlaw(pullRequest: PullRequestSnapshot): { readonly lin
   const retry = retryNumber(pullRequest.verdicts);
   if (retry > MAX_RETRIES || pullRequest.ticket === null) return null;
   return {
-    line: `Retry ${retry} of ${MAX_RETRIES} starts now${retry === MAX_RETRIES ? ", stepped up" : ""}: the Implementer fixes these findings on the same branch.`,
+    line: `Retry ${retry} of ${MAX_RETRIES} starts now${stepsUp(retry) ? ", stepped up" : ""}: the Implementer fixes these findings on the same branch.`,
     // A fresh agent:implement on the Ticket resumes the PR's Implement run (src/loop/implement.ts). It notifies nobody.
     actions: [{ kind: "add-labels", issue: pullRequest.ticket, labels: [DISPATCH_LABEL] }],
   };
@@ -89,7 +94,7 @@ export function owedRetry(
   if (run?.kind !== "retry") return null;
   const { implement, stepUp } = config.roles;
   // Never a cheaper model, and never a skipped Step-up, whatever the weekly pool says.
-  const { model, effort } = run.retry === MAX_RETRIES ? stepUp : implement;
+  const { model, effort } = stepsUp(run.retry) ? stepUp : implement;
   return {
     kind: "start-agent-run",
     role: "implement",
@@ -99,6 +104,6 @@ export function owedRetry(
     effort,
     timeoutMinutes: implement.timeoutMinutes,
     retry: run.retry,
-    stepUp: run.retry === MAX_RETRIES,
+    stepUp: stepsUp(run.retry),
   };
 }
