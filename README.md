@@ -58,6 +58,10 @@ Then the Operator runs the wizard (`skills/fabrik-setup/wizard.sh`, made with th
 
 Re-running `/fabrik-setup` on a working install changes nothing. On a broken one it repairs only what's missing: a missing label is created, and a missing secret gets a new service account (1Password shows a token only once, so delete the old account by hand).
 
+## Triage
+
+A person's reply on a `needs-info` issue swaps `needs-info` for `needs-triage`, which starts Triage again; a bot's reply does nothing. Deleting the reply doesn't undo the swap: Triage still runs, reads the thread without the reply, and most likely asks its questions again, one more round and one more notification.
+
 ## Design session (async)
 
 Adding `needs-design` to an open issue starts a Design session. Each turn is a fresh run of the Design-session agent job (Opus 5.5, 30 minutes by default, `roles.design` in the Kit config, plus `.fabrik/design.md` when present), one at a time per issue, rebuilding its context from the issue thread, the issue's parent Spec when it has one, and the repo. A turn ends in one of these ways (see [Back to design](#back-to-design) for splitting a Ticket):
