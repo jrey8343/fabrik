@@ -1,7 +1,7 @@
 // The Weekly summary (ADR-0009): from the store's Run records, a GitHub facts
 // snapshot per Product repo, the Operator and now, the one issue filed for the
 // week that just ended, or skip in a quiet week. Pure, no I/O, no model call.
-import { DISPATCH_LABEL } from "../loop/labels.ts";
+import { DISPATCH_LABEL, READY_FOR_AGENT, READY_FOR_HUMAN } from "../loop/labels.ts";
 import type { RateLimitReading, RunRecord } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
@@ -17,6 +17,13 @@ export interface LabelEvent {
 export interface TicketFacts {
   readonly number: number;
   readonly labelEvents: readonly LabelEvent[];
+}
+
+/** A Spec, its label timeline and the Tickets that build it (its sub-issues). */
+export interface SpecFacts {
+  readonly number: number;
+  readonly labelEvents: readonly LabelEvent[];
+  readonly tickets: readonly number[];
 }
 
 /** An agent PR merged or closed in the last 30 days. */
@@ -36,6 +43,7 @@ export interface GitHubFacts {
   readonly repo: string;
   readonly pullRequests: readonly AgentPullRequestFacts[];
   readonly tickets: readonly TicketFacts[];
+  readonly specs: readonly SpecFacts[];
 }
 
 export interface WeeklySummaryInput {
@@ -76,6 +84,13 @@ export interface WeeklySummary {
    * averaged over the week's merged PRs.
    */
   readonly costPerMergedPullRequest: WeekOverWeek<CostFigure>;
+  /**
+   * For each Spec that left design in the week (the App gave it its ready
+   * label), the Triage and Design records on its issue plus the Design turns
+   * on its Tickets sent back to design, whatever week they ran in, averaged
+   * over those Specs.
+   */
+  readonly costPerSpec: WeekOverWeek<CostFigure>;
   /** The latest weekly-limit reading across the week's records, or null if none read one. */
   readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
   readonly counts: {
@@ -115,6 +130,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     cost: change("cost"),
     unknownCost: change("unknownCost"),
     costPerMergedPullRequest: change("costPerMergedPullRequest"),
+    costPerSpec: change("costPerSpec"),
     weeklyLimit: change("weeklyLimit"),
     counts: {
       mergedPullRequests: change("mergedPullRequests"),
@@ -133,6 +149,7 @@ interface WeekMetrics {
   readonly cost: number;
   readonly unknownCost: number;
   readonly costPerMergedPullRequest: CostFigure;
+  readonly costPerSpec: CostFigure;
   readonly weeklyLimit: RateLimitReading | null;
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
@@ -151,6 +168,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     cost: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
     unknownCost: records.filter((record) => record.totalCostUsd === null).length,
     costPerMergedPullRequest: costPerMergedPullRequestOf(week, input),
+    costPerSpec: costPerSpecOf(week, input),
     weeklyLimit: records.findLast((record) => record.rateLimit !== null)?.rateLimit ?? null,
     mergedPullRequests: pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt)).length,
     ticketsDispatched: tickets.filter((ticket) => {
@@ -180,8 +198,46 @@ function costPerMergedPullRequestOf(week: Week, input: WeeklySummaryInput): Cost
         ),
       ),
   );
-  const total = costOf(perPullRequest.flat());
-  return { usd: perPullRequest.length === 0 ? null : total.usd / perPullRequest.length, unknownCost: total.unknownCost };
+  return averageCostOf(perPullRequest);
+}
+
+function costPerSpecOf(week: Week, input: WeeklySummaryInput): CostFigure {
+  const ended = endedBy(week, input.records);
+  const perSpec = input.facts.flatMap((facts) =>
+    facts.specs
+      .filter((spec) => leftDesignIn(week, spec))
+      .map((spec) =>
+        ended.filter(
+          (record) =>
+            record.repo === facts.repo &&
+            ((record.issue === spec.number && (record.role === "triage" || record.role === "design")) ||
+              (spec.tickets.includes(record.issue) && record.role === "design")),
+        ),
+      ),
+  );
+  return averageCostOf(perSpec);
+}
+
+/** Whether the App gave the Spec its ready label, ending its Design session, in the week. */
+function leftDesignIn(week: Week, spec: SpecFacts): boolean {
+  return spec.labelEvents.some(
+    (event) =>
+      (event.label === READY_FOR_AGENT || event.label === READY_FOR_HUMAN) &&
+      event.action === "labeled" &&
+      byTheApp(event) &&
+      within(week, event.at),
+  );
+}
+
+/** Whether a GitHub App made the label event: its login is the App's slug with `[bot]`. */
+function byTheApp(event: LabelEvent): boolean {
+  return event.actor.endsWith("[bot]");
+}
+
+/** Each group's summed cost, averaged over the groups, or null for no groups. */
+function averageCostOf(groups: readonly (readonly RunRecord[])[]): CostFigure {
+  const total = costOf(groups.flat());
+  return { usd: groups.length === 0 ? null : total.usd / groups.length, unknownCost: total.unknownCost };
 }
 
 /** The records that ended before the week did, whatever week they ended in. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aLabelAdded, aMergedPullRequest, aRunRecord, aTicketTimeline, factsOf } from "../__fixtures__/weeklySummary.ts";
+import { aLabelAdded, aMergedPullRequest, aRunRecord, aSpec, aTicketTimeline, factsOf } from "../__fixtures__/weeklySummary.ts";
 import { type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
@@ -207,6 +207,75 @@ describe("the Weekly summary", () => {
         kind: "summary",
         summary: { costPerMergedPullRequest: { thisWeek: { usd: 1, unknownCost: 1 } } },
       });
+    });
+  });
+
+  describe("cost per Spec", () => {
+    it("averages, over the Specs that left design in the week, their Triage and Design records", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 3, role: "triage", pullRequest: null, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 0.5 }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1.5 }),
+            aRunRecord({ issue: 4, role: "design", pullRequest: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ issue: 5, role: "design", pullRequest: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 100 }), // still in design
+          ],
+          facts: [
+            factsOf({
+              specs: [
+                aSpec([aLabelAdded("ready-for-agent", "2026-11-03T06:00:00Z")], { number: 3, tickets: [] }),
+                aSpec([aLabelAdded("ready-for-human", "2026-11-05T00:00:00Z")], { number: 4, tickets: [] }),
+                aSpec([aLabelAdded("needs-design", "2026-11-03T00:00:00Z")], { number: 5, tickets: [] }),
+              ],
+            }),
+          ],
+        }),
+      );
+      // Spec 3: $3, Spec 4: $1.
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { costPerSpec: { thisWeek: { usd: 2, unknownCost: 0 }, lastWeek: { usd: null, unknownCost: 0 } } },
+      });
+    });
+
+    it("counts Design turns on its Tickets sent back to design, but not their build runs", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ issue: 7, role: "implement", endedAt: "2026-11-03T06:00:00Z", totalCostUsd: 10 }),
+            aRunRecord({ issue: 7, role: "design", pullRequest: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 0.75 }),
+          ],
+          facts: [factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-05T00:00:00Z")], { number: 3, tickets: [7] })] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerSpec: { thisWeek: { usd: 1.75 } } } });
+    });
+
+    it("counts only a Spec the App moved out of design, not one the Operator labelled", () => {
+      const result = weeklySummary(
+        input({
+          records: [aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T00:00:00Z" })],
+          facts: [
+            factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-04T00:00:00Z", { actor: "operator" })], { number: 3 })] }),
+          ],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerSpec: { thisWeek: { usd: null } } } });
+    });
+
+    it("leaves a run whose cost basis is unknown out of the sum, and counts it", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 3, role: "triage", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: null }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 2 }),
+          ],
+          facts: [factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-05T00:00:00Z")], { number: 3 })] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerSpec: { thisWeek: { usd: 2, unknownCost: 1 } } } });
     });
   });
 
