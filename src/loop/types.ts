@@ -245,7 +245,7 @@ export interface IssueSnapshot {
   readonly number: number;
   readonly open: boolean;
   readonly author: string;
-  /** Whether the Fabrik App (a bot) opened it. Only the App's bodies are read for an Audit's markers. */
+  /** Whether it was opened by a bot (the Fabrik App), as an agent PR is. Only a bot's body is read for an Audit's markers. */
   readonly byApp: boolean;
   /** Its Markdown body as it stands, whose marker lines a Design session's rewrite carries forward (src/loop/carriedLines.ts). */
   readonly body: string;
@@ -320,6 +320,13 @@ export type Verdict = "pass" | "execution-flaw" | "design-flaw";
 export type Strength = "strong" | "worth-exploring" | "speculative";
 
 export const STRENGTHS: readonly Strength[] = ["strong", "worth-exploring", "speculative"];
+
+/** Each Strength as people read it: an Audit card's badge, and its name in the Weekly summary. */
+export const STRENGTH_LABELS: Readonly<Record<Strength, string>> = {
+  strong: "Strong",
+  "worth-exploring": "Worth exploring",
+  speculative: "Speculative",
+};
 
 /** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
 export interface VerdictRecord {
@@ -439,12 +446,14 @@ export interface AuditSnapshot {
 /** A `fabrik:audit` issue, open or closed, as the adapter read it (src/loop/audit.ts). */
 export interface AuditIssueSnapshot {
   readonly number: number;
+  /** Its title, which an Auditor run's inputs name each closed Audit by (src/agent/inputs.ts). */
+  readonly title: string;
   readonly open: boolean;
   /** Why it was last closed, or reopened, as GitHub records it; null when it never was. */
   readonly stateReason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
   /** When it was opened, as an ISO 8601 time. */
   readonly createdAt: string;
-  /** Whether the Fabrik App opened it. Only the App's bodies are read for markers. */
+  /** Whether it was opened by a bot (the Fabrik App), as an agent PR is. Only a bot's body is read for markers. */
   readonly byApp: boolean;
   readonly body: string;
 }

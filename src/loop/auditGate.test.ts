@@ -9,12 +9,8 @@ import {
   repoSnapshot,
   snapshotOf,
 } from "../__fixtures__/snapshots.ts";
-import { scheduledTickWithAuditGate } from "./auditGate.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AuditIssueSnapshot, KitConfig, KitIssueSnapshot, Plan } from "./types.ts";
-
-// The audit gate's own cases run the tick's plan without the Design queue
-// check the scheduled-tick rule adds after it, so each says why it opens nothing.
 
 /** The default branch's head on these ticks. */
 const HEAD = "c0ffee5".padEnd(40, "0");
@@ -22,7 +18,7 @@ const HEAD = "c0ffee5".padEnd(40, "0");
 /** Sunday 2026-11-08 04:00 UTC: on the default audit.day, in the week of Monday 2026-11-02. */
 const SUNDAY = "2026-11-08T04:00:00.000Z";
 
-/** The tick's plan, with this default branch head, these `fabrik:audit` issues and these open Kit-owned issues. */
+/** The scheduled tick's plan, with this default branch head, these `fabrik:audit` issues and these open Kit-owned issues. */
 function tick(
   now: string,
   {
@@ -32,8 +28,11 @@ function tick(
   }: { head?: string | null; issues?: readonly AuditIssueSnapshot[]; kitIssues?: readonly KitIssueSnapshot[] } = {},
   config: KitConfig = kitConfig(),
 ): Plan {
-  return scheduledTickWithAuditGate(now, repoSnapshot({ kitIssues, audit: { head, issues } }), config);
+  return planFor({ kind: "scheduled-tick", now }, repoSnapshot({ kitIssues, audit: { head, issues } }), config);
 }
+
+/** A tick that opens no Audit and closes or posts nothing: it only asks for the Design queue check every tick ends with. */
+const OPENS_NOTHING: Plan = { kind: "act", actions: [{ kind: "check-design-queue" }] };
 
 /** The Kit's open weekly-limit issue, for a limit that resets at `resetsAt`. */
 function weeklyLimitIssue(resetsAt: string): KitIssueSnapshot {
@@ -103,8 +102,8 @@ describe("The audit gate opens a pending Audit", () => {
     const newest = anAuditIssue({ number: 90, createdAt: "2026-11-01T00:05:00Z", body: auditBody(HEAD) });
     const older = anAuditIssue({ number: 80, createdAt: "2026-10-25T00:05:00Z", body: auditBody(AUDITED_SHA) });
 
-    expect(opened(tick(SUNDAY, { issues: [newest, older] }))).toEqual([]);
-    expect(opened(tick(SUNDAY, { issues: [older, newest] }))).toEqual([]);
+    expect(tick(SUNDAY, { issues: [newest, older] })).toEqual(OPENS_NOTHING);
+    expect(tick(SUNDAY, { issues: [older, newest] })).toEqual(OPENS_NOTHING);
   });
 
   it("ignoring a fabrik:audit issue a person opened, which neither stops the tick's Audit nor stands in for one", () => {
@@ -122,39 +121,29 @@ describe("The audit gate opens a pending Audit", () => {
 });
 
 describe("The audit gate opens nothing", () => {
-  it("when audit.day is null, which turns the Audit off", () => {
-    const plan = tick(SUNDAY, {}, kitConfig({ audit: { day: null } }));
-
-    expect(opened(plan)).toEqual([]);
+  it("when audit.day is null, which turns the Audit off, so the tick does only what it did before the Auditor", () => {
+    expect(tick(SUNDAY, {}, kitConfig({ audit: { day: null } }))).toEqual(OPENS_NOTHING);
   });
 
   it("before 00:00 UTC on audit.day this week", () => {
-    const plan = tick("2026-11-07T23:59:00.000Z");
-
-    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("The Audit is due from 2026-11-08 00:00 UTC") });
+    expect(tick("2026-11-07T23:59:00.000Z")).toEqual(OPENS_NOTHING);
   });
 
   it("when an Audit already ran this week, even one the Operator has closed and with the branch moved on since", () => {
     const thisWeek = anAuditIssue({ number: 95, createdAt: "2026-11-08T00:05:00Z" });
 
-    const plan = tick(SUNDAY, { issues: [anAuditIssue(), thisWeek] });
-
-    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("#95 already audited this week") });
+    expect(tick(SUNDAY, { issues: [anAuditIssue(), thisWeek] })).toEqual(OPENS_NOTHING);
   });
 
   it.each([
     ["still pending on its run", auditBody(AUDITED_SHA, "pending")],
     ["filled and not yet closed by the Operator", auditBody(AUDITED_SHA, "filled")],
   ])("when last week's Audit is open, %s", (_, body) => {
-    const plan = tick(SUNDAY, { issues: [anAuditIssue({ number: 90, open: true, stateReason: null, body })] });
-
-    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("#90 is still open") });
+    expect(tick(SUNDAY, { issues: [anAuditIssue({ number: 90, open: true, stateReason: null, body })] })).toEqual(OPENS_NOTHING);
   });
 
   it("while the weekly-limit issue is open, since the Auditor's run would stall on the limit", () => {
-    const plan = tick(SUNDAY, { kitIssues: [weeklyLimitIssue("2026-11-09T04:00:00.000Z")] });
-
-    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("#41") });
+    expect(tick(SUNDAY, { kitIssues: [weeklyLimitIssue("2026-11-09T04:00:00.000Z")] })).toEqual(OPENS_NOTHING);
   });
 
   it("when two Audits have already failed this week, until next week", () => {
@@ -165,11 +154,11 @@ describe("The audit gate opens nothing", () => {
       issues: [anAuditIssue(), failed(95, "2026-11-08T00:05:00Z"), failed(96, "2026-11-08T01:05:00Z")],
     });
 
-    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("#95 and #96 failed this week") });
+    expect(plan).toEqual(OPENS_NOTHING);
   });
 
   it("when the default branch has no commits yet", () => {
-    expect(tick(SUNDAY, { head: null })).toEqual({ kind: "nothing", reason: expect.stringContaining("no commits") });
+    expect(tick(SUNDAY, { head: null })).toEqual(OPENS_NOTHING);
   });
 
   it("when the default branch hasn't moved since the last Audit's commit", () => {
@@ -177,7 +166,7 @@ describe("The audit gate opens nothing", () => {
 
     const plan = tick(SUNDAY, { head: AUDITED_SHA, issues: [older, anAuditIssue({ number: 90 })] });
 
-    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("hasn't moved since #90") });
+    expect(plan).toEqual(OPENS_NOTHING);
   });
 });
 
@@ -192,9 +181,7 @@ describe("The audit gate's week, Monday to Monday in UTC", () => {
 
   it("waits for 00:00 UTC, whatever offset the tick's time is written in", () => {
     // 2026-11-07 22:30 UTC, a Saturday, though it's Sunday in UTC+11.
-    const plan = tick("2026-11-08T09:30:00+11:00");
-
-    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("2026-11-08 00:00 UTC") });
+    expect(tick("2026-11-08T09:30:00+11:00")).toEqual(OPENS_NOTHING);
   });
 
   it("starts the week at Monday 00:00 UTC: an Audit opened late on Sunday was last week's", () => {
@@ -206,9 +193,7 @@ describe("The audit gate's week, Monday to Monday in UTC", () => {
   });
 
   it("counts an Audit opened at Monday 00:00 UTC as this week's", () => {
-    const plan = tick(SUNDAY, { issues: [anAuditIssue({ number: 95, createdAt: "2026-11-02T00:00:00Z" })] });
-
-    expect(opened(plan)).toEqual([]);
+    expect(tick(SUNDAY, { issues: [anAuditIssue({ number: 95, createdAt: "2026-11-02T00:00:00Z" })] })).toEqual(OPENS_NOTHING);
   });
 
   it("still opens later in the week, when the day's ticks opened nothing", () => {
@@ -217,7 +202,7 @@ describe("The audit gate's week, Monday to Monday in UTC", () => {
 });
 
 describe("The tick's other rules", () => {
-  it("still closes the weekly-limit issue after its reset, alongside opening the Audit the limit held back", () => {
+  it("still close the weekly-limit issue after its reset, alongside opening the Audit the limit held back, then ask for a Design queue check", () => {
     const plan = tick(SUNDAY, { kitIssues: [weeklyLimitIssue("2026-11-08T03:00:00.000Z")] });
 
     expect(plan).toEqual({
@@ -225,24 +210,26 @@ describe("The tick's other rules", () => {
       actions: [
         { kind: "comment", issue: 41, body: expect.stringMatching(/^The weekly usage limit reset at 2026-11-08 03:00 UTC/) },
         { kind: "close", issue: 41, reason: "completed" },
-        expect.objectContaining({ kind: "open-issue", title: "Audit: week of 2026-11-02" }),
+        expect.objectContaining({ kind: "open-issue", title: "Audit: week of 2026-11-02", labels: ["fabrik:audit"], assignees: [] }),
+        { kind: "check-design-queue" },
       ],
     });
+    expect(notificationsOf(plan)).toEqual([]);
   });
 
-  it("still closes the weekly-limit issue when no Audit is due", () => {
+  it("still close the weekly-limit issue when no Audit is due", () => {
     const plan = tick("2026-11-07T04:00:00.000Z", { kitIssues: [weeklyLimitIssue("2026-11-07T03:00:00.000Z")] });
 
     expect(plan).toEqual({
       kind: "act",
-      actions: [expect.objectContaining({ kind: "comment", issue: 41 }), { kind: "close", issue: 41, reason: "completed" }],
+      actions: [expect.objectContaining({ kind: "comment", issue: 41 }), { kind: "close", issue: 41, reason: "completed" }, { kind: "check-design-queue" }],
     });
   });
 });
 
 describe("A tick's snapshot without the audit slice", () => {
   it("fails rather than guess, and changes nothing", () => {
-    const plan = scheduledTickWithAuditGate(SUNDAY, repoSnapshot(), kitConfig());
+    const plan = planFor({ kind: "scheduled-tick", now: SUNDAY }, repoSnapshot(), kitConfig());
 
     expect(plan).toEqual({ kind: "fail", failure: "infrastructure", reason: expect.stringContaining("audit") });
   });
@@ -256,35 +243,5 @@ describe("The pending Audit's issue", () => {
     const plan = planFor({ kind: "issue-opened", issue: 98 }, snapshotOf(issue), kitConfig());
 
     expect(plan).toEqual({ kind: "act", actions: [expect.objectContaining({ kind: "start-agent-run", role: "audit", issue: 98 })] });
-  });
-});
-
-describe("The scheduled-tick rule", () => {
-  it("opens the pending Audit when one is due, alongside closing the weekly-limit issue, then asks for a Design queue check", () => {
-    const snapshot = repoSnapshot({
-      kitIssues: [weeklyLimitIssue("2026-11-08T03:00:00.000Z")],
-      audit: { head: HEAD, issues: [] },
-    });
-
-    const plan = planFor({ kind: "scheduled-tick", now: SUNDAY }, snapshot, kitConfig());
-
-    expect(plan).toEqual({
-      kind: "act",
-      actions: [
-        expect.objectContaining({ kind: "comment", issue: 41 }),
-        { kind: "close", issue: 41, reason: "completed" },
-        expect.objectContaining({ kind: "open-issue", title: "Audit: week of 2026-11-02", labels: ["fabrik:audit"], assignees: [] }),
-        { kind: "check-design-queue" },
-      ],
-    });
-    expect(notificationsOf(plan)).toEqual([]);
-  });
-
-  it("opens no Audit with audit.day null, and does only what it did before the Auditor", () => {
-    const snapshot = repoSnapshot({ audit: { head: HEAD, issues: [] } });
-
-    const plan = planFor({ kind: "scheduled-tick", now: SUNDAY }, snapshot, kitConfig({ audit: { day: null } }));
-
-    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
   });
 });

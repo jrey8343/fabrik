@@ -2,13 +2,14 @@
 // the pending Audit. The Kit renders every word of layout; the Auditor wrote
 // only the candidates' text. The Audit stays silent: no state label, no
 // assignee, no mention.
+import { shortSha } from "../skills/lock.ts";
 import { isPendingAudit, TOP_RECOMMENDATION_HEADING } from "./audit.ts";
 import { failAudit } from "./auditFailure.ts";
 import { type AuditCandidate, type AuditOutput, parseAuditOutput } from "./auditOutput.ts";
 import { newIssueUrl } from "./followUps.ts";
 import { auditMarker, auditMarksIn, escapeMarker, fromAuditLine } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
-import type { AuditWindow, IssueContext, LoopEvent, NamedPullRequestSnapshot, Plan, Strength } from "./types.ts";
+import { type AuditWindow, type IssueContext, type LoopEvent, type NamedPullRequestSnapshot, type Plan, STRENGTH_LABELS, STRENGTHS } from "./types.ts";
 
 type AuditFinished = Extract<LoopEvent, { kind: "audit-run-finished" }>;
 
@@ -51,33 +52,42 @@ export function landAudit(event: AuditFinished, context: IssueContext, named: re
   };
 }
 
-/** The Auditor's output with an @-mention in none of its text, Mermaid source and paths included. */
+/**
+ * The Auditor's output with an @-mention in none of its prose. GitHub
+ * notifies nobody from code, so its file paths, each set in a code span, and
+ * its Mermaid source, which the Kit fences and which holds no fence of its own
+ * (src/loop/auditOutput.ts), stay as written: a path such as
+ * `packages/@scope/x` stays intact.
+ */
 function silenced({ candidates, topRecommendation }: AuditOutput): AuditOutput {
   return {
     candidates: candidates.map((candidate) => ({
       ...candidate,
       title: withoutMentions(candidate.title),
-      files: candidate.files.map(withoutMentions),
+      files: candidate.files.map(pathInCodeSpan),
       problem: withoutMentions(candidate.problem),
       solution: withoutMentions(candidate.solution),
       benefits: withoutMentions(candidate.benefits),
-      before: withoutMentions(candidate.before),
-      after: withoutMentions(candidate.after),
     })),
     topRecommendation: topRecommendation === null ? null : withoutMentions(topRecommendation),
   };
 }
 
+/** A path as written, unless a backtick or a line break in it could break out of its code span: then it mentions nobody either. */
+function pathInCodeSpan(path: string): string {
+  return /[`\r\n]/.test(path) ? withoutMentions(path) : path;
+}
+
 /** A clean Audit: one line, then its audit marker. */
 function cleanBody(commit: string, window: AuditWindow): string {
   return [
-    `The Auditor read the default branch up to \`${short(commit)}\`, ${lookedFirstAt(window)}, and found nothing above Speculative: the repo is clean.`,
+    `The Auditor read the default branch up to \`${shortSha(commit)}\`, ${lookedFirstAt(window)}, and found nothing above Speculative: the repo is clean.`,
     "",
     auditMarker(commit),
   ].join("\n");
 }
 
-/** A filled Audit: what it read and what to do, a card per candidate, the Top recommendation, then its audit marker. */
+/** A filled Audit: what it read and what to do, a card per candidate Strongest first, the Top recommendation, then its audit marker. */
 function filledBody(
   { candidates, topRecommendation }: AuditOutput,
   named: readonly NamedPullRequestSnapshot[],
@@ -85,8 +95,8 @@ function filledBody(
   { issue: audit, window, repoUrl }: AuditFinished,
 ): string {
   return [
-    `The Auditor read the default branch up to \`${short(commit)}\`, ${lookedFirstAt(window)}. File the candidates you want, comment here on any you reject so the next Audit knows, and close this Audit when you're done.`,
-    ...candidates.flatMap((candidate) => ["", ...card(candidate, keptPullRequests(candidate, named), repoUrl, audit)]),
+    `The Auditor read the default branch up to \`${shortSha(commit)}\`, ${lookedFirstAt(window)}. File the candidates you want, comment here on any you reject so the next Audit knows, and close this Audit when you're done.`,
+    ...strongestFirst(candidates).flatMap((candidate) => ["", ...card(candidate, keptPullRequests(candidate, named), repoUrl, audit)]),
     "",
     TOP_RECOMMENDATION_HEADING,
     "",
@@ -96,11 +106,10 @@ function filledBody(
   ].join("\n");
 }
 
-const BADGES: Readonly<Record<Strength, string>> = {
-  strong: "Strong",
-  "worth-exploring": "Worth exploring",
-  speculative: "Speculative",
-};
+/** The candidates Strongest first, keeping the Auditor's order among those of one Strength. */
+function strongestFirst(candidates: readonly AuditCandidate[]): AuditCandidate[] {
+  return candidates.toSorted((a, b) => STRENGTHS.indexOf(a.strength) - STRENGTHS.indexOf(b.strength));
+}
 
 /**
  * The PRs a candidate traces to that the Kit can vouch for: each merged agent
@@ -117,7 +126,7 @@ function card(candidate: AuditCandidate, introducedBy: readonly number[], repoUr
   return [
     `## ${candidate.title}`,
     "",
-    `\`${BADGES[candidate.strength]}\``,
+    `\`${STRENGTH_LABELS[candidate.strength]}\``,
     "",
     ...described(candidate),
     "",
@@ -156,7 +165,7 @@ function described(candidate: AuditCandidate): string[] {
  * session's rewrite carries both lines forward (src/loop/carriedLines.ts).
  */
 function openAsIssue(candidate: AuditCandidate, introducedBy: readonly number[], repoUrl: string, audit: number): string {
-  const body = [...described(candidate), "", `**Strength:** ${BADGES[candidate.strength]}`].join("\n");
+  const body = [...described(candidate), "", `**Strength:** ${STRENGTH_LABELS[candidate.strength]}`].join("\n");
   const trailer = [fromAuditLine(audit), ...(introducedBy.length === 0 ? [] : [escapeMarker(candidate.strength, introducedBy)])];
   return newIssueUrl(repoUrl, candidate.title, body, trailer.join("\n"));
 }
@@ -168,12 +177,8 @@ function mermaid(source: string): string[] {
 function lookedFirstAt(window: AuditWindow): string {
   switch (window.kind) {
     case "since-audit":
-      return `looking first at what changed since Audit #${window.audit} at \`${short(window.commit)}\``;
+      return `looking first at what changed since Audit #${window.audit} at \`${shortSha(window.commit)}\``;
     case "last-days":
       return `looking first at the last ${window.days} days`;
   }
-}
-
-function short(sha: string): string {
-  return sha.slice(0, 7);
 }

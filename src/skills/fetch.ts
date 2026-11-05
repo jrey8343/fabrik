@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { readIfPresent, readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { asksForExtraSkills, KIT_CONFIG_PATH, type Phase, PHASES, picksIn, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
+import { AGENT_ROLES, type AgentRole } from "../loop/types.ts";
 import { checkExtraSkills } from "./extra.ts";
 import { INSTALL_RECORD, type InstallRecord, parseInstallRecord } from "./installRecord.ts";
 import { PLUGIN_MANIFEST_PATH, readSkillsLock, SKILLS_LOCK_PATH, shortSha, skillFolders } from "./lock.ts";
@@ -27,7 +28,7 @@ const OLD_SKILLS_MARKER = ".fabrik-skills-sha";
  * session at the wheel). The Auditor takes none, so an Auditor run gets the
  * Base skills alone (ADR-0008).
  */
-export type SkillsToInstall = Phase | "audit" | "every";
+export type SkillsToInstall = AgentRole | "every";
 
 /** The roles a fetch installs the picks of. */
 function pickingRoles(install: SkillsToInstall): readonly Phase[] {
@@ -245,9 +246,8 @@ export async function readInstallRecord(productDir: string): Promise<InstallReco
 
 if (import.meta.main) {
   const [productDir, role] = process.argv.slice(2);
-  const roles: readonly string[] = [...PHASES, "audit"];
-  if (productDir === undefined || (role !== undefined && !roles.includes(role))) {
-    console.error(`Usage: node src/skills/fetch.ts <product checkout> [${roles.join("|")}]`);
+  if (productDir === undefined || (role !== undefined && !(AGENT_ROLES as readonly string[]).includes(role))) {
+    console.error(`Usage: node src/skills/fetch.ts <product checkout> [${AGENT_ROLES.join("|")}]`);
     process.exit(2);
   }
   const kitDir = resolve(import.meta.dirname, "..", "..");

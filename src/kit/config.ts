@@ -1,5 +1,6 @@
 // The Kit config: loaded from a Product repo's .fabrik/ folder, with every v1
 // default filled in, and validated at the start of every run. Pure, no I/O.
+import { AGENT_ROLES, type AgentRole as AgentRoleName } from "../loop/types.ts";
 import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
 
 export interface AgentRole {
@@ -75,12 +76,12 @@ export const PHASES: readonly Phase[] = ["triage", "design", "implement", "revie
 
 /**
  * The roles a Product repo can give its own instructions in .fabrik/<role>.md:
- * every Phase, and the Auditor, which takes no Extra skills (ADR-0008) and so
- * is no Phase.
+ * every AFK role, so every Phase and the Auditor, which takes no Extra skills
+ * (ADR-0008) and so is no Phase.
  */
-export type InstructedRole = Phase | "audit";
+export type InstructedRole = AgentRoleName;
 
-export const INSTRUCTED_ROLES: readonly InstructedRole[] = [...PHASES, "audit"];
+export const INSTRUCTED_ROLES: readonly InstructedRole[] = AGENT_ROLES;
 
 /** Every Extra skill the given roles pick, each once however many of them pick it. */
 export function picksIn(config: KitConfig, roles: readonly Phase[] = PHASES): readonly ExtraSkill[] {

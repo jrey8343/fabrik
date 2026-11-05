@@ -1,6 +1,9 @@
-// The markers the Kit's comments open with. The core writes them; the adapter
-// reads a thread's comments back through them into the snapshot
-// (src/github/threads.ts), so the Loop's history lives on GitHub alone.
+// The markers the Kit's comments open with, and the marker lines it puts in
+// issue bodies: an Audit's own, and the `From audit #n` line and escape marker
+// an Audit candidate's filed issue ends with (#150). The core writes them; the
+// adapter reads a thread's comments back through them into the snapshot
+// (src/github/threads.ts), and the body lines are read from the issues
+// themselves, so the Loop's history lives on GitHub alone.
 import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
@@ -55,6 +58,13 @@ export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) 
  * session's rewrite carries it forward, and the Operator may paste one by hand.
  */
 const ESCAPE_MARKER = /<!--\s*fabrik:escape(\s[^>]*?)?\s*-->/;
+
+/**
+ * A line that is an escape marker and nothing else, matched against the line
+ * with its outer whitespace trimmed: the line a Design session's rewrite
+ * carries forward (src/loop/carriedLines.ts).
+ */
+export const ESCAPE_MARKER_LINE = new RegExp(`^${ESCAPE_MARKER.source}$`);
 
 /** What an escape marker says, read as written. */
 export interface EscapeMarker {

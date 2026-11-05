@@ -800,6 +800,8 @@ describe("the Weekly summary", () => {
             repo: "owner/product",
             number: 80,
             url: "https://github.com/owner/product/issues/80",
+            title: "Make the cart module deeper",
+            body: "From audit #70\n<!-- fabrik:escape strong #50 -->",
             strength: "strong",
             pullRequests: [
               {
@@ -817,6 +819,15 @@ describe("the Weekly summary", () => {
             ],
           },
         ]);
+      });
+
+      it("carries each escape's candidate, as the Operator filed it: its issue's title and body", () => {
+        const body = "**Files:** `src/parser.ts`\n\n**Problem:** The parser leaks.\n\nFrom audit #70\n<!-- fabrik:escape strong #50 -->";
+        const escapes = escapesOf([aRunRecord()], {
+          pullRequests: [merged(50, 3)],
+          escapeMarkerIssues: [anEscapeMarkerIssue(body, { title: "Split the parser", createdAt: daysBeforeTheWeekEnds(2) })],
+        });
+        expect(escapes).toMatchObject([{ number: 80, title: "Split the parser", body }]);
       });
 
       it("flags no Operator pushes on a PR only the Fabrik App pushed to, and names no Review when the store holds no passing one", () => {

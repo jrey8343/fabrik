@@ -6,7 +6,7 @@ import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_ROUND_MARKER, escapeMarkerIn } from "../loop/markers.ts";
-import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTHS, type Strength } from "../loop/types.ts";
+import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { type RateLimitReading, type RunRecord, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
@@ -131,6 +131,7 @@ export interface OpenPullRequestFacts {
  */
 export interface EscapeMarkerIssueFacts {
   readonly number: number;
+  readonly title: string;
   /** Who opened it: only the Operator's issues count. */
   readonly author: string;
   /** ISO 8601. */
@@ -340,6 +341,9 @@ export interface EscapeThisWeek {
   /** The escape's issue. */
   readonly number: number;
   readonly url: string;
+  /** The issue's title and body as they stand: the candidate the Operator filed, or what a Design session rewrote it into. */
+  readonly title: string;
+  readonly body: string;
   /** Its marker's Strength, or null when it isn't one the Auditor gives. */
   readonly strength: Strength | null;
   /** The agent PRs merged in the 90 days to the week's end that its marker names. */
@@ -604,6 +608,8 @@ function escapesThisWeekOf(week: Week, { facts, records, operator }: WeeklySumma
         repo,
         number: issue.number,
         url: `https://github.com/${repo}/issues/${issue.number}`,
+        title: issue.title,
+        body: issue.body,
         strength,
         pullRequests: pullRequests.map((pullRequest) => {
           const passed = onRepo.findLast((record) => record.role === "review" && record.pullRequest === pullRequest.number && record.verdict === "pass");
@@ -1049,7 +1055,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
 
 /** The escapes opened in the 90 days by Strength, naming those with no known Strength only when there are some. */
 function escapesByStrengthLine(counts: EscapesByStrength): string {
-  const known = [`${counts.strong} Strong`, `${counts["worth-exploring"]} Worth exploring`, `${counts.speculative} Speculative`];
+  const known = STRENGTHS.map((strength) => `${counts[strength]} ${STRENGTH_LABELS[strength]}`);
   const all = counts.none === 0 ? known : [...known, `${counts.none} with no known Strength`];
   return `Architectural escapes by Strength (90 days): ${all.join(", ")}.`;
 }

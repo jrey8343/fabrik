@@ -21,7 +21,7 @@ import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest
 import { AUDIT_LABEL } from "../loop/labels.ts";
 import { escapeMarkerIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
-import type { GitHub, Repo } from "./client.ts";
+import { type GitHub, pagesOf, type Repo } from "./client.ts";
 import { gatherDesignQueueSlice } from "./snapshot.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -37,12 +37,12 @@ const WINDOW_MS = 37 * DAY_MS;
  * week before, so last week's 90-day escape window is as whole as this week's.
  * Revert rate reads its own 30 days of them.
  */
-const ESCAPE_WINDOW_MS = 97 * DAY_MS;
+const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 
 /** The GitHub facts the Weekly summary reads of one Product repo, as of `now`, with the Operator's login. */
 export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
-  const escapeSince = new Date(now - ESCAPE_WINDOW_MS).toISOString();
+  const escapeSince = new Date(now - ESCAPE_WINDOWS_REACH_MS).toISOString();
   const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, escapeMarkerIssues, openAudits] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
@@ -163,7 +163,7 @@ const ISSUES_OPENED_BY_QUERY = `
     repository(owner: $owner, name: $name) {
       issues(first: 25, after: $after, filterBy: { createdBy: $operator }, orderBy: { field: CREATED_AT, direction: DESC }) {
         ${PAGE_INFO}
-        nodes { number createdAt state body author ${ACTOR} }
+        nodes { number title createdAt state body author ${ACTOR} }
       }
     }
   }
@@ -261,6 +261,7 @@ interface RawIssue {
 
 interface RawOpenedIssue {
   number: number;
+  title: string;
   createdAt: string;
   state: "OPEN" | "CLOSED";
   body: string;
@@ -277,31 +278,6 @@ interface RawAudit {
 interface RawCommit {
   message: string;
   committedDate: string;
-}
-
-interface Page<T> {
-  pageInfo: { hasNextPage: boolean; endCursor: string | null };
-  nodes: T[];
-}
-
-/** Every node of a paged connection, or only until `enough` says the rest are too old. */
-async function pagesOf<T>(
-  github: Pick<GitHub, "graphql">,
-  query: string,
-  repo: Repo,
-  variables: Record<string, unknown>,
-  connection: (data: any) => Page<T> | null,
-  enough: (page: readonly T[]) => boolean = () => false,
-): Promise<T[]> {
-  const nodes: T[] = [];
-  let after: string | null = null;
-  do {
-    const page = connection(await github.graphql(query, { owner: repo.owner, name: repo.name, after, ...variables }));
-    if (page === null) break;
-    nodes.push(...page.nodes);
-    after = page.pageInfo.hasNextPage && !enough(page.nodes) ? page.pageInfo.endCursor : null;
-  } while (after !== null);
-  return nodes;
 }
 
 /** The PRs merged or closed in the window, agent or not. */
@@ -341,6 +317,7 @@ async function gatherEscapeMarkerIssues(
     .filter((issue) => Date.parse(issue.createdAt) >= sinceMs && escapeMarkerIn(issue.body) !== null)
     .map((issue) => ({
       number: issue.number,
+      title: issue.title,
       author: loginOf(issue.author),
       createdAt: issue.createdAt,
       state: issue.state === "CLOSED" ? "closed" : "open",

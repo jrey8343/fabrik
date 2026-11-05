@@ -630,12 +630,12 @@ describe("Gathering a scheduled tick's audit slice", () => {
 
   const tick = { kind: "scheduled-tick", now: "2026-11-08T04:00:00.000Z" } as const;
 
-  it("holds the default branch's head and each Audit issue, open or closed, telling the Fabrik App's from anyone else's", async () => {
+  it("holds the default branch's head and each Audit issue, open or closed, with its title, telling the Fabrik App's from anyone else's", async () => {
     const github = githubWith({ target: { oid: HEAD } }, [
-      { number: 97, state: "OPEN", stateReason: null, createdAt: "2026-11-08T00:05:00Z", body: "Quoting <!-- fabrik:audit-pending -->", author: { __typename: "User" } },
-      { number: 95, state: "CLOSED", stateReason: "NOT_PLANNED", createdAt: "2026-11-08T00:04:00Z", body: "failed", author: { __typename: "Bot" } },
-      { number: 90, state: "CLOSED", stateReason: "COMPLETED", createdAt: "2026-11-01T00:05:00Z", body: "filled", author: { __typename: "Bot" } },
-      { number: 85, state: "OPEN", stateReason: "REOPENED", createdAt: "2026-10-25T00:05:00Z", body: "", author: null },
+      { number: 97, title: "My audit", state: "OPEN", stateReason: null, createdAt: "2026-11-08T00:05:00Z", body: "Quoting <!-- fabrik:audit-pending -->", author: { __typename: "User" } },
+      { number: 95, title: "Audit: week of 2026-11-02", state: "CLOSED", stateReason: "NOT_PLANNED", createdAt: "2026-11-08T00:04:00Z", body: "failed", author: { __typename: "Bot" } },
+      { number: 90, title: "Audit: week of 2026-10-26", state: "CLOSED", stateReason: "COMPLETED", createdAt: "2026-11-01T00:05:00Z", body: "filled", author: { __typename: "Bot" } },
+      { number: 85, title: "Audit: week of 2026-10-19", state: "OPEN", stateReason: "REOPENED", createdAt: "2026-10-25T00:05:00Z", body: "", author: null },
     ]);
 
     const snapshot = await gatherSnapshot(github, repo, tick, null);
@@ -643,10 +643,10 @@ describe("Gathering a scheduled tick's audit slice", () => {
     expect(snapshot.audit).toEqual({
       head: HEAD,
       issues: [
-        { number: 97, open: true, stateReason: null, createdAt: "2026-11-08T00:05:00Z", byApp: false, body: "Quoting <!-- fabrik:audit-pending -->" },
-        { number: 95, open: false, stateReason: "not_planned", createdAt: "2026-11-08T00:04:00Z", byApp: true, body: "failed" },
-        { number: 90, open: false, stateReason: "completed", createdAt: "2026-11-01T00:05:00Z", byApp: true, body: "filled" },
-        { number: 85, open: true, stateReason: "reopened", createdAt: "2026-10-25T00:05:00Z", byApp: false, body: "" },
+        { number: 97, title: "My audit", open: true, stateReason: null, createdAt: "2026-11-08T00:05:00Z", byApp: false, body: "Quoting <!-- fabrik:audit-pending -->" },
+        { number: 95, title: "Audit: week of 2026-11-02", open: false, stateReason: "not_planned", createdAt: "2026-11-08T00:04:00Z", byApp: true, body: "failed" },
+        { number: 90, title: "Audit: week of 2026-10-26", open: false, stateReason: "completed", createdAt: "2026-11-01T00:05:00Z", byApp: true, body: "filled" },
+        { number: 85, title: "Audit: week of 2026-10-19", open: true, stateReason: "reopened", createdAt: "2026-10-25T00:05:00Z", byApp: false, body: "" },
       ],
     });
   });
@@ -665,10 +665,9 @@ describe("Gathering a scheduled tick's audit slice", () => {
 });
 
 describe("Gathering the PRs an Auditor named", () => {
-  /** The API, holding Audit #97 and these PRs by number; any other number is no PR. */
+  /** The read-only API, holding Audit #97 and these PRs by number; any other number is no PR, which GitHub answers with a 404. */
   function githubWith(pulls: Record<number, unknown>) {
-    const asked: number[] = [];
-    const github = {
+    return {
       async graphql(query: string): Promise<unknown> {
         if (query.includes("issue(number: $number)")) {
           return {
@@ -692,16 +691,16 @@ describe("Gathering the PRs an Auditor named", () => {
         }
         return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
       },
-      async rest(method: string, path: string, _body: unknown, options: { allowNotFound?: boolean }): Promise<unknown> {
-        expect(method).toBe("GET");
+      async rest(method: string, path: string, _body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<unknown> {
         const pull = /^\/repos\/acme\/shop\/pulls\/(\d+)$/.exec(path);
-        if (pull === null) throw new Error(`Unexpected call: ${path}`);
-        asked.push(Number(pull[1]));
-        expect(options.allowNotFound).toBe(true);
-        return pulls[Number(pull[1])] ?? null;
+        if (method !== "GET" || pull === null) throw new Error(`Unexpected call: ${method} ${path}`);
+        const found = pulls[Number(pull[1])];
+        if (found !== undefined) return found;
+        // As the real client does: a 404 is null only when the call allows it.
+        if (options.allowNotFound === true) return null;
+        throw new Error(`GitHub GET ${path} failed: 404`);
       },
     } as unknown as GitHub;
-    return { github, asked };
   }
 
   const pull = (number: number, merged: boolean, ref: string, type: string) => ({ number, merged, head: { ref }, user: { type } });
@@ -729,8 +728,8 @@ describe("Gathering the PRs an Auditor named", () => {
     introducedBy,
   });
 
-  it("reads each PR the reply names once, telling a merged agent PR from the rest and leaving out a number that's no PR, beside the Audit", async () => {
-    const { github, asked } = githubWith({
+  it("holds each PR the reply names once, telling a merged agent PR from the rest and leaving out a number that's no PR, beside the Audit", async () => {
+    const github = githubWith({
       31: pull(31, true, "fabrik/ticket-7", "Bot"),
       40: pull(40, false, "fabrik/ticket-8", "Bot"),
       41: pull(41, true, "feature/cart", "User"),
@@ -750,21 +749,19 @@ describe("Gathering the PRs an Auditor named", () => {
       { number: 41, merged: true, headRef: "feature/cart", isAgent: false },
       { number: 42, merged: true, headRef: "fabrik/ticket-9", isAgent: false },
     ]);
-    expect(asked.sort((a, b) => a - b)).toEqual([31, 40, 41, 42, 404]);
     expect(snapshot.issue).toMatchObject({ number: 97, byApp: true, labels: ["fabrik:audit"] });
   });
 
-  it("reads no PRs for a reply that breaks its contract, whose Audit the core then fails", async () => {
-    const { github, asked } = githubWith({});
+  it("holds no PRs for a reply that breaks its contract, whose Audit the core then fails", async () => {
+    const github = githubWith({ 31: pull(31, true, "fabrik/ticket-7", "Bot") });
 
-    const snapshot = await gatherSnapshot(github, repo, finished("not JSON"), null);
+    const snapshot = await gatherSnapshot(github, repo, finished("not JSON, though it names #31"), null);
 
     expect(snapshot.namedPullRequests).toEqual([]);
-    expect(asked).toEqual([]);
   });
 
   it("isn't gathered for any other event", async () => {
-    const snapshot = await gatherSnapshot(githubWith({}).github, repo, { kind: "kit-config-changed" }, null);
+    const snapshot = await gatherSnapshot(githubWith({}), repo, { kind: "kit-config-changed" }, null);
 
     expect(snapshot.namedPullRequests).toBeNull();
   });

@@ -14,13 +14,13 @@
 //                                Audit): writes audit.json, the Auditor's inputs (readAuditInputs)
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { GitHub, type Repo } from "../github/client.ts";
+import { GitHub, pagesOf, type Repo } from "../github/client.ts";
+import { gatherAuditSlice } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { type Audit, auditsIn, lastAudit } from "../loop/audit.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
-import { AUDIT_LABEL } from "../loop/labels.ts";
 import { fromAuditIn } from "../loop/markers.ts";
 import type { AuditIssueSnapshot, AuditWindow } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
@@ -382,8 +382,8 @@ export const AUDIT_INPUTS_FILE = "audit.json";
 
 /** What an Auditor run is given beyond the pending Audit's own issue, written to AUDIT_INPUTS_FILE. */
 export interface AuditInputs {
-  /** The pending Audit, with when the tick opened it at the marked commit. */
-  readonly audit: PendingAudit & { readonly openedAt: string };
+  /** The pending Audit, which the Auditor's prompt names with its marked commit. */
+  readonly audit: PendingAudit;
   /** The hot-spot window, which the agent job copies into its result for the landing to name. */
   readonly window: AuditWindow;
   /** The files merged agent PRs keep changing with no doc changed beside them (src/agent/comprehensionDrift.ts). */
@@ -395,29 +395,6 @@ export interface AuditInputs {
 
 /** How many closed Audits the Auditor weighs the Operator's rejections from. */
 const CLOSED_AUDITS = 3;
-
-const AUDITS_QUERY = `
-  query ($owner: String!, $name: String!, $label: String!) {
-    repository(owner: $owner, name: $name) {
-      issues(labels: [$label], states: [OPEN, CLOSED], first: 50, orderBy: { field: CREATED_AT, direction: DESC }) {
-        nodes {
-          number title state stateReason createdAt body
-          author { __typename }
-        }
-      }
-    }
-  }
-`;
-
-interface AuditNode {
-  number: number;
-  title: string;
-  state: "OPEN" | "CLOSED";
-  stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
-  createdAt: string;
-  body: string;
-  author: { __typename: string } | null;
-}
 
 const MERGED_PULL_REQUESTS_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
@@ -451,29 +428,6 @@ const OPEN_ISSUES_QUERY = `
   }
 `;
 
-interface Connection<T> {
-  pageInfo: { hasNextPage: boolean; endCursor: string | null };
-  nodes: T[];
-}
-
-/** Every node of a paged GraphQL connection, or only until `enough` says the rest are too old. */
-async function nodesOf<T>(
-  github: Reader,
-  repo: Repo,
-  query: string,
-  connection: (data: any) => Connection<T>,
-  enough: (page: readonly T[]) => boolean = () => false,
-): Promise<T[]> {
-  const nodes: T[] = [];
-  let after: string | null = null;
-  do {
-    const page = connection(await github.graphql(query, { owner: repo.owner, name: repo.name, after }));
-    nodes.push(...page.nodes);
-    after = page.pageInfo.hasNextPage && !enough(page.nodes) ? page.pageInfo.endCursor : null;
-  } while (after !== null);
-  return nodes;
-}
-
 const DAY_MS = 86_400_000;
 
 /** How far back the window falls back to, from the pending Audit. */
@@ -501,21 +455,7 @@ async function isAncestor(github: Reader, repo: Repo, from: string, to: string):
  * instructions to it.
  */
 export async function readAuditInputs(github: Reader, repo: Repo, audit: PendingAudit, operator: string): Promise<AuditInputs> {
-  const nodes = (
-    await github.graphql<{ repository: { issues: { nodes: AuditNode[] } } }>(AUDITS_QUERY, {
-      owner: repo.owner,
-      name: repo.name,
-      label: AUDIT_LABEL,
-    })
-  ).repository.issues.nodes;
-  const issues: AuditIssueSnapshot[] = nodes.map((node) => ({
-    number: node.number,
-    open: node.state === "OPEN",
-    stateReason: node.stateReason === null ? null : (node.stateReason.toLowerCase() as AuditIssueSnapshot["stateReason"]),
-    createdAt: node.createdAt,
-    byApp: node.author?.__typename === "Bot",
-    body: node.body,
-  }));
+  const { issues } = await gatherAuditSlice(github, repo);
   const audits = auditsIn(issues);
   const pendingAudit = audits.find((each) => each.number === audit.number);
   if (pendingAudit === undefined) throw new Error(`Audit #${audit.number} isn't an Audit the Fabrik App opened`);
@@ -528,10 +468,11 @@ export async function readAuditInputs(github: Reader, repo: Repo, audit: Pending
   const since = window.kind === "since-audit" && last !== null ? Date.parse(last.createdAt) : until - FALLBACK_DAYS * DAY_MS;
   // The agent PRs merged in the window, or in the 30 days drift looks back over, whichever reaches further.
   const earliest = Math.min(since, until - DRIFT_DAYS * DAY_MS);
-  const merged = await nodesOf<MergedPullRequestNode>(
+  const merged = await pagesOf<MergedPullRequestNode>(
     github,
-    repo,
     MERGED_PULL_REQUESTS_QUERY,
+    repo,
+    {},
     (data) => data.repository.pullRequests,
     (page) => page.some((pr) => Date.parse(pr.updatedAt) < earliest),
   );
@@ -569,7 +510,7 @@ export async function readAuditInputs(github: Reader, repo: Repo, audit: Pending
         const issue = issues.find((each) => each.number === number);
         return {
           number,
-          title: nodes.find((node) => node.number === number)?.title ?? "",
+          title: issue?.title ?? "",
           commit,
           closedAs: issue?.stateReason ?? null,
           body: issue?.body ?? "",
@@ -577,12 +518,12 @@ export async function readAuditInputs(github: Reader, repo: Repo, audit: Pending
         };
       }),
   );
-  const open = await nodesOf<{ number: number; title: string; body: string }>(github, repo, OPEN_ISSUES_QUERY, (data) => data.repository.issues);
+  const open = await pagesOf<{ number: number; title: string; body: string }>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues);
   const filedCandidates = open.flatMap(({ number, title, body }) => {
     const fromAudit = fromAuditIn(body);
     return fromAudit === null ? [] : [{ number, title, fromAudit, body }];
   });
-  return { audit: { ...audit, openedAt }, window, drift, closedAudits, filedCandidates, pullRequests };
+  return { audit, window, drift, closedAudits, filedCandidates, pullRequests };
 }
 
 /** The Operator's comments on an issue, oldest first; bots' and other people's are left out. */

@@ -127,9 +127,9 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
   };
 }
 
-/** Issue 80, which the Operator opened on 2026-11-03 with `body`, still open. */
+/** Issue 80, "Make the cart module deeper", which the Operator opened on 2026-11-03 with `body`, still open. */
 export function anEscapeMarkerIssue(body: string, overrides: Partial<EscapeMarkerIssueFacts> = {}): EscapeMarkerIssueFacts {
-  return { number: 80, author: "operator", createdAt: "2026-11-03T00:00:00Z", state: "open", body, ...overrides };
+  return { number: 80, title: "Make the cart module deeper", author: "operator", createdAt: "2026-11-03T00:00:00Z", state: "open", body, ...overrides };
 }
 
 /** Audit 90, which the Fabrik App opened on 2026-11-01 and nobody has closed. */

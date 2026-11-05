@@ -72,3 +72,33 @@ export class GitHub {
     };
   }
 }
+
+/** One page of a GraphQL connection, as a query selecting its `pageInfo { hasNextPage endCursor }` and `nodes` gets it. */
+export interface Page<T> {
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+  nodes: T[];
+}
+
+/**
+ * Every node of a paged GraphQL connection, which `query` reads a page of
+ * from the cursor `$after` in the repo `$owner/$name`, with `variables`; or
+ * only until `enough` says the rest are too old. A null connection has none.
+ */
+export async function pagesOf<T>(
+  github: Pick<GitHub, "graphql">,
+  query: string,
+  repo: Repo,
+  variables: Record<string, unknown>,
+  connection: (data: any) => Page<T> | null,
+  enough: (page: readonly T[]) => boolean = () => false,
+): Promise<T[]> {
+  const nodes: T[] = [];
+  let after: string | null = null;
+  do {
+    const page = connection(await github.graphql(query, { owner: repo.owner, name: repo.name, after, ...variables }));
+    if (page === null) break;
+    nodes.push(...page.nodes);
+    after = page.pageInfo.hasNextPage && !enough(page.nodes) ? page.pageInfo.endCursor : null;
+  } while (after !== null);
+  return nodes;
+}
