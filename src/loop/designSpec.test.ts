@@ -73,6 +73,7 @@ describe("Finishing a Design session with a Spec and its Tickets", () => {
           ],
         },
         { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
       ],
     });
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 
 const startsDesignTurn = {
@@ -17,12 +17,12 @@ const startsDesignTurn = {
 };
 
 describe("Starting a Design-session turn", () => {
-  it("starts round 1 when needs-design is added to an open issue", () => {
+  it("asks the Design queue check to start round 1 when needs-design is added to an open issue", () => {
     const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
 
     const plan = planFor({ kind: "label-added", issue: 7, label: "needs-design" }, snapshotOf(issue), kitConfig());
 
-    expect(plan).toEqual(startsDesignTurn);
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
   });
 
   it("does not start a session on a closed issue, saying why", () => {
@@ -53,12 +53,45 @@ describe("Starting a Design-session turn", () => {
 describe("Answering a Design-session round", () => {
   const commented = (commenter: string, commenterIsBot = false) =>
     ({ kind: "issue-comment-created", issue: 7, commenter, commenterIsBot, body: "yes", comment: 9001 }) as const;
-  const inSession = snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"] }), { operator: "jrey" });
+  const inSession = snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"], designRounds: 1 }), {
+    operator: "jrey",
+  });
 
-  it("starts the next turn when the Operator comments on a needs-design issue", () => {
+  it("starts the next turn when the Operator replies to a round", () => {
     const plan = planFor(commented("jrey"), inSession, kitConfig());
 
     expect(plan).toEqual(startsDesignTurn);
+  });
+
+  it("starts the turn again when the Operator replies after a turn failed, since the session keeps its slot", () => {
+    const failed = anIssue({ number: 7, labels: ["enhancement", "needs-design"], turnFailed: true });
+
+    const plan = planFor(commented("jrey"), snapshotOf(failed, { operator: "jrey" }), kitConfig());
+
+    expect(plan).toEqual(startsDesignTurn);
+  });
+
+  it("starts nothing when the Operator comments on an issue waiting for a Design session slot: the comment is context for round 1", () => {
+    const waiting = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
+
+    const plan = planFor(commented("jrey"), snapshotOf(waiting, { operator: "jrey" }), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "#7 holds no Design session slot yet, so the Operator's comment is context for its round 1, not a turn of its own",
+    });
+    expect(notificationsOf(plan, "jrey")).toEqual([]);
+  });
+
+  it("starts nothing when someone else comments on a waiting issue, saying why", () => {
+    const waiting = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
+
+    const plan = planFor(commented("someone"), snapshotOf(waiting, { operator: "jrey" }), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "@someone isn't the Operator, so their comment on #7 doesn't drive the Design session",
+    });
   });
 
   it("does nothing when someone other than the Operator comments, saying why", () => {
@@ -242,6 +275,7 @@ describe("Finishing a Design session with an agent brief", () => {
         { kind: "remove-label", issue: 7, label: "needs-design" },
         { kind: "add-labels", issue: 7, labels: ["ready-for-agent"] },
         { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
       ],
     });
   });
@@ -255,7 +289,7 @@ describe("Finishing a Design session with an agent brief", () => {
       kitConfig(),
     );
 
-    expect(plan.kind === "act" ? plan.actions.at(-1) : null).toEqual({ kind: "check-dispatch" });
+    expect(plan.kind === "act" ? plan.actions : []).toContainEqual({ kind: "check-dispatch" });
   });
 
   it("notifies nobody: neither the body nor the comment @-mentions anyone", () => {

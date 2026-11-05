@@ -16,7 +16,7 @@ inputs:
     description: The push service account's token (secrets.OP_PUSH_TOKEN), which reads the Fabrik App vault.
     required: true
   actions-token:
-    description: For the Dispatch and Design queue jobs only, a token that can read workflow runs (its GITHUB_TOKEN); the Fabrik App has no Actions permission.
+    description: For the Dispatch job and loop.yml's Design queue job only, a token that can read workflow runs (its GITHUB_TOKEN); the Fabrik App has no Actions permission. The scheduled tick's Design queue job has none.
     required: false
     default: ""
 

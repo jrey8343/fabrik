@@ -188,7 +188,8 @@ describe("Failure notices", () => {
   });
 
   it("after a Design-session turn failure, the Operator's reply starts the turn again", () => {
-    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
+    // The failure notice marks the turn failed, so the session keeps its slot.
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], turnFailed: true });
     const reply: LoopEvent = { kind: "issue-comment-created", issue: 7, commenter: "operator", commenterIsBot: false, body: "Try again", comment: 9001 };
 
     expect(planFor(reply, snapshotOf(issue), kitConfig())).toMatchObject({

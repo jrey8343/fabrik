@@ -27,10 +27,17 @@ import type {
   StartingComment,
 } from "./types.ts";
 
-/** Adding needs-design starts the session's first round. */
-export function startSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
-  return whileInSession(issueNumber, issue) ?? startAgentRun("design", issueNumber, config);
+/**
+ * Adding needs-design, by any route, asks the Design queue check for the
+ * session's first round (#147): a first turn only starts through the queue
+ * check, which holds the issue silently while the cap is full.
+ */
+export function startSession(issueNumber: number, { issue }: IssueContext): Plan {
+  return whileInSession(issueNumber, issue) ?? { kind: "act", actions: [CHECK_DESIGN_QUEUE] };
 }
+
+/** Run a Design queue check once the plan has landed, so a waiting issue can take a slot. */
+const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
 
 /**
  * agent:design, which the Design queue check adds when a slot frees up, starts
@@ -48,7 +55,10 @@ export function startQueuedSession(issueNumber: number, { issue }: IssueContext,
 /**
  * The Operator's reply to a round starts the next turn; nobody else's comment,
  * and no bot's, does. The Operator's comment that opens with a live outcome
- * marker instead lands what a live session decided.
+ * marker instead lands what a live session decided, even on a waiting issue.
+ * Only an issue that holds a Design session slot by a posted round or a failed
+ * turn starts a turn: on any other, the queue check starts round 1, which
+ * reads the whole thread, so the comment is context (#147, in the spirit of ADR-0007).
  */
 export function answerRound(
   { issue: issueNumber, commenter, commenterIsBot, body }: Extract<LoopEvent, { kind: "issue-comment-created" }>,
@@ -67,11 +77,23 @@ export function answerRound(
   const notNow = whileInSession(issueNumber, snapshot.issue);
   if (notNow !== null) return notNow;
   const live = LIVE_OUTCOME_MARKER.exec(body);
-  return live?.[1] === undefined ? startAgentRun("design", issueNumber, config) : landLiveOutcome(issueNumber, live[1], snapshot.operator);
+  if (live?.[1] !== undefined) return landLiveOutcome(issueNumber, live[1], snapshot.operator);
+  const { designRounds, turnFailed } = snapshot.issue;
+  if (designRounds === 0 && !turnFailed) {
+    return {
+      kind: "nothing",
+      reason: `#${issueNumber} holds no Design session slot yet, so the Operator's comment is context for its round 1, not a turn of its own`,
+    };
+  }
+  return startAgentRun("design", issueNumber, config);
 }
 
 
-/** The live session's outcome is already on GitHub, so the Kit only moves the issue on, as an async finish would. */
+/**
+ * The live session's outcome is already on GitHub, so the Kit only moves the
+ * issue on, as an async finish would. Each outcome ends the session and frees
+ * its slot, so it asks for a Design queue check.
+ */
 function landLiveOutcome(issueNumber: number, outcome: string, operator: string): Plan {
   const leaveSession: Action = { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN };
   // A brief or a Spec leaves new ready work, so see whether it can start.
@@ -79,7 +101,12 @@ function landLiveOutcome(issueNumber: number, outcome: string, operator: string)
     case "brief":
       return {
         kind: "act",
-        actions: [leaveSession, { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] }, { kind: "check-dispatch" }],
+        actions: [
+          leaveSession,
+          { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] },
+          { kind: "check-dispatch" },
+          CHECK_DESIGN_QUEUE,
+        ],
       };
     case "operator-brief":
       // Only the Operator can do this work, so it waits for them, not Dispatch.
@@ -89,13 +116,14 @@ function landLiveOutcome(issueNumber: number, outcome: string, operator: string)
           leaveSession,
           { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_HUMAN] },
           { kind: "assign", issue: issueNumber, assignee: operator },
+          CHECK_DESIGN_QUEUE,
         ],
       };
     case "spec":
       // The Operator's comment already names the Spec that supersedes this issue.
       return {
         kind: "act",
-        actions: [leaveSession, { kind: "close", issue: issueNumber, reason: "completed" }, { kind: "check-dispatch" }],
+        actions: [leaveSession, { kind: "close", issue: issueNumber, reason: "completed" }, { kind: "check-dispatch" }, CHECK_DESIGN_QUEUE],
       };
     default:
       return {
@@ -183,9 +211,10 @@ function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: Issue
       actions: [{ kind: "comment", issue: issueNumber, body: roundComment(round, output, snapshot.operator, sentBack) }],
     };
   }
+  // Every outcome but a round ends the session and frees its slot, so the next waiting issue can start.
   if (output.kind === "not-planned") {
     // Nothing new is ready, so there is nothing for Dispatch to check.
-    return { kind: "act", actions: closeAsNotPlanned(issueNumber, output.comment, snapshot.issue.openBlocking) };
+    return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, output.comment, snapshot.issue.openBlocking), CHECK_DESIGN_QUEUE] };
   }
   // The Spec stays the single parent of its work: a Ticket under one splits into
   // siblings, and only an issue with no Spec above it gets a Spec of its own.
@@ -201,14 +230,14 @@ function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: Issue
   if (output.kind === "brief") {
     // Only the Operator can do an Operator brief's work, so it waits for them, not Dispatch.
     return "operator" in output.brief
-      ? { kind: "act", actions: rewriteAsOperatorBrief(issueNumber, output.comment, output.brief, snapshot.operator) }
-      : { kind: "act", actions: [...rewriteAsBrief(issueNumber, output.comment, output.brief), checkDispatch] };
+      ? { kind: "act", actions: [...rewriteAsOperatorBrief(issueNumber, output.comment, output.brief, snapshot.operator), CHECK_DESIGN_QUEUE] }
+      : { kind: "act", actions: [...rewriteAsBrief(issueNumber, output.comment, output.brief), checkDispatch, CHECK_DESIGN_QUEUE] };
   }
   const landed =
     output.kind === "spec"
       ? supersedeBySpec(issueNumber, output, snapshot.issue, snapshot.operator)
       : splitIntoSiblings(issueNumber, output, snapshot.issue, parent ?? 0, snapshot.operator);
-  return { kind: "act", actions: [...landed, checkDispatch] };
+  return { kind: "act", actions: [...landed, checkDispatch, CHECK_DESIGN_QUEUE] };
 }
 
 /**

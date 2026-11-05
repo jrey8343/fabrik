@@ -72,12 +72,13 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
         : applyRetryImplementation(event, snapshot);
     case "agent-run-failed":
       return withIssue(snapshot, (context) => failureNotice(event, context, config));
-    // A closed issue may finish its Spec, free a slot or unblock a Ticket. Merging an
-    // agent PR closes its Ticket through `Closes #n`, so it lands here.
+    // A closed issue may finish its Spec, free a slot or unblock a Ticket, or end a
+    // Design session by hand. Merging an agent PR closes its Ticket through
+    // `Closes #n`, so it lands here.
     case "issue-closed":
       return withIssue(snapshot, ({ issue }) => ({
         kind: "act",
-        actions: [...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH],
+        actions: [...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH, CHECK_DESIGN_QUEUE],
       }));
     // A push to an agent draft PR, or agent:review added to resume after a failure, starts a Review.
     case "pull-request-pushed":
@@ -116,14 +117,30 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
         ? missingFromSnapshot("the needs-design issues a Design queue check weighs")
         : checkDesignQueue(snapshot.designQueue, config);
     case "kit-config-changed":
-      // max_in_flight may have gone up, or from 0 back above it, so see what can start now.
-      return { kind: "act", actions: [CHECK_DISPATCH] };
+      // max_in_flight or caps.design_sessions may have gone up, or from 0 back
+      // above it, so see what can start now.
+      return { kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] };
     case "scheduled-tick":
-      return scheduledTick(event.now, snapshot);
+      // The tick also catches a Design session slot freed by an event the Loop
+      // doesn't watch, such as needs-design coming off by hand.
+      return thenCheckDesignQueue(scheduledTick(event.now, snapshot));
   }
 }
 
 const CHECK_DISPATCH: Action = { kind: "check-dispatch" };
+const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
+
+/** The plan, then a Design queue check once it has landed. */
+function thenCheckDesignQueue(plan: Plan): Plan {
+  switch (plan.kind) {
+    case "act":
+      return { kind: "act", actions: [...plan.actions, CHECK_DESIGN_QUEUE] };
+    case "nothing":
+      return { kind: "act", actions: [CHECK_DESIGN_QUEUE] };
+    case "fail":
+      return plan;
+  }
+}
 
 /** Decides an issue event, which needs the issue in the snapshot. */
 function withIssue(snapshot: Snapshot, decide: (context: IssueContext) => Plan): Plan {
@@ -142,8 +159,8 @@ function missingFromSnapshot(what: string): Plan {
 }
 
 /**
- * Adding needs-triage starts Triage, adding needs-design starts a Design
- * session (as does agent:design, which the Design queue check adds), and
+ * Adding needs-triage starts Triage; adding needs-design asks for a Design
+ * queue check, whose agent:design starts the Design session's first turn; and
  * adding agent:implement starts (or resumes) an Implement run.
  */
 function labelAdded(
@@ -153,7 +170,7 @@ function labelAdded(
   pullRequest: PullRequestSnapshot | null,
   config: KitConfig,
 ): Plan {
-  if (label === NEEDS_DESIGN) return startSession(issueNumber, context, config);
+  if (label === NEEDS_DESIGN) return startSession(issueNumber, context);
   if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config);
   if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
   if (label !== NEEDS_TRIAGE) {

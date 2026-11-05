@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
 import { anIssue, aPullRequest, designQueueSnapshotOf, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
+import { DESIGN_TURN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
 import { countImplementRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME } from "./snapshot.ts";
@@ -101,7 +102,13 @@ describe("The Design-session turn job's name", () => {
 describe("Gathering a Design queue check's needs-design issues", () => {
   const kit = (body: string) => ({ body, author: { __typename: "Bot" } });
   const person = (body: string) => ({ body, author: { __typename: "User" } });
-  const labelled = (name: string, createdAt: string) => ({ createdAt, label: { name } });
+  const labelled = (name: string, createdAt: string) => ({ __typename: "LabeledEvent", createdAt, label: { name } });
+  const unlabelled = (name: string, createdAt: string, actor = "Bot") => ({
+    __typename: "UnlabeledEvent",
+    createdAt,
+    label: { name },
+    actor: { __typename: actor },
+  });
 
   function issue(number: number, overrides: Record<string, unknown> = {}) {
     return {
@@ -114,7 +121,10 @@ describe("Gathering a Design queue check's needs-design issues", () => {
     };
   }
 
-  async function gathered(nodes: unknown[], runs: Parameters<typeof actionsWith>[0] = []): Promise<DesignQueueSnapshot> {
+  async function gathered(
+    nodes: unknown[],
+    runs: Parameters<typeof actionsWith>[0] | null = [],
+  ): Promise<DesignQueueSnapshot> {
     const github = {
       async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
         if (query.includes("labels: [$needsDesign]")) {
@@ -126,7 +136,8 @@ describe("Gathering a Design queue check's needs-design issues", () => {
         return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
       },
     } as unknown as GitHub;
-    const snapshot = await gatherSnapshot(github, repo, { kind: "design-queue-check" }, null, actionsWith(runs) as unknown as GitHub);
+    const actions = runs === null ? null : (actionsWith(runs) as unknown as GitHub);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "design-queue-check" }, null, actions);
     if (snapshot.designQueue === null) throw new Error("no Design queue slice");
     return snapshot.designQueue;
   }
@@ -266,16 +277,48 @@ describe("Gathering a Design queue check's needs-design issues", () => {
     expect(queue.issues[0]?.neededDesignAt).toBe("2026-10-01T09:00:00Z");
   });
 
-  it("needs a token that can read workflow runs", async () => {
-    const github = {
-      async graphql(): Promise<unknown> {
-        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
-      },
-    } as unknown as GitHub;
+  describe("without a token that can read workflow runs, as on the scheduled tick", () => {
+    it("reads a first turn in progress from the Kit taking agent:design off since the issue last got needs-design", async () => {
+      const queue = await gathered(
+        [
+          issue(3, {
+            timelineItems: {
+              nodes: [labelled("needs-design", "2026-11-01T09:00:00Z"), unlabelled("agent:design", "2026-11-01T10:00:00Z")],
+            },
+          }),
+          issue(4, {
+            timelineItems: {
+              nodes: [unlabelled("agent:design", "2026-10-01T10:00:00Z"), labelled("needs-design", "2026-11-01T09:00:00Z")],
+            },
+          }),
+          issue(5, {
+            timelineItems: {
+              nodes: [labelled("needs-design", "2026-11-01T09:00:00Z"), unlabelled("agent:design", "2026-11-01T10:00:00Z", "User")],
+            },
+          }),
+          issue(6),
+        ],
+        null,
+      );
 
-    await expect(gatherSnapshot(github, repo, { kind: "design-queue-check" }, null)).rejects.toThrow(
-      "A Design queue check needs a token that can read workflow runs",
-    );
+      expect(queue.designTurnsInProgress).toEqual([3]);
+      expect(holding(queue)).toEqual({ 3: true, 4: false, 5: false, 6: false });
+    });
+
+    it("doesn't take needs-design coming off for it being added", async () => {
+      const queue = await gathered(
+        [
+          issue(3, {
+            timelineItems: {
+              nodes: [labelled("needs-design", "2026-11-01T09:00:00Z"), unlabelled("needs-design", "2026-11-02T09:00:00Z")],
+            },
+          }),
+        ],
+        null,
+      );
+
+      expect(queue.issues[0]?.neededDesignAt).toBe("2026-11-01T09:00:00Z");
+    });
   });
 });
 
@@ -320,6 +363,50 @@ describe("Gathering an issue's blocked-by edges", () => {
     const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 6, label: "needs-design" }, null);
 
     expect(snapshot.issue).toMatchObject({ openBlockers: [10], openBlocking: [7] });
+  });
+});
+
+describe("Gathering an issue's Design session", () => {
+  async function gatheredIssue(comments: { body: string; author: { __typename: string } }[]) {
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issue: {
+                number: 6,
+                state: "OPEN",
+                author: { login: "someone" },
+                labels: { nodes: [{ name: "needs-design" }] },
+                parent: null,
+                comments: { nodes: comments },
+                closedByPullRequestsReferences: { nodes: [] },
+                blockedBy: { nodes: [] },
+                blocking: { nodes: [] },
+              },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+    const event = { kind: "issue-comment-created", issue: 6, commenter: "operator", commenterIsBot: false, body: "More context", comment: 9 } as const;
+    return (await gatherSnapshot(github, repo, event, null)).issue;
+  }
+
+  it("reads a Design-session turn's failure notice as a failed turn, so the session keeps its slot", async () => {
+    const issue = await gatheredIssue([
+      { body: `${DESIGN_TURN_FAILED_MARKER}\n@operator The Design-session turn run on #6 failed.`, author: { __typename: "Bot" } },
+    ]);
+
+    expect(issue).toMatchObject({ designRounds: 0, turnFailed: true });
+  });
+
+  it("reads an issue with no round and no failure as holding no slot", async () => {
+    const issue = await gatheredIssue([{ body: "Some context while it waits", author: { __typename: "User" } }]);
+
+    expect(issue).toMatchObject({ designRounds: 0, turnFailed: false });
   });
 });
 

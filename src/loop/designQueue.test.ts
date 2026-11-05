@@ -5,6 +5,7 @@ import {
   designQueueSnapshotOf,
   kitConfig,
   notificationsOf,
+  repoSnapshot,
   snapshotOf,
 } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
@@ -246,6 +247,7 @@ describe("A waiting issue's live Design session", () => {
         { kind: "remove-label", issue: 7, label: "needs-design" },
         { kind: "add-labels", issue: 7, labels: ["ready-for-agent"] },
         { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
       ],
     });
   });
@@ -280,11 +282,32 @@ describe("agent:design", () => {
   });
 });
 
-describe("While the Design queue check is dormant", () => {
-  it("adding needs-design still starts the Design session straight away", () => {
+describe("What triggers a Design queue check", () => {
+  it("adding needs-design asks for a queue check instead of starting a turn, and adds nothing to the issue", () => {
     const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
     const plan = planFor({ kind: "label-added", issue: 7, label: "needs-design" }, snapshotOf(issue), kitConfig());
 
-    expect(plan).toMatchObject({ kind: "act", actions: [{ kind: "start-agent-run", role: "design", issue: 7 }] });
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("an issue closing, which may end a Design session by hand", () => {
+    const issue = anIssue({ number: 7, open: false, labels: ["enhancement", "needs-design"] });
+
+    const plan = planFor({ kind: "issue-closed", issue: 7 }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
+  });
+
+  it("a change to the Kit config, since caps.design_sessions may have gone up", () => {
+    const plan = planFor({ kind: "kit-config-changed" }, repoSnapshot(), kitConfig());
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
+  });
+
+  it("the hourly scheduled tick, which catches a slot freed by needs-design coming off by hand", () => {
+    const plan = planFor({ kind: "scheduled-tick", now: "2026-11-09T04:05:00.000Z" }, repoSnapshot(), kitConfig());
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
   });
 });

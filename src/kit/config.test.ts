@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { resolveKitConfig } from "./config.ts";
+
+const root = new URL("../../", import.meta.url);
+const template = readFileSync(new URL("templates/fabrik-config.json", root), "utf8");
+const readme = readFileSync(new URL("README.md", root), "utf8");
 
 const DEFAULTS = {
   sandbox: { setup: null, build: null, test: null, checks: [], env: {}, secrets: {} },
@@ -221,6 +226,7 @@ describe("Kit config", () => {
         step_up: { model: "claude-opus-5-5", effort: null },
       },
       max_in_flight: 2,
+      caps: { design_sessions: 2 },
       operator: null,
     };
 
@@ -250,6 +256,12 @@ describe("Kit config", () => {
     const result = resolveKitConfig({ config: `{ "max_in_flight": 0 }` });
 
     expect(result.ok && result.config.maxInFlight).toBe(0);
+  });
+
+  it("gives a Product repo whose config never sets caps the Kit default of 2 Design sessions", () => {
+    const result = resolveKitConfig({ config: `{ "max_in_flight": 1, "operator": "jrey8343" }` });
+
+    expect(result.ok && result.config.caps).toEqual({ designSessions: 2 });
   });
 
   it.each([1, 0])("honours lowering caps.design_sessions to %i", (cap) => {
@@ -288,4 +300,21 @@ describe("Kit config", () => {
       });
     },
   );
+});
+
+describe("The Kit config template", () => {
+  it("spells out caps.design_sessions at its Kit default", () => {
+    expect(JSON.parse(template)).toMatchObject({ caps: { design_sessions: 2 } });
+  });
+
+  it("resolves to every Kit default", () => {
+    expect(resolveKitConfig({ config: template })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it("is the defaults block the README's Kit config section shows", () => {
+    const section = readme.slice(readme.indexOf("## Kit config"));
+    const block = /```json\n([\s\S]*?)```/.exec(section)?.[1];
+
+    expect(block).toBe(template);
+  });
 });
