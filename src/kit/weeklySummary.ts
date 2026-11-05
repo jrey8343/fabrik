@@ -180,7 +180,9 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
-  if (thisWeek.records === 0) return { kind: "skip" };
+  const repos = input.facts.map((facts) => repoSectionOf(facts, input.records, Date.parse(input.now)));
+  const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0);
+  if (thisWeek.records === 0 && quiet) return { kind: "skip" };
   const change = <K extends keyof WeekMetrics>(metric: K): WeekOverWeek<WeekMetrics[K]> => ({
     thisWeek: thisWeek[metric],
     lastWeek: lastWeek[metric],
@@ -196,7 +198,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
       retries: change("retries"),
       stepUps: change("stepUps"),
     },
-    repos: input.facts.map((facts) => repoSectionOf(facts, input.records, Date.parse(input.now))),
+    repos,
   };
   return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
 }

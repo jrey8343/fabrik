@@ -27,6 +27,13 @@ describe("the Weekly summary", () => {
     expect(weeklySummary(input())).toEqual({ kind: "skip" });
   });
 
+  it.each([
+    ["something waiting on the Operator", factsOf({ openIssues: [anOpenIssue({ labels: ["ready-for-human"] })] })],
+    ["something stuck", factsOf({ openPullRequests: [anOpenPullRequest()] })],
+  ])("isn't skipped in a week with no records but %s", (_, facts) => {
+    expect(weeklySummary(input({ facts: [factsOf({ repo: "owner/quiet" }), facts] })).kind).toBe("summary");
+  });
+
   it("covers Monday to Monday in the Operator's time zone, with last week beside it", () => {
     const result = weeklySummary(
       input({
