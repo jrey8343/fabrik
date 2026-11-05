@@ -313,11 +313,11 @@ describe("The weekly summary workflow", () => {
     expect(run).toContain("FABRIK_APP_SLUG: ${{ steps.store.outputs.app-slug }}");
   });
 
-  it("reads the store's records from a sparse checkout of runs/, never its transcripts", () => {
+  it("reads the store's records and score files from a sparse checkout of runs/ and scores/, never its transcripts", () => {
     const checkout = steps.find((step) => step.includes("uses: actions/checkout@"));
 
     expect(checkout).toContain("repository: jrey8343/fabrik-runs");
-    expect(checkout).toMatch(/sparse-checkout: runs\n/);
+    expect(checkout).toMatch(/sparse-checkout: \|\n {10}runs\n {10}scores\n {8}\S/);
     expect(checkout).toContain("sparse-checkout-cone-mode: true");
     expect(checkout).toContain("persist-credentials: false");
     expect(action).not.toContain("transcripts/");
