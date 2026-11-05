@@ -1,7 +1,8 @@
 // Small builders for the Monitor core's tests (src/monitor/core.ts), matching
 // anIssue and snapshotOf (./snapshots.ts): say only what a test cares about.
 import { DEFAULT_KIT_CONFIG, type MonitorErrors } from "../kit/config.ts";
-import type { MonitorInput, MonitorIssue } from "../monitor/core.ts";
+import type { MonitorInput } from "../monitor/core.ts";
+import type { MonitorIssue } from "../monitor/issues.ts";
 import type { GroupFacts } from "../monitor/sentry.ts";
 
 /** Production errors on, read from Sentry's `acme/clinic` project, with the default threshold of 3 events in 24 hours. */

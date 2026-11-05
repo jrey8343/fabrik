@@ -22,7 +22,8 @@ import { callerWorkflowPath, checkKit } from "../kit/caller.ts";
 import { type KitConfig, type MonitorErrors, resolveKitConfig } from "../kit/config.ts";
 import { MONITOR_LABEL } from "../loop/labels.ts";
 import { RED_MAIN_GREEN_MARKER, RED_MAIN_MARKER } from "../loop/markers.ts";
-import { type MonitorInput, type MonitorIssue, type MonitorPlan, monitorPlanFor, newestByMarker, type SentryRead } from "./core.ts";
+import { type MonitorInput, monitorPlanFor, type SentryRead } from "./core.ts";
+import { type MonitorIssue, type MonitorPlan, newestByMarker } from "./issues.ts";
 import type { CheckRun, MainChecksRead, MainCommit } from "./redMain.ts";
 import { type GroupFacts, groupFactsOf, type RawSentryEvent, type RawSentryGroup, withLatestEvent } from "./sentry.ts";
 

@@ -10,7 +10,8 @@ import {
   SENTRY_ON,
 } from "../__fixtures__/monitor.ts";
 import { CLINIC_3_LATEST_EVENT, PROJECT_ISSUES_24H } from "../__fixtures__/sentry.ts";
-import { heldCountIn, type MonitorIssue, monitorPlanFor } from "./core.ts";
+import { heldCountIn, monitorPlanFor } from "./core.ts";
+import type { MonitorIssue } from "./issues.ts";
 import { type GroupFacts, groupFactsOf, withLatestEvent } from "./sentry.ts";
 
 /** The Sentry groups this plan files issues for. */

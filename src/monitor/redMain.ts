@@ -4,9 +4,21 @@
 // plan beside production errors'. Pure, no I/O: the program
 // (src/monitor/main.ts) reads the commits and check runs.
 import { CALLER_JOBS } from "../kit/caller.ts";
+import type { KitConfig } from "../kit/config.ts";
 import { MONITOR_LABEL } from "../loop/labels.ts";
 import { RED_MAIN_GREEN_MARKER, RED_MAIN_MARKER } from "../loop/markers.ts";
-import { bodyCode, type MonitorInput, type MonitorIssue, type MonitorPlan, newestByMarker, rewrittenBlock, statsBlock } from "./core.ts";
+import { ascending, bodyCode, monitorBlock, type MonitorIssue, type MonitorPlan, newestByMarker, withMonitorBlock } from "./issues.ts";
+
+/** What red main's part of the plan reads of the Monitor core's input (./core.ts). */
+export interface RedMainInput {
+  readonly monitor: Pick<KitConfig["monitor"], "redMain">;
+  /** What reading the default branch's commits and their check runs gave this tick, or null when `monitor.redMain` is off and they weren't read. */
+  readonly mainChecks: MainChecksRead | null;
+  /** The Kit config's `sandbox.checks`: when it lists any, the only checks that decide whether the default branch is red. */
+  readonly gatingChecks: readonly string[];
+  /** Every issue in the Product repo carrying fabrik:monitor, open or closed. */
+  readonly issues: readonly MonitorIssue[];
+}
 
 export type MainChecksRead =
   /** The default branch's newest commits, newest first back to the program's bound, each with its check runs. */
@@ -48,7 +60,7 @@ export interface CheckRun {
  * comment and only close. With no decided commit, or `monitor.red_main` off,
  * it does nothing. Its issue never counts toward the cap on error issues.
  */
-export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: MonitorInput): Pick<MonitorPlan, "open" | "rewrite" | "close" | "summary"> {
+export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: RedMainInput): MonitorPlan {
   const nothing = { open: [], rewrite: [], close: [], summary: [] };
   if (!monitor.redMain || mainChecks === null) return nothing;
   if (mainChecks.kind === "rate-limited") {
@@ -75,7 +87,7 @@ export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: Monit
     return { ...nothing, summary: [`Red main: the default branch is green at ${shortSha(commit)}.`] };
   }
   if (issue?.open === true) {
-    const body = rewrittenBlock(issue, detailsOf(commit, state.failed));
+    const body = withMonitorBlock(issue, detailsOf(commit, state.failed));
     if (body !== null) {
       return { ...nothing, rewrite: [{ kind: "red-main", issue: issue.number, body, summary: `Refreshed red main's details on #${issue.number}.` }] };
     }
@@ -160,13 +172,13 @@ const RED_MAIN_TITLE = "Red main: the default branch's CI is failing";
 /** The longest check name the red-main issue quotes. */
 const CHECK_NAME_MAX = 100;
 
-/** The red-main issue's body: what it tracks, then the red commit's details in the stats block. */
+/** The red-main issue's body: what it tracks, then the red commit's details in its Monitor block. */
 function redMainBodyOf(commit: MainCommit, failed: readonly CheckRun[]): string {
   return [
     RED_MAIN_MARKER,
     "The default branch is red: the newest commit on it whose gating checks have all finished failed some of them. The Monitor keeps the details below current while it stays red, and closes this issue itself once the default branch is green again.",
     "",
-    ...statsBlock(detailsOf(commit, failed)),
+    ...monitorBlock(detailsOf(commit, failed)),
     "",
     "The gating checks are `sandbox.checks` in `.fabrik/config.json`, or every check but Fabrik's own when it lists none.",
   ].join("\n");
@@ -178,7 +190,7 @@ function detailsOf(commit: MainCommit, failed: readonly CheckRun[]): string[] {
     `- Red at: [${shortSha(commit)}](${commit.url})`,
     "- Failed checks:",
     ...[...failed]
-      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+      .sort((a, b) => ascending(a.name, b.name))
       .map((run) => `  - [${bodyCode(run.name, CHECK_NAME_MAX)}](${run.url}) ${run.conclusion === "timed_out" ? "timed out" : "failed"}`),
   ];
 }

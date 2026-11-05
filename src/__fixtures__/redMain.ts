@@ -2,7 +2,8 @@
 // branch's commits, their check runs and the Monitor's red-main issue,
 // matching ./monitor.ts: say only what a test cares about.
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
-import type { MonitorInput, MonitorIssue } from "../monitor/core.ts";
+import type { MonitorInput } from "../monitor/core.ts";
+import type { MonitorIssue } from "../monitor/issues.ts";
 import type { CheckRun, MainCommit } from "../monitor/redMain.ts";
 
 /** A commit's page on GitHub, in the `acme/clinic` Product repo. */
