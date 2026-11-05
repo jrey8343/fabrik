@@ -163,6 +163,29 @@ describe("A Design session keeps a Monitor issue's marker", () => {
       rewrittenBody,
     ],
     ["an agent brief", { kind: "brief", comment: "One PR.", brief: { summary: "Fix it.", acceptanceCriteria: ["It works"] } }, rewrittenBody],
+  ])("opens %s with the marker line and still ends it with the issue's From audit and escape lines (#150)", (_, output, bodyOf) => {
+    const alsoFiledFromAnAudit = anIssue({
+      number: 7,
+      labels: ["bug", "needs-design", "fabrik:monitor"],
+      byApp: true,
+      body: `${monitorIssueBody}\n\nFrom audit #40\n<!-- fabrik:escape strong #31 -->`,
+    });
+
+    const lines = bodyOf(planFor(turnFinished(output), snapshotOf(alsoFiledFromAnAudit), kitConfig()))?.split("\n") ?? [];
+
+    expect(lines[0]).toBe(MARKER);
+    expect(lines.slice(-3)).toEqual(["", "From audit #40", "<!-- fabrik:escape strong #31 -->"]);
+    expect(lines.filter((line) => line === MARKER)).toHaveLength(1);
+  });
+
+  it.each([
+    ["a Spec", spec, (plan: Plan) => createdBody(plan, "spec")],
+    [
+      "an Operator brief",
+      { kind: "brief", comment: "Operator work.", brief: { operator: true, summary: "Rotate the key.", steps: ["Rotate it"] } },
+      rewrittenBody,
+    ],
+    ["an agent brief", { kind: "brief", comment: "One PR.", brief: { summary: "Fix it.", acceptanceCriteria: ["It works"] } }, rewrittenBody],
   ])("rewrites an issue whose body has no Monitor marker as %s exactly as before", (_, output, bodyOf) => {
     const unmarked = anIssue({
       number: 7,
