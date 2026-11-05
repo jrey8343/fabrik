@@ -504,7 +504,8 @@ describe("The starters the Product repo then owns", () => {
         step_up: { model: "claude-opus-5-5", effort: null },
       },
       max_in_flight: 2,
-      caps: { design_sessions: 2 },
+      caps: { design_sessions: 2, monitor_issues: 5 },
+      monitor: { errors: null, red_main: true },
       operator: null,
     });
     expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({

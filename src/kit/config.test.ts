@@ -231,7 +231,8 @@ describe("Kit config", () => {
         step_up: { model: "claude-opus-5-5", effort: null },
       },
       max_in_flight: 2,
-      caps: { design_sessions: 2 },
+      caps: { design_sessions: 2, monitor_issues: 5 },
+      monitor: { errors: null, red_main: true },
       operator: null,
     };
 
@@ -368,7 +369,7 @@ describe("The monitor block", () => {
     });
   });
 
-  it("lets null leave production errors off, as the template will spell it", () => {
+  it("lets null leave production errors off, as the template spells it", () => {
     const result = resolveKitConfig({ config: `{ "monitor": { "errors": null, "red_main": true } }` });
 
     expect(result).toEqual({ ok: true, config: DEFAULTS });
@@ -458,6 +459,10 @@ describe("The monitor block", () => {
 describe("The Kit config template", () => {
   it("spells out caps.design_sessions at its Kit default", () => {
     expect(JSON.parse(template)).toMatchObject({ caps: { design_sessions: 2 } });
+  });
+
+  it("spells out caps.monitor_issues and the monitor block at their Kit defaults: production errors off, red main on", () => {
+    expect(JSON.parse(template)).toMatchObject({ caps: { monitor_issues: 5 }, monitor: { errors: null, red_main: true } });
   });
 
   it("resolves to every Kit default", () => {
