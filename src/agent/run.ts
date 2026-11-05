@@ -23,23 +23,22 @@
 // A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
 // PR, and its result is the Reviewer's reply, a Verdict line first.
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { delimiter, join, resolve } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
+import { KIT_DIR } from "../kit/kitFiles.ts";
 import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
 import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
 import type { AgentRole, GivenOperatorComment } from "../loop/types.ts";
 import { kitPromptPath } from "../guard/trust-root.ts";
-import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
-import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { readInstallRecord } from "../skills/fetch.ts";
 import { type ParsedVerdict, parseVerdict } from "../loop/verdict.ts";
-import { AGENT_FAILURE_FILE, failureReportFor, MissingVerdictError } from "./failure.ts";
+import { AGENT_FAILURE_FILE, MissingVerdictError } from "./failure.ts";
 import {
   bundleAgentBranch,
   continueAgentBranch,
@@ -50,14 +49,12 @@ import {
   startAgentBranch,
 } from "./implement.ts";
 import { sentBackContext } from "./design.ts";
+import { claudeArgs, leaveFailureReport, readyHook, schemaOf, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "./launch.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
-import { readStream } from "./stream.ts";
 import { missingSkills, runSummary } from "./summary.ts";
-import { TRANSCRIPT_FILE, transcriptWriter } from "./transcript.ts";
-
-const KIT_DIR = resolve(import.meta.dirname, "..", "..");
+import { TRANSCRIPT_FILE } from "./transcript.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -70,22 +67,6 @@ async function loadConfig(productDir: string): Promise<KitConfig> {
   const resolved = await readKitConfigFromCheckout(productDir);
   if (!resolved.ok) throw new Error(`The Kit config is invalid:\n${resolved.errors.map((e) => `- ${e}`).join("\n")}`);
   return resolved.config;
-}
-
-type Checked<T> = { readonly ok: true; readonly output: T } | { readonly ok: false; readonly errors: readonly string[] };
-
-/** A Standard Schema over a role's output contract, so Sandcastle can ask the agent to fix a malformed output. */
-function schemaOf<T>(read: (value: unknown) => Checked<T>): StandardSchemaV1<unknown, T> {
-  return {
-    "~standard": {
-      version: 1,
-      vendor: "fabrik",
-      validate(value) {
-        const result = read(value);
-        return result.ok ? { value: result.output } : { issues: result.errors.map((message) => ({ message })) };
-      },
-    },
-  };
 }
 
 /** How one AFK role runs: its prompt, its output tag and contract, and how to log what it emitted. */
@@ -179,41 +160,6 @@ function modelFor(role: { model: string; effort: string | null }): { model: stri
   return { model, effort: effort === undefined || effort === "" ? null : effort };
 }
 
-/** The arguments Sandcastle's claudeCode() passes to `claude` (its buildPrintCommand), for the preflight. */
-function claudeArgs(model: string, effort: string | null): string[] {
-  return [
-    "--print",
-    "--verbose",
-    "--dangerously-skip-permissions",
-    "--output-format",
-    "stream-json",
-    "--model",
-    model,
-    ...(effort === null ? [] : ["--effort", effort]),
-    "-p",
-    "-",
-  ];
-}
-
-/** One onSandboxReady hook: the Product's setup, then the preflight last (Sandcastle runs hooks in parallel). */
-function readyHook(setup: string | null): string {
-  const preflight = `node ${JSON.stringify(join(KIT_DIR, "src", "preflight", "main.ts"))}`;
-  return setup === null ? preflight : `(${setup}) && ${preflight}`;
-}
-
-async function writeSummary(text: string): Promise<void> {
-  console.log(text);
-  const path = process.env["GITHUB_STEP_SUMMARY"];
-  if (path !== undefined && path !== "") await appendFile(path, text);
-}
-
-/** Appends step outputs, when the runner gives a file for them. */
-async function writeOutputs(outputs: Readonly<Record<string, string>>): Promise<void> {
-  const path = process.env["GITHUB_OUTPUT"];
-  if (path === undefined || path === "") return;
-  await appendFile(path, Object.entries(outputs).map(([key, value]) => `${key}=${value}\n`).join(""));
-}
-
 async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   const name = spec.role;
   const productDir = process.cwd();
@@ -289,15 +235,10 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       : Output.string({ tag: name });
 
   // The agent inherits this process's env (noSandbox), so set what it needs here.
-  process.env["PATH"] = [join(KIT_DIR, "node_modules", ".bin"), process.env["PATH"] ?? ""].join(delimiter);
-  process.env["DISABLE_AUTOUPDATER"] = "1";
-  process.env[CLAUDE_ARGS_ENV] = JSON.stringify(claudeArgs(role.model, role.effort));
+  setAgentEnv(claudeArgs(role.model, role.effort));
 
-  const lines: string[] = [];
-  const transcript = transcriptWriter(join(outDir, TRANSCRIPT_FILE));
-  // null until the init message arrives, then the routes it refused (empty when it passed).
-  const init: { refused: readonly string[] | null } = { refused: null };
   const abort = new AbortController();
+  const watch = streamWatch(join(outDir, TRANSCRIPT_FILE), abort);
   const timeoutMs = role.timeoutMinutes * 60_000;
 
   try {
@@ -329,26 +270,9 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
         },
       },
       signal: abort.signal,
-      logging: {
-        type: "file",
-        path: join(outDir, "agent.log"),
-        // Errors thrown here are swallowed by Sandcastle, so stop the run through the signal.
-        onAgentStreamEvent(event) {
-          if (event.type !== "raw") return;
-          lines.push(event.line);
-          const initMessage = init.refused === null ? readStream([event.line]).init : null;
-          if (initMessage !== null) {
-            const check = checkInitMessage(initMessage);
-            init.refused = check.kind === "refuse" ? check.routes : [];
-            if (check.kind === "refuse") abort.abort(new Error(check.routes.join("; ")));
-          }
-          // After the init check, so a failed write can never skip its abort.
-          transcript(event.line);
-        },
-      },
+      logging: { type: "file", path: join(outDir, "agent.log"), onAgentStreamEvent: watch.onAgentStreamEvent },
     });
-    if (init.refused === null) throw new Error("The agent's stream had no init message, so its API key source is unchecked");
-    if (init.refused.length > 0) throw new Error(`Refused at init: ${init.refused.join("; ")}`);
+    watch.checkInit();
 
     // Text output is checked here, so a reply that breaks its contract fails this job, never passes.
     // Either output kind puts what the tag held on the result.
@@ -365,11 +289,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     await writeFile(join(outDir, AGENT_RESULT_FILE), `${JSON.stringify(artifact, null, 2)}\n`);
     console.log(spec.describe(subject, checked));
   } catch (error) {
-    for (const route of init.refused ?? []) console.log(`::error title=Metered-billing route::${route}`);
     // Left for the push job, which posts the failure notice (loop.yml).
-    const report = failureReportFor({ error, lines, initRefused: init.refused });
-    await writeFile(join(outDir, AGENT_FAILURE_FILE), `${JSON.stringify(report, null, 2)}\n`);
-    console.log(`::error title=Infrastructure failure (${report.failure})::${report.detail}`);
+    await leaveFailureReport(error, watch, { path: join(outDir, AGENT_FAILURE_FILE), title: "Infrastructure failure" });
     throw error;
   } finally {
     // The install record src/skills/fetch.ts wrote last, naming each source and the skills from it.
@@ -377,12 +298,12 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     if (installed === undefined) {
       console.log("::warning title=Skills not installed::No install record was found in .claude/skills");
     } else {
-      const missing = missingSkills(lines, installed);
+      const missing = missingSkills(watch.lines, installed);
       if (missing.length > 0) {
         console.log(`::warning title=Installed skills missing at init::${missing.join(", ")}`);
       }
     }
-    await writeSummary(runSummary({ role: name, effort: role.effort, lines, ...(installed === undefined ? {} : { installed }) }));
+    await writeSummary(runSummary({ role: name, effort: role.effort, lines: watch.lines, ...(installed === undefined ? {} : { installed }) }));
   }
 }
 

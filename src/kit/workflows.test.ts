@@ -1,7 +1,9 @@
 // The Kit's reusable workflows are wiring only. These hold the wiring to the
 // files it names, since nothing runs the workflows before a release.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { JUDGE_JOB } from "./judge.ts";
+import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 
 const root = new URL("../../", import.meta.url);
 const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml", ".github/workflows/weekly-summary.yml"].map((path) => ({
@@ -11,6 +13,10 @@ const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml
 const loop = workflows.find((workflow) => workflow.path.endsWith("loop.yml"))!.text;
 const schedule = workflows.find((workflow) => workflow.path.endsWith("schedule.yml"))!.text;
 const prepareAgent = readFileSync(new URL(".github/actions/prepare-agent/action.yml", root), "utf8");
+const actions = readdirSync(new URL(".github/actions/", root)).map((name) => ({
+  name,
+  text: readFileSync(new URL(`.github/actions/${name}/action.yml`, root), "utf8"),
+}));
 
 /** A workflow's job, from its key line to the next job's. */
 function jobIn(workflow: string, job: string): string {
@@ -100,6 +106,16 @@ describe("The Kit's workflows", () => {
     expect(record).toContain("continue-on-error: true");
     expect(record).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
     expect(record).toContain("role: ${{ needs.kit.outputs.route }}");
+  });
+
+  // Scoring (#149) is planned inside that same step, so it can't fail or stall the push job either.
+  it("loop.yml's push job passes out its record step's ask for a score, and the scored record's path", () => {
+    const push = jobIn(loop, "push");
+    const record = stepsOf(push).find((step) => step.includes("uses: ./kit/.github/actions/write-run-record"));
+
+    expect(record).toContain("id: record");
+    expect(push).toContain("score: ${{ steps.record.outputs.score }}");
+    expect(push).toContain("record: ${{ steps.record.outputs.record }}");
   });
 
   // A Step-up run is an Implement run on a stronger model, so it gets implement's Extra skills.
@@ -197,6 +213,91 @@ describe("loop.yml's Design queue job", () => {
   });
 });
 
+describe("loop.yml's judge job", () => {
+  const judge = (): string => job(JUDGE_JOB);
+
+  it("runs after the push job, only when its scoring plan asked for a score, unless the run was cancelled", () => {
+    expect(judge()).toMatch(/\n    needs: \[kit, push\]\n/);
+    expect(judge()).toMatch(/\n    if: \$\{\{ !cancelled\(\) && needs\.push\.outputs\.score == 'true' \}\}\n/);
+  });
+
+  // The judge run action checks nothing out itself, so this checkout is all the job has.
+  it("checks out only the Kit, at its pinned commit, before running the judge, and never the Product repo", () => {
+    const steps = stepsOf(judge());
+    const checkouts = steps.filter((step) => step.includes("uses: actions/checkout@"));
+    const run = steps.findIndex((step) => step.includes("uses: ./kit/.github/actions/run-judge"));
+
+    expect(checkouts).toHaveLength(1);
+    expect(checkouts[0]).toContain("repository: jrey8343/fabrik");
+    expect(checkouts[0]).toContain("ref: ${{ needs.kit.outputs.sha }}");
+    expect(checkouts[0]).toContain("path: kit");
+    expect(checkouts[0]).toContain("persist-credentials: false");
+    expect(steps.indexOf(checkouts[0]!)).toBeLessThan(run);
+  });
+
+  // ADR-0002: the job running an agent holds no write credential.
+  it("holds no write credential: read-only access to the Ticket, and only the agent service account", () => {
+    const permissions = /\n    permissions:\n((?: {6}.*\n)+)/.exec(judge())?.[1] ?? "";
+
+    expect(permissions.split("\n").filter((line) => line !== "" && !line.trimStart().startsWith("#"))).toEqual(["      issues: read"]);
+    expect([...judge().matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1])).toEqual(["OP_AGENT_TOKEN"]);
+    expect(judge()).not.toMatch(/create-github-app-token|id-token|: write\b/);
+  });
+
+  it("stops at the Kit's judge timeout, never Kit config's", () => {
+    expect(judge()).toMatch(new RegExp(`\\n    timeout-minutes: ${JUDGE_TIMEOUT_MINUTES}\\n`));
+  });
+
+  it("passes out how its secrets loaded, and the model and effort it ran, for the judge's Run record", () => {
+    expect(judge()).toContain("secrets-step: ${{ steps.judge.outputs.secrets-step }}");
+    expect(judge()).toContain("model: ${{ steps.judge.outputs.model }}");
+    expect(judge()).toContain("effort: ${{ steps.judge.outputs.effort }}");
+    expect(stepsOf(judge()).find((step) => step.includes("uses: ./kit/.github/actions/run-judge"))).toContain("id: judge");
+  });
+});
+
+describe("loop.yml's score-record job", () => {
+  const scoreRecord = (): string => job("score-record");
+
+  it("runs after the judge job, whether it succeeded or failed, unless the run was cancelled, and never fails the run", () => {
+    expect(scoreRecord()).toMatch(new RegExp(`\\n    needs: \\[kit, push, ${JUDGE_JOB}\\]\\n`));
+    expect(scoreRecord()).toContain(`\n    if: \${{ !cancelled() && needs.${JUDGE_JOB}.result != 'skipped' }}\n`);
+    expect(scoreRecord()).toContain("\n    continue-on-error: true\n");
+  });
+
+  // Its action mints that one token, for fabrik-runs alone with Contents write (see its tests below).
+  it("holds no token but the store's: no job permissions, and only the push service account, for the score-record action", () => {
+    const write = stepsOf(scoreRecord()).find((step) => step.includes("uses: ./kit/.github/actions/write-score-record"));
+
+    expect(scoreRecord()).toContain("\n    permissions: {}\n");
+    expect([...scoreRecord().matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1])).toEqual(["OP_PUSH_TOKEN"]);
+    expect(write).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
+    expect(scoreRecord()).not.toMatch(/create-github-app-token|id-token/);
+  });
+
+  it("runs no Product code: it checks out only the Kit, and reads how the judge ended from FABRIK_NEEDS", () => {
+    const steps = stepsOf(scoreRecord());
+    const checkouts = steps.filter((step) => step.includes("uses: actions/checkout@"));
+    const write = steps.findIndex((step) => step.includes("uses: ./kit/.github/actions/write-score-record"));
+
+    expect(checkouts).toHaveLength(1);
+    expect(checkouts[0]).toContain("repository: jrey8343/fabrik");
+    expect(checkouts[0]).toContain("ref: ${{ needs.kit.outputs.sha }}");
+    expect(checkouts[0]).toContain("path: kit");
+    expect(checkouts[0]).toContain("persist-credentials: false");
+    expect(steps.indexOf(checkouts[0]!)).toBeLessThan(write);
+    expect(scoreRecord()).toContain("FABRIK_NEEDS: ${{ toJSON(needs) }}");
+    expect(steps[write]).toContain("record: ${{ needs.push.outputs.record }}");
+  });
+});
+
+describe("loop.yml's scoring jobs", () => {
+  it.each([JUDGE_JOB, "score-record"])("%s leaves reading and writing GitHub to the Kit's actions, never inline gh calls or shell steps", (name) => {
+    expect(job(name)).not.toMatch(/\bgh (api|issue|pr|repo|release|run|workflow) /);
+    expect(job(name)).not.toMatch(/\n\s+run: /);
+  });
+});
+
 describe("loop.yml's claim job", () => {
   it("takes agent:design off as the Design session's first turn starts, as it takes agent:implement off", () => {
     expect(job("implement-claim")).toContain(
@@ -230,24 +331,29 @@ describe("schedule.yml's Design queue job", () => {
   });
 });
 
-describe("The write the Run record action", () => {
-  const action = readFileSync(new URL(".github/actions/write-run-record/action.yml", root), "utf8");
+describe("The store-token action, which the record actions share", () => {
+  const action = readFileSync(new URL(".github/actions/store-token/action.yml", root), "utf8");
   const steps = action.split(/\n(?=    - )/);
-  const storeToken = steps.find((step) => step.includes("id: store"));
+  const storeToken = steps.find((step) => step.includes("id: store\n"));
+  const kitConfigToken = steps.find((step) => step.includes("id: kit-config\n"));
+  const permissionsOf = (step: string | undefined) => [...(step ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`);
 
-  it("builds and writes the record with the Kit's Node program, never inline gh calls", () => {
-    const program = /run: node (src\/\S+)/.exec(action)?.[1];
+  it("loads the Fabrik App key through the push service account, and nothing else", () => {
+    const secrets = steps.filter((step) => step.includes("1password/load-secrets-action@"));
 
-    expect(program).toBeDefined();
-    expect(existsSync(new URL(program!, root))).toBe(true);
-    expect(action).not.toMatch(/\bgh (api|issue|pr|repo) /);
+    expect(secrets).toHaveLength(1);
+    expect(secrets[0]).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}");
+    expect([...secrets[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual([
+      "op://Fabrik App/Fabrik App/client-id",
+      "op://Fabrik App/Fabrik App/private-key",
+    ]);
   });
 
   it("mints the store's token for fabrik-runs alone, with Contents write and nothing else", () => {
     expect(storeToken).toContain("uses: actions/create-github-app-token@");
     expect(storeToken).toMatch(/owner: jrey8343\n/);
     expect(storeToken).toMatch(/repositories: fabrik-runs\n/);
-    expect([...storeToken!.matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`)).toEqual(["contents: write"]);
+    expect(permissionsOf(storeToken)).toEqual(["contents: write"]);
   });
 
   it("goes on when the store's token can't be minted, so the program can name the missing setup step", () => {
@@ -265,11 +371,62 @@ describe("The write the Run record action", () => {
     expect(storeToken).toContain("if: steps.find-store.outputs.installed == 'true'");
   });
 
+  it("mints a token that reads the Product's Kit config only when asked, with Contents read and nothing else", () => {
+    expect(kitConfigToken).toContain("uses: actions/create-github-app-token@");
+    expect(kitConfigToken).toContain("if: inputs.kit-config-token == 'true'");
+    expect(kitConfigToken).not.toContain("repositories:");
+    expect(permissionsOf(kitConfigToken)).toEqual(["contents: read"]);
+    expect(action).toMatch(/\n  kit-config-token:\n(?:.*\n)*?\s+default: "false"\n/);
+  });
+
+  it("passes out the tokens it minted, empty for one it didn't", () => {
+    expect(action).toMatch(/\n  store-token:\n.*\n\s+value: \$\{\{ steps\.store\.outputs\.token \}\}\n/);
+    expect(action).toMatch(/\n  kit-config-token:\n.*\n\s+value: \$\{\{ steps\.kit-config\.outputs\.token \}\}\n/);
+  });
+});
+
+describe("The write the Run record action", () => {
+  const action = readFileSync(new URL(".github/actions/write-run-record/action.yml", root), "utf8");
+  const steps = action.split(/\n(?=    - )/);
+  const tokens = steps.find((step) => step.includes("uses: ./kit/.github/actions/store-token"));
+
+  it("builds and writes the record with the Kit's Node program, never inline gh calls", () => {
+    const program = /run: node (src\/\S+)/.exec(action)?.[1];
+
+    expect(program).toBeDefined();
+    expect(existsSync(new URL(program!, root))).toBe(true);
+    expect(action).not.toMatch(/\bgh (api|issue|pr|repo) /);
+  });
+
+  it("gets the store's token, and one that reads the Kit config, from the store-token action, holding the App key nowhere else", () => {
+    expect(tokens).toContain("id: tokens");
+    expect(tokens).toContain("op-push-token: ${{ inputs.op-push-token }}");
+    expect(tokens).toContain('kit-config-token: "true"');
+    expect(action).not.toMatch(/create-github-app-token|load-secrets-action/);
+  });
+
+  it("writes the record with those tokens", () => {
+    const write = steps.find((step) => step.includes("run: node src/kit/record-main.ts"));
+
+    expect(write).toContain("FABRIK_PRODUCT_TOKEN: ${{ steps.tokens.outputs.kit-config-token }}");
+    expect(write).toContain("FABRIK_STORE_TOKEN: ${{ steps.tokens.outputs.store-token }}");
+    expect(steps.indexOf(tokens!)).toBeLessThan(steps.indexOf(write!));
+  });
+
   it("takes the role's transcript, and a missing one is fine", () => {
     const download = steps.find((step) => step.includes("actions/download-artifact@"));
 
     expect(download).toContain("fabrik-transcript-");
     expect(download).toContain("continue-on-error: true");
+  });
+
+  // The scoring plan runs inside the record step (#149), on the record it just wrote.
+  it("passes out the scoring plan's ask for a score, and the scored record's path, from its program's step", () => {
+    const write = steps.find((step) => step.includes("run: node src/kit/record-main.ts"));
+
+    expect(write).toContain("id: record");
+    expect(action).toMatch(/\n  score:\n.*\n\s+value: \$\{\{ steps\.record\.outputs\.score \}\}\n/);
+    expect(action).toMatch(/\n  record:\n.*\n\s+value: \$\{\{ steps\.record\.outputs\.record \}\}\n/);
   });
 });
 
@@ -313,14 +470,165 @@ describe("The weekly summary workflow", () => {
     expect(run).toContain("FABRIK_APP_SLUG: ${{ steps.store.outputs.app-slug }}");
   });
 
-  it("reads the store's records from a sparse checkout of runs/, never its transcripts", () => {
+  it("reads the store's records and score files from a sparse checkout of runs/ and scores/, never its transcripts", () => {
     const checkout = steps.find((step) => step.includes("uses: actions/checkout@"));
 
     expect(checkout).toContain("repository: jrey8343/fabrik-runs");
-    expect(checkout).toMatch(/sparse-checkout: runs\n/);
+    expect(checkout).toMatch(/sparse-checkout: \|\n {10}runs\n {10}scores\n {8}\S/);
     expect(checkout).toContain("sparse-checkout-cone-mode: true");
     expect(checkout).toContain("persist-credentials: false");
     expect(action).not.toContain("transcripts/");
   });
 });
 
+
+/**
+ * What a Kit source file imports at run time: every import and re-export but
+ * `import type` and `export type`, the only ones Node strips whole.
+ */
+function runtimeImportsOf(source: string): string[] {
+  const statements = source.matchAll(/^(?:import|export)\s+(type\s+)?(?:[\w*{}\s,]+?\s+from\s+)?["']([^"']+)["'];?$/gm);
+  return [...statements].filter((match) => match[1] === undefined).map((match) => match[2]!);
+}
+
+/** Each package a Kit program reaches through its imports at run time, as `<file> imports <package>`. */
+function packagesReachedBy(program: string): string[] {
+  const seen = new Set<string>();
+  const reached: string[] = [];
+  const visit = (file: URL) => {
+    if (seen.has(file.href)) return;
+    seen.add(file.href);
+    for (const specifier of runtimeImportsOf(readFileSync(file, "utf8"))) {
+      if (specifier.startsWith(".")) visit(new URL(specifier, file));
+      else if (!specifier.startsWith("node:")) reached.push(`${file.href.slice(root.href.length)} imports ${specifier}`);
+    }
+  };
+  visit(new URL(program, root));
+  return reached;
+}
+
+describe("The Kit's composite actions", () => {
+  it.each(actions)("$name leaves reading and writing GitHub to the Kit's Node programs, never inline gh calls", ({ text }) => {
+    expect(text).not.toMatch(/\bgh (api|issue|pr|repo|release|run|workflow) /);
+  });
+
+  // A composite action's `uses: ./` path starts at the workspace, where every workflow checks the Kit out at kit/.
+  it.each(actions)("$name uses only composite actions the Kit ships, through its kit/ checkout", ({ text }) => {
+    for (const [, path] of text.matchAll(/uses: (\.\/\S+)/g)) {
+      expect(path).toMatch(/^\.\/kit\/\.github\/actions\/[a-z-]+$/);
+      expect(existsSync(new URL(`${path!.slice("./kit/".length)}/action.yml`, root)), path).toBe(true);
+    }
+  });
+
+  it.each(actions)("$name runs only Node programs the Kit ships", ({ text }) => {
+    const programs = [...text.matchAll(/run: node (?:kit\/)?(src\/\S+)/g)].map((match) => match[1]!);
+
+    for (const program of programs) expect(existsSync(new URL(program, root)), program).toBe(true);
+  });
+
+  // Push-job-shaped programs (src/main.ts, the record writers) run without `npm ci`: only the agent's actions install Sandcastle.
+  it.each(actions.filter(({ text }) => !text.includes("run: npm ci")))(
+    "$name, which installs nothing, runs only programs that import no package at run time",
+    ({ text }) => {
+      const programs = [...text.matchAll(/run: node (?:kit\/)?(src\/\S+)/g)].map((match) => match[1]!);
+
+      expect(programs.length).toBeGreaterThan(0);
+      for (const program of programs) expect(packagesReachedBy(program), program).toEqual([]);
+    },
+  );
+
+  it("can tell a program that imports a package at run time", () => {
+    expect(packagesReachedBy("src/kit/judge-main.ts")).toEqual(expect.arrayContaining(["src/kit/judge-main.ts imports @ai-hero/sandcastle"]));
+  });
+});
+
+describe("The judge action", () => {
+  const action = readFileSync(new URL(".github/actions/run-judge/action.yml", root), "utf8");
+  const steps = action.split(/\n(?=    - )/);
+  const step = (pattern: string) => steps.findIndex((candidate) => candidate.includes(pattern));
+
+  it("checks nothing out, so the judge job's Kit checkout is all it has: never the Product repo", () => {
+    expect(action).not.toContain("actions/checkout@");
+  });
+
+  it("holds no write credential: no Fabrik App token, and only the Claude token, through the agent service account", () => {
+    const secrets = steps.filter((candidate) => candidate.includes("1password/load-secrets-action@"));
+
+    expect(action).not.toContain("create-github-app-token");
+    expect(action).not.toMatch(/OP_PUSH_TOKEN|OP_IMPLEMENT_TOKEN|op-push-token|id-token/);
+    expect(secrets).toHaveLength(1);
+    expect(secrets[0]).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-agent-token }}");
+    expect([...secrets[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual(["op://Fabrik/Claude token/credential"]);
+  });
+
+  it("reads the Ticket with the read-only token before the Claude token loads, and never gives the judge that token", () => {
+    const ticket = step("run: node src/kit/judge-ticket-main.ts");
+    const judge = steps[step("run: node src/kit/judge-main.ts")]!;
+
+    expect(ticket).toBeGreaterThan(-1);
+    expect(steps[ticket]).toContain("GH_TOKEN: ${{ inputs.github-token }}");
+    expect(ticket).toBeLessThan(step("1password/load-secrets-action@"));
+    expect(judge).toContain("id: judge");
+    expect(judge).not.toContain("inputs.github-token");
+  });
+
+  it("judges the Implement run's transcript, and a missing one is the judge's failure, not the step's", () => {
+    const download = steps[step("actions/download-artifact@")]!;
+
+    expect(download).toContain("name: fabrik-transcript-implement");
+    expect(download).toContain("continue-on-error: true");
+  });
+
+  it("leaves its answer or failure report for the score-record job, and its own transcript apart from them", () => {
+    const result = steps[step("name: fabrik-judge-result")]!;
+    const failure = steps[step("name: fabrik-judge-failure")]!;
+    const transcript = steps[step("name: fabrik-transcript-score")]!;
+
+    expect(result).toMatch(/path: .*\/judge-result\.json\n/);
+    expect(failure).toContain("if: failure()");
+    expect(failure).toMatch(/path: .*\/judge-failure\.json\n/);
+    expect(transcript).toContain("if: always()");
+    expect(transcript).toContain("continue-on-error: true");
+    expect(transcript).toMatch(/path: .*transcript\.jsonl\.gz/);
+    expect(action).toMatch(/if: always\(\)\n\s+continue-on-error: true\n\s+shell: bash\n\s+run: .*gzip.*transcript\.jsonl/);
+  });
+
+  it("passes out how its secrets loaded, its model and its effort, for the judge's Run record", () => {
+    expect(action).toMatch(/\n  secrets-step:\n.*\n\s+value: \$\{\{ steps\.op\.outcome \}\}\n/);
+    expect(action).toMatch(/\n  model:\n.*\n\s+value: \$\{\{ steps\.judge\.outputs\.model \}\}\n/);
+    expect(action).toMatch(/\n  effort:\n.*\n\s+value: \$\{\{ steps\.judge\.outputs\.effort \}\}\n/);
+  });
+});
+
+describe("The score-record action", () => {
+  const action = readFileSync(new URL(".github/actions/write-score-record/action.yml", root), "utf8");
+  const steps = action.split(/\n(?=    - )/);
+  const tokens = steps.find((step) => step.includes("uses: ./kit/.github/actions/store-token"));
+
+  // The store-token action mints it for fabrik-runs alone, with Contents write (see its tests above).
+  it("gets one token, the store's, from the store-token action, and none that reads the Product repo", () => {
+    expect(tokens).toContain("id: tokens");
+    expect(tokens).toContain("op-push-token: ${{ inputs.op-push-token }}");
+    expect(tokens).not.toContain("kit-config-token");
+    expect(action).not.toMatch(/create-github-app-token|load-secrets-action/);
+  });
+
+  it("runs no agent and no Product code: no checkout, no Claude token", () => {
+    expect(action).not.toContain("actions/checkout@");
+    expect(action).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
+  });
+
+  it("takes the judge's answer or failure report and its transcript, and missing ones are fine", () => {
+    const downloads = steps.filter((step) => step.includes("actions/download-artifact@"));
+
+    expect(downloads.find((step) => step.includes("pattern: fabrik-judge-*"))).toContain("continue-on-error: true");
+    expect(downloads.find((step) => step.includes("name: fabrik-transcript-score"))).toContain("continue-on-error: true");
+  });
+
+  it("writes with the store's token, and the scored run's record path it was given", () => {
+    const write = steps.find((step) => step.includes("run: node src/kit/score-record-main.ts"));
+
+    expect(write).toContain("FABRIK_STORE_TOKEN: ${{ steps.tokens.outputs.store-token }}");
+    expect(write).toContain("FABRIK_SCORED_RECORD: ${{ inputs.record }}");
+  });
+});

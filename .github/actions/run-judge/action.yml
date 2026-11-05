@@ -1,0 +1,136 @@
+# Runs the judge (#149): the Kit's fixed judge model (JUDGE_MODEL in
+# src/kit/runStore.ts) scores one finished Implementer run on the Kit's
+# rubrics, from the run's transcript and its Ticket. Its job holds no write
+# credential (ADR-0002): only the read-only GITHUB_TOKEN, which reads the
+# Ticket, and the Claude token, loaded through the agent service account
+# (ADR-0004). The job, not the step, is the security boundary (ADR-0004), so
+# those two are all a judge that read the runner's memory could reach. It runs
+# src/kit/judge-main.ts, which runs the judge with no tools, behind the
+# metered-billing preflight, in an empty directory. It checks out nothing: the
+# judge job checks out the Kit alone into kit/, never the Product repo, before
+# using it:
+#   - uses: ./kit/.github/actions/run-judge
+#     with:
+#       op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
+#       github-token: ${{ github.token }}
+#       ticket: ${{ needs.kit.outputs.ticket }}
+# It leaves the judge's answer (fabrik-judge-result) or its failure report
+# (fabrik-judge-failure), and its transcript (fabrik-transcript-score), for the
+# score-record job (.github/actions/write-score-record). Its outputs are for
+# the judge job to pass out, as an agent job does for its Run record.
+name: Run the judge
+description: Scores a finished Implementer run from its transcript and Ticket, with no tools and no write credential.
+
+inputs:
+  op-agent-token:
+    description: The agent service account's token (secrets.OP_AGENT_TOKEN), which reads the Claude token.
+    required: true
+  github-token:
+    description: The job's read-only GITHUB_TOKEN, to read the Ticket.
+    required: true
+  ticket:
+    description: The Ticket the scored run built (needs.kit.outputs.ticket).
+    required: true
+
+outputs:
+  secrets-step:
+    description: How loading the Claude token went; "failure" means the judge never started.
+    value: ${{ steps.op.outcome }}
+  model:
+    description: The model the judge ran.
+    value: ${{ steps.judge.outputs.model }}
+  effort:
+    description: The effort the judge ran at, empty for the model's default.
+    value: ${{ steps.judge.outputs.effort }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24
+
+    - name: Install the Kit (Sandcastle and the Claude Code CLI, pinned)
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      run: npm ci
+
+    # The push job asks for a score only for a run whose transcript survived.
+    # Missing anyway, the judge fails, and the score file says so.
+    - name: Take the scored run's transcript
+      continue-on-error: true
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: fabrik-transcript-implement
+        path: ${{ runner.temp }}/scored-transcript
+
+    # Before the Claude token loads, and in a step of its own, so the token stays
+    # out of the judge's env. Not a boundary (ADR-0004): what keeps the judge from
+    # writing is that its job holds only this read-only token.
+    - name: Read the Ticket
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        FABRIK_TICKET: ${{ inputs.ticket }}
+      run: node src/kit/judge-ticket-main.ts "$RUNNER_TEMP/judge-ticket.json"
+
+    - name: Load the Claude token
+      id: op
+      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+      with:
+        export-env: false
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-agent-token }}
+        CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+
+    - name: Run the judge
+      id: judge
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
+        FABRIK_TRANSCRIPT_DIR: ${{ runner.temp }}/scored-transcript
+        FABRIK_TICKET_FILE: ${{ runner.temp }}/judge-ticket.json
+        FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-judge
+      run: node src/kit/judge-main.ts
+
+    - name: Pass the judge's answer to the score-record job
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: fabrik-judge-result
+        path: ${{ runner.temp }}/fabrik-judge/judge-result.json
+        if-no-files-found: error
+        retention-days: 7
+
+    # src/kit/judge-main.ts writes this when it catches a failure. A judge
+    # cancelled by its timeout, or whose token never loaded, leaves none, and
+    # the score-record job reads that as the judge failing.
+    - name: Pass the judge's failure report to the score-record job
+      if: failure()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: fabrik-judge-failure
+        path: ${{ runner.temp }}/fabrik-judge/judge-failure.json
+        if-no-files-found: ignore
+        retention-days: 7
+
+    # The judge's own stream-json transcript, kept for its Run record whether it
+    # passed, failed or timed out. Not fabrik-judge-*: the score-record job
+    # downloads those. continue-on-error: keeping it must never fail the judge.
+    - name: Gzip the judge's transcript
+      if: always()
+      continue-on-error: true
+      shell: bash
+      run: if [ -f "$RUNNER_TEMP/fabrik-judge/transcript.jsonl" ]; then gzip -f "$RUNNER_TEMP/fabrik-judge/transcript.jsonl"; fi
+
+    - name: Keep the judge's transcript
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: fabrik-transcript-score
+        path: ${{ runner.temp }}/fabrik-judge/transcript.jsonl.gz
+        if-no-files-found: ignore
+        retention-days: 7
