@@ -109,7 +109,11 @@ export function sentryRead(groups: readonly GroupFacts[], overrides: Partial<Sen
   return { kind: "read", groups, groupsWithoutStats: 0, cutShortAt: null, latestEventErrors: [], ...overrides };
 }
 
-/** A tick with production errors on and Sentry read, giving these groups and no Monitor issues, and the default branch not read. */
+/**
+ * A tick with production errors on and Sentry read, giving these groups and
+ * no Monitor issues, the default branch not read, and the Kit default cap of
+ * 5 open error issues.
+ */
 export function monitorInput(groups: readonly GroupFacts[], overrides: Partial<MonitorInput> = {}): MonitorInput {
   return {
     monitor: { ...DEFAULT_KIT_CONFIG.monitor, errors: SENTRY_ON },
@@ -117,7 +121,7 @@ export function monitorInput(groups: readonly GroupFacts[], overrides: Partial<M
     issues: [],
     gatingChecks: [],
     mainChecks: null,
-    now: "2026-11-06T08:00:00Z",
+    cap: DEFAULT_KIT_CONFIG.caps.monitorIssues,
     ...overrides,
   };
 }

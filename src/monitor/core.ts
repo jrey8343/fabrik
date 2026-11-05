@@ -3,7 +3,7 @@
 // `fabrik:monitor` issue, what the Monitor files, rewrites and closes, and the
 // step summary's lines; red main's part is in ./redMain.ts. Pure, no I/O: the
 // program (src/monitor/main.ts) gathers the facts and applies the plan.
-import { DEFAULT_KIT_CONFIG, type KitConfig } from "../kit/config.ts";
+import type { KitConfig } from "../kit/config.ts";
 import { MONITOR_LABEL, WONTFIX } from "../loop/labels.ts";
 import { monitorMarkerIn, monitorMarkerLine } from "../loop/markers.ts";
 import {
@@ -35,10 +35,12 @@ export interface MonitorInput {
   readonly gatingChecks: readonly string[];
   /** What reading the default branch's commits and their check runs gave this tick, or null when `monitor.redMain` is off and they weren't read. */
   readonly mainChecks: MainChecksRead | null;
-  /** The Kit config's `caps.monitor_issues`: the most open error issues the Monitor keeps at once, 0 pausing new ones; the Kit default when not given. */
-  readonly cap?: number;
-  /** ISO 8601. */
-  readonly now: string;
+  /**
+   * The Kit config's `caps.monitor_issues`: the most open error issues the
+   * Monitor keeps at once, past which new groups are held until a slot frees
+   * up. A repo can only lower it from the Kit default, and 0 pauses new error filings.
+   */
+  readonly cap: number;
 }
 
 export type SentryRead =
@@ -95,13 +97,6 @@ export function groupsNeedingLatestEvent(plan: MonitorPlan): ReadonlySet<string>
   ]);
 }
 
-/**
- * The Kit default for the most open error issues the Monitor keeps in a
- * Product repo, which `caps.monitor_issues` can only lower. Past it, new
- * groups are held until a slot frees up.
- */
-const MONITOR_ISSUES_CAP = DEFAULT_KIT_CONFIG.caps.monitorIssues;
-
 /** What a cap of 0 does: every group that would be filed is held, and nothing else changes. */
 const FILINGS_PAUSED = "new error filings are paused by `caps.monitor_issues: 0`";
 
@@ -119,7 +114,7 @@ const SENTRY_TOKEN_ITEM = "`Sentry token` item in the `Fabrik App` 1Password vau
  * closes or reopens an error issue. A source that isn't set up, or that
  * Sentry refuses, is a quiet note, never a failure.
  */
-function productionErrors({ monitor, sentry, issues, cap = MONITOR_ISSUES_CAP }: MonitorInput): Pick<MonitorPlan, "open" | "rewrite" | "summary"> {
+function productionErrors({ monitor, sentry, issues, cap }: MonitorInput): Pick<MonitorPlan, "open" | "rewrite" | "summary"> {
   if (monitor.errors === null || sentry === null) {
     return {
       open: [],

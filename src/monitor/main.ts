@@ -106,7 +106,6 @@ async function main(): Promise<void> {
     gatingChecks,
     mainChecks: facts.mainChecks,
     cap: config.caps.monitorIssues,
-    now: new Date().toISOString(),
   });
   // Which groups are filed and held never depends on their latest events, so a
   // plan with the groups as listed names the ones whose latest event to read.
