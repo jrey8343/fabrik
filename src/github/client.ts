@@ -9,12 +9,31 @@ export interface Repo {
 /** A failed GitHub REST call, with the status it failed with. */
 export class GitHubError extends Error {
   readonly status: number;
+  /** The body GitHub answered with, such as its JSON `message`. */
+  readonly body: string;
+  /** GitHub's `x-ratelimit-remaining` header, or null when it gave none. */
+  readonly rateLimitRemaining: string | null;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, answer: { readonly body?: string; readonly rateLimitRemaining?: string | null } = {}) {
     super(message);
     this.name = "GitHubError";
     this.status = status;
+    this.body = answer.body ?? "";
+    this.rateLimitRemaining = answer.rateLimitRemaining ?? null;
   }
+}
+
+/**
+ * Why GitHub refused a call, when it's one of the refusals a caller can act
+ * on: a rate limit (a 429, or a 403 with no requests left or a message naming
+ * a rate limit), or a permission the token lacks (a 403 GitHub answers with
+ * "Resource not accessible by integration"). Null for any other failure.
+ */
+export function refusalOf(error: GitHubError): "rate-limited" | "missing-permission" | null {
+  if (error.status === 429) return "rate-limited";
+  if (error.status !== 403) return null;
+  if (error.rateLimitRemaining === "0" || /rate limit/i.test(error.body)) return "rate-limited";
+  return error.body.includes("Resource not accessible by integration") ? "missing-permission" : null;
 }
 
 /** A GitHub API client authenticated as the Fabrik App. */
@@ -36,7 +55,11 @@ export class GitHub {
     });
     if (response.status === 404 && options.allowNotFound === true) return null;
     if (!response.ok) {
-      throw new GitHubError(`GitHub ${method} ${path} failed: ${response.status} ${await response.text()}`, response.status);
+      const text = await response.text();
+      throw new GitHubError(`GitHub ${method} ${path} failed: ${response.status} ${text}`, response.status, {
+        body: text,
+        rateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
+      });
     }
     return response.status === 204 ? null : response.json();
   }

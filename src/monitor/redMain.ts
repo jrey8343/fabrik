@@ -12,7 +12,9 @@ export type MainChecksRead =
   /** The default branch's newest commits, newest first back to the program's bound, each with its check runs. */
   | { readonly kind: "read"; readonly commits: readonly MainCommit[] }
   /** GitHub refused the check runs: the Fabrik App hasn't been granted Checks: read. */
-  | { readonly kind: "no-permission" };
+  | { readonly kind: "no-permission" }
+  /** GitHub's rate limit stopped the read, with GitHub's error. */
+  | { readonly kind: "rate-limited"; readonly error: string };
 
 /** A commit on the default branch. */
 export interface MainCommit {
@@ -49,6 +51,12 @@ export interface CheckRun {
 export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: MonitorInput): Pick<MonitorPlan, "open" | "rewrite" | "close" | "summary"> {
   const nothing = { open: [], rewrite: [], close: [], summary: [] };
   if (!monitor.redMain || mainChecks === null) return nothing;
+  if (mainChecks.kind === "rate-limited") {
+    return {
+      ...nothing,
+      summary: [`Warning: GitHub's rate limit stopped red main reading the default branch's checks, so it did nothing this tick: ${mainChecks.error}`],
+    };
+  }
   if (mainChecks.kind === "no-permission") {
     return {
       ...nothing,

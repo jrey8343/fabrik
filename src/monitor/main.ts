@@ -16,7 +16,7 @@
 // Red main reads check runs through the App's Checks: read; while the App
 // lacks it, GitHub refuses them and red main is a quiet dormant note.
 import { appendFile } from "node:fs/promises";
-import { GitHub, GitHubError, type Repo } from "../github/client.ts";
+import { GitHub, GitHubError, type Repo, refusalOf } from "../github/client.ts";
 import { readKitConfigSources } from "../github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "../kit/caller.ts";
 import { type KitConfig, type MonitorErrors, resolveKitConfig } from "../kit/config.ts";
@@ -115,22 +115,29 @@ interface RawCheckRun {
 
 /**
  * The default branch's newest commits, newest first, each with its check
- * runs, or no-permission when GitHub refuses the check runs because the
- * Fabrik App hasn't been granted Checks: read. Every other error fails the run.
+ * runs; no-permission when GitHub refuses the check runs because the Fabrik
+ * App hasn't been granted Checks: read, and rate-limited, with a warning,
+ * when GitHub's rate limit stops the read. Every other error fails the run.
  */
 async function readMainChecks(github: GitHub, repo: Repo, gatingChecks: readonly string[]): Promise<MainChecksRead> {
-  // With no sha, GitHub lists the default branch's commits.
-  const listed = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/commits?per_page=${MAIN_COMMITS}`)) as RawCommit[];
-  const commits: MainCommit[] = [];
-  for (const commit of listed) {
-    try {
+  try {
+    // With no sha, GitHub lists the default branch's commits.
+    const listed = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/commits?per_page=${MAIN_COMMITS}`)) as RawCommit[];
+    const commits: MainCommit[] = [];
+    for (const commit of listed) {
       commits.push({ sha: commit.sha, url: commit.html_url, checkRuns: await checkRunsOf(github, repo, commit, gatingChecks) });
-    } catch (error) {
-      if (error instanceof GitHubError && error.status === 403) return { kind: "no-permission" };
-      throw error;
     }
+    return { kind: "read", commits };
+  } catch (error) {
+    const refusal = error instanceof GitHubError ? refusalOf(error) : null;
+    if (refusal === "missing-permission") return { kind: "no-permission" };
+    if (refusal === "rate-limited") {
+      const message = (error as GitHubError).message;
+      console.log(`::warning title=GitHub rate limit::${message}`);
+      return { kind: "rate-limited", error: message };
+    }
+    throw error;
   }
-  return { kind: "read", commits };
 }
 
 /**

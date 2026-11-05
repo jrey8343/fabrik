@@ -525,6 +525,19 @@ describe("Red main dormant", () => {
     ]);
   });
 
+  it("warns, doing nothing, when GitHub's rate limit stopped the read of the default branch's checks, which isn't a missing Checks: read", () => {
+    const plan = monitorPlanFor(
+      redMainInput([], { mainChecks: { kind: "rate-limited", error: "GitHub GET check-runs failed: 403 API rate limit exceeded" }, issues: [aRedMainIssue()] }),
+    );
+
+    expect(plan.open).toEqual([]);
+    expect(plan.rewrite).toEqual([]);
+    expect(plan.close).toEqual([]);
+    expect(plan.summary.filter((line) => /red main/i.test(line))).toEqual([
+      "Warning: GitHub's rate limit stopped red main reading the default branch's checks, so it did nothing this tick: GitHub GET check-runs failed: 403 API rate limit exceeded",
+    ]);
+  });
+
   it("notes red main dormant beside what production errors did, so a missing Checks: read never stops Sentry's issues", () => {
     const plan = monitorPlanFor(
       monitorInput([aGroup()], { mainChecks: { kind: "no-permission" } }),
