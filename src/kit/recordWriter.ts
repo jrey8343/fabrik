@@ -74,24 +74,34 @@ const CONFLICT = 409;
 
 /**
  * Creates the file at `path`, or returns false when the store already holds
- * it: without a `sha` the Contents API refuses to replace a file (422).
+ * it: without a `sha` the Contents API refuses to replace a file (422), so a
+ * refusal is checked by looking for the file, never by reading its message.
  */
 async function createFile(store: StoreApi, path: string, content: Uint8Array, message: string): Promise<boolean> {
-  const contentsPath = path.split("/").map(encodeURIComponent).join("/");
+  const contents = `/repos/${RUN_STORE.owner}/${RUN_STORE.name}/contents/${path.split("/").map(encodeURIComponent).join("/")}`;
   try {
-    await store.rest("PUT", `/repos/${RUN_STORE.owner}/${RUN_STORE.name}/contents/${contentsPath}`, {
-      message,
-      content: Buffer.from(content).toString("base64"),
-    });
+    await store.rest("PUT", contents, { message, content: Buffer.from(content).toString("base64") });
     return true;
   } catch (error) {
-    if (error instanceof GitHubError && error.status === UNPROCESSABLE && error.message.includes('"sha"')) return false;
+    if (error instanceof GitHubError && error.status === UNPROCESSABLE && (await isThere(store, contents))) return false;
     throw error;
   }
 }
 
-/** The Contents API's answer to creating a file that already exists, naming the `sha` it lacked. */
+/** Whether the store holds a file at this Contents API path. */
+async function isThere(store: StoreApi, contents: string): Promise<boolean> {
+  try {
+    await store.rest("GET", contents);
+    return true;
+  } catch (error) {
+    if (error instanceof GitHubError && error.status === NOT_FOUND) return false;
+    throw error;
+  }
+}
+
+/** The Contents API's answer to creating a file that already exists, among other refusals. */
 const UNPROCESSABLE = 422;
+const NOT_FOUND = 404;
 
 /** How the record writer ended: a write, or no token for the store because setup hasn't made or reached it. */
 export type RecordOutcome = RecordWrite | { readonly kind: "no-store-token" };
