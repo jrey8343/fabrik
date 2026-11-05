@@ -322,7 +322,7 @@ describe("An agent job's inputs", () => {
   ];
 
   it("gives the Reviewer the PR and the Operator's comments, never the Verdicts or fix comments, so earlier runs don't steer it", async () => {
-    expect(await readPullRequest(withThread(), repo, 50, false, "operator")).toEqual({
+    expect(await readPullRequest(withThread(), repo, 50, { withComments: false, operator: "operator" })).toEqual({
       number: 50,
       title: "Add a waitlist",
       body: "Closes #7",
@@ -334,7 +334,7 @@ describe("An agent job's inputs", () => {
   });
 
   it("gives a retry the PR's body, to refresh, its comments with their authors' kind, so only the Fabrik App's Verdicts count, and the Operator's comments apart", async () => {
-    expect(await readPullRequest(withThread(), repo, 50, true, "operator")).toEqual({
+    expect(await readPullRequest(withThread(), repo, 50, { withComments: true, operator: "operator" })).toEqual({
       number: 50,
       title: "Add a waitlist",
       body: "Closes #7",

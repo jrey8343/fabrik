@@ -306,8 +306,7 @@ export async function readPullRequest(
   github: Reader,
   repo: Repo,
   number: number,
-  withComments: boolean,
-  operator: string,
+  { withComments, operator }: { readonly withComments: boolean; readonly operator: string },
 ): Promise<unknown> {
   const [data, operatorComments] = await Promise.all([
     github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, { owner: repo.owner, name: repo.name, number }),
@@ -368,7 +367,7 @@ async function main(outDir: string): Promise<void> {
     const withComments = process.env["FABRIK_PULL_REQUEST_COMMENTS"] === "true";
     await writeFile(
       join(outDir, "pull-request.json"),
-      JSON.stringify(await readPullRequest(github, repo, pullRequest, withComments, operator)),
+      JSON.stringify(await readPullRequest(github, repo, pullRequest, { withComments, operator })),
     );
     if (review !== null) await writeFile(join(outDir, "review.json"), JSON.stringify(await readReview(github, repo, pullRequest, review)));
   }

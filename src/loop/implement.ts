@@ -151,9 +151,11 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         fixes,
         // Its Verdict is the Request-changes run's, so it uses no retry.
         requestChanges ? { ...pullRequest, requestChangesRun: true } : pullRequest,
-        "execution-flaw",
-        "empty-diff",
-        `The Implementer's ${requestChanges ? "Request-changes run" : "retry"} on \`${branch}\` committed no change, so there was nothing to review.`,
+        {
+          verdict: "execution-flaw",
+          source: "empty-diff",
+          findings: `The Implementer's ${requestChanges ? "Request-changes run" : "retry"} on \`${branch}\` committed no change, so there was nothing to review.`,
+        },
       ),
     };
   }

@@ -94,7 +94,7 @@ describe("A Review's context", () => {
     };
 
     // The Review's input step, then the Review's prompt.
-    const read = await readPullRequest(github, { owner: "jrey8343", name: "penrith" }, 39, false, "operator");
+    const read = await readPullRequest(github, { owner: "jrey8343", name: "penrith" }, 39, { withComments: false, operator: "operator" });
     const { productDir, pullRequestFile, specFile } = await inputs(read);
     const context = await reviewContext(productDir, pullRequestFile, specFile);
     const text = context.parts.join("\n");

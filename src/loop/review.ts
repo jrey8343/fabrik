@@ -52,7 +52,7 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot): Plan {
       "",
       ...event.failed.map((name) => `- \`${name.replace(/`/g, "'")}\``),
     ].join("\n");
-    return { kind: "act", actions: verdictActions(event, pullRequest, "execution-flaw", "ci", findings) };
+    return { kind: "act", actions: verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings }) };
   });
 }
 
@@ -67,14 +67,12 @@ export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
     if (!parsed.ok) {
       return { kind: "fail", failure: "infrastructure", reason: `The Review of #${pullRequest.number} gave no valid Verdict: ${parsed.error}` };
     }
-    const actions = verdictActions(
-      event,
-      pullRequest,
-      parsed.verdict,
-      "reviewer",
-      withoutMentions(parsed.findings),
-      consideredSection(parsed.considered, event.operatorComments),
-    );
+    const actions = verdictActions(event, pullRequest, {
+      verdict: parsed.verdict,
+      source: "reviewer",
+      findings: withoutMentions(parsed.findings),
+      considered: consideredSection(parsed.considered, event.operatorComments),
+    });
     if (parsed.verdict !== "pass") return { kind: "act", actions };
     return {
       kind: "act",
@@ -135,10 +133,17 @@ const VERDICT_COMMENT: PostedComment = { posted: "verdict" };
 export function verdictActions(
   event: { readonly headSha: string; readonly runUrl: string },
   pullRequest: PullRequestSnapshot,
-  verdict: Verdict,
-  source: VerdictRecord["source"],
-  findings: string,
-  considered: readonly string[] = [],
+  {
+    verdict,
+    source,
+    findings,
+    considered = [],
+  }: {
+    readonly verdict: Verdict;
+    readonly source: VerdictRecord["source"];
+    readonly findings: string;
+    readonly considered?: readonly string[];
+  },
 ): Action[] {
   const record: VerdictRecord = { verdict, source, requestChanges: pullRequest.requestChangesRun, headSha: event.headSha };
   const by = BY[source];
