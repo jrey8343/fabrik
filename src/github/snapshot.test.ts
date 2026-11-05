@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
 import { anIssue, aPullRequest, designQueueSnapshotOf, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
+import { JUDGE_JOB } from "../kit/judge.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
@@ -59,6 +60,22 @@ describe("The Implement job's name", () => {
     const implementJob = /^ {2}implement:\n {4}name: (.+)$/m.exec(workflow)?.[1];
 
     expect(implementJob).toBe(IMPLEMENT_JOB_NAME);
+  });
+});
+
+describe("The judge job's name", () => {
+  // #149: scoring never takes a Dispatch slot, nor a Design session slot.
+  it("is never counted as an Implement run or a Design-session turn in flight while it scores a run", async () => {
+    const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
+    const judgeJob = new RegExp(`^ {2}${JUDGE_JOB}:\n {4}name: (.+)$`, "m").exec(workflow)?.[1];
+    expect(judgeJob).toBeDefined();
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "completed" }, { name: `fabrik / ${judgeJob}`, status: "in_progress" }] },
+      { id: 2, status: "queued", jobs: [{ name: `fabrik / ${judgeJob}`, status: "queued" }] },
+    ]);
+
+    expect(await countImplementRuns(actions, repo)).toBe(0);
+    expect(await designTurnsInProgress(actions, repo)).toEqual([]);
   });
 });
 

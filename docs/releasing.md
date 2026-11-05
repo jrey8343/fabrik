@@ -47,7 +47,7 @@ Fabrik uses semver, counted from what a Product repo has to do:
    git push origin v1.3.0
    ```
 
-4. Publish the GitHub release with notes that say what changed, whether a Product repo needs anything beyond the bump (only for a major), and the pins it carries. A release whose new behaviour waits on an opt-in Operator step gets a **To turn it on** section saying which step turns it on, in which repos, and to turn it on for the Pilot first. Notes drafted ahead of a release are in `docs/release-notes/`, such as [the Run records minor's](release-notes/run-records.md) and [the Monitor minor's](release-notes/monitor.md).
+4. Publish the GitHub release with notes that say what changed, whether a Product repo needs anything beyond the bump (only for a major), and the pins it carries. A release whose new behaviour waits on an opt-in Operator step gets a **To turn it on** section saying which step turns it on, in which repos, and to turn it on for the Pilot first. Notes drafted ahead of a release are in `docs/release-notes/`, such as [the Run records minor's](release-notes/run-records.md), [the Scorers minor's](release-notes/scorers.md) and [the Monitor minor's](release-notes/monitor.md).
 
    ```sh
    jq -r '"- Sandcastle \(.dependencies["@ai-hero/sandcastle"])\n- Claude Code CLI \(.dependencies["@anthropic-ai/claude-code"])"' package.json

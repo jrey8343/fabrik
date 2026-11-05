@@ -1,19 +1,62 @@
 // Writes a run's transcript and Run record to the store, RUN_STORE (ADR-0009),
 // through the Contents API, as the Fabrik App's token scoped to the store. The
-// record itself is built by src/kit/runRecord.ts; this only writes it.
+// record itself is built by src/kit/runRecord.ts; this only writes it. Its
+// create-only, conflict-retrying write is the score-record job's too
+// (src/kit/scoreRecord.ts).
 import { Buffer } from "node:buffer";
 import { type GitHub, GitHubError } from "../github/client.ts";
-import type { RunRecordFiles } from "./runRecord.ts";
+import type { RunIdentity, RunRecordFiles } from "./runRecord.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "./runStore.ts";
 
-/** The store's REST API: the record writer reads its visibility and creates files. */
+/** The store's REST API: the writer reads its visibility and creates files. */
 export type StoreApi = Pick<GitHub, "rest">;
 
-/** What writing the record came to. */
-export type RecordWrite =
-  | { readonly kind: "no-record" }
+/** What writing files to the store came to: nothing, for a store that isn't private, or which files were written and which it already held. */
+export type StoreWrite =
   | { readonly kind: "public-store" }
   | { readonly kind: "written"; readonly written: readonly string[]; readonly existing: readonly string[] };
+
+/** What writing the record came to. */
+export type RecordWrite = { readonly kind: "no-record" } | StoreWrite;
+
+/** A file to create in the store. */
+export interface StoreFile {
+  readonly path: string;
+  readonly content: Uint8Array;
+}
+
+/** A value as the store keeps it in a JSON file: indented, with a final newline. */
+export function storeJson(value: unknown): Uint8Array {
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+/**
+ * Creates each file in the store, in order, never replacing one it already
+ * holds, and retrying a write a parallel commit beat. Writes nothing when the
+ * store isn't private.
+ */
+export async function writeStoreFiles(
+  store: StoreApi,
+  files: readonly StoreFile[],
+  message: string,
+  wait: (ms: number) => Promise<void>,
+): Promise<StoreWrite> {
+  // Records hold Product repos' issues and transcripts their code: never in a store others can read.
+  const repo = (await store.rest("GET", `/repos/${RUN_STORE.owner}/${RUN_STORE.name}`)) as { private?: unknown };
+  if (repo.private !== true) return { kind: "public-store" };
+  const written: string[] = [];
+  const existing: string[] = [];
+  for (const { path, content } of files) {
+    const created = await createRetryingConflicts(store, path, content, message, wait);
+    (created ? written : existing).push(path);
+  }
+  return { kind: "written", written, existing };
+}
+
+/** The commit message of a run's files in the store: the repo, the run and the role. */
+export function storeCommitMessage(record: RunIdentity): string {
+  return `${record.repo} run ${record.runId}-${record.runAttempt} (${record.role})`;
+}
 
 /**
  * Writes the transcript, then the record, each as a new file in the store:
@@ -26,20 +69,10 @@ export async function writeRunRecord(
   wait: (ms: number) => Promise<void>,
 ): Promise<RecordWrite> {
   if (files === null) return { kind: "no-record" };
-  // Records hold Product repos' issues and transcripts their code: never in a store others can read.
-  const repo = (await store.rest("GET", `/repos/${RUN_STORE.owner}/${RUN_STORE.name}`)) as { private?: unknown };
-  if (repo.private !== true) return { kind: "public-store" };
-  const written: string[] = [];
-  const existing: string[] = [];
-  const toWrite: [string, Uint8Array][] = [];
-  if (files.transcriptPath !== null && transcriptGzip !== null) toWrite.push([files.transcriptPath, transcriptGzip]);
-  toWrite.push([files.recordPath, Buffer.from(`${JSON.stringify(files.record, null, 2)}\n`, "utf8")]);
-  for (const [path, content] of toWrite) {
-    const message = `${files.record.repo} run ${files.record.runId}-${files.record.runAttempt} (${files.record.role})`;
-    const created = await createRetryingConflicts(store, path, content, message, wait);
-    (created ? written : existing).push(path);
-  }
-  return { kind: "written", written, existing };
+  const toWrite: StoreFile[] = [];
+  if (files.transcriptPath !== null && transcriptGzip !== null) toWrite.push({ path: files.transcriptPath, content: transcriptGzip });
+  toWrite.push({ path: files.recordPath, content: storeJson(files.record) });
+  return writeStoreFiles(store, toWrite, storeCommitMessage(files.record), wait);
 }
 
 /**
@@ -103,24 +136,39 @@ async function isThere(store: StoreApi, contents: string): Promise<boolean> {
 const UNPROCESSABLE = 422;
 const NOT_FOUND = 404;
 
-/** How the record writer ended: a write, or no token for the store because setup hasn't made or reached it. */
-export type RecordOutcome = RecordWrite | { readonly kind: "no-store-token" };
+/** How a write to the store ended, or that there was no token for the store because setup hasn't made or reached it. */
+export type StoreOutcome = StoreWrite | { readonly kind: "no-store-token" };
+
+/**
+ * The step-summary words on a write of `what` (a "Run record", a "score") to
+ * the store, the one place they're worded: why nothing was written, or what
+ * was and what the store already held and left as it was.
+ */
+export function storeWriteSummary(what: string, outcome: StoreOutcome): string {
+  switch (outcome.kind) {
+    case "no-store-token":
+      return `No ${what} written: the Fabrik App couldn't get a token for ${RUN_STORE_REPO}.`;
+    case "public-store":
+      return `No ${what} written: ${RUN_STORE_REPO} isn't private, and the Kit writes nothing to a store others can read. Make it private.`;
+    case "written":
+      return [
+        ...(outcome.written.length === 0 ? [] : [`Written to ${RUN_STORE_REPO}: ${outcome.written.join(", ")}.`]),
+        ...(outcome.existing.length === 0 ? [] : [`Already there, left as it was: ${outcome.existing.join(", ")}.`]),
+      ].join(" ");
+  }
+}
+
+/** How the record writer ended: a write, no agent run to record, or no token for the store. */
+export type RecordOutcome = { readonly kind: "no-record" } | StoreOutcome;
 
 /** The record writer's one step-summary line. */
 export function recordWriteSummary(outcome: RecordOutcome): string {
   switch (outcome.kind) {
-    case "no-store-token":
-      return (
-        `No Run record written: the Fabrik App couldn't get a token for ${RUN_STORE_REPO}. ` +
-        `Run fabrik-setup to create the store, then install the Fabrik App on ${RUN_STORE_REPO}.`
-      );
-    case "public-store":
-      return `No Run record written: ${RUN_STORE_REPO} isn't private, and records never go to a store others can read. Make it private.`;
     case "no-record":
       return "No Run record: no agent run ended in this run.";
-    case "written": {
-      const written = `Run record written to ${RUN_STORE_REPO}: ${outcome.written.join(", ")}.`;
-      return outcome.existing.length === 0 ? written : `${written} Already there, left as it was: ${outcome.existing.join(", ")}.`;
-    }
+    case "no-store-token":
+      return `${storeWriteSummary("Run record", outcome)} Run fabrik-setup to create the store, then install the Fabrik App on ${RUN_STORE_REPO}.`;
+    default:
+      return storeWriteSummary("Run record", outcome);
   }
 }

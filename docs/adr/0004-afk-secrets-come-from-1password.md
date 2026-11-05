@@ -4,11 +4,11 @@ Every secret an AFK job needs comes from 1Password at run time, not from repo Ac
 
 | Service account | Reads vault | Referenced by |
 |---|---|---|
-| agent | `Fabrik` (the Claude token) | Triage, Dispatch, Review |
+| agent | `Fabrik` (the Claude token) | Triage, Dispatch, Review, the judge |
 | implement | `Fabrik` + `Fabrik Sandbox · <product>` (that repo's test secrets) | Implement |
-| push | `Fabrik App` (App ID + private key, and the `Sentry token`) | the push jobs (ADR-0002), and the Monitor |
+| push | `Fabrik App` (App ID + private key, and the `Sentry token`) | the push jobs (ADR-0002), the score-record job among them (ADR-0009), and the Monitor |
 
-Even an agent that dumps memory reaches only the token it already has and, in Implement, its own repo's test secrets. Kit config in `.fabrik/` lists test secrets as `op://` references. A Kit step resolves them with the service-account token in that step's env only, using `load-secrets-action` in output mode and never `configure`. The agent step then gets just the resolved values.
+Even an agent that dumps memory reaches only the token it already has and, in Implement, its own repo's test secrets. The Scorers' judge job (#149) is an agent job of this kind: beside the Claude token its job holds only the read-only `github.token` it reads the Ticket with, and no write credential (ADR-0002), so that is all a judge that dumps memory reaches. Kit config in `.fabrik/` lists test secrets as `op://` references. A Kit step resolves them with the service-account token in that step's env only, using `load-secrets-action` in output mode and never `configure`. The agent step then gets just the resolved values.
 
 ## Considered options
 

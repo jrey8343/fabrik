@@ -1,3 +1,4 @@
+import { RUBRICS_DIR } from "../kit/rubrics.ts";
 import { AGENT_ROLES, type AgentRole } from "../loop/types.ts";
 
 /** One path an agent branch changes. A rename also carries the path it moved from. */
@@ -34,10 +35,12 @@ export function kitPromptPath(role: AgentRole): string {
 }
 
 /**
- * The Kit's role prompts, which are trust roots only when the Loop runs on
- * Fabrik itself; a Product's own `prompts/` folder is its own business.
+ * The Kit's role prompts, which steer the agents, and its Scorers' rubrics,
+ * which judge their work: trust roots only when the Loop runs on Fabrik
+ * itself, since a Product's own `prompts/` folder is its own business.
  */
 const KIT_PROMPTS: readonly string[] = AGENT_ROLES.map(kitPromptPath);
+const KIT_RUBRICS = `${RUBRICS_DIR}/`;
 
 /**
  * Folders that are trust roots only at the repo root: the Product repo's Kit
@@ -46,7 +49,7 @@ const KIT_PROMPTS: readonly string[] = AGENT_ROLES.map(kitPromptPath);
 const ROOT_FOLDERS = [".fabrik/", ".github/workflows/"];
 
 function isTrustRoot(path: string): boolean {
-  if (KIT_PROMPTS.includes(path)) return true;
+  if (KIT_PROMPTS.includes(path) || path.startsWith(KIT_RUBRICS)) return true;
   if (ROOT_FOLDERS.some((folder) => path.startsWith(folder))) return true;
   const segments = path.split("/");
   const name = segments.at(-1) ?? "";
