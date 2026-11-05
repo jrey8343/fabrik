@@ -5,6 +5,7 @@ import {
   aMergedPullRequest,
   aReview,
   aRunRecord,
+  aSpec,
   aTicketTimeline,
   aVerdictComment,
   factsOf,
@@ -371,6 +372,197 @@ describe("the Weekly summary", () => {
     });
   });
 
+  describe("cost per merged PR", () => {
+    it("averages, over the week's merged agent PRs, every Implement, Retry, Step-up and Review record on each Ticket", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 2, retry: 1 }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-04T06:00:00Z", totalCostUsd: 3, retry: 2, stepUp: true }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-04T12:00:00Z", totalCostUsd: 0.5, role: "review" }),
+            aRunRecord({ issue: 8, endedAt: "2026-11-05T00:00:00Z", totalCostUsd: 1.5 }),
+            aRunRecord({ issue: 9, endedAt: "2026-11-05T00:00:00Z", totalCostUsd: 100 }), // its PR isn't merged
+            aRunRecord({ repo: "owner/other", issue: 8, endedAt: "2026-11-05T00:00:00Z", totalCostUsd: 100 }), // another repo's Ticket 8
+          ],
+          facts: [
+            factsOf({
+              pullRequests: [
+                aMergedPullRequest("2026-11-05T00:00:00Z", { number: 50, ticket: 7 }),
+                aMergedPullRequest("2026-11-06T00:00:00Z", { number: 51, ticket: 8 }),
+              ],
+            }),
+          ],
+        }),
+      );
+      // Ticket 7: $6.50, Ticket 8: $1.50.
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { costPerMergedPullRequest: { thisWeek: { usd: 4, unknownCost: 0 }, lastWeek: { usd: null, unknownCost: 0 } } },
+      });
+    });
+
+    it("counts a run from an earlier week toward a PR merged this week", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 2 }), // last week
+            aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1, role: "review" }),
+          ],
+          facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-03T06:00:00Z")] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerMergedPullRequest: { thisWeek: { usd: 3 } } } });
+    });
+
+    it("never counts the Ticket's Triage or Design records", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 5, role: "triage", pullRequest: null }),
+            aRunRecord({ endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 5, role: "design", pullRequest: null }),
+            aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+          ],
+          facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-03T06:00:00Z")] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerMergedPullRequest: { thisWeek: { usd: 1 } } } });
+    });
+
+    it("leaves a run whose cost basis is unknown out of the sum, and counts it", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", totalCostUsd: null, retry: 1 }),
+          ],
+          facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-04T00:00:00Z")] })],
+        }),
+      );
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { costPerMergedPullRequest: { thisWeek: { usd: 1, unknownCost: 1 } } },
+      });
+    });
+  });
+
+  describe("cost per Spec", () => {
+    it("averages, over the Specs that left design in the week, their Triage and Design records", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 3, role: "triage", pullRequest: null, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 0.5 }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1.5 }),
+            aRunRecord({ issue: 4, role: "design", pullRequest: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ issue: 5, role: "design", pullRequest: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 100 }), // still in design
+          ],
+          facts: [
+            factsOf({
+              specs: [
+                aSpec([aLabelAdded("ready-for-agent", "2026-11-03T06:00:00Z")], { number: 3, tickets: [] }),
+                aSpec([aLabelAdded("ready-for-human", "2026-11-05T00:00:00Z")], { number: 4, tickets: [] }),
+                aSpec([aLabelAdded("needs-design", "2026-11-03T00:00:00Z")], { number: 5, tickets: [] }),
+              ],
+            }),
+          ],
+        }),
+      );
+      // Spec 3: $3, Spec 4: $1.
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { costPerSpec: { thisWeek: { usd: 2, unknownCost: 0 }, lastWeek: { usd: null, unknownCost: 0 } } },
+      });
+    });
+
+    it("counts Design turns on its Tickets sent back to design, but not their build runs", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ issue: 7, role: "implement", endedAt: "2026-11-03T06:00:00Z", totalCostUsd: 10 }),
+            aRunRecord({ issue: 7, role: "design", pullRequest: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 0.75 }),
+          ],
+          facts: [factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-05T00:00:00Z")], { number: 3, tickets: [7] })] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerSpec: { thisWeek: { usd: 1.75 } } } });
+    });
+
+    it("counts only a Spec the App moved out of design, not one the Operator labelled", () => {
+      const result = weeklySummary(
+        input({
+          records: [aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T00:00:00Z" })],
+          facts: [
+            factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-04T00:00:00Z", { actor: "operator" })], { number: 3 })] }),
+          ],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerSpec: { thisWeek: { usd: null } } } });
+    });
+
+    it("leaves a run whose cost basis is unknown out of the sum, and counts it", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 3, role: "triage", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: null }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 2 }),
+          ],
+          facts: [factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-05T00:00:00Z")], { number: 3 })] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerSpec: { thisWeek: { usd: 2, unknownCost: 1 } } } });
+    });
+  });
+
+  describe("spend that never merged", () => {
+    it("sums the build runs on Tickets closed in the week without a merged PR", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 7, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2 }), // last week, closed this week
+            aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1, role: "review" }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-03T06:00:00Z", totalCostUsd: 5, role: "design", pullRequest: null }), // the Spec's
+            aRunRecord({ issue: 8, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 100 }), // closed by its merged PR
+            aRunRecord({ issue: 9, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 100 }), // still open
+            aRunRecord({ issue: 10, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 0.5 }), // closed last week
+          ],
+          facts: [
+            factsOf({
+              pullRequests: [
+                aMergedPullRequest("2026-11-04T00:00:00Z", { number: 50, ticket: 7, mergedAt: null }), // closed unmerged
+                aMergedPullRequest("2026-11-04T00:00:00Z", { number: 51, ticket: 8 }),
+              ],
+              tickets: [
+                aTicketTimeline([], { number: 7, closedAt: "2026-11-04T00:00:00Z" }),
+                aTicketTimeline([], { number: 8, closedAt: "2026-11-04T00:00:00Z" }),
+                aTicketTimeline([], { number: 9 }),
+                aTicketTimeline([], { number: 10, closedAt: "2026-10-29T00:00:00Z" }),
+              ],
+            }),
+          ],
+        }),
+      );
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { spendNeverMerged: { thisWeek: { usd: 3, unknownCost: 0 }, lastWeek: { usd: 0.5, unknownCost: 0 } } },
+      });
+    });
+
+    it("leaves a run whose cost basis is unknown out of the sum, and counts it", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", totalCostUsd: null }),
+          ],
+          facts: [factsOf({ tickets: [aTicketTimeline([], { closedAt: "2026-11-04T00:00:00Z" })] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { spendNeverMerged: { thisWeek: { usd: 1, unknownCost: 1 } } } });
+    });
+  });
+
   describe("rendered", () => {
     const week = input({
       records: [
@@ -430,6 +622,41 @@ describe("the Weekly summary", () => {
       const { body } = rendered();
       expect(body).toContain("1 run with an unknown cost basis is left out of the cost.");
       expect(body).toContain("Subscription usage: 62% of the weekly limit, resetting 2026-11-13 10:00 (Australia/Sydney).");
+    });
+
+    it("shows each cost figure this week and last week, with the change, and a dash where there's nothing to average", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 7, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2 }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: null, retry: 1 }),
+            aRunRecord({ issue: 8, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 1.5 }),
+            aRunRecord({ issue: 9, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 0.25 }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-26T00:00:00Z", totalCostUsd: null }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 1 }),
+          ],
+          facts: [
+            factsOf({
+              // Ticket 7 merged this week; Ticket 8 merged last week.
+              pullRequests: [
+                aMergedPullRequest("2026-11-05T00:00:00Z", { number: 50, ticket: 7 }),
+                aMergedPullRequest("2026-10-29T00:00:00Z", { number: 51, ticket: 8 }),
+              ],
+              // Ticket 9 closed this week, unmerged.
+              tickets: [aTicketTimeline([], { number: 9, closedAt: "2026-11-05T00:00:00Z" })],
+              // Spec 3 left design last week.
+              specs: [aSpec([aLabelAdded("ready-for-agent", "2026-10-28T00:00:00Z")], { number: 3 })],
+            }),
+          ],
+        }),
+      );
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      expect(result.body).toContain("| Cost per merged PR | $2.00 | $1.50 | +$0.50 |");
+      expect(result.body).toContain("| Cost per Spec | – | $1.00 | – |");
+      expect(result.body).toContain("| Spend that never merged | $0.25 | $0.00 | +$0.25 |");
+      expect(result.body).toContain("1 run with an unknown cost basis is left out of cost per merged PR.");
+      expect(result.body).not.toContain("left out of cost per Spec");
+      expect(result.body).not.toContain("left out of spend that never merged");
     });
 
     it("ends with exactly one mention of the Operator", () => {

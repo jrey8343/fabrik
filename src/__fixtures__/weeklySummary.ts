@@ -10,6 +10,7 @@ import type {
   GitHubFacts,
   LabelEvent,
   ReviewFacts,
+  SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
 
@@ -87,12 +88,25 @@ export function aLabelAdded(label: string, at: string, overrides: Partial<LabelE
   return { label, action: "labeled", actor: "fabrik-app[bot]", at, ...overrides };
 }
 
-/** Ticket 7 with this label timeline, blocked by nothing. */
+/** Ticket 7, still open, with this label timeline, blocked by nothing. */
 export function aTicketTimeline(labelEvents: readonly LabelEvent[], overrides: Partial<TicketFacts> = {}): TicketFacts {
-  return { number: 7, labelEvents, blockedBy: [], ...overrides };
+  return { number: 7, labelEvents, closedAt: null, blockedBy: [], ...overrides };
+}
+
+/** Spec 3, the parent of Ticket 7, with this label timeline. */
+export function aSpec(labelEvents: readonly LabelEvent[], overrides: Partial<SpecFacts> = {}): SpecFacts {
+  return { number: 3, labelEvents, tickets: [7], ...overrides };
 }
 
 /** The GitHub facts of `owner/product`, with nothing in them unless a test says so. */
 export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
-  return { repo: "owner/product", pullRequests: [], tickets: [], defaultBranchCommits: [], mergedPullRequestTitles: [], ...overrides };
+  return {
+    repo: "owner/product",
+    pullRequests: [],
+    tickets: [],
+    specs: [],
+    defaultBranchCommits: [],
+    mergedPullRequestTitles: [],
+    ...overrides,
+  };
 }
