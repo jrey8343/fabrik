@@ -178,6 +178,10 @@ _Avoid_: approval, sign-off
 A comment the Operator leaves on an agent pull request, which every later agent run reading that pull request weighs as the Operator's own words, never as a request for work: a change the Operator wants built still goes through Request changes.
 _Avoid_: PR feedback, reply
 
+**UI evidence**:
+The screenshots, and preview link if the Product repo has one, that the Kit captures for a pull request changing a Product repo's UI, so the Operator and the Reviewer can see what was built.
+_Avoid_: visual proof, screenshots, artifacts
+
 ## Measuring the factory
 
 **Run record**:
