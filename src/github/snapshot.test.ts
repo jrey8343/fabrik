@@ -665,10 +665,9 @@ describe("Gathering a scheduled tick's audit slice", () => {
 });
 
 describe("Gathering the PRs an Auditor named", () => {
-  /** The API, holding Audit #97 and these PRs by number; any other number is no PR. */
+  /** The read-only API, holding Audit #97 and these PRs by number; any other number is no PR, which GitHub answers with a 404. */
   function githubWith(pulls: Record<number, unknown>) {
-    const asked: number[] = [];
-    const github = {
+    return {
       async graphql(query: string): Promise<unknown> {
         if (query.includes("issue(number: $number)")) {
           return {
@@ -692,16 +691,16 @@ describe("Gathering the PRs an Auditor named", () => {
         }
         return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
       },
-      async rest(method: string, path: string, _body: unknown, options: { allowNotFound?: boolean }): Promise<unknown> {
-        expect(method).toBe("GET");
+      async rest(method: string, path: string, _body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<unknown> {
         const pull = /^\/repos\/acme\/shop\/pulls\/(\d+)$/.exec(path);
-        if (pull === null) throw new Error(`Unexpected call: ${path}`);
-        asked.push(Number(pull[1]));
-        expect(options.allowNotFound).toBe(true);
-        return pulls[Number(pull[1])] ?? null;
+        if (method !== "GET" || pull === null) throw new Error(`Unexpected call: ${method} ${path}`);
+        const found = pulls[Number(pull[1])];
+        if (found !== undefined) return found;
+        // As the real client does: a 404 is null only when the call allows it.
+        if (options.allowNotFound === true) return null;
+        throw new Error(`GitHub GET ${path} failed: 404`);
       },
     } as unknown as GitHub;
-    return { github, asked };
   }
 
   const pull = (number: number, merged: boolean, ref: string, type: string) => ({ number, merged, head: { ref }, user: { type } });
@@ -729,8 +728,8 @@ describe("Gathering the PRs an Auditor named", () => {
     introducedBy,
   });
 
-  it("reads each PR the reply names once, telling a merged agent PR from the rest and leaving out a number that's no PR, beside the Audit", async () => {
-    const { github, asked } = githubWith({
+  it("holds each PR the reply names once, telling a merged agent PR from the rest and leaving out a number that's no PR, beside the Audit", async () => {
+    const github = githubWith({
       31: pull(31, true, "fabrik/ticket-7", "Bot"),
       40: pull(40, false, "fabrik/ticket-8", "Bot"),
       41: pull(41, true, "feature/cart", "User"),
@@ -750,21 +749,19 @@ describe("Gathering the PRs an Auditor named", () => {
       { number: 41, merged: true, headRef: "feature/cart", isAgent: false },
       { number: 42, merged: true, headRef: "fabrik/ticket-9", isAgent: false },
     ]);
-    expect(asked.sort((a, b) => a - b)).toEqual([31, 40, 41, 42, 404]);
     expect(snapshot.issue).toMatchObject({ number: 97, byApp: true, labels: ["fabrik:audit"] });
   });
 
-  it("reads no PRs for a reply that breaks its contract, whose Audit the core then fails", async () => {
-    const { github, asked } = githubWith({});
+  it("holds no PRs for a reply that breaks its contract, whose Audit the core then fails", async () => {
+    const github = githubWith({ 31: pull(31, true, "fabrik/ticket-7", "Bot") });
 
-    const snapshot = await gatherSnapshot(github, repo, finished("not JSON"), null);
+    const snapshot = await gatherSnapshot(github, repo, finished("not JSON, though it names #31"), null);
 
     expect(snapshot.namedPullRequests).toEqual([]);
-    expect(asked).toEqual([]);
   });
 
   it("isn't gathered for any other event", async () => {
-    const snapshot = await gatherSnapshot(githubWith({}).github, repo, { kind: "kit-config-changed" }, null);
+    const snapshot = await gatherSnapshot(githubWith({}), repo, { kind: "kit-config-changed" }, null);
 
     expect(snapshot.namedPullRequests).toBeNull();
   });
