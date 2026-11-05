@@ -166,7 +166,7 @@ The Kit pushes to the Operator's phone only when it is their move, and once a we
 | Fast path, Design session finished, Spec closed, `wontfix` | Silent | |
 | Skills-source bump PR | Silent | The PR requests no review; the Operator merges it when they choose. |
 
-- **Held work is silent.** Work a full cap holds (see `caps` in the [Kit config](#kit-config)) waits with no comment, label or notification. It pushes when its slot opens, as a Design session's round 1 does.
+- **Held work is silent.** Work a full cap holds (see `caps` in the [Kit config](#kit-config)) waits with no comment, label or notification. It pushes when its slot opens, as a Design session's round 1 does, and the Weekly summary's **Held** section shows, per Product repo, how many `needs-design` issues wait for a slot and how long the oldest has waited.
 - **There is no push budget.** Every push but the Weekly summary is the Operator's move, and the Weekly summary is one a week, so the Kit never holds one back: it caps the sources, never the pushes.
 
 ## Kit config
