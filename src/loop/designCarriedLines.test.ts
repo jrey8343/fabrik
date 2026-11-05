@@ -123,6 +123,14 @@ describe("A Design session's rewrite keeps the issue's From audit line and escap
     }
   });
 
+  it("carries a line indented as far as an indented code block, since only a fence opens a code block here", () => {
+    const indented = ["The log said:", "", "    From audit #40", "    <!-- fabrik:escape strong #31 -->", "", "Split it."].join("\n");
+
+    const plan = planFor(turnFinished(operatorBrief), inSession(indented), kitConfig());
+
+    expect(rewrittenBody(plan)?.split("\n").slice(-2)).toEqual(["From audit #40", "<!-- fabrik:escape strong #31 -->"]);
+  });
+
   it("still carries the lines of a filed candidate whose body was cut short inside a code block, since a fence that never closes quotes nothing", () => {
     const cutShort = ["**Solution:** Split it:", "", "```ts", "export function slotsFor(…", "", "From audit #40", "<!-- fabrik:escape strong #31 -->"].join("\n");
 
