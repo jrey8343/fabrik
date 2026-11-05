@@ -2,8 +2,9 @@
 // snapshot per Product repo, the Operator and now, the one issue filed for the
 // week that just ended, or skip in a quiet week. Pure, no I/O, no model call.
 import { verdictsIn } from "../github/threads.ts";
-import { DISPATCH_LABEL, READY_FOR_HUMAN } from "../loop/labels.ts";
+import { DISPATCH_LABEL, NEEDS_INFO, READY_FOR_HUMAN } from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
+import type { InfrastructureFailure } from "../loop/types.ts";
 import type { RateLimitReading, RunRecord } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
@@ -128,6 +129,8 @@ export interface RepoSection {
   readonly repo: string;
   /** Oldest first. */
   readonly waitingOnYou: readonly WaitingItem[];
+  /** Loop work that hasn't moved in more than 24 hours, longest-stuck first. */
+  readonly stuck: readonly StuckItem[];
 }
 
 interface ItemBase {
@@ -152,6 +155,15 @@ export type WaitingItem =
       /** The Operator wait so far: from the passing Verdict to the filing, in milliseconds. */
       readonly operatorWait: number;
     });
+
+/** Loop work that hasn't moved in more than 24 hours, since `since`. */
+export type StuckItem =
+  /** A `needs-info` issue a person answered after the question, with no state change since the answer. */
+  | (ItemBase & { readonly kind: "needs-info-answered" })
+  /** A draft agent PR with no commit, comment or label event since `since`. */
+  | (ItemBase & { readonly kind: "idle-draft" })
+  /** An open Ticket whose latest record, ended at `since`, was an Infrastructure failure or timeout. */
+  | (ItemBase & { readonly kind: "infrastructure-failure"; readonly failure: InfrastructureFailure });
 
 export type WeeklySummaryResult =
   | { readonly kind: "skip" }
@@ -184,7 +196,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
       retries: change("retries"),
       stepUps: change("stepUps"),
     },
-    repos: input.facts.map((facts) => repoSectionOf(facts, Date.parse(input.now))),
+    repos: input.facts.map((facts) => repoSectionOf(facts, input.records, Date.parse(input.now))),
   };
   return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
 }
@@ -229,14 +241,18 @@ function dispatchOf(ticket: TicketFacts): string | null {
   return added.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at))[0]?.at ?? null;
 }
 
-// Per repo: what waits on the Operator, as of the filing.
+// Per repo: what waits on the Operator and what is stuck, as of the filing.
 
-function repoSectionOf(facts: GitHubFacts, now: number): RepoSection {
-  return { repo: facts.repo, waitingOnYou: waitingOnYou(facts, now) };
+/** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
+const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
+
+function repoSectionOf(facts: GitHubFacts, records: readonly RunRecord[], now: number): RepoSection {
+  const items = itemsIn(facts.repo, now);
+  return { repo: facts.repo, waitingOnYou: waitingOnYou(facts, items), stuck: stuck(facts, records, items, now) };
 }
 
-function waitingOnYou({ repo, openIssues, openPullRequests }: GitHubFacts, now: number): WaitingItem[] {
-  const issueUrl = (number: number) => `https://github.com/${repo}/issues/${number}`;
+/** Builds a repo's items, aged as of the filing. */
+function itemsIn(repo: string, now: number) {
   const item = (number: number, title: string, url: string, since: string): ItemBase => ({
     number,
     title,
@@ -244,22 +260,83 @@ function waitingOnYou({ repo, openIssues, openPullRequests }: GitHubFacts, now: 
     since,
     age: now - Date.parse(since),
   });
-  const items: WaitingItem[] = [];
+  return {
+    issue: (issue: { readonly number: number; readonly title: string }, since: string) =>
+      item(issue.number, issue.title, `https://github.com/${repo}/issues/${issue.number}`, since),
+    pullRequest: (pullRequest: OpenPullRequestFacts, since: string) =>
+      item(pullRequest.number, pullRequest.title, `https://github.com/${repo}/pull/${pullRequest.number}`, since),
+  };
+}
+
+type Items = ReturnType<typeof itemsIn>;
+
+function oldestFirst<T extends ItemBase>(items: readonly T[]): T[] {
+  return items.toSorted((a, b) => Date.parse(a.since) - Date.parse(b.since));
+}
+
+function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, items: Items): WaitingItem[] {
+  const waiting: WaitingItem[] = [];
   for (const issue of openIssues) {
     const round = unansweredRoundOf(issue);
-    if (round !== null) items.push({ kind: "design-round", ...item(issue.number, issue.title, issueUrl(issue.number), round) });
+    if (round !== null) waiting.push({ kind: "design-round", ...items.issue(issue, round) });
     if (issue.labels.includes(READY_FOR_HUMAN)) {
       const since = lastAdded(issue.labelEvents, READY_FOR_HUMAN) ?? issue.createdAt;
-      items.push({ kind: "ready-for-human", ...item(issue.number, issue.title, issueUrl(issue.number), since) });
+      waiting.push({ kind: "ready-for-human", ...items.issue(issue, since) });
     }
   }
   for (const pullRequest of openPullRequests) {
     const passed = passAtHeadOf(pullRequest);
     if (pullRequest.draft || passed === null) continue;
-    const base = item(pullRequest.number, pullRequest.title, `https://github.com/${repo}/pull/${pullRequest.number}`, passed);
-    items.push({ kind: "merge-gate", ...base, operatorWait: base.age });
+    const item = items.pullRequest(pullRequest, passed);
+    waiting.push({ kind: "merge-gate", ...item, operatorWait: item.age });
   }
-  return items.toSorted((a, b) => Date.parse(a.since) - Date.parse(b.since));
+  return oldestFirst(waiting);
+}
+
+function stuck({ repo, openIssues, openPullRequests }: GitHubFacts, records: readonly RunRecord[], items: Items, now: number): StuckItem[] {
+  const found: StuckItem[] = [];
+  for (const issue of openIssues) {
+    const answered = issue.labels.includes(NEEDS_INFO) ? answerOf(issue) : null;
+    if (answered !== null) found.push({ kind: "needs-info-answered", ...items.issue(issue, answered) });
+    const failed = failedLastRunOf(issue, repo, records);
+    if (failed !== null) found.push({ kind: "infrastructure-failure", ...items.issue(issue, failed.endedAt), failure: failed.failure });
+  }
+  for (const pullRequest of openPullRequests) {
+    if (pullRequest.draft) found.push({ kind: "idle-draft", ...items.pullRequest(pullRequest, lastActivityOf(pullRequest)) });
+  }
+  return oldestFirst(found.filter((item) => now - Date.parse(item.since) > STUCK_AFTER_MS));
+}
+
+/**
+ * When a person first answered a `needs-info` issue's question, or null if
+ * nobody has. The question is when it last got `needs-info`: a later state
+ * change would have taken the label off, and asking again adds it anew. A
+ * bot's comment is no answer, as it never sends the issue back to Triage.
+ */
+function answerOf(issue: OpenIssueFacts): string | null {
+  const asked = Date.parse(lastAdded(issue.labelEvents, NEEDS_INFO) ?? issue.createdAt);
+  return issue.comments.find((comment) => !comment.byBot && Date.parse(comment.at) > asked)?.at ?? null;
+}
+
+/** An open Ticket's latest record, if it ended in an Infrastructure failure: the run nothing has picked up again. */
+function failedLastRunOf(
+  issue: OpenIssueFacts,
+  repo: string,
+  records: readonly RunRecord[],
+): { readonly endedAt: string; readonly failure: InfrastructureFailure } | null {
+  const latest = records
+    .filter((record) => record.repo === repo && record.issue === issue.number)
+    .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
+    .at(-1);
+  if (latest === undefined || latest.infrastructureFailure === null) return null;
+  if (latest.role !== "implement" && latest.role !== "review") return null;
+  return { endedAt: latest.endedAt, failure: latest.infrastructureFailure };
+}
+
+/** A PR's latest commit, comment or label event, or when it was opened. */
+function lastActivityOf(pullRequest: OpenPullRequestFacts): string {
+  const times = [pullRequest.createdAt, ...[...pullRequest.commits, ...pullRequest.comments, ...pullRequest.labelEvents].map(({ at }) => at)];
+  return times.toSorted((a, b) => Date.parse(a) - Date.parse(b)).at(-1) ?? pullRequest.createdAt;
 }
 
 /** When the App posted the Design round an issue's thread ends on, or null if its last comment is anything else. */
