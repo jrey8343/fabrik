@@ -1,6 +1,7 @@
 // The audit gate (#150): on the hourly scheduled tick, whether to open this
 // week's pending Audit, whose opening starts the Auditor's run.
 import { AUDIT_DAYS } from "../kit/config.ts";
+import { shortSha } from "../skills/lock.ts";
 import { auditsIn, lastAudit } from "./audit.ts";
 import { scheduledTick } from "./kitIssues.ts";
 import { AUDIT_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
@@ -69,7 +70,7 @@ function auditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   if (head === null) return { kind: "nothing", reason: "The default branch has no commits to audit" };
   const last = lastAudit(slice.issues);
   if (last !== null && last.commit === head) {
-    return { kind: "nothing", reason: `The default branch hasn't moved since #${last.number} audited it at ${short(head)}` };
+    return { kind: "nothing", reason: `The default branch hasn't moved since #${last.number} audited it at ${shortSha(head)}` };
   }
   return { kind: "act", actions: [pendingAudit(week, head)] };
 }
@@ -80,7 +81,7 @@ function pendingAudit(week: number, head: string): Action {
     kind: "open-issue",
     title: `Audit: week of ${dateOf(week)}`,
     body: [
-      `The Auditor is reading the default branch up to \`${short(head)}\`, and this issue fills in when it's done.`,
+      `The Auditor is reading the default branch up to \`${shortSha(head)}\`, and this issue fills in when it's done.`,
       "",
       auditMarker(head),
       AUDIT_PENDING_MARKER,
@@ -88,10 +89,6 @@ function pendingAudit(week: number, head: string): Action {
     labels: [AUDIT_LABEL],
     assignees: [],
   };
-}
-
-function short(sha: string): string {
-  return sha.slice(0, 7);
 }
 
 /** Monday 00:00 UTC of the ISO week `now` falls in, in milliseconds. */

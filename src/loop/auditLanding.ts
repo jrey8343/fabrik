@@ -2,6 +2,7 @@
 // the pending Audit. The Kit renders every word of layout; the Auditor wrote
 // only the candidates' text. The Audit stays silent: no state label, no
 // assignee, no mention.
+import { shortSha } from "../skills/lock.ts";
 import { isPendingAudit, TOP_RECOMMENDATION_HEADING } from "./audit.ts";
 import { failAudit } from "./auditFailure.ts";
 import { type AuditCandidate, type AuditOutput, parseAuditOutput } from "./auditOutput.ts";
@@ -71,7 +72,7 @@ function silenced({ candidates, topRecommendation }: AuditOutput): AuditOutput {
 /** A clean Audit: one line, then its audit marker. */
 function cleanBody(commit: string, window: AuditWindow): string {
   return [
-    `The Auditor read the default branch up to \`${short(commit)}\`, ${lookedFirstAt(window)}, and found nothing above Speculative: the repo is clean.`,
+    `The Auditor read the default branch up to \`${shortSha(commit)}\`, ${lookedFirstAt(window)}, and found nothing above Speculative: the repo is clean.`,
     "",
     auditMarker(commit),
   ].join("\n");
@@ -85,7 +86,7 @@ function filledBody(
   { issue: audit, window, repoUrl }: AuditFinished,
 ): string {
   return [
-    `The Auditor read the default branch up to \`${short(commit)}\`, ${lookedFirstAt(window)}. File the candidates you want, comment here on any you reject so the next Audit knows, and close this Audit when you're done.`,
+    `The Auditor read the default branch up to \`${shortSha(commit)}\`, ${lookedFirstAt(window)}. File the candidates you want, comment here on any you reject so the next Audit knows, and close this Audit when you're done.`,
     ...candidates.flatMap((candidate) => ["", ...card(candidate, keptPullRequests(candidate, named), repoUrl, audit)]),
     "",
     TOP_RECOMMENDATION_HEADING,
@@ -168,12 +169,8 @@ function mermaid(source: string): string[] {
 function lookedFirstAt(window: AuditWindow): string {
   switch (window.kind) {
     case "since-audit":
-      return `looking first at what changed since Audit #${window.audit} at \`${short(window.commit)}\``;
+      return `looking first at what changed since Audit #${window.audit} at \`${shortSha(window.commit)}\``;
     case "last-days":
       return `looking first at the last ${window.days} days`;
   }
-}
-
-function short(sha: string): string {
-  return sha.slice(0, 7);
 }
