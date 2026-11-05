@@ -7,6 +7,7 @@ import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import type {
   AgentPullRequestFacts,
   CommentFacts,
+  EscapeMarkerIssueFacts,
   GitHubFacts,
   LabelEvent,
   OpenIssueFacts,
@@ -16,21 +17,32 @@ import type {
   TicketFacts,
 } from "../kit/weeklySummary.ts";
 import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest.ts";
+import { escapeMarkerIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import type { GitHub, Repo } from "./client.ts";
 import { gatherDesignQueueSlice } from "./snapshot.ts";
 
-/**
- * How far back the facts reach: 30 days of agent PRs, plus the week before,
- * so last week's 30-day revert window is as whole as this week's.
- */
-const WINDOW_MS = 37 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** The GitHub facts the Weekly summary reads of one Product repo, as of `now`. */
-export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number): Promise<GitHubFacts> {
+/**
+ * How far back the issue and default-branch facts reach: 30 days, plus the
+ * week before, so last week's 30-day revert window is as whole as this week's.
+ */
+const WINDOW_MS = 37 * DAY_MS;
+
+/**
+ * How far back the PRs and the escape-marked issues reach: 90 days, plus the
+ * week before, so last week's 90-day escape window is as whole as this week's.
+ * Revert rate reads its own 30 days of them.
+ */
+const ESCAPE_WINDOW_MS = 97 * DAY_MS;
+
+/** The GitHub facts the Weekly summary reads of one Product repo, as of `now`, with the Operator's login. */
+export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }] = await Promise.all([
-    gatherClosedPullRequests(github, repo, since),
+  const escapeSince = new Date(now - ESCAPE_WINDOW_MS).toISOString();
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, escapeMarkerIssues] = await Promise.all([
+    gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
     pagesOf<RawIssue>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues),
@@ -38,6 +50,7 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     // The Design queue check's own slice, so Held and the check can't disagree. Its token can't read
     // workflow runs, so it reads Design turns in progress from the issues, as the scheduled tick does.
     gatherDesignQueueSlice(github, null, repo),
+    gatherEscapeMarkerIssues(github, repo, operator, escapeSince),
   ]);
   const issues = [...new Map([...updatedIssues, ...openIssues].map((issue) => [issue.number, issue])).values()];
   return {
@@ -50,6 +63,7 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     openIssues: openIssues.map(openIssueOf),
     openPullRequests: open.filter(isAgent).map(openPullRequestOf),
     designQueue,
+    escapeMarkerIssues,
   };
 }
 
@@ -139,6 +153,18 @@ const OPEN_ISSUES_QUERY = `
   }
 `;
 
+// The issues one person opened, newest first, so paging stops at the first page older than the window.
+const ISSUES_OPENED_BY_QUERY = `
+  query ($owner: String!, $name: String!, $after: String, $operator: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(first: 25, after: $after, filterBy: { createdBy: $operator }, orderBy: { field: CREATED_AT, direction: DESC }) {
+        ${PAGE_INFO}
+        nodes { number createdAt state body author ${ACTOR} }
+      }
+    }
+  }
+`;
+
 const DEFAULT_BRANCH_QUERY = `
   query ($owner: String!, $name: String!, $after: String, $since: GitTimestamp!) {
     repository(owner: $owner, name: $name) {
@@ -217,6 +243,14 @@ interface RawIssue {
   subIssues: { nodes: { number: number }[] };
 }
 
+interface RawOpenedIssue {
+  number: number;
+  createdAt: string;
+  state: "OPEN" | "CLOSED";
+  body: string;
+  author: RawActor | null;
+}
+
 interface RawCommit {
   message: string;
   committedDate: string;
@@ -262,6 +296,33 @@ async function gatherClosedPullRequests(github: Pick<GitHub, "graphql">, repo: R
     const at = pr.mergedAt ?? pr.closedAt;
     return at !== null && Date.parse(at) >= sinceMs;
   });
+}
+
+/** The issues the Operator opened in the window whose body has an escape marker, such as filed Audit candidates. */
+async function gatherEscapeMarkerIssues(
+  github: Pick<GitHub, "graphql">,
+  repo: Repo,
+  operator: string,
+  since: string,
+): Promise<EscapeMarkerIssueFacts[]> {
+  const sinceMs = Date.parse(since);
+  const issues = await pagesOf<RawOpenedIssue>(
+    github,
+    ISSUES_OPENED_BY_QUERY,
+    repo,
+    { operator },
+    (data) => data.repository.issues,
+    (page) => page.some((issue) => Date.parse(issue.createdAt) < sinceMs),
+  );
+  return issues
+    .filter((issue) => Date.parse(issue.createdAt) >= sinceMs && escapeMarkerIn(issue.body) !== null)
+    .map((issue) => ({
+      number: issue.number,
+      author: loginOf(issue.author),
+      createdAt: issue.createdAt,
+      state: issue.state === "CLOSED" ? "closed" : "open",
+      body: issue.body,
+    }));
 }
 
 // --- Into the summary's facts -------------------------------------------------

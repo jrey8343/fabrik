@@ -5,6 +5,7 @@ import type {
   AgentPullRequestFacts,
   CommentFacts,
   CommitFacts,
+  EscapeMarkerIssueFacts,
   GitHubFacts,
   LabelEvent,
   OpenIssueFacts,
@@ -114,8 +115,14 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     openIssues: [],
     openPullRequests: [],
     designQueue: { issues: [], designTurnsInProgress: [] },
+    escapeMarkerIssues: [],
     ...overrides,
   };
+}
+
+/** Issue 80, which the Operator opened on 2026-11-03 with `body`, still open. */
+export function anEscapeMarkerIssue(body: string, overrides: Partial<EscapeMarkerIssueFacts> = {}): EscapeMarkerIssueFacts {
+  return { number: 80, author: "operator", createdAt: "2026-11-03T00:00:00Z", state: "open", body, ...overrides };
 }
 
 /** The Fabrik App's comment `body` at `at`; a person's with `{ author, byBot: false }`. */
