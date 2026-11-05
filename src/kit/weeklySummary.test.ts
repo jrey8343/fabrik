@@ -316,6 +316,58 @@ describe("the Weekly summary", () => {
     });
   });
 
+  describe("revert rate", () => {
+    // This week's 30-day window runs from 2026-10-09T13:00Z to the week's end,
+    // 2026-11-08T13:00Z; last week's from 2026-10-02T13:00Z to 2026-11-01T13:00Z.
+    const sha = (n: number) => String(n).repeat(40);
+    const merged = (number: number, mergedAt: string) =>
+      aMergedPullRequest(mergedAt, { number, mergeSha: sha(number), title: `Build thing ${number}` });
+    const revertRateOf = (facts: Partial<GitHubFacts>) => {
+      const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary.revertRate;
+    };
+
+    it("counts an agent PR reverted by a default-branch commit with its merge sha's trailer", () => {
+      const rate = revertRateOf({
+        pullRequests: [merged(1, "2026-10-20T00:00:00Z"), merged(2, "2026-10-21T00:00:00Z")],
+        defaultBranchCommits: [{ message: `Revert "Build thing 1"\n\nThis reverts commit ${sha(1)}.`, at: "2026-11-04T00:00:00Z" }],
+      });
+      expect(rate).toEqual({ thisWeek: { reverted: 1, merged: 2 }, lastWeek: { reverted: 0, merged: 2 } });
+    });
+
+    it("counts an agent PR reverted by a merged PR titled Revert and its title", () => {
+      const rate = revertRateOf({
+        pullRequests: [merged(1, "2026-10-20T00:00:00Z"), merged(2, "2026-10-21T00:00:00Z")],
+        mergedPullRequestTitles: [
+          { title: 'Revert "Build thing 2"', mergedAt: "2026-10-25T00:00:00Z" },
+          { title: 'Revert "Something else"', mergedAt: "2026-10-25T00:00:00Z" },
+        ],
+      });
+      expect(rate).toEqual({ thisWeek: { reverted: 1, merged: 2 }, lastWeek: { reverted: 1, merged: 2 } });
+    });
+
+    it("doesn't count a revert outside the 30-day window, or of a PR merged outside it", () => {
+      const rate = revertRateOf({
+        pullRequests: [merged(1, "2026-10-20T00:00:00Z"), merged(2, "2026-10-05T00:00:00Z")],
+        defaultBranchCommits: [
+          { message: `This reverts commit ${sha(1)}.`, at: "2026-11-08T14:00:00Z" }, // after the week
+          { message: `This reverts commit ${sha(2)}.`, at: "2026-10-12T00:00:00Z" }, // of a PR merged before this week's window
+        ],
+      });
+      expect(rate).toEqual({ thisWeek: { reverted: 0, merged: 1 }, lastWeek: { reverted: 1, merged: 2 } });
+    });
+
+    it("counts a PR once however many ways it was reverted, and never a PR closed unmerged", () => {
+      const rate = revertRateOf({
+        pullRequests: [merged(1, "2026-10-20T00:00:00Z"), aMergedPullRequest("2026-10-20T00:00:00Z", { number: 3, mergedAt: null, mergeSha: null })],
+        defaultBranchCommits: [{ message: `This reverts commit ${sha(1)}.`, at: "2026-11-04T00:00:00Z" }],
+        mergedPullRequestTitles: [{ title: 'Revert "Build thing 1"', mergedAt: "2026-11-04T00:00:00Z" }],
+      });
+      expect(rate.thisWeek).toEqual({ reverted: 1, merged: 1 });
+    });
+  });
+
   describe("rendered", () => {
     const week = input({
       records: [

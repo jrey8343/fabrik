@@ -78,5 +78,5 @@ export function aTicketTimeline(labelEvents: readonly LabelEvent[], overrides: P
 
 /** The GitHub facts of `owner/product`, with nothing in them unless a test says so. */
 export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
-  return { repo: "owner/product", pullRequests: [], tickets: [], ...overrides };
+  return { repo: "owner/product", pullRequests: [], tickets: [], defaultBranchCommits: [], mergedPullRequestTitles: [], ...overrides };
 }

@@ -71,12 +71,29 @@ export interface AgentPullRequestFacts {
   readonly labelEvents: readonly LabelEvent[];
 }
 
+/** A commit on the default branch. */
+export interface DefaultBranchCommitFacts {
+  readonly message: string;
+  /** ISO 8601. */
+  readonly at: string;
+}
+
+/** Any PR merged in the last 30 days, agent or not, by its title. */
+export interface MergedTitleFacts {
+  readonly title: string;
+  /** ISO 8601. */
+  readonly mergedAt: string;
+}
+
 /** What the summary reads of one Product repo on GitHub. */
 export interface GitHubFacts {
   /** The Product repo, as `owner/name`. */
   readonly repo: string;
   readonly pullRequests: readonly AgentPullRequestFacts[];
   readonly tickets: readonly TicketFacts[];
+  /** The default branch's commits in the last 30 days. */
+  readonly defaultBranchCommits: readonly DefaultBranchCommitFacts[];
+  readonly mergedPullRequestTitles: readonly MergedTitleFacts[];
 }
 
 export interface WeeklySummaryInput {
@@ -112,6 +129,8 @@ export interface WeeklySummary {
   readonly cycleTimeMs: WeekOverWeek<number | null>;
   /** The median time from the last passing Verdict to merge of the week's merged agent PRs, in ms, or null with none. */
   readonly operatorWaitMs: WeekOverWeek<number | null>;
+  /** Of the agent PRs merged in the 30 days to the week's end, how many were reverted in that window. */
+  readonly revertRate: WeekOverWeek<RevertRate>;
   readonly counts: {
     /** Agent PRs merged in the week, across every Product repo. */
     readonly mergedPullRequests: WeekOverWeek<number>;
@@ -122,6 +141,11 @@ export interface WeeklySummary {
     /** Records of a Step-up. */
     readonly stepUps: WeekOverWeek<number>;
   };
+}
+
+export interface RevertRate {
+  readonly reverted: number;
+  readonly merged: number;
 }
 
 export type WeeklySummaryResult =
@@ -152,6 +176,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     humanTouches: change("humanTouches"),
     cycleTimeMs: change("cycleTimeMs"),
     operatorWaitMs: change("operatorWaitMs"),
+    revertRate: change("revertRate"),
     counts: {
       mergedPullRequests: change("mergedPullRequests"),
       ticketsDispatched: change("ticketsDispatched"),
@@ -172,6 +197,7 @@ interface WeekMetrics {
   readonly humanTouches: number | null;
   readonly cycleTimeMs: number | null;
   readonly operatorWaitMs: number | null;
+  readonly revertRate: RevertRate;
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
   readonly retries: number;
@@ -202,6 +228,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
         return passed === null ? [] : [Date.parse(mergedAt) - Date.parse(passed)];
       }),
     ),
+    revertRate: revertRateOf(week, input.facts),
     mergedPullRequests: pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt)).length,
     ticketsDispatched: tickets.filter((ticket) => {
       const dispatch = dispatchOf(ticket);
@@ -250,6 +277,30 @@ function humanTouchesOf({ pullRequest, mergedAt, ticket, dispatch }: MergedPullR
   return pushes + requestChanges + retriesAsked + pairing + operatorSteps;
 }
 
+/**
+ * The agent PRs merged in the 30 days to the week's end, and how many of them
+ * a default-branch commit's `This reverts commit <merge sha>` trailer, or a
+ * merged `Revert "<title>"` PR, reverted in the same window.
+ */
+function revertRateOf(week: Week, facts: readonly GitHubFacts[]): RevertRate {
+  const window = { start: week.end - REVERT_WINDOW_MS, end: week.end };
+  const counts = facts.map((repo) => {
+    const merged = repo.pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(window, pullRequest.mergedAt));
+    const commits = repo.defaultBranchCommits.filter((commit) => within(window, commit.at));
+    const titles = repo.mergedPullRequestTitles.filter((pullRequest) => within(window, pullRequest.mergedAt));
+    const reverted = merged.filter(
+      ({ mergeSha, title }) =>
+        (mergeSha !== null && commits.some((commit) => commit.message.includes(`This reverts commit ${mergeSha}`))) ||
+        titles.some((pullRequest) => pullRequest.title === `Revert "${title}"`),
+    );
+    return { reverted: reverted.length, merged: merged.length };
+  });
+  return {
+    reverted: counts.reduce((sum, count) => sum + count.reverted, 0),
+    merged: counts.reduce((sum, count) => sum + count.merged, 0),
+  };
+}
+
 /** When the PR's last passing Verdict before its merge was given, read through the Verdict marker on the App's comments, or null. */
 function lastPassOf(pullRequest: AgentPullRequestFacts, mergedAt: string): string | null {
   return (
@@ -287,11 +338,12 @@ interface Week {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const REVERT_WINDOW_MS = 30 * DAY_MS;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-function within(week: Week, at: string): boolean {
+function within({ start, end }: Pick<Week, "start" | "end">, at: string): boolean {
   const time = Date.parse(at);
-  return time >= week.start && time < week.end;
+  return time >= start && time < end;
 }
 
 /** The week ending at the last Monday 00:00 at or before `now`, and the week before it. */
