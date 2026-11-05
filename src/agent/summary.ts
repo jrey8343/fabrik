@@ -3,6 +3,7 @@
 // message; duration, turns, tokens and cost from the final result message.
 // Effort is what the runner passed to the CLI, since the init message never
 // carries it. Pure, no I/O.
+import { readStream, type AgentStream, type StreamMessage } from "./stream.ts";
 
 export interface RunSummaryInput {
   readonly role: string;
@@ -12,34 +13,6 @@ export interface RunSummaryInput {
   readonly lines: readonly string[];
   /** The skills the Kit installed from its lockfile, to confirm against the init message. */
   readonly pinnedSkills?: { readonly sha: string; readonly names: readonly string[] };
-}
-
-type Message = Record<string, unknown>;
-
-function parse(line: string): Message | null {
-  try {
-    const value: unknown = JSON.parse(line);
-    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Message) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** The stream's `system/init` message, or null if none arrived. */
-export function initMessageOf(lines: readonly string[]): Message | null {
-  for (const line of lines) {
-    const message = parse(line);
-    if (message?.["type"] === "system" && message["subtype"] === "init") return message;
-  }
-  return null;
-}
-
-function resultMessageOf(lines: readonly string[]): Message | null {
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const message = parse(lines[i] ?? "");
-    if (message?.["type"] === "result") return message;
-  }
-  return null;
 }
 
 const UNKNOWN = "unknown";
@@ -64,12 +37,10 @@ interface Tokens {
  * model the run used (subagents included), else its usage, which counts the
  * main loop only.
  */
-function tokensOf(result: Message | null): Tokens {
-  const perModel = result?.["modelUsage"];
-  const models =
-    typeof perModel === "object" && perModel !== null ? (Object.values(perModel) as Message[]) : [];
+function tokensOf({ result, modelUsage }: AgentStream): Tokens {
+  const models = Object.values(modelUsage);
   if (models.length === 0) {
-    const usage = (result?.["usage"] ?? {}) as Message;
+    const usage = (result?.["usage"] ?? {}) as StreamMessage;
     return {
       input: usage["input_tokens"],
       output: usage["output_tokens"],
@@ -102,22 +73,26 @@ function text(value: unknown): string {
 
 /** The pinned skills the stream's init message didn't report as loaded (all of them if it never arrived). */
 export function missingSkills(lines: readonly string[], names: readonly string[]): readonly string[] {
-  const loaded = initMessageOf(lines)?.["skills"];
+  return missingFrom(readStream(lines).init, names);
+}
+
+function missingFrom(init: StreamMessage | null, names: readonly string[]): readonly string[] {
+  const loaded = init?.["skills"];
   const reported = new Set(Array.isArray(loaded) ? loaded : []);
   return names.filter((name) => !reported.has(name));
 }
 
-function pinnedSkillsLine(lines: readonly string[], pinned: NonNullable<RunSummaryInput["pinnedSkills"]>): string {
-  const missing = missingSkills(lines, pinned.names);
+function pinnedSkillsLine(init: StreamMessage | null, pinned: NonNullable<RunSummaryInput["pinnedSkills"]>): string {
+  const missing = missingFrom(init, pinned.names);
   const at = `Pinned skills at ${pinned.sha.slice(0, 7)}`;
   if (missing.length === 0) return `${at}: all ${pinned.names.length} loaded`;
   return `${at}: ${pinned.names.length - missing.length} of ${pinned.names.length} loaded; missing: ${missing.join(", ")}`;
 }
 
 export function runSummary({ role, effort, lines, pinnedSkills }: RunSummaryInput): string {
-  const init = initMessageOf(lines);
-  const result = resultMessageOf(lines);
-  const tokens = tokensOf(result);
+  const stream = readStream(lines);
+  const { init, result } = stream;
+  const tokens = tokensOf(stream);
 
   const skills = Array.isArray(init?.["skills"]) && init["skills"].length > 0 ? init["skills"].join(", ") : "none reported";
 
@@ -142,6 +117,6 @@ export function runSummary({ role, effort, lines, pinnedSkills }: RunSummaryInpu
     "",
     `Skills loaded: ${skills}`,
     "",
-    ...(pinnedSkills === undefined ? [] : [pinnedSkillsLine(lines, pinnedSkills), ""]),
+    ...(pinnedSkills === undefined ? [] : [pinnedSkillsLine(init, pinnedSkills), ""]),
   ].join("\n");
 }
