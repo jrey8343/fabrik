@@ -249,13 +249,13 @@ describe("A tick's snapshot without the audit slice", () => {
 });
 
 describe("The pending Audit's issue", () => {
-  it("gets nothing from Intake, as a Kit-owned issue, so Triage never sorts it", () => {
+  it("starts the Auditor's run once the App has opened it, rather than going through Intake to Triage", () => {
     const pending = opened(tick(SUNDAY))[0];
-    const issue = anIssue({ number: 98, author: "fabrik-app[bot]", labels: pending?.labels ?? [], body: pending?.body ?? "" });
+    const issue = anIssue({ number: 98, author: "fabrik-app", byApp: true, labels: pending?.labels ?? [], body: pending?.body ?? "" });
 
     const plan = planFor({ kind: "issue-opened", issue: 98 }, snapshotOf(issue), kitConfig());
 
-    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("fabrik:audit") });
+    expect(plan).toEqual({ kind: "act", actions: [expect.objectContaining({ kind: "start-agent-run", role: "audit", issue: 98 })] });
   });
 });
 

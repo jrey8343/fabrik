@@ -1,8 +1,9 @@
 // The Audits in a Product repo (#150), read from the `fabrik:audit` issues the
 // Fabrik App opened through their marker lines (src/loop/markers.ts). The
 // tick opens each one pending; the Auditor's run fills it in or fails it.
+import { AUDIT_LABEL } from "./labels.ts";
 import { auditMarksIn } from "./markers.ts";
-import type { AuditIssueSnapshot } from "./types.ts";
+import type { AuditIssueSnapshot, IssueSnapshot } from "./types.ts";
 
 /** An Audit as the Kit reads it from its issue. */
 export interface Audit {
@@ -36,4 +37,13 @@ export function auditsIn(issues: readonly AuditIssueSnapshot[]): Audit[] {
  */
 export function lastAudit(issues: readonly AuditIssueSnapshot[]): Audit | null {
   return auditsIn(issues).find((audit) => !audit.failed) ?? null;
+}
+
+/**
+ * Whether this issue is the Fabrik App's open Audit still waiting on its run:
+ * the only issue an Auditor run starts for, or fails. A person's issue with
+ * the label or a quoted marker never is.
+ */
+export function isPendingAudit(issue: IssueSnapshot): boolean {
+  return issue.open && issue.byApp && issue.labels.includes(AUDIT_LABEL) && auditMarksIn(issue.body).pending;
 }

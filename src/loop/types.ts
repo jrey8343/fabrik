@@ -5,9 +5,9 @@ import type { SentBack } from "./backToDesign.ts";
 import type { Label } from "./labels.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
-export type AgentRole = "triage" | "design" | "implement" | "review";
+export type AgentRole = "triage" | "design" | "implement" | "review" | "audit";
 
-export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review"];
+export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit"];
 
 /** How an agent job says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
 export type ReportedFailure =
@@ -83,8 +83,8 @@ export type LoopEvent =
     }
   | {
       readonly kind: "agent-run-finished";
-      /** Implement and Review runs finish through their own events, which carry what their push jobs hold. */
-      readonly role: Exclude<AgentRole, "implement" | "review">;
+      /** Implement, Review and Auditor runs finish through their own events, which carry what their push jobs hold. */
+      readonly role: Exclude<AgentRole, "implement" | "review" | "audit">;
       readonly issue: number;
       /** The text the agent emitted as its structured output, unparsed. */
       readonly output: string;
@@ -222,6 +222,8 @@ export interface IssueSnapshot {
   readonly number: number;
   readonly open: boolean;
   readonly author: string;
+  /** Whether the Fabrik App (a bot) opened it. Only the App's bodies are read for an Audit's markers. */
+  readonly byApp: boolean;
   /** Its Markdown body as it stands, whose marker lines a Design session's rewrite carries forward (src/loop/carriedLines.ts). */
   readonly body: string;
   readonly labels: readonly string[];
