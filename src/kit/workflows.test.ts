@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const root = new URL("../../", import.meta.url);
-const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml"].map((path) => ({
+const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml", ".github/workflows/weekly-summary.yml"].map((path) => ({
   path,
   text: readFileSync(new URL(path, root), "utf8"),
 }));
@@ -107,6 +107,51 @@ describe("The write the Run record action", () => {
 
     expect(download).toContain("fabrik-transcript-");
     expect(download).toContain("continue-on-error: true");
+  });
+});
+
+describe("The weekly summary workflow", () => {
+  const weekly = workflows.find((workflow) => workflow.path.endsWith("weekly-summary.yml"))!.text;
+  const action = readFileSync(new URL(".github/actions/file-weekly-summary/action.yml", root), "utf8");
+  const steps = action.split(/\n(?=    - )/);
+  const tokens = steps.filter((step) => step.includes("uses: actions/create-github-app-token@"));
+  const permissionsOf = (step: string | undefined) =>
+    [...(step ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`).sort();
+
+  it("is called from the fabrik-runs caller with its push service account, and runs the Kit's composite action", () => {
+    expect(weekly).toMatch(/on:\n {2}workflow_call:\n {4}secrets:\n {6}OP_PUSH_TOKEN:/);
+    expect(weekly).toContain("jrey8343/fabrik/.github/workflows/weekly-summary.yml@*)");
+    expect(weekly).toContain("uses: ./kit/.github/actions/file-weekly-summary");
+  });
+
+  it("leaves reading and filing to the Kit's Node program, never inline gh calls", () => {
+    const program = /run: node (src\/\S+)/.exec(action)?.[1];
+
+    expect(program).toBeDefined();
+    expect(existsSync(new URL(program!, root))).toBe(true);
+    for (const text of [weekly, action]) expect(text).not.toMatch(/\bgh (api|issue|pr|repo) /);
+  });
+
+  it("holds only two Fabrik App tokens: Issues write and Contents read on fabrik-runs, and read-only on the Product repos", () => {
+    const store = tokens.find((step) => step.includes("repositories: fabrik-runs"));
+    const products = tokens.find((step) => step !== store);
+
+    expect(tokens).toHaveLength(2);
+    expect(store).toMatch(/owner: jrey8343\n/);
+    expect(permissionsOf(store)).toEqual(["contents: read", "issues: write"]);
+    expect(products).toMatch(/owner: jrey8343\n/);
+    expect(products).not.toContain("repositories:");
+    expect(permissionsOf(products)).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
+  });
+
+  it("reads the store's records from a sparse checkout of runs/, never its transcripts", () => {
+    const checkout = steps.find((step) => step.includes("uses: actions/checkout@"));
+
+    expect(checkout).toContain("repository: jrey8343/fabrik-runs");
+    expect(checkout).toMatch(/sparse-checkout: runs\n/);
+    expect(checkout).toContain("sparse-checkout-cone-mode: true");
+    expect(checkout).toContain("persist-credentials: false");
+    expect(action).not.toContain("transcripts/");
   });
 });
 

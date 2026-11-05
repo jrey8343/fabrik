@@ -14,11 +14,16 @@ const FABRIK_USES = /^\s*(?:-\s+)?uses:\s*["']?jrey8343\/fabrik(?:\/[^@\s"']*)?@
 /** An exact semver release tag, such as v1.2.3 or v1.2.3-pre.1. */
 const EXACT_RELEASE = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
-export function checkCallerWorkflow(text: string): CallerCheck {
-  const refs = text.split("\n").flatMap((line) => {
+/** The refs of every `uses:` line in the workflow that names Fabrik, in order. */
+export function fabrikRefsIn(text: string): string[] {
+  return text.split("\n").flatMap((line) => {
     const match = FABRIK_USES.exec(line);
     return match?.[1] === undefined ? [] : [match[1]];
   });
+}
+
+export function checkCallerWorkflow(text: string): CallerCheck {
+  const refs = fabrikRefsIn(text);
   if (refs.length === 0) {
     return { ok: false, error: "The caller workflow has no uses: line that pins a Fabrik release" };
   }

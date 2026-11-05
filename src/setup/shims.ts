@@ -46,6 +46,13 @@ export function scheduleIn(template: string, timeZone: string): string {
   return template.replace(/^(\s+timezone:\s*)\S.*$/m, `$1${JSON.stringify(timeZone)}`);
 }
 
+/** The Operator's time zone, as `scheduleIn` wrote it into the store's caller, or null if it names none. */
+export function timeZoneIn(caller: string): string | null {
+  const value = /^\s+timezone:\s*(\S.*?)\s*$/m.exec(caller)?.[1];
+  if (value === undefined) return null;
+  return value.replace(/^(["'])(.*)\1$/, "$2");
+}
+
 /** Semver majors, where each 0.x minor is a major of its own. */
 function compareMajors(a: string, b: string): number {
   const [aMajor, aMinor] = majorLine(a);
