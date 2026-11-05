@@ -83,6 +83,17 @@ export function aMonitorIssue(overrides: Partial<MonitorIssue> = {}): MonitorIss
   };
 }
 
+/**
+ * `count` open error issues the Fabrik App filed, numbered from 40 up, one
+ * each for groups 4601 and up, which Sentry doesn't list this tick: each takes
+ * a slot under the cap, its stats block showing aGroup()'s stats.
+ */
+export function openErrorIssues(count: number): MonitorIssue[] {
+  return Array.from({ length: count }, (_, i) =>
+    aMonitorIssue({ number: 40 + i, body: aMonitorIssueBody().replace("sentry:4504", `sentry:${4601 + i}`) }),
+  );
+}
+
 /** Issue 40 closed as completed on 2026-11-03 at 10:00 UTC, by its fix merging. */
 export function aClosedMonitorIssue(overrides: Partial<MonitorIssue> = {}): MonitorIssue {
   return aMonitorIssue({ open: false, stateReason: "completed", closedAt: "2026-11-03T10:00:00Z", ...overrides });
