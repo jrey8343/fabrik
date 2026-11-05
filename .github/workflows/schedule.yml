@@ -2,9 +2,12 @@
 # .github/workflows/fabrik.yml on its schedule.
 #
 # This file is wiring only. It runs the Loop's time-based rules (closing the
-# weekly-limit issue after its reset, and a Design queue check) through the
-# Loop rules core, which src/main.ts runs as a `scheduled-tick` event, and once
-# a week the Product repo's skills bumps for its own Skills sources.
+# weekly-limit issue after its reset, opening the week's pending Audit, and a
+# Design queue check) through the Loop rules core, which src/main.ts runs as a
+# `scheduled-tick` event, and once a week the Product repo's skills bumps for
+# its own Skills sources. The Fabrik App opening the pending Audit starts the
+# Loop workflow, whose Audit job runs the Auditor, so the tick itself holds
+# only the push service account.
 #
 # Like the Loop's push job (ADR-0002), the tick and skills bump jobs run on a
 # fresh VM, load the Fabrik App key through the push service account, mint an

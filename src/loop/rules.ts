@@ -1,9 +1,9 @@
 import { isPendingAudit, startAuditorRun } from "./audit.ts";
+import { scheduledTickWithAuditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom } from "./design.ts";
 import { failureNotice } from "./failures.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
-import { scheduledTick } from "./kitIssues.ts";
 import {
   DESIGN_LABEL,
   DISPATCH_LABEL,
@@ -100,7 +100,6 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
       return applyRedChecks(event, snapshot);
     case "review-run-finished":
       return applyReview(event, snapshot);
-    // Nothing raises it until the Auditor is switched on (#214).
     case "audit-run-finished":
       return withIssue(snapshot, (context) => landAudit(event, context, snapshot.namedPullRequests));
     case "pull-request-changes-requested":
@@ -129,9 +128,11 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
       // above it, so see what can start now.
       return { kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] };
     case "scheduled-tick":
-      // The tick also catches a Design session slot freed by an event the Loop
-      // doesn't watch, such as needs-design coming off by hand.
-      return thenCheckDesignQueue(scheduledTick(event.now, snapshot));
+      // The tick closes the weekly-limit issue after its reset and opens the
+      // week's pending Audit when it's due. It also catches a Design session
+      // slot freed by an event the Loop doesn't watch, such as needs-design
+      // coming off by hand.
+      return thenCheckDesignQueue(scheduledTickWithAuditGate(event.now, snapshot, config));
   }
 }
 

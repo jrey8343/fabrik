@@ -15,8 +15,7 @@ const FAILED_AUDITS_A_WEEK = 2;
 /**
  * The scheduled tick with the audit gate: closes the weekly-limit issue after
  * its reset, as scheduledTick does, alongside opening a pending Audit when
- * one is due. The scheduled-tick rule calls scheduledTick alone until the
- * Auditor is switched on (#214).
+ * one is due. The scheduled-tick rule calls it on every tick.
  */
 export function scheduledTickWithAuditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   const tick = scheduledTick(now, snapshot);

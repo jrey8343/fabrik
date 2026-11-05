@@ -6,9 +6,6 @@ import type { IssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
-// The Auditor's run is dormant: nothing opens a pending Audit until the audit
-// gate is switched on (#214), so these tests open one by hand.
-
 /** A `fabrik:audit` issue as the Loop sees it: by default the App's pending Audit, open and waiting on its run. */
 function anAudit(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
   return anIssue({ number: 98, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "pending"), ...overrides });

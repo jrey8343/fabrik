@@ -140,6 +140,14 @@ export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kit
   return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, namedPullRequests: null, ...overrides };
 }
 
+/**
+ * A scheduled tick's snapshot: the repo's, with the audit slice every tick
+ * gathers, by default an unaudited repo whose default branch is at HEAD_SHA.
+ */
+export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit">> = {}): Snapshot {
+  return repoSnapshot({ audit: { head: HEAD_SHA, issues: [] }, ...overrides });
+}
+
 /** The commit anAuditIssue() audited unless a test says otherwise. */
 export const AUDITED_SHA = "b".repeat(40);
 
