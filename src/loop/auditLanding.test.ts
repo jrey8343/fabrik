@@ -582,6 +582,18 @@ describe("Landing an Audit: a reply that breaks the contract", () => {
     expect(rewrittenBodyOf(plan).match(/^## (One|Two|Three)$/gm)).toEqual(["## One", "## Two", "## Three"]);
   });
 
+  it("files the cards Strongest first, whatever order the Auditor gave them, keeping its order among candidates of one Strength", () => {
+    /** The cards' titles, in the order the Audit files them, for candidates One, Two and Three of these Strengths. */
+    const cardsFor = (...strengths: string[]) => {
+      const candidates = ["One", "Two", "Three"].map((title, i) => aCandidate({ title, strength: strengths[i] }));
+      const plan = planFor(auditFinished({ candidates, topRecommendation: "Start with One" }), auditRunSnapshotOf(), kitConfig());
+      return rewrittenBodyOf(plan).match(/^## (One|Two|Three)$/gm);
+    };
+
+    expect(cardsFor("speculative", "worth-exploring", "strong")).toEqual(["## Three", "## Two", "## One"]);
+    expect(cardsFor("strong", "worth-exploring", "strong")).toEqual(["## One", "## Three", "## Two"]);
+  });
+
   it("takes a Top recommendation that names its candidate in any case", () => {
     const plan = planFor(auditFinished({ candidates: [aCandidate()], topRecommendation: "Start by making the cart module deeper? No: make the cart module deeper." }), auditRunSnapshotOf(), kitConfig());
 

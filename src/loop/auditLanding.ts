@@ -9,7 +9,7 @@ import { type AuditCandidate, type AuditOutput, parseAuditOutput } from "./audit
 import { newIssueUrl } from "./followUps.ts";
 import { auditMarker, auditMarksIn, escapeMarker, fromAuditLine } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
-import { type AuditWindow, type IssueContext, type LoopEvent, type NamedPullRequestSnapshot, type Plan, STRENGTH_LABELS } from "./types.ts";
+import { type AuditWindow, type IssueContext, type LoopEvent, type NamedPullRequestSnapshot, type Plan, STRENGTH_LABELS, STRENGTHS } from "./types.ts";
 
 type AuditFinished = Extract<LoopEvent, { kind: "audit-run-finished" }>;
 
@@ -78,7 +78,7 @@ function cleanBody(commit: string, window: AuditWindow): string {
   ].join("\n");
 }
 
-/** A filled Audit: what it read and what to do, a card per candidate, the Top recommendation, then its audit marker. */
+/** A filled Audit: what it read and what to do, a card per candidate Strongest first, the Top recommendation, then its audit marker. */
 function filledBody(
   { candidates, topRecommendation }: AuditOutput,
   named: readonly NamedPullRequestSnapshot[],
@@ -87,7 +87,7 @@ function filledBody(
 ): string {
   return [
     `The Auditor read the default branch up to \`${shortSha(commit)}\`, ${lookedFirstAt(window)}. File the candidates you want, comment here on any you reject so the next Audit knows, and close this Audit when you're done.`,
-    ...candidates.flatMap((candidate) => ["", ...card(candidate, keptPullRequests(candidate, named), repoUrl, audit)]),
+    ...strongestFirst(candidates).flatMap((candidate) => ["", ...card(candidate, keptPullRequests(candidate, named), repoUrl, audit)]),
     "",
     TOP_RECOMMENDATION_HEADING,
     "",
@@ -95,6 +95,11 @@ function filledBody(
     "",
     auditMarker(commit),
   ].join("\n");
+}
+
+/** The candidates Strongest first, keeping the Auditor's order among those of one Strength. */
+function strongestFirst(candidates: readonly AuditCandidate[]): AuditCandidate[] {
+  return candidates.toSorted((a, b) => STRENGTHS.indexOf(a.strength) - STRENGTHS.indexOf(b.strength));
 }
 
 /**
