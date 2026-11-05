@@ -149,6 +149,23 @@ export function isSkillsBumpTick(tickAt: Date): boolean {
   return tickAt.getUTCDay() === 1 && tickAt.getUTCHours() === 4;
 }
 
+/**
+ * The scheduled tick a run belongs to: the latest time at or before
+ * `observedAt` on the minute an hourly `schedule` (such as "17 * * * *")
+ * names. GitHub often starts a scheduled run late, so this, not the time the
+ * run got going, is what the weekly gate should check; a run up to an hour
+ * late still counts as its own tick. A schedule it can't read as an hourly
+ * cron leaves `observedAt` as it is.
+ */
+export function scheduledTickOf(observedAt: Date, schedule: string | undefined): Date {
+  const minute = /^\s*(\d{1,2})\s+\*\s+\*\s+\*\s+\*\s*$/.exec(schedule ?? "")?.[1];
+  if (minute === undefined || Number(minute) > 59) return observedAt;
+  const tick = new Date(observedAt);
+  tick.setUTCMinutes(Number(minute), 0, 0);
+  if (tick > observedAt) tick.setUTCHours(tick.getUTCHours() - 1);
+  return tick;
+}
+
 function hasMoved(pin: { readonly sha: string }, upstream: UpstreamSkills): boolean {
   return !(upstream.head === pin.sha || upstream.status === "identical" || upstream.status === "behind");
 }

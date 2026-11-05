@@ -2,7 +2,8 @@
 // GitHub API: the head of one branch, the compare, the diff, and the plugin
 // manifest at both ends. Both weekly bumps use it: Fabrik's own reads `main`,
 // a Product repo's reads each source's default branch. Sources are public, so
-// this needs no credential.
+// any token will do; both bumps pass one only to stay clear of the
+// unauthenticated rate limit.
 import type { UpstreamSkills } from "./bump.ts";
 import { PLUGIN_MANIFEST_PATH } from "./lock.ts";
 

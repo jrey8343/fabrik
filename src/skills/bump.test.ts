@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSkillsBumpTick, planSkillsBump, planSourceBump, type UpstreamSkills } from "./bump.ts";
+import { isSkillsBumpTick, planSkillsBump, planSourceBump, scheduledTickOf, type UpstreamSkills } from "./bump.ts";
 import type { SkillsSource } from "../kit/config.ts";
 import type { SkillsLock } from "./lock.ts";
 
@@ -352,5 +352,28 @@ describe("the weekly gate on a Product repo's skills bump", () => {
     expect(isSkillsBumpTick(new Date("2026-11-10T04:15:00Z"))).toBe(false);
     // 04:30 on Monday in Sydney is still Sunday in UTC.
     expect(isSkillsBumpTick(new Date("2026-11-09T04:30:00+11:00"))).toBe(false);
+  });
+});
+
+describe("finding the scheduled tick a delayed run belongs to", () => {
+  const tick = (observedAt: string, schedule?: string) => scheduledTickOf(new Date(observedAt), schedule).toISOString();
+
+  it("takes a Monday 04:17 tick that only started after 05:00 as the 04:17 tick, so the week's bump still runs", () => {
+    expect(tick("2026-11-09T05:10:00Z", "17 * * * *")).toBe("2026-11-09T04:17:00.000Z");
+    expect(isSkillsBumpTick(scheduledTickOf(new Date("2026-11-09T05:10:00Z"), "17 * * * *"))).toBe(true);
+  });
+
+  it("takes a 03:17 tick delayed into the 04:00 hour as the 03:17 tick, so it doesn't bump", () => {
+    expect(tick("2026-11-09T04:05:00Z", "17 * * * *")).toBe("2026-11-09T03:17:00.000Z");
+    expect(isSkillsBumpTick(scheduledTickOf(new Date("2026-11-09T04:05:00Z"), "17 * * * *"))).toBe(false);
+  });
+
+  it("takes a run on time as its own tick", () => {
+    expect(tick("2026-11-09T04:17:30Z", "17 * * * *")).toBe("2026-11-09T04:17:00.000Z");
+  });
+
+  it("falls back to when the run was seen when the schedule isn't an hourly cron it can read", () => {
+    expect(tick("2026-11-09T04:40:00Z", undefined)).toBe("2026-11-09T04:40:00.000Z");
+    expect(tick("2026-11-09T04:40:00Z", "*/15 * * * *")).toBe("2026-11-09T04:40:00.000Z");
   });
 });
