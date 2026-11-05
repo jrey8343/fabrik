@@ -321,6 +321,13 @@ export type Strength = "strong" | "worth-exploring" | "speculative";
 
 export const STRENGTHS: readonly Strength[] = ["strong", "worth-exploring", "speculative"];
 
+/** Each Strength as people read it: an Audit card's badge, and its name in the Weekly summary. */
+export const STRENGTH_LABELS: Readonly<Record<Strength, string>> = {
+  strong: "Strong",
+  "worth-exploring": "Worth exploring",
+  speculative: "Speculative",
+};
+
 /** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
 export interface VerdictRecord {
   readonly verdict: Verdict;

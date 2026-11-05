@@ -6,7 +6,7 @@ import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_ROUND_MARKER, escapeMarkerIn } from "../loop/markers.ts";
-import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTHS, type Strength } from "../loop/types.ts";
+import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { type RateLimitReading, type RunRecord, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
@@ -1049,7 +1049,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
 
 /** The escapes opened in the 90 days by Strength, naming those with no known Strength only when there are some. */
 function escapesByStrengthLine(counts: EscapesByStrength): string {
-  const known = [`${counts.strong} Strong`, `${counts["worth-exploring"]} Worth exploring`, `${counts.speculative} Speculative`];
+  const known = STRENGTHS.map((strength) => `${counts[strength]} ${STRENGTH_LABELS[strength]}`);
   const all = counts.none === 0 ? known : [...known, `${counts.none} with no known Strength`];
   return `Architectural escapes by Strength (90 days): ${all.join(", ")}.`;
 }

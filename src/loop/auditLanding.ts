@@ -9,7 +9,7 @@ import { type AuditCandidate, type AuditOutput, parseAuditOutput } from "./audit
 import { newIssueUrl } from "./followUps.ts";
 import { auditMarker, auditMarksIn, escapeMarker, fromAuditLine } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
-import type { AuditWindow, IssueContext, LoopEvent, NamedPullRequestSnapshot, Plan, Strength } from "./types.ts";
+import { type AuditWindow, type IssueContext, type LoopEvent, type NamedPullRequestSnapshot, type Plan, STRENGTH_LABELS } from "./types.ts";
 
 type AuditFinished = Extract<LoopEvent, { kind: "audit-run-finished" }>;
 
@@ -97,12 +97,6 @@ function filledBody(
   ].join("\n");
 }
 
-const BADGES: Readonly<Record<Strength, string>> = {
-  strong: "Strong",
-  "worth-exploring": "Worth exploring",
-  speculative: "Speculative",
-};
-
 /**
  * The PRs a candidate traces to that the Kit can vouch for: each merged agent
  * PR the Auditor named, once, in its order. The rest are dropped silently, so
@@ -118,7 +112,7 @@ function card(candidate: AuditCandidate, introducedBy: readonly number[], repoUr
   return [
     `## ${candidate.title}`,
     "",
-    `\`${BADGES[candidate.strength]}\``,
+    `\`${STRENGTH_LABELS[candidate.strength]}\``,
     "",
     ...described(candidate),
     "",
@@ -157,7 +151,7 @@ function described(candidate: AuditCandidate): string[] {
  * session's rewrite carries both lines forward (src/loop/carriedLines.ts).
  */
 function openAsIssue(candidate: AuditCandidate, introducedBy: readonly number[], repoUrl: string, audit: number): string {
-  const body = [...described(candidate), "", `**Strength:** ${BADGES[candidate.strength]}`].join("\n");
+  const body = [...described(candidate), "", `**Strength:** ${STRENGTH_LABELS[candidate.strength]}`].join("\n");
   const trailer = [fromAuditLine(audit), ...(introducedBy.length === 0 ? [] : [escapeMarker(candidate.strength, introducedBy)])];
   return newIssueUrl(repoUrl, candidate.title, body, trailer.join("\n"));
 }
