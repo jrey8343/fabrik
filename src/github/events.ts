@@ -192,11 +192,15 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
   };
 }
 
-/** Turns an Auditor's result into the Loop event its push job applies, which fills its Audit; `runUrl` is that push job's run. */
-export function auditEventFrom(result: AgentRunResult, runUrl: string): LoopEvent {
+/**
+ * Turns an Auditor's result into the Loop event its push job applies, which
+ * fills its Audit; `runUrl` is that push job's run, and `repoUrl` the Product
+ * repo its candidates open issues on.
+ */
+export function auditEventFrom(result: AgentRunResult, runUrl: string, repoUrl: string): LoopEvent {
   if (result.role !== "audit") throw new Error(`An Audit's push job was handed a ${result.role} result`);
   if (result.window === undefined) throw new Error(`The Auditor's result for #${result.issue} names no window it was given`);
-  return { kind: "audit-run-finished", issue: result.issue, output: result.output, window: result.window, runUrl };
+  return { kind: "audit-run-finished", issue: result.issue, output: result.output, window: result.window, runUrl, repoUrl };
 }
 
 /** The Operator comments a run was given, for its event to carry; nothing when its result has none. */

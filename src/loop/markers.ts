@@ -1,7 +1,7 @@
 // The markers the Kit's comments open with. The core writes them; the adapter
 // reads a thread's comments back through them into the snapshot
 // (src/github/threads.ts), so the Loop's history lives on GitHub alone.
-import type { VerdictRecord } from "./types.ts";
+import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
@@ -64,6 +64,11 @@ export interface EscapeMarker {
   readonly pullRequests: readonly number[];
 }
 
+/** The escape marker for a candidate of this Strength that traces to these merged agent PRs, which escapeMarkerIn reads back. */
+export function escapeMarker(strength: Strength, pullRequests: readonly number[]): string {
+  return `<!-- fabrik:escape ${[strength, ...pullRequests.map((pullRequest) => `#${pullRequest}`)].join(" ")} -->`;
+}
+
 /** The first escape marker in `body`, or null if it has none. */
 export function escapeMarkerIn(body: string): EscapeMarker | null {
   const match = ESCAPE_MARKER.exec(body);
@@ -85,6 +90,11 @@ export function escapeMarkerIn(body: string): EscapeMarker | null {
  * trimmed. A Design session's rewrite carries it forward.
  */
 export const FROM_AUDIT_LINE = /^From audit #([1-9][0-9]*)$/;
+
+/** The `From audit #n` line for a candidate filed from Audit #`audit`, which fromAuditIn reads back. */
+export function fromAuditLine(audit: number): string {
+  return `From audit #${audit}`;
+}
 
 /** The Audit the first `From audit #n` line in `body` names, or null if it has none. */
 export function fromAuditIn(body: string): number | null {

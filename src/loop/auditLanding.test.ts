@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { aNamedPullRequest, AUDITED_SHA, auditBody, auditRunSnapshotOf, kitConfig, notificationsOf } from "../__fixtures__/snapshots.ts";
+import { aNamedPullRequest, anIssue, AUDITED_SHA, auditBody, auditRunSnapshotOf, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { MAX_ISSUE_URL_LENGTH } from "./followUps.ts";
+import { escapeMarkerIn, fromAuditIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { AuditWindow, LoopEvent, Plan } from "./types.ts";
 
@@ -13,7 +15,7 @@ const SINCE_LAST_AUDIT: AuditWindow = { kind: "since-audit", audit: 90, commit: 
 /** The Auditor's run on Audit #97 finished with this `<audit>` JSON, or this text when it's a string. */
 function auditFinished(output: unknown, window: AuditWindow = SINCE_LAST_AUDIT): LoopEvent {
   const text = typeof output === "string" ? output : JSON.stringify(output);
-  return { kind: "audit-run-finished", issue: 97, output: text, window, runUrl: RUN };
+  return { kind: "audit-run-finished", issue: 97, output: text, window, runUrl: RUN, repoUrl: "https://github.com/acme/shop" };
 }
 
 /** One candidate as the Auditor writes it: by default Strong, naming PR #31. */
@@ -32,8 +34,13 @@ function aCandidate(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** The Open as issue link to the Product repo's new-issue form, prefilled with this title and body. */
+function openAsIssue(title: string, body: readonly string[]): string {
+  return `[Open as issue](https://github.com/acme/shop/issues/new?${new URLSearchParams({ title, body: body.join("\n") })})`;
+}
+
 describe("Landing an Audit: a full Audit", () => {
-  it("rewrites the pending Audit into its cards, each with its badge, diagrams and Introduced by, then the Top recommendation", () => {
+  it("rewrites the pending Audit into its cards, each with its badge, diagrams, Introduced by and Open as issue link, then the Top recommendation", () => {
     const output = {
       candidates: [
         aCandidate({ introducedBy: [31, 32] }),
@@ -96,6 +103,21 @@ describe("Landing an Audit: a full Audit", () => {
             "",
             "**Introduced by:** #31, #32",
             "",
+            openAsIssue("Make the cart module deeper", [
+              "**Files:** `src/cart.ts`, `src/cart/total.ts`",
+              "",
+              "**Problem:** Callers reach into three modules to total a cart.",
+              "",
+              "**Solution:** One cart module whose `total()` hides the tax and discount steps.",
+              "",
+              "**Benefits:** Callers stop knowing how a total is made, so tests sit at one seam.",
+              "",
+              "**Strength:** Strong",
+              "",
+              "From audit #97",
+              "<!-- fabrik:escape strong #31 #32 -->",
+            ]),
+            "",
             "## Give booking its own seam",
             "",
             "`Worth exploring`",
@@ -124,6 +146,20 @@ describe("Landing an Audit: a full Audit", () => {
             "```",
             "",
             "**Introduced by:** No merged agent PR",
+            "",
+            openAsIssue("Give booking its own seam", [
+              "**Files:** `src/booking.ts`",
+              "",
+              "**Problem:** Booking and billing share one module.",
+              "",
+              "**Solution:** Split booking out behind `book()`.",
+              "",
+              "**Benefits:** Billing changes stop breaking booking.",
+              "",
+              "**Strength:** Worth exploring",
+              "",
+              "From audit #97",
+            ]),
             "",
             "## Top recommendation",
             "",
@@ -186,6 +222,171 @@ describe("Landing an Audit: Introduced by", () => {
     );
 
     expect(introducedByLines(rewrittenBodyOf(plan))).toEqual(["**Introduced by:** No merged agent PR"]);
+  });
+});
+
+describe("Landing an Audit: the Open as issue link", () => {
+  /** Each Open as issue link in an Audit's body, read back as the new-issue form it opens. */
+  function issueLinks(body: string): URL[] {
+    return [...body.matchAll(/\[Open as issue\]\(([^)\s]+)\)/g)].map((match) => new URL(match[1]!));
+  }
+
+  /** The new-issue form each card's link opens, from the filled Audit `output` lands as, given the PRs it named. */
+  function linksFrom(output: unknown, named = [aNamedPullRequest()]): URL[] {
+    return issueLinks(rewrittenBodyOf(planFor(auditFinished(output), auditRunSnapshotOf(named), kitConfig())));
+  }
+
+  it("ends each card with a link to the Product repo's new-issue form, prefilled with the candidate's title, Files, Problem, Solution, Benefits and Strength, then the Audit it came from", () => {
+    const output = {
+      candidates: [
+        aCandidate({ introducedBy: [] }),
+        aCandidate({ title: "Give booking its own seam", files: ["src/booking.ts"], strength: "worth-exploring", introducedBy: [] }),
+      ],
+      topRecommendation: "Make the cart module deeper",
+    };
+
+    const links = linksFrom(output);
+
+    expect(links.map((link) => `${link.origin}${link.pathname}`)).toEqual([
+      "https://github.com/acme/shop/issues/new",
+      "https://github.com/acme/shop/issues/new",
+    ]);
+    expect(links.map((link) => [link.searchParams.get("title"), link.searchParams.get("body")])).toEqual([
+      [
+        "Make the cart module deeper",
+        [
+          "**Files:** `src/cart.ts`, `src/cart/total.ts`",
+          "",
+          "**Problem:** Callers reach into three modules to total a cart.",
+          "",
+          "**Solution:** One cart module whose `total()` hides the tax and discount steps.",
+          "",
+          "**Benefits:** Callers stop knowing how a total is made, so tests sit at one seam.",
+          "",
+          "**Strength:** Strong",
+          "",
+          "From audit #97",
+        ].join("\n"),
+      ],
+      [
+        "Give booking its own seam",
+        [
+          "**Files:** `src/booking.ts`",
+          "",
+          "**Problem:** Callers reach into three modules to total a cart.",
+          "",
+          "**Solution:** One cart module whose `total()` hides the tax and discount steps.",
+          "",
+          "**Benefits:** Callers stop knowing how a total is made, so tests sit at one seam.",
+          "",
+          "**Strength:** Worth exploring",
+          "",
+          "From audit #97",
+        ].join("\n"),
+      ],
+    ]);
+  });
+
+  it("ends the issue with the escape marker, naming the Strength and the PRs kept in Introduced by, when it traces to merged agent PRs", () => {
+    const output = {
+      candidates: [aCandidate({ strength: "worth-exploring", introducedBy: [32, 40, 31] })],
+      topRecommendation: "Make the cart module deeper",
+    };
+
+    const [link] = linksFrom(output, [
+      aNamedPullRequest({ number: 31 }),
+      aNamedPullRequest({ number: 32, headRef: "fabrik/ticket-8" }),
+      aNamedPullRequest({ number: 40, merged: false }),
+    ]);
+
+    expect(link?.searchParams.get("body")?.split("\n").slice(-4)).toEqual([
+      "**Strength:** Worth exploring",
+      "",
+      "From audit #97",
+      "<!-- fabrik:escape worth-exploring #32 #31 -->",
+    ]);
+  });
+
+  it("gives a candidate naming only a PR from a person's branch no Introduced by and no escape marker", () => {
+    const output = { candidates: [aCandidate({ introducedBy: [41] })], topRecommendation: "Make the cart module deeper" };
+    const named = [aNamedPullRequest({ number: 41, headRef: "feature/cart", isAgent: false })];
+
+    const body = rewrittenBodyOf(planFor(auditFinished(output), auditRunSnapshotOf(named), kitConfig()));
+
+    expect(introducedByLines(body)).toEqual(["**Introduced by:** No merged agent PR"]);
+    const prefilled = issueLinks(body)[0]?.searchParams.get("body") ?? "";
+    expect(prefilled).toMatch(/\n\nFrom audit #97$/);
+    expect(prefilled).not.toContain("fabrik:escape");
+  });
+
+  it("cuts a long candidate short to fit GitHub's URL limit, keeping its whole trailer, while the Audit shows all of it", () => {
+    const long = "word ".repeat(3000).trim();
+    const output = {
+      candidates: [aCandidate({ problem: long, solution: long, introducedBy: [31, 32] })],
+      topRecommendation: "Make the cart module deeper",
+    };
+    const named = [aNamedPullRequest({ number: 31 }), aNamedPullRequest({ number: 32, headRef: "fabrik/ticket-8" })];
+
+    const body = rewrittenBodyOf(planFor(auditFinished(output), auditRunSnapshotOf(named), kitConfig()));
+
+    const [link] = issueLinks(body);
+    expect(link?.href.length).toBeLessThanOrEqual(MAX_ISSUE_URL_LENGTH);
+    expect(link?.searchParams.get("body")).toMatch(
+      /^\*\*Files:\*\* `src\/cart\.ts`, `src\/cart\/total\.ts`\n\n\*\*Problem:\*\* word word .*…\n\nFrom audit #97\n<!-- fabrik:escape strong #31 #32 -->$/s,
+    );
+    expect(body).toContain(`**Problem:** ${long}`);
+    expect(body).toContain(`**Solution:** ${long}`);
+  });
+
+  it("files an issue whose escape marker reads back as the candidate's Strength and kept PRs, for every Strength", () => {
+    const output = {
+      candidates: [
+        aCandidate({ title: "One", strength: "strong", introducedBy: [31] }),
+        aCandidate({ title: "Two", strength: "worth-exploring", introducedBy: [32, 31] }),
+        aCandidate({ title: "Three", strength: "speculative", introducedBy: [32] }),
+      ],
+      topRecommendation: "One",
+    };
+
+    const links = linksFrom(output, [aNamedPullRequest({ number: 31 }), aNamedPullRequest({ number: 32, headRef: "fabrik/ticket-8" })]);
+
+    expect(links.map((link) => escapeMarkerIn(link.searchParams.get("body") ?? ""))).toEqual([
+      { strength: "strong", pullRequests: [31] },
+      { strength: "worth-exploring", pullRequests: [32, 31] },
+      { strength: "speculative", pullRequests: [32] },
+    ]);
+  });
+
+  it("files issues that the next Audit's inputs read back as filed from this Audit", () => {
+    const output = {
+      candidates: [aCandidate({ title: "One", introducedBy: [31] }), aCandidate({ title: "Two", introducedBy: [] })],
+      topRecommendation: "One",
+    };
+
+    const links = linksFrom(output);
+
+    expect(links.map((link) => fromAuditIn(link.searchParams.get("body") ?? ""))).toEqual([97, 97]);
+  });
+
+  it("files an issue that keeps its From audit line and escape marker when a Design session rewrites it, so it still counts", () => {
+    const [link] = linksFrom({ candidates: [aCandidate({ introducedBy: [31] })], topRecommendation: "Make the cart module deeper" });
+    const filed = anIssue({ number: 120, labels: ["enhancement", "needs-design"], body: link?.searchParams.get("body") ?? "" });
+    const operatorBrief = {
+      kind: "brief",
+      comment: "This is all Operator work.",
+      brief: { operator: true, summary: "Merge the cart modules by hand.", steps: ["Move total() into cart"] },
+    };
+
+    const plan = planFor(
+      { kind: "agent-run-finished", role: "design", issue: 120, output: JSON.stringify(operatorBrief) },
+      snapshotOf(filed, { operator: "jrey" }),
+      kitConfig(),
+    );
+
+    const rewritten = rewrittenBodyOf(plan);
+    expect(rewritten).toContain("Merge the cart modules by hand.");
+    expect(rewritten.split("\n").slice(-2)).toEqual(["From audit #97", "<!-- fabrik:escape strong #31 -->"]);
+    expect(escapeMarkerIn(rewritten)).toEqual({ strength: "strong", pullRequests: [31] });
   });
 });
 
@@ -275,7 +476,7 @@ describe("Landing an Audit: a stale result", () => {
 });
 
 describe("Landing an Audit: silent", () => {
-  it("mentions nobody from any text the Auditor wrote", () => {
+  it("mentions nobody from any text the Auditor wrote, on the Audit or in the issue a candidate files", () => {
     const output = {
       candidates: [
         aCandidate({
@@ -295,6 +496,10 @@ describe("Landing an Audit: silent", () => {
 
     expect(body).not.toMatch(/@(alice|bob|carol|dave|erin|frank|grace|heidi)/);
     expect(body).toContain("## Ask @​alice about the cart");
+    // Nor does the issue a candidate's Open as issue link files.
+    const link = new URL(/\[Open as issue\]\(([^)\s]+)\)/.exec(body)?.[1] ?? "");
+    expect(link.searchParams.get("title")).toBe("Ask @\u200balice about the cart");
+    expect(link.searchParams.get("body")).not.toMatch(/@(alice|bob|carol|dave|erin|frank|grace|heidi)/);
   });
 
   it("gives the filled Audit no state label, assignee, review request or mention, and leaves it open", () => {

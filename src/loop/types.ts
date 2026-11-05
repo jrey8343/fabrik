@@ -180,6 +180,8 @@ export type LoopEvent =
       readonly window: AuditWindow;
       /** The Actions run, which a failed Audit links to. */
       readonly runUrl: string;
+      /** The Product repo's web address, which an Audit's candidates open issues on. */
+      readonly repoUrl: string;
     }
   | {
       /** A review that requests changes was submitted on a PR: at the Merge gate, the Operator's ask for another run. */

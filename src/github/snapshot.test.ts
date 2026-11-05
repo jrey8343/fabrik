@@ -713,6 +713,7 @@ describe("Gathering the PRs an Auditor named", () => {
       output: typeof output === "string" ? output : JSON.stringify(output),
       window: { kind: "last-days", days: 30 },
       runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+      repoUrl: "https://github.com/acme/shop",
     };
   }
 

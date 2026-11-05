@@ -146,29 +146,31 @@ describe("A finished Design-session turn", () => {
 
 describe("A finished Audit run", () => {
   const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
+  const REPO = "https://github.com/acme/shop";
   const artifact = (window: unknown) =>
     JSON.stringify({ role: "audit", issue: 97, output: '{"candidates":[],"topRecommendation":null}', ...(window === undefined ? {} : { window }) });
 
-  it("carries the Auditor's output, unparsed, with the window its inputs gave it and this run", () => {
+  it("carries the Auditor's output, unparsed, with the window its inputs gave it, this run and the Product repo its candidates open issues on", () => {
     const window = { kind: "since-audit", audit: 90, commit: "c".repeat(40) };
 
-    expect(auditEventFrom(readAgentRunResult(artifact(window)), RUN)).toEqual({
+    expect(auditEventFrom(readAgentRunResult(artifact(window)), RUN, REPO)).toEqual({
       kind: "audit-run-finished",
       issue: 97,
       output: '{"candidates":[],"topRecommendation":null}',
       window,
       runUrl: RUN,
+      repoUrl: "https://github.com/acme/shop",
     });
   });
 
   it("carries a window of the last 30 days", () => {
-    expect(auditEventFrom(readAgentRunResult(artifact({ kind: "last-days", days: 30 })), RUN)).toMatchObject({
+    expect(auditEventFrom(readAgentRunResult(artifact({ kind: "last-days", days: 30 })), RUN, REPO)).toMatchObject({
       window: { kind: "last-days", days: 30 },
     });
   });
 
   it("refuses an Auditor's result with no window", () => {
-    expect(() => auditEventFrom(readAgentRunResult(artifact(undefined)), RUN)).toThrow(/window/);
+    expect(() => auditEventFrom(readAgentRunResult(artifact(undefined)), RUN, REPO)).toThrow(/window/);
   });
 
   it.each([
