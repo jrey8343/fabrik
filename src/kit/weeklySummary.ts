@@ -9,7 +9,7 @@ import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { DesignQueueSnapshot, InfrastructureFailure } from "../loop/types.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { type RateLimitReading, type RunRecord, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
+import { type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
@@ -438,9 +438,9 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
 
 /** What the score files of the week's runs say: per rubric version, how the runs scored. */
 function scoresOf(week: Week, input: WeeklySummaryInput): WeekScores {
-  const endedAt = new Map(input.records.map((record) => [runKeyOf(record), record.endedAt]));
+  const endedAt = new Map(input.records.map((record) => [runKey(record), record.endedAt]));
   // A score file whose record isn't in the store goes by when it was scored: minutes after its run ended.
-  const files = input.scoreFiles.filter((file) => within(week, endedAt.get(runKeyOf(file)) ?? file.scoredAt));
+  const files = input.scoreFiles.filter((file) => within(week, endedAt.get(runKey(file)) ?? file.scoredAt));
   const byRubric = new Map<string, { readonly scorer: string; readonly version: number; readonly entries: ScoreEntry[] }>();
   for (const entry of files.flatMap((file) => file.entries ?? [])) {
     const id = rubricId({ name: entry.scorer, version: entry.version });
@@ -476,11 +476,6 @@ function inKitOrder(a: RubricScores, b: RubricScores): number {
     return index === -1 ? SCORERS.length : index;
   };
   return rank(a.scorer) - rank(b.scorer) || a.scorer.localeCompare(b.scorer) || a.version - b.version;
-}
-
-/** A run in one role, as its record and its score files both name it. */
-function runKeyOf({ repo, runId, runAttempt, role }: Pick<RunRecord, "repo" | "runId" | "runAttempt" | "role">): string {
-  return `${repo}/${runId}-${runAttempt}-${role}`;
 }
 
 /** An agent PR merged in the week, with its repo, its Ticket and when that was dispatched. */

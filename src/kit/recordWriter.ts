@@ -5,7 +5,7 @@
 // (src/kit/scoreRecord.ts).
 import { Buffer } from "node:buffer";
 import { type GitHub, GitHubError } from "../github/client.ts";
-import type { RunRecord, RunRecordFiles } from "./runRecord.ts";
+import type { RunIdentity, RunRecordFiles } from "./runRecord.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "./runStore.ts";
 
 /** The store's REST API: the writer reads its visibility and creates files. */
@@ -54,7 +54,7 @@ export async function writeStoreFiles(
 }
 
 /** The commit message of a run's files in the store: the repo, the run and the role. */
-export function storeCommitMessage(record: Pick<RunRecord, "repo" | "runId" | "runAttempt" | "role">): string {
+export function storeCommitMessage(record: RunIdentity): string {
   return `${record.repo} run ${record.runId}-${record.runAttempt} (${record.role})`;
 }
 

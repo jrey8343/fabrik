@@ -193,7 +193,7 @@ export function scoreFileFor(input: ScoreFileInput): ScoreFileWithPath {
     ...resultOf(rubrics, outcome),
   };
   // Beside the scored run's record, and named by the rubric set, so re-scoring under new rubric versions writes a new file.
-  return { file, path: `scores/${runStoreName(scored, scored.role)}-${set.hash}.json` };
+  return { file, path: `scores/${runStoreName(scored)}-${set.hash}.json` };
 }
 
 /** The judge a score file names, if one ran. */
