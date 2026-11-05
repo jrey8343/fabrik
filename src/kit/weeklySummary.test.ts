@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aRunRecord, factsOf } from "../__fixtures__/weeklySummary.ts";
+import { aLabelAdded, aMergedPullRequest, aRunRecord, aTicketTimeline, factsOf } from "../__fixtures__/weeklySummary.ts";
 import { type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
@@ -72,6 +72,68 @@ describe("the Weekly summary", () => {
       }),
     );
     expect(result).toMatchObject({ kind: "summary", summary: { cost: { thisWeek: 1, lastWeek: 0 }, unknownCost: { thisWeek: 1, lastWeek: 0 } } });
+  });
+
+  it("counts the agent PRs merged in the week across every Product repo", () => {
+    const result = weeklySummary(
+      input({
+        records: [aRunRecord()],
+        facts: [
+          factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-03T00:00:00Z", { number: 50 }),
+              aMergedPullRequest("2026-11-08T13:00:00Z", { number: 51 }), // merged after the week
+              aMergedPullRequest("2026-10-30T00:00:00Z", { number: 52 }), // last week
+              aMergedPullRequest("2026-11-04T00:00:00Z", { number: 53, mergedAt: null }), // closed unmerged
+            ],
+          }),
+          factsOf({ repo: "owner/other", pullRequests: [aMergedPullRequest("2026-11-05T00:00:00Z")] }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ kind: "summary", summary: { counts: { mergedPullRequests: { thisWeek: 2, lastWeek: 1 } } } });
+  });
+
+  it("counts a Ticket as dispatched in the week its first agent:implement was added", () => {
+    const result = weeklySummary(
+      input({
+        records: [aRunRecord()],
+        facts: [
+          factsOf({
+            tickets: [
+              aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z")], { number: 1 }),
+              // Dispatched last week, then a Retry this week: dispatched last week only.
+              aTicketTimeline(
+                [aLabelAdded("agent:implement", "2026-10-28T00:00:00Z"), aLabelAdded("agent:implement", "2026-11-04T00:00:00Z")],
+                { number: 2 },
+              ),
+              aTicketTimeline([aLabelAdded("ready-for-agent", "2026-11-03T00:00:00Z")], { number: 3 }),
+              aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z", { action: "unlabeled" })], { number: 4 }),
+            ],
+          }),
+          factsOf({ repo: "owner/other", tickets: [aTicketTimeline([aLabelAdded("agent:implement", "2026-11-06T00:00:00Z")])] }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ kind: "summary", summary: { counts: { ticketsDispatched: { thisWeek: 2, lastWeek: 1 } } } });
+  });
+
+  it("counts the week's Retries and Step-ups from its records", () => {
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ endedAt: "2026-11-03T00:00:00Z" }), // a first run
+          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", retry: 1 }),
+          aRunRecord({ endedAt: "2026-11-05T00:00:00Z", retry: 2, stepUp: true }),
+          aRunRecord({ endedAt: "2026-11-05T00:00:00Z", role: "review" }),
+          aRunRecord({ endedAt: "2026-10-29T00:00:00Z", retry: 1 }), // last week
+        ],
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "summary",
+      summary: { counts: { retries: { thisWeek: 2, lastWeek: 1 }, stepUps: { thisWeek: 1, lastWeek: 0 } } },
+    });
   });
 
   it("keeps Monday 00:00 local across a daylight-saving change", () => {

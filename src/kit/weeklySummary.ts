@@ -1,6 +1,7 @@
 // The Weekly summary (ADR-0009): from the store's Run records, a GitHub facts
 // snapshot per Product repo, the Operator and now, the one issue filed for the
 // week that just ended, or skip in a quiet week. Pure, no I/O, no model call.
+import { DISPATCH_LABEL } from "../loop/labels.ts";
 import type { RateLimitReading, RunRecord } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
@@ -64,6 +65,16 @@ export interface WeeklySummary {
   readonly unknownCost: WeekOverWeek<number>;
   /** The latest weekly-limit reading across the week's records, or null if none read one. */
   readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
+  readonly counts: {
+    /** Agent PRs merged in the week, across every Product repo. */
+    readonly mergedPullRequests: WeekOverWeek<number>;
+    /** Tickets whose Dispatch, their first `agent:implement`, came in the week. */
+    readonly ticketsDispatched: WeekOverWeek<number>;
+    /** Implement records with `retry > 0`. */
+    readonly retries: WeekOverWeek<number>;
+    /** Records of a Step-up. */
+    readonly stepUps: WeekOverWeek<number>;
+  };
 }
 
 export type WeeklySummaryResult =
@@ -87,6 +98,12 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
       cost: change("cost"),
       unknownCost: change("unknownCost"),
       weeklyLimit: change("weeklyLimit"),
+      counts: {
+        mergedPullRequests: change("mergedPullRequests"),
+        ticketsDispatched: change("ticketsDispatched"),
+        retries: change("retries"),
+        stepUps: change("stepUps"),
+      },
     },
   };
 }
@@ -98,18 +115,37 @@ interface WeekMetrics {
   readonly cost: number;
   readonly unknownCost: number;
   readonly weeklyLimit: RateLimitReading | null;
+  readonly mergedPullRequests: number;
+  readonly ticketsDispatched: number;
+  readonly retries: number;
+  readonly stepUps: number;
 }
 
 function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
   const records = input.records
     .filter((record) => within(week, record.endedAt))
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
+  const pullRequests = input.facts.flatMap((facts) => facts.pullRequests);
+  const tickets = input.facts.flatMap((facts) => facts.tickets);
   return {
     records: records.length,
     cost: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
     unknownCost: records.filter((record) => record.totalCostUsd === null).length,
     weeklyLimit: records.findLast((record) => record.rateLimit !== null)?.rateLimit ?? null,
+    mergedPullRequests: pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt)).length,
+    ticketsDispatched: tickets.filter((ticket) => {
+      const dispatch = dispatchOf(ticket);
+      return dispatch !== null && within(week, dispatch);
+    }).length,
+    retries: records.filter((record) => record.role === "implement" && record.retry > 0).length,
+    stepUps: records.filter((record) => record.stepUp).length,
   };
+}
+
+/** When the Ticket was dispatched: its first `agent:implement` (a Retry adds it again), or null. */
+function dispatchOf(ticket: TicketFacts): string | null {
+  const added = ticket.labelEvents.filter((event) => event.label === DISPATCH_LABEL && event.action === "labeled");
+  return added.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at))[0]?.at ?? null;
 }
 
 // The week: Monday 00:00 to Monday 00:00 in the Operator's time zone.
