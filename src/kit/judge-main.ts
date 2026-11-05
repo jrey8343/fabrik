@@ -21,10 +21,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { claudeCode, run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
-import { failureReportFor } from "../agent/failure.ts";
-import { readyHook, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "../agent/launch.ts";
+import { leaveFailureReport, readyHook, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "../agent/launch.ts";
 import { runSummary } from "../agent/summary.ts";
 import { readTranscriptGzip, TRANSCRIPT_FILE } from "../agent/transcript.ts";
+import type { FailureReport } from "../loop/types.ts";
 import { readBytesIfPresent } from "./checkout.ts";
 import { JUDGE_FAILURE_FILE, JUDGE_JOB, JUDGE_RESULT_FILE, judgeFailureText, judgeResultText } from "./judge.ts";
 import { judgeClaudeArgs, judgeOutput, withoutTools } from "./judgeLaunch.ts";
@@ -90,11 +90,9 @@ async function main(): Promise<void> {
     await writeFile(join(outDir, JUDGE_RESULT_FILE), judgeResultText((result as { output?: unknown }).output, trimmed));
     console.log(`The judge scored the run on ${rubrics.map((rubric) => rubric.name).join(", ")}${trimmed ? ", from a trimmed transcript" : ""}`);
   } catch (error) {
-    for (const route of watch.initRefused() ?? []) console.log(`::error title=Metered-billing route::${route}`);
     // Left for the score-record job, which writes the judge's record and a judge-failed or judge-output-invalid score file.
-    const report = failureReportFor({ error, lines: watch.lines, initRefused: watch.initRefused() });
-    await writeFile(join(outDir, JUDGE_FAILURE_FILE), judgeFailureText(report, digestTrimmed));
-    console.log(`::error title=The judge failed (${report.failure})::${report.detail}`);
+    const text = (report: FailureReport) => judgeFailureText(report, digestTrimmed);
+    await leaveFailureReport(error, watch, { path: join(outDir, JUDGE_FAILURE_FILE), title: "The judge failed", text });
     throw error;
   } finally {
     await writeSummary(runSummary({ role: JUDGE_JOB, effort: null, lines: watch.lines }));

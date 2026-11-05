@@ -3,15 +3,17 @@
 // `claude` arguments the metered-billing preflight checks and the
 // onSandboxReady hook that runs it, the Standard Schema a structured output is
 // checked with, the stream watch that keeps the transcript and stops a run
-// whose init message fails the backstop check, and the step summary and step
-// outputs every agent job writes.
-import { appendFile } from "node:fs/promises";
+// whose init message fails the backstop check, the failure report a failed
+// run leaves, and the step summary and step outputs every agent job writes.
+import { appendFile, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import type { AgentStreamEvent } from "@ai-hero/sandcastle";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { KIT_DIR } from "../kit/kitFiles.ts";
+import type { FailureReport } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
+import { failureReportFor } from "./failure.ts";
 import { readStream } from "./stream.ts";
 import { transcriptWriter } from "./transcript.ts";
 
@@ -112,6 +114,28 @@ export function streamWatch(transcriptPath: string, abort: AbortController): Str
       transcript(event.line);
     },
   };
+}
+
+/** Where a failed run leaves its failure report, and how it's annotated. */
+export interface FailureFile {
+  readonly path: string;
+  /** The error annotation's title, before the failure's kind. */
+  readonly title: string;
+  /** The file's text; the report as JSON when not given. */
+  readonly text?: (report: FailureReport) => string;
+}
+
+/**
+ * What a failed run leaves for the job after it, before its caller rethrows:
+ * an error annotation for each route the init check refused, its failure
+ * report, read from the error and the stream, and one error annotation naming
+ * the failure.
+ */
+export async function leaveFailureReport(error: unknown, watch: StreamWatch, file: FailureFile): Promise<void> {
+  for (const route of watch.initRefused() ?? []) console.log(`::error title=Metered-billing route::${route}`);
+  const report = failureReportFor({ error, lines: watch.lines, initRefused: watch.initRefused() });
+  await writeFile(file.path, file.text?.(report) ?? `${JSON.stringify(report, null, 2)}\n`);
+  console.log(`::error title=${file.title} (${report.failure})::${report.detail}`);
 }
 
 export async function writeSummary(text: string): Promise<void> {
