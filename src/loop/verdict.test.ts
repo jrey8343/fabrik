@@ -76,4 +76,16 @@ describe("Reading the Follow-ups a Reviewer names on a pass", () => {
 
     expect(parsed).toMatchObject({ ok: true, verdict: "pass", findings: `Checked it.\n\n${block}`, followUps: [] });
   });
+
+  it("a flaw keeps the findings that come after a Follow-ups block it drops", () => {
+    const parsed = parseVerdict("verdict: execution-flaw\n\nThe build is red.\n\nfollow-ups:\n- Tidy the footer\n  Crooked.\n\nAlso, the tests fail.");
+
+    expect(parsed).toMatchObject({ ok: true, findings: "The build is red.\n\nAlso, the tests fail.", followUps: [] });
+  });
+
+  it("a pass with findings after its Follow-ups block keeps it all as plain text", () => {
+    const output = "Checked it.\n\nfollow-ups:\n- Tidy the footer\n  Crooked.\n\nOne more thing.";
+
+    expect(parseVerdict(`verdict: pass\n\n${output}`)).toMatchObject({ ok: true, findings: output, followUps: [] });
+  });
 });

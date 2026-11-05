@@ -25,8 +25,9 @@ describe("The prompts of the runs that read an agent PR", () => {
   });
 
   it("review allows no nits on a pass: the cases that used to pass as nits are Execution flaws", async () => {
-    const verdict = section(await prompt("review"), "Your Verdict");
-    expect(verdict).not.toMatch(/\bnits?\b/i);
+    const text = await prompt("review");
+    expect(text).not.toMatch(/\bnits?\b/i);
+    const verdict = section(text, "Your Verdict");
     expect(verdict).toContain("an acceptance criterion the PR says it skipped");
     expect(verdict).toContain("only CI can confirm");
     expect(verdict).toContain("a PR body that is out of date with the branch");
@@ -35,7 +36,6 @@ describe("The prompts of the runs that read an agent PR", () => {
 
   it("review describes a pass's Checked part and Follow-ups block, as the Kit reads it", async () => {
     const text = await prompt("review");
-    expect(text).not.toMatch(/\bnits?\b/i);
     expect(text).toContain(FOLLOW_UPS_PREFIX);
     const examples = [...text.matchAll(/<review>\n([\s\S]*?)\n<\/review>/g)].map((match) => parseVerdict(match[1] ?? ""));
     expect(examples).toContainEqual(

@@ -1,8 +1,8 @@
 // The Verdict contract: the Reviewer's reply starts with exactly one Verdict
 // line, then its findings, then on a pass any Follow-ups, and may end with a
-// line naming the Operator comments it weighed. Each Verdict the Fabrik App posts carries a marker
-// (src/loop/markers.ts), so a PR's review history can be read back from its
-// comments alone. Pure.
+// line naming the Operator comments it weighed. Each Verdict the Fabrik App
+// posts carries a marker (src/loop/markers.ts), so a PR's review history can
+// be read back from its comments alone. Pure.
 import type { Verdict } from "./types.ts";
 
 export const VERDICTS: readonly Verdict[] = ["pass", "execution-flaw", "design-flaw"];
@@ -69,34 +69,36 @@ export const FOLLOW_UPS_PREFIX = "follow-ups:";
 
 /**
  * Splits a Follow-ups block off the findings: a `follow-ups:` line, then one
- * `- <title>` item per Follow-up with its body indented beneath it. A
- * Verdict that isn't a pass drops the block. On a pass, a malformed block
- * stays in the findings as plain text, and the Verdict still lands.
+ * `- <title>` item per Follow-up with its body indented beneath it. The block
+ * ends at the first line that is neither. A Verdict that isn't a pass drops
+ * the block and keeps the rest. On a pass, a malformed block, or findings
+ * after it, stays in the findings as plain text, and the Verdict still lands.
  */
 function followUpsBlock(rest: string, verdict: Verdict): { findings: string; followUps: FollowUp[] } {
   const lines = rest.split("\n").map((line) => line.replace(/\r$/, ""));
   const start = lines.findLastIndex((line) => line.trimEnd() === FOLLOW_UPS_PREFIX);
   if (start === -1) return { findings: rest, followUps: [] };
-  const findings = lines.slice(0, start).join("\n").trim();
+  const after = lines.slice(start + 1);
+  const length = after.findIndex((line) => !/^(- |\s|$)/.test(line));
+  const block = length === -1 ? after : after.slice(0, length);
+  const findings = [lines.slice(0, start), length === -1 ? [] : after.slice(length)]
+    .map((part) => part.join("\n").trim())
+    .filter((part) => part !== "")
+    .join("\n\n");
   if (verdict !== "pass") return { findings, followUps: [] };
-  const followUps = followUpItems(lines.slice(start + 1));
+  const followUps = length === -1 ? followUpItems(block) : null;
   return followUps === null ? { findings: rest, followUps: [] } : { findings, followUps };
 }
 
-/** The items under a `follow-ups:` line, or null if they don't follow the form. */
+/** The items under a `follow-ups:` line, each line an item's title, part of its body, or blank; null if they don't make one. */
 function followUpItems(lines: readonly string[]): FollowUp[] | null {
   const items: { title: string; body: string[] }[] = [];
   for (const line of lines) {
     const title = /^- (.*)$/.exec(line)?.[1]?.trim();
-    if (title !== undefined) {
-      if (title === "") return null;
-      items.push({ title, body: [] });
-    } else if (line.trim() === "" || /^\s/.test(line)) {
-      const item = items.at(-1);
-      if (item === undefined) {
-        if (line.trim() !== "") return null;
-      } else item.body.push(line);
-    } else return null;
+    if (title === "") return null;
+    if (title !== undefined) items.push({ title, body: [] });
+    else if (items.length > 0) items.at(-1)?.body.push(line);
+    else if (line.trim() !== "") return null;
   }
   if (items.length === 0) return null;
   return items.map(({ title, body }) => ({ title, body: dedent(body) }));

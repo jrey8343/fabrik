@@ -187,11 +187,15 @@ async function failedRunEvent(
   return { event, source: `the failed ${input.role} run on #${input.issue}` };
 }
 
+/** The Product repo's web address, which a pass's Follow-ups open issues on. */
+function thisRepoUrl(): string {
+  return `${required("GITHUB_SERVER_URL")}/${required("GITHUB_REPOSITORY")}`;
+}
+
 /** This Actions run's attempt, which failure and Verdict comments link to. */
 function thisRunUrl(): string {
   return [
-    required("GITHUB_SERVER_URL"),
-    required("GITHUB_REPOSITORY"),
+    thisRepoUrl(),
     "actions/runs",
     required("GITHUB_RUN_ID"),
     "attempts",
@@ -209,7 +213,7 @@ async function finishedReviewEvent(
     pullRequest: input.pullRequest,
     headSha: input.headSha,
     runUrl: thisRunUrl(),
-    repoUrl: `${required("GITHUB_SERVER_URL")}/${required("GITHUB_REPOSITORY")}`,
+    repoUrl: thisRepoUrl(),
     failedChecks: input.failedChecks,
     result,
   });

@@ -7,6 +7,7 @@ import {
   snapshotOfPullRequest,
   verdictsPostedIn,
 } from "../__fixtures__/snapshots.ts";
+import { MAX_ISSUE_URL_LENGTH } from "./followUps.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan } from "./types.ts";
 
@@ -255,12 +256,12 @@ describe("Review: the Follow-ups on a pass", () => {
     return [...body.matchAll(/\[Open as issue\]\(([^)\s]+)\)/g)].map((match) => new URL(match[1]!));
   }
 
-  function passWith(output: string): string {
+  function verdictCommentFor(output: string): string {
     return commentsOf(planFor(reviewed(output), snapshotOfPullRequest(aPullRequest()), kitConfig()))[0] ?? "";
   }
 
   it("a pass shows what the Reviewer checked, and each Follow-up with a link to open it as an issue on the Product repo", () => {
-    const body = passWith(
+    const body = verdictCommentFor(
       "verdict: pass\n\nChecked the empty-cart case.\n\nfollow-ups:\n- The badge miscounts\n  Already wrong: `badge.ts`.\n- Tidy the footer\n  Crooked.",
     );
 
@@ -281,7 +282,7 @@ describe("Review: the Follow-ups on a pass", () => {
   });
 
   it("a pass with no Follow-ups has no Follow-ups part", () => {
-    const body = passWith("verdict: pass\n\nChecked it.");
+    const body = verdictCommentFor("verdict: pass\n\nChecked it.");
 
     expect(body).toContain("### Checked\n\nChecked it.");
     expect(body).not.toContain("Follow-ups");
@@ -289,14 +290,14 @@ describe("Review: the Follow-ups on a pass", () => {
   });
 
   it("an Execution flaw shows no Follow-ups part, even when the Reviewer named some", () => {
-    const body = passWith("verdict: execution-flaw\n\nFix the build.\n\nfollow-ups:\n- Tidy the footer\n  Crooked.");
+    const body = verdictCommentFor("verdict: execution-flaw\n\nFix the build.\n\nfollow-ups:\n- Tidy the footer\n  Crooked.");
 
     expect(body).toContain("Fix the build.");
     expect(body).not.toMatch(/Follow-ups|Tidy the footer|Open as issue|### Checked/);
   });
 
   it("a Follow-up's title and body mention nobody, in the comment or in the issue it opens", () => {
-    const body = passWith("verdict: pass\n\nChecked it.\n\nfollow-ups:\n- Ask @alice about it\n  And @bob too.");
+    const body = verdictCommentFor("verdict: pass\n\nChecked it.\n\nfollow-ups:\n- Ask @alice about it\n  And @bob too.");
 
     expect(body).not.toMatch(/@alice|@bob/);
     const [link] = issueLinks(body);
@@ -306,14 +307,23 @@ describe("Review: the Follow-ups on a pass", () => {
 
   it("a long body is cut short to fit GitHub's URL limit, and still ends with the PR it came from", () => {
     const long = "word ".repeat(5000).trim();
-    const body = passWith(`verdict: pass\n\nChecked it.\n\nfollow-ups:\n- A big one\n  ${long}`);
+    const body = verdictCommentFor(`verdict: pass\n\nChecked it.\n\nfollow-ups:\n- A big one\n  ${long}`);
 
     const [link] = issueLinks(body);
-    expect(link?.href.length).toBeLessThanOrEqual(8000);
+    expect(link?.href.length).toBeLessThanOrEqual(MAX_ISSUE_URL_LENGTH);
     const prefilled = link?.searchParams.get("body") ?? "";
     expect(prefilled).toMatch(/^word word .*…\n\nFrom PR #50$/s);
     expect(prefilled.length).toBeLessThan(long.length);
     // The comment itself shows the whole body.
     expect(body).toContain(long);
+  });
+
+  it("a very long title is cut short too, so the link still opens", () => {
+    const title = "x".repeat(9000);
+    const [link] = issueLinks(verdictCommentFor(`verdict: pass\n\nChecked it.\n\nfollow-ups:\n- ${title}\n  Short body.`));
+
+    expect(link?.href.length).toBeLessThanOrEqual(MAX_ISSUE_URL_LENGTH);
+    expect(link?.searchParams.get("title")).toMatch(/^x+…$/);
+    expect(link?.searchParams.get("body")).toBe("Short body.\n\nFrom PR #50");
   });
 });
