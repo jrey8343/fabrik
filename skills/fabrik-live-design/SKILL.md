@@ -27,6 +27,8 @@ This session runs with the Operator's own GitHub credentials, so you publish the
 
 Do exactly one of these, once nothing that matters is open or the Operator wants to stop. Every comment and issue you write here contains no @-mentions.
 
+When you rewrite the issue's body with `gh issue edit`, keep any `<!-- fabrik:monitor … -->` line from the old body as the new body's first line, and nothing else of the Monitor's. The Monitor finds the error it filed the issue for by that line, and would file it again without it.
+
 ### The work fits one pull request: an agent brief
 
 1. Rewrite the issue's body as its agent brief (`gh issue edit <n> --body-file …`), following `.claude/skills/triage/AGENT-BRIEF.md`, in this shape:
