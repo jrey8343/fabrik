@@ -78,6 +78,38 @@ describe("The Kit's workflows", () => {
   });
 });
 
+describe("The write the Run record action", () => {
+  const action = readFileSync(new URL(".github/actions/write-run-record/action.yml", root), "utf8");
+  const steps = action.split(/\n(?=    - )/);
+  const storeToken = steps.find((step) => step.includes("id: store"));
+
+  it("builds and writes the record with the Kit's Node program, never inline gh calls", () => {
+    const program = /run: node (src\/\S+)/.exec(action)?.[1];
+
+    expect(program).toBeDefined();
+    expect(existsSync(new URL(program!, root))).toBe(true);
+    expect(action).not.toMatch(/\bgh (api|issue|pr|repo) /);
+  });
+
+  it("mints the store's token for fabrik-runs alone, with Contents write and nothing else", () => {
+    expect(storeToken).toContain("uses: actions/create-github-app-token@");
+    expect(storeToken).toMatch(/owner: jrey8343\n/);
+    expect(storeToken).toMatch(/repositories: fabrik-runs\n/);
+    expect([...storeToken!.matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`)).toEqual(["contents: write"]);
+  });
+
+  it("goes on when the store's token can't be minted, so the program can name the missing setup step", () => {
+    expect(storeToken).toContain("continue-on-error: true");
+  });
+
+  it("takes the role's transcript, and a missing one is fine", () => {
+    const download = steps.find((step) => step.includes("actions/download-artifact@"));
+
+    expect(download).toContain("fabrik-transcript-");
+    expect(download).toContain("continue-on-error: true");
+  });
+});
+
 /** One job's section of loop.yml. */
 function jobOf(job: string): string {
   const body = loop.split(/\n(?=  [a-z-]+:\n)/).find((section) => section.startsWith(`  ${job}:\n`));
