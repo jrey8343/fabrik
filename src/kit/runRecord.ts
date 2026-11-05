@@ -116,8 +116,13 @@ interface EndedRun {
   readonly failure: InfrastructureFailure | null;
 }
 
+/** Whether an agent run ended, so there's a record to write: known from the jobs alone, before anything else is read. */
+export function agentRunEnded(needs: Needs, eventIssue: number | null): boolean {
+  return endedRun({ needs, eventIssue, failureReport: null }) !== null;
+}
+
 /** Which agent run ended, or null when none did: red checks, routing to push, or nothing to do. */
-function endedRun(end: RunEnd): EndedRun | null {
+function endedRun(end: Pick<RunEnd, "needs" | "eventIssue" | "failureReport">): EndedRun | null {
   const input = pushJobInput(end.needs, end.eventIssue);
   switch (input.kind) {
     case "agent-result":
