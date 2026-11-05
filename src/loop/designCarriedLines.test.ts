@@ -115,6 +115,22 @@ describe("A Design session's rewrite keeps the issue's From audit line and escap
     expect(rewrittenBody(plan)?.split("\n").slice(-2)).toEqual(["From audit #40", "<!-- fabrik:escape moderate #31 -->"]);
   });
 
+  it("carries no line quoted in a code block, which is data, not a marker line", () => {
+    for (const fence of ["```", "~~~", "````text"]) {
+      const quoting = ["The log said:", "", fence, "From audit #40", "<!-- fabrik:escape strong #31 -->", fence.replace("text", ""), "", "Split it."].join("\n");
+
+      expect(planFor(turnFinished(spec), inSession(quoting), kitConfig())).toEqual(planFor(turnFinished(spec), inSession("Split it."), kitConfig()));
+    }
+  });
+
+  it("still carries the lines of a filed candidate whose body was cut short inside a code block, since a fence that never closes quotes nothing", () => {
+    const cutShort = ["**Solution:** Split it:", "", "```ts", "export function slotsFor(…", "", "From audit #40", "<!-- fabrik:escape strong #31 -->"].join("\n");
+
+    const plan = planFor(turnFinished(operatorBrief), inSession(cutShort), kitConfig());
+
+    expect(rewrittenBody(plan)?.split("\n").slice(-2)).toEqual(["From audit #40", "<!-- fabrik:escape strong #31 -->"]);
+  });
+
   it("notifies nobody through a carried line that @-mentions someone", () => {
     const plan = planFor(turnFinished(spec), inSession("<!-- fabrik:escape strong #31 @someone -->"), kitConfig());
 

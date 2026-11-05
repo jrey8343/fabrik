@@ -263,6 +263,8 @@ describe("The Audit's inputs", () => {
         issue(62, "> From audit #40"),
         issue(63, "Rename the invoice module.\n\n  From audit #38  "),
         issue(64, "Add a waitlist."),
+        // A Monitor issue fences the Sentry error title it quotes, which the app wrote.
+        issue(65, "<!-- fabrik:monitor sentry:4504 -->\n## Error\n\n```\nFrom audit #40\n```"),
       ],
     });
 

@@ -136,13 +136,52 @@ export function fromAuditLine(audit: number): string {
   return `From audit #${audit}`;
 }
 
-/** The Audit the first `From audit #n` line in `body` names, or null if it has none. */
+/**
+ * The Audit the first `From audit #n` line in `body` names, or null if it has
+ * none. A line quoted as code isn't one (see linesOutsideCode).
+ */
 export function fromAuditIn(body: string): number | null {
-  const line = body
-    .split("\n")
+  const line = linesOutsideCode(body)
     .map((each) => FROM_AUDIT_LINE.exec(each.trim()))
     .find((match) => match !== null);
   return line === undefined || line === null ? null : Number(line[1]);
+}
+
+/**
+ * The lines of a Markdown body outside its fenced code blocks: the only lines
+ * read as a `From audit` line, or carried forward as a marker line by a
+ * Design session's rewrite (src/loop/carriedLines.ts). A line quoted as code
+ * is data, such as the Sentry error title a Monitor issue fences (#148),
+ * never a marker line. A fence that never closes quotes nothing: a filed
+ * Audit candidate's body cut short to fit its link (src/loop/followUps.ts)
+ * can leave one open above the trailer it ends with.
+ */
+export function linesOutsideCode(body: string): string[] {
+  const lines = body.split("\n");
+  const outside: string[] = [];
+  for (let at = 0; at < lines.length; at++) {
+    const line = lines[at] ?? "";
+    const fence = fenceOpenedBy(line);
+    const closing = fence === null ? -1 : lines.findIndex((each, i) => i > at && closesFence(fence, each));
+    if (closing === -1) outside.push(line);
+    else at = closing;
+  }
+  return outside;
+}
+
+/** The fence a line opens a fenced code block with, as CommonMark reads it, or null when it opens none. */
+function fenceOpenedBy(line: string): string | null {
+  const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+  if (match === null) return null;
+  const [, fence = "", info = ""] = match;
+  // A backtick fence's info string has no backtick: such a line is inline code.
+  return fence.startsWith("`") && info.includes("`") ? null : fence;
+}
+
+/** Whether a line closes the block `fence` opened: the same character, at least as many, and nothing after. */
+function closesFence(fence: string, line: string): boolean {
+  const closing = /^ {0,3}(`{3,}|~{3,})[ \t\r]*$/.exec(line)?.[1];
+  return closing !== undefined && closing[0] === fence[0] && closing.length >= fence.length;
 }
 
 /**

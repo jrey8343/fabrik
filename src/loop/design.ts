@@ -609,7 +609,8 @@ function keptMarker(issue: IssueSnapshot): MonitorMarker | null {
  * The body a session's rewrite leaves: `rewritten`, opened by the kept
  * Monitor marker's line (#148) and ended with the From audit and escape lines
  * of the issue's old body (src/loop/carriedLines.ts, #150), so whatever reads
- * those lines still finds them.
+ * those lines still finds them. A line the old body quotes as code, as a
+ * Monitor issue quotes its Sentry error, is never carried.
  */
 function rewrittenBody(rewritten: string, issue: IssueSnapshot, marker: MonitorMarker | null = keptMarker(issue)): string {
   return withCarriedLines(marker === null ? rewritten : [monitorMarkerLine(marker), rewritten].join("\n"), issue.body);
