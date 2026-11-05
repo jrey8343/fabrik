@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { aLabelAdded, aMergedPullRequest, aRunRecord, aSpec, aTicketTimeline, factsOf } from "../__fixtures__/weeklySummary.ts";
+import {
+  aComment,
+  aDesignRound,
+  aLabelAdded,
+  aMergedPullRequest,
+  anOpenIssue,
+  anOpenPullRequest,
+  aRunRecord,
+  aSpec,
+  aTicketTimeline,
+  aVerdictComment,
+  factsOf,
+} from "../__fixtures__/weeklySummary.ts";
 import { type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
@@ -14,6 +26,13 @@ function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput 
 describe("the Weekly summary", () => {
   it("is skipped in a week with no records and nothing waiting or stuck", () => {
     expect(weeklySummary(input())).toEqual({ kind: "skip" });
+  });
+
+  it.each([
+    ["something waiting on the Operator", factsOf({ openIssues: [anOpenIssue({ labels: ["ready-for-human"] })] })],
+    ["something stuck", factsOf({ openPullRequests: [anOpenPullRequest()] })],
+  ])("isn't skipped in a week with no records but %s", (_, facts) => {
+    expect(weeklySummary(input({ facts: [factsOf({ repo: "owner/quiet" }), facts] })).kind).toBe("summary");
   });
 
   it("covers Monday to Monday in the Operator's time zone, with last week beside it", () => {
@@ -133,6 +152,188 @@ describe("the Weekly summary", () => {
     expect(result).toMatchObject({
       kind: "summary",
       summary: { counts: { retries: { thisWeek: 2, lastWeek: 1 }, stepUps: { thisWeek: 1, lastWeek: 0 } } },
+    });
+  });
+
+  describe("Waiting on you", () => {
+    const HOUR = 60 * 60 * 1000;
+    const head = "h".repeat(40);
+    const operatorAnswer = (at: string) => aComment("Option A, please.", at, { author: "operator", byBot: false });
+    const waitingIn = (facts: Parameters<typeof factsOf>[0]) => {
+      const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary.repos[0]?.waitingOnYou;
+    };
+
+    it("lists unanswered Design rounds, ready-for-human issues and PRs at the Merge gate, oldest first, with their ages", () => {
+      const waiting = waitingIn({
+        openIssues: [
+          anOpenIssue({
+            number: 12,
+            title: "Design the thing",
+            labels: ["needs-design"],
+            comments: [aDesignRound(1, "2026-11-02T20:00:00Z"), operatorAnswer("2026-11-03T20:00:00Z"), aDesignRound(2, "2026-11-05T20:00:00Z")],
+          }),
+          anOpenIssue({
+            number: 13,
+            title: "Rotate the key",
+            labels: ["ready-for-human"],
+            labelEvents: [aLabelAdded("needs-triage", "2026-10-30T20:00:00Z"), aLabelAdded("ready-for-human", "2026-11-01T20:00:00Z")],
+          }),
+          // The Operator answered the last round: the next move is the session's.
+          anOpenIssue({
+            number: 14,
+            labels: ["needs-design"],
+            comments: [aDesignRound(1, "2026-11-02T20:00:00Z"), operatorAnswer("2026-11-03T20:00:00Z")],
+          }),
+        ],
+        openPullRequests: [
+          anOpenPullRequest({ number: 50, title: "Build the thing", draft: false, comments: [aVerdictComment("pass", head, "2026-11-07T20:00:00Z")] }),
+          // Passed on an older head: the Operator pushed since, so it waits for its Review.
+          anOpenPullRequest({ number: 51, draft: false, comments: [aVerdictComment("pass", "o".repeat(40), "2026-11-07T20:00:00Z")] }),
+          // Still a draft: the Loop has it.
+          anOpenPullRequest({ number: 52, comments: [aVerdictComment("pass", head, "2026-11-07T20:00:00Z")] }),
+          // Its latest Verdict on its head is a flaw.
+          anOpenPullRequest({
+            number: 53,
+            draft: false,
+            comments: [aVerdictComment("pass", head, "2026-11-06T20:00:00Z"), aVerdictComment("execution-flaw", head, "2026-11-07T20:00:00Z")],
+          }),
+        ],
+      });
+      expect(waiting).toEqual([
+        {
+          kind: "ready-for-human",
+          number: 13,
+          title: "Rotate the key",
+          url: "https://github.com/owner/product/issues/13",
+          since: "2026-11-01T20:00:00Z",
+          age: 7 * 24 * HOUR,
+        },
+        {
+          kind: "design-round",
+          number: 12,
+          title: "Design the thing",
+          url: "https://github.com/owner/product/issues/12",
+          since: "2026-11-05T20:00:00Z",
+          age: 3 * 24 * HOUR,
+        },
+        {
+          kind: "merge-gate",
+          number: 50,
+          title: "Build the thing",
+          url: "https://github.com/owner/product/pull/50",
+          since: "2026-11-07T20:00:00Z",
+          age: 24 * HOUR,
+          operatorWait: 24 * HOUR,
+        },
+      ]);
+    });
+  });
+
+  describe("Stuck", () => {
+    const HOUR = 60 * 60 * 1000;
+    const hoursAgo = (hours: number) => new Date(Date.parse(NOW) - hours * HOUR).toISOString();
+    const person = (body: string, at: string) => aComment(body, at, { author: "someone", byBot: false });
+    const stuckIn = (facts: Parameters<typeof factsOf>[0], records = [aRunRecord()]) => {
+      const result = weeklySummary(input({ records, facts: [factsOf(facts)] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary.repos[0]?.stuck;
+    };
+    const askedOn = (labelledAt: string, comments: Parameters<typeof aComment>[] = []) =>
+      anOpenIssue({
+        number: 20,
+        title: "It crashes",
+        labels: ["needs-info"],
+        labelEvents: [aLabelAdded("needs-info", labelledAt)],
+        comments: [aComment("Which version are you on?", labelledAt), ...comments.map((args) => aComment(...args))],
+      });
+
+    it.each([
+      [23, []],
+      [25, [{ kind: "needs-info-answered", number: 20, title: "It crashes", url: "https://github.com/owner/product/issues/20" }]],
+    ])("lists a needs-info issue someone answered %i hours ago with no state change since only past 24 hours", (hours, stuck) => {
+      const issue = askedOn(hoursAgo(30), [["Version 2.", hoursAgo(hours), { author: "someone", byBot: false }]]);
+      expect(stuckIn({ openIssues: [issue] })).toMatchObject(stuck);
+    });
+
+    it("dates an answered needs-info issue from the first answer after the question", () => {
+      const issue = askedOn(hoursAgo(50), [
+        ["An earlier thought.", hoursAgo(60), { author: "someone", byBot: false }],
+        ["Version 2.", hoursAgo(40), { author: "someone", byBot: false }],
+        ["Also on 3.", hoursAgo(30), { author: "someone", byBot: false }],
+      ]);
+      expect(stuckIn({ openIssues: [issue] })).toMatchObject([{ kind: "needs-info-answered", since: hoursAgo(40), age: 40 * HOUR }]);
+    });
+
+    it("doesn't list a needs-info issue only a bot answered, or one whose answer came before the question", () => {
+      const botOnly = askedOn(hoursAgo(50), [["Thanks for the report!", hoursAgo(40), { author: "dependabot[bot]", byBot: true }]]);
+      const answeredBefore = { ...askedOn(hoursAgo(50)), number: 21, comments: [person("Version 2.", hoursAgo(60))] };
+      expect(stuckIn({ openIssues: [botOnly, answeredBefore] })).toEqual([]);
+    });
+
+    it("doesn't list a needs-info issue whose state changed after the answer", () => {
+      const issue = {
+        ...askedOn(hoursAgo(50), [["Version 2.", hoursAgo(40), { author: "someone", byBot: false }]]),
+        labelEvents: [
+          aLabelAdded("needs-info", hoursAgo(50)),
+          aLabelAdded("needs-info", hoursAgo(35), { action: "unlabeled" }),
+          aLabelAdded("needs-triage", hoursAgo(35)),
+          aLabelAdded("needs-info", hoursAgo(30)),
+        ],
+      };
+      expect(stuckIn({ openIssues: [issue] })).toEqual([]);
+    });
+
+    it.each([
+      ["commit", (at: string) => anOpenPullRequest({ number: 51, commits: [{ at }] })],
+      ["comment", (at: string) => anOpenPullRequest({ number: 51, comments: [aComment("Still going.", at)] })],
+      ["label event", (at: string) => anOpenPullRequest({ number: 51, labelEvents: [aLabelAdded("agent:review", at)] })],
+    ])("lists a draft agent PR whose last %s came more than 24 hours ago", (_, draft) => {
+      expect(stuckIn({ openPullRequests: [draft(hoursAgo(23))] })).toEqual([]);
+      expect(stuckIn({ openPullRequests: [draft(hoursAgo(25))] })).toEqual([
+        {
+          kind: "idle-draft",
+          number: 51,
+          title: "Build the thing",
+          url: "https://github.com/owner/product/pull/51",
+          since: hoursAgo(25),
+          age: 25 * HOUR,
+        },
+      ]);
+    });
+
+    it("doesn't list an agent PR out of draft, however long it has been quiet", () => {
+      expect(stuckIn({ openPullRequests: [anOpenPullRequest({ draft: false })] })).toEqual([]);
+    });
+
+    it.each([
+      [23, []],
+      [25, [{ kind: "infrastructure-failure", number: 7, title: "Build the thing", url: "https://github.com/owner/product/issues/7", failure: "timeout" }]],
+    ])("lists an open Ticket whose latest record, %i hours ago, ended in an Infrastructure failure, only past 24 hours", (hours, stuck) => {
+      const records = [
+        aRunRecord({ endedAt: hoursAgo(40) }),
+        aRunRecord({ endedAt: hoursAgo(hours), jobResult: "cancelled", infrastructureFailure: "timeout" }),
+      ];
+      expect(stuckIn({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" })] }, records)).toMatchObject(stuck);
+    });
+
+    it("doesn't list a Ticket that has a record after its Infrastructure failure, or one that's closed", () => {
+      const records = [
+        aRunRecord({ endedAt: hoursAgo(40), infrastructureFailure: "provider-error" }),
+        aRunRecord({ endedAt: hoursAgo(30) }),
+        aRunRecord({ issue: 8, endedAt: hoursAgo(40), infrastructureFailure: "provider-error" }), // Ticket 8 is closed
+        aRunRecord({ repo: "owner/other", issue: 12, endedAt: hoursAgo(40), infrastructureFailure: "crash" }), // another repo's 12
+      ];
+      expect(stuckIn({ openIssues: [anOpenIssue({ number: 7 }), anOpenIssue({ number: 12 })] }, records)).toEqual([]);
+    });
+
+    it("doesn't list an issue whose failed run was a Triage or a Design turn, as it isn't a Ticket", () => {
+      const records = [
+        aRunRecord({ role: "triage", issue: 13, pullRequest: null, endedAt: hoursAgo(40), infrastructureFailure: "crash" }),
+        aRunRecord({ role: "design", issue: 14, pullRequest: null, endedAt: hoursAgo(40), infrastructureFailure: "timeout" }),
+      ];
+      expect(stuckIn({ openIssues: [anOpenIssue({ number: 13 }), anOpenIssue({ number: 14 })] }, records)).toEqual([]);
     });
   });
 
@@ -410,8 +611,115 @@ describe("the Weekly summary", () => {
 
     it("has no section for a feature that hasn't shipped, not even an empty one", () => {
       const { body } = rendered();
-      expect(body.match(/^#+ .*$/gm)).toEqual(["## Metrics"]);
+      expect(body.match(/^#+ .*$/gm)).toEqual(["## Metrics", "## owner/product", "### Waiting on you"]);
       expect(body).not.toMatch(/Held|Retro|Audit|Map|Monitor|escape|score/i);
+    });
+  });
+
+  describe("rendered per repo", () => {
+    const HOUR = 60 * 60 * 1000;
+    const hoursAgo = (hours: number) => new Date(Date.parse(NOW) - hours * HOUR).toISOString();
+    const head = "h".repeat(40);
+    const bodyOf = (...facts: ReturnType<typeof factsOf>[]) => {
+      const result = weeklySummary(input({ records: [aRunRecord()], facts }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.body;
+    };
+    const readyForHuman = (number: number, hours: number) =>
+      anOpenIssue({ number, title: `Operator work ${number}`, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", hoursAgo(hours))] });
+
+    it("gives each repo a section listing what waits on the Operator, with its age and any Operator wait", () => {
+      const body = bodyOf(
+        factsOf({
+          openIssues: [
+            anOpenIssue({ number: 12, title: "Design the thing", comments: [aDesignRound(2, hoursAgo(72))] }),
+            readyForHuman(13, 30),
+          ],
+          openPullRequests: [anOpenPullRequest({ draft: false, comments: [aVerdictComment("pass", head, hoursAgo(5))] })],
+        }),
+        factsOf({ repo: "owner/other" }),
+      );
+      expect(body).toContain(
+        [
+          "## owner/product",
+          "",
+          "### Waiting on you",
+          "",
+          "- [#12](https://github.com/owner/product/issues/12) Design the thing: Design round unanswered for 3 days",
+          "- [#13](https://github.com/owner/product/issues/13) Operator work 13: ready-for-human for 30 hours",
+          "- [#50](https://github.com/owner/product/pull/50) Build the thing: at the Merge gate, Operator wait 5 hours",
+          "",
+        ].join("\n"),
+      );
+      expect(body).toContain(["## owner/other", "", "### Waiting on you", "", "Nothing waiting on you.", ""].join("\n"));
+    });
+
+    it("collapses the 11th item onward in a repo into details", () => {
+      const body = bodyOf(factsOf({ openIssues: Array.from({ length: 12 }, (_, i) => readyForHuman(100 + i, 100 - i)) }));
+      const shown = body.slice(0, body.indexOf("<details>"));
+      expect(shown).toContain("#109");
+      expect(shown).not.toContain("#110");
+      expect(body).toContain(
+        [
+          "<details><summary>2 more</summary>",
+          "",
+          "- [#110](https://github.com/owner/product/issues/110) Operator work 110: ready-for-human for 3 days",
+          "- [#111](https://github.com/owner/product/issues/111) Operator work 111: ready-for-human for 3 days",
+          "",
+          "</details>",
+        ].join("\n"),
+      );
+    });
+
+    it("lists the repo's Stuck work, and leaves Stuck out when nothing is", () => {
+      const stuckBody = bodyOf(
+        factsOf({
+          openIssues: [
+            anOpenIssue({
+              number: 20,
+              title: "It crashes",
+              labels: ["needs-info"],
+              labelEvents: [aLabelAdded("needs-info", hoursAgo(50))],
+              comments: [aComment("Version 2.", hoursAgo(26), { author: "someone", byBot: false })],
+            }),
+            anOpenIssue({ number: 7, title: "Build the other thing" }),
+          ],
+          openPullRequests: [anOpenPullRequest({ number: 51, title: "Build it", createdAt: hoursAgo(25) })],
+        }),
+      );
+      expect(stuckBody).toContain(
+        [
+          "### Stuck",
+          "",
+          "- [#20](https://github.com/owner/product/issues/20) It crashes: needs-info answered 26 hours ago, not picked up",
+          "- [#51](https://github.com/owner/product/pull/51) Build it: a draft with no activity for 25 hours",
+          "",
+        ].join("\n"),
+      );
+      const failedBody = weeklySummary(
+        input({
+          records: [aRunRecord({ endedAt: hoursAgo(49), jobResult: "cancelled", infrastructureFailure: "timeout" })],
+          facts: [factsOf({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" })] })],
+        }),
+      );
+      expect(failedBody).toMatchObject({
+        body: expect.stringContaining("- [#7](https://github.com/owner/product/issues/7) Build the thing: last run ended in an Infrastructure failure (timeout) 2 days ago"),
+      });
+      expect(bodyOf(factsOf())).not.toContain("Stuck");
+    });
+
+    it("links each repo's live searches for ready-for-human issues, open agent PRs and needs-design issues", () => {
+      expect(bodyOf(factsOf())).toContain(
+        "Live: [ready-for-human](https://github.com/owner/product/issues?q=is%3Aissue%20is%3Aopen%20label%3Aready-for-human)" +
+          " · [open agent PRs](https://github.com/owner/product/pulls?q=is%3Apr%20is%3Aopen%20head%3Afabrik%2Fticket-)" +
+          " · [needs-design](https://github.com/owner/product/issues?q=is%3Aissue%20is%3Aopen%20label%3Aneeds-design)",
+      );
+    });
+
+    it("keeps the Operator's one mention last, after every repo", () => {
+      const body = bodyOf(factsOf({ openIssues: [readyForHuman(13, 30)] }), factsOf({ repo: "owner/other" }));
+      expect(body.match(/@operator\b/g)).toHaveLength(1);
+      expect(body.trimEnd().endsWith("@operator")).toBe(true);
     });
   });
 

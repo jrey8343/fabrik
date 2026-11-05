@@ -2,7 +2,8 @@
 // one, as the Fabrik App, from the Ticket's agent branch.
 import type { PullRequestSnapshot } from "./types.ts";
 
-const AGENT_BRANCH_PREFIX = "fabrik/ticket-";
+/** What every agent branch's name starts with. */
+export const AGENT_BRANCH_PREFIX = "fabrik/ticket-";
 
 /** The branch an Implementer works on for this Ticket. */
 export function agentBranchFor(ticket: number): string {
