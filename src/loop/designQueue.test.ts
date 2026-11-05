@@ -280,11 +280,12 @@ describe("agent:design", () => {
   });
 });
 
-describe("While the Design queue check is dormant", () => {
-  it("adding needs-design still starts the Design session straight away", () => {
+describe("What triggers a Design queue check", () => {
+  it("adding needs-design asks for a queue check instead of starting a turn, and adds nothing to the issue", () => {
     const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
     const plan = planFor({ kind: "label-added", issue: 7, label: "needs-design" }, snapshotOf(issue), kitConfig());
 
-    expect(plan).toMatchObject({ kind: "act", actions: [{ kind: "start-agent-run", role: "design", issue: 7 }] });
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
+    expect(notificationsOf(plan)).toEqual([]);
   });
 });

@@ -17,12 +17,12 @@ const startsDesignTurn = {
 };
 
 describe("Starting a Design-session turn", () => {
-  it("starts round 1 when needs-design is added to an open issue", () => {
+  it("asks the Design queue check to start round 1 when needs-design is added to an open issue", () => {
     const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
 
     const plan = planFor({ kind: "label-added", issue: 7, label: "needs-design" }, snapshotOf(issue), kitConfig());
 
-    expect(plan).toEqual(startsDesignTurn);
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
   });
 
   it("does not start a session on a closed issue, saying why", () => {

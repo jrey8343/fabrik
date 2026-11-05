@@ -27,10 +27,17 @@ import type {
   StartingComment,
 } from "./types.ts";
 
-/** Adding needs-design starts the session's first round. */
-export function startSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
-  return whileInSession(issueNumber, issue) ?? startAgentRun("design", issueNumber, config);
+/**
+ * Adding needs-design, by any route, asks the Design queue check for the
+ * session's first round (#147): a first turn only starts through the queue
+ * check, which holds the issue silently while the cap is full.
+ */
+export function startSession(issueNumber: number, { issue }: IssueContext): Plan {
+  return whileInSession(issueNumber, issue) ?? { kind: "act", actions: [CHECK_DESIGN_QUEUE] };
 }
+
+/** Run a Design queue check once the plan has landed, so a waiting issue can take a slot. */
+const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
 
 /**
  * agent:design, which the Design queue check adds when a slot frees up, starts

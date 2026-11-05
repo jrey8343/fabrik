@@ -153,7 +153,7 @@ function labelAdded(
   pullRequest: PullRequestSnapshot | null,
   config: KitConfig,
 ): Plan {
-  if (label === NEEDS_DESIGN) return startSession(issueNumber, context, config);
+  if (label === NEEDS_DESIGN) return startSession(issueNumber, context);
   if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config);
   if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
   if (label !== NEEDS_TRIAGE) {
