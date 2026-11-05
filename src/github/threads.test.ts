@@ -20,7 +20,7 @@ function redChecks(headSha: string): LoopEvent {
 }
 
 function reviewed(output: string, headSha = HEAD_SHA): LoopEvent {
-  return { kind: "review-run-finished", pullRequest: 50, headSha, output, runUrl: RUN };
+  return { kind: "review-run-finished", pullRequest: 50, headSha, output, runUrl: RUN, repoUrl: "https://github.com/acme/shop" };
 }
 
 describe("Reading a PR's Verdicts", () => {

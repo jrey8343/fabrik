@@ -114,6 +114,7 @@ describe("A Review's context", () => {
       pullRequest: 39,
       headSha: "c".repeat(40),
       runUrl: "https://github.com/jrey8343/penrith/actions/runs/7",
+      repoUrl: "https://github.com/jrey8343/penrith",
       failedChecks: [],
       result: readAgentRunResult(artifact),
     });

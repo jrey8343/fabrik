@@ -15,7 +15,7 @@ import type { Action, LoopEvent, Plan, Snapshot, VerdictRecord } from "./types.t
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
 function reviewed(output: string): LoopEvent {
-  return { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output, runUrl: RUN };
+  return { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output, runUrl: RUN, repoUrl: "https://github.com/acme/shop" };
 }
 
 function redChecks(): LoopEvent {

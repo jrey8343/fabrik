@@ -158,6 +158,8 @@ export interface FinishedReview {
   readonly pullRequest: number;
   readonly headSha: string;
   readonly runUrl: string;
+  /** The Product repo's web address, which a pass's Follow-ups open issues on. */
+  readonly repoUrl: string;
   /** The required checks that didn't pass, from the checks job. */
   readonly failedChecks: readonly string[];
   /** The Reviewer's result, null when red checks kept it from running. */
@@ -178,6 +180,7 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
     headSha,
     output: result.output,
     runUrl,
+    repoUrl: review.repoUrl,
     ...givenTo(result),
   };
 }

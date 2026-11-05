@@ -80,7 +80,7 @@ function redChecks(headSha: string): LoopEvent {
 }
 
 function reviewed(headSha: string, output: string): LoopEvent {
-  return { kind: "review-run-finished", pullRequest: 50, headSha, output, runUrl: RUN };
+  return { kind: "review-run-finished", pullRequest: 50, headSha, output, runUrl: RUN, repoUrl: "https://github.com/acme/shop" };
 }
 
 function retried(headSha: string, requestChanges = false): Extract<LoopEvent, { kind: "implement-run-finished" }> {
