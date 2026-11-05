@@ -336,6 +336,7 @@ describe("Labels", () => {
     "enhancement",
     "fabrik:token-rotation",
     "fabrik:weekly-limit",
+    "fabrik:audit",
   ];
 
   function createdLabels(state: ProductState): string[] {

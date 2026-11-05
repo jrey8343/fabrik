@@ -383,6 +383,29 @@ export interface Snapshot {
    * whether it is still on the issue. Null when the event names no such comment.
    */
   readonly startingComment: StartingComment | null;
+  /** Gathered for a scheduled tick only: what the audit gate weighs. */
+  readonly audit: AuditSnapshot | null;
+}
+
+/** What the audit gate weighs on a scheduled tick (src/loop/auditGate.ts). */
+export interface AuditSnapshot {
+  /** The default branch's head commit, or null when it has none. */
+  readonly head: string | null;
+  /** The newest `fabrik:audit` issues, open and closed, in any order. */
+  readonly issues: readonly AuditIssueSnapshot[];
+}
+
+/** A `fabrik:audit` issue, open or closed, as the adapter read it (src/loop/audit.ts). */
+export interface AuditIssueSnapshot {
+  readonly number: number;
+  readonly open: boolean;
+  /** Why it was last closed, or reopened, as GitHub records it; null when it never was. */
+  readonly stateReason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** When it was opened, as an ISO 8601 time. */
+  readonly createdAt: string;
+  /** Whether the Fabrik App opened it. Only the App's bodies are read for markers. */
+  readonly byApp: boolean;
+  readonly body: string;
 }
 
 /** The Operator's reply that started a Design-session turn, as the adapter found it when the turn finished. */

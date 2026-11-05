@@ -9,9 +9,11 @@ import {
   SKILLS_SOURCES_LOCK_PATH,
 } from "../kit/config.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
-import { DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
+import { AUDIT_LABEL, DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
+  AuditIssueSnapshot,
+  AuditSnapshot,
   DesignQueueIssue,
   DesignQueueSnapshot,
   KitIssueSnapshot,
@@ -247,18 +249,67 @@ export async function gatherSnapshot(
   operator: string | null,
   actions: GitHub | null = null,
 ): Promise<Snapshot> {
-  const [{ owner, kitIssues }, part, startingComment] = await Promise.all([
+  const [{ owner, kitIssues }, part, startingComment, audit] = await Promise.all([
     gatherKitIssues(github, repo),
     gatherEventPart(github, repo, event, operator, actions),
     gatherStartingComment(github, repo, event),
+    event.kind === "scheduled-tick" ? gatherAuditSlice(github, repo) : null,
   ]);
   // A closed Ticket may be its Spec's last.
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
   // By default the Operator owns the Product repos they run Fabrik in.
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment }
-    : { ...part, spec, kitIssues, startingComment };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment, audit }
+    : { ...part, spec, kitIssues, startingComment, audit };
+}
+
+// The newest Audit issues, open and closed: enough to hold this week's, any
+// open one and the last Audit, since a week opens at most three.
+const AUDIT_QUERY = `
+  query ($owner: String!, $name: String!, $label: String!) {
+    repository(owner: $owner, name: $name) {
+      defaultBranchRef { target { oid } }
+      issues(labels: [$label], states: [OPEN, CLOSED], first: 50, orderBy: { field: CREATED_AT, direction: DESC }) {
+        nodes { number state stateReason createdAt body author { __typename } }
+      }
+    }
+  }
+`;
+
+interface AuditQueryResult {
+  repository: {
+    defaultBranchRef: { target: { oid: string } } | null;
+    issues: {
+      nodes: {
+        number: number;
+        state: "OPEN" | "CLOSED";
+        stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
+        createdAt: string;
+        body: string;
+        author: { __typename: string } | null;
+      }[];
+    };
+  };
+}
+
+/**
+ * What the audit gate weighs: the default branch's head, and the newest
+ * `fabrik:audit` issues with whether the Fabrik App (a bot) opened each.
+ */
+export async function gatherAuditSlice(github: Pick<GitHub, "graphql">, repo: Repo): Promise<AuditSnapshot> {
+  const data = await github.graphql<AuditQueryResult>(AUDIT_QUERY, { owner: repo.owner, name: repo.name, label: AUDIT_LABEL });
+  return {
+    head: data.repository.defaultBranchRef?.target.oid ?? null,
+    issues: data.repository.issues.nodes.map((issue) => ({
+      number: issue.number,
+      open: issue.state === "OPEN",
+      stateReason: issue.stateReason === null ? null : (issue.stateReason.toLowerCase() as AuditIssueSnapshot["stateReason"]),
+      createdAt: issue.createdAt,
+      byApp: issue.author?.__typename === "Bot",
+      body: issue.body,
+    })),
+  };
 }
 
 /**
@@ -377,7 +428,7 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit">;
 
 const KIT_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $labels: [String!]!) {
