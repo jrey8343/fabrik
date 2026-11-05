@@ -37,12 +37,12 @@ const WINDOW_MS = 37 * DAY_MS;
  * week before, so last week's 90-day escape window is as whole as this week's.
  * Revert rate reads its own 30 days of them.
  */
-const ESCAPE_WINDOW_MS = 97 * DAY_MS;
+const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 
 /** The GitHub facts the Weekly summary reads of one Product repo, as of `now`, with the Operator's login. */
 export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
-  const escapeSince = new Date(now - ESCAPE_WINDOW_MS).toISOString();
+  const escapeSince = new Date(now - ESCAPE_WINDOWS_REACH_MS).toISOString();
   const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, escapeMarkerIssues, openAudits] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
