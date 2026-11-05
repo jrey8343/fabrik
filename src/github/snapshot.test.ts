@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
-import { anIssue, aPullRequest, designQueueSnapshotOf, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, AUDITED_SHA, auditBody, designQueueSnapshotOf, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
@@ -591,6 +591,44 @@ describe("Gathering who opened an issue", () => {
 
   it("says the App didn't when a person did, whatever their login", async () => {
     expect(await openedBy({ login: "fabrik-app", __typename: "User" })).toMatchObject({ author: "fabrik-app", byApp: false });
+  });
+
+  it("says the App didn't when another bot did, so another bot's issue is never read for Audit markers", async () => {
+    expect(await openedBy({ login: "other-app", __typename: "Bot" })).toMatchObject({ author: "other-app", byApp: false });
+  });
+
+  // The Kit job routes the event with no Fabrik App token, so it gathers with no App login.
+  it("lets the Kit job, which doesn't know the App's login, route the App's pending Audit to its Auditor run", async () => {
+    const opened = { kind: "issue-opened", issue: 98 } as const;
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issue: {
+                number: 98,
+                state: "OPEN",
+                author: { login: "fabrik-app", __typename: "Bot" },
+                body: auditBody(AUDITED_SHA, "pending"),
+                labels: { nodes: [{ name: "fabrik:audit" }] },
+                parent: null,
+                comments: { nodes: [] },
+                timelineItems: { nodes: [] },
+                closedByPullRequestsReferences: { nodes: [] },
+                blockedBy: { nodes: [] },
+                blocking: { nodes: [] },
+              },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+
+    const plan = planFor(opened, await gatherSnapshot(github, repo, opened, null, null), kitConfig());
+
+    expect(plan).toMatchObject({ kind: "act", actions: [{ kind: "start-agent-run", role: "audit", issue: 98, commit: AUDITED_SHA }] });
   });
 });
 
