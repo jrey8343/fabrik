@@ -462,6 +462,26 @@ describe("A red-main issue someone closed", () => {
     expect(filedFor(plan)).toEqual(["dead000"]);
   });
 
+  it("keeps it closed while red when only an older commit's re-run passed after the close, as the newer red commit was decided first", () => {
+    const plan = monitorPlanFor(
+      redMainInput(
+        [
+          aCommit(STILL_RED, [aCheckRun({ id: 930, name: "test", conclusion: "failure", completedAt: "2026-11-06T07:00:00Z" })]),
+          aCommit(GREEN, [
+            aCheckRun({ id: 920, name: "test", conclusion: "failure", completedAt: "2026-11-06T06:00:00Z" }),
+            aCheckRun({ id: 925, name: "test", conclusion: "success", completedAt: "2026-11-06T07:40:00Z" }),
+          ]),
+        ],
+        { issues: [byOperator] },
+      ),
+    );
+
+    expect(plan.open).toEqual([]);
+    expect(redMainLines(plan)).toEqual([
+      "Red main: the default branch is red at `dead000`, but #41 stays closed until it's seen green, as someone other than the Monitor closed it.",
+    ]);
+  });
+
   it("goes by the newest of the Fabrik App's red-main issues", () => {
     const plan = monitorPlanFor(
       redMainInput([aCommit(STILL_RED, [aCheckRun({ id: 930, name: "test", conclusion: "failure" })])], {

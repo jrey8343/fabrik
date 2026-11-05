@@ -95,13 +95,23 @@ function undecidedNote(commits: number, gatingChecks: readonly string[]): string
 
 /**
  * Whether the newest red-main issue, closed by someone other than the Monitor
- * (the Operator, or the Loop for them), stays closed: no commit within the
- * bound has been decided green since. Once one has, a red files a new issue.
+ * (the Operator, or the Loop for them), stays closed: the default branch
+ * hasn't been seen green since. Once it has, a red files a new issue.
  */
 function heldClosed(issue: MonitorIssue, decided: readonly Decided[]): boolean {
   if (issue.closedByMonitor || issue.closedAt === null) return false;
   const closedAt = Date.parse(issue.closedAt);
-  return !decided.some((commit) => commit.kind === "green" && commit.decidedAt > closedAt);
+  return !decided.some((commit, i) => commit.kind === "green" && commit.decidedAt > closedAt && decidedFirst(commit, decided.slice(0, i)));
+}
+
+/**
+ * Whether the commit was decided before every one newer than it in branch
+ * order, so it was the newest decided commit, the default branch's state,
+ * when it was decided. A green re-run of an older commit while a newer one
+ * stays red never makes the default branch green.
+ */
+function decidedFirst(commit: Decided, newer: readonly Decided[]): boolean {
+  return newer.every((other) => other.decidedAt > commit.decidedAt);
 }
 
 /**
