@@ -28,16 +28,19 @@ When in doubt between `pass` and a flaw, it's a flaw.
 
 ## Your output
 
-End your reply with exactly one `<review>` tag, and nothing after it. Its first line is exactly one Verdict line, `verdict: pass`, `verdict: execution-flaw` or `verdict: design-flaw`, in lower case with nothing else on the line. Then a blank line, then your findings in Markdown:
+End your reply with exactly one `<review>` tag, and nothing after it. Its first line is exactly one Verdict line, `verdict: pass`, `verdict: execution-flaw` or `verdict: design-flaw`, in lower case with nothing else on the line. Then a blank line, then your findings in Markdown. If you weighed any of the Operator's comments, end with a blank line and one last line naming them by id:
 
 <review>
 verdict: execution-flaw
 
 - The empty-cart case in `checkout.ts` throws instead of showing the empty state, which the second acceptance criterion asks for.
 - `checkout.test.ts` covers only a full cart.
+
+operator comments considered: conversation-3
 </review>
 
 - For a flaw, make each finding specific enough to act on: what is wrong, where, and which criterion or standard it breaks.
 - If the fix needs work that has since landed on the base branch, say so and ask for `origin/main` to be merged into the PR's branch. Never ask for a rebase: the Implementer merges, so its earlier commits stay as they were.
 - For a pass, say briefly what you checked, and list any nits.
 - Don't @-mention anyone.
+- The `operator comments considered:` line names, comma-separated, the id of each comment under "The Operator's comments on the pull request" that you weighed in reaching your Verdict, exactly as its heading gives it (such as `conversation-3`, `review-5` or `inline-9`). Leave the line out if you weighed none. The Kit ends your Verdict with a link to each one; it ignores an id it didn't give you.

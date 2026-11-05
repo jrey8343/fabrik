@@ -57,10 +57,12 @@ When you have committed your work, end your reply with exactly one `<implement>`
 {
   "title": "The PR title: one line saying what the change does.",
   "summary": "Markdown for the PR body: what the PR changes and why, how you tested it, and anything the reviewer should look at closely.",
-  "fix": "Only on a retry or a Request-changes run: Markdown saying what you were asked to fix and what this run changed."
+  "fix": "Only on a retry or a Request-changes run: Markdown saying what you were asked to fix and what this run changed.",
+  "operatorCommentsConsidered": ["conversation-3"]
 }
 </implement>
 
 - `title` is one non-empty line. Don't put the Ticket number in it.
 - `summary` is non-empty Markdown. The Kit adds `Closes #<ticket>` itself. Don't @-mention anyone.
 - `fix` is non-empty Markdown on a retry or a Request-changes run, which the Kit posts as a comment on the PR. Leave it out on a first run. Don't @-mention anyone.
+- `operatorCommentsConsidered` lists, on a retry or a Request-changes run, the id of each comment under "The Operator's comments on the pull request" that you weighed, exactly as its heading gives it (such as `conversation-3`, `review-5` or `inline-9`). Leave it out, or leave it empty, if you weighed none, and always on a first run. The Kit ends your `fix` comment with a link to each one; it ignores an id it didn't give you.
