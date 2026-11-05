@@ -27,7 +27,7 @@ import { readTranscriptGzip, TRANSCRIPT_FILE } from "../agent/transcript.ts";
 import { readBytesIfPresent } from "./checkout.ts";
 import { JUDGE_FAILURE_FILE, JUDGE_JOB, JUDGE_RESULT_FILE, judgeFailureText, judgeResultText } from "./judge.ts";
 import { judgeClaudeArgs, judgeOutput, withoutTools } from "./judgeLaunch.ts";
-import { loadRubrics } from "./rubrics.ts";
+import { loadRubrics } from "./kitFiles.ts";
 import { JUDGE_MODEL, JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 import { type JudgedTicket, judgePrompt } from "./scorerPrompt.ts";
 

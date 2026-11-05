@@ -6,16 +6,14 @@
 // whose init message fails the backstop check, and the step summary and step
 // outputs every agent job writes.
 import { appendFile } from "node:fs/promises";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, join } from "node:path";
 import type { AgentStreamEvent } from "@ai-hero/sandcastle";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
+import { KIT_DIR } from "../kit/kitFiles.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { readStream } from "./stream.ts";
 import { transcriptWriter } from "./transcript.ts";
-
-/** This Kit checkout. */
-export const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 
 export type Checked<T> = { readonly ok: true; readonly output: T } | { readonly ok: false; readonly errors: readonly string[] };
 

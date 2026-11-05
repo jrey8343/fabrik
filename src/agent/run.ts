@@ -30,6 +30,7 @@ import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
+import { KIT_DIR } from "../kit/kitFiles.ts";
 import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
 import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
@@ -48,7 +49,7 @@ import {
   startAgentBranch,
 } from "./implement.ts";
 import { sentBackContext } from "./design.ts";
-import { claudeArgs, KIT_DIR, readyHook, schemaOf, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "./launch.ts";
+import { claudeArgs, readyHook, schemaOf, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "./launch.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
