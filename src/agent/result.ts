@@ -2,6 +2,7 @@
 // ran for, and the structured output it emitted. The push job applies it
 // through the Loop rules core, which checks the output against its contract.
 // An Implement run also passes the branch it built, as a git bundle beside it.
+import { isGivenOperatorComment } from "../loop/considered.ts";
 import { AGENT_ROLES, type AgentRole, type GivenOperatorComment } from "../loop/types.ts";
 
 /** The branch an Implement run built, which the push job reads back from the bundle. */
@@ -57,17 +58,10 @@ export function readAgentRunResult(text: string): AgentRunResult {
 }
 
 function readGiven(value: unknown): GivenOperatorComment[] {
-  const valid =
-    Array.isArray(value) &&
-    value.every(
-      (comment: unknown) =>
-        typeof comment === "object" &&
-        comment !== null &&
-        typeof (comment as Record<string, unknown>)["id"] === "string" &&
-        typeof (comment as Record<string, unknown>)["url"] === "string",
-    );
-  if (!valid) throw new Error(`${AGENT_RESULT_FILE} has Operator comments that aren't each an id and a link`);
-  return (value as GivenOperatorComment[]).map(({ id, url }) => ({ id, url }));
+  if (!Array.isArray(value) || !value.every(isGivenOperatorComment)) {
+    throw new Error(`${AGENT_RESULT_FILE} has Operator comments that aren't each an id and a link`);
+  }
+  return value.map(({ id, url }) => ({ id, url }));
 }
 
 function readBranch(value: unknown): BuiltBranch {

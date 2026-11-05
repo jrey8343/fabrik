@@ -3,6 +3,13 @@
 // so an agent can't claim a comment it never read. Pure.
 import type { GivenOperatorComment } from "./types.ts";
 
+/** Whether a value is an Operator comment's id and link, the shape a run is given them in. */
+export function isGivenOperatorComment(value: unknown): value is GivenOperatorComment {
+  if (typeof value !== "object" || value === null) return false;
+  const { id, url } = value as Record<string, unknown>;
+  return typeof id === "string" && typeof url === "string";
+}
+
 export const CONSIDERED_HEADING = "Operator comments considered";
 
 /**

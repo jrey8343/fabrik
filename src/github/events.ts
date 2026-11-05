@@ -3,7 +3,14 @@
 // It holds no Loop rules; those all live in src/loop/rules.ts.
 import type { AgentRunResult } from "../agent/result.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
-import type { AgentRole, BranchChanges, FailureReport, LoopEvent, PullRequestCommentPlace } from "../loop/types.ts";
+import type {
+  AgentRole,
+  BranchChanges,
+  FailureReport,
+  GivenOperatorComment,
+  LoopEvent,
+  PullRequestCommentPlace,
+} from "../loop/types.ts";
 
 /** Maps an Actions event to the Loop event it stands for, or null if the Loop ignores it. */
 export function loopEventFrom(
@@ -135,7 +142,7 @@ export function agentRunEventFrom(
           fixes: {
             ...retry,
             headSha: result.branch.base.sha,
-            ...(result.operatorComments === undefined ? {} : { operatorComments: result.operatorComments }),
+            ...givenTo(result),
           },
         }),
   };
@@ -166,8 +173,13 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
     headSha,
     output: result.output,
     runUrl,
-    ...(result.operatorComments === undefined ? {} : { operatorComments: result.operatorComments }),
+    ...givenTo(result),
   };
+}
+
+/** The Operator comments a run was given, for its event to carry; nothing when its result has none. */
+function givenTo(result: AgentRunResult): { operatorComments?: readonly GivenOperatorComment[] } {
+  return result.operatorComments === undefined ? {} : { operatorComments: result.operatorComments };
 }
 
 /** What the push job knows about the agent job it follows (src/kit/pushJob.ts). */

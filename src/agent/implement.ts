@@ -81,8 +81,9 @@ function currentDescription(body: unknown): string[] {
 }
 
 /**
- * A run on an existing PR's prompt parts beyond the Ticket, and the Operator
- * comments it was given, which its result passes out.
+ * What a run that reads an agent PR (a Review, a retry or a Request-changes
+ * run) is given beyond the Ticket: the PR's number, its prompt parts, and the
+ * Operator comments among them, which its result passes out.
  */
 export interface PullRequestRunContext {
   readonly pullRequest: number;

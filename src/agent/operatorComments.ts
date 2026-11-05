@@ -3,6 +3,7 @@
 // `operatorComments` for a Review, a retry or a Request-changes run, and under
 // the issue's `sentBack.operatorComments` for the Design session that follows a
 // return. Each is context for the run, never a request for work.
+import { isGivenOperatorComment } from "../loop/considered.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 
 /** The three places on a PR an Operator comment can be. */
@@ -41,9 +42,7 @@ export interface OperatorComment {
  */
 export function givenOperatorComments(comments: unknown): GivenOperatorComment[] {
   if (!Array.isArray(comments)) return [];
-  return (comments as { id?: unknown; url?: unknown }[]).flatMap(({ id, url }) =>
-    typeof id === "string" && typeof url === "string" ? [{ id, url }] : [],
-  );
+  return comments.filter(isGivenOperatorComment).map(({ id, url }) => ({ id, url }));
 }
 
 /** The heading every run's prompt sets the Operator's comments out under. */
