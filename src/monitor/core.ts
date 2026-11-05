@@ -156,7 +156,7 @@ function productionErrors({ monitor, sentry, issues, cap = MONITOR_ISSUES_CAP }:
   // The newest open error issue shows the held line: the last one filed now,
   // as GitHub numbers them in the order they're filed, or else the newest
   // already open whose body has a stats block to show it in.
-  const holder = filing.length > 0 ? null : newestWithStatsBlock(openErrorIssues);
+  const holder = filing.length > 0 ? null : heldCountHolder(issues);
   const rewrite: BodyRewrite[] = [];
   for (const issue of openErrorIssues) {
     const line = issue === holder ? heldLine : null;
@@ -209,19 +209,28 @@ function timeOf(iso: string): number {
   return Number.isNaN(at) ? Infinity : at;
 }
 
+/** What telling an open error issue, and the one showing the held count, reads of a Monitor issue. */
+type OpenErrorIssueFacts = Pick<MonitorIssue, "number" | "open" | "authorIsApp" | "body">;
+
 /**
  * Whether the issue takes a slot under the cap: an open issue the Fabrik App
  * filed for a Sentry group. Red main's issue never does.
  */
-function isOpenErrorIssue(issue: MonitorIssue): boolean {
-  return issue.open && issue.byApp && monitorMarkerIn(issue.body)?.kind === "sentry";
+function isOpenErrorIssue(issue: OpenErrorIssueFacts): boolean {
+  return issue.open && issue.authorIsApp && monitorMarkerIn(issue.body)?.kind === "sentry";
 }
 
-/** The newest of these issues whose body has a stats block, or null when none has. */
-function newestWithStatsBlock(issues: readonly MonitorIssue[]): MonitorIssue | null {
-  let newest: MonitorIssue | null = null;
+/**
+ * Of these Monitor issues, the one whose stats block shows the held count
+ * (heldCountIn): the newest open error issue whose body has a stats block, or
+ * null when none has. The Monitor puts the held line there and the Weekly
+ * summary reads it there, by this one rule, so the two can't disagree.
+ */
+export function heldCountHolder<Issue extends OpenErrorIssueFacts>(issues: readonly Issue[]): Issue | null {
+  let newest: Issue | null = null;
   for (const issue of issues) {
-    if (monitorBlockIn(issue.body) !== null && (newest === null || issue.number > newest.number)) newest = issue;
+    if (!isOpenErrorIssue(issue) || monitorBlockIn(issue.body) === null) continue;
+    if (newest === null || issue.number > newest.number) newest = issue;
   }
   return newest;
 }

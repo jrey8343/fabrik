@@ -5,9 +5,9 @@ import { verdictsIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { DESIGN_ROUND_MARKER, monitorMarkerIn } from "../loop/markers.ts";
+import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { DesignQueueSnapshot, InfrastructureFailure } from "../loop/types.ts";
-import { heldCountIn } from "../monitor/core.ts";
+import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { type RateLimitReading, type RunRecord, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
@@ -625,19 +625,16 @@ function heldDesignSessionsOf(queue: DesignQueueSnapshot, now: number): HeldDesi
 
 /**
  * The error groups the Monitor holds, from the held line in the stats block
- * of the newest open error issue the Fabrik App filed that has one, where the
- * Monitor shows it, read with the Monitor's own parser (heldCountIn) so the
+ * of the open error issue the Monitor shows it in, found and read by the
+ * Monitor's own rule (heldCountHolder) and parser (heldCountIn), so the
  * summary and the Monitor can't disagree. Null when that block has no held line.
  */
 function heldMonitorOf(issues: readonly MonitorIssueFacts[], appLogin: string): HeldMonitor | null {
-  let newest: HeldMonitor | null = null;
-  for (const issue of issues) {
-    if (issue.author !== appLogin) continue;
-    if (monitorMarkerIn(issue.body)?.kind !== "sentry") continue;
-    const groups = heldCountIn(issue.body);
-    if (groups !== null && (newest === null || issue.number > newest.issue)) newest = { groups, issue: issue.number };
-  }
-  return newest === null || newest.groups === 0 ? null : newest;
+  const holder = heldCountHolder(
+    issues.map((issue) => ({ number: issue.number, open: true, authorIsApp: issue.author === appLogin, body: issue.body })),
+  );
+  const groups = holder === null ? 0 : (heldCountIn(holder.body) ?? 0);
+  return holder === null || groups === 0 ? null : { groups, issue: holder.number };
 }
 
 /** Builds a repo's items, aged as of the filing. */

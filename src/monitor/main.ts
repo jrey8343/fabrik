@@ -86,7 +86,7 @@ async function monitorIssues(github: GitHub, repo: Repo, appLogin: string): Prom
         stateReason: issue.state_reason,
         closedAt: issue.closed_at,
         labels: issue.labels.map((label) => label.name),
-        byApp: issue.user?.login === appLogin,
+        authorIsApp: issue.user?.login === appLogin,
         body: issue.body ?? "",
         closedByMonitor: false,
       });

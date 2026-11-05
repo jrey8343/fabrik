@@ -136,7 +136,7 @@ describe("The red-main issue", () => {
   const red = [aCommit(RED, [aCheckRun({ id: 901, name: "test", conclusion: "failure" })])];
 
   it("files one while red when only an issue someone else opened carries the red-main marker", () => {
-    const plan = monitorPlanFor(redMainInput(red, { issues: [aRedMainIssue({ number: 52, byApp: false })] }));
+    const plan = monitorPlanFor(redMainInput(red, { issues: [aRedMainIssue({ number: 52, authorIsApp: false })] }));
 
     expect(filedFor(plan)).toEqual(["badc0de"]);
     expect(plan.rewrite).toEqual([]);
@@ -488,7 +488,7 @@ describe("A red-main issue someone closed", () => {
         issues: [
           aRedMainIssue({ number: 30, open: false, stateReason: "completed", closedAt: "2026-11-01T07:20:00Z", closedByMonitor: true }),
           byOperator,
-          aRedMainIssue({ number: 52, byApp: false }),
+          aRedMainIssue({ number: 52, authorIsApp: false }),
         ],
       }),
     );

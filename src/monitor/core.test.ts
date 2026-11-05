@@ -91,8 +91,8 @@ describe("Filing a Sentry group", () => {
   });
 
   it.each([
-    ["open", aMonitorIssue({ number: 61, byApp: false })],
-    ["closed as not planned", aClosedMonitorIssue({ number: 61, byApp: false, stateReason: "not_planned" })],
+    ["open", aMonitorIssue({ number: 61, authorIsApp: false })],
+    ["closed as not planned", aClosedMonitorIssue({ number: 61, authorIsApp: false, stateReason: "not_planned" })],
   ])("files a group whose marker only an issue the Fabrik App didn't open carries, %s", (_state, quoting) => {
     const plan = monitorPlanFor(monitorInput([aGroup({ id: "4504" })], { issues: [quoting] }));
 
@@ -103,7 +103,7 @@ describe("Filing a Sentry group", () => {
   it("goes by the Fabrik App's issue for a group when a newer issue someone else opened quotes its marker", () => {
     const plan = monitorPlanFor(
       monitorInput([aGroup({ events24h: 14 })], {
-        issues: [aClosedMonitorIssue({ number: 61, byApp: false, stateReason: "not_planned" }), aMonitorIssue({ number: 40 })],
+        issues: [aClosedMonitorIssue({ number: 61, authorIsApp: false, stateReason: "not_planned" }), aMonitorIssue({ number: 40 })],
       }),
     );
 
@@ -673,7 +673,7 @@ describe("The cap of 5 open error issues", () => {
   it("counts only open issues the Fabrik App filed for a Sentry group", () => {
     const others = [
       aClosedMonitorIssue({ number: 50, body: openBody(10) }),
-      aMonitorIssue({ number: 51, byApp: false, body: openBody(11) }),
+      aMonitorIssue({ number: 51, authorIsApp: false, body: openBody(11) }),
       aMonitorIssue({ number: 52, body: "A fabrik:monitor issue someone filed with no marker." }),
     ];
 

@@ -17,7 +17,7 @@ export interface MonitorIssue {
   readonly closedAt: string | null;
   readonly labels: readonly string[];
   /** Whether the Fabrik App opened it. */
-  readonly byApp: boolean;
+  readonly authorIsApp: boolean;
   readonly body: string;
   /**
    * Whether its last close was the Monitor's own, right after its green-at
@@ -89,7 +89,7 @@ export function newestByMarker(issues: readonly MonitorIssue[]): NewestByMarker 
   const byGroup = new Map<string, MonitorIssue>();
   let redMain: MonitorIssue | null = null;
   for (const issue of issues) {
-    const marker = issue.byApp ? monitorMarkerIn(issue.body) : null;
+    const marker = issue.authorIsApp ? monitorMarkerIn(issue.body) : null;
     if (marker?.kind === "sentry") {
       const seen = byGroup.get(marker.group);
       if (seen === undefined || issue.number > seen.number) byGroup.set(marker.group, issue);
