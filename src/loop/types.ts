@@ -245,7 +245,7 @@ export interface IssueSnapshot {
   readonly number: number;
   readonly open: boolean;
   readonly author: string;
-  /** Whether the Fabrik App (a bot) opened it. Only the App's bodies are read for an Audit's markers. */
+  /** Whether it was opened by a bot (the Fabrik App), as an agent PR is. Only a bot's body is read for an Audit's markers. */
   readonly byApp: boolean;
   /** Its Markdown body as it stands, whose marker lines a Design session's rewrite carries forward (src/loop/carriedLines.ts). */
   readonly body: string;
@@ -453,7 +453,7 @@ export interface AuditIssueSnapshot {
   readonly stateReason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
   /** When it was opened, as an ISO 8601 time. */
   readonly createdAt: string;
-  /** Whether the Fabrik App opened it. Only the App's bodies are read for markers. */
+  /** Whether it was opened by a bot (the Fabrik App), as an agent PR is. Only a bot's body is read for markers. */
   readonly byApp: boolean;
   readonly body: string;
 }

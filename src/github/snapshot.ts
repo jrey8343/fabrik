@@ -300,7 +300,7 @@ interface AuditQueryResult {
 
 /**
  * The default branch's head, and the newest `fabrik:audit` issues with
- * whether the Fabrik App (a bot) opened each: what the audit gate weighs on a
+ * whether a bot (the Fabrik App) opened each: what the audit gate weighs on a
  * scheduled tick, and what an Auditor run's inputs read the Audits from
  * (src/agent/inputs.ts), so the two read the same Audits.
  */
