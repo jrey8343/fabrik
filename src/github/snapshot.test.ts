@@ -418,6 +418,54 @@ describe("Gathering an issue's blocked-by edges", () => {
   });
 });
 
+describe("Gathering an issue's body", () => {
+  /** The issue as GitHub holds it, opened by `author`. */
+  function githubWith(author: { login: string; __typename: string } | null) {
+    return {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issue: {
+                number: 6,
+                state: "OPEN",
+                author,
+                body: "<!-- fabrik:monitor sentry:4504 -->\n## Production error",
+                labels: { nodes: [{ name: "fabrik:monitor" }, { name: "needs-design" }] },
+                parent: null,
+                comments: { nodes: [] },
+                timelineItems: { nodes: [] },
+                closedByPullRequestsReferences: { nodes: [] },
+                blockedBy: { nodes: [] },
+                blocking: { nodes: [] },
+              },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+  }
+
+  const event = { kind: "label-added", issue: 6, label: "needs-design" } as const;
+
+  it("holds the body as it stands, and that the Fabrik App opened it, so a Design session keeps its Monitor marker", async () => {
+    const snapshot = await gatherSnapshot(githubWith({ login: "fabrik-app", __typename: "Bot" }), repo, event, null);
+
+    expect(snapshot.issue).toMatchObject({ body: "<!-- fabrik:monitor sentry:4504 -->\n## Production error", authorIsBot: true });
+  });
+
+  it.each([
+    ["a person", { login: "someone", __typename: "User" }],
+    ["a deleted account", null],
+  ])("holds that %s, not the Fabrik App, opened it", async (_, author) => {
+    const snapshot = await gatherSnapshot(githubWith(author), repo, event, null);
+
+    expect(snapshot.issue).toMatchObject({ authorIsBot: false });
+  });
+});
+
 describe("Gathering an issue's Design session", () => {
   async function gatheredIssue(
     comments: { body: string; createdAt?: string; author: { __typename: string } }[],

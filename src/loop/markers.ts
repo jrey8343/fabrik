@@ -47,3 +47,14 @@ export const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 
 /** The first line of the Kit's note that a Ticket came back to design from an agent PR. */
 export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
+
+/**
+ * A Monitor issue's marker line, naming the Sentry group or the red main it
+ * tracks (#148). Only the line itself counts, never the stats block's markers.
+ */
+const MONITOR_MARKER = /^(<!-- fabrik:monitor (?:sentry:\S+|red-main) -->)$/m;
+
+/** The Monitor marker line in this body, or null when it has none. */
+export function monitorMarkerIn(body: string): string | null {
+  return MONITOR_MARKER.exec(body)?.[1] ?? null;
+}
