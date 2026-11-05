@@ -379,6 +379,25 @@ describe("The Run record a run's end yields", () => {
     });
   });
 
+  it("keeps the last weekly-limit reading even when a five-hour one came after it", () => {
+    const limit = (info: Record<string, unknown>) => line({ type: "rate_limit_event", rate_limit_info: info });
+    const transcript = [
+      init,
+      limit({ status: "allowed", rateLimitType: "seven_day", utilization: 0.4, resetsAt: 1_800_500_000 }),
+      limit({ status: "allowed", rateLimitType: "five_hour", utilization: 0.9, resetsAt: 1_800_000_000 }),
+      result(),
+    ];
+
+    expect(runRecordFor(runEnd({ transcript }))?.record.rateLimit).toMatchObject({ rateLimitType: "seven_day", utilization: 0.4 });
+  });
+
+  it("has no weekly-limit reading when the stream reported only five-hour ones", () => {
+    const limit = (info: Record<string, unknown>) => line({ type: "rate_limit_event", rate_limit_info: info });
+    const transcript = [init, limit({ status: "allowed", rateLimitType: "five_hour", utilization: 0.9, resetsAt: 1_800_000_000 }), result()];
+
+    expect(runRecordFor(runEnd({ transcript }))?.record.rateLimit).toBeNull();
+  });
+
   it("counts permission denials and API retries", () => {
     const retry = line({ type: "system", subtype: "api_retry", attempt: 1, error: "overloaded_error", error_status: 529 });
     const denials = [{ tool_name: "Bash" }, { tool_name: "Write" }];

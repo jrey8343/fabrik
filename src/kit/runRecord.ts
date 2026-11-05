@@ -47,6 +47,9 @@ export interface ModelCost {
   readonly costBasis: string | null;
 }
 
+/** The `rateLimitType` of the Subscription's weekly limit; the stream reports its five-hour one too. */
+export const WEEKLY_LIMIT = "seven_day";
+
 /** The last weekly-limit reading the stream reported, raw. */
 export interface RateLimitReading {
   readonly status: string | null;
@@ -181,7 +184,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     // A run with any model of unknown cost basis has no total either: never a guessed figure.
     totalCostUsd: Object.values(modelUsage).some((usage) => usage.costUsd === null) ? null : numberOr(last?.["total_cost_usd"]),
     modelUsage,
-    rateLimit: readingOf(stream?.lastRateLimit ?? null),
+    rateLimit: readingOf(stream?.rateLimits.findLast((info) => info["rateLimitType"] === WEEKLY_LIMIT) ?? null),
     transcript: transcriptPath,
   };
   return { record, recordPath, transcriptPath };
