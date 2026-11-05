@@ -1,4 +1,4 @@
-import { answerRound, applyTurn, startSession } from "./design.ts";
+import { answerRound, applyTurn, startSession, turnStartFrom } from "./design.ts";
 import { failureNotice } from "./failures.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import { scheduledTick } from "./kitIssues.ts";
@@ -53,7 +53,9 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
         case "triage":
           return withIssue(snapshot, ({ issue, operator }) => applyTriage(event.issue, event.output, issue, operator));
         case "design":
-          return withIssue(snapshot, (context) => applyTurn(event.issue, event.output, context));
+          return withIssue(snapshot, (context) =>
+            applyTurn(event.issue, event.output, context, turnStartFrom(event.startedBy, snapshot.startingComment)),
+          );
       }
     case "implement-run-finished":
       // A retry lands on the PR it fixes; a first run opens one.

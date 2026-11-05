@@ -78,6 +78,8 @@ export type LoopEvent =
       readonly commenterIsBot: boolean;
       /** The comment's Markdown, which may carry a live Design session's outcome marker. */
       readonly body: string;
+      /** The comment's id, which a Design-session turn it starts checks still exists before it posts. */
+      readonly comment: number;
     }
   | {
       readonly kind: "agent-run-finished";
@@ -86,6 +88,12 @@ export type LoopEvent =
       readonly issue: number;
       /** The text the agent emitted as its structured output, unparsed. */
       readonly output: string;
+      /**
+       * For a Design-session turn the Operator's reply started: that comment's
+       * id, from the Actions event the push job runs for, never from the agent.
+       * None for the first round, which adding needs-design starts.
+       */
+      readonly startedBy?: number;
     }
   | {
       /** An Implement run's agent job finished; its push job has the branch it built, not yet pushed. */
@@ -321,6 +329,18 @@ export interface Snapshot {
   readonly operator: string;
   /** The open issues the Kit owns in this repo (token rotation, weekly limit), oldest first. Gathered for every event. */
   readonly kitIssues: readonly KitIssueSnapshot[];
+  /**
+   * For a Design-session turn the Operator's reply started: that comment, and
+   * whether it is still on the issue. Null when the event names no such comment.
+   */
+  readonly startingComment: StartingComment | null;
+}
+
+/** The Operator's reply that started a Design-session turn, as the adapter found it when the turn finished. */
+export interface StartingComment {
+  readonly id: number;
+  /** False when GitHub no longer has it: the Operator deleted it. */
+  readonly exists: boolean;
 }
 
 /** A Spec and its Tickets, which Spec closing weighs. */

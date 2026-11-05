@@ -113,7 +113,13 @@ async function loopEvent(repo: Repo): Promise<EventSource> {
   if (needsText === undefined || needsText === "") return actionsEvent;
 
   const eventIssue = (payload["issue"] as { number?: unknown } | undefined)?.number;
-  const input = pushJobInput(JSON.parse(needsText) as Needs, typeof eventIssue === "number" ? eventIssue : null);
+  // The reply that routed this run, read from the Actions event, which no agent can rewrite.
+  const eventComment = actionsEvent.event?.kind === "issue-comment-created" ? actionsEvent.event.comment : null;
+  const input = pushJobInput(
+    JSON.parse(needsText) as Needs,
+    typeof eventIssue === "number" ? eventIssue : null,
+    eventComment,
+  );
   // The agent job's artifacts, whichever it left (a result and bundle, or a failure report), as the push job downloads them.
   const agentDir = process.env["FABRIK_AGENT_DIR"] || join(required("RUNNER_TEMP"), "agent");
   switch (input.kind) {
@@ -144,7 +150,9 @@ async function agentResultEvent(
   if (result.role !== input.role) throw new Error(`The agent's result is a ${result.role} result, not ${input.role}`);
   if (result.issue !== input.issue) throw new Error(`The agent's result is for #${result.issue}, not #${input.issue}`);
   const source = `the ${result.role} run on #${result.issue}`;
-  if (result.role !== "implement") return { event: agentRunEventFrom(result), source, branch: null };
+  if (result.role !== "implement") {
+    return { event: agentRunEventFrom(result, null, null, input.startedBy), source, branch: null };
+  }
 
   const built = result.branch;
   if (built === undefined || built.name !== agentBranchFor(result.issue)) {

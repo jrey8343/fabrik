@@ -20,13 +20,33 @@ describe("What the push job applies", () => {
       issue: 12,
       pullRequest: null,
       review: null,
+      startedBy: null,
     });
+  });
+
+  it("applies a Design-session turn's result with the Operator's reply that started it, from the Actions event", () => {
+    expect(pushJobInput(needs("design", { design: ok() }), 12, 7003)).toEqual({
+      kind: "agent-result",
+      role: "design",
+      issue: 12,
+      pullRequest: null,
+      review: null,
+      startedBy: 7003,
+    });
+  });
+
+  it("applies the first round's result with no starting reply, as adding needs-design started it", () => {
+    expect(pushJobInput(needs("design", { design: ok() }), 12)).toMatchObject({ kind: "agent-result", role: "design", startedBy: null });
+  });
+
+  it("names no starting reply for a Triage run, even one a reply restarted", () => {
+    expect(pushJobInput(needs("triage", { triage: ok() }), 12, 7003)).toMatchObject({ kind: "agent-result", startedBy: null });
   });
 
   it("applies an Implement run's result for the Ticket the Kit job's plan named, with a retry's PR and a Request-changes run's review", () => {
     const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", review: "900" }), 50);
 
-    expect(input).toEqual({ kind: "agent-result", role: "implement", issue: 7, pullRequest: 50, review: 900 });
+    expect(input).toEqual({ kind: "agent-result", role: "implement", issue: 7, pullRequest: 50, review: 900, startedBy: null });
   });
 
   it("applies red checks as such: the Reviewer didn't run", () => {

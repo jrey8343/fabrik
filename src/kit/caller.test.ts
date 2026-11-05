@@ -94,6 +94,12 @@ describe("Caller workflow release check", () => {
     expect(template).toContain("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)");
   });
 
+  it("the caller template runs the Loop on a new issue comment only, never an edited or deleted one", () => {
+    const template = readFileSync(new URL("../../templates/fabrik.yml", import.meta.url), "utf8");
+
+    expect(template).toMatch(/^ {2}issue_comment:\n {4}types: \[created\]$/m);
+  });
+
   it("the scheduled Kit workflow ships beside the Loop as a reusable workflow", () => {
     const workflow = readFileSync(new URL("../../.github/workflows/schedule.yml", import.meta.url), "utf8");
 

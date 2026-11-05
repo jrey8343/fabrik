@@ -6,7 +6,7 @@ import { planFor } from "./rules.ts";
 // credentials. It publishes the Spec and Tickets (or rewrites the issue as its
 // agent brief) itself, then posts one outcome comment, which the Kit lands.
 const commented = (body: string, commenter = "jrey", commenterIsBot = false) =>
-  ({ kind: "issue-comment-created", issue: 7, commenter, commenterIsBot, body }) as const;
+  ({ kind: "issue-comment-created", issue: 7, commenter, commenterIsBot, body, comment: 9001 }) as const;
 
 const inSession = (labels: readonly string[] = ["enhancement", "needs-design"], open = true) =>
   snapshotOf(anIssue({ number: 7, labels, open }), { operator: "jrey" });

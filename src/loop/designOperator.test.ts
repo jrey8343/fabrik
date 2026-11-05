@@ -213,6 +213,7 @@ describe("Landing a live Design session that ended with an Operator brief", () =
         commenter: "jrey",
         commenterIsBot: false,
         body: "<!-- fabrik:live-outcome operator-brief -->\n**Design session finished live.** This issue is now an Operator brief.",
+        comment: 9001,
       },
       inSession,
       kitConfig(),

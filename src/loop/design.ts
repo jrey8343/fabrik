@@ -14,7 +14,16 @@ import { designRoundMarker, LIVE_OUTCOME_MARKER, SESSION_FINISHED } from "./mark
 import { withoutMentions } from "./mentions.ts";
 import type { AgentBrief } from "./triageOutput.ts";
 import { startAgentRun } from "./runs.ts";
-import type { Action, CreatedIssue, IssueContext, IssueSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
+import type {
+  Action,
+  CreatedIssue,
+  IssueContext,
+  IssueSnapshot,
+  KitConfig,
+  LoopEvent,
+  Plan,
+  StartingComment,
+} from "./types.ts";
 
 /** Adding needs-design starts the session's first round. */
 export function startSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
@@ -81,8 +90,41 @@ function landLiveOutcome(issueNumber: number, outcome: string, operator: string)
   }
 }
 
-/** A finished turn posts the next round, or ends the session with its outcome. */
-export function applyTurn(issueNumber: number, text: string, snapshot: IssueContext): Plan {
+/**
+ * What a turn knows of what started it: adding needs-design (the first round),
+ * the Operator's reply as the snapshot found it, or a reply the snapshot
+ * didn't check.
+ */
+export type TurnStart =
+  | { readonly kind: "label" }
+  | { readonly kind: "reply"; readonly comment: StartingComment }
+  | { readonly kind: "unchecked-reply"; readonly comment: number };
+
+/** Pairs the reply a turn's event names with what the snapshot found of it. */
+export function turnStartFrom(comment: number | undefined, found: StartingComment | null): TurnStart {
+  if (comment === undefined) return { kind: "label" };
+  return found?.id === comment ? { kind: "reply", comment: found } : { kind: "unchecked-reply", comment };
+}
+
+/**
+ * A finished turn posts the next round, or ends the session with its outcome.
+ * A turn whose starting reply the Operator deleted posts nothing: it answered
+ * a reply that is no longer there.
+ */
+export function applyTurn(issueNumber: number, text: string, snapshot: IssueContext, start: TurnStart): Plan {
+  if (start.kind === "unchecked-reply") {
+    return {
+      kind: "fail",
+      failure: "infrastructure",
+      reason: `The Design-session turn on #${issueNumber} was started by a reply (comment ${start.comment}) the push job didn't check is still there`,
+    };
+  }
+  if (start.kind === "reply" && !start.comment.exists) {
+    return {
+      kind: "nothing",
+      reason: `The Operator's reply that started this Design-session turn on #${issueNumber} (comment ${start.comment.id}) was deleted, so the turn posts nothing`,
+    };
+  }
   const parsed = parseDesignTurnOutput(text);
   if (!parsed.ok) {
     return {
