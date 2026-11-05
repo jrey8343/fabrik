@@ -36,24 +36,6 @@ _Avoid_: target repo, client repo, project
 The first Product repo used to prove the Kit against real stakes: Penrith Physiotherapy & Sports Centre.
 _Avoid_: test repo, demo
 
-## The product
-
-**Product intent**:
-Who a Product repo's product serves, why it exists, how its success is measured, and what it deliberately doesn't do.
-_Avoid_: product vision, goals, requirements
-
-**Vision**:
-A Product repo's written statement of its Product intent, which only the Operator changes.
-_Avoid_: mission, strategy, PRD
-
-**Roadmap**:
-A Product repo's Now / Next / Later list of what it means to build, kept by the Operator by hand. Not a Map.
-_Avoid_: backlog, plan, Map
-
-**End user**:
-A person the product in a Product repo serves, as its Vision describes them; never the Operator.
-_Avoid_: user, avatar, persona, customer
-
 ## People and agents
 
 **Operator**:
