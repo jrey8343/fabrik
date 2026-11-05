@@ -46,4 +46,41 @@ describe("The Kit's workflows", () => {
       expect(body).toMatch(/if: always\(\)\n\s+continue-on-error: true\n\s+run: .*gzip.*transcript\.jsonl/);
     },
   );
+
+  // What the Run record (src/kit/runRecord.ts) needs of how each run started.
+  // Nothing in the push job reads them yet.
+  it("loop.yml's Kit job passes out which run it planned: its Retry number, Step-up and Request changes", () => {
+    const kit = jobOf("kit");
+
+    expect(kit).toContain("retry: ${{ steps.route.outputs.retry }}");
+    expect(kit).toContain("step-up: ${{ steps.route.outputs.step-up }}");
+    expect(kit).toContain("request-changes: ${{ steps.route.outputs.request-changes }}");
+  });
+
+  it.each(["triage", "design", "implement", "review"])(
+    "loop.yml's %s job passes out the model and effort it ran and the commit it started from",
+    (job) => {
+      const body = jobOf(job);
+
+      expect(body).toMatch(/model: \$\{\{ steps\.agent\.outputs\.model \}\}/);
+      expect(body).toMatch(/effort: \$\{\{ steps\.agent\.outputs\.effort \}\}/);
+      expect(body).toMatch(/base-sha: \$\{\{ steps\.base\.outputs\.sha \}\}/);
+      expect(body).toMatch(/id: agent\n\s+working-directory: product\n(?:.*\n)*?\s+run: node \.\.\/kit\/src\/agent\/run\.ts /);
+      // Before the secrets load, so a run whose agent never started still names its commit.
+      expect(body.indexOf("id: base")).toBeLessThan(body.indexOf("id: op"));
+    },
+  );
+
+  it("loop.yml's push job reads none of the Run record's new outputs yet", () => {
+    const push = jobOf("push");
+
+    for (const output of ["retry", "step-up", "request-changes", "base-sha"]) expect(push).not.toContain(`outputs.${output}`);
+  });
 });
+
+/** One job's section of loop.yml. */
+function jobOf(job: string): string {
+  const body = loop.split(/\n(?=  [a-z-]+:\n)/).find((section) => section.startsWith(`  ${job}:\n`));
+  if (body === undefined) throw new Error(`loop.yml has no ${job} job`);
+  return body;
+}

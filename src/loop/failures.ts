@@ -27,8 +27,11 @@ const ROLE_NAMES: Readonly<Record<AgentRole, string>> = {
   review: "Review",
 };
 
-/** Which Infrastructure failure this was, from what the agent job left and how it ended. */
-function classify(run: FailedRun): InfrastructureFailure {
+/**
+ * Which Infrastructure failure this was, from what the agent job left and how
+ * it ended. The Run record classifies with it too, so the two never disagree.
+ */
+export function infrastructureFailureOf(run: Pick<FailedRun, "secretsStep" | "report" | "jobResult">): InfrastructureFailure {
   if (run.secretsStep === "failure") return "unreachable-1password";
   if (run.report !== null) return run.report.failure;
   return run.jobResult === "cancelled" ? "timeout" : "crash";
@@ -62,7 +65,7 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
  */
 export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig): Plan {
   const { issue, operator } = context;
-  const failure = classify(run);
+  const failure = infrastructureFailureOf(run);
   const pullRequest = issue.openPullRequests[0];
   const target = pullRequest ?? run.issue;
   // The review trigger lives on the PR; every other role's on the issue.

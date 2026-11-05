@@ -98,5 +98,7 @@ export function owedRetry(
     model,
     effort,
     timeoutMinutes: implement.timeoutMinutes,
+    retry: run.retry,
+    stepUp: run.retry === MAX_RETRIES,
   };
 }
