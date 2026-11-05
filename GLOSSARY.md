@@ -104,6 +104,10 @@ _Avoid_: approval, review result
 A Verdict that the right design was built wrongly, so the Implementer can fix it.
 _Avoid_: bug, failing review
 
+**Retry**:
+An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head.
+_Avoid_: rerun, attempt
+
 **Design flaw**:
 A Verdict that the Ticket itself is wrong, so it needs a Design session.
 _Avoid_: bad spec, rejection
