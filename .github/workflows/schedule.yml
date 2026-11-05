@@ -3,13 +3,14 @@
 #
 # This file is wiring only. It runs the Loop's time-based rules (closing the
 # weekly-limit issue after its reset, and a Design queue check) through the
-# Loop rules core, which src/main.ts runs as a `scheduled-tick` event, and once
-# a week the Product repo's skills bumps for its own Skills sources.
+# Loop rules core, which src/main.ts runs as a `scheduled-tick` event, once a
+# week the Product repo's skills bumps for its own Skills sources, and every
+# hour the Monitor, in a job of its own.
 #
-# Like the Loop's push job (ADR-0002), the tick and skills bump jobs run on a
-# fresh VM, load the Fabrik App key through the push service account, mint an
-# App token, and never check out or run Product code. They check out only Fabrik itself, at
-# the exact commit the caller pinned.
+# Like the Loop's push job (ADR-0002), the tick, skills bump and Monitor jobs
+# run on a fresh VM, load the Fabrik App key through the push service account,
+# mint an App token, and never check out or run Product code. They check out
+# only Fabrik itself, at the exact commit the caller pinned.
 name: Fabrik scheduled tick
 
 on:
@@ -176,3 +177,79 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: node kit/src/skills/source-bumps-main.ts
+
+  # The Monitor (src/monitor/main.ts, #148): files an issue for Triage for each
+  # production error Sentry reports, once monitor.errors is set, and one while
+  # the default branch's CI is red, once the Fabrik App has Checks: read. It
+  # reads the Product repo's Kit config, issues and check runs, and Sentry,
+  # through their APIs alone: it never checks out or runs Product code, makes
+  # no model call and writes no Run record. It needs only the Kit job, so it
+  # runs on every tick, the weekly-limit issue open or not, and a Sentry outage
+  # or a failed Monitor can't stop the tick.
+  monitor:
+    name: Monitor
+    needs: kit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: fabrik-monitor
+      cancel-in-progress: false
+    permissions: {}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Load the Fabrik App key
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}
+          FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+          FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+      # No permission-* inputs: asking for Checks: read before the Operator has
+      # accepted it would fail the mint. Until then red main notes it's dormant.
+      - name: Mint a Fabrik App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+          private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+
+      - name: Check whether the Kit config reads production errors
+        id: config
+        env:
+          FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: node kit/src/monitor/errors-set.ts
+
+      # Only for a repo whose Kit config sets monitor.errors. A missing or
+      # unreadable item fails no job: the Monitor notes it in the step summary.
+      - name: Load the Sentry token
+        id: sentry
+        if: steps.config.outputs.errors == 'true'
+        continue-on-error: true
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}
+          SENTRY_TOKEN: op://Fabrik App/Sentry token/credential
+
+      - name: Run the Monitor
+        env:
+          FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
+          FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          FABRIK_SENTRY_TOKEN: ${{ steps.sentry.outputs.SENTRY_TOKEN }}
+        run: node kit/src/monitor/main.ts
