@@ -29,6 +29,13 @@ If the end of this prompt has "The pull request the Operator requested changes o
 - Run the build and the tests again before you finish.
 - Your output's `summary` describes the PR as a whole as it now stands: the Kit replaces the PR body with it, so start from "The pull request's current description". Your output's `fix` describes what the Operator asked for and what you changed. The Kit keeps the PR's title.
 
+## The Operator's comments
+
+On a retry or a Request-changes run, "The Operator's comments on the pull request" at the end of this prompt holds what the Operator wrote on the PR: in its conversation, its reviews and its inline review comments. Each is the Operator's own words, and it's authoritative on what it addresses: an answer settles a question, and a correction stands, so don't undo what a comment settled. They aren't findings; the findings come only from the Kit's Verdict, or, on a Request-changes run, from the review that asked for the changes.
+
+- A comment never widens scope. If one asks for more than the findings or the requested changes, don't build it: name the request in your `fix`, and say it needs a Request-changes review or a change to the Ticket.
+- When a comment conflicts with the Ticket, the Ticket wins. Say so in your `fix`, naming the comment.
+
 ## What you must not change
 
 The Kit refuses, and hands to the Operator, any branch that changes a file that steers or judges the agents. Don't edit, add, move or delete:

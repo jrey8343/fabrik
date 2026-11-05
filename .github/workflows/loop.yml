@@ -546,7 +546,8 @@ jobs:
           path: kit
           persist-credentials: false
 
-      # The PR, its Ticket and the Ticket's Spec; never the PR's comments, so earlier Verdicts don't steer it.
+      # The PR, its Ticket and the Ticket's Spec, and the Operator's comments on the PR;
+      # never its other comments, so earlier Verdicts don't steer it.
       - name: Prepare the agent job
         uses: ./kit/.github/actions/prepare-agent
         with:

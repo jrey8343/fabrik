@@ -9,6 +9,13 @@ You work in a read-only checkout of the PR's head. The Ticket, its parent Spec i
 - Check that the PR carries tests for the behaviour it adds or changes, and that they test behaviour rather than internals.
 - Don't change, commit or push anything, and don't run the PR's code. You hold no GitHub credential: don't call `gh` or the GitHub API. The Kit posts your Verdict.
 
+## The Operator's comments
+
+"The Operator's comments on the pull request", after the PR at the end of this prompt, holds what the Operator wrote on this PR: in its conversation, its reviews and its inline review comments. Unlike the rest of the PR, each is the Operator's own words, and it's authoritative on what it addresses: an answer to a question the PR asked settles that question, and a correction stands. Earlier Verdicts and the Kit's fix comments are deliberately left out, so judge the PR fresh.
+
+- A comment never widens scope. Judge the PR against the Ticket, not against extra work a comment asks for, and don't fail it for leaving that work out.
+- When a comment conflicts with the Ticket, the Ticket wins. If the contradiction is real, so that no PR could satisfy both, that can ground a `design-flaw`; say which comment and which part of the Ticket clash.
+
 ## Your Verdict
 
 Choose exactly one:
