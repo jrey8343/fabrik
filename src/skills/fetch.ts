@@ -10,11 +10,11 @@ import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { readKitConfigFromCheckout } from "../kit/checkout.ts";
-import { type Phase, PHASES, picksIn } from "../kit/config.ts";
+import { readIfPresent, readKitConfigFromCheckout } from "../kit/checkout.ts";
+import { asksForExtraSkills, KIT_CONFIG_PATH, type Phase, PHASES, picksIn, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
 import { checkExtraSkills } from "./extra.ts";
 import { INSTALL_RECORD, type InstallRecord, parseInstallRecord } from "./installRecord.ts";
-import { PLUGIN_MANIFEST_PATH, readSkillsLock, SKILLS_LOCK_PATH, skillFolders } from "./lock.ts";
+import { PLUGIN_MANIFEST_PATH, readSkillsLock, SKILLS_LOCK_PATH, shortSha, skillFolders } from "./lock.ts";
 
 const run = promisify(execFile);
 
@@ -40,8 +40,10 @@ export interface InstalledSkills {
   /** The Extra skills now installed, by the name they install as. */
   readonly extraSkills: readonly string[];
   /**
-   * Why the requested Extra skills weren't installed: Kit config errors, or
-   * what the manifest check found. The Base skills are installed either way.
+   * Why the requested Extra skills weren't installed: Kit config errors (only
+   * when the repo asks for Extra skills), a source that couldn't be
+   * downloaded, or what the manifest check found. The Base skills are
+   * installed either way.
    */
   readonly errors: readonly string[];
 }
@@ -95,6 +97,8 @@ export async function fetchSkills(
 
   const resolved = await readKitConfigFromCheckout(productDir);
   const config = resolved.ok ? resolved.config : null;
+  // An invalid Kit config only costs the Extra skills when the repo asks for some.
+  const configErrors = resolved.ok || !(await asksForExtraSkillsIn(productDir)) ? [] : resolved.errors;
   const picks = config === null ? [] : picksIn(config, install === "every" ? PHASES : [install]);
 
   const work = await mkdtemp(join(tmpdir(), "fabrik-skills-"));
@@ -121,6 +125,7 @@ export async function fetchSkills(
     }
 
     const extras: Wanted[] = [];
+    const downloadErrors: string[] = [];
     for (const source of config?.skillsSources ?? []) {
       const skills = picks.filter((pick) => pick.source === source.repository).map((pick) => pick.name);
       if (skills.length === 0) continue;
@@ -128,13 +133,18 @@ export async function fetchSkills(
       if (earlier?.sha === source.sha && sameSkills(earlier.skills, skills)) {
         extras.push({ ...source, skills });
       } else {
-        extras.push({ ...source, skills, ...(await fetchSource(source.repository, source.sha)) });
+        try {
+          extras.push({ ...source, skills, ...(await fetchSource(source.repository, source.sha)) });
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          downloadErrors.push(`${source.repository} at ${shortSha(source.sha)} could not be downloaded: ${reason}`);
+        }
       }
     }
 
-    const errors =
+    const checkErrors =
       config === null
-        ? resolved.ok ? [] : resolved.errors
+        ? configErrors
         : checkExtraSkills({
             config,
             roles: install === "every" ? PHASES : [install],
@@ -145,6 +155,7 @@ export async function fetchSkills(
             baseSkills: baseWanted.skills,
             kitSkills: await kitSkillNames(kitDir),
           });
+    const errors = [...downloadErrors, ...checkErrors];
     const wanted = errors.length === 0 ? [baseWanted, ...extras] : [baseWanted];
     const changed = wanted.some((source) => source.extracted !== undefined);
     const wantedNames = new Set(wanted.flatMap((source) => source.skills));
@@ -182,6 +193,15 @@ export async function fetchSkills(
   } finally {
     await rm(work, { recursive: true, force: true });
   }
+}
+
+/** Whether the Product checkout's Kit config folder asks for Extra skills at all. */
+async function asksForExtraSkillsIn(productDir: string): Promise<boolean> {
+  const [config, skillsLock] = await Promise.all([
+    readIfPresent(join(productDir, KIT_CONFIG_PATH)),
+    readIfPresent(join(productDir, SKILLS_SOURCES_LOCK_PATH)),
+  ]);
+  return asksForExtraSkills({ config, skillsLock });
 }
 
 /** The Extra skills among what's wanted: everything after the Base source. */

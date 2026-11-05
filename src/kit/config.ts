@@ -129,6 +129,25 @@ export function resolveKitConfig(sources: KitConfigSources): KitConfigResult {
   return { ok: true, config: { ...config, ...skills, instructions: readInstructions(sources.instructions ?? {}) } };
 }
 
+/**
+ * Whether the Kit config folder asks for Extra skills at all: it has a Skills
+ * sources lockfile, or some role in config.json gives a `skills` key. A repo
+ * that doesn't is untouched by Extra skills, even when its Kit config is
+ * invalid for some other reason.
+ */
+export function asksForExtraSkills(sources: Pick<KitConfigSources, "config" | "skillsLock">): boolean {
+  if (sources.skillsLock !== null && sources.skillsLock !== undefined) return true;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(sources.config ?? "");
+  } catch {
+    return false;
+  }
+  const roles = (raw as { roles?: unknown } | null)?.roles;
+  if (typeof roles !== "object" || roles === null) return false;
+  return Object.values(roles).some((role) => typeof role === "object" && role !== null && Object.hasOwn(role, "skills"));
+}
+
 /** Each pickable role's raw `skills` list, as the Kit config gives it; null when it isn't a list of strings. */
 type Picks = Partial<Record<Phase, readonly string[] | null>>;
 
