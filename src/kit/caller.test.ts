@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { callerWorkflowPath, checkCallerWorkflow, checkKit } from "./caller.ts";
+import { CALLER_JOBS, callerWorkflowPath, checkCallerWorkflow, checkKit } from "./caller.ts";
 import { resolveKitConfig } from "./config.ts";
 
 function callerWith(...uses: string[]): string {
@@ -98,6 +98,13 @@ describe("Caller workflow release check", () => {
     const template = readFileSync(new URL("../../templates/fabrik.yml", import.meta.url), "utf8");
 
     expect(template).toMatch(/^ {2}issue_comment:\n {4}types: \[created\]$/m);
+  });
+
+  it("the caller template's job keys are the ones the Kit knows its own check runs by", () => {
+    const template = readFileSync(new URL("../../templates/fabrik.yml", import.meta.url), "utf8");
+    const jobs = template.slice(template.indexOf("\njobs:\n"));
+
+    expect([...jobs.matchAll(/^ {2}([a-z][a-z0-9_-]*):$/gm)].map((match) => match[1])).toEqual([...CALLER_JOBS]);
   });
 
   it("the scheduled Kit workflow ships beside the Loop as a reusable workflow", () => {

@@ -1,10 +1,12 @@
 // The Monitor core (#148): from a Product repo's `monitor` settings, the Sentry
-// groups read this tick and every `fabrik:monitor` issue, what the Monitor
-// files, rewrites and closes, and the step summary's lines. Pure, no I/O: the
+// groups and the default branch's check runs read this tick, and every
+// `fabrik:monitor` issue, what the Monitor files, rewrites and closes, and the
+// step summary's lines; red main's part is in ./redMain.ts. Pure, no I/O: the
 // program (src/monitor/main.ts) gathers the facts and applies the plan.
 import { DEFAULT_KIT_CONFIG, type KitConfig } from "../kit/config.ts";
 import { type Label, MONITOR_LABEL, WONTFIX } from "../loop/labels.ts";
 import { monitorMarkerIn, RED_MAIN_MARKER, sentryGroupMarker } from "../loop/markers.ts";
+import { type MainChecksRead, redMainPlan } from "./redMain.ts";
 import type { FrameFacts, GroupFacts, LatestEventFacts } from "./sentry.ts";
 
 export interface MonitorInput {
@@ -14,6 +16,10 @@ export interface MonitorInput {
   readonly sentry: SentryRead | null;
   /** Every issue in the Product repo carrying fabrik:monitor, open or closed. */
   readonly issues: readonly MonitorIssue[];
+  /** The Kit config's `sandbox.checks`: when it lists any, the only checks that decide whether the default branch is red. */
+  readonly gatingChecks: readonly string[];
+  /** What reading the default branch's commits and their check runs gave this tick, or null when `monitor.redMain` is off and they weren't read. */
+  readonly mainChecks: MainChecksRead | null;
   /** The Kit config's `caps.monitor_issues`: the most open error issues the Monitor keeps at once, 0 pausing new ones; the Kit default when not given. */
   readonly cap?: number;
   /** ISO 8601. */
@@ -47,6 +53,12 @@ export interface MonitorIssue {
   /** Whether the Fabrik App opened it. */
   readonly byApp: boolean;
   readonly body: string;
+  /**
+   * Whether its last close was the Monitor's own, right after its green-at
+   * note, rather than the Operator's or the Loop's; false while it's open. The
+   * program reads it for the newest red-main issue alone, so it's false on any other.
+   */
+  readonly closedByMonitor: boolean;
 }
 
 /** What the Monitor does this tick. */
@@ -95,7 +107,13 @@ export interface IssueToClose {
  */
 export function monitorPlanFor(input: MonitorInput): MonitorPlan {
   const errors = productionErrors(input);
-  return { open: errors.open, rewrite: errors.rewrite, close: [], summary: errors.summary };
+  const red = redMainPlan(input);
+  return {
+    open: [...errors.open, ...red.open],
+    rewrite: [...errors.rewrite, ...red.rewrite],
+    close: red.close,
+    summary: [...errors.summary, ...red.summary],
+  };
 }
 
 /**
@@ -262,7 +280,7 @@ function newestWithStatsBlock(issues: readonly MonitorIssue[]): MonitorIssue | n
  * they're opened. A marker in anyone else's issue counts for nothing, so
  * quoting one can't silence an error.
  */
-function newestByMarker(issues: readonly MonitorIssue[]): Map<string, MonitorIssue> {
+export function newestByMarker(issues: readonly MonitorIssue[]): Map<string, MonitorIssue> {
   const newest = new Map<string, MonitorIssue>();
   for (const issue of issues) {
     const marker = issue.byApp ? monitorMarkerIn(issue.body) : null;
@@ -437,7 +455,7 @@ const STATS_CLOSE = "<!-- /fabrik:monitor-stats -->";
 const STATS_BLOCK = /^(<!-- fabrik:monitor-stats -->(\r?\n))((?:(?!<!-- fabrik:monitor-stats -->$).*\r?\n)*?)<!-- \/fabrik:monitor-stats -->$/m;
 
 /** These lines inside a stats block, for a new issue's body. */
-function statsBlock(lines: readonly string[]): string[] {
+export function statsBlock(lines: readonly string[]): string[] {
   return [STATS_OPEN, ...lines, STATS_CLOSE];
 }
 
@@ -464,7 +482,7 @@ function withStatsBlock(body: string, lines: readonly string[]): string {
  * The rewrite putting these lines in the issue's stats block, or null when
  * they're there already or its body has no stats block, which leaves it alone.
  */
-function blockRewrite(issue: MonitorIssue, sentryGroup: string | null, lines: readonly string[]): BodyRewrite | null {
+export function blockRewrite(issue: MonitorIssue, sentryGroup: string | null, lines: readonly string[]): BodyRewrite | null {
   const body = withStatsBlock(issue.body, lines);
   return body === issue.body ? null : { issue: issue.number, sentryGroup, body };
 }
@@ -507,7 +525,7 @@ function readable(iso: string): string {
 }
 
 /** Text quoted in a body as a code span: one line, truncated, fenced by more backticks than it holds. */
-function bodyCode(text: string, max: number): string {
+export function bodyCode(text: string, max: number): string {
   const quoted = truncated(oneLine(text), max);
   const fence = "`".repeat(longestBacktickRun(quoted) + 1);
   const pad = quoted.startsWith("`") || quoted.endsWith("`") ? " " : "";
