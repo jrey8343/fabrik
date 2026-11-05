@@ -1,7 +1,7 @@
 // Small builders for the Weekly summary's tests, matching anIssue, aPullRequest
 // and snapshotOf (./snapshots.ts): say only what a test cares about.
 import type { RunRecord } from "../kit/runRecord.ts";
-import type { AgentPullRequestFacts, GitHubFacts, LabelEvent, TicketFacts } from "../kit/weeklySummary.ts";
+import type { AgentPullRequestFacts, CommitFacts, GitHubFacts, LabelEvent, ReviewFacts, TicketFacts } from "../kit/weeklySummary.ts";
 
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -42,7 +42,28 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
 
 /** An agent PR the Fabrik App opened for Ticket 7, merged at `mergedAt`. */
 export function aMergedPullRequest(mergedAt: string, overrides: Partial<AgentPullRequestFacts> = {}): AgentPullRequestFacts {
-  return { number: 50, ticket: 7, title: "Build the thing", mergedAt, mergeSha: "c".repeat(40), ...overrides };
+  return {
+    number: 50,
+    ticket: 7,
+    title: "Build the thing",
+    mergedAt,
+    mergeSha: "c".repeat(40),
+    commits: [],
+    reviews: [],
+    comments: [],
+    labelEvents: [],
+    ...overrides,
+  };
+}
+
+/** The Operator requesting changes at `at`. */
+export function aReview(at: string, overrides: Partial<ReviewFacts> = {}): ReviewFacts {
+  return { author: "operator", state: "changes-requested", at, ...overrides };
+}
+
+/** A commit someone other than the Fabrik App made at `at`. */
+export function aCommit(at: string, overrides: Partial<CommitFacts> = {}): CommitFacts {
+  return { byApp: false, at, ...overrides };
 }
 
 /** The App adding `label` at `at`. */
@@ -50,9 +71,9 @@ export function aLabelAdded(label: string, at: string, overrides: Partial<LabelE
   return { label, action: "labeled", actor: "fabrik-app[bot]", at, ...overrides };
 }
 
-/** Ticket 7 with this label timeline. */
+/** Ticket 7 with this label timeline, blocked by nothing. */
 export function aTicketTimeline(labelEvents: readonly LabelEvent[], overrides: Partial<TicketFacts> = {}): TicketFacts {
-  return { number: 7, labelEvents, ...overrides };
+  return { number: 7, labelEvents, blockedBy: [], ...overrides };
 }
 
 /** The GitHub facts of `owner/product`, with nothing in them unless a test says so. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { aLabelAdded, aMergedPullRequest, aRunRecord, aTicketTimeline, factsOf } from "../__fixtures__/weeklySummary.ts";
-import { type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
+import { aCommit, aLabelAdded, aMergedPullRequest, aReview, aRunRecord, aTicketTimeline, factsOf } from "../__fixtures__/weeklySummary.ts";
+import { type AgentPullRequestFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
 // week it covers runs from Monday 2 November 00:00 to Monday 9 November 00:00
@@ -133,6 +133,110 @@ describe("the Weekly summary", () => {
     expect(result).toMatchObject({
       kind: "summary",
       summary: { counts: { retries: { thisWeek: 2, lastWeek: 1 }, stepUps: { thisWeek: 1, lastWeek: 0 } } },
+    });
+  });
+
+  describe("Human touches per merged PR", () => {
+    // Ticket 7 dispatched on Monday, its PR merged on Friday.
+    const DISPATCH = "2026-11-02T00:00:00Z";
+    const MERGE = "2026-11-06T00:00:00Z";
+    const touches = (pullRequest: Partial<AgentPullRequestFacts>, ticket: Partial<TicketFacts> = {}, more: AgentPullRequestFacts[] = []) => {
+      const result = weeklySummary(
+        input({
+          records: [aRunRecord()],
+          facts: [
+            factsOf({
+              pullRequests: [aMergedPullRequest(MERGE, pullRequest), ...more],
+              tickets: [aTicketTimeline([aLabelAdded("agent:implement", DISPATCH)], ticket)],
+            }),
+          ],
+        }),
+      );
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary.humanTouches.thisWeek;
+    };
+
+    it("counts each run of consecutive commits not made by the Fabrik App as one push", () => {
+      const commits = [
+        aCommit("2026-11-02T01:00:00Z", { byApp: true }),
+        aCommit("2026-11-03T01:00:00Z"), // the Operator's push of two commits
+        aCommit("2026-11-03T01:01:00Z"),
+        aCommit("2026-11-04T01:00:00Z", { byApp: true }),
+        aCommit("2026-11-05T01:00:00Z"), // a second push
+      ];
+      expect(touches({ commits })).toBe(2);
+    });
+
+    it("counts each Request changes review by the Operator", () => {
+      const reviews = [
+        aReview("2026-11-03T00:00:00Z"),
+        aReview("2026-11-04T00:00:00Z"),
+        aReview("2026-11-05T00:00:00Z", { state: "approved" }),
+        aReview("2026-11-05T00:00:00Z", { author: "someone-else" }),
+      ];
+      expect(touches({ reviews })).toBe(2);
+    });
+
+    it("counts each agent:implement or agent:review the Operator added themselves", () => {
+      const byOperator = { actor: "operator" };
+      expect(
+        touches(
+          {
+            labelEvents: [
+              aLabelAdded("agent:review", "2026-11-04T00:00:00Z", byOperator),
+              aLabelAdded("agent:review", "2026-11-04T01:00:00Z"), // the App's
+            ],
+          },
+          {
+            labelEvents: [
+              aLabelAdded("agent:implement", DISPATCH),
+              aLabelAdded("agent:implement", "2026-11-03T00:00:00Z", byOperator),
+              aLabelAdded("agent:implement", "2026-11-03T01:00:00Z"), // the App's Retry
+              aLabelAdded("agent:implement", "2026-11-03T02:00:00Z", { ...byOperator, action: "unlabeled" }),
+              aLabelAdded("needs-design", "2026-11-03T03:00:00Z", byOperator),
+            ],
+          },
+        ),
+      ).toBe(2);
+    });
+
+    it("counts the Ticket being labelled ready-for-human after Dispatch, a Pairing session on it", () => {
+      expect(touches({}, { labelEvents: [aLabelAdded("agent:implement", DISPATCH), aLabelAdded("ready-for-human", "2026-11-04T00:00:00Z")] })).toBe(1);
+      expect(touches({}, { labelEvents: [aLabelAdded("ready-for-human", "2026-11-01T00:00:00Z"), aLabelAdded("agent:implement", DISPATCH)] })).toBe(0);
+    });
+
+    it("counts each Operator step the Ticket was blocked by", () => {
+      const blockedBy = [
+        { number: 3, labels: ["ready-for-human"] }, // an Operator step
+        { number: 4, labels: ["ready-for-human", "enhancement"] },
+        { number: 5, labels: ["ready-for-agent"] }, // a Ticket
+      ];
+      expect(touches({}, { blockedBy })).toBe(2);
+    });
+
+    it("never counts the merge, Design-session answers or Operator comments", () => {
+      expect(
+        touches(
+          {
+            comments: [
+              { author: "operator", byApp: false, body: "Looks good, merging.", at: "2026-11-05T00:00:00Z" },
+              { author: "operator", byApp: false, body: "Answering round 2: yes.", at: "2026-11-05T01:00:00Z" },
+            ],
+            reviews: [aReview("2026-11-05T02:00:00Z", { state: "commented" })],
+          },
+        ),
+      ).toBe(0);
+    });
+
+    it("counts only what came between Dispatch and the merge", () => {
+      const reviews = [aReview("2026-11-01T00:00:00Z"), aReview("2026-11-03T00:00:00Z"), aReview("2026-11-06T00:00:01Z")];
+      const commits = [aCommit("2026-11-01T00:00:00Z"), aCommit("2026-11-06T00:00:01Z")];
+      expect(touches({ reviews, commits })).toBe(1);
+    });
+
+    it("averages over the week's merged PRs", () => {
+      const other = aMergedPullRequest("2026-11-05T00:00:00Z", { number: 51, ticket: 8 });
+      expect(touches({ reviews: [aReview("2026-11-03T00:00:00Z")] }, {}, [other])).toBe(0.5);
     });
   });
 

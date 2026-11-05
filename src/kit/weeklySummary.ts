@@ -1,7 +1,7 @@
 // The Weekly summary (ADR-0009): from the store's Run records, a GitHub facts
 // snapshot per Product repo, the Operator and now, the one issue filed for the
 // week that just ended, or skip in a quiet week. Pure, no I/O, no model call.
-import { DISPATCH_LABEL } from "../loop/labels.ts";
+import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import type { RateLimitReading, RunRecord } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
@@ -13,10 +13,44 @@ export interface LabelEvent {
   readonly at: string;
 }
 
-/** A Ticket and its label timeline. */
+/** An issue a Ticket is blocked by. */
+export interface BlockerFacts {
+  readonly number: number;
+  /** Its labels: an Operator step's include `ready-for-human`. */
+  readonly labels: readonly string[];
+}
+
+/** A Ticket, its label timeline and what it's blocked by. */
 export interface TicketFacts {
   readonly number: number;
   readonly labelEvents: readonly LabelEvent[];
+  readonly blockedBy: readonly BlockerFacts[];
+}
+
+/** A commit on an agent PR's branch. */
+export interface CommitFacts {
+  /** Whether the Fabrik App made it, as an agent run's push does. */
+  readonly byApp: boolean;
+  /** ISO 8601. */
+  readonly at: string;
+}
+
+/** A review left on an agent PR. */
+export interface ReviewFacts {
+  readonly author: string;
+  readonly state: "approved" | "changes-requested" | "commented" | "dismissed";
+  /** ISO 8601. */
+  readonly at: string;
+}
+
+/** A comment on an agent PR. */
+export interface CommentFacts {
+  readonly author: string;
+  /** Whether the Fabrik App left it: only the App's markers count, so quoting one fakes nothing. */
+  readonly byApp: boolean;
+  readonly body: string;
+  /** ISO 8601. */
+  readonly at: string;
 }
 
 /** An agent PR merged or closed in the last 30 days. */
@@ -28,6 +62,12 @@ export interface AgentPullRequestFacts {
   /** ISO 8601, or null for a PR closed without merging. */
   readonly mergedAt: string | null;
   readonly mergeSha: string | null;
+  /** Its commits, oldest first. */
+  readonly commits: readonly CommitFacts[];
+  readonly reviews: readonly ReviewFacts[];
+  /** Its comments, oldest first. */
+  readonly comments: readonly CommentFacts[];
+  readonly labelEvents: readonly LabelEvent[];
 }
 
 /** What the summary reads of one Product repo on GitHub. */
@@ -65,6 +105,8 @@ export interface WeeklySummary {
   readonly unknownCost: WeekOverWeek<number>;
   /** The latest weekly-limit reading across the week's records, or null if none read one. */
   readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
+  /** Human touches per agent PR merged in the week, or null in a week with none merged. */
+  readonly humanTouches: WeekOverWeek<number | null>;
   readonly counts: {
     /** Agent PRs merged in the week, across every Product repo. */
     readonly mergedPullRequests: WeekOverWeek<number>;
@@ -102,6 +144,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     cost: change("cost"),
     unknownCost: change("unknownCost"),
     weeklyLimit: change("weeklyLimit"),
+    humanTouches: change("humanTouches"),
     counts: {
       mergedPullRequests: change("mergedPullRequests"),
       ticketsDispatched: change("ticketsDispatched"),
@@ -119,6 +162,7 @@ interface WeekMetrics {
   readonly cost: number;
   readonly unknownCost: number;
   readonly weeklyLimit: RateLimitReading | null;
+  readonly humanTouches: number | null;
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
   readonly retries: number;
@@ -131,11 +175,17 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
   const pullRequests = input.facts.flatMap((facts) => facts.pullRequests);
   const tickets = input.facts.flatMap((facts) => facts.tickets);
+  const merged = input.facts.flatMap((facts) =>
+    facts.pullRequests.flatMap((pullRequest) =>
+      pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt) ? [mergedPullRequestOf(facts, pullRequest, pullRequest.mergedAt)] : [],
+    ),
+  );
   return {
     records: records.length,
     cost: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
     unknownCost: records.filter((record) => record.totalCostUsd === null).length,
     weeklyLimit: records.findLast((record) => record.rateLimit !== null)?.rateLimit ?? null,
+    humanTouches: mean(merged.map((pullRequest) => humanTouchesOf(pullRequest, input.operator))),
     mergedPullRequests: pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt)).length,
     ticketsDispatched: tickets.filter((ticket) => {
       const dispatch = dispatchOf(ticket);
@@ -144,6 +194,48 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     retries: records.filter((record) => record.role === "implement" && record.retry > 0).length,
     stepUps: records.filter((record) => record.stepUp).length,
   };
+}
+
+/** An agent PR merged in the week, with its Ticket and when that was dispatched. */
+interface MergedPullRequest {
+  readonly pullRequest: AgentPullRequestFacts;
+  readonly mergedAt: string;
+  readonly ticket: TicketFacts | null;
+  readonly dispatch: string | null;
+}
+
+function mergedPullRequestOf(facts: GitHubFacts, pullRequest: AgentPullRequestFacts, mergedAt: string): MergedPullRequest {
+  const ticket = facts.tickets.find((candidate) => candidate.number === pullRequest.ticket) ?? null;
+  return { pullRequest, mergedAt, ticket, dispatch: ticket === null ? null : dispatchOf(ticket) };
+}
+
+/**
+ * The Operator's steps into a Ticket's path between Dispatch and merge (the
+ * glossary's Human touch). The merge, Design-session answers and Operator
+ * comments are never touches.
+ */
+function humanTouchesOf({ pullRequest, mergedAt, ticket, dispatch }: MergedPullRequest, operator: string): number {
+  const before = (at: string) => Date.parse(at) <= Date.parse(mergedAt);
+  const between = (at: string) => (dispatch === null || Date.parse(at) >= Date.parse(dispatch)) && before(at);
+  // Dispatch itself adds the first agent:implement, so a label counts only after it.
+  const after = (at: string) => (dispatch === null || Date.parse(at) > Date.parse(dispatch)) && before(at);
+  // A push: a run of consecutive commits the App didn't make.
+  const commits = pullRequest.commits.filter((commit) => between(commit.at));
+  const pushes = commits.filter((commit, i) => !commit.byApp && (i === 0 || commits[i - 1]?.byApp === true)).length;
+  const requestChanges = pullRequest.reviews.filter(
+    (review) => review.author === operator && review.state === "changes-requested" && between(review.at),
+  ).length;
+  const added = [...(ticket?.labelEvents ?? []), ...pullRequest.labelEvents].filter((event) => event.action === "labeled" && after(event.at));
+  // A Retry or Step-up the Operator asked for.
+  const retriesAsked = added.filter((event) => event.actor === operator && (event.label === DISPATCH_LABEL || event.label === REVIEW_LABEL)).length;
+  // A Pairing session on the Ticket.
+  const pairing = ticket?.labelEvents.some((event) => event.label === READY_FOR_HUMAN && event.action === "labeled" && after(event.at)) ? 1 : 0;
+  const operatorSteps = ticket?.blockedBy.filter((blocker) => blocker.labels.includes(READY_FOR_HUMAN)).length ?? 0;
+  return pushes + requestChanges + retriesAsked + pairing + operatorSteps;
+}
+
+function mean(values: readonly number[]): number | null {
+  return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 /** When the Ticket was dispatched: its first `agent:implement` (a Retry adds it again), or null. */
