@@ -121,8 +121,7 @@ function endedRun(end: RunEnd): EndedRun | null {
       return { role: input.role, issue: input.issue, pullRequest: input.pullRequest, job: end.needs[input.role], failure: null };
     case "review": {
       if (!input.withResult) return null;
-      const ticket = countOf(end.needs["kit"]?.outputs["ticket"]) ?? input.pullRequest;
-      return { role: "review", issue: ticket, pullRequest: input.pullRequest, job: end.needs["review"], failure: null };
+      return { role: "review", issue: input.ticket, pullRequest: input.pullRequest, job: end.needs["review"], failure: null };
     }
     case "agent-failure": {
       const { role, issue, jobResult, secretsStep } = input;

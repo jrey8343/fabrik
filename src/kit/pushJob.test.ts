@@ -59,7 +59,7 @@ describe("What the push job applies", () => {
       50,
     );
 
-    expect(input).toEqual({ kind: "review", pullRequest: 50, headSha: "a".repeat(40), failedChecks: ["build"], withResult: false });
+    expect(input).toEqual({ kind: "review", pullRequest: 50, ticket: 7, headSha: "a".repeat(40), failedChecks: ["build"], withResult: false });
   });
 
   it("applies the Reviewer's Verdict once green checks let it run", () => {
@@ -72,7 +72,7 @@ describe("What the push job applies", () => {
       50,
     );
 
-    expect(input).toEqual({ kind: "review", pullRequest: 50, headSha: "a".repeat(40), failedChecks: [], withResult: true });
+    expect(input).toEqual({ kind: "review", pullRequest: 50, ticket: 7, headSha: "a".repeat(40), failedChecks: [], withResult: true });
   });
 
   it("does nothing when the PR moved on while its checks were awaited", () => {
