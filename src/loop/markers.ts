@@ -57,6 +57,13 @@ const MONITOR_MARKER = /^(<!-- fabrik:monitor (?:sentry:\S+|red-main) -->)$/m;
 /** The marker line of the Monitor's red-main issue. */
 export const RED_MAIN_MARKER = "<!-- fabrik:monitor red-main -->";
 
+/**
+ * The first line of the Monitor's note closing its red-main issue once the
+ * default branch is green: its only comment, which tells its own close apart
+ * from anyone else's.
+ */
+export const RED_MAIN_GREEN_MARKER = "<!-- fabrik:monitor-green -->";
+
 /** The marker line of the Monitor's issue for this Sentry group. */
 export function sentryGroupMarker(groupId: string): string {
   return `<!-- fabrik:monitor sentry:${groupId} -->`;

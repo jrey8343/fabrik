@@ -79,6 +79,7 @@ export function aMonitorIssue(overrides: Partial<MonitorIssue> = {}): MonitorIss
     labels: ["fabrik:monitor", "bug", "ready-for-agent"],
     byApp: true,
     body: aMonitorIssueBody(),
+    closedByMonitor: false,
     ...overrides,
   };
 }
@@ -88,12 +89,14 @@ export function aClosedMonitorIssue(overrides: Partial<MonitorIssue> = {}): Moni
   return aMonitorIssue({ open: false, stateReason: "completed", closedAt: "2026-11-03T10:00:00Z", ...overrides });
 }
 
-/** A tick with production errors on and Sentry read, giving these groups and no Monitor issues. */
+/** A tick with production errors on and Sentry read, giving these groups and no Monitor issues, and the default branch not read. */
 export function monitorInput(groups: readonly GroupFacts[], overrides: Partial<MonitorInput> = {}): MonitorInput {
   return {
     monitor: { ...DEFAULT_KIT_CONFIG.monitor, errors: SENTRY_ON },
     sentry: { kind: "read", groups, groupsWithoutStats: 0 },
     issues: [],
+    gatingChecks: [],
+    mainChecks: null,
     now: "2026-11-06T08:00:00Z",
     ...overrides,
   };

@@ -1,24 +1,29 @@
 // The Monitor's program (#148): reads the Product repo's Kit config from the
 // default branch and checks it as the Loop does, lists every fabrik:monitor
-// issue and the Sentry project's unresolved `error` and `fatal` groups, plans
-// with the Monitor core (src/monitor/core.ts), files and rewrites what the
-// plan says, and writes the step summary. It talks to GitHub and Sentry
-// through their APIs alone: it never checks out or runs Product code, makes no
-// model call and writes no Run record. Nothing runs it yet; switch-on wires it
-// into the scheduled tick as its own job.
+// issue, the Sentry project's unresolved `error` and `fatal` groups and the
+// default branch's newest commits with their check runs, plans with the
+// Monitor core (src/monitor/core.ts), files, rewrites and closes what the plan
+// says, and writes the step summary. It talks to GitHub and Sentry through
+// their APIs alone: it never checks out or runs Product code, makes no model
+// call and writes no Run record. Nothing runs it yet; switch-on wires it into
+// the scheduled tick as its own job.
 //   node src/monitor/main.ts
 // Reads FABRIK_APP_TOKEN, the Fabrik App's token on the Product repo, and
 // FABRIK_APP_SLUG, the App's slug, which names the issues it opened. When
 // monitor.errors is set, FABRIK_SENTRY_TOKEN is the Sentry token, empty when
 // its 1Password item is missing or couldn't be read. A Sentry API error is a
-// warning in the step summary, never a failed run.
+// warning in the step summary, never a failed run, and red main still runs.
+// Red main reads check runs through the App's Checks: read; while the App
+// lacks it, GitHub refuses them and red main is a quiet dormant note.
 import { appendFile } from "node:fs/promises";
-import { GitHub, type Repo } from "../github/client.ts";
+import { GitHub, GitHubError, type Repo } from "../github/client.ts";
 import { readKitConfigSources } from "../github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "../kit/caller.ts";
 import { type KitConfig, type MonitorErrors, resolveKitConfig } from "../kit/config.ts";
 import { MONITOR_LABEL } from "../loop/labels.ts";
-import { type MonitorInput, type MonitorIssue, type MonitorPlan, monitorPlanFor, type SentryRead } from "./core.ts";
+import { RED_MAIN_GREEN_MARKER, RED_MAIN_MARKER } from "../loop/markers.ts";
+import { type MonitorInput, type MonitorIssue, type MonitorPlan, monitorPlanFor, newestByMarker, type SentryRead } from "./core.ts";
+import type { CheckRun, MainChecksRead, MainCommit } from "./redMain.ts";
 import { type GroupFacts, groupFactsOf, type RawSentryEvent, type RawSentryGroup, withLatestEvent } from "./sentry.ts";
 
 function required(name: string): string {
@@ -82,10 +87,120 @@ async function monitorIssues(github: GitHub, repo: Repo, appLogin: string): Prom
         labels: issue.labels.map((label) => label.name),
         byApp: issue.user?.login === appLogin,
         body: issue.body ?? "",
+        closedByMonitor: false,
       });
     }
     if (batch.length < 100) return issues;
   }
+}
+
+/** How many of the default branch's newest commits red main reads back for a decided one. */
+const MAIN_COMMITS = 20;
+
+/** A commit in GitHub's REST listing. */
+interface RawCommit {
+  readonly sha: string;
+  readonly html_url: string;
+}
+
+/** A check run in GitHub's REST listing. */
+interface RawCheckRun {
+  readonly id: number;
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly completed_at: string | null;
+  readonly html_url: string | null;
+}
+
+/**
+ * The default branch's newest commits, newest first, each with its check
+ * runs, or no-permission when GitHub refuses the check runs because the
+ * Fabrik App hasn't been granted Checks: read. Every other error fails the run.
+ */
+async function readMainChecks(github: GitHub, repo: Repo, gatingChecks: readonly string[]): Promise<MainChecksRead> {
+  // With no sha, GitHub lists the default branch's commits.
+  const listed = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/commits?per_page=${MAIN_COMMITS}`)) as RawCommit[];
+  const commits: MainCommit[] = [];
+  for (const commit of listed) {
+    try {
+      commits.push({ sha: commit.sha, url: commit.html_url, checkRuns: await checkRunsOf(github, repo, commit, gatingChecks) });
+    } catch (error) {
+      if (error instanceof GitHubError && error.status === 403) return { kind: "no-permission" };
+      throw error;
+    }
+  }
+  return { kind: "read", commits };
+}
+
+/**
+ * A commit's check runs: those named in `sandbox.checks`, asked for by name,
+ * when it lists any, else every one. Fabrik's own jobs add runs to the
+ * default branch's head every hour, so asking by name keeps the read short.
+ */
+async function checkRunsOf(github: GitHub, repo: Repo, commit: RawCommit, gatingChecks: readonly string[]): Promise<CheckRun[]> {
+  const byName = gatingChecks.length === 0 ? [""] : gatingChecks.map((name) => `&check_name=${encodeURIComponent(name)}`);
+  const runs: CheckRun[] = [];
+  for (const filter of byName) {
+    for (let page = 1; ; page++) {
+      const { check_runs: batch } = (await github.rest(
+        "GET",
+        `/repos/${repo.owner}/${repo.name}/commits/${commit.sha}/check-runs?per_page=100&page=${page}${filter}`,
+      )) as { check_runs: RawCheckRun[] };
+      for (const run of batch) {
+        runs.push({
+          id: run.id,
+          name: run.name,
+          status: run.status,
+          conclusion: run.conclusion,
+          completedAt: run.completed_at,
+          url: run.html_url ?? commit.html_url,
+        });
+      }
+      if (batch.length < 100) break;
+    }
+  }
+  return runs;
+}
+
+/** An entry in an issue's timeline, as GitHub's REST API gives it. */
+interface RawTimelineEvent {
+  readonly event?: string;
+  readonly actor?: { readonly login: string } | null;
+  readonly user?: { readonly login: string } | null;
+  readonly body?: string | null;
+}
+
+/**
+ * The issues, with whether the Monitor itself made the last close of the
+ * newest red-main issue, read from its timeline: a close by the Fabrik App
+ * that came after the App's green-at note, with no reopen between. The
+ * Operator's close, or the Loop's (Triage closing it as wontfix, say, also as
+ * the App), comes after no such note.
+ */
+async function withRedMainCloser(github: GitHub, repo: Repo, issues: readonly MonitorIssue[], appLogin: string): Promise<MonitorIssue[]> {
+  const newest = newestByMarker(issues).get(RED_MAIN_MARKER);
+  if (newest === undefined || newest.open) return [...issues];
+  let noted = false;
+  let byMonitor = false;
+  for (let page = 1; ; page++) {
+    const batch = (await github.rest(
+      "GET",
+      `/repos/${repo.owner}/${repo.name}/issues/${newest.number}/timeline?per_page=100&page=${page}`,
+    )) as RawTimelineEvent[];
+    for (const entry of batch) {
+      if (entry.event === "commented") {
+        if (entry.user?.login === appLogin && (entry.body ?? "").startsWith(RED_MAIN_GREEN_MARKER)) noted = true;
+      } else if (entry.event === "reopened") {
+        noted = false;
+      } else if (entry.event === "closed") {
+        byMonitor = noted && entry.actor?.login === appLogin;
+        noted = false;
+      }
+    }
+    if (batch.length < 100) break;
+  }
+  return issues.map((issue) => (issue === newest ? { ...issue, closedByMonitor: byMonitor } : issue));
 }
 
 /** A failed Sentry API call, with the status it failed with, or null when it got no answer. */
@@ -207,7 +322,7 @@ async function withLatestEvents(
   return { input: { ...input, sentry: { ...input.sentry, groups } }, notes };
 }
 
-/** Files each issue the plan opens and rewrites each body it rewrites, returning a step-summary line for each. */
+/** Files each issue the plan opens, rewrites each body it rewrites and closes what it closes, returning a step-summary line for each. */
 async function apply(github: GitHub, repo: Repo, plan: MonitorPlan): Promise<string[]> {
   const lines: string[] = [];
   for (const issue of plan.open) {
@@ -222,7 +337,13 @@ async function apply(github: GitHub, repo: Repo, plan: MonitorPlan): Promise<str
   for (const rewrite of plan.rewrite) {
     // Only the body changes: no comment, and an edit is no event the caller's workflow runs on.
     await github.rest("PATCH", `/repos/${repo.owner}/${repo.name}/issues/${rewrite.issue}`, { body: rewrite.body });
-    lines.push(`Refreshed the stats block on #${rewrite.issue}.`);
+    lines.push(rewrite.sentryGroup === null ? `Refreshed red main's details on #${rewrite.issue}.` : `Refreshed the stats block on #${rewrite.issue}.`);
+  }
+  for (const close of plan.close) {
+    // The note goes first, so the close right after it reads as the Monitor's own in the issue's timeline.
+    await github.rest("POST", `/repos/${repo.owner}/${repo.name}/issues/${close.issue}/comments`, { body: close.comment });
+    await github.rest("PATCH", `/repos/${repo.owner}/${repo.name}/issues/${close.issue}`, { state: "closed", state_reason: "completed" });
+    lines.push(`Closed #${close.issue} as completed: the default branch is green again.`);
   }
   return lines;
 }
@@ -239,9 +360,22 @@ async function main(): Promise<void> {
     return;
   }
   const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
-  const { errors } = config.monitor;
-  const [issues, reading] = await Promise.all([monitorIssues(github, repo, appLogin), readSentry(errors)]);
-  const listed: MonitorInput = { monitor: config.monitor, sentry: reading.sentry, issues, now: new Date().toISOString() };
+  const { errors, redMain } = config.monitor;
+  const gatingChecks = config.sandbox.checks;
+  const [listedIssues, reading, mainChecks] = await Promise.all([
+    monitorIssues(github, repo, appLogin),
+    readSentry(errors),
+    redMain ? readMainChecks(github, repo, gatingChecks) : null,
+  ]);
+  const issues = mainChecks?.kind === "read" ? await withRedMainCloser(github, repo, listedIssues, appLogin) : listedIssues;
+  const listed: MonitorInput = {
+    monitor: config.monitor,
+    sentry: reading.sentry,
+    issues,
+    gatingChecks,
+    mainChecks,
+    now: new Date().toISOString(),
+  };
   const read = await withLatestEvents(listed, monitorPlanFor(listed), errors);
   const plan = monitorPlanFor(read.input);
   const filed = await apply(github, repo, plan);
