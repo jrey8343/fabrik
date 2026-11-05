@@ -5,8 +5,9 @@ import { verdictsIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
+import { DESIGN_ROUND_MARKER, monitorMarkerIn, RED_MAIN_MARKER } from "../loop/markers.ts";
 import type { DesignQueueSnapshot, InfrastructureFailure } from "../loop/types.ts";
+import { heldCountIn } from "../monitor/core.ts";
 import { type RateLimitReading, type RunRecord, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
@@ -125,6 +126,14 @@ export interface OpenPullRequestFacts {
   readonly labelEvents: readonly LabelEvent[];
 }
 
+/** An open `fabrik:monitor` issue, as Held reads the Monitor's held count from it. */
+export interface MonitorIssueFacts {
+  readonly number: number;
+  /** Who opened it: only the Fabrik App's issues count, so quoting a held line fakes nothing. */
+  readonly author: string;
+  readonly body: string;
+}
+
 /** What the summary reads of one Product repo on GitHub. */
 export interface GitHubFacts {
   /** The Product repo, as `owner/name`. */
@@ -144,6 +153,11 @@ export interface GitHubFacts {
    * the Design queue check reads them: Held counts the ones waiting for a slot.
    */
   readonly designQueue: DesignQueueSnapshot;
+  /**
+   * The repo's open `fabrik:monitor` issues: Held counts the error groups the
+   * Monitor holds from the newest error issue among them that has a stats block.
+   */
+  readonly monitorIssues: readonly MonitorIssueFacts[];
 }
 
 export interface WeeklySummaryInput {
@@ -239,6 +253,8 @@ export interface RepoSection {
 export interface Held {
   /** The `needs-design` issues waiting for a Design session slot (caps.design_sessions). */
   readonly designSessions: HeldDesignSessions | null;
+  /** The Sentry error groups waiting for a slot under the Monitor's cap of open error issues (caps.monitor_issues). */
+  readonly monitor: HeldMonitor | null;
 }
 
 export interface HeldDesignSessions {
@@ -248,6 +264,13 @@ export interface HeldDesignSessions {
   readonly oldestSince: string;
   /** How long the oldest has waited at the filing, in milliseconds. */
   readonly oldestAge: number;
+}
+
+export interface HeldMonitor {
+  /** How many error groups the Monitor holds. */
+  readonly groups: number;
+  /** The open error issue whose stats block shows that count: the newest with a stats block. */
+  readonly issue: number;
 }
 
 interface ItemBase {
@@ -302,7 +325,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
-  const repos = input.facts.map((facts) => repoSectionOf(facts, input.records, Date.parse(input.now)));
+  const repos = input.facts.map((facts) => repoSectionOf(facts, input.records, input.appLogin, Date.parse(input.now)));
   // Held work counts too, so a queue never sits unseen through a week nothing ran.
   const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null);
   if (thisWeek.records === 0 && quiet) return { kind: "skip" };
@@ -572,15 +595,21 @@ function dispatchOf(ticket: TicketFacts): string | null {
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
-function repoSectionOf(facts: GitHubFacts, records: readonly RunRecord[], now: number): RepoSection {
+function repoSectionOf(facts: GitHubFacts, records: readonly RunRecord[], appLogin: string, now: number): RepoSection {
   const items = itemsIn(facts.repo, now);
-  return { repo: facts.repo, waitingOnYou: waitingOnYou(facts, items), stuck: stuck(facts, records, items, now), held: heldIn(facts, now) };
+  return {
+    repo: facts.repo,
+    waitingOnYou: waitingOnYou(facts, items),
+    stuck: stuck(facts, records, items, now),
+    held: heldIn(facts, appLogin, now),
+  };
 }
 
 /** What a cap holds in the repo, or null when nothing is held. */
-function heldIn({ designQueue }: GitHubFacts, now: number): Held | null {
+function heldIn({ designQueue, monitorIssues }: GitHubFacts, appLogin: string, now: number): Held | null {
   const designSessions = heldDesignSessionsOf(designQueue, now);
-  return designSessions === null ? null : { designSessions };
+  const monitor = heldMonitorOf(monitorIssues, appLogin);
+  return designSessions === null && monitor === null ? null : { designSessions, monitor };
 }
 
 /**
@@ -592,6 +621,24 @@ function heldDesignSessionsOf(queue: DesignQueueSnapshot, now: number): HeldDesi
   const oldestSince = waiting.map((issue) => issue.neededDesignAt).toSorted((a, b) => Date.parse(a) - Date.parse(b))[0];
   if (oldestSince === undefined) return null;
   return { waiting: waiting.length, oldestSince, oldestAge: now - Date.parse(oldestSince) };
+}
+
+/**
+ * The error groups the Monitor holds, from the held line in the stats block
+ * of the newest open error issue the Fabrik App filed that has one, where the
+ * Monitor shows it, read with the Monitor's own parser (heldCountIn) so the
+ * summary and the Monitor can't disagree. Null when that block has no held line.
+ */
+function heldMonitorOf(issues: readonly MonitorIssueFacts[], appLogin: string): HeldMonitor | null {
+  let newest: HeldMonitor | null = null;
+  for (const issue of issues) {
+    if (issue.author !== appLogin) continue;
+    const marker = monitorMarkerIn(issue.body);
+    if (marker === null || marker === RED_MAIN_MARKER) continue;
+    const groups = heldCountIn(issue.body);
+    if (groups !== null && (newest === null || issue.number > newest.issue)) newest = { groups, issue: issue.number };
+  }
+  return newest === null || newest.groups === 0 ? null : newest;
 }
 
 /** Builds a repo's items, aged as of the filing. */
@@ -777,8 +824,8 @@ function localTime(time: number, timeZone: string): string {
 
 // Rendering. Only shipped features get a section: the Retro, Audit, Map and
 // Monitor issues, the architectural escape rate and scores add theirs when
-// their Specs ship. Held shows only what the Design-session cap holds, until
-// the Monitor and Ideas and Maps caps add their lines.
+// their Specs ship. Held shows what the Design-session and Monitor caps hold,
+// until the Ideas and Maps caps add their lines.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
   const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, counts } = summary;
@@ -847,11 +894,19 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
 /** The Held section: a line per repo and source with work held, or nothing at all when no repo has any. */
 function heldLines(repos: readonly RepoSection[]): string[] {
   const lines = repos.flatMap(({ repo, held }) => {
+    const shown: string[] = [];
     const design = held?.designSessions ?? null;
-    if (design === null) return [];
-    const issues = design.waiting === 1 ? "1 needs-design issue" : `${design.waiting} needs-design issues`;
-    const oldest = design.waiting === 1 ? `for ${duration(design.oldestAge)}` : `the oldest for ${duration(design.oldestAge)}`;
-    return [`- ${repo}: ${issues} waiting for a Design session slot, ${oldest}`];
+    if (design !== null) {
+      const issues = design.waiting === 1 ? "1 needs-design issue" : `${design.waiting} needs-design issues`;
+      const oldest = design.waiting === 1 ? `for ${duration(design.oldestAge)}` : `the oldest for ${duration(design.oldestAge)}`;
+      shown.push(`- ${repo}: ${issues} waiting for a Design session slot, ${oldest}`);
+    }
+    const monitor = held?.monitor ?? null;
+    if (monitor !== null) {
+      const groups = monitor.groups === 1 ? "1 error group" : `${monitor.groups} error groups`;
+      shown.push(`- ${repo}: ${groups} waiting for a Monitor issue slot, counted in [#${monitor.issue}](https://github.com/${repo}/issues/${monitor.issue})`);
+    }
+    return shown;
   });
   return lines.length === 0 ? [] : ["## Held", "", ...lines, ""];
 }
