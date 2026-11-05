@@ -5,10 +5,18 @@
 // files themselves are built by src/kit/runRecord.ts and src/kit/scorer.ts.
 // Also the push job's part, which runs the scoring plan on the run it just
 // recorded, and writes a skip's score file itself.
-import { type RecordWrite, type StoreApi, type StoreFile, type StoreWrite, storeCommitMessage, storeJson, writeStoreFiles } from "./recordWriter.ts";
+import {
+  type RecordWrite,
+  type StoreApi,
+  type StoreFile,
+  type StoreWrite,
+  storeCommitMessage,
+  storeJson,
+  storeWriteSummary,
+  writeStoreFiles,
+} from "./recordWriter.ts";
 import type { Rubric } from "./rubrics.ts";
 import type { RunRecord, RunRecordFiles } from "./runRecord.ts";
-import { RUN_STORE_REPO } from "./runStore.ts";
 import { type ScoreFile, type ScoreFileWithPath, scoreFileFor, type ScoreSkip, scoringPlan } from "./scorer.ts";
 
 /** A judge run's files, as the score-record job writes them. */
@@ -59,21 +67,20 @@ export function scoreRecordSummary(outcome: ScoreRecordOutcome): string {
   switch (outcome.kind) {
     case "no-judge":
       return "Nothing scored: the judge job didn't run.";
-    case "no-store-token":
-      return `No score written: the Fabrik App couldn't get a token for ${RUN_STORE_REPO}.`;
-    case "public-store":
-      return `No score written: ${RUN_STORE_REPO} isn't private, and scores never go to a store others can read. Make it private.`;
     case "written":
-      return [scoredLine(outcome.score, outcome.judge), ...writesOf(outcome)].join(" ");
+      return scoreWriteSummary(outcome.score, outcome.judge, outcome);
+    default:
+      return storeWriteSummary(SCORE, outcome);
   }
 }
 
-/** What a write to the store wrote, and what it found already there and left as it was. */
-function writesOf(write: { readonly written: readonly string[]; readonly existing: readonly string[] }): string[] {
-  return [
-    ...(write.written.length === 0 ? [] : [`Written to ${RUN_STORE_REPO}: ${write.written.join(", ")}.`]),
-    ...(write.existing.length === 0 ? [] : [`Already there, left as it was: ${write.existing.join(", ")}.`]),
-  ];
+/** What the step summary calls a score file and the judge's files written with it. */
+const SCORE = "score";
+
+/** What a score file says, and what writing it came to. `judge` is null for a skip decided before any judge ran. */
+function scoreWriteSummary(score: ScoreFile, judge: RunRecord | null, write: StoreWrite): string {
+  if (write.kind === "public-store") return storeWriteSummary(SCORE, write);
+  return `${scoredLine(score, judge)} ${storeWriteSummary(SCORE, write)}`;
 }
 
 /** What the score file says: each rubric's score, or why the run has none. `judge` is null for a skip decided before any judge ran. */
@@ -154,7 +161,6 @@ export function recordedRunScoringSummary(scoring: RecordedRunScoring): string |
     case "score":
       return `Picked for scoring: the judge job scores ${scoring.record}.`;
     case "skip":
-      if (scoring.write.kind === "public-store") return scoreRecordSummary(scoring.write);
-      return [scoredLine(scoring.score, null), ...writesOf(scoring.write)].join(" ");
+      return scoreWriteSummary(scoring.score, null, scoring.write);
   }
 }

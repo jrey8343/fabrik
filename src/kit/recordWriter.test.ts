@@ -96,7 +96,7 @@ describe("The step summary's line on the Run record", () => {
 
   it("says why nothing was written to a store that isn't private", () => {
     expect(recordWriteSummary({ kind: "public-store" })).toBe(
-      "No Run record written: jrey8343/fabrik-runs isn't private, and records never go to a store others can read. Make it private.",
+      "No Run record written: jrey8343/fabrik-runs isn't private, and the Kit writes nothing to a store others can read. Make it private.",
     );
   });
 
@@ -106,7 +106,13 @@ describe("The step summary's line on the Run record", () => {
 
   it("names what was written and what the store already held", () => {
     expect(recordWriteSummary({ kind: "written", written: [RECORD_PATH], existing: [TRANSCRIPT_PATH] })).toBe(
-      `Run record written to jrey8343/fabrik-runs: ${RECORD_PATH}. Already there, left as it was: ${TRANSCRIPT_PATH}.`,
+      `Written to jrey8343/fabrik-runs: ${RECORD_PATH}. Already there, left as it was: ${TRANSCRIPT_PATH}.`,
+    );
+  });
+
+  it("says only what a re-run found already there, when it wrote nothing", () => {
+    expect(recordWriteSummary({ kind: "written", written: [], existing: [TRANSCRIPT_PATH, RECORD_PATH] })).toBe(
+      `Already there, left as it was: ${TRANSCRIPT_PATH}, ${RECORD_PATH}.`,
     );
   });
 });
