@@ -19,6 +19,7 @@ import {
   WEEKLY_LIMIT_LABEL,
   WONTFIX,
 } from "../loop/labels.ts";
+import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
 import type { SetupKit } from "./kit.ts";
 import {
   CALLER_PATH,
@@ -32,8 +33,10 @@ import {
   PRETTIER_DETECTION_PATHS,
   PRETTIERIGNORE_PATH,
   prettierignoreUpdate,
+  scheduleIn,
   SETTINGS_PATH,
   settingsUpdate,
+  STORE_CALLER_PATH,
 } from "./shims.ts";
 
 /** What the setup skill reads from a Product repo and its 1Password account before planning. */
@@ -53,6 +56,28 @@ export interface ProductState {
   readonly protection: BranchProtection | null;
   /** The Merge gate ruleset, found by its name, or null when the repo lacks it. */
   readonly mergeGate: MergeGateRuleset | null;
+  /** The fabrik-runs store every Product repo shares. Its Fabrik App vault is in `vaults`, the same 1Password account's. */
+  readonly store: RunStoreState;
+}
+
+/** What setup reads about the fabrik-runs store (ADR-0009). */
+export interface RunStoreState {
+  readonly exists: boolean;
+  readonly private: boolean;
+  /** The text of each file setup writes in the store, or null when it lacks it. */
+  readonly files: Readonly<Record<string, string | null>>;
+  /** The store's Actions secret names. */
+  readonly secrets: readonly string[];
+}
+
+/** What the Operator tells setup that no repo holds. */
+export interface SetupAnswers {
+  /**
+   * The Operator's IANA time zone, such as Australia/Sydney, for the Weekly
+   * summary's Monday-morning schedule. Without it setup leaves the store alone,
+   * so the store stays an opt-in step.
+   */
+  readonly timeZone?: string;
 }
 
 export interface BranchProtection {
@@ -92,6 +117,8 @@ export type SetupAction =
       readonly vaults: readonly string[];
       /** The Actions secret its token is stored as. */
       readonly secret: string;
+      /** The repo, as `owner/name`, that holds the secret when it isn't the Product repo. */
+      readonly repo?: string;
     }
   | {
       readonly kind: "protect-branch";
@@ -102,6 +129,15 @@ export type SetupAction =
       /** Creates the Merge gate ruleset, or with its id puts the existing one right. */
       readonly kind: "restrict-default-branch";
       readonly rulesetId: number | null;
+    }
+  | { readonly kind: "create-run-store"; readonly repo: string; readonly private: true }
+  | {
+      /** A file committed straight to the store's default branch: it has no checkout of its own. */
+      readonly kind: "write-store-file";
+      readonly repo: string;
+      readonly path: string;
+      readonly content: string;
+      readonly why: string;
     };
 
 export interface SetupPlan {
@@ -110,7 +146,7 @@ export interface SetupPlan {
   readonly notes: readonly string[];
 }
 
-export function planSetup(state: ProductState, kit: SetupKit): SetupPlan {
+export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnswers = {}): SetupPlan {
   const actions: SetupAction[] = [];
   const notes: string[] = [];
   const shims: [string, FileUpdate, string][] = [
@@ -137,7 +173,76 @@ export function planSetup(state: ProductState, kit: SetupKit): SetupPlan {
   actions.push(...secrets(state));
   actions.push(...protection(state, kit, notes));
   actions.push(...mergeGate(state));
+  actions.push(...runStore(state.store, kit, answers, notes));
   return { actions, notes };
+}
+
+/**
+ * The fabrik-runs store: Run records and the Weekly summary turn on once it
+ * exists with the Fabrik App installed on it (the wizard's stage).
+ */
+/** Whether GitHub's schedule `timezone:` takes it: an IANA name the runtime's time zone data knows. */
+function isTimeZone(name: string): boolean {
+  if (!/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(name)) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The store's one Actions secret, which its caller workflow passes to the Weekly summary. */
+const STORE_SECRET = "FABRIK_OP_PUSH_TOKEN";
+
+function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, notes: string[]): SetupAction[] {
+  const { timeZone } = answers;
+  if (timeZone === undefined) return [];
+  if (!isTimeZone(timeZone)) {
+    notes.push(
+      `${timeZone} isn't an IANA time zone, such as Europe/London, so ${RUN_STORE_REPO} wasn't set up: run setup again with your time zone.`,
+    );
+    return [];
+  }
+  // A transcript can hold whatever an agent echoed, so the store must be private
+  // (ADR-0009). Making a repo private is the Operator's call, never setup's.
+  if (store.exists && !store.private) {
+    notes.push(
+      `${RUN_STORE_REPO} is public, so setup changed nothing there and no Run record will be written to it: make it private (Settings → General → Danger Zone → Change visibility), then run setup again.`,
+    );
+    return [];
+  }
+  const actions: SetupAction[] = [];
+  if (!store.exists) actions.push({ kind: "create-run-store", repo: RUN_STORE_REPO, private: true });
+  const caller = scheduleIn(kit.templates.storeCaller, timeZone);
+  const files: [string, FileUpdate, string][] = [
+    [
+      STORE_CALLER_PATH,
+      callerUpdate(store.files[STORE_CALLER_PATH] ?? null, caller, kit.release, STORE_CALLER_PATH),
+      "the Weekly summary each Monday morning, pinning one Fabrik release",
+    ],
+    [
+      DEPENDABOT_PATH,
+      dependabotUpdate(store.files[DEPENDABOT_PATH] ?? null, kit.templates.dependabot),
+      "Dependabot bumps the Fabrik pin",
+    ],
+  ];
+  for (const [path, update, why] of files) {
+    if (update === null) continue;
+    if ("note" in update) notes.push(`${RUN_STORE_REPO}: ${update.note}`);
+    else actions.push({ kind: "write-store-file", repo: RUN_STORE_REPO, path, content: update.content, why });
+  }
+  // The push account pattern: the Weekly summary mints its App tokens from the Fabrik App vault.
+  if (!store.secrets.includes(STORE_SECRET)) {
+    actions.push({
+      kind: "create-service-account",
+      name: `fabrik-${RUN_STORE.owner}-${RUN_STORE.name}-push`,
+      vaults: [FABRIK_APP_VAULT],
+      secret: STORE_SECRET,
+      repo: RUN_STORE_REPO,
+    });
+  }
+  return actions;
 }
 
 /** Every file planSetup reads from the Product checkout. */

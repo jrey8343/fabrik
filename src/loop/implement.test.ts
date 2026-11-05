@@ -171,6 +171,17 @@ describe("An empty diff", () => {
       timeoutMinutes: 60,
     });
   });
+
+  it("each retry after an empty diff says which Retry it is, and the second that it Steps up", () => {
+    const after = (emptyDiffs: number) =>
+      anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], emptyDiffs });
+    const runOf = (emptyDiffs: number) =>
+      actionsOf(planFor(dispatched(), snapshotOf(after(emptyDiffs)), kitConfig())).find((action) => action.kind === "start-agent-run");
+
+    expect(runOf(0)).not.toHaveProperty("retry");
+    expect(runOf(1)).toMatchObject({ retry: 1, stepUp: false });
+    expect(runOf(2)).toMatchObject({ retry: 2, stepUp: true });
+  });
 });
 
 describe("Opening the draft PR", () => {

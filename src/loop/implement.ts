@@ -8,7 +8,7 @@ import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
 import { EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { owedRequestChangesRun } from "./mergeGate.ts";
-import { MAX_RETRIES, owedRetry, runInFlight, runName } from "./retry.ts";
+import { MAX_RETRIES, owedRetry, runInFlight, runName, stepsUp } from "./retry.ts";
 import { verdictActions } from "./review.ts";
 import type {
   Action,
@@ -52,7 +52,10 @@ export function startImplementer(
   if (whyNotBuildable(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
   const { implement, stepUp } = config.roles;
   // The second retry Steps up; the first run and the first retry use the Implementer's model.
-  const { model, effort } = issue.emptyDiffs >= MAX_RETRIES ? stepUp : implement;
+  const steppedUp = stepsUp(issue.emptyDiffs);
+  const { model, effort } = steppedUp ? stepUp : implement;
+  // Each empty diff so far was an Execution flaw, so this run is the Retry after the last one.
+  const retry = issue.emptyDiffs === 0 ? {} : { retry: issue.emptyDiffs, stepUp: steppedUp };
   return {
     kind: "act",
     actions: [
@@ -64,6 +67,7 @@ export function startImplementer(
         model,
         effort,
         timeoutMinutes: implement.timeoutMinutes,
+        ...retry,
       },
     ],
   };
@@ -305,7 +309,7 @@ function emptyDiff(issueNumber: number, issue: IssueSnapshot): Plan {
         issue: issueNumber,
         body: [
           EMPTY_DIFF_MARKER,
-          `The Implementer's branch for #${issueNumber} changed nothing, so the Kit opened no PR. An empty diff is an Execution flaw: retry ${flaw} of ${MAX_RETRIES} starts now${flaw === MAX_RETRIES ? ", stepped up" : ""}.`,
+          `The Implementer's branch for #${issueNumber} changed nothing, so the Kit opened no PR. An empty diff is an Execution flaw: retry ${flaw} of ${MAX_RETRIES} starts now${stepsUp(flaw) ? ", stepped up" : ""}.`,
         ].join("\n"),
       },
       // A fresh label event, as Dispatch would add, starts the retry in this run's own slot.

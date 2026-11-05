@@ -20,6 +20,8 @@ const DEFAULTS = {
   caps: { designSessions: 2 },
   operator: null,
   instructions: { triage: null, design: null, implement: null, review: null },
+  skillsSources: [],
+  extraSkills: { triage: [], design: [], implement: [], review: [] },
 };
 
 describe("Kit config", () => {
@@ -316,5 +318,199 @@ describe("The Kit config template", () => {
     const block = /```json\n([\s\S]*?)```/.exec(section)?.[1];
 
     expect(block).toBe(template);
+  });
+});
+
+describe("Skills sources and Extra skill picks", () => {
+  const SHA_A = "a".repeat(40);
+  const SHA_B = "b".repeat(40);
+
+  it("resolves no lockfile and no picks to no Skills sources and no Extra skills for every role", () => {
+    expect(resolveKitConfig({ config: null, skillsLock: null })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  /** A config that picks one skill from each of these sources, so no pin goes unused. */
+  function pickingFrom(...repositories: string[]): string {
+    return JSON.stringify({ roles: { design: { skills: repositories.map((repository, i) => `${repository}/skill-${i}`) } } });
+  }
+
+  it.each([
+    ["", []],
+    ["  \n", []],
+    ["[]", []],
+  ])("treats an empty lockfile (%j) as no Skills sources", (skillsLock) => {
+    expect(resolveKitConfig({ config: null, skillsLock })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it("fails a lockfile that isn't JSON, naming the file", () => {
+    const result = resolveKitConfig({ config: null, skillsLock: "[{ repository: x }]" });
+
+    expect(!result.ok && result.errors).toEqual([expect.stringMatching(/^\.fabrik\/skills\.lock\.json is not valid JSON: /)]);
+  });
+
+  it.each([
+    [`{ "repository": "jrey8343/skills", "sha": "${SHA_A}" }`, ".fabrik/skills.lock.json must be a list of { repository, sha } pins"],
+    [`["jrey8343/skills"]`, ".fabrik/skills.lock.json[0] must be an object"],
+    [
+      `[{ "repository": "jrey8343", "sha": "${SHA_A}" }]`,
+      `.fabrik/skills.lock.json[0].repository is "jrey8343": a repository must be owner/name`,
+    ],
+    [`[{ "sha": "${SHA_A}" }]`, ".fabrik/skills.lock.json[0].repository is missing"],
+    [
+      `[{ "repository": "jrey8343/skills", "sha": "main" }]`,
+      `.fabrik/skills.lock.json[0].sha is "main": a pin must be a full 40-character lowercase commit SHA`,
+    ],
+    [
+      `[{ "repository": "jrey8343/skills", "sha": "${SHA_A.toUpperCase()}" }]`,
+      `.fabrik/skills.lock.json[0].sha is "${SHA_A.toUpperCase()}": a pin must be a full 40-character lowercase commit SHA`,
+    ],
+    [`[{ "repository": "jrey8343/skills" }]`, ".fabrik/skills.lock.json[0].sha is missing"],
+    [
+      `[{ "repository": "jrey8343/skills", "sha": "${SHA_A}", "branch": "main" }]`,
+      ".fabrik/skills.lock.json[0].branch is not a Kit config field",
+    ],
+    [
+      `[{ "repository": "jrey8343/skills", "sha": "${SHA_A}" }, { "repository": "JRey8343/Skills", "sha": "${SHA_B}" }]`,
+      ".fabrik/skills.lock.json[1] pins JRey8343/Skills, which .fabrik/skills.lock.json[0] already pins",
+    ],
+  ])("fails a bad lockfile, naming the entry: %s", (skillsLock, error) => {
+    expect(resolveKitConfig({ config: pickingFrom("jrey8343/skills"), skillsLock })).toEqual({ ok: false, errors: [error] });
+  });
+
+  const LOCK = JSON.stringify([
+    { repository: "jrey8343/skills", sha: SHA_A },
+    { repository: "mattpocock/extras", sha: SHA_B },
+  ]);
+
+  it.each([
+    [{ design: { skills: "jrey8343/skills/event-storming" } }, "roles.design.skills must be a list of strings"],
+    [
+      { design: { skills: ["jrey8343/skills/event-storming", "event-storming"] } },
+      `roles.design.skills[1] is "event-storming": a pick must be owner/name/skill`,
+    ],
+    [
+      { design: { skills: ["jrey8343/skills/event-storming", "jrey8343/skills/storming/deep"] } },
+      `roles.design.skills[1] is "jrey8343/skills/storming/deep": a pick must be owner/name/skill`,
+    ],
+    [
+      { design: { skills: ["jrey8343/skills/event-storming", "jrey8343/skills/"] } },
+      `roles.design.skills[1] is "jrey8343/skills/": a pick must be owner/name/skill`,
+    ],
+    [
+      { design: { skills: ["jrey8343/skills/event-storming", "jrey8343/skills/.."] } },
+      `roles.design.skills[1] is "jrey8343/skills/..": a pick must be owner/name/skill`,
+    ],
+    [
+      { design: { skills: ["jrey8343/skills/event-storming", "mattpocock/extras/decider", "someone/else/tdd"] } },
+      `roles.design.skills[2] is "someone/else/tdd": someone/else has no pin in .fabrik/skills.lock.json`,
+    ],
+    [
+      { design: { skills: ["jrey8343/skills/event-storming"] } },
+      ".fabrik/skills.lock.json[1] pins mattpocock/extras, but no role picks a skill from it",
+    ],
+    [
+      { design: { skills: ["jrey8343/skills/decider"] }, implement: { skills: ["mattpocock/extras/decider"] } },
+      `roles.implement.skills[0] is "mattpocock/extras/decider": roles.design.skills[0] already picks a skill named decider from jrey8343/skills`,
+    ],
+    [
+      { design: { skills: ["jrey8343/skills/event-storming", "mattpocock/extras/decider", "jrey8343/skills/event-storming"] } },
+      `roles.design.skills[2] is "jrey8343/skills/event-storming": roles.design.skills[0] already picks it`,
+    ],
+  ])("fails a bad pick, naming it: %j", (roles, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ roles }), skillsLock: LOCK })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("matches a pick to its pin whatever the case, resolving it to the pin's spelling", () => {
+    const result = resolveKitConfig(
+      { config: pickingFrom("JRey8343/Skills"), skillsLock: JSON.stringify([{ repository: "jrey8343/skills", sha: SHA_A }]) },
+    );
+
+    expect(result.ok && result.config.extraSkills.design).toEqual([{ source: "jrey8343/skills", name: "skill-0" }]);
+  });
+
+  it("fails picks with no lockfile, naming the unpinned source", () => {
+    const result = resolveKitConfig({ config: pickingFrom("jrey8343/skills"), skillsLock: null });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [`roles.design.skills[0] is "jrey8343/skills/skill-0": jrey8343/skills has no pin in .fabrik/skills.lock.json`],
+    });
+  });
+
+  it.each(["dispatch", "step_up", "implementer"])("refuses skills under roles.%s as an unknown field", (role) => {
+    const result = resolveKitConfig(
+      { config: JSON.stringify({ roles: { [role]: { skills: ["jrey8343/skills/event-storming"] } } }), skillsLock: null },
+    );
+
+    expect(!result.ok && result.errors).toContain(
+      role === "implementer" ? "roles.implementer is not a Kit config field" : `roles.${role}.skills is not a Kit config field`,
+    );
+  });
+
+  it("resolves the pinned sources and each role's picks, giving one pick to several roles", () => {
+    const result = resolveKitConfig(
+      {
+        config: JSON.stringify({
+          roles: {
+            design: { skills: ["jrey8343/skills/event-storming", "mattpocock/extras/decider"] },
+            review: { skills: ["jrey8343/skills/event-storming"] },
+          },
+        }),
+        skillsLock: JSON.stringify([
+          { repository: "jrey8343/skills", sha: SHA_A },
+          { repository: "mattpocock/extras", sha: SHA_B },
+        ]),
+      },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        skillsSources: [
+          { repository: "jrey8343/skills", sha: SHA_A },
+          { repository: "mattpocock/extras", sha: SHA_B },
+        ],
+        extraSkills: {
+          triage: [],
+          design: [
+            { source: "jrey8343/skills", name: "event-storming" },
+            { source: "mattpocock/extras", name: "decider" },
+          ],
+          implement: [],
+          review: [{ source: "jrey8343/skills", name: "event-storming" }],
+        },
+      },
+    });
+  });
+});
+
+describe("Skills sources and Extra skill picks, as shipped", () => {
+  const SHA = "a".repeat(40);
+
+  it("resolves a Product repo's pins and picks", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ roles: { design: { skills: ["jrey8343/skills/event-storming"] } } }),
+      skillsLock: JSON.stringify([{ repository: "jrey8343/skills", sha: SHA }]),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        skillsSources: [{ repository: "jrey8343/skills", sha: SHA }],
+        extraSkills: { ...DEFAULTS.extraSkills, design: [{ source: "jrey8343/skills", name: "event-storming" }] },
+      },
+    });
+  });
+
+  it("resolves a repo with no lockfile and no picks exactly as before", () => {
+    expect(resolveKitConfig({ config: null })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it.each(["dispatch", "step_up"])("still refuses a pick under roles.%s as an unknown field", (role) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ roles: { [role]: { skills: [] } } }) });
+
+    expect(result).toEqual({ ok: false, errors: [`roles.${role}.skills is not a Kit config field`] });
   });
 });

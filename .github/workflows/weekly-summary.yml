@@ -1,0 +1,73 @@
+# The Weekly summary (ADR-0009), called from the fabrik-runs store's caller
+# workflow (templates/fabrik-runs-caller.yml) on its Monday-morning schedule
+# and on workflow_dispatch.
+#
+# This file is wiring only. The file the Weekly summary action reads the
+# store's Run records and every Product repo's GitHub facts, builds the
+# summary through the Weekly summary module and files it in fabrik-runs.
+#
+# Like the Loop's push job (ADR-0002), the job runs on a fresh VM and never
+# checks out or runs Product code. It checks out only Fabrik itself, at the
+# exact commit the caller pinned, and the store's runs/.
+name: Fabrik weekly summary
+
+on:
+  workflow_call:
+    secrets:
+      OP_PUSH_TOKEN:
+        description: The store's read-only 1Password push service account, which reads the Fabrik App vault.
+        required: true
+
+permissions: {}
+
+jobs:
+  kit:
+    name: Kit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Only to read this workflow's own commit from the job's OIDC token.
+      id-token: write
+    outputs:
+      sha: ${{ steps.kit.outputs.sha }}
+    steps:
+      # No expression context names the commit of a called workflow, so read
+      # it from the OIDC token's job_workflow_sha claim.
+      - name: Find the Kit's pinned commit
+        id: kit
+        run: |
+          set -euo pipefail
+          jwt="$(curl -sSf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r .value)"
+          claims="$(node -e 'process.stdout.write(Buffer.from(process.argv[1].split(".")[1], "base64url").toString())' "$jwt")"
+          ref="$(jq -r .job_workflow_ref <<<"$claims")"
+          sha="$(jq -r .job_workflow_sha <<<"$claims")"
+          case "$ref" in
+            jrey8343/fabrik/.github/workflows/weekly-summary.yml@*) ;;
+            *) echo "::error::Unexpected Kit workflow ref: $ref"; exit 1 ;;
+          esac
+          echo "Kit: $ref ($sha)"
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+
+  summary:
+    name: Weekly summary
+    needs: kit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # One filing at a time, so a re-run never races the scheduled one into a second issue.
+    concurrency:
+      group: fabrik-weekly-summary
+      cancel-in-progress: false
+    permissions: {}
+    steps:
+      - name: Check out the Kit (never a Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: File the Weekly summary
+        uses: ./kit/.github/actions/file-weekly-summary
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}

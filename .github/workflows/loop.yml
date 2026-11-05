@@ -67,6 +67,11 @@ jobs:
       # The model and effort the plan chose for its agent run, a Step-up included.
       model: ${{ steps.route.outputs.model }}
       effort: ${{ steps.route.outputs.effort }}
+      # Which run the plan started, for its Run record: its Retry number (0 for none), and "true"
+      # or "false" for whether it Steps up and whether it's the Operator's Request-changes run.
+      retry: ${{ steps.route.outputs.retry }}
+      step-up: ${{ steps.route.outputs.step-up }}
+      request-changes: ${{ steps.route.outputs.request-changes }}
     steps:
       # No expression context names the commit of a called workflow, so read
       # it from the OIDC token's job_workflow_sha claim.
@@ -130,12 +135,21 @@ jobs:
     outputs:
       # Read by the push job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}
+      # For its Run record: the model and effort the runner passed, and the commit the run started from.
+      model: ${{ steps.agent.outputs.model }}
+      effort: ${{ steps.agent.outputs.effort }}
+      base-sha: ${{ steps.base.outputs.sha }}
     steps:
       - name: Check out the Product repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: product
           persist-credentials: false
+
+      # Before the secrets load, so a run whose agent never started still names it.
+      - name: Note the commit the run starts from
+        id: base
+        run: echo "sha=$(git -C product rev-parse HEAD)" >>"$GITHUB_OUTPUT"
 
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -148,6 +162,7 @@ jobs:
       - name: Prepare the agent job
         uses: ./kit/.github/actions/prepare-agent
         with:
+          role: triage
           github-token: ${{ github.token }}
           issue: ${{ github.event.issue.number }}
 
@@ -161,6 +176,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
 
       - name: Run Triage
+        id: agent
         working-directory: product
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -226,12 +242,21 @@ jobs:
     outputs:
       # Read by the push job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}
+      # For its Run record: the model and effort the runner passed, and the commit the run started from.
+      model: ${{ steps.agent.outputs.model }}
+      effort: ${{ steps.agent.outputs.effort }}
+      base-sha: ${{ steps.base.outputs.sha }}
     steps:
       - name: Check out the Product repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: product
           persist-credentials: false
+
+      # Before the secrets load, so a run whose agent never started still names it.
+      - name: Note the commit the run starts from
+        id: base
+        run: echo "sha=$(git -C product rev-parse HEAD)" >>"$GITHUB_OUTPUT"
 
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -246,6 +271,7 @@ jobs:
       - name: Prepare the agent job
         uses: ./kit/.github/actions/prepare-agent
         with:
+          role: design
           github-token: ${{ github.token }}
           issue: ${{ github.event.issue.number }}
 
@@ -259,6 +285,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
 
       - name: Run the Design-session turn
+        id: agent
         working-directory: product
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -357,6 +384,10 @@ jobs:
     outputs:
       # Read by the push job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}
+      # For its Run record: the model and effort the runner passed, and the commit the run started from.
+      model: ${{ steps.agent.outputs.model }}
+      effort: ${{ steps.agent.outputs.effort }}
+      base-sha: ${{ steps.base.outputs.sha }}
     steps:
       # A fresh clone: no working directory or .env* files carried over. A first
       # run starts from main; a retry from its PR's branch (the Kit job names it).
@@ -367,6 +398,11 @@ jobs:
           ref: ${{ needs.kit.outputs.branch || github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
+
+      # Before the secrets load, so a run whose agent never started still names it.
+      - name: Note the commit the run starts from
+        id: base
+        run: echo "sha=$(git -C product rev-parse HEAD)" >>"$GITHUB_OUTPUT"
 
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -381,6 +417,8 @@ jobs:
       - name: Prepare the agent job
         uses: ./kit/.github/actions/prepare-agent
         with:
+          # A Step-up run is an Implement run, so it gets implement's Extra skills too.
+          role: implement
           github-token: ${{ github.token }}
           issue: ${{ needs.kit.outputs.ticket }}
           pull-request: ${{ needs.kit.outputs.pull-request }}
@@ -402,6 +440,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
 
       - name: Run the Implementer
+        id: agent
         working-directory: product
         env:
           # Every value the 1Password step resolved, in this step's env only.
@@ -533,6 +572,10 @@ jobs:
     outputs:
       # Read by the push job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}
+      # For its Run record: the model and effort the runner passed, and the commit the run started from.
+      model: ${{ steps.agent.outputs.model }}
+      effort: ${{ steps.agent.outputs.effort }}
+      base-sha: ${{ steps.base.outputs.sha }}
     steps:
       - name: Check out the PR's head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -541,6 +584,11 @@ jobs:
           ref: ${{ needs.review-checks.outputs.head-sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      # Before the secrets load, so a run whose agent never started still names it.
+      - name: Note the commit the run starts from
+        id: base
+        run: echo "sha=$(git -C product rev-parse HEAD)" >>"$GITHUB_OUTPUT"
 
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -555,6 +603,7 @@ jobs:
       - name: Prepare the agent job
         uses: ./kit/.github/actions/prepare-agent
         with:
+          role: review
           github-token: ${{ github.token }}
           issue: ${{ needs.kit.outputs.ticket }}
           pull-request: ${{ needs.kit.outputs.pull-request }}
@@ -569,6 +618,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
 
       - name: Run the Reviewer
+        id: agent
         working-directory: product
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -664,6 +714,18 @@ jobs:
         uses: ./kit/.github/actions/run-loop
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+
+      # The run's Run record and transcript, to the fabrik-runs store (ADR-0009).
+      # always(), so a Loop that failed still leaves its record; continue-on-error,
+      # so a store problem never fails the push job or stalls the Loop. Without
+      # fabrik-runs it writes one step-summary line naming the setup step.
+      - name: Write the Run record
+        if: always()
+        continue-on-error: true
+        uses: ./kit/.github/actions/write-run-record
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          role: ${{ needs.kit.outputs.route }}
 
   # Dispatch (ADR-0001): runs when the push job's plan asked for a check, on a
   # fresh snapshot taken after that plan's labels landed. Like the push job, it

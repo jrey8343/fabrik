@@ -30,6 +30,8 @@ export type PushJobInput =
   | {
       readonly kind: "review";
       readonly pullRequest: number;
+      /** The Ticket the PR builds, the Review's subject. */
+      readonly ticket: number;
       readonly headSha: string;
       readonly failedChecks: readonly string[];
       /** Whether green checks let the Reviewer run, so its result is there to apply. */
@@ -90,9 +92,9 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       const outcome = checks.outputs["checks"];
       const headSha = checks.outputs["head-sha"] ?? "";
       const failedChecks = readNames(checks.outputs["failed"]);
-      if (outcome === "red") return { kind: "review", pullRequest, headSha, failedChecks, withResult: false };
+      if (outcome === "red") return { kind: "review", pullRequest, ticket, headSha, failedChecks, withResult: false };
       if (outcome === "green" && reviewer?.result === "success") {
-        return { kind: "review", pullRequest, headSha, failedChecks, withResult: true };
+        return { kind: "review", pullRequest, ticket, headSha, failedChecks, withResult: true };
       }
       return { kind: "nothing", reason: `#${pullRequest}'s checks ended ${outcome ?? "unknown"}, so there's no Verdict to post` };
     }

@@ -543,3 +543,119 @@ describe("The starters the Product repo then owns", () => {
     expect(paths).not.toContain("AGENTS.md");
   });
 });
+
+describe("The fabrik-runs store, the opt-in step for Run records and the Weekly summary", () => {
+  const operator = { timeZone: "Australia/Sydney" };
+
+  it("creates a missing store as a private repo", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, operator);
+
+    expect(actions).toContainEqual({ kind: "create-run-store", repo: "jrey8343/fabrik-runs", private: true });
+  });
+
+  it("writes the store's caller workflow: the Weekly summary each Monday morning in the Operator's time zone, and on demand", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, operator);
+
+    const caller = storeWritten(actions, ".github/workflows/weekly-summary.yml") ?? "";
+    expect(caller).toMatch(/schedule:\n\s+- cron: "0 7 \* \* 1"\n\s+timezone: "Australia\/Sydney"/);
+    expect(caller).toMatch(/^\s+workflow_dispatch:/m);
+    expect(caller).toContain("uses: jrey8343/fabrik/.github/workflows/weekly-summary.yml@v1.4.2");
+    expect(checkCallerWorkflow(caller)).toEqual({ ok: true, release: "v1.4.2" });
+  });
+
+  it("writes the store's Dependabot entry, so Dependabot bumps its Fabrik pin", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, operator);
+
+    expect(storeWritten(actions, ".github/dependabot.yml")).toBe(kit.templates.dependabot);
+  });
+
+  it("creates a read-only service account for the Fabrik App vault, stored as an Actions secret on the store (ADR-0004)", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, operator);
+
+    expect(actions).toContainEqual({
+      kind: "create-service-account",
+      name: "fabrik-jrey8343-fabrik-runs-push",
+      vaults: ["Fabrik App"],
+      secret: "FABRIK_OP_PUSH_TOKEN",
+      repo: "jrey8343/fabrik-runs",
+    });
+  });
+
+  it("passes that secret to the Weekly summary from the store's caller workflow", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, operator);
+
+    expect(storeWritten(actions, ".github/workflows/weekly-summary.yml")).toContain("${{ secrets.FABRIK_OP_PUSH_TOKEN }}");
+  });
+
+  function storeActions(state: ProductState): string[] {
+    return planSetup(state, kit, operator).actions.flatMap((a) =>
+      a.kind === "create-run-store" || a.kind === "write-store-file" || ("repo" in a && a.repo === "jrey8343/fabrik-runs")
+        ? [a.kind]
+        : [],
+    );
+  }
+
+  it("plans nothing for a store that's already set up", () => {
+    const clean = aCleanProduct();
+    const setUp = afterApplying(clean, planSetup(clean, kit, operator));
+
+    expect(setUp.store.exists).toBe(true);
+    expect(storeActions(setUp)).toEqual([]);
+    expect(planSetup(setUp, kit, operator).actions).toEqual([]);
+  });
+
+  it("keeps planning nothing for the store however many times setup runs again", () => {
+    let state = aCleanProduct();
+    for (let run = 0; run < 3; run++) state = afterApplying(state, planSetup(state, kit, operator));
+
+    expect(planSetup(state, kit, operator)).toEqual({ actions: [], notes: expect.any(Array) as unknown });
+    expect(storeActions(state)).toEqual([]);
+  });
+
+  it("never makes a public store private: it tells the Operator, and changes nothing there", () => {
+    const store = { exists: true, private: false, files: {}, secrets: [] };
+
+    const plan = planSetup(aCleanProduct({ store }), kit, operator);
+
+    expect(storeActions(aCleanProduct({ store }))).toEqual([]);
+    expect(plan.notes.join("\n")).toMatch(/jrey8343\/fabrik-runs is public/);
+  });
+
+  it("repairs only what a private store lacks", () => {
+    const clean = aCleanProduct();
+    const setUp = afterApplying(clean, planSetup(clean, kit, operator));
+    const lostSecret = { ...setUp, store: { ...setUp.store, secrets: [] } };
+
+    expect(storeActions(lostSecret)).toEqual(["create-service-account"]);
+  });
+
+  it("moves the Weekly summary's schedule when the Operator gives a new time zone, and touches nothing else", () => {
+    const clean = aCleanProduct();
+    const setUp = afterApplying(clean, planSetup(clean, kit, operator));
+
+    const actions = planSetup(setUp, kit, { timeZone: "Europe/London" }).actions;
+
+    expect(actions.map((a) => a.kind)).toEqual(["write-store-file"]);
+    expect(storeWritten(actions, ".github/workflows/weekly-summary.yml")).toContain('timezone: "Europe/London"');
+  });
+
+  it("leaves the store alone until the Operator gives setup their time zone, so it stays opt-in", () => {
+    expect(storeActions(aCleanProduct()).length).toBeGreaterThan(0);
+
+    const { actions } = planSetup(aCleanProduct(), kit);
+
+    expect(actions.filter((a) => a.kind === "create-run-store" || a.kind === "write-store-file" || ("repo" in a && a.repo !== undefined))).toEqual([]);
+  });
+
+  it("tells the Operator when their time zone isn't one GitHub's schedule knows, and changes nothing for the store", () => {
+    const plan = planSetup(aCleanProduct(), kit, { timeZone: "Mars/Olympus_Mons" });
+
+    expect(plan.actions.filter((a) => a.kind === "create-run-store" || a.kind === "write-store-file")).toEqual([]);
+    expect(plan.notes.join("\n")).toContain("Mars/Olympus_Mons");
+  });
+});
+
+function storeWritten(actions: readonly SetupAction[], path: string): string | undefined {
+  const action = actions.find((a) => a.kind === "write-store-file" && a.path === path);
+  return action?.kind === "write-store-file" ? action.content : undefined;
+}

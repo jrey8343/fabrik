@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { readIfPresent } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { sandboxEnv } from "../kit/secrets.ts";
-import { agentBranchFor } from "../loop/agentPullRequest.ts";
+import { agentBranchFor, IMPLEMENTER_AUTHOR } from "../loop/agentPullRequest.ts";
 import { verdictsIn } from "../github/threads.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 import { givenOperatorComments, operatorCommentId, operatorCommentsSection } from "./operatorComments.ts";
@@ -24,9 +24,6 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 /** The env var the workflow passes the 1Password step's outputs in, as JSON. */
 export const SECRETS_ENV = "FABRIK_SECRETS";
 
-/** Commits the Implementer makes carry this identity; the PR itself is the Fabrik App's. */
-const AUTHOR = { name: "Fabrik Implementer", email: "fabrik-implementer@users.noreply.github.com" };
-
 /**
  * Sets the Implementer's env on this process, which the agent inherits
  * (noSandbox): the Claude token, the Sandbox's values and its test secrets,
@@ -38,10 +35,10 @@ export function setImplementerEnv(config: KitConfig): void {
   if (resolved === undefined || resolved === "") throw new Error(`${SECRETS_ENV} is not set`);
   delete process.env[SECRETS_ENV];
   Object.assign(process.env, sandboxEnv(config, resolved), {
-    GIT_AUTHOR_NAME: AUTHOR.name,
-    GIT_AUTHOR_EMAIL: AUTHOR.email,
-    GIT_COMMITTER_NAME: AUTHOR.name,
-    GIT_COMMITTER_EMAIL: AUTHOR.email,
+    GIT_AUTHOR_NAME: IMPLEMENTER_AUTHOR.name,
+    GIT_AUTHOR_EMAIL: IMPLEMENTER_AUTHOR.email,
+    GIT_COMMITTER_NAME: IMPLEMENTER_AUTHOR.name,
+    GIT_COMMITTER_EMAIL: IMPLEMENTER_AUTHOR.email,
   });
 }
 

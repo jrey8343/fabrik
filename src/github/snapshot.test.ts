@@ -2,11 +2,12 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
 import { anIssue, aPullRequest, designQueueSnapshotOf, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { resolveKitConfig } from "../kit/config.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
-import { countImplementRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME } from "./snapshot.ts";
+import { countImplementRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, readKitConfigSources } from "./snapshot.ts";
 
 const repo = { owner: "acme", name: "shop" };
 
@@ -604,5 +605,34 @@ describe("Gathering a Design-session turn's starting reply", () => {
 
     expect(snapshot.startingComment).toBeNull();
     expect(reads).toEqual([]);
+  });
+});
+
+describe("Reading the Kit config folder through the API", () => {
+  it("reads the Skills sources lockfile beside config.json and the phase instructions, at the ref", async () => {
+    const files: Record<string, string> = {
+      ".fabrik/config.json": `{ "roles": { "review": { "skills": ["jrey8343/skills/event-storming"] } } }`,
+      ".fabrik/skills.lock.json": `[{ "repository": "jrey8343/skills", "sha": "${"a".repeat(40)}" }]`,
+      ".fabrik/review.md": "Check the deciders.\n",
+    };
+    const github = {
+      async fileText(at: typeof repo, path: string, ref: string): Promise<string | null> {
+        expect([at, ref]).toEqual([repo, "abc123"]);
+        return files[path] ?? null;
+      },
+    };
+
+    const sources = await readKitConfigSources(github, repo, "abc123");
+
+    expect(sources.skillsLock).toBe(files[".fabrik/skills.lock.json"]);
+    const result = resolveKitConfig(sources);
+    expect(result.ok && result.config.extraSkills.review).toEqual([{ source: "jrey8343/skills", name: "event-storming" }]);
+    expect(result.ok && result.config.instructions.review).toBe("Check the deciders.\n");
+  });
+
+  it("gives no lockfile when the Product repo has none", async () => {
+    const sources = await readKitConfigSources({ fileText: async () => null }, repo, "abc123");
+
+    expect(sources.skillsLock).toBeNull();
   });
 });

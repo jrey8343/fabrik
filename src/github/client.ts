@@ -6,6 +6,16 @@ export interface Repo {
   readonly name: string;
 }
 
+/** A failed GitHub REST call, with the status it failed with. */
+export class GitHubError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "GitHubError";
+    this.status = status;
+  }
+}
 
 /** A GitHub API client authenticated as the Fabrik App. */
 export class GitHub {
@@ -26,7 +36,7 @@ export class GitHub {
     });
     if (response.status === 404 && options.allowNotFound === true) return null;
     if (!response.ok) {
-      throw new Error(`GitHub ${method} ${path} failed: ${response.status} ${await response.text()}`);
+      throw new GitHubError(`GitHub ${method} ${path} failed: ${response.status} ${await response.text()}`, response.status);
     }
     return response.status === 204 ? null : response.json();
   }

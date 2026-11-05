@@ -9,7 +9,8 @@
 //   FABRIK_OUT_DIR         where to write agent-result.json, the agent log and the
 //                          transcript (every stream-json line, appended as it arrives)
 //   FABRIK_MODEL, FABRIK_EFFORT  the model and effort the Kit job's plan chose (a Step-up, say);
-//                          when unset, the role's own from Kit config
+//                          when unset, the role's own from Kit config; the ones it passes go out
+//                          as the step outputs `model` and `effort`, for the run's Run record
 //   CLAUDE_CODE_OAUTH_TOKEN, from the agent service account (ADR-0004)
 // An Implement run instead takes the Claude token and its test secrets from
 // FABRIK_SECRETS (src/agent/implement.ts), its parent Spec from FABRIK_SPEC_FILE,
@@ -22,12 +23,12 @@
 // A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
 // PR, and its result is the Reviewer's reply, a Verdict line first.
-import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import { readIfPresent, readKitConfigFromCheckout } from "../kit/checkout.ts";
+import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
 import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
@@ -36,7 +37,7 @@ import type { AgentRole, GivenOperatorComment } from "../loop/types.ts";
 import { kitPromptPath } from "../guard/trust-root.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
-import { SKILLS_MARKER } from "../skills/fetch.ts";
+import { readInstallRecord } from "../skills/fetch.ts";
 import { type ParsedVerdict, parseVerdict } from "../loop/verdict.ts";
 import { AGENT_FAILURE_FILE, failureReportFor, MissingVerdictError } from "./failure.ts";
 import {
@@ -51,7 +52,9 @@ import {
 import { sentBackContext } from "./design.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
-import { initMessageOf, missingSkills, runSummary } from "./summary.ts";
+import { promptFor } from "./prompt.ts";
+import { readStream } from "./stream.ts";
+import { missingSkills, runSummary } from "./summary.ts";
 import { TRANSCRIPT_FILE, transcriptWriter } from "./transcript.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
@@ -166,28 +169,6 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<ParsedVerdict & { ok: true }>,
 };
 
-/**
- * The Kit's prompt for the role, then the Product's instructions for its phase,
- * then the issue thread, then anything else the role is given.
- */
-async function promptFor(
-  role: AgentRole,
-  note: string,
-  config: KitConfig,
-  issue: unknown,
-  heading: string,
-  extra: readonly string[],
-): Promise<string> {
-  const template = await readFile(join(KIT_DIR, kitPromptPath(role)), "utf8");
-  const parts = [template.trimEnd()];
-  const instructions = config.instructions[role];
-  if (instructions !== null) {
-    parts.push(`## This Product repo's ${role} instructions`, note, instructions.trimEnd());
-  }
-  parts.push(`## ${heading}`, "```json", JSON.stringify(issue, null, 2), "```", ...extra);
-  return `${parts.join("\n\n")}\n`;
-}
-
 /** The model and effort to run: what the Kit job's plan chose, else the role's own. */
 function modelFor(role: { model: string; effort: string | null }): { model: string; effort: string | null } {
   const model = process.env["FABRIK_MODEL"];
@@ -226,6 +207,13 @@ async function writeSummary(text: string): Promise<void> {
   if (path !== undefined && path !== "") await appendFile(path, text);
 }
 
+/** Appends step outputs, when the runner gives a file for them. */
+async function writeOutputs(outputs: Readonly<Record<string, string>>): Promise<void> {
+  const path = process.env["GITHUB_OUTPUT"];
+  if (path === undefined || path === "") return;
+  await appendFile(path, Object.entries(outputs).map(([key, value]) => `${key}=${value}\n`).join(""));
+}
+
 async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   const name = spec.role;
   const productDir = process.cwd();
@@ -237,6 +225,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
 
   const config = await loadConfig(productDir);
   const role = { ...config.roles[name], ...modelFor(config.roles[name]) };
+  // For the run's record (src/kit/runRecord.ts): the model and effort passed to the CLI.
+  await writeOutputs({ model: role.model, effort: role.effort ?? "" });
 
   // The Implementer builds on its own branch from main, with its test secrets.
   let branch: BuiltBranch | null = null;
@@ -319,7 +309,15 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       ),
       sandbox: noSandbox(),
       cwd: productDir,
-      prompt: await promptFor(name, spec.instructionsNote, config, issue, spec.issueHeading ?? "The issue", extra),
+      prompt: promptFor({
+        template: await readFile(join(KIT_DIR, kitPromptPath(name)), "utf8"),
+        role: name,
+        note: spec.instructionsNote,
+        config,
+        issue,
+        heading: spec.issueHeading ?? "The issue",
+        extra,
+      }),
       maxIterations: 1,
       output,
       // The Reviewer reads the PR and runs none of its code, so it needs no Sandbox setup.
@@ -338,8 +336,9 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
         onAgentStreamEvent(event) {
           if (event.type !== "raw") return;
           lines.push(event.line);
-          if (init.refused === null && initMessageOf([event.line]) !== null) {
-            const check = checkInitMessage(JSON.parse(event.line));
+          const initMessage = init.refused === null ? readStream([event.line]).init : null;
+          if (initMessage !== null) {
+            const check = checkInitMessage(initMessage);
             init.refused = check.kind === "refuse" ? check.routes : [];
             if (check.kind === "refuse") abort.abort(new Error(check.routes.join("; ")));
           }
@@ -373,26 +372,18 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     console.log(`::error title=Infrastructure failure (${report.failure})::${report.detail}`);
     throw error;
   } finally {
-    const pinnedSkills = await installedSkills(productDir);
-    if (pinnedSkills === undefined) {
-      console.log("::warning title=Skills not installed::No pinned skills were found in .claude/skills");
+    // The install record src/skills/fetch.ts wrote last, naming each source and the skills from it.
+    const installed = await readInstallRecord(productDir);
+    if (installed === undefined) {
+      console.log("::warning title=Skills not installed::No install record was found in .claude/skills");
     } else {
-      const missing = missingSkills(lines, pinnedSkills.names);
+      const missing = missingSkills(lines, installed);
       if (missing.length > 0) {
-        console.log(`::warning title=Pinned skills missing at init::${missing.join(", ")}`);
+        console.log(`::warning title=Installed skills missing at init::${missing.join(", ")}`);
       }
     }
-    await writeSummary(runSummary({ role: name, effort: role.effort, lines, ...(pinnedSkills === undefined ? {} : { pinnedSkills }) }));
+    await writeSummary(runSummary({ role: name, effort: role.effort, lines, ...(installed === undefined ? {} : { installed }) }));
   }
-}
-
-/** The skills src/skills/fetch.ts installed into the checkout, and the commit they came from. */
-async function installedSkills(productDir: string): Promise<{ sha: string; names: string[] } | undefined> {
-  const dir = join(productDir, ".claude", "skills");
-  const sha = (await readIfPresent(join(dir, SKILLS_MARKER)))?.trim();
-  if (sha === undefined || sha === "") return undefined;
-  const entries = await readdir(dir, { withFileTypes: true });
-  return { sha, names: entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name) };
 }
 
 const roles: Record<string, () => Promise<void>> = {
