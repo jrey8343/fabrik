@@ -27,6 +27,14 @@ export interface KitConfig {
   };
   /** How many Tickets may be in flight at once; 0 pauses Dispatch. */
   readonly maxInFlight: number;
+  /**
+   * Attention caps the Operator can only lower below the Kit defaults (#147).
+   * Nothing acts on them yet.
+   */
+  readonly caps: {
+    /** How many Design sessions may hold a slot at once; 0 pauses new ones. */
+    readonly designSessions: number;
+  };
   /** The Operator's GitHub login; null means the Product repo's owner. */
   readonly operator: string | null;
   readonly instructions: Readonly<Record<Phase, string | null>>;
@@ -67,6 +75,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     stepUp: { model: OPUS, effort: null },
   },
   maxInFlight: 2,
+  caps: { designSessions: 2 },
   operator: null,
   instructions: { triage: null, design: null, implement: null, review: null },
 };
@@ -125,6 +134,7 @@ function readConfig(file: Reader): KitConfig {
       stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp),
     },
     maxInFlight: file.wholeNumber("max_in_flight", 0) ?? defaults.maxInFlight,
+    caps: readCaps(file.object("caps"), defaults.caps),
     operator: orDefault(file.nullableString("operator", checkLogin), defaults.operator),
   };
 }
@@ -144,6 +154,15 @@ function readAgentRole(role: Reader, defaults: AgentRole): AgentRole {
 
 function readDispatch(role: Reader, defaults: KitConfig["roles"]["dispatch"]): KitConfig["roles"]["dispatch"] {
   return { timeoutMinutes: role.positiveInteger("timeout_minutes") ?? defaults.timeoutMinutes };
+}
+
+/**
+ * Every cap goes through the tighten-only reader, so a repo can lower its
+ * attention budget but never raise it (#147). The Monitor and Ideas and Maps
+ * Specs register their caps here.
+ */
+function readCaps(caps: Reader, defaults: KitConfig["caps"]): KitConfig["caps"] {
+  return { designSessions: caps.cap("design_sessions", defaults.designSessions) ?? defaults.designSessions };
 }
 
 function readStepUp(role: Reader, defaults: KitConfig["roles"]["stepUp"]): KitConfig["roles"]["stepUp"] {
@@ -256,6 +275,14 @@ class Reader {
       return undefined;
     }
     return value;
+  }
+
+  /** A whole number from 0 up to `kitDefault`: a cap can only be lowered (#147). */
+  cap(key: string, kitDefault: number): number | undefined {
+    const value = this.wholeNumber(key, 0);
+    if (value === undefined || value <= kitDefault) return value;
+    this.#fail(`${this.#field(key)} is ${value}, but a cap can only be lowered: the Kit default is ${kitDefault}`);
+    return undefined;
   }
 
   /** A string, or null to say "none"; undefined when left out. */
