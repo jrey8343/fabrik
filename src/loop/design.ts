@@ -78,7 +78,11 @@ export function answerRound(
 }
 
 
-/** The live session's outcome is already on GitHub, so the Kit only moves the issue on, as an async finish would. */
+/**
+ * The live session's outcome is already on GitHub, so the Kit only moves the
+ * issue on, as an async finish would. Each outcome ends the session and frees
+ * its slot, so it asks for a Design queue check.
+ */
 function landLiveOutcome(issueNumber: number, outcome: string, operator: string): Plan {
   const leaveSession: Action = { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN };
   // A brief or a Spec leaves new ready work, so see whether it can start.
@@ -86,7 +90,12 @@ function landLiveOutcome(issueNumber: number, outcome: string, operator: string)
     case "brief":
       return {
         kind: "act",
-        actions: [leaveSession, { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] }, { kind: "check-dispatch" }],
+        actions: [
+          leaveSession,
+          { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] },
+          { kind: "check-dispatch" },
+          CHECK_DESIGN_QUEUE,
+        ],
       };
     case "operator-brief":
       // Only the Operator can do this work, so it waits for them, not Dispatch.
@@ -96,13 +105,14 @@ function landLiveOutcome(issueNumber: number, outcome: string, operator: string)
           leaveSession,
           { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_HUMAN] },
           { kind: "assign", issue: issueNumber, assignee: operator },
+          CHECK_DESIGN_QUEUE,
         ],
       };
     case "spec":
       // The Operator's comment already names the Spec that supersedes this issue.
       return {
         kind: "act",
-        actions: [leaveSession, { kind: "close", issue: issueNumber, reason: "completed" }, { kind: "check-dispatch" }],
+        actions: [leaveSession, { kind: "close", issue: issueNumber, reason: "completed" }, { kind: "check-dispatch" }, CHECK_DESIGN_QUEUE],
       };
     default:
       return {
@@ -190,9 +200,10 @@ function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: Issue
       actions: [{ kind: "comment", issue: issueNumber, body: roundComment(round, output, snapshot.operator, sentBack) }],
     };
   }
+  // Every outcome but a round ends the session and frees its slot, so the next waiting issue can start.
   if (output.kind === "not-planned") {
     // Nothing new is ready, so there is nothing for Dispatch to check.
-    return { kind: "act", actions: closeAsNotPlanned(issueNumber, output.comment, snapshot.issue.openBlocking) };
+    return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, output.comment, snapshot.issue.openBlocking), CHECK_DESIGN_QUEUE] };
   }
   // The Spec stays the single parent of its work: a Ticket under one splits into
   // siblings, and only an issue with no Spec above it gets a Spec of its own.
@@ -208,14 +219,14 @@ function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: Issue
   if (output.kind === "brief") {
     // Only the Operator can do an Operator brief's work, so it waits for them, not Dispatch.
     return "operator" in output.brief
-      ? { kind: "act", actions: rewriteAsOperatorBrief(issueNumber, output.comment, output.brief, snapshot.operator) }
-      : { kind: "act", actions: [...rewriteAsBrief(issueNumber, output.comment, output.brief), checkDispatch] };
+      ? { kind: "act", actions: [...rewriteAsOperatorBrief(issueNumber, output.comment, output.brief, snapshot.operator), CHECK_DESIGN_QUEUE] }
+      : { kind: "act", actions: [...rewriteAsBrief(issueNumber, output.comment, output.brief), checkDispatch, CHECK_DESIGN_QUEUE] };
   }
   const landed =
     output.kind === "spec"
       ? supersedeBySpec(issueNumber, output, snapshot.issue, snapshot.operator)
       : splitIntoSiblings(issueNumber, output, snapshot.issue, parent ?? 0, snapshot.operator);
-  return { kind: "act", actions: [...landed, checkDispatch] };
+  return { kind: "act", actions: [...landed, checkDispatch, CHECK_DESIGN_QUEUE] };
 }
 
 /**

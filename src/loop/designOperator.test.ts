@@ -173,6 +173,7 @@ describe("Finishing a Design session with an Operator brief", () => {
         { kind: "remove-label", issue: 7, label: "needs-design" },
         { kind: "add-labels", issue: 7, labels: ["ready-for-human"] },
         { kind: "assign", issue: 7, assignee: "jrey" },
+        { kind: "check-design-queue" },
       ],
     });
   });
@@ -205,7 +206,7 @@ describe("Dispatch and Operator steps", () => {
 });
 
 describe("Landing a live Design session that ended with an Operator brief", () => {
-  it("swaps needs-design for ready-for-human and assigns the Operator, without a Dispatch check", () => {
+  it("swaps needs-design for ready-for-human and assigns the Operator, without a Dispatch check, and asks for a Design queue check", () => {
     const plan = planFor(
       {
         kind: "issue-comment-created",
@@ -225,6 +226,7 @@ describe("Landing a live Design session that ended with an Operator brief", () =
         { kind: "remove-label", issue: 7, label: "needs-design" },
         { kind: "add-labels", issue: 7, labels: ["ready-for-human"] },
         { kind: "assign", issue: 7, assignee: "jrey" },
+        { kind: "check-design-queue" },
       ],
     });
   });

@@ -246,6 +246,7 @@ describe("A waiting issue's live Design session", () => {
         { kind: "remove-label", issue: 7, label: "needs-design" },
         { kind: "add-labels", issue: 7, labels: ["ready-for-agent"] },
         { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
       ],
     });
   });

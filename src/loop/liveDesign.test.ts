@@ -25,6 +25,7 @@ describe("Landing a live Design session's outcome", () => {
         { kind: "remove-label", issue: 7, label: "needs-design" },
         { kind: "add-labels", issue: 7, labels: ["ready-for-agent"] },
         { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
       ],
     });
   });
@@ -42,6 +43,7 @@ describe("Landing a live Design session's outcome", () => {
         { kind: "remove-label", issue: 7, label: "needs-design" },
         { kind: "close", issue: 7, reason: "completed" },
         { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
       ],
     });
   });

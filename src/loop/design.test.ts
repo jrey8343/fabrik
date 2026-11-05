@@ -242,6 +242,7 @@ describe("Finishing a Design session with an agent brief", () => {
         { kind: "remove-label", issue: 7, label: "needs-design" },
         { kind: "add-labels", issue: 7, labels: ["ready-for-agent"] },
         { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
       ],
     });
   });
@@ -255,7 +256,7 @@ describe("Finishing a Design session with an agent brief", () => {
       kitConfig(),
     );
 
-    expect(plan.kind === "act" ? plan.actions.at(-1) : null).toEqual({ kind: "check-dispatch" });
+    expect(plan.kind === "act" ? plan.actions : []).toContainEqual({ kind: "check-dispatch" });
   });
 
   it("notifies nobody: neither the body nor the comment @-mentions anyone", () => {
