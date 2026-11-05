@@ -81,4 +81,65 @@ describe("reading an agent's stream-json", () => {
     expect(stream.apiRetryCount).toBe(2);
     expect(stream.apiRetries.map((retry) => retry["error"])).toEqual(["overloaded", "authentication_failed"]);
   });
+
+  it("gives each assistant turn's text and tool calls in order, each call with its result", () => {
+    const stream = readStream(
+      lines(
+        init,
+        { type: "assistant", message: { content: [{ type: "thinking", thinking: "hmm" }, { type: "text", text: "Loading tdd." }] } },
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Skill", input: { skill: "tdd" } }] } },
+        { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "Launching skill: tdd" }] } },
+        { type: "user", message: { content: [{ type: "text", text: "Base directory for this skill: …" }] } },
+        {
+          type: "assistant",
+          message: {
+            content: [
+              { type: "tool_use", id: "t2", name: "Bash", input: { command: "npm test" } },
+              { type: "tool_use", id: "t3", name: "Read", input: { file_path: "src/a.ts" } },
+            ],
+          },
+        },
+        {
+          type: "user",
+          message: {
+            content: [
+              { type: "tool_result", tool_use_id: "t3", content: [{ type: "text", text: "line 1" }, { type: "image" }, { type: "text", text: "line 2" }] },
+              { type: "tool_result", tool_use_id: "t2", content: "1 failed", is_error: true },
+            ],
+          },
+        },
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "t4", name: "Bash", input: { command: "sleep 999" } }] } },
+      ),
+    );
+
+    expect(stream.steps).toEqual([
+      { kind: "text", text: "Loading tdd.", parentToolUseId: null },
+      { kind: "tool-call", id: "t1", name: "Skill", input: { skill: "tdd" }, result: "Launching skill: tdd", isError: false, parentToolUseId: null },
+      { kind: "tool-call", id: "t2", name: "Bash", input: { command: "npm test" }, result: "1 failed", isError: true, parentToolUseId: null },
+      { kind: "tool-call", id: "t3", name: "Read", input: { file_path: "src/a.ts" }, result: "line 1\n[image]\nline 2", isError: false, parentToolUseId: null },
+      { kind: "tool-call", id: "t4", name: "Bash", input: { command: "sleep 999" }, result: null, isError: false, parentToolUseId: null },
+    ]);
+  });
+
+  it("marks the text and tool calls a subagent gave with the call that started it", () => {
+    const stream = readStream(
+      lines(
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "task", name: "Task", input: { prompt: "explore" } }] } },
+        { type: "assistant", parent_tool_use_id: "task", message: { content: [{ type: "text", text: "Exploring." }] } },
+        { type: "assistant", parent_tool_use_id: "task", message: { content: [{ type: "tool_use", id: "g1", name: "Grep", input: { pattern: "x" } }] } },
+        { type: "user", parent_tool_use_id: "task", message: { content: [{ type: "tool_result", tool_use_id: "g1", content: "a.ts" }] } },
+        { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "task", content: "Found a.ts" }] } },
+      ),
+    );
+
+    expect(stream.steps).toEqual([
+      { kind: "tool-call", id: "task", name: "Task", input: { prompt: "explore" }, result: "Found a.ts", isError: false, parentToolUseId: null },
+      { kind: "text", text: "Exploring.", parentToolUseId: "task" },
+      { kind: "tool-call", id: "g1", name: "Grep", input: { pattern: "x" }, result: "a.ts", isError: false, parentToolUseId: "task" },
+    ]);
+  });
+
+  it("has no steps when the stream held no assistant turns", () => {
+    expect(readStream(lines(init, { type: "assistant" }, { type: "assistant", message: { content: "text" } })).steps).toEqual([]);
+  });
 });
