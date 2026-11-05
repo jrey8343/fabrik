@@ -452,7 +452,7 @@ describe("A retry's fix comment and the Operator comments it weighed", () => {
   ])("ignores a considered field that is %s: the fix still lands, weighing none", (_, named) => {
     const plan = planFor(weighing(named, given), retrySnapshot(), kitConfig());
 
-    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["push-branch", "edit-issue-body", "comment"]);
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
     expect(fixCommentOf(plan)).not.toContain("Operator comments considered");
   });
 });
