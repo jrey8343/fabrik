@@ -27,10 +27,7 @@ export interface KitConfig {
   };
   /** How many Tickets may be in flight at once; 0 pauses Dispatch. */
   readonly maxInFlight: number;
-  /**
-   * Attention caps the Operator can only lower below the Kit defaults (#147).
-   * Nothing acts on them yet.
-   */
+  /** Attention caps the Operator can only lower below the Kit defaults (#147). */
   readonly caps: {
     /** How many Design sessions may hold a slot at once; 0 pauses new ones. */
     readonly designSessions: number;

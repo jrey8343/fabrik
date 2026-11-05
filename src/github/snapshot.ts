@@ -28,7 +28,14 @@ const ISSUE_QUERY = `
         author { login }
         labels(first: 100) { nodes { name } }
         parent { number }
-        comments(last: 100) { nodes { body author { __typename } } }
+        comments(last: 100) { nodes { body createdAt author { __typename } } }
+        timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT], last: 100) {
+          nodes {
+            __typename
+            ... on LabeledEvent { createdAt label { name } }
+            ... on UnlabeledEvent { createdAt label { name } actor { __typename } }
+          }
+        }
         closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number } }
         blockedBy(first: 50) { nodes { number state repository { nameWithOwner } } }
         blocking(first: 50) { nodes { number state repository { nameWithOwner } } }
@@ -46,7 +53,9 @@ interface IssueQueryResult {
       author: { login: string } | null;
       labels: { nodes: { name: string }[] };
       parent: { number: number } | null;
-      comments: { nodes: { body: string; author: { __typename: string } | null }[] };
+      comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
+      // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
+      timelineItems: { nodes: LabelTimelineItem[] };
       closedByPullRequestsReferences: { nodes: { number: number }[] };
       blockedBy: DependencyEdges;
       blocking: DependencyEdges;
@@ -162,7 +171,7 @@ const DESIGN_QUEUE_QUERY = `
           number
           createdAt
           labels(first: 100) { nodes { name } }
-          comments(last: 100) { nodes { body author { __typename } } }
+          comments(last: 100) { nodes { body createdAt author { __typename } } }
           timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT], last: 100) {
             nodes {
               __typename
@@ -176,8 +185,8 @@ const DESIGN_QUEUE_QUERY = `
   }
 `;
 
-/** A label coming on or off an issue, oldest first, as DESIGN_QUEUE_QUERY reads it. */
-interface DesignQueueTimelineItem {
+/** A label coming on or off an issue, oldest first, as ISSUE_QUERY and DESIGN_QUEUE_QUERY read it. */
+interface LabelTimelineItem {
   __typename?: string;
   createdAt?: string;
   label?: { name: string };
@@ -193,9 +202,9 @@ interface DesignQueueQueryResult {
         number: number;
         createdAt: string;
         labels: { nodes: { name: string }[] };
-        comments: { nodes: { body: string; author: { __typename: string } | null }[] };
+        comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
         // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
-        timelineItems: { nodes: DesignQueueTimelineItem[] };
+        timelineItems: { nodes: LabelTimelineItem[] };
       }[];
     };
   };
@@ -410,7 +419,13 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
   if (issue === null) {
     throw new Error(`Issue #${number} not found in ${repo.owner}/${repo.name}`);
   }
-  const comments = issue.comments.nodes.map((comment) => ({ body: comment.body, byBot: comment.author?.__typename === "Bot" }));
+  const comments = issue.comments.nodes.map((comment) => ({
+    body: comment.body,
+    createdAt: comment.createdAt,
+    byBot: comment.author?.__typename === "Bot",
+  }));
+  const timeline = issue.timelineItems.nodes;
+  const thisSession = commentsSince(lastNeededDesignAt(timeline), comments);
   return {
     issue: {
       number: issue.number,
@@ -419,8 +434,10 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
-      ...designSessionOf(comments),
-      turnFailed: designTurnFailedIn(comments),
+      designRounds: designSessionOf(thisSession).designRounds,
+      sentBack: designSessionOf(comments).sentBack,
+      turnFailed: designTurnFailedIn(thisSession),
+      firstTurnClaimed: firstTurnClaimed(timeline),
       emptyDiffs: countEmptyDiffs(comments.map((comment) => comment.body)),
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),
@@ -566,23 +583,23 @@ async function gatherDesignQueue(
     for (const issue of page.repository.issues.nodes) {
       const comments = issue.comments.nodes.map((comment) => ({
         body: comment.body,
+        createdAt: comment.createdAt,
         byBot: comment.author?.__typename === "Bot",
       }));
       const timeline = issue.timelineItems.nodes;
-      const added = timeline
-        .filter((event) => isLabeled(event, NEEDS_DESIGN) && event.createdAt !== undefined)
-        .map((event) => event.createdAt as string);
+      const neededDesignAt = lastNeededDesignAt(timeline);
+      const thisSession = commentsSince(neededDesignAt, comments);
       const session = designSessionOf(comments);
       if (firstTurnClaimed(timeline)) claimed.push(issue.number);
       issues.push({
         number: issue.number,
         labels: issue.labels.nodes.map((label) => label.name),
-        designRounds: session.designRounds,
-        turnFailed: designTurnFailedIn(comments),
+        designRounds: designSessionOf(thisSession).designRounds,
+        turnFailed: designTurnFailedIn(thisSession),
         // A third empty diff is the one that sent the Ticket back to design.
         redesign: session.sentBack !== null || countEmptyDiffs(comments.map((comment) => comment.body)) > MAX_RETRIES,
         // The latest time it got needs-design; an issue whose timeline doesn't show it waits from when it opened.
-        neededDesignAt: added.at(-1) ?? issue.createdAt,
+        neededDesignAt: neededDesignAt ?? issue.createdAt,
       });
     }
     after = page.repository.issues.pageInfo.hasNextPage ? page.repository.issues.pageInfo.endCursor : null;
@@ -600,7 +617,24 @@ async function gatherDesignQueue(
   };
 }
 
-function isLabeled(event: DesignQueueTimelineItem, name: string): boolean {
+/** The latest time an issue got needs-design, from its label timeline; null if it doesn't show it. */
+function lastNeededDesignAt(timeline: readonly LabelTimelineItem[]): string | null {
+  return timeline.filter((event) => isLabeled(event, NEEDS_DESIGN)).at(-1)?.createdAt ?? null;
+}
+
+/**
+ * The comments posted since an issue last got needs-design: its current
+ * Design session's. Adding needs-design starts a new session, so a round or
+ * failure notice from one the Operator abandoned by taking the label off
+ * doesn't count toward it.
+ */
+function commentsSince<C extends { readonly createdAt: string }>(neededDesignAt: string | null, comments: readonly C[]): readonly C[] {
+  if (neededDesignAt === null) return comments;
+  const start = Date.parse(neededDesignAt);
+  return comments.filter((comment) => Date.parse(comment.createdAt) >= start);
+}
+
+function isLabeled(event: LabelTimelineItem, name: string): boolean {
   return event.__typename === "LabeledEvent" && event.label?.name === name;
 }
 
@@ -611,7 +645,7 @@ function isLabeled(event: DesignQueueTimelineItem, name: string): boolean {
  * until its round or failure notice shows in the thread, so a check never
  * starts a second session in that gap. Only a bot taking it off counts.
  */
-function firstTurnClaimed(timeline: readonly DesignQueueTimelineItem[]): boolean {
+function firstTurnClaimed(timeline: readonly LabelTimelineItem[]): boolean {
   let claimed = false;
   for (const event of timeline) {
     if (isLabeled(event, NEEDS_DESIGN)) claimed = false;
@@ -625,6 +659,12 @@ function firstTurnClaimed(timeline: readonly DesignQueueTimelineItem[]): boolean
 /** Workflow-run statuses, short of completed, whose Implement job may still hold a slot. */
 const UNFINISHED_RUNS = ["in_progress", "queued", "waiting", "pending", "requested"] as const;
 
+interface Job {
+  name: string;
+  status: string;
+  conclusion: string | null;
+}
+
 /**
  * Implement jobs not yet finished, across every workflow run in the repo:
  * running, and also queued or waiting (behind its concurrency group, say)
@@ -632,25 +672,36 @@ const UNFINISHED_RUNS = ["in_progress", "queued", "waiting", "pending", "request
  * uncounted between the label coming off and the run starting.
  */
 export async function countImplementRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<number> {
-  const jobs = await unfinishedJobs(github, repo);
-  return jobs.filter((name) => name === IMPLEMENT_JOB_NAME || name.endsWith(` / ${IMPLEMENT_JOB_NAME}`)).length;
+  const jobs = await jobsOfUnfinishedRuns(github, repo);
+  return jobs
+    .filter((job) => job.status !== "completed")
+    .filter(({ name }) => name === IMPLEMENT_JOB_NAME || name.endsWith(` / ${IMPLEMENT_JOB_NAME}`)).length;
 }
 
 const DESIGN_JOB = new RegExp(`^(?:.+ / )?${DESIGN_JOB_NAME} #([1-9][0-9]*)$`);
 
 /**
  * The issue of each Design-session turn not yet finished, across every
- * workflow run in the repo, read from its job's name: running, and also
- * queued or waiting behind its issue's concurrency group, lowest number first.
+ * workflow run in the repo, read from its job's name, lowest number first. A
+ * turn is in progress until its whole run finishes: running, queued or
+ * waiting behind its issue's concurrency group, and also after its job is
+ * done while the push job is still posting its round or failure notice, so no
+ * slot goes uncounted before the thread shows it. A Design job skipped
+ * because the run went another way is no turn.
  */
 export async function designTurnsInProgress(github: Pick<GitHub, "rest">, repo: Repo): Promise<number[]> {
-  const jobs = await unfinishedJobs(github, repo);
-  const issues = new Set(jobs.flatMap((name) => DESIGN_JOB.exec(name)?.[1] ?? []).map(Number));
+  const jobs = await jobsOfUnfinishedRuns(github, repo);
+  const issues = new Set(
+    jobs
+      .filter((job) => job.conclusion !== "skipped")
+      .flatMap((job) => DESIGN_JOB.exec(job.name)?.[1] ?? [])
+      .map(Number),
+  );
   return [...issues].sort((a, b) => a - b);
 }
 
-/** The names of the jobs not yet completed in every workflow run not yet completed. */
-async function unfinishedJobs(github: Pick<GitHub, "rest">, repo: Repo): Promise<string[]> {
+/** Every job, finished or not, of every workflow run not yet completed. */
+async function jobsOfUnfinishedRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<Job[]> {
   const base = `/repos/${repo.owner}/${repo.name}/actions`;
   const runIds = new Set<number>();
   for (const status of UNFINISHED_RUNS) {
@@ -659,14 +710,14 @@ async function unfinishedJobs(github: Pick<GitHub, "rest">, repo: Repo): Promise
     };
     for (const run of runs.workflow_runs) runIds.add(run.id);
   }
-  const names: string[] = [];
+  const jobs: Job[] = [];
   for (const id of runIds) {
-    const jobs = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as {
-      jobs: { name: string; status: string }[];
+    const page = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as {
+      jobs: { name: string; status: string; conclusion?: string | null }[];
     };
-    names.push(...jobs.jobs.filter((job) => job.status !== "completed").map((job) => job.name));
+    jobs.push(...page.jobs.map((job) => ({ name: job.name, status: job.status, conclusion: job.conclusion ?? null })));
   }
-  return names;
+  return jobs;
 }
 
 /** Reads the Kit config folder's files from the Product repo at `ref`, through the API. */

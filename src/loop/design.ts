@@ -48,17 +48,18 @@ const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
 export function startQueuedSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
   const removeLabel: Action = { kind: "remove-label", issue: issueNumber, label: DESIGN_LABEL };
   if (whileInSession(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
-  const start = startAgentRun("design", issueNumber, config);
-  return start.kind === "act" ? { kind: "act", actions: [removeLabel, ...start.actions] } : start;
+  return { kind: "act", actions: [removeLabel, ...startAgentRun("design", issueNumber, config).actions] };
 }
 
 /**
  * The Operator's reply to a round starts the next turn; nobody else's comment,
  * and no bot's, does. The Operator's comment that opens with a live outcome
  * marker instead lands what a live session decided, even on a waiting issue.
- * Only an issue that holds a Design session slot by a posted round or a failed
- * turn starts a turn: on any other, the queue check starts round 1, which
- * reads the whole thread, so the comment is context (#147, in the spirit of ADR-0007).
+ * Only an issue that holds a Design session slot, by its first turn having
+ * started, a posted round or a failed turn, starts a turn: on any other, the
+ * queue check starts round 1, which reads the whole thread, so the comment is
+ * context (#147, in the spirit of ADR-0007). A turn started while round 1's is
+ * still running waits behind it, so it reads round 1 and the comment.
  */
 export function answerRound(
   { issue: issueNumber, commenter, commenterIsBot, body }: Extract<LoopEvent, { kind: "issue-comment-created" }>,
@@ -78,8 +79,8 @@ export function answerRound(
   if (notNow !== null) return notNow;
   const live = LIVE_OUTCOME_MARKER.exec(body);
   if (live?.[1] !== undefined) return landLiveOutcome(issueNumber, live[1], snapshot.operator);
-  const { designRounds, turnFailed } = snapshot.issue;
-  if (designRounds === 0 && !turnFailed) {
+  const { designRounds, turnFailed, firstTurnClaimed } = snapshot.issue;
+  if (designRounds === 0 && !turnFailed && !firstTurnClaimed) {
     return {
       kind: "nothing",
       reason: `#${issueNumber} holds no Design session slot yet, so the Operator's comment is context for its round 1, not a turn of its own`,

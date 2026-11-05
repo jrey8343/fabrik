@@ -709,7 +709,7 @@ jobs:
     needs: [kit, push]
     if: ${{ !cancelled() && needs.push.result == 'success' && needs.push.outputs.design-queue == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ fromJSON(needs.kit.outputs.dispatch-timeout-minutes) }}
+    timeout-minutes: 10
     # One check at a time per repo, so two can't both fill the same free slot.
     # A newer pending check replacing an older one is fine: each reads fresh state.
     concurrency:
