@@ -15,7 +15,7 @@ import { type NeededJob, type Needs, pushJobInput } from "./pushJob.ts";
 export interface RunEnd {
   /** The jobs' `needs`, as `toJSON(needs)` gives it, the Kit job's outputs included. */
   readonly needs: Needs;
-  /** The Actions event's issue number, the subject of a Triage or Design run. */
+  /** The Actions event's issue number, the subject of a Triage, Design or Auditor run. */
   readonly eventIssue: number | null;
   /** The Product repo, as `owner/name`. */
   readonly repo: string;
@@ -66,7 +66,7 @@ export interface RunRecord {
   readonly runId: number;
   readonly runAttempt: number;
   readonly role: AgentRole;
-  /** The run's subject: the Ticket for Implement and Review, the event's issue for Triage and Design. */
+  /** The run's subject: the Ticket for Implement and Review, the event's issue for Triage and Design, the pending Audit for the Auditor. */
   readonly issue: number;
   readonly pullRequest: number | null;
   readonly endedAt: string;
@@ -76,7 +76,10 @@ export interface RunRecord {
   readonly retry: number;
   readonly stepUp: boolean;
   readonly requestChanges: boolean;
-  /** The commit the run started from: an Implement branch's base, a Review's PR head, the event's commit for Triage and Design. */
+  /**
+   * The commit the run started from: an Implement branch's base, a Review's PR
+   * head, the event's commit for Triage and Design, the Audit's marked commit for the Auditor.
+   */
   readonly baseSha: string | null;
   readonly jobResult: string;
   readonly subtype: string | null;
