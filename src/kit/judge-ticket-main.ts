@@ -1,8 +1,10 @@
 // Reads the Ticket a scored run built, for the judge (src/kit/judge-main.ts):
 // its title and body only, through the judge job's read-only token, in a step
-// of its own before the Claude token loads, so the judge never holds a GitHub
-// token. The Ticket may have been edited since the run; the judge sees it as
-// it is now, which is close enough.
+// of its own before the Claude token loads, so the token stays out of the
+// judge's env. That keeps things tidy but is no boundary (ADR-0004): the judge
+// can't write because its job holds only that read-only token. The Ticket may
+// have been edited since the run; the judge sees it as it is now, which is
+// close enough.
 //   node src/kit/judge-ticket-main.ts <out file>
 // Env: GH_TOKEN, the job's read-only GITHUB_TOKEN; FABRIK_TICKET, the Ticket's number.
 import { writeFile } from "node:fs/promises";

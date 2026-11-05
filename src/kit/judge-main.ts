@@ -4,7 +4,8 @@
 // tools (src/kit/judgeLaunch.ts) through the same Sandcastle runner,
 // metered-billing preflight and init check as the agent roles
 // (src/agent/launch.ts), in an empty directory: never a Product checkout,
-// never the Kit's. It holds no GitHub token. It leaves its answer, checked
+// never the Kit's. Its env holds no GitHub token, and its job holds only the
+// read-only one, which reads the Ticket (ADR-0004). It leaves its answer, checked
 // against the rubrics, or its failure report, for the score-record job, and
 // its transcript beside them.
 //   node src/kit/judge-main.ts
