@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GitHubError } from "../github/client.ts";
+import { noWait, storeWith } from "../__fixtures__/store.ts";
 import type { RunRecord, RunRecordFiles } from "./runRecord.ts";
 import { recordWriteSummary, writeRunRecord } from "./recordWriter.ts";
 
@@ -12,49 +12,6 @@ function files(overrides: Partial<RunRecordFiles> = {}): RunRecordFiles {
   const record = { schema: 1, repo: "acme/widgets", runId: 9001, runAttempt: 1, role: "triage", issue: 12 } as unknown as RunRecord;
   return { record, recordPath: RECORD_PATH, transcriptPath: TRANSCRIPT_PATH, ...overrides };
 }
-
-/**
- * The fabrik-runs store through the Contents API: its visibility, the files it
- * already holds, how many parallel commits beat each write to a path, and the
- * paths it refuses (422) for some other reason. Its 422 for a file already
- * there says nothing of a `sha`: the writer looks rather than reading the text.
- */
-function storeWith(options: { private?: boolean; files?: string[]; conflicts?: Record<string, number>; refused?: string[] } = {}) {
-  const held = new Map<string, string>((options.files ?? []).map((path) => [path, "earlier"]));
-  const conflicts = { ...options.conflicts };
-  const writes: string[] = [];
-  return {
-    held,
-    writes,
-    async rest(method: string, path: string, body?: unknown): Promise<unknown> {
-      if (method === "GET" && path === "/repos/jrey8343/fabrik-runs") return { private: options.private ?? true };
-      const contents = /^\/repos\/jrey8343\/fabrik-runs\/contents\/(.+)$/.exec(path);
-      if (method === "GET" && contents !== null) {
-        const file = decodeURIComponent(contents[1] ?? "");
-        if (!held.has(file)) throw new GitHubError(`GET ${path} failed: 404 Not Found`, 404);
-        return { path: file, sha: "s".repeat(40) };
-      }
-      const put = contents;
-      if (method === "PUT" && put !== null) {
-        const file = decodeURIComponent(put[1] ?? "");
-        const { content, sha } = body as { content: string; sha?: string };
-        writes.push(file);
-        if ((conflicts[file] ?? 0) > 0) {
-          conflicts[file] = (conflicts[file] ?? 0) - 1;
-          throw new GitHubError(`PUT ${path} failed: 409 is at abc but expected def`, 409);
-        }
-        if ((held.has(file) && sha === undefined) || (options.refused ?? []).includes(file)) {
-          throw new GitHubError(`PUT ${path} failed: 422 Invalid request.`, 422);
-        }
-        held.set(file, content);
-        return { content: { path: file } };
-      }
-      throw new Error(`Unexpected call: ${method} ${path}`);
-    },
-  };
-}
-
-const noWait = async () => {};
 
 describe("Writing a run's Run record to the store", () => {
   it("writes the gzipped transcript, then the record", async () => {

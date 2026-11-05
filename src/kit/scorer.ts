@@ -98,8 +98,8 @@ export interface JudgeRun {
   readonly model: string;
   /** The judge's Run record's store path, where what scoring cost lives. */
   readonly record: string;
-  /** Whether the transcript's digest was trimmed to fit the judge's budget. */
-  readonly digestTrimmed: boolean;
+  /** Whether the transcript's digest was trimmed to fit the judge's budget; null when the judge failed before it built its prompt. */
+  readonly digestTrimmed: boolean | null;
 }
 
 /**
@@ -157,7 +157,7 @@ export interface ScoreFile {
   readonly scoredAt: string;
   /** The judge's model and Run record path, or null for a skip decided before any judge ran. */
   readonly judge: { readonly model: string; readonly record: string } | null;
-  /** Whether the judge read a trimmed digest; null when no judge ran. */
+  /** Whether the judge read a trimmed digest; null when no judge ran, or it failed before it built its prompt. */
   readonly digestTrimmed: boolean | null;
   readonly skip: ScoreSkip | null;
   /** One per rubric, in the rubrics' order. */
@@ -204,7 +204,7 @@ function resultOf(rubrics: readonly Rubric[], outcome: ScoringOutcome): Pick<Sco
     case "skip":
       return { skip: outcome.skip, entries: null };
     case "judged": {
-      const entries = entriesOf(rubrics, outcome.output);
+      const entries = scoreEntries(rubrics, outcome.output);
       return entries === null ? { skip: { reason: "judge-output-invalid" }, entries: null } : { skip: null, entries };
     }
     default:
@@ -216,9 +216,11 @@ function resultOf(rubrics: readonly Rubric[], outcome: ScoringOutcome): Pick<Sco
  * Each rubric's score from the judge's output, in the rubrics' order, with
  * its pass from the rubric's threshold. Null, so the output is invalid as a
  * whole, unless it's a JudgeOutput answering each rubric exactly once with a
- * score from 0 to 1 and one of that rubric's labels.
+ * score from 0 to 1 and one of that rubric's labels. The judge checks its own
+ * answer with this too (src/kit/judge.ts), so it's asked to fix what the
+ * score file would refuse.
  */
-function entriesOf(rubrics: readonly Rubric[], output: unknown): readonly ScoreEntry[] | null {
+export function scoreEntries(rubrics: readonly Rubric[], output: unknown): readonly ScoreEntry[] | null {
   const answers = answersOf(output);
   if (answers === null || answers.length !== rubrics.length) return null;
   const entries: ScoreEntry[] = [];
