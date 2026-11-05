@@ -206,8 +206,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # Named for its issue: a Design queue check reads the issues with a turn in
+  # progress from these names (DESIGN_JOB_NAME in src/github/snapshot.ts).
   design:
-    name: Design-session turn
+    name: "Design-session turn #${{ github.event.issue.number }}"
     needs: kit
     if: needs.kit.outputs.route == 'design'
     runs-on: ubuntu-latest
