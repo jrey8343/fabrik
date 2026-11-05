@@ -1,14 +1,18 @@
-// The weekly skills bump: given the pinned skills lock and what upstream main
-// looks like now, decide whether to open (or refresh) a PR bumping the lock,
-// and write that PR. Pure, no I/O; src/skills/bump-main.ts gathers the input.
+// The weekly skills bumps: given a pin and what upstream looks like now, decide
+// whether to open (or refresh) a PR bumping it, and write that PR. Fabrik's own
+// bump moves the Base skills in skills.lock.json; a Product repo's bump moves
+// one of its own Skills sources in .fabrik/skills.lock.json, and cares only
+// about the skills it picks. Pure, no I/O; src/skills/bump-main.ts gathers the
+// input for Fabrik's own bump.
 //
 // Upstream text (commit messages, the diff) only ever goes into the body
 // inside code fences, so it can't mention people or link issues here.
+import { SKILLS_SOURCES_LOCK_PATH, type SkillsSource } from "../kit/config.ts";
 import { type SkillsLock, skillFolders } from "./lock.ts";
 
-/** What the GitHub compare API says about upstream main against the pin. */
+/** What the GitHub compare API says about upstream (main, or a source's default branch) against the pin. */
 export interface UpstreamSkills {
-  /** Upstream main's commit SHA. */
+  /** Upstream's head commit SHA. */
   readonly head: string;
   /** The compare status of head against the pin. */
   readonly status: "identical" | "ahead" | "behind" | "diverged";
@@ -30,7 +34,7 @@ export type SkillsBump =
       readonly branch: string;
       readonly title: string;
       readonly body: string;
-      /** The new skills.lock.json text. */
+      /** The new lockfile text: skills.lock.json, or a Product repo's .fabrik/skills.lock.json. */
       readonly lockText: string;
     };
 
@@ -42,54 +46,186 @@ const MAX_BODY = 65_536;
 const BODY_RESERVE = 512;
 
 export function planSkillsBump(lock: SkillsLock, upstream: UpstreamSkills): SkillsBump {
-  if (upstream.head === lock.sha || upstream.status === "identical" || upstream.status === "behind") {
-    return { kind: "up-to-date" };
-  }
+  if (!hasMoved(lock, upstream)) return { kind: "up-to-date" };
 
   const before = new Set(skillFolders(upstream.manifestAtPin).map((folder) => folder.name));
   const after = new Set(skillFolders(upstream.manifestAtHead).map((folder) => folder.name));
   const added = [...after].filter((name) => !before.has(name));
   const removed = [...before].filter((name) => !after.has(name));
 
-  const short = (sha: string) => sha.slice(0, 7);
-  const compareUrl = `https://github.com/${lock.repository}/compare/${lock.sha}...${upstream.head}`;
-  const commitLines = upstream.commits.map((commit) => `${short(commit.sha)} ${commit.message.split("\n")[0]}`);
-  const missing = upstream.aheadBy - upstream.commits.length;
-
-  const head: string[] = [
-    `Bumps Matt Pocock's skills (\`${lock.repository}\`) from \`${short(lock.sha)}\` to \`${short(upstream.head)}\` in \`skills.lock.json\`.`,
-    "",
-    `Compare on GitHub: ${compareUrl}`,
-  ];
-  if (upstream.status === "diverged") {
-    head.push(
-      "",
-      "> [!WARNING]",
-      "> Upstream main no longer contains the pinned commit, so its history was rewritten. The diff below runs from their merge base.",
-    );
-  }
-  if (added.length > 0 || removed.length > 0) {
-    head.push("");
-    if (added.length > 0) head.push(`Skills added: ${added.map((name) => `\`${name}\``).join(", ")}.`);
-    if (removed.length > 0) head.push(`Skills removed: ${removed.map((name) => `\`${name}\``).join(", ")}.`);
-  }
-  head.push("", `### Commits (${upstream.aheadBy})`, "", fenced("text", commitLines.join("\n") + "\n"));
-  if (missing > 0) head.push("", `…and ${missing} more commits.`);
-  head.push("", "### Upstream diff", "");
-
-  const opening = head.join("\n");
-  const room = MAX_BODY - BODY_RESERVE - opening.length;
-  const { text: diff, cut } = cutAtLine(upstream.diff, room);
-  let body = opening + fenced("diff", diff, upstream.diff);
-  if (cut) body += "\n\nThe diff is cut short here; the compare link has all of it.";
+  const notes: string[] = [];
+  if (added.length > 0) notes.push(`Skills added: ${added.map((name) => `\`${name}\``).join(", ")}.`);
+  if (removed.length > 0) notes.push(`Skills removed: ${removed.map((name) => `\`${name}\``).join(", ")}.`);
 
   return {
     kind: "pull-request",
     branch: SKILLS_BUMP_BRANCH,
     title: `Bump Matt Pocock's skills to ${short(upstream.head)}`,
-    body,
+    body: pullRequestBody({
+      pin: lock,
+      upstream,
+      intro: `Bumps Matt Pocock's skills (\`${lock.repository}\`) from \`${short(lock.sha)}\` to \`${short(upstream.head)}\` in \`skills.lock.json\`.`,
+      upstreamName: "Upstream main",
+      notes,
+      diffHeading: "### Upstream diff",
+      diff: upstream.diff,
+    }),
     lockText: `${JSON.stringify({ repository: lock.repository, sha: upstream.head }, null, 2)}\n`,
   };
+}
+
+/** The branch a Product repo's bump of one Skills source always uses. */
+export function sourceBumpBranch(repository: string): string {
+  return `${SKILLS_BUMP_BRANCH}/${repository.replace("/", "-")}`;
+}
+
+/**
+ * Plans a Product repo's bump of one of its own Skills sources (ADR-0008) to
+ * the head of that source's default branch. Only the skills the Product picks
+ * from it matter: a week in which none of their folders changed is up to date,
+ * and the PR's diff shows those folders alone. `lockText` is the Product's
+ * .fabrik/skills.lock.json on its default branch; the PR changes only this
+ * source's SHA in it.
+ */
+export function planSourceBump(
+  source: SkillsSource,
+  picked: readonly string[],
+  upstream: UpstreamSkills,
+  lockText: string,
+): SkillsBump {
+  if (!hasMoved(source, upstream)) return { kind: "up-to-date" };
+
+  const atHead = new Set(skillFolders(upstream.manifestAtHead).map((folder) => folder.name));
+  const removed = picked.filter((name) => !atHead.has(name));
+  const folders = pickedFolders(picked, upstream);
+  const files = splitDiff(upstream.diff);
+  const touchesPicked = (file: FileDiff) =>
+    file.paths.some((path) => folders.some((folder) => path.startsWith(`${folder}/`)));
+  const inPicked = files.filter(touchesPicked);
+  // A diff with no file headers (GitHub refused to send one) can't be scoped, so it's shown whole.
+  const unscoped = files.length === 0 && upstream.diff.trim() !== "";
+  if (inPicked.length === 0 && removed.length === 0 && !unscoped) return { kind: "up-to-date" };
+
+  const notes: string[] = [];
+  if (removed.length > 0) {
+    notes.push(
+      "> [!CAUTION]",
+      `> Breaking: the source's plugin manifest at \`${short(upstream.head)}\` no longer lists ${removed.map((name) => `\`${name}\``).join(", ")}, which this repo picks. Drop the pick before merging, or every run that has it will fail.`,
+      "",
+    );
+  }
+  notes.push(`Picked skills from this source: ${picked.map((name) => `\`${name}\``).join(", ")}.`);
+  const others = [...new Set(files.filter((file) => !touchesPicked(file)).flatMap((file) => file.paths))];
+  if (others.length > 0) {
+    notes.push("", "Other upstream changes, outside the picked skills:", "", fenced("text", others.join(" ")));
+  }
+
+  const diff = unscoped ? upstream.diff : inPicked.map((file) => file.text).join("");
+  return {
+    kind: "pull-request",
+    branch: sourceBumpBranch(source.repository),
+    title: `Bump the ${source.repository} Skills source to ${short(upstream.head)}`,
+    body: pullRequestBody({
+      pin: source,
+      upstream,
+      intro: `Bumps the \`${source.repository}\` Skills source from \`${short(source.sha)}\` to \`${short(upstream.head)}\` in \`${SKILLS_SOURCES_LOCK_PATH}\`.`,
+      upstreamName: "The source's default branch",
+      notes,
+      diffHeading: unscoped ? "### Upstream diff" : "### Diff of the picked skills",
+      diff,
+    }),
+    lockText: bumpedLockText(lockText, source, upstream.head),
+  };
+}
+
+/**
+ * Whether a scheduled tick is the one a Product repo's weekly skills bump acts
+ * on: the Monday tick in the 04:00 UTC hour. A dropped tick waits a week.
+ */
+export function isSkillsBumpTick(tickAt: Date): boolean {
+  return tickAt.getUTCDay() === 1 && tickAt.getUTCHours() === 4;
+}
+
+function hasMoved(pin: { readonly sha: string }, upstream: UpstreamSkills): boolean {
+  return !(upstream.head === pin.sha || upstream.status === "identical" || upstream.status === "behind");
+}
+
+const short = (sha: string) => sha.slice(0, 7);
+
+interface BodyParts {
+  readonly pin: { readonly repository: string; readonly sha: string };
+  readonly upstream: UpstreamSkills;
+  readonly intro: string;
+  /** What the diverged-history warning calls the branch the bump follows. */
+  readonly upstreamName: string;
+  /** Lines between the warning and the commits. */
+  readonly notes: readonly string[];
+  readonly diffHeading: string;
+  readonly diff: string;
+}
+
+/** The PR body both bumps share: the compare link, any warning, the commits, then the diff cut to fit. */
+function pullRequestBody({ pin, upstream, intro, upstreamName, notes, diffHeading, diff }: BodyParts): string {
+  const compareUrl = `https://github.com/${pin.repository}/compare/${pin.sha}...${upstream.head}`;
+  const commitLines = upstream.commits.map((commit) => `${short(commit.sha)} ${commit.message.split("\n")[0]}`);
+  const missing = upstream.aheadBy - upstream.commits.length;
+
+  const head: string[] = [intro, "", `Compare on GitHub: ${compareUrl}`];
+  if (upstream.status === "diverged") {
+    head.push(
+      "",
+      "> [!WARNING]",
+      `> ${upstreamName} no longer contains the pinned commit, so its history was rewritten. The diff below runs from their merge base.`,
+    );
+  }
+  if (notes.length > 0) head.push("", ...notes);
+  head.push("", `### Commits (${upstream.aheadBy})`, "", fenced("text", commitLines.join("\n") + "\n"));
+  if (missing > 0) head.push("", `…and ${missing} more commits.`);
+  head.push("", diffHeading, "");
+
+  const opening = head.join("\n");
+  const room = MAX_BODY - BODY_RESERVE - opening.length;
+  const { text, cut } = cutAtLine(diff, room);
+  let body = opening + fenced("diff", text, diff);
+  if (cut) body += "\n\nThe diff is cut short here; the compare link has all of it.";
+  return body;
+}
+
+/** The lockfile with only this source's SHA changed, keeping the rest of the text as the Operator wrote it. */
+function bumpedLockText(lockText: string, source: SkillsSource, head: string): string {
+  const entries = JSON.parse(lockText) as { repository: string; sha: string }[];
+  const entry = entries.find((pin) => pin.repository.toLowerCase() === source.repository.toLowerCase());
+  if (entry === undefined) throw new Error(`${SKILLS_SOURCES_LOCK_PATH} no longer pins ${source.repository}`);
+  const quoted = JSON.stringify(entry.sha);
+  if (lockText.split(quoted).length === 2) return lockText.replace(quoted, JSON.stringify(head));
+  // The old SHA isn't unique in the text, so rewrite the whole list instead.
+  const bumped = entries.map((pin) => (pin === entry ? { ...pin, sha: head } : pin));
+  return `${JSON.stringify(bumped, null, 2)}\n`;
+}
+
+/** The folders of the picked skills at the pin and at head, so a folder that moved still counts. */
+function pickedFolders(picked: readonly string[], upstream: UpstreamSkills): readonly string[] {
+  const wanted = new Set(picked);
+  return [...skillFolders(upstream.manifestAtPin), ...skillFolders(upstream.manifestAtHead)]
+    .filter((folder) => wanted.has(folder.name))
+    .map((folder) => folder.from);
+}
+
+interface FileDiff {
+  /** The file's path before and after, from its `diff --git a/… b/…` header. */
+  readonly paths: readonly string[];
+  readonly text: string;
+}
+
+/** A unified diff split into its files. */
+function splitDiff(diff: string): readonly FileDiff[] {
+  const files: FileDiff[] = [];
+  for (const text of diff.split(/^(?=diff --git )/m)) {
+    const header = /^diff --git a\/(.*) b\/(.*)$/m.exec(text);
+    if (header === null || !text.startsWith("diff --git ")) continue;
+    files.push({ paths: [header[1] ?? "", header[2] ?? ""], text });
+  }
+  return files;
 }
 
 /** A fenced block whose fence is longer than any backtick run in `content` (or `fenceFor`). */

@@ -51,6 +51,7 @@ import {
 import { sentBackContext } from "./design.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
+import { promptFor } from "./prompt.ts";
 import { initMessageOf, missingSkills, runSummary } from "./summary.ts";
 import { TRANSCRIPT_FILE, transcriptWriter } from "./transcript.ts";
 
@@ -165,28 +166,6 @@ const ROLE_SPECS = {
     reviewsPullRequest: true,
   } satisfies RoleSpec<ParsedVerdict & { ok: true }>,
 };
-
-/**
- * The Kit's prompt for the role, then the Product's instructions for its phase,
- * then the issue thread, then anything else the role is given.
- */
-async function promptFor(
-  role: AgentRole,
-  note: string,
-  config: KitConfig,
-  issue: unknown,
-  heading: string,
-  extra: readonly string[],
-): Promise<string> {
-  const template = await readFile(join(KIT_DIR, kitPromptPath(role)), "utf8");
-  const parts = [template.trimEnd()];
-  const instructions = config.instructions[role];
-  if (instructions !== null) {
-    parts.push(`## This Product repo's ${role} instructions`, note, instructions.trimEnd());
-  }
-  parts.push(`## ${heading}`, "```json", JSON.stringify(issue, null, 2), "```", ...extra);
-  return `${parts.join("\n\n")}\n`;
-}
 
 /** The model and effort to run: what the Kit job's plan chose, else the role's own. */
 function modelFor(role: { model: string; effort: string | null }): { model: string; effort: string | null } {
@@ -319,7 +298,15 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       ),
       sandbox: noSandbox(),
       cwd: productDir,
-      prompt: await promptFor(name, spec.instructionsNote, config, issue, spec.issueHeading ?? "The issue", extra),
+      prompt: promptFor({
+        template: await readFile(join(KIT_DIR, kitPromptPath(name)), "utf8"),
+        role: name,
+        note: spec.instructionsNote,
+        config,
+        issue,
+        heading: spec.issueHeading ?? "The issue",
+        extra,
+      }),
       maxIterations: 1,
       output,
       // The Reviewer reads the PR and runs none of its code, so it needs no Sandbox setup.
