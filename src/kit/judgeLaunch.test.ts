@@ -2,27 +2,38 @@ import { claudeCode } from "@ai-hero/sandcastle";
 import { describe, expect, it } from "vitest";
 import { cleanLaunch } from "../__fixtures__/preflight.ts";
 import { checkMeteredBilling } from "../preflight/meteredBilling.ts";
-import { judgeClaudeArgs, readJudgeOutput, withoutTools } from "./judgeLaunch.ts";
+import { judgeClaudeArgs, judgeOutput, withoutTools } from "./judgeLaunch.ts";
 import type { Rubric } from "./rubrics.ts";
+import { JUDGE_OUTPUT_TAG } from "./scorerPrompt.ts";
 
-describe("The judge's check of its own answer, which the runner asks it to fix once", () => {
+describe("The judge's answer, read from its one reply", () => {
   const rubrics: readonly Rubric[] = [
     { name: "efficiency", version: 1, threshold: 0.7, labels: ["clean", "repeated-calls"], text: "How directly the run worked." },
     { name: "skill-use", version: 1, threshold: 0.7, labels: ["followed", "missed-skill"], text: "Whether it used its skills." },
   ];
   const answer = (scorer: string, label: string) => ({ scorer, score: 0.8, label, rationale: "Why." });
+  const check = (value: unknown) => judgeOutput(rubrics).schema["~standard"].validate(value);
 
-  it("takes an answer per rubric, each with one of its labels", () => {
-    const output = { answers: [answer("efficiency", "clean"), answer("skill-use", "followed")] };
-
-    expect(readJudgeOutput(rubrics)(output)).toEqual({ ok: true, output });
+  it("comes in the tag the judge prompt asks for", () => {
+    expect(judgeOutput(rubrics).tag).toBe(JUDGE_OUTPUT_TAG);
   });
 
-  it("refuses an answer the score file would refuse, saying what each rubric owes", () => {
-    const check = readJudgeOutput(rubrics)({ answers: [answer("efficiency", "clean"), answer("skill-use", "clean")] });
+  it("takes an answer per rubric, each with one of its labels", async () => {
+    const output = { answers: [answer("efficiency", "clean"), answer("skill-use", "followed")] };
 
-    expect(check.ok).toBe(false);
-    expect(check.ok ? [] : check.errors.join("\n")).toMatch(/`efficiency`: one of `clean`, `repeated-calls`[\s\S]*`skill-use`: one of `followed`, `missed-skill`/);
+    expect(await check(output)).toEqual({ value: output });
+  });
+
+  it("refuses an answer the score file would refuse, saying what each rubric owes", async () => {
+    const result = await check({ answers: [answer("efficiency", "clean"), answer("skill-use", "clean")] });
+    const issues = "issues" in result && result.issues !== undefined ? result.issues.map((issue) => issue.message).join("\n") : "";
+
+    expect(issues).toMatch(/`efficiency`: one of `clean`, `repeated-calls`[\s\S]*`skill-use`: one of `followed`, `missed-skill`/);
+  });
+
+  // A malformed answer fails the judge (missing-output), which the score file records as judge-output-invalid.
+  it("is never asked for again, so the judge reads the transcript once", () => {
+    expect(judgeOutput(rubrics).maxRetries ?? 0).toBe(0);
   });
 });
 
@@ -31,11 +42,8 @@ describe("The judge's launch", () => {
   /** A launch command's words, with Sandcastle's single quotes taken off. */
   const words = (command: string) => command.split(" ").map((word) => word.replace(/^'(.*)'$/, "$1"));
 
-  it.each([
-    ["a fresh session", {}],
-    ["the session the runner resumes to ask for a fixed answer", { resumeSession: "4f6c0b1e" }],
-  ])("runs %s with no tools and no MCP server", (_, resume) => {
-    const { command } = judge.buildPrintCommand({ prompt: "Score this run.", dangerouslySkipPermissions: true, ...resume });
+  it("runs with no tools and no MCP server", () => {
+    const { command } = judge.buildPrintCommand({ prompt: "Score this run.", dangerouslySkipPermissions: true });
 
     expect(command).toMatch(/ --tools '' --strict-mcp-config -p -$/);
     expect(command).not.toContain("--bare");

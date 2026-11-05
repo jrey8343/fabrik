@@ -18,18 +18,18 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { claudeCode, Output, run } from "@ai-hero/sandcastle";
+import { claudeCode, run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { failureReportFor } from "../agent/failure.ts";
-import { readyHook, schemaOf, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "../agent/launch.ts";
+import { readyHook, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "../agent/launch.ts";
 import { runSummary } from "../agent/summary.ts";
 import { readTranscriptGzip, TRANSCRIPT_FILE } from "../agent/transcript.ts";
 import { readBytesIfPresent } from "./checkout.ts";
 import { JUDGE_FAILURE_FILE, JUDGE_JOB, JUDGE_RESULT_FILE, judgeFailureText, judgeResultText } from "./judge.ts";
-import { judgeClaudeArgs, readJudgeOutput, withoutTools } from "./judgeLaunch.ts";
+import { judgeClaudeArgs, judgeOutput, withoutTools } from "./judgeLaunch.ts";
 import { loadRubrics } from "./rubrics.ts";
 import { JUDGE_MODEL, JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
-import { JUDGE_OUTPUT_TAG, type JudgedTicket, judgePrompt } from "./scorerPrompt.ts";
+import { type JudgedTicket, judgePrompt } from "./scorerPrompt.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -78,7 +78,7 @@ async function main(): Promise<void> {
       cwd: await emptyWorkingDir(),
       prompt,
       maxIterations: 1,
-      output: Output.object({ tag: JUDGE_OUTPUT_TAG, schema: schemaOf(readJudgeOutput(rubrics)), maxRetries: 1 }),
+      output: judgeOutput(rubrics),
       // No setup: the judge runs nothing, so only the preflight.
       hooks: { sandbox: { onSandboxReady: [{ command: readyHook(null), timeoutMs: JUDGE_TIMEOUT_MINUTES * 60_000 }] } },
       signal: abort.signal,

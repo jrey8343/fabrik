@@ -220,9 +220,9 @@ function resultOf(rubrics: readonly Rubric[], outcome: ScoringOutcome): Pick<Sco
  * Each rubric's score from the judge's output, in the rubrics' order, with
  * its pass from the rubric's threshold. Null, so the output is invalid as a
  * whole, unless it's a JudgeOutput answering each rubric exactly once with a
- * score from 0 to 1 and one of that rubric's labels. The judge checks its own
- * answer with this too (src/kit/judgeLaunch.ts), so it's asked to fix what the
- * score file would refuse.
+ * score from 0 to 1 and one of that rubric's labels. The judge's run checks
+ * its answer with this too (src/kit/judgeLaunch.ts), so an answer the score
+ * file would refuse fails the judge, with the reasons in its failure report.
  */
 export function scoreEntries(rubrics: readonly Rubric[], output: unknown): readonly ScoreEntry[] | null {
   const answers = answersOf(output);

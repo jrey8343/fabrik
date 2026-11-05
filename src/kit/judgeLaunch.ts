@@ -1,12 +1,14 @@
 // How the judge launches (#149): with no tools, through the same `claude`
 // arguments the metered-billing preflight checks for the agent roles
-// (src/agent/launch.ts), and checking its own answer as the score file will.
-// The judge job runs it from src/kit/judge-main.ts. What the job leaves for
-// the score-record job is src/kit/judge.ts, which needs none of this. Pure, no I/O.
-import type { AgentProvider } from "@ai-hero/sandcastle";
-import { type Checked, claudeArgs } from "../agent/launch.ts";
+// (src/agent/launch.ts), and with its one answer checked as the score file
+// will check it. The judge job runs it from src/kit/judge-main.ts. What the
+// job leaves for the score-record job is src/kit/judge.ts, which needs none of
+// this. Pure, no I/O.
+import { type AgentProvider, Output, type OutputObjectDefinition } from "@ai-hero/sandcastle";
+import { type Checked, claudeArgs, schemaOf } from "../agent/launch.ts";
 import type { Rubric } from "./rubrics.ts";
 import { type JudgeOutput, scoreEntries } from "./scorer.ts";
+import { JUDGE_OUTPUT_TAG } from "./scorerPrompt.ts";
 
 /**
  * What the judge adds to its `claude` launch: no built-in tools at all, and no
@@ -20,9 +22,8 @@ const NO_TOOLS = ["--tools", "", "--strict-mcp-config"] as const;
 const PROMPT_ON_STDIN = " -p -";
 
 /**
- * The provider with no tools, fresh or resumed: Sandcastle resumes the
- * session to ask for a fixed answer. Sandcastle 0.12.0's claudeCode() has no
- * option for it, so this adds the flags to the command it builds.
+ * The provider with no tools. Sandcastle 0.12.0's claudeCode() has no option
+ * for it, so this adds the flags to the command it builds.
  */
 export function withoutTools(provider: AgentProvider): AgentProvider {
   return {
@@ -42,10 +43,17 @@ export function judgeClaudeArgs(model: string): string[] {
 }
 
 /**
- * The judge's check of its own answer, as the score file will check it, so
- * the runner can ask it once to fix an answer the score file would refuse.
+ * The judge's structured output: its answer in the judge prompt's tag,
+ * checked as the score file will check it. Never retried, so the judge reads
+ * the transcript once: an answer that fails the check fails the judge
+ * (missing-output), and the score file says judge-output-invalid.
  */
-export function readJudgeOutput(rubrics: readonly Rubric[]): (value: unknown) => Checked<JudgeOutput> {
+export function judgeOutput(rubrics: readonly Rubric[]): OutputObjectDefinition<JudgeOutput> {
+  return Output.object({ tag: JUDGE_OUTPUT_TAG, schema: schemaOf(readJudgeOutput(rubrics)) });
+}
+
+/** The check of the judge's answer, whose errors say what each rubric owes, for its failure report. */
+function readJudgeOutput(rubrics: readonly Rubric[]): (value: unknown) => Checked<JudgeOutput> {
   return (value) => {
     if (scoreEntries(rubrics, value) !== null) return { ok: true, output: value as JudgeOutput };
     return {
