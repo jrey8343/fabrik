@@ -133,6 +133,28 @@ describe("A Design session keeps a Monitor issue's marker", () => {
     expect(createdBody(plan, "spec")?.split("\n")[0]).toBe("<!-- fabrik:monitor red-main -->");
   });
 
+  it("labels the Spec fabrik:monitor beside its category and state when it keeps a Sentry group's marker, so the Monitor finds the group's open issue", () => {
+    const plan = planFor(turnFinished(spec), monitorIssue, kitConfig());
+
+    expect(created(plan).map((action) => [action.key, action.labels])).toEqual([
+      ["spec", ["bug", "ready-for-agent", "fabrik:monitor"]],
+      ["ticket:fix", ["bug", "ready-for-agent"]],
+    ]);
+  });
+
+  it("leaves fabrik:monitor off a Spec that keeps red main's marker, so the Monitor never closes a Spec when main goes green", () => {
+    const redMain = anIssue({
+      number: 7,
+      labels: ["bug", "needs-design", "fabrik:monitor"],
+      authorIsBot: true,
+      body: "<!-- fabrik:monitor red-main -->\n## Red main",
+    });
+
+    const plan = planFor(turnFinished(spec), snapshotOf(redMain), kitConfig());
+
+    expect(created(plan).find((action) => action.key === "spec")?.labels).toEqual(["bug", "ready-for-agent"]);
+  });
+
   it.each([
     ["a Spec", spec, (plan: Plan) => createdBody(plan, "spec")],
     [
@@ -164,7 +186,11 @@ function rewrittenBody(plan: Plan): string | undefined {
 }
 
 function createdBody(plan: Plan, key: string): string | undefined {
-  const actions: readonly Action[] = plan.kind === "act" ? plan.actions : [];
-  const created = actions.find((action) => action.kind === "create-issue" && action.key === key);
-  return created?.kind === "create-issue" ? created.body : undefined;
+  return created(plan).find((action) => action.key === key)?.body;
+}
+
+function created(plan: Plan): Extract<Action, { kind: "create-issue" }>[] {
+  return plan.kind === "act"
+    ? plan.actions.filter((action): action is Extract<Action, { kind: "create-issue" }> => action.kind === "create-issue")
+    : [];
 }

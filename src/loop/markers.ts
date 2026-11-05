@@ -54,6 +54,9 @@ export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) 
  */
 const MONITOR_MARKER = /^(<!-- fabrik:monitor (?:sentry:\S+|red-main) -->)$/m;
 
+/** The marker line of the Monitor's red-main issue. */
+export const RED_MAIN_MARKER = "<!-- fabrik:monitor red-main -->";
+
 /** The Monitor marker line in this body, or null when it has none. */
 export function monitorMarkerIn(body: string): string | null {
   return MONITOR_MARKER.exec(body)?.[1] ?? null;

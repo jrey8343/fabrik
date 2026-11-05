@@ -10,8 +10,17 @@ import {
   type OperatorBrief,
   type SpecTicket,
 } from "./designOutput.ts";
-import { DESIGN_LABEL, isCategoryLabel, type Label, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, WONTFIX } from "./labels.ts";
-import { designRoundMarker, LIVE_OUTCOME_MARKER, monitorMarkerIn, SESSION_FINISHED } from "./markers.ts";
+import {
+  DESIGN_LABEL,
+  isCategoryLabel,
+  type Label,
+  MONITOR_LABEL,
+  NEEDS_DESIGN,
+  READY_FOR_AGENT,
+  READY_FOR_HUMAN,
+  WONTFIX,
+} from "./labels.ts";
+import { designRoundMarker, LIVE_OUTCOME_MARKER, monitorMarkerIn, RED_MAIN_MARKER, SESSION_FINISHED } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { AgentBrief } from "./triageOutput.ts";
 import { startAgentRun } from "./runs.ts";
@@ -457,18 +466,22 @@ function supersedeBySpec(
   operator: string,
 ): Action[] {
   const tickets = ticketActions(output.tickets, issue, SPEC, operator);
+  const marker = keptMarker(issue);
+  // The Monitor finds its issues by their label, so a Spec that keeps a Sentry group's marker is the
+  // group's open issue to it. One that keeps red main's goes without, so the Monitor never closes it once main is green.
+  const monitorLabel: Label[] = marker.some((line) => line !== RED_MAIN_MARKER) ? [MONITOR_LABEL] : [];
   return [
     {
       kind: "create-issue",
       key: SPEC.created,
       title: withoutMentions(output.spec.title),
       body: [
-        ...keptMarker(issue),
+        ...marker,
         withoutMentions(output.spec.body),
         "",
         `<sub>Written by the Fabrik Design session on #${issueNumber}, which this Spec supersedes.</sub>`,
       ].join("\n"),
-      labels: readyLabels(issue),
+      labels: [...readyLabels(issue), ...monitorLabel],
       parent: null,
       blockedBy: [],
     },
