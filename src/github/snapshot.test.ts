@@ -846,11 +846,12 @@ describe("Gathering a Design-session turn's starting reply", () => {
 });
 
 describe("Reading the Kit config folder through the API", () => {
-  it("reads the Skills sources lockfile beside config.json and the phase instructions, at the ref", async () => {
+  it("reads the Skills sources lockfile beside config.json and each role's instructions, the Auditor's too, at the ref", async () => {
     const files: Record<string, string> = {
       ".fabrik/config.json": `{ "roles": { "review": { "skills": ["jrey8343/skills/event-storming"] } } }`,
       ".fabrik/skills.lock.json": `[{ "repository": "jrey8343/skills", "sha": "${"a".repeat(40)}" }]`,
       ".fabrik/review.md": "Check the deciders.\n",
+      ".fabrik/audit.md": "Booking first.\n",
     };
     const github = {
       async fileText(at: typeof repo, path: string, ref: string): Promise<string | null> {
@@ -865,6 +866,7 @@ describe("Reading the Kit config folder through the API", () => {
     const result = resolveKitConfig(sources);
     expect(result.ok && result.config.extraSkills.review).toEqual([{ source: "jrey8343/skills", name: "event-storming" }]);
     expect(result.ok && result.config.instructions.review).toBe("Check the deciders.\n");
+    expect(result.ok && result.config.instructions.audit).toBe("Booking first.\n");
   });
 
   it("gives no lockfile when the Product repo has none", async () => {

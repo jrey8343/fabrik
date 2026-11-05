@@ -1,7 +1,7 @@
 // An AFK role's prompt: the Kit's prompt for the role, the line naming its
-// Extra skills (if it has any), the Product's instructions for its phase, then
+// Extra skills (if it has any), the Product's instructions for the role, then
 // the issue thread and anything else the role is given. Pure, no I/O.
-import type { ExtraSkill, KitConfig, Phase } from "../kit/config.ts";
+import type { ExtraSkill, InstructedRole, KitConfig, Phase } from "../kit/config.ts";
 
 /** `a`, `a` and `b`, or `a`, `b` and `c`. */
 function listed(names: readonly string[]): string {
@@ -24,9 +24,12 @@ export function extraSkillsLine(phase: Phase, skills: readonly ExtraSkill[]): st
 export interface PromptParts {
   /** The Kit's prompt for the role, from prompts/<role>.md. */
   readonly template: string;
-  /** The role, which is also its Kit config phase; a Step-up run is an implement run. */
-  readonly role: Phase;
-  /** How the Product's own instructions for this phase relate to the Kit's prompt. */
+  /**
+   * The role, which names its .fabrik/<role>.md instructions; a Step-up run is
+   * an implement run. Every role but the Auditor is also a Kit config phase.
+   */
+  readonly role: InstructedRole;
+  /** How the Product's own instructions for this role relate to the Kit's prompt. */
   readonly note: string;
   readonly config: KitConfig;
   readonly issue: unknown;
@@ -38,12 +41,12 @@ export interface PromptParts {
 
 /**
  * The Kit's prompt for the role, then the line naming its Extra skills, then
- * the Product's instructions for its phase, then the issue thread, then
- * anything else the role is given.
+ * the Product's instructions for the role, then the issue thread, then
+ * anything else the role is given. The Auditor takes no Extra skills (ADR-0008).
  */
 export function promptFor({ template, role, note, config, issue, heading, extra }: PromptParts): string {
   const parts = [template.trimEnd()];
-  const skills = extraSkillsLine(role, config.extraSkills[role]);
+  const skills = role === "audit" ? null : extraSkillsLine(role, config.extraSkills[role]);
   if (skills !== null) parts.push(skills);
   const instructions = config.instructions[role];
   if (instructions !== null) {
