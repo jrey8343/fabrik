@@ -79,7 +79,13 @@ export interface WeeklySummary {
 
 export type WeeklySummaryResult =
   | { readonly kind: "skip" }
-  | { readonly kind: "summary"; readonly summary: WeeklySummary };
+  | {
+      readonly kind: "summary";
+      readonly summary: WeeklySummary;
+      /** The issue's title and body. */
+      readonly title: string;
+      readonly body: string;
+    };
 
 /** The summary to file for the week that just ended, or skip. */
 export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
@@ -91,21 +97,19 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     thisWeek: thisWeek[metric],
     lastWeek: lastWeek[metric],
   });
-  return {
-    kind: "summary",
-    summary: {
-      week: weeks.thisWeek.monday,
-      cost: change("cost"),
-      unknownCost: change("unknownCost"),
-      weeklyLimit: change("weeklyLimit"),
-      counts: {
-        mergedPullRequests: change("mergedPullRequests"),
-        ticketsDispatched: change("ticketsDispatched"),
-        retries: change("retries"),
-        stepUps: change("stepUps"),
-      },
+  const summary: WeeklySummary = {
+    week: weeks.thisWeek.monday,
+    cost: change("cost"),
+    unknownCost: change("unknownCost"),
+    weeklyLimit: change("weeklyLimit"),
+    counts: {
+      mergedPullRequests: change("mergedPullRequests"),
+      ticketsDispatched: change("ticketsDispatched"),
+      retries: change("retries"),
+      stepUps: change("stepUps"),
     },
   };
+  return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
 }
 
 // The metrics: one week's figures, computed the same way for any week.
@@ -211,4 +215,66 @@ function midnight(date: number, timeZone: string): number {
   const offsetAt = (time: number) => wallClock(time, timeZone).asUtc - time;
   const guess = date - offsetAt(date);
   return date - offsetAt(guess);
+}
+
+/** `yyyy-mm-dd hh:mm` on the wall clock in the time zone. */
+function localTime(time: number, timeZone: string): string {
+  return new Date(wallClock(time, timeZone).asUtc).toISOString().slice(0, 16).replace("T", " ");
+}
+
+// Rendering. Only shipped features get a section: Held, the Retro, Audit, Map
+// and Monitor issues, the architectural escape rate and scores add theirs when
+// their Specs ship.
+
+function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
+  const { cost, unknownCost, weeklyLimit, counts } = summary;
+  const row = (name: string, { thisWeek, lastWeek }: WeekOverWeek<number>, format: (value: number) => string) =>
+    `| ${name} | ${format(thisWeek)} | ${format(lastWeek)} | ${signed(thisWeek - lastWeek, format)} |`;
+  const count = (value: number) => String(value);
+  const lines = [
+    "## Metrics",
+    "",
+    "| | This week | Last week | Change |",
+    "| --- | ---: | ---: | ---: |",
+    row("API-equivalent cost", cost, dollars),
+    row("Merged agent PRs", counts.mergedPullRequests, count),
+    row("Tickets dispatched", counts.ticketsDispatched, count),
+    row("Retries", counts.retries, count),
+    row("Step-ups", counts.stepUps, count),
+    "",
+  ];
+  if (unknownCost.thisWeek > 0) {
+    lines.push(
+      unknownCost.thisWeek === 1
+        ? "1 run with an unknown cost basis is left out of the cost."
+        : `${unknownCost.thisWeek} runs with an unknown cost basis are left out of the cost.`,
+      "",
+    );
+  }
+  // The Operator's one mention, last: the week's only scheduled push.
+  lines.push(subscriptionUsage(weeklyLimit, timeZone), "", `@${operator}`);
+  return `${lines.join("\n")}\n`;
+}
+
+function subscriptionUsage({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading | null>, timeZone: string): string {
+  const share = (reading: RateLimitReading | null) =>
+    reading === null || reading.utilization === null ? null : `${Math.round(reading.utilization * 100)}%`;
+  const now = share(thisWeek);
+  const before = share(lastWeek);
+  const resets =
+    thisWeek === null || thisWeek.resetsAt === null ? "" : `, resetting ${localTime(thisWeek.resetsAt * 1000, timeZone)} (${timeZone})`;
+  const usage =
+    now === null ? "Subscription usage: no weekly-limit reading this week." : `Subscription usage: ${now} of the weekly limit${resets}.`;
+  return before === null ? usage : `${usage} Last week: ${before}.`;
+}
+
+function dollars(value: number): string {
+  return `$${value.toFixed(2)}`;
+}
+
+/** A change with its sign: `+1`, `-$0.75`, or plain `0`. */
+function signed(change: number, format: (value: number) => string): string {
+  const rounded = Math.round(change * 100) / 100;
+  if (rounded === 0) return format(0);
+  return `${rounded > 0 ? "+" : "-"}${format(Math.abs(rounded))}`;
 }

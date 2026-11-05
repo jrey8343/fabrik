@@ -136,6 +136,59 @@ describe("the Weekly summary", () => {
     });
   });
 
+  describe("rendered", () => {
+    const week = input({
+      records: [
+        aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1.5, retry: 1 }),
+        aRunRecord({
+          endedAt: "2026-11-05T00:00:00Z",
+          totalCostUsd: null,
+          stepUp: true,
+          // Friday 13 November 2026, 10:00 in Sydney.
+          rateLimit: { status: "allowed", rateLimitType: "seven_day", utilization: 0.62, resetsAt: 1_794_524_400 },
+        }),
+        aRunRecord({ endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2.25 }),
+      ],
+      facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-04T00:00:00Z")] })],
+    });
+    const rendered = () => {
+      const result = weeklySummary(week);
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result;
+    };
+
+    it("is titled by the week's Monday", () => {
+      expect(rendered().title).toBe("Weekly summary: week of 2026-11-02");
+    });
+
+    it("shows each figure this week and last week, with the change", () => {
+      const { body } = rendered();
+      expect(body).toContain("| API-equivalent cost | $1.50 | $2.25 | -$0.75 |");
+      expect(body).toContain("| Merged agent PRs | 1 | 0 | +1 |");
+      expect(body).toContain("| Tickets dispatched | 0 | 0 | 0 |");
+      expect(body).toContain("| Retries | 1 | 0 | +1 |");
+      expect(body).toContain("| Step-ups | 1 | 0 | +1 |");
+    });
+
+    it("says how many runs the cost leaves out and how close the Subscription came to its weekly limit", () => {
+      const { body } = rendered();
+      expect(body).toContain("1 run with an unknown cost basis is left out of the cost.");
+      expect(body).toContain("Subscription usage: 62% of the weekly limit, resetting 2026-11-13 10:00 (Australia/Sydney).");
+    });
+
+    it("ends with exactly one mention of the Operator", () => {
+      const { body } = rendered();
+      expect(body.match(/@operator\b/g)).toHaveLength(1);
+      expect(body.trimEnd().endsWith("@operator")).toBe(true);
+    });
+
+    it("has no section for a feature that hasn't shipped, not even an empty one", () => {
+      const { body } = rendered();
+      expect(body.match(/^#+ .*$/gm)).toEqual(["## Metrics"]);
+      expect(body).not.toMatch(/Held|Retro|Audit|Map|Monitor|escape|score/i);
+    });
+  });
+
   it("keeps Monday 00:00 local across a daylight-saving change", () => {
     // Los Angeles left daylight saving on Sunday 1 November 2026: last week
     // began at 00:00 PDT (07:00Z) and this week at 00:00 PST (08:00Z).
