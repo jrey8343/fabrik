@@ -56,6 +56,13 @@ export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) 
  */
 const ESCAPE_MARKER = /<!--\s*fabrik:escape(\s[^>]*?)?\s*-->/;
 
+/**
+ * A line that is an escape marker and nothing else, matched against the line
+ * with its outer whitespace trimmed: the line a Design session's rewrite
+ * carries forward (src/loop/carriedLines.ts).
+ */
+export const ESCAPE_MARKER_LINE = new RegExp(`^${ESCAPE_MARKER.source}$`);
+
 /** What an escape marker says, read as written. */
 export interface EscapeMarker {
   /** The word in the Strength's place, known or not, or null when the marker opens with a PR. */

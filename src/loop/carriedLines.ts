@@ -1,7 +1,7 @@
 // The lines a Design session's rewrite carries forward from the issue's old
 // body. Each one marks the issue for something that reads it later, so a
 // rewrite that dropped it would lose what it records.
-import { FROM_AUDIT_LINE } from "./markers.ts";
+import { ESCAPE_MARKER_LINE, FROM_AUDIT_LINE } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 
 /** Every line carried forward, matched against the line with its outer whitespace trimmed. */
@@ -9,7 +9,7 @@ const CARRIED_LINES: readonly RegExp[] = [
   // The Audit the candidate was filed from, so the next Audit skips it (#150).
   FROM_AUDIT_LINE,
   // The Architectural escape it records, so it still counts (#150).
-  /^<!-- fabrik:escape\s.*-->$/,
+  ESCAPE_MARKER_LINE,
 ];
 
 /**
