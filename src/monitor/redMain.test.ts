@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aGroup, aMonitorIssue, aMonitorIssueBody, monitorInput, SENTRY_ON } from "../__fixtures__/monitor.ts";
+import { aGroup, aMonitorIssue, aMonitorIssueBody, monitorInput, SENTRY_ON, sentryRead } from "../__fixtures__/monitor.ts";
 import { aCheckRun, aCommit, aRedMainBody, aRedMainIssue, commitUrl, RED_DETAILS, redMainInput, runUrl } from "../__fixtures__/redMain.ts";
 import { monitorPlanFor } from "./core.ts";
 
@@ -155,7 +155,7 @@ describe("The red-main issue", () => {
 
 describe("Red main at caps.monitor_issues 0", () => {
   /** Error filings paused, with a qualifying Sentry group that would otherwise be filed. */
-  const paused = { cap: 0, monitor: { errors: SENTRY_ON, redMain: true }, sentry: { kind: "read" as const, groups: [aGroup()], groupsWithoutStats: 0 } };
+  const paused = { cap: 0, monitor: { errors: SENTRY_ON, redMain: true }, sentry: sentryRead([aGroup()]) };
 
   it("still files the red-main issue while new error filings are paused", () => {
     const plan = monitorPlanFor(redMainInput([aCommit(RED, [aCheckRun({ id: 901, name: "test", conclusion: "failure" })])], paused));

@@ -42,19 +42,25 @@ export interface MonitorInput {
 }
 
 export type SentryRead =
-  /** The project's unresolved `error` and `fatal` groups, each with its latest event once it's read. */
-  | {
-      readonly kind: "read";
-      readonly groups: readonly GroupFacts[];
-      /** How many of the listed groups came with no 24-hour stats, so count 0 events. */
-      readonly groupsWithoutStats: number;
-    }
+  | SentryGroupsRead
   /** The Sentry token item is missing from 1Password, or couldn't be read. */
   | { readonly kind: "no-token" }
   /** Sentry refused the token. */
   | { readonly kind: "token-rejected"; readonly status: 401 | 403 }
   /** Any other Sentry API error. */
   | { readonly kind: "failed"; readonly error: string };
+
+/** The project's unresolved `error` and `fatal` groups, as Sentry listed them, each with its latest event once it's read. */
+export interface SentryGroupsRead {
+  readonly kind: "read";
+  readonly groups: readonly GroupFacts[];
+  /** How many of the listed groups came with no 24-hour stats, so count 0 events. */
+  readonly groupsWithoutStats: number;
+  /** How many groups were read when Sentry listed more than the Monitor reads in one tick; null when it read them all. */
+  readonly cutShortAt: number | null;
+  /** Each group whose latest event the program tried to read and couldn't, with why. */
+  readonly latestEventErrors: readonly { readonly group: string; readonly error: string }[];
+}
 
 /**
  * What the Monitor files, rewrites and closes this tick, and what it tells the
@@ -73,6 +79,20 @@ export function monitorPlanFor(input: MonitorInput): MonitorPlan {
     close: red.close,
     summary: [...errors.summary, ...red.summary],
   };
+}
+
+/**
+ * The Sentry groups whose latest event the program reads after this plan,
+ * planned with the groups as listed, and only those: the ones it files an
+ * issue for and the ones whose open issue's stats it refreshes, whose bodies
+ * name a release. A release changes only with a new event, which changes the
+ * other stats too, and no other group's latest event shows anywhere.
+ */
+export function groupsNeedingLatestEvent(plan: MonitorPlan): ReadonlySet<string> {
+  return new Set([
+    ...plan.open.flatMap((issue) => (issue.sentryGroup === null ? [] : [issue.sentryGroup])),
+    ...plan.rewrite.flatMap((rewrite) => (rewrite.kind === "stats" ? [rewrite.sentryGroup] : [])),
+  ]);
 }
 
 /**
@@ -165,6 +185,17 @@ function productionErrors({ monitor, sentry, issues, cap = MONITOR_ISSUES_CAP }:
     if (rewritten !== null) rewrite.push(rewritten);
   }
   const summary: string[] = [];
+  if (sentry.cutShortAt !== null) {
+    summary.push(
+      `Warning: Sentry lists more than ${sentry.cutShortAt} unresolved \`error\` and \`fatal\` groups, so only the ${sentry.cutShortAt} it gave first were read.`,
+    );
+  }
+  for (const { group, error } of sentry.latestEventErrors) {
+    const filed = open.find((issue) => issue.sentryGroup === group);
+    const shows = filed === undefined ? "its issue's stats keep the release they named" : "its issue shows no release or frames";
+    const shortId = sentry.groups.find((listed) => listed.id === group)?.shortId ?? group;
+    summary.push(`Warning: the latest event of Sentry's ${shortId} couldn't be read, so ${shows}: ${error}`);
+  }
   if (sentry.groupsWithoutStats > 0) {
     summary.push(
       `Sentry gave no 24-hour stats for ${sentry.groupsWithoutStats} group${sentry.groupsWithoutStats === 1 ? "" : "s"}, so their events count as none: an \`error\` group isn't filed until Sentry gives its stats again.`,

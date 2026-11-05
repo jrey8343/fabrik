@@ -1,7 +1,7 @@
 // Small builders for the Monitor core's tests (src/monitor/core.ts), matching
 // anIssue and snapshotOf (./snapshots.ts): say only what a test cares about.
 import { DEFAULT_KIT_CONFIG, type MonitorErrors } from "../kit/config.ts";
-import type { MonitorInput } from "../monitor/core.ts";
+import type { MonitorInput, SentryGroupsRead } from "../monitor/core.ts";
 import type { MonitorIssue } from "../monitor/issues.ts";
 import type { GroupFacts } from "../monitor/sentry.ts";
 
@@ -104,11 +104,16 @@ export function aClosedMonitorIssue(overrides: Partial<MonitorIssue> = {}): Moni
   return aMonitorIssue({ open: false, stateReason: "completed", closedAt: "2026-11-03T10:00:00Z", ...overrides });
 }
 
+/** Sentry read as listing these groups, every one of them with its 24-hour stats and its latest event as the group says. */
+export function sentryRead(groups: readonly GroupFacts[], overrides: Partial<SentryGroupsRead> = {}): SentryGroupsRead {
+  return { kind: "read", groups, groupsWithoutStats: 0, cutShortAt: null, latestEventErrors: [], ...overrides };
+}
+
 /** A tick with production errors on and Sentry read, giving these groups and no Monitor issues, and the default branch not read. */
 export function monitorInput(groups: readonly GroupFacts[], overrides: Partial<MonitorInput> = {}): MonitorInput {
   return {
     monitor: { ...DEFAULT_KIT_CONFIG.monitor, errors: SENTRY_ON },
-    sentry: { kind: "read", groups, groupsWithoutStats: 0 },
+    sentry: sentryRead(groups),
     issues: [],
     gatingChecks: [],
     mainChecks: null,

@@ -36,6 +36,25 @@ export function refusalOf(error: GitHubError): "rate-limited" | "missing-permiss
   return error.body.includes("Resource not accessible by integration") ? "missing-permission" : null;
 }
 
+/**
+ * Every item of a paginated REST list, 100 to a page, whatever query `path`
+ * already has. `itemsOf` picks the list out of a page that wraps it, as
+ * GitHub's check runs do; a page that is the list needs none.
+ */
+export async function allPages<T>(
+  github: Pick<GitHub, "rest">,
+  path: string,
+  itemsOf: (page: unknown) => readonly T[] = (page) => page as T[],
+): Promise<T[]> {
+  const query = path.includes("?") ? "&" : "?";
+  const items: T[] = [];
+  for (let page = 1; ; page++) {
+    const batch = itemsOf(await github.rest("GET", `${path}${query}per_page=100&page=${page}`));
+    items.push(...batch);
+    if (batch.length < 100) return items;
+  }
+}
+
 /** A GitHub API client authenticated as the Fabrik App. */
 export class GitHub {
   readonly #token: string;

@@ -8,9 +8,10 @@ import {
   monitorInput,
   openErrorIssues,
   SENTRY_ON,
+  sentryRead,
 } from "../__fixtures__/monitor.ts";
 import { CLINIC_3_LATEST_EVENT, PROJECT_ISSUES_24H } from "../__fixtures__/sentry.ts";
-import { heldCountIn, monitorPlanFor } from "./core.ts";
+import { groupsNeedingLatestEvent, heldCountIn, monitorPlanFor } from "./core.ts";
 import type { MonitorIssue } from "./issues.ts";
 import { type GroupFacts, groupFactsOf, withLatestEvent } from "./sentry.ts";
 
@@ -1123,12 +1124,33 @@ describe("The step summary", () => {
   ])("notes when Sentry gave %i listed groups no 24-hour stats, so an error group among them can't qualify", (groupsWithoutStats, groups) => {
     const listed = [aGroup({ events24h: 0 })];
 
-    const plan = monitorPlanFor(monitorInput(listed, { sentry: { kind: "read", groups: listed, groupsWithoutStats } }));
+    const plan = monitorPlanFor(monitorInput(listed, { sentry: sentryRead(listed, { groupsWithoutStats }) }));
 
     expect(plan.summary).toEqual([
       `Sentry gave no 24-hour stats for ${groups}, so their events count as none: an \`error\` group isn't filed until Sentry gives its stats again.`,
       "No production error needs a new issue.",
     ]);
+  });
+
+  it("warns that Sentry listed more groups than the Monitor reads in one tick, so only the first it gave were read", () => {
+    const plan = monitorPlanFor(monitorInput([], { sentry: sentryRead([], { cutShortAt: 1000 }) }));
+
+    expect(plan.summary).toEqual([
+      "Warning: Sentry lists more than 1000 unresolved `error` and `fatal` groups, so only the 1000 it gave first were read.",
+      "No production error needs a new issue.",
+    ]);
+  });
+
+  it.each([
+    ["a group it files", [], "its issue shows no release or frames"],
+    ["a group whose open issue's stats it refreshes", [aMonitorIssue()], "its issue's stats keep the release they named"],
+  ])("warns when the latest event of %s couldn't be read", (_case, issues, shows) => {
+    const unread = aGroup({ events24h: 14, latestEvent: null });
+    const error = "Sentry answered GET /api/0/organizations/acme/issues/4504/events/latest/ with 500: boom";
+
+    const plan = monitorPlanFor(monitorInput([unread], { issues, sentry: sentryRead([unread], { latestEventErrors: [{ group: "4504", error }] }) }));
+
+    expect(plan.summary[0]).toBe(`Warning: the latest event of Sentry's CLINIC-7 couldn't be read, so ${shows}: ${error}`);
   });
 
   it("says when there's nothing new to file", () => {
@@ -1141,5 +1163,33 @@ describe("The step summary", () => {
     const plan = monitorPlanFor(monitorInput([aGroup()]));
 
     expect(plan.summary).toEqual([]);
+  });
+});
+
+describe("The groups whose latest event the program reads", () => {
+  it("are those the plan files an issue for", () => {
+    const plan = monitorPlanFor(monitorInput([aGroup({ id: "4701" }), aGroup({ id: "4702" }), aGroup({ id: "4703", events24h: 1 })]));
+
+    expect([...groupsNeedingLatestEvent(plan)]).toEqual(["4701", "4702"]);
+  });
+
+  it("are those whose open issue's stats the plan refreshes, never a held group's or one whose issue only takes the held line", () => {
+    const plan = monitorPlanFor(monitorInput([aGroup({ id: "4701" }), aGroup({ id: "4601", events24h: 14 })], { issues: openErrorIssues(5) }));
+
+    expect(plan.rewrite.map((rewrite) => [rewrite.kind, rewrite.issue])).toEqual([
+      ["stats", 40],
+      ["held-line", 44],
+    ]);
+    expect([...groupsNeedingLatestEvent(plan)]).toEqual(["4601"]);
+  });
+
+  it("are none for red main's issue", () => {
+    const plan = monitorPlanFor(
+      monitorInput([], {
+        mainChecks: { kind: "read", commits: [{ sha: "badc0de", url: "https://github.com/acme/clinic/commit/badc0de", checkRuns: [] }] },
+      }),
+    );
+
+    expect([...groupsNeedingLatestEvent(plan)]).toEqual([]);
   });
 });
