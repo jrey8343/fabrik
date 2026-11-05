@@ -97,22 +97,22 @@ export async function withLatestEvents(
 ): Promise<SentryRead | null> {
   if (sentry?.kind !== "read" || errors === null || groups.size === 0) return sentry;
   const get = sentryClient(errors, token);
-  const read: GroupFacts[] = [];
+  const withEvents: GroupFacts[] = [];
   const latestEventErrors = [...sentry.latestEventErrors];
   for (const group of sentry.groups) {
     if (!groups.has(group.id)) {
-      read.push(group);
+      withEvents.push(group);
       continue;
     }
     try {
       const response = await get(`/api/0/organizations/${errors.org}/issues/${encodeURIComponent(group.id)}/events/latest/`);
-      read.push(withLatestEvent(group, (await response.json()) as RawSentryEvent));
+      withEvents.push(withLatestEvent(group, (await response.json()) as RawSentryEvent));
     } catch (error) {
       latestEventErrors.push({ group: group.id, error: warned(error) });
-      read.push(group);
+      withEvents.push(group);
     }
   }
-  return { ...sentry, groups: read, latestEventErrors };
+  return { ...sentry, groups: withEvents, latestEventErrors };
 }
 
 /** The error's message, after annotating the run with it as a warning. */

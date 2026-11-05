@@ -95,22 +95,23 @@ async function main(): Promise<void> {
   const { errors, redMain } = config.monitor;
   const gatingChecks = config.sandbox.checks;
   const sentryToken = process.env["FABRIK_SENTRY_TOKEN"] ?? "";
-  const [facts, sentry] = await Promise.all([
+  const [gitHubFacts, sentryAsListed] = await Promise.all([
     gatherMonitorFacts(github, repo, { appLogin: `${required("FABRIK_APP_SLUG")}[bot]`, redMain, gatingChecks }),
     readSentry(errors, sentryToken),
   ]);
-  const inputWith = (read: SentryRead | null): MonitorInput => ({
+  const inputWith = (sentry: SentryRead | null): MonitorInput => ({
     monitor: config.monitor,
-    sentry: read,
-    issues: facts.issues,
+    sentry,
+    issues: gitHubFacts.issues,
     gatingChecks,
-    mainChecks: facts.mainChecks,
+    mainChecks: gitHubFacts.mainChecks,
     cap: config.caps.monitorIssues,
   });
   // Which groups are filed and held never depends on their latest events, so a
   // plan with the groups as listed names the ones whose latest event to read.
-  const asListed = monitorPlanFor(inputWith(sentry));
-  const plan = monitorPlanFor(inputWith(await withLatestEvents(sentry, errors, sentryToken, groupsNeedingLatestEvent(asListed))));
+  const planAsListed = monitorPlanFor(inputWith(sentryAsListed));
+  const sentryWithEvents = await withLatestEvents(sentryAsListed, errors, sentryToken, groupsNeedingLatestEvent(planAsListed));
+  const plan = monitorPlanFor(inputWith(sentryWithEvents));
   await report([...(await apply(github, repo, plan)), ...plan.summary]);
 }
 

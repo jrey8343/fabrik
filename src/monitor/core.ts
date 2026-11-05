@@ -108,11 +108,12 @@ const SENTRY_TOKEN_ITEM = "`Sentry token` item in the `Fabrik App` 1Password vau
  * the newest of the Fabrik App's issues carrying its marker decides: none
  * files one; an open one has its stats block rewritten; one closed as
  * completed before Sentry last saw the group files a regression, once its
- * events since the close qualify it too; any other closed one, nothing. Those to file fill the cap's free slots, the
- * highest-ranked first, and the rest are held: their count shows in the stats
- * block of the newest open error issue and in no other. It never comments on,
- * closes or reopens an error issue. A source that isn't set up, or that
- * Sentry refuses, is a quiet note, never a failure.
+ * events since the close qualify it too; any other closed one, nothing. Those
+ * to file fill the cap's free slots, the highest-ranked first, and the rest
+ * are held: their count shows in the stats block of the newest open error
+ * issue and in no other. It never comments on, closes or reopens an error
+ * issue. A source that isn't set up, or that Sentry refuses, is a quiet note,
+ * never a failure.
  */
 function productionErrors({ monitor, sentry, issues, cap }: MonitorInput): Pick<MonitorPlan, "open" | "rewrite" | "summary"> {
   if (monitor.errors === null || sentry === null) {
