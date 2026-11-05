@@ -91,6 +91,11 @@ export function escapeMarkerIn(body: string): EscapeMarker | null {
  */
 export const FROM_AUDIT_LINE = /^From audit #([1-9][0-9]*)$/;
 
+/** The `From audit #n` line for a candidate filed from Audit #`audit`, which fromAuditIn reads back. */
+export function fromAuditLine(audit: number): string {
+  return `From audit #${audit}`;
+}
+
 /** The Audit the first `From audit #n` line in `body` names, or null if it has none. */
 export function fromAuditIn(body: string): number | null {
   const line = body

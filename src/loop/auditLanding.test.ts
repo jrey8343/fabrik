@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { aNamedPullRequest, anIssue, AUDITED_SHA, auditBody, auditRunSnapshotOf, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { MAX_ISSUE_URL_LENGTH } from "./followUps.ts";
-import { escapeMarkerIn } from "./markers.ts";
+import { escapeMarkerIn, fromAuditIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { AuditWindow, LoopEvent, Plan } from "./types.ts";
 
@@ -355,6 +355,17 @@ describe("Landing an Audit: the Open as issue link", () => {
       { strength: "worth-exploring", pullRequests: [32, 31] },
       { strength: "speculative", pullRequests: [32] },
     ]);
+  });
+
+  it("files issues that the next Audit's inputs read back as filed from this Audit", () => {
+    const output = {
+      candidates: [aCandidate({ title: "One", introducedBy: [31] }), aCandidate({ title: "Two", introducedBy: [] })],
+      topRecommendation: "One",
+    };
+
+    const links = linksFrom(output);
+
+    expect(links.map((link) => fromAuditIn(link.searchParams.get("body") ?? ""))).toEqual([97, 97]);
   });
 
   it("files an issue that keeps its From audit line and escape marker when a Design session rewrites it, so it still counts", () => {

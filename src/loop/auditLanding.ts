@@ -6,7 +6,7 @@ import { isPendingAudit, TOP_RECOMMENDATION_HEADING } from "./audit.ts";
 import { failAudit } from "./auditFailure.ts";
 import { type AuditCandidate, type AuditOutput, parseAuditOutput } from "./auditOutput.ts";
 import { newIssueUrl } from "./followUps.ts";
-import { auditMarker, auditMarksIn, escapeMarker } from "./markers.ts";
+import { auditMarker, auditMarksIn, escapeMarker, fromAuditLine } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { AuditWindow, IssueContext, LoopEvent, NamedPullRequestSnapshot, Plan, Strength } from "./types.ts";
 
@@ -157,7 +157,7 @@ function described(candidate: AuditCandidate): string[] {
  */
 function openAsIssue(candidate: AuditCandidate, introducedBy: readonly number[], repoUrl: string, audit: number): string {
   const body = [...described(candidate), "", `**Strength:** ${BADGES[candidate.strength]}`].join("\n");
-  const trailer = [`From audit #${audit}`, ...(introducedBy.length === 0 ? [] : [escapeMarker(candidate.strength, introducedBy)])];
+  const trailer = [fromAuditLine(audit), ...(introducedBy.length === 0 ? [] : [escapeMarker(candidate.strength, introducedBy)])];
   return newIssueUrl(repoUrl, candidate.title, body, trailer.join("\n"));
 }
 
