@@ -418,6 +418,42 @@ describe("Gathering an issue's blocked-by edges", () => {
   });
 });
 
+describe("Gathering an issue's body", () => {
+  it("holds the body as it stands, so a Design session's rewrite can carry its marker lines forward", async () => {
+    const body = "Booking and billing share one module.\n\nFrom audit #40\n<!-- fabrik:escape strong #31 -->";
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issue: {
+                number: 6,
+                state: "OPEN",
+                author: { login: "someone" },
+                // GitHub answers only the fields the query selects.
+                ...(/^\s*body$/m.test(query) ? { body } : {}),
+                labels: { nodes: [{ name: "needs-design" }] },
+                parent: null,
+                comments: { nodes: [] },
+                timelineItems: { nodes: [] },
+                closedByPullRequestsReferences: { nodes: [] },
+                blockedBy: { nodes: [] },
+                blocking: { nodes: [] },
+              },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 6, label: "needs-design" }, null);
+
+    expect(snapshot.issue?.body).toBe(body);
+  });
+});
+
 describe("Gathering an issue's Design session", () => {
   async function gatheredIssue(
     comments: { body: string; createdAt?: string; author: { __typename: string } }[],

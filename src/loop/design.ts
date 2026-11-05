@@ -2,6 +2,7 @@
 // Each turn rebuilds its context from the issue thread, so nothing is held here
 // between turns beyond what the thread itself shows.
 import type { SentBack } from "./backToDesign.ts";
+import { withCarriedLines } from "./carriedLines.ts";
 import { consideredSection } from "./considered.ts";
 import {
   dependencyOrder,
@@ -231,8 +232,8 @@ function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: Issue
   if (output.kind === "brief") {
     // Only the Operator can do an Operator brief's work, so it waits for them, not Dispatch.
     return "operator" in output.brief
-      ? { kind: "act", actions: [...rewriteAsOperatorBrief(issueNumber, output.comment, output.brief, snapshot.operator), CHECK_DESIGN_QUEUE] }
-      : { kind: "act", actions: [...rewriteAsBrief(issueNumber, output.comment, output.brief), checkDispatch, CHECK_DESIGN_QUEUE] };
+      ? { kind: "act", actions: [...rewriteAsOperatorBrief(issueNumber, output.comment, output.brief, snapshot.issue, snapshot.operator), CHECK_DESIGN_QUEUE] }
+      : { kind: "act", actions: [...rewriteAsBrief(issueNumber, output.comment, output.brief, snapshot.issue), checkDispatch, CHECK_DESIGN_QUEUE] };
   }
   const landed =
     output.kind === "spec"
@@ -422,9 +423,9 @@ function commaList(issues: readonly CreatedIssue[]): (string | CreatedIssue)[] {
 }
 
 /** The small outcome: the issue becomes its own agent brief, ready for an Implementer. */
-function rewriteAsBrief(issueNumber: number, comment: string, brief: AgentBrief): Action[] {
+function rewriteAsBrief(issueNumber: number, comment: string, brief: AgentBrief, issue: IssueSnapshot): Action[] {
   return [
-    { kind: "edit-issue-body", issue: issueNumber, body: briefBody(brief) },
+    { kind: "edit-issue-body", issue: issueNumber, body: withCarriedLines(briefBody(brief), issue.body) },
     {
       kind: "comment",
       issue: issueNumber,
@@ -459,11 +460,15 @@ function supersedeBySpec(
       kind: "create-issue",
       key: SPEC.created,
       title: withoutMentions(output.spec.title),
-      body: [
-        withoutMentions(output.spec.body),
-        "",
-        `<sub>Written by the Fabrik Design session on #${issueNumber}, which this Spec supersedes.</sub>`,
-      ].join("\n"),
+      // The Spec takes the issue's place, so it carries the issue's marker lines.
+      body: withCarriedLines(
+        [
+          withoutMentions(output.spec.body),
+          "",
+          `<sub>Written by the Fabrik Design session on #${issueNumber}, which this Spec supersedes.</sub>`,
+        ].join("\n"),
+        issue.body,
+      ),
       labels: readyLabels(issue),
       parent: null,
       blockedBy: [],
@@ -517,22 +522,25 @@ function roundComment(
  * assigned to the Operator, ready for a Pairing session. The assignment is
  * its one notification, so the comment mentions nobody.
  */
-function rewriteAsOperatorBrief(issueNumber: number, comment: string, brief: OperatorBrief, operator: string): Action[] {
+function rewriteAsOperatorBrief(issueNumber: number, comment: string, brief: OperatorBrief, issue: IssueSnapshot, operator: string): Action[] {
   return [
     {
       kind: "edit-issue-body",
       issue: issueNumber,
-      body: [
-        "## Operator brief",
-        "",
-        withoutMentions(brief.summary),
-        "",
-        "## Steps",
-        "",
-        ...taskList(brief.steps),
-        "",
-        "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
-      ].join("\n"),
+      body: withCarriedLines(
+        [
+          "## Operator brief",
+          "",
+          withoutMentions(brief.summary),
+          "",
+          "## Steps",
+          "",
+          ...taskList(brief.steps),
+          "",
+          "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
+        ].join("\n"),
+        issue.body,
+      ),
     },
     {
       kind: "comment",
