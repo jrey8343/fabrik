@@ -39,8 +39,11 @@ describe("What the score-record job makes of the judge's artifacts", () => {
     expect(judgeOutcome({ result: null, failure: null }, JUDGE)).toEqual({ kind: "judge-failed", judge: { ...JUDGE, digestTrimmed: null } });
   });
 
-  it("a judge's result that can't be read gives judge-output-invalid", () => {
-    expect(judgeOutcome({ result: "{ not json", failure: null }, JUDGE)).toEqual({
+  it.each([
+    ["isn't JSON", "{ not json"],
+    ["holds no JSON object", "[]\n"],
+  ])("a judge's result that %s gives judge-output-invalid", (_, result) => {
+    expect(judgeOutcome({ result, failure: null }, JUDGE)).toEqual({
       kind: "judge-output-invalid",
       judge: { ...JUDGE, digestTrimmed: null },
     });

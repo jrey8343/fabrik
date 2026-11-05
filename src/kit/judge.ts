@@ -5,7 +5,7 @@
 // src/kit/score-record-main.ts, which, like the push job, runs without the
 // Kit's runtime dependencies, so nothing here imports them. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
-import { streamMessageOf } from "../agent/stream.ts";
+import { isObject } from "../agent/stream.ts";
 import type { FailureReport } from "../loop/types.ts";
 import type { JudgeRun, ScoringOutcome } from "./scorer.ts";
 
@@ -47,14 +47,24 @@ export interface JudgeArtifacts {
  */
 export function judgeOutcome(artifacts: JudgeArtifacts, judge: Omit<JudgeRun, "digestTrimmed">): ScoringOutcome {
   if (artifacts.result !== null) {
-    const result = streamMessageOf(artifacts.result);
+    const result = jsonObjectOf(artifacts.result);
     if (result === null) return { kind: "judge-output-invalid", judge: { ...judge, digestTrimmed: null } };
     return { kind: "judged", judge: { ...judge, digestTrimmed: trimmedOf(result["digestTrimmed"]) }, output: result["output"] };
   }
   if (artifacts.failure === null) return { kind: "judge-failed", judge: { ...judge, digestTrimmed: null } };
-  const digestTrimmed = trimmedOf(streamMessageOf(artifacts.failure)?.["digestTrimmed"]);
+  const digestTrimmed = trimmedOf(jsonObjectOf(artifacts.failure)?.["digestTrimmed"]);
   const kind = readFailureReport(artifacts.failure).failure === "missing-output" ? "judge-output-invalid" : "judge-failed";
   return { kind, judge: { ...judge, digestTrimmed } };
+}
+
+/** A judge file's text as the JSON object it holds, or null if it holds anything else or isn't JSON. */
+function jsonObjectOf(text: string): Readonly<Record<string, unknown>> | null {
+  try {
+    const value: unknown = JSON.parse(text);
+    return isObject(value) ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function trimmedOf(value: unknown): boolean | null {
