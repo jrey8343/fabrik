@@ -2,6 +2,8 @@
 // files it names, since nothing runs the workflows before a release.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { JUDGE_JOB } from "./judge.ts";
+import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 
 const root = new URL("../../", import.meta.url);
 const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml", ".github/workflows/weekly-summary.yml"].map((path) => ({
@@ -106,6 +108,16 @@ describe("The Kit's workflows", () => {
     expect(record).toContain("role: ${{ needs.kit.outputs.route }}");
   });
 
+  // Scoring (#149) is planned inside that same step, so it can't fail or stall the push job either.
+  it("loop.yml's push job passes out its record step's ask for a score, and the scored record's path", () => {
+    const push = jobIn(loop, "push");
+    const record = stepsOf(push).find((step) => step.includes("uses: ./kit/.github/actions/write-run-record"));
+
+    expect(record).toContain("id: record");
+    expect(push).toContain("score: ${{ steps.record.outputs.score }}");
+    expect(push).toContain("record: ${{ steps.record.outputs.record }}");
+  });
+
   // A Step-up run is an Implement run on a stronger model, so it gets implement's Extra skills.
   it.each(["triage", "design", "implement", "review"])(
     "loop.yml's %s job passes its role to prepare-agent, which fetches the skills before any secret loads",
@@ -201,6 +213,91 @@ describe("loop.yml's Design queue job", () => {
   });
 });
 
+describe("loop.yml's judge job", () => {
+  const judge = (): string => job(JUDGE_JOB);
+
+  it("runs after the push job, only when its scoring plan asked for a score, unless the run was cancelled", () => {
+    expect(judge()).toMatch(/\n    needs: \[kit, push\]\n/);
+    expect(judge()).toMatch(/\n    if: \$\{\{ !cancelled\(\) && needs\.push\.outputs\.score == 'true' \}\}\n/);
+  });
+
+  // The judge run action checks nothing out itself, so this checkout is all the job has.
+  it("checks out only the Kit, at its pinned commit, before running the judge, and never the Product repo", () => {
+    const steps = stepsOf(judge());
+    const checkouts = steps.filter((step) => step.includes("uses: actions/checkout@"));
+    const run = steps.findIndex((step) => step.includes("uses: ./kit/.github/actions/run-judge"));
+
+    expect(checkouts).toHaveLength(1);
+    expect(checkouts[0]).toContain("repository: jrey8343/fabrik");
+    expect(checkouts[0]).toContain("ref: ${{ needs.kit.outputs.sha }}");
+    expect(checkouts[0]).toContain("path: kit");
+    expect(checkouts[0]).toContain("persist-credentials: false");
+    expect(steps.indexOf(checkouts[0]!)).toBeLessThan(run);
+  });
+
+  // ADR-0002: the job running an agent holds no write credential.
+  it("holds no write credential: read-only access to the Ticket, and only the agent service account", () => {
+    const permissions = /\n    permissions:\n((?: {6}.*\n)+)/.exec(judge())?.[1] ?? "";
+
+    expect(permissions.split("\n").filter((line) => line !== "" && !line.trimStart().startsWith("#"))).toEqual(["      issues: read"]);
+    expect([...judge().matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1])).toEqual(["OP_AGENT_TOKEN"]);
+    expect(judge()).not.toMatch(/create-github-app-token|id-token|: write\b/);
+  });
+
+  it("stops at the Kit's judge timeout, never Kit config's", () => {
+    expect(judge()).toMatch(new RegExp(`\\n    timeout-minutes: ${JUDGE_TIMEOUT_MINUTES}\\n`));
+  });
+
+  it("passes out how its secrets loaded, and the model and effort it ran, for the judge's Run record", () => {
+    expect(judge()).toContain("secrets-step: ${{ steps.judge.outputs.secrets-step }}");
+    expect(judge()).toContain("model: ${{ steps.judge.outputs.model }}");
+    expect(judge()).toContain("effort: ${{ steps.judge.outputs.effort }}");
+    expect(stepsOf(judge()).find((step) => step.includes("uses: ./kit/.github/actions/run-judge"))).toContain("id: judge");
+  });
+});
+
+describe("loop.yml's score-record job", () => {
+  const scoreRecord = (): string => job("score-record");
+
+  it("runs after the judge job, whether it succeeded or failed, unless the run was cancelled, and never fails the run", () => {
+    expect(scoreRecord()).toMatch(new RegExp(`\\n    needs: \\[kit, push, ${JUDGE_JOB}\\]\\n`));
+    expect(scoreRecord()).toContain(`\n    if: \${{ !cancelled() && needs.${JUDGE_JOB}.result != 'skipped' }}\n`);
+    expect(scoreRecord()).toContain("\n    continue-on-error: true\n");
+  });
+
+  // Its action mints that one token, for fabrik-runs alone with Contents write (see its tests below).
+  it("holds no token but the store's: no job permissions, and only the push service account, for the score-record action", () => {
+    const write = stepsOf(scoreRecord()).find((step) => step.includes("uses: ./kit/.github/actions/write-score-record"));
+
+    expect(scoreRecord()).toContain("\n    permissions: {}\n");
+    expect([...scoreRecord().matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1])).toEqual(["OP_PUSH_TOKEN"]);
+    expect(write).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
+    expect(scoreRecord()).not.toMatch(/create-github-app-token|id-token/);
+  });
+
+  it("runs no Product code: it checks out only the Kit, and reads how the judge ended from FABRIK_NEEDS", () => {
+    const steps = stepsOf(scoreRecord());
+    const checkouts = steps.filter((step) => step.includes("uses: actions/checkout@"));
+    const write = steps.findIndex((step) => step.includes("uses: ./kit/.github/actions/write-score-record"));
+
+    expect(checkouts).toHaveLength(1);
+    expect(checkouts[0]).toContain("repository: jrey8343/fabrik");
+    expect(checkouts[0]).toContain("ref: ${{ needs.kit.outputs.sha }}");
+    expect(checkouts[0]).toContain("path: kit");
+    expect(checkouts[0]).toContain("persist-credentials: false");
+    expect(steps.indexOf(checkouts[0]!)).toBeLessThan(write);
+    expect(scoreRecord()).toContain("FABRIK_NEEDS: ${{ toJSON(needs) }}");
+    expect(steps[write]).toContain("record: ${{ needs.push.outputs.record }}");
+  });
+});
+
+describe("loop.yml's scoring jobs", () => {
+  it.each([JUDGE_JOB, "score-record"])("%s leaves reading and writing GitHub to the Kit's actions, never inline gh calls or shell steps", (name) => {
+    expect(job(name)).not.toMatch(/\bgh (api|issue|pr|repo|release|run|workflow) /);
+    expect(job(name)).not.toMatch(/\n\s+run: /);
+  });
+});
+
 describe("loop.yml's claim job", () => {
   it("takes agent:design off as the Design session's first turn starts, as it takes agent:implement off", () => {
     expect(job("implement-claim")).toContain(
@@ -274,6 +371,15 @@ describe("The write the Run record action", () => {
 
     expect(download).toContain("fabrik-transcript-");
     expect(download).toContain("continue-on-error: true");
+  });
+
+  // The scoring plan runs inside the record step (#149), on the record it just wrote.
+  it("passes out the scoring plan's ask for a score, and the scored record's path, from its program's step", () => {
+    const write = steps.find((step) => step.includes("run: node src/kit/record-main.ts"));
+
+    expect(write).toContain("id: record");
+    expect(action).toMatch(/\n  score:\n.*\n\s+value: \$\{\{ steps\.record\.outputs\.score \}\}\n/);
+    expect(action).toMatch(/\n  record:\n.*\n\s+value: \$\{\{ steps\.record\.outputs\.record \}\}\n/);
   });
 });
 
