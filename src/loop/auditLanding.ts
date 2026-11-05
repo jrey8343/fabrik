@@ -2,7 +2,7 @@
 // the pending Audit. The Kit renders every word of layout; the Auditor wrote
 // only the candidates' text. The Audit stays silent: no state label, no
 // assignee, no mention.
-import { isPendingAudit } from "./audit.ts";
+import { isPendingAudit, TOP_RECOMMENDATION_HEADING } from "./audit.ts";
 import { failAudit } from "./auditFailure.ts";
 import { type AuditCandidate, type AuditOutput, parseAuditOutput } from "./auditOutput.ts";
 import { auditMarker, auditMarksIn } from "./markers.ts";
@@ -87,7 +87,7 @@ function filledBody(
     `The Auditor read the default branch up to \`${short(commit)}\`, ${lookedFirstAt(window)}. File the candidates you want, comment here on any you reject so the next Audit knows, and close this Audit when you're done.`,
     ...candidates.flatMap((candidate) => ["", ...card(candidate, keptPullRequests(candidate, named))]),
     "",
-    "## Top recommendation",
+    TOP_RECOMMENDATION_HEADING,
     "",
     topRecommendation ?? "",
     "",

@@ -17,7 +17,15 @@ export interface Audit {
   readonly pending: boolean;
   /** Whether its run failed, which leaves it closed and never the last Audit. */
   readonly failed: boolean;
+  /** Whether its run filled it with candidates; a clean Audit, which closed itself, has none. */
+  readonly filled: boolean;
 }
+
+/**
+ * The heading a filled Audit ends its candidates with (src/loop/auditLanding.ts).
+ * Only a filled Audit has it, so it's how a filled Audit is told from a clean one.
+ */
+export const TOP_RECOMMENDATION_HEADING = "## Top recommendation";
 
 /**
  * The Audits among these `fabrik:audit` issues, newest first. Only an issue
@@ -27,7 +35,11 @@ export interface Audit {
 export function auditsIn(issues: readonly AuditIssueSnapshot[]): Audit[] {
   return issues
     .filter((issue) => issue.byApp)
-    .map(({ number, open, createdAt, body }) => ({ number, open, createdAt, ...auditMarksIn(body) }))
+    .map(({ number, open, createdAt, body }) => {
+      const marks = auditMarksIn(body);
+      const filled = !marks.pending && !marks.failed && body.split("\n").some((line) => line.trim() === TOP_RECOMMENDATION_HEADING);
+      return { number, open, createdAt, ...marks, filled };
+    })
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.number - a.number);
 }
 
