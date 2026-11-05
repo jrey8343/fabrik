@@ -1,4 +1,4 @@
-// The Monitor core (#148): from a Product repo's `monitor` settings, the Sentry
+// The Monitor core (#148): from the Kit config's `monitor` block, the Sentry
 // groups and the default branch's check runs read this tick, and every
 // `fabrik:monitor` issue, what the Monitor files, rewrites and closes, and the
 // step summary's lines; red main's part is in ./redMain.ts. Pure, no I/O: the
@@ -25,7 +25,7 @@ import { type MainChecksRead, redMainPlan } from "./redMain.ts";
 import type { FrameFacts, GroupFacts, LatestEventFacts } from "./sentry.ts";
 
 export interface MonitorInput {
-  /** The Product repo's resolved `monitor` settings. */
+  /** The Product repo's Kit config's `monitor` block, resolved. */
   readonly monitor: KitConfig["monitor"];
   /** What reading Sentry gave this tick, or null when `monitor.errors` is off and it wasn't read. */
   readonly sentry: SentryRead | null;
