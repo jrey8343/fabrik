@@ -81,3 +81,28 @@ describe("loop.yml's claim job", () => {
     );
   });
 });
+
+describe("schedule.yml's Design queue job", () => {
+  const schedule = workflows.find((workflow) => workflow.path.endsWith("schedule.yml"))!.text;
+  const scheduleJob = (name: string): string => {
+    const body = schedule.split(/\n(?=  [a-z-]+:\n)/).find((section) => section.startsWith(`  ${name}:\n`));
+    if (body === undefined) throw new Error(`schedule.yml has no ${name} job`);
+    return body;
+  };
+
+  it("runs a Design queue check when the tick's plan asked for one", () => {
+    expect(scheduleJob("tick")).toContain("design-queue: ${{ steps.loop.outputs.design-queue }}");
+    expect(scheduleJob("tick")).toMatch(/id: loop\n\s+uses: \.\/kit\/\.github\/actions\/run-loop/);
+    expect(scheduleJob("design-queue")).toContain("needs.tick.outputs.design-queue == 'true'");
+    expect(scheduleJob("design-queue")).toContain('FABRIK_DESIGN_QUEUE_CHECK: "true"');
+  });
+
+  it("shares loop.yml's per-repo concurrency group, so a tick's check and an event's can't fill the same free slot", () => {
+    expect(scheduleJob("design-queue")).toMatch(/concurrency:\n\s+group: fabrik-design-queue\n\s+cancel-in-progress: false\n/);
+  });
+
+  it("asks for no permission the caller's tick job doesn't grant, so taking it needs no change to the shim", () => {
+    expect(scheduleJob("design-queue")).toContain("permissions: {}");
+    expect(scheduleJob("design-queue")).not.toContain("actions-token");
+  });
+});

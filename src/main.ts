@@ -284,7 +284,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Only the Dispatch and Design queue jobs set it: their GITHUB_TOKEN, scoped to actions: read.
+  // Only the Dispatch job and loop.yml's Design queue job set it: their GITHUB_TOKEN, scoped to actions: read.
+  // The scheduled tick's Design queue job has none, so its snapshot reads turns in progress from the issues.
   const actionsToken = process.env["FABRIK_ACTIONS_TOKEN"];
   const actions =
     actionsToken === undefined || actionsToken === "" ? null : new GitHub(actionsToken, process.env["GITHUB_API_URL"]);
