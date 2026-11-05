@@ -454,6 +454,49 @@ describe("Gathering an issue's body", () => {
   });
 });
 
+describe("Gathering who opened an issue", () => {
+  /** The issue as gathered, opened by this account, which GitHub names without its [bot] suffix. */
+  async function openedBy(author: { login: string; __typename: string }) {
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          // GitHub answers only the fields the query selects.
+          const issueQuery = query.slice(query.indexOf("issue(number: $number)"));
+          const selectsType = /^\s*author \{[^}]*__typename/m.test(issueQuery);
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issue: {
+                number: 98,
+                state: "OPEN",
+                author: selectsType ? author : { login: author.login },
+                body: "",
+                labels: { nodes: [{ name: "fabrik:audit" }] },
+                parent: null,
+                comments: { nodes: [] },
+                timelineItems: { nodes: [] },
+                closedByPullRequestsReferences: { nodes: [] },
+                blockedBy: { nodes: [] },
+                blocking: { nodes: [] },
+              },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+    return (await gatherSnapshot(github, repo, { kind: "issue-opened", issue: 98 }, null)).issue;
+  }
+
+  it("says the Fabrik App opened it when a bot did, so its Audit markers are read", async () => {
+    expect(await openedBy({ login: "fabrik-app", __typename: "Bot" })).toMatchObject({ author: "fabrik-app", byApp: true });
+  });
+
+  it("says the App didn't when a person did, whatever their login", async () => {
+    expect(await openedBy({ login: "fabrik-app", __typename: "User" })).toMatchObject({ author: "fabrik-app", byApp: false });
+  });
+});
+
 describe("Gathering an issue's Design session", () => {
   async function gatheredIssue(
     comments: { body: string; createdAt?: string; author: { __typename: string } }[],

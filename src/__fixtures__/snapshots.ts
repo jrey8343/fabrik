@@ -19,6 +19,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     number: 1,
     open: true,
     author: "someone",
+    byApp: false,
     body: "",
     labels: [],
     parent: null,
