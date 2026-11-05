@@ -229,6 +229,8 @@ export interface IssueSnapshot {
   readonly openPullRequests: readonly number[];
   /** How many rounds the Kit has posted in the issue's current Design session (src/loop/design.ts). */
   readonly designRounds: number;
+  /** Whether a Design-session turn has failed in its current Design session, read from the Kit's failure notice. */
+  readonly turnFailed: boolean;
   /**
    * The agent PR whose Verdict sent this Ticket back to design, read from the
    * Kit's note on it (src/loop/backToDesign.ts), while the Design session that

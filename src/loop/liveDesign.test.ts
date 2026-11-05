@@ -8,8 +8,9 @@ import { planFor } from "./rules.ts";
 const commented = (body: string, commenter = "jrey", commenterIsBot = false) =>
   ({ kind: "issue-comment-created", issue: 7, commenter, commenterIsBot, body, comment: 9001 }) as const;
 
+/** An issue in a Design session that has posted round 1, so the Operator's ordinary answer starts a turn. */
 const inSession = (labels: readonly string[] = ["enhancement", "needs-design"], open = true) =>
-  snapshotOf(anIssue({ number: 7, labels, open }), { operator: "jrey" });
+  snapshotOf(anIssue({ number: 7, labels, open, designRounds: 1 }), { operator: "jrey" });
 
 describe("Landing a live Design session's outcome", () => {
   it("makes the issue ready for an Implementer when the live session ended with an agent brief", () => {

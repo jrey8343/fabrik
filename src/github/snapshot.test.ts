@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
 import { anIssue, aPullRequest, designQueueSnapshotOf, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
+import { DESIGN_TURN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
 import { countImplementRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME } from "./snapshot.ts";
@@ -320,6 +321,50 @@ describe("Gathering an issue's blocked-by edges", () => {
     const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 6, label: "needs-design" }, null);
 
     expect(snapshot.issue).toMatchObject({ openBlockers: [10], openBlocking: [7] });
+  });
+});
+
+describe("Gathering an issue's Design session", () => {
+  async function gatheredIssue(comments: { body: string; author: { __typename: string } }[]) {
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issue: {
+                number: 6,
+                state: "OPEN",
+                author: { login: "someone" },
+                labels: { nodes: [{ name: "needs-design" }] },
+                parent: null,
+                comments: { nodes: comments },
+                closedByPullRequestsReferences: { nodes: [] },
+                blockedBy: { nodes: [] },
+                blocking: { nodes: [] },
+              },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+    const event = { kind: "issue-comment-created", issue: 6, commenter: "operator", commenterIsBot: false, body: "More context", comment: 9 } as const;
+    return (await gatherSnapshot(github, repo, event, null)).issue;
+  }
+
+  it("reads a Design-session turn's failure notice as a failed turn, so the session keeps its slot", async () => {
+    const issue = await gatheredIssue([
+      { body: `${DESIGN_TURN_FAILED_MARKER}\n@operator The Design-session turn run on #6 failed.`, author: { __typename: "Bot" } },
+    ]);
+
+    expect(issue).toMatchObject({ designRounds: 0, turnFailed: true });
+  });
+
+  it("reads an issue with no round and no failure as holding no slot", async () => {
+    const issue = await gatheredIssue([{ body: "Some context while it waits", author: { __typename: "User" } }]);
+
+    expect(issue).toMatchObject({ designRounds: 0, turnFailed: false });
   });
 });
 

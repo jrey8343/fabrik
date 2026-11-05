@@ -399,6 +399,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
   if (issue === null) {
     throw new Error(`Issue #${number} not found in ${repo.owner}/${repo.name}`);
   }
+  const comments = issue.comments.nodes.map((comment) => ({ body: comment.body, byBot: comment.author?.__typename === "Bot" }));
   return {
     issue: {
       number: issue.number,
@@ -407,10 +408,9 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
-      ...designSessionOf(
-        issue.comments.nodes.map((comment) => ({ body: comment.body, byBot: comment.author?.__typename === "Bot" })),
-      ),
-      emptyDiffs: countEmptyDiffs(issue.comments.nodes.map((comment) => comment.body)),
+      ...designSessionOf(comments),
+      turnFailed: designTurnFailedIn(comments),
+      emptyDiffs: countEmptyDiffs(comments.map((comment) => comment.body)),
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),
     },
