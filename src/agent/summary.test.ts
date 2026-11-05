@@ -121,6 +121,23 @@ describe("the agent job's step summary", () => {
     expect(missingSkills(lines(init, result), installed)).toEqual(["grilling", "event-storming"]);
   });
 
+  it("lists every source, Extra skills included, with its short SHA, and flags an Extra skill missing at init like a Base one", () => {
+    const summary = runSummary({
+      role: "design",
+      effort: null,
+      lines: lines({ ...init, skills: ["tdd", "triage", "event-storming"] }, result),
+      installed: [
+        { repository: "mattpocock/skills", sha: "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d", skills: ["tdd", "triage"] },
+        { repository: "jrey8343/skills", sha: "0123456789abcdef0123456789abcdef01234567", skills: ["event-storming", "deciders"] },
+      ],
+    });
+
+    expect(summary).toContain("Installed from mattpocock/skills at 4ae2317: tdd, triage (all 2 loaded)");
+    expect(summary).toContain(
+      "Installed from jrey8343/skills at 0123456: event-storming, deciders (1 of 2 loaded; missing: deciders)",
+    );
+  });
+
   it("says when no init message arrived, so no skills were seen to load", () => {
     const summary = runSummary({ role: "triage", effort: null, lines: [] });
 
