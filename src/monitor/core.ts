@@ -133,8 +133,8 @@ const SENTRY_TOKEN_ITEM = "`Sentry token` item in the `Fabrik App` 1Password vau
  * The production-errors source's part of the plan. For each qualifying group,
  * the newest of the Fabrik App's issues carrying its marker decides: none
  * files one; an open one has its stats block rewritten; one closed as
- * completed before Sentry last saw the group files a regression; any other
- * closed one, nothing. Those to file fill the cap's free slots, the
+ * completed before Sentry last saw the group files a regression, once its
+ * events since the close qualify it too; any other closed one, nothing. Those to file fill the cap's free slots, the
  * highest-ranked first, and the rest are held: their count shows in the stats
  * block of the newest open error issue and in no other. It never comments on,
  * closes or reopens an error issue. A source that isn't set up, or that
@@ -178,13 +178,12 @@ function productionErrors({ monitor, sentry, issues, cap = MONITOR_ISSUES_CAP }:
   /** Each open issue whose group qualifies, by number: the newest of the App's issues for it. */
   const refreshing = new Map<number, GroupFacts>();
   for (const group of sentry.groups) {
-    if (!qualifies(group, minEvents)) continue;
     const issue = newest.get(sentryGroupMarker(group.id));
     if (issue === undefined) {
-      candidates.push({ group, regressedFrom: null });
+      if (qualifies(group, minEvents, group.events24h)) candidates.push({ group, regressedFrom: null });
     } else if (issue.open) {
-      refreshing.set(issue.number, group);
-    } else if (regressedSince(issue, group)) {
+      if (qualifies(group, minEvents, group.events24h)) refreshing.set(issue.number, group);
+    } else if (regressedSince(issue, group, minEvents)) {
       candidates.push({ group, regressedFrom: issue.number });
     }
   }
@@ -293,21 +292,33 @@ export function newestByMarker(issues: readonly MonitorIssue[]): Map<string, Mon
 
 /**
  * Whether a group is worth an issue: unresolved, and `fatal` at any count or
- * `error` once it has `minEvents` events in 24 hours. Sentry's other levels never are.
+ * `error` once these events, its 24 hours' or a regression's since its
+ * issue's close, reach `minEvents`. Sentry's other levels never are.
  */
-function qualifies(group: GroupFacts, minEvents: number): boolean {
+function qualifies(group: GroupFacts, minEvents: number, events: number): boolean {
   if (group.status !== "unresolved") return false;
-  return group.level === "fatal" || (group.level === "error" && group.events24h >= minEvents);
+  return group.level === "fatal" || (group.level === "error" && events >= minEvents);
+}
+
+/**
+ * The group's events in the hours of its 24-hour stats that start no earlier
+ * than this close, so the events before a fix don't count toward its
+ * regression and one stray event after it doesn't refile it.
+ */
+function eventsSince(group: GroupFacts, closedAt: string): number {
+  const close = Date.parse(closedAt);
+  return group.eventsByHour.reduce((sum, hour) => (Date.parse(hour.start) >= close ? sum + hour.events : sum), 0);
 }
 
 /**
  * Whether a group whose newest issue is closed comes back as a regression:
- * that issue was closed as completed, and Sentry has seen the group since. One
- * closed as not planned or as a duplicate, or carrying wontfix, never comes back.
+ * that issue was closed as completed, Sentry has seen the group since, and
+ * the events since then alone meet the threshold a new group's do. One closed
+ * as not planned or as a duplicate, or carrying wontfix, never comes back.
  */
-function regressedSince(issue: MonitorIssue, group: GroupFacts): boolean {
+function regressedSince(issue: MonitorIssue, group: GroupFacts, minEvents: number): boolean {
   if (issue.stateReason !== "completed" || issue.labels.includes(WONTFIX) || issue.closedAt === null) return false;
-  return Date.parse(group.lastSeen) > Date.parse(issue.closedAt);
+  return Date.parse(group.lastSeen) > Date.parse(issue.closedAt) && qualifies(group, minEvents, eventsSince(group, issue.closedAt));
 }
 
 /**

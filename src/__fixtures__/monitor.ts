@@ -15,10 +15,12 @@ export const SENTRY_ON: MonitorErrors = {
 
 /**
  * Group 4504 (CLINIC-7): an unresolved `error`-level TypeError in `POST
- * /api/book` with 9 events in the last 24 hours from 4 users, its latest event
- * read: release `clinic@1.4.0` and two in-app frames.
+ * /api/book` with 9 events in the last 24 hours from 4 users, all of them (or
+ * as many as `events24h` says) in the hour from 06:00 UTC on the day the tick
+ * runs, its latest event read: release `clinic@1.4.0` and two in-app frames.
  */
 export function aGroup(overrides: Partial<GroupFacts> = {}): GroupFacts {
+  const events24h = overrides.events24h ?? 9;
   return {
     id: "4504",
     shortId: "CLINIC-7",
@@ -27,7 +29,8 @@ export function aGroup(overrides: Partial<GroupFacts> = {}): GroupFacts {
     culprit: "POST /api/book",
     level: "error",
     status: "unresolved",
-    events24h: 9,
+    events24h,
+    eventsByHour: events24h === 0 ? [] : [{ start: "2026-11-06T06:00:00.000Z", events: events24h }],
     usersAffected: 4,
     firstSeen: "2026-11-01T09:30:00.000000Z",
     lastSeen: "2026-11-06T06:15:00.000000Z",

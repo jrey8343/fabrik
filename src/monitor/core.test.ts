@@ -277,6 +277,48 @@ describe("A Monitor issue that was closed", () => {
     expect(plan.open).toEqual([]);
   });
 
+  describe("closed within the last 24 hours, after a busy morning", () => {
+    // Closed at 04:30 UTC on the tick's day, after 12 events in the hours before it.
+    const closedThisMorning = aClosedMonitorIssue({ closedAt: "2026-11-06T04:30:00Z" });
+    const busyMorning = [
+      { start: "2026-11-06T01:00:00.000Z", events: 4 },
+      { start: "2026-11-06T02:00:00.000Z", events: 5 },
+      { start: "2026-11-06T03:00:00.000Z", events: 3 },
+    ];
+    /** The group at this level, seen through the busy morning and then in these hours after the close. */
+    const seenAfterTheClose = (level: string, ...hours: { start: string; events: number }[]) => {
+      const eventsByHour = [...busyMorning, ...hours];
+      return aGroup({
+        level,
+        eventsByHour,
+        events24h: eventsByHour.reduce((sum, hour) => sum + hour.events, 0),
+        lastSeen: "2026-11-06T06:20:00Z",
+      });
+    };
+
+    it("files nothing for one stray event after the close, counting only the hours that start after it", () => {
+      const group = seenAfterTheClose("error", { start: "2026-11-06T06:00:00.000Z", events: 1 });
+
+      expect(filed(monitorPlanFor(monitorInput([group], { issues: [closedThisMorning] })))).toEqual([]);
+    });
+
+    it("files the regression once the events after the close reach min_events", () => {
+      const group = seenAfterTheClose(
+        "error",
+        { start: "2026-11-06T05:00:00.000Z", events: 2 },
+        { start: "2026-11-06T06:00:00.000Z", events: 1 },
+      );
+
+      expect(filed(monitorPlanFor(monitorInput([group], { issues: [closedThisMorning] })))).toEqual(["4504"]);
+    });
+
+    it("files a fatal group's regression for one event after the close, as a fatal group needs no threshold", () => {
+      const group = seenAfterTheClose("fatal", { start: "2026-11-06T06:00:00.000Z", events: 1 });
+
+      expect(filed(monitorPlanFor(monitorInput([group], { issues: [closedThisMorning] })))).toEqual(["4504"]);
+    });
+  });
+
   it.each(["not_planned", "duplicate"])("never files again a group whose issue was closed as %s, however much Sentry sees it", (reason) => {
     const plan = monitorPlanFor(
       monitorInput([aGroup({ level: "fatal", events24h: 500, lastSeen: "2026-11-06T06:15:00Z" })], {

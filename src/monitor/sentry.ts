@@ -22,6 +22,8 @@ export interface GroupFacts {
   readonly status: string;
   /** Events in the last 24 hours, summed from the group's hourly stats. */
   readonly events24h: number;
+  /** The hours in the last 24 that had any events, oldest first, so the Monitor can count those after an issue's close. */
+  readonly eventsByHour: readonly EventsInHour[];
   readonly usersAffected: number;
   /** ISO 8601. */
   readonly firstSeen: string;
@@ -31,6 +33,13 @@ export interface GroupFacts {
   readonly permalink: string;
   /** What the group's latest event adds, or null until it's read (see withLatestEvent). */
   readonly latestEvent: LatestEventFacts | null;
+}
+
+/** One of a group's hourly stats buckets. */
+export interface EventsInHour {
+  /** When the hour starts, ISO 8601. */
+  readonly start: string;
+  readonly events: number;
 }
 
 /** What a group's latest event adds to its facts. */
@@ -72,21 +81,32 @@ export interface RawSentryGroup {
 
 /** One page of Sentry's issue listing, translated. Each group's latest event is still to be read. */
 export function groupFactsOf(listing: readonly RawSentryGroup[]): GroupFacts[] {
-  return listing.map((group) => ({
-    id: group.id,
+  return listing.map((group) => {
+    const eventsByHour = eventsByHourOf(group.stats?.["24h"] ?? []);
+    return {
+      id: group.id,
     shortId: group.shortId,
     title: group.title,
     exceptionType: textOrNull(group.metadata["type"]),
-    culprit: textOrNull(group.culprit),
-    level: group.level,
-    status: group.status,
-    events24h: (group.stats?.["24h"] ?? []).reduce((sum, [, events]) => sum + (events ?? 0), 0),
-    usersAffected: group.userCount,
-    firstSeen: group.firstSeen,
-    lastSeen: group.lastSeen,
-    permalink: group.permalink,
-    latestEvent: null,
-  }));
+      culprit: textOrNull(group.culprit),
+      level: group.level,
+      status: group.status,
+      events24h: eventsByHour.reduce((sum, hour) => sum + hour.events, 0),
+      eventsByHour,
+      usersAffected: group.userCount,
+      firstSeen: group.firstSeen,
+      lastSeen: group.lastSeen,
+      permalink: group.permalink,
+      latestEvent: null,
+    };
+  });
+}
+
+/** The hourly `[unix seconds, events]` buckets that had any events, oldest first. */
+function eventsByHourOf(buckets: readonly (readonly number[])[]): EventsInHour[] {
+  return buckets
+    .flatMap(([start, events]) => (start === undefined || events === undefined || events <= 0 ? [] : [{ start: new Date(start * 1000).toISOString(), events }]))
+    .toSorted((a, b) => Date.parse(a.start) - Date.parse(b.start));
 }
 
 /**

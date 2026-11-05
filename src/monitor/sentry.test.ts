@@ -3,7 +3,7 @@ import { CLINIC_1_LATEST_EVENT, CLINIC_3_LATEST_EVENT, PROJECT_ISSUES_24H } from
 import { groupFactsOf, withLatestEvent } from "./sentry.ts";
 
 describe("Translating Sentry's issue listing into group facts", () => {
-  it("gives each group's facts, with its events in the last 24 hours summed from the hourly stats", () => {
+  it("gives each group's facts, with its events in the last 24 hours summed from the hourly stats and the hours that had any", () => {
     expect(groupFactsOf(PROJECT_ISSUES_24H)[0]).toEqual({
       id: "6031250812",
       shortId: "CLINIC-3",
@@ -13,6 +13,12 @@ describe("Translating Sentry's issue listing into group facts", () => {
       level: "error",
       status: "unresolved",
       events24h: 9,
+      eventsByHour: [
+        { start: "2026-11-06T04:00:00.000Z", events: 2 },
+        { start: "2026-11-06T06:00:00.000Z", events: 3 },
+        { start: "2026-11-06T07:00:00.000Z", events: 1 },
+        { start: "2026-11-06T08:00:00.000Z", events: 3 },
+      ],
       usersAffected: 4,
       firstSeen: "2026-10-29T03:12:44.104000Z",
       lastSeen: "2026-11-06T08:41:09.512000Z",
@@ -31,6 +37,10 @@ describe("Translating Sentry's issue listing into group facts", () => {
       level: "error",
       status: "unresolved",
       events24h: 3,
+      eventsByHour: [
+        { start: "2026-11-05T09:00:00.000Z", events: 1 },
+        { start: "2026-11-05T12:00:00.000Z", events: 2 },
+      ],
       usersAffected: 0,
       firstSeen: "2026-10-31T22:05:17.880000Z",
       lastSeen: "2026-11-05T12:18:52.031000Z",
