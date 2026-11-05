@@ -83,4 +83,28 @@ describe("an AFK role's prompt", () => {
     expect(prompt).toContain("the Extra skill `deciders`");
     expect(prompt).not.toContain("event-storming");
   });
+
+  it("gives the Auditor this repo's audit instructions from .fabrik/audit.md, and no Extra skills line", () => {
+    const withAudit: KitConfig = {
+      ...config({ design: [eventStorming], review: [deciders] }),
+      instructions: { ...DEFAULT_KIT_CONFIG.instructions, audit: "Booking first.\n" },
+    };
+
+    const prompt = promptFor({ ...base, template: "# The Kit's audit prompt\n", role: "audit", config: withAudit, heading: "The pending Audit" });
+
+    expect(prompt).toBe(
+      [
+        "# The Kit's audit prompt",
+        "## This Product repo's audit instructions",
+        "The Operator wrote these for this repo.",
+        "Booking first.",
+        "## The pending Audit",
+        "```json",
+        JSON.stringify(issue, null, 2),
+        "```",
+        "## More",
+        "Context.",
+      ].join("\n\n") + "\n",
+    );
+  });
 });

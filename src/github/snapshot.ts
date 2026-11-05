@@ -2,10 +2,10 @@
 // needs, fresh rather than from the event payload, into the snapshot the core
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
 import {
+  INSTRUCTED_ROLES,
   instructionsPath,
   KIT_CONFIG_PATH,
   type KitConfigSources,
-  PHASES,
   SKILLS_SOURCES_LOCK_PATH,
 } from "../kit/config.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
@@ -840,11 +840,11 @@ export async function readKitConfigSources(
   const [config, skillsLock, ...instructions] = await Promise.all([
     github.fileText(repo, KIT_CONFIG_PATH, ref),
     github.fileText(repo, SKILLS_SOURCES_LOCK_PATH, ref),
-    ...PHASES.map((phase) => github.fileText(repo, instructionsPath(phase), ref)),
+    ...INSTRUCTED_ROLES.map((role) => github.fileText(repo, instructionsPath(role), ref)),
   ]);
   return {
     config: config ?? null,
     skillsLock: skillsLock ?? null,
-    instructions: Object.fromEntries(PHASES.map((phase, i) => [phase, instructions[i] ?? null])),
+    instructions: Object.fromEntries(INSTRUCTED_ROLES.map((role, i) => [role, instructions[i] ?? null])),
   };
 }

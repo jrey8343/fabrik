@@ -21,7 +21,7 @@ const DEFAULTS = {
   caps: { designSessions: 2 },
   audit: { day: "sunday" },
   operator: null,
-  instructions: { triage: null, design: null, implement: null, review: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
 };
@@ -209,7 +209,15 @@ describe("Kit config", () => {
       design: null,
       implement: "Use the repo's money helpers.\n",
       review: "Check the booking flow.\n",
+      audit: null,
     });
+  });
+
+  it("carries the Auditor's instructions from .fabrik/audit.md, though the Auditor picks no Extra skills", () => {
+    const result = resolveKitConfig({ config: null, instructions: { audit: "Look at the booking module first.\n" } });
+
+    expect(result.ok && result.config.instructions.audit).toBe("Look at the booking module first.\n");
+    expect(result.ok && Object.keys(result.config.extraSkills)).toEqual(["triage", "design", "implement", "review"]);
   });
 
   it("treats a blank instruction file as absent", () => {

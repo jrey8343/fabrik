@@ -41,7 +41,8 @@ export interface KitConfig {
   };
   /** The Operator's GitHub login; null means the Product repo's owner. */
   readonly operator: string | null;
-  readonly instructions: Readonly<Record<Phase, string | null>>;
+  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's included. */
+  readonly instructions: Readonly<Record<InstructedRole, string | null>>;
   /** The Product repo's own Skills sources, from .fabrik/skills.lock.json. */
   readonly skillsSources: readonly SkillsSource[];
   /** Each role's Extra skills, picked from those sources; a Step-up run uses implement's. */
@@ -72,6 +73,15 @@ export type Phase = "triage" | "design" | "implement" | "review";
 
 export const PHASES: readonly Phase[] = ["triage", "design", "implement", "review"];
 
+/**
+ * The roles a Product repo can give its own instructions in .fabrik/<role>.md:
+ * every Phase, and the Auditor, which takes no Extra skills (ADR-0008) and so
+ * is no Phase.
+ */
+export type InstructedRole = Phase | "audit";
+
+export const INSTRUCTED_ROLES: readonly InstructedRole[] = [...PHASES, "audit"];
+
 /** Every Extra skill the given roles pick, each once however many of them pick it. */
 export function picksIn(config: KitConfig, roles: readonly Phase[] = PHASES): readonly ExtraSkill[] {
   const picks = new Map<string, ExtraSkill>();
@@ -85,15 +95,15 @@ export function picksIn(config: KitConfig, roles: readonly Phase[] = PHASES): re
 export interface KitConfigSources {
   /** The text of .fabrik/config.json. */
   readonly config: string | null;
-  /** The text of each .fabrik/<phase>.md the Product repo provides. */
-  readonly instructions?: Readonly<Partial<Record<Phase, string | null>>>;
+  /** The text of each .fabrik/<role>.md the Product repo provides. */
+  readonly instructions?: Readonly<Partial<Record<InstructedRole, string | null>>>;
   /** The text of .fabrik/skills.lock.json. */
   readonly skillsLock?: string | null;
 }
 
-/** Where each optional per-phase instruction file lives in a Product repo. */
-export function instructionsPath(phase: Phase): string {
-  return `.fabrik/${phase}.md`;
+/** Where each optional per-role instruction file lives in a Product repo. */
+export function instructionsPath(role: InstructedRole): string {
+  return `.fabrik/${role}.md`;
 }
 
 export type KitConfigResult =
@@ -119,7 +129,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   // Sunday, so a fresh Audit is open by Monday's Weekly summary and misses the Monday skills bump.
   audit: { day: "sunday" },
   operator: null,
-  instructions: { triage: null, design: null, implement: null, review: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
 };
@@ -284,10 +294,10 @@ function checkSha(sha: string): string | null {
 }
 
 function readInstructions(files: NonNullable<KitConfigSources["instructions"]>): KitConfig["instructions"] {
-  const instructions: Record<Phase, string | null> = { ...DEFAULT_KIT_CONFIG.instructions };
-  for (const phase of PHASES) {
-    const text = files[phase];
-    if (text !== undefined && text !== null && text.trim() !== "") instructions[phase] = text;
+  const instructions: Record<InstructedRole, string | null> = { ...DEFAULT_KIT_CONFIG.instructions };
+  for (const role of INSTRUCTED_ROLES) {
+    const text = files[role];
+    if (text !== undefined && text !== null && text.trim() !== "") instructions[role] = text;
   }
   return instructions;
 }

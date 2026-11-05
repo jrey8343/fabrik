@@ -80,6 +80,22 @@ export function escapeMarkerIn(body: string): EscapeMarker | null {
 }
 
 /**
+ * The line an Audit candidate's filed issue ends with, naming the Audit it
+ * came from (#150), matched against a whole line with its outer whitespace
+ * trimmed. A Design session's rewrite carries it forward.
+ */
+export const FROM_AUDIT_LINE = /^From audit #([1-9][0-9]*)$/;
+
+/** The Audit the first `From audit #n` line in `body` names, or null if it has none. */
+export function fromAuditIn(body: string): number | null {
+  const line = body
+    .split("\n")
+    .map((each) => FROM_AUDIT_LINE.exec(each.trim()))
+    .find((match) => match !== null);
+  return line === undefined || line === null ? null : Number(line[1]);
+}
+
+/**
  * An Audit's marker line (#150): `<!-- fabrik:audit <sha> -->`, the commit the
  * Audit reads, which was the default branch's head when the tick opened it.
  * Its body keeps the line through every state.
