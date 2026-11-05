@@ -10,6 +10,7 @@ import type {
   EscapeMarkerIssueFacts,
   GitHubFacts,
   LabelEvent,
+  OpenAuditFacts,
   OpenIssueFacts,
   OpenPullRequestFacts,
   ReviewFacts,
@@ -37,11 +38,14 @@ const WINDOW_MS = 37 * DAY_MS;
  */
 const ESCAPE_WINDOW_MS = 97 * DAY_MS;
 
+/** The label on an Audit, the issue an Auditor files (#150). */
+const AUDIT_LABEL = "fabrik:audit";
+
 /** The GitHub facts the Weekly summary reads of one Product repo, as of `now`, with the Operator's login. */
 export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(now - ESCAPE_WINDOW_MS).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, escapeMarkerIssues] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, escapeMarkerIssues, openAudits] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
@@ -51,6 +55,7 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     // workflow runs, so it reads Design turns in progress from the issues, as the scheduled tick does.
     gatherDesignQueueSlice(github, null, repo),
     gatherEscapeMarkerIssues(github, repo, operator, escapeSince),
+    pagesOf<RawAudit>(github, OPEN_AUDITS_QUERY, repo, { audit: AUDIT_LABEL }, (data) => data.repository.issues),
   ]);
   const issues = [...new Map([...updatedIssues, ...openIssues].map((issue) => [issue.number, issue])).values()];
   return {
@@ -64,6 +69,7 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     openPullRequests: open.filter(isAgent).map(openPullRequestOf),
     designQueue,
     escapeMarkerIssues,
+    openAudits: openAudits.map(openAuditOf),
   };
 }
 
@@ -165,6 +171,18 @@ const ISSUES_OPENED_BY_QUERY = `
   }
 `;
 
+// The open Audits, whoever opened them: the summary keeps the Fabrik App's.
+const OPEN_AUDITS_QUERY = `
+  query ($owner: String!, $name: String!, $after: String, $audit: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, labels: [$audit], first: 25, after: $after) {
+        ${PAGE_INFO}
+        nodes { number title createdAt author ${ACTOR} }
+      }
+    }
+  }
+`;
+
 const DEFAULT_BRANCH_QUERY = `
   query ($owner: String!, $name: String!, $after: String, $since: GitTimestamp!) {
     repository(owner: $owner, name: $name) {
@@ -248,6 +266,13 @@ interface RawOpenedIssue {
   createdAt: string;
   state: "OPEN" | "CLOSED";
   body: string;
+  author: RawActor | null;
+}
+
+interface RawAudit {
+  number: number;
+  title: string;
+  createdAt: string;
   author: RawActor | null;
 }
 
@@ -401,6 +426,10 @@ function openIssueOf(issue: RawIssue): OpenIssueFacts {
     comments: issue.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(issue.timelineItems.nodes),
   };
+}
+
+function openAuditOf(audit: RawAudit): OpenAuditFacts {
+  return { number: audit.number, title: audit.title, author: loginOf(audit.author), createdAt: audit.createdAt };
 }
 
 function commentOf(comment: RawComment): CommentFacts {
