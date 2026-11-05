@@ -64,6 +64,7 @@ interface PullRequest {
   title: string;
   body: string;
   state: "open" | "closed";
+  merged?: boolean;
 }
 
 /**
@@ -157,6 +158,18 @@ class FakeProduct {
     if (method === "GET" && match !== null) {
       const head = decodeURIComponent(match[1]!).replace(/^acme:/, "");
       return this.pulls.filter((pull) => pull.head === head && pull.state === "open");
+    }
+    match = /^\/repos\/acme\/shop\/pulls\?head=([^&]+)&base=main&state=closed$/.exec(path);
+    if (method === "GET" && match !== null) {
+      const head = decodeURIComponent(match[1]!).replace(/^acme:/, "");
+      return this.pulls
+        .filter((pull) => pull.head === head && pull.state === "closed")
+        .map((pull) => ({
+          number: pull.number,
+          merged_at: pull.merged === true ? "2026-11-02T00:00:00Z" : null,
+          // Closed with the branch where it is now.
+          head: { sha: this.branches.get(pull.head) },
+        }));
     }
     if (method === "POST" && path === `${base}/pulls`) {
       const pull: PullRequest = {
@@ -338,6 +351,21 @@ describe("pushing a Product repo's weekly skills bumps", () => {
     );
 
     expect(later.ok && later.sources[0]).toEqual({ repository: "jrey8343/skills", outcome: "opened", pullRequest: 101 });
+  });
+
+  it("opens the PR for a branch an earlier run pushed but never opened one for", async () => {
+    const github = product();
+    const same = upstreamOf({ "jrey8343/skills": moved(PIN, HEAD, "event-storming"), "someone/kit": upToDate(OTHER_PIN) });
+    await run(github, same);
+    // The earlier run pushed the branch, then failed to open its PR.
+    github.pulls.length = 0;
+    const branchBefore = github.branches.get(BRANCH);
+
+    const result = await run(github, same);
+
+    expect(result.ok && result.sources[0]).toEqual({ repository: "jrey8343/skills", outcome: "opened", pullRequest: 100 });
+    expect(github.pulls).toMatchObject([{ head: BRANCH, base: "main", state: "open" }]);
+    expect(github.branches.get(BRANCH)).toBe(branchBefore);
   });
 
   it("reports a source that fails and still bumps the others", async () => {
