@@ -15,6 +15,8 @@ export interface SetupKit {
     readonly kitConfig: string;
     readonly agentSkills: string;
     readonly docsAgents: Readonly<Record<string, string>>;
+    /** templates/fabrik-runs-caller.yml: the fabrik-runs store's Weekly summary caller. */
+    readonly storeCaller: string;
   };
 }
 
@@ -32,6 +34,7 @@ export async function loadSetupKit(kitDir: string, release: string): Promise<Set
       kitConfig: await template("fabrik-config.json"),
       agentSkills: await template("agent-skills.md"),
       docsAgents: Object.fromEntries(docs),
+      storeCaller: await template("fabrik-runs-caller.yml"),
     },
   };
 }
