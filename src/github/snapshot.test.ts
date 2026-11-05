@@ -11,7 +11,7 @@ import { countImplementRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnaps
 const repo = { owner: "acme", name: "shop" };
 
 /** A read-only Actions API holding these workflow runs, each with its jobs. */
-function actionsWith(runs: { id: number; status: string; jobs: { name: string; status: string }[] }[]) {
+function actionsWith(runs: { id: number; status: string; jobs: { name: string; status: string; conclusion?: string }[] }[]) {
   return {
     async rest(method: string, path: string): Promise<unknown> {
       expect(method).toBe("GET");
@@ -72,13 +72,28 @@ describe("Reading the Design-session turns a Design queue check sees in progress
     expect(await designTurnsInProgress(actions, repo)).toEqual([4, 7, 9]);
   });
 
-  it("doesn't read a finished Design-session turn, or any other job", async () => {
+  it("reads a Design-session turn whose job is done while its run is still posting the round", async () => {
     const actions = actionsWith([
       {
         id: 1,
         status: "in_progress",
         jobs: [
-          { name: "fabrik / Design-session turn #7", status: "completed" },
+          { name: "fabrik / Design-session turn #7", status: "completed", conclusion: "success" },
+          { name: "fabrik / Push", status: "in_progress" },
+        ],
+      },
+    ]);
+
+    expect(await designTurnsInProgress(actions, repo)).toEqual([7]);
+  });
+
+  it("doesn't read a Design job skipped because its run went another way, or any other job", async () => {
+    const actions = actionsWith([
+      {
+        id: 1,
+        status: "in_progress",
+        jobs: [
+          { name: "fabrik / Design-session turn #7", status: "completed", conclusion: "skipped" },
           { name: "fabrik / Implement", status: "in_progress" },
           { name: "fabrik / Design-session turn #", status: "in_progress" },
         ],
@@ -100,8 +115,8 @@ describe("The Design-session turn job's name", () => {
 });
 
 describe("Gathering a Design queue check's needs-design issues", () => {
-  const kit = (body: string) => ({ body, author: { __typename: "Bot" } });
-  const person = (body: string) => ({ body, author: { __typename: "User" } });
+  const kit = (body: string, createdAt = "2026-11-02T09:00:00Z") => ({ body, createdAt, author: { __typename: "Bot" } });
+  const person = (body: string, createdAt = "2026-11-02T09:00:00Z") => ({ body, createdAt, author: { __typename: "User" } });
   const labelled = (name: string, createdAt: string) => ({ __typename: "LabeledEvent", createdAt, label: { name } });
   const unlabelled = (name: string, createdAt: string, actor = "Bot") => ({
     __typename: "UnlabeledEvent",
@@ -159,6 +174,41 @@ describe("Gathering a Design queue check's needs-design issues", () => {
 
     expect(queue.designTurnsInProgress).toEqual([4]);
     expect(holding(queue)).toEqual({ 3: true, 4: true, 5: true, 6: false });
+  });
+
+  it("reads an issue that got needs-design again, after its old session was abandoned by hand, as waiting", async () => {
+    const queue = await gathered([
+      issue(3, {
+        comments: {
+          nodes: [
+            kit("<!-- fabrik:design-round 1 -->\n@jrey **Design session, round 1.**", "2026-10-02T09:00:00Z"),
+            person("Can we add a cart total?", "2026-11-02T09:00:00Z"),
+          ],
+        },
+        timelineItems: {
+          nodes: [
+            labelled("needs-design", "2026-10-01T09:00:00Z"),
+            unlabelled("needs-design", "2026-10-03T09:00:00Z", "User"),
+            labelled("needs-design", "2026-11-01T09:00:00Z"),
+          ],
+        },
+      }),
+      issue(4, {
+        comments: { nodes: [kit("<!-- fabrik:design-turn-failed -->\n@jrey The Design-session turn run on #4 failed.", "2026-10-02T09:00:00Z")] },
+        timelineItems: {
+          nodes: [
+            labelled("needs-design", "2026-10-01T09:00:00Z"),
+            unlabelled("needs-design", "2026-10-03T09:00:00Z", "User"),
+            labelled("needs-design", "2026-11-01T09:00:00Z"),
+          ],
+        },
+      }),
+      issue(5, {
+        comments: { nodes: [kit("<!-- fabrik:design-round 1 -->\n@jrey **Design session, round 1.**", "2026-11-02T09:00:00Z")] },
+      }),
+    ]);
+
+    expect(holding(queue)).toEqual({ 3: false, 4: false, 5: true });
   });
 
   it("reads when an issue got needs-design from its label timeline: the latest time it was added", async () => {
@@ -337,6 +387,7 @@ describe("Gathering an issue's blocked-by edges", () => {
                 labels: { nodes: [{ name: "needs-design" }] },
                 parent: null,
                 comments: { nodes: [] },
+                timelineItems: { nodes: [] },
                 closedByPullRequestsReferences: { nodes: [] },
                 blockedBy: {
                   nodes: [
@@ -367,7 +418,10 @@ describe("Gathering an issue's blocked-by edges", () => {
 });
 
 describe("Gathering an issue's Design session", () => {
-  async function gatheredIssue(comments: { body: string; author: { __typename: string } }[]) {
+  async function gatheredIssue(
+    comments: { body: string; createdAt?: string; author: { __typename: string } }[],
+    timeline: unknown[] = [],
+  ) {
     const github = {
       async graphql(query: string): Promise<unknown> {
         if (query.includes("issue(number: $number)")) {
@@ -380,7 +434,8 @@ describe("Gathering an issue's Design session", () => {
                 author: { login: "someone" },
                 labels: { nodes: [{ name: "needs-design" }] },
                 parent: null,
-                comments: { nodes: comments },
+                comments: { nodes: comments.map((comment) => ({ createdAt: "2026-11-02T09:00:00Z", ...comment })) },
+                timelineItems: { nodes: timeline },
                 closedByPullRequestsReferences: { nodes: [] },
                 blockedBy: { nodes: [] },
                 blocking: { nodes: [] },
@@ -405,6 +460,31 @@ describe("Gathering an issue's Design session", () => {
 
   it("reads an issue with no round and no failure as holding no slot", async () => {
     const issue = await gatheredIssue([{ body: "Some context while it waits", author: { __typename: "User" } }]);
+
+    expect(issue).toMatchObject({ designRounds: 0, turnFailed: false });
+  });
+
+  it("reads the Kit taking agent:design off since the issue last got needs-design as its first turn having started", async () => {
+    const labelled = { __typename: "LabeledEvent", createdAt: "2026-11-01T09:00:00Z", label: { name: "needs-design" } };
+    const claimed = {
+      __typename: "UnlabeledEvent",
+      createdAt: "2026-11-01T10:00:00Z",
+      label: { name: "agent:design" },
+      actor: { __typename: "Bot" },
+    };
+
+    expect(await gatheredIssue([], [labelled, claimed])).toMatchObject({ firstTurnClaimed: true });
+    expect(await gatheredIssue([], [claimed, { ...labelled, createdAt: "2026-11-02T09:00:00Z" }])).toMatchObject({ firstTurnClaimed: false });
+  });
+
+  it("counts only the rounds and failure notices posted since the issue last got needs-design", async () => {
+    const issue = await gatheredIssue(
+      [
+        { body: "<!-- fabrik:design-round 1 -->\n@operator **Design session, round 1.**", createdAt: "2026-10-02T09:00:00Z", author: { __typename: "Bot" } },
+        { body: `${DESIGN_TURN_FAILED_MARKER}\n@operator The Design-session turn run on #6 failed.`, createdAt: "2026-10-03T09:00:00Z", author: { __typename: "Bot" } },
+      ],
+      [{ __typename: "LabeledEvent", createdAt: "2026-11-01T09:00:00Z", label: { name: "needs-design" } }],
+    );
 
     expect(issue).toMatchObject({ designRounds: 0, turnFailed: false });
   });
@@ -463,6 +543,7 @@ describe("Gathering a Design-session turn's starting reply", () => {
         labels: { nodes: [{ name: "needs-design" }] },
         parent: null,
         comments: { nodes: [] },
+        timelineItems: { nodes: [] },
         closedByPullRequestsReferences: { nodes: [] },
         blockedBy: { nodes: [] },
         blocking: { nodes: [] },

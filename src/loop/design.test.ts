@@ -71,6 +71,14 @@ describe("Answering a Design-session round", () => {
     expect(plan).toEqual(startsDesignTurn);
   });
 
+  it("starts the next turn when the Operator comments while round 1's turn is running, since it holds a slot", () => {
+    const running = anIssue({ number: 7, labels: ["enhancement", "needs-design"], firstTurnClaimed: true });
+
+    const plan = planFor(commented("jrey"), snapshotOf(running, { operator: "jrey" }), kitConfig());
+
+    expect(plan).toEqual(startsDesignTurn);
+  });
+
   it("starts nothing when the Operator comments on an issue waiting for a Design session slot: the comment is context for round 1", () => {
     const waiting = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
 

@@ -232,6 +232,12 @@ export interface IssueSnapshot {
   /** Whether a Design-session turn has failed in its current Design session, read from the Kit's failure notice. */
   readonly turnFailed: boolean;
   /**
+   * Whether the Kit took agent:design off since the issue last got
+   * needs-design: its current session's first turn has started, so it holds
+   * a Design session slot even before round 1 posts.
+   */
+  readonly firstTurnClaimed: boolean;
+  /**
    * The agent PR whose Verdict sent this Ticket back to design, read from the
    * Kit's note on it (src/loop/backToDesign.ts), while the Design session that
    * followed hasn't finished; otherwise null.

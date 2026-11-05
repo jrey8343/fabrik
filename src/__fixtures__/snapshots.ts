@@ -23,6 +23,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     openPullRequests: [],
     designRounds: 0,
     turnFailed: false,
+    firstTurnClaimed: false,
     sentBack: null,
     emptyDiffs: 0,
     openBlockers: [],
