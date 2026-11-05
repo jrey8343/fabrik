@@ -6,7 +6,7 @@ Every secret an AFK job needs comes from 1Password at run time, not from repo Ac
 |---|---|---|
 | agent | `Fabrik` (the Claude token) | Triage, Dispatch, Review |
 | implement | `Fabrik` + `Fabrik Sandbox · <product>` (that repo's test secrets) | Implement |
-| push | `Fabrik App` (App ID + private key) | the push jobs (ADR-0002) |
+| push | `Fabrik App` (App ID + private key, and the `Sentry token`) | the push jobs (ADR-0002), and the Monitor |
 
 Even an agent that dumps memory reaches only the token it already has and, in Implement, its own repo's test secrets. Kit config in `.fabrik/` lists test secrets as `op://` references. A Kit step resolves them with the service-account token in that step's env only, using `load-secrets-action` in output mode and never `configure`. The agent step then gets just the resolved values.
 
