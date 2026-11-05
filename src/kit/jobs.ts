@@ -1,6 +1,7 @@
 // The Kit job's step: checks the Product's Kit config and its caller
-// workflow's Fabrik pins (read as data from a sparse checkout, never run), so
-// no agent starts on an invalid Kit; asks the Loop rules core what this event
+// workflow's Fabrik pins (read as data from a sparse checkout, never run), and
+// its Extra skill picks against each pinned Skills source's manifest, so no
+// agent starts on an invalid Kit; asks the Loop rules core what this event
 // calls for; and tells the workflow which job it routes to and the settings its jobs
 // need before they start, such as their timeout-minutes. Writes step outputs:
 //   route                    "triage", "design", "implement" or "review" when the plan starts that agent run,
@@ -20,7 +21,7 @@
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
 import { appendFile, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { agentRunIn } from "../github/apply.ts";
 import { GitHub, type Repo } from "../github/client.ts";
 import { loopEventFrom } from "../github/events.ts";
@@ -28,6 +29,7 @@ import { gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
+import { kitConfigErrors } from "../skills/pinnedManifests.ts";
 import { callerWorkflowPath, checkKit } from "./caller.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
 
@@ -43,6 +45,9 @@ function routeOf(plan: Plan): string {
   return plan.kind === "nothing" ? "none" : "push";
 }
 
+/** This Kit checkout, which holds the Base skills' lock and the Kit's own skills. */
+const KIT_DIR = resolve(import.meta.dirname, "..", "..");
+
 async function main(productDir: string): Promise<void> {
   const [owner, name] = required("GITHUB_REPOSITORY").split("/");
   const repo: Repo = { owner: owner ?? "", name: name ?? "" };
@@ -53,8 +58,11 @@ async function main(productDir: string): Promise<void> {
     readIfPresent(join(productDir, callerPath)),
   ]);
   const check = checkKit(resolved, { path: callerPath, text: callerText });
-  if (!check.ok) {
-    for (const error of check.errors) console.log(`::error title=Invalid Kit config::${error}`);
+  // The Extra skill picks against each pinned source's manifest, before routing
+  // any agent run; it reads nothing when the Product pins no Skills source.
+  const errors = await kitConfigErrors(check, { kitDir: KIT_DIR });
+  if (!check.ok || errors.length > 0) {
+    for (const error of errors) console.log(`::error title=Invalid Kit config::${error}`);
     process.exitCode = 1;
     return;
   }

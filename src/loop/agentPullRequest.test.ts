@@ -14,7 +14,13 @@ describe("An agent PR", () => {
     expect(isAgentPullRequest({ headRef: "fabrik/ticket-12", authorIsBot: false })).toBe(false);
   });
 
-  it.each(["dependabot/npm_and_yarn/vitest-5.0.6", "fabrik-ticket-12", "feature/fabrik/ticket-12"])(
+  it.each([
+    "dependabot/npm_and_yarn/vitest-5.0.6",
+    "fabrik-ticket-12",
+    "feature/fabrik/ticket-12",
+    // A Product repo's weekly skills bump: only the Operator merges it, and the Loop never reviews, retries or dispatches it.
+    "fabrik/skills-bump/jrey8343-skills",
+  ])(
     "is not a bot's PR from %s",
     (headRef) => {
       expect(isAgentPullRequest({ headRef, authorIsBot: true })).toBe(false);

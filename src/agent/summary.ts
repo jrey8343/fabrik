@@ -3,6 +3,7 @@
 // message; duration, turns, tokens and cost from the final result message.
 // Effort is what the runner passed to the CLI, since the init message never
 // carries it. Pure, no I/O.
+import type { InstallRecord, InstalledSource } from "../skills/installRecord.ts";
 
 export interface RunSummaryInput {
   readonly role: string;
@@ -10,8 +11,8 @@ export interface RunSummaryInput {
   readonly effort: string | null;
   /** Every stdout line of the agent's stream, in order. */
   readonly lines: readonly string[];
-  /** The skills the Kit installed from its lockfile, to confirm against the init message. */
-  readonly pinnedSkills?: { readonly sha: string; readonly names: readonly string[] };
+  /** The skills fetch's install record, to confirm against the init message. */
+  readonly installed?: InstallRecord;
 }
 
 type Message = Record<string, unknown>;
@@ -100,21 +101,22 @@ function text(value: unknown): string {
   return typeof value === "string" && value !== "" ? value : UNKNOWN;
 }
 
-/** The pinned skills the stream's init message didn't report as loaded (all of them if it never arrived). */
-export function missingSkills(lines: readonly string[], names: readonly string[]): readonly string[] {
+/** The installed skills, from every source, that the stream's init message didn't report as loaded (all of them if it never arrived). */
+export function missingSkills(lines: readonly string[], installed: InstallRecord): readonly string[] {
   const loaded = initMessageOf(lines)?.["skills"];
   const reported = new Set(Array.isArray(loaded) ? loaded : []);
-  return names.filter((name) => !reported.has(name));
+  return installed.flatMap((source) => source.skills).filter((name) => !reported.has(name));
 }
 
-function pinnedSkillsLine(lines: readonly string[], pinned: NonNullable<RunSummaryInput["pinnedSkills"]>): string {
-  const missing = missingSkills(lines, pinned.names);
-  const at = `Pinned skills at ${pinned.sha.slice(0, 7)}`;
-  if (missing.length === 0) return `${at}: all ${pinned.names.length} loaded`;
-  return `${at}: ${pinned.names.length - missing.length} of ${pinned.names.length} loaded; missing: ${missing.join(", ")}`;
+function installedSourceLine(lines: readonly string[], source: InstalledSource): string {
+  const missing = missingSkills(lines, [source]);
+  const total = source.skills.length;
+  const loaded =
+    missing.length === 0 ? `all ${total} loaded` : `${total - missing.length} of ${total} loaded; missing: ${missing.join(", ")}`;
+  return `Installed from ${source.repository} at ${source.sha.slice(0, 7)}: ${source.skills.join(", ")} (${loaded})`;
 }
 
-export function runSummary({ role, effort, lines, pinnedSkills }: RunSummaryInput): string {
+export function runSummary({ role, effort, lines, installed }: RunSummaryInput): string {
   const init = initMessageOf(lines);
   const result = resultMessageOf(lines);
   const tokens = tokensOf(result);
@@ -142,6 +144,6 @@ export function runSummary({ role, effort, lines, pinnedSkills }: RunSummaryInpu
     "",
     `Skills loaded: ${skills}`,
     "",
-    ...(pinnedSkills === undefined ? [] : [pinnedSkillsLine(lines, pinnedSkills), ""]),
+    ...(installed ?? []).flatMap((source) => [installedSourceLine(lines, source), ""]),
   ].join("\n");
 }

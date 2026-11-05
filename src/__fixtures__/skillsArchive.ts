@@ -1,5 +1,6 @@
-// Fixtures for the skills fetch: a Kit checkout holding a skills lockfile, and
-// an upstream skills archive like the one codeload serves for a commit.
+// Fixtures for the skills fetch: a Kit checkout holding a skills lockfile, a
+// Product checkout pinning its own Skills sources, and upstream skills archives
+// like the ones codeload serves for a commit, each keyed by its URL.
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -28,12 +29,19 @@ export async function aKitCheckout(sha = LOCKED_SHA, files: Record<string, strin
   return kit;
 }
 
-/** A gzipped tarball shaped like codeload's: one top folder holding the repo at that commit. */
-export async function aSkillsArchive(skills: Record<string, string> = { "skills/engineering/tdd": "# tdd" }): Promise<Buffer> {
+/**
+ * A gzipped tarball shaped like codeload's: one top folder holding the repo at
+ * that commit, its plugin manifest listing these skill folders. With
+ * `manifest: false` the repo has no plugin manifest at all.
+ */
+export async function aSkillsArchive(
+  skills: Record<string, string> = { "skills/engineering/tdd": "# tdd" },
+  { manifest = true }: { readonly manifest?: boolean } = {},
+): Promise<Buffer> {
   const root = await tempDir("archive");
   const top = join(root, "skills-top");
   await writeFiles(top, {
-    ".claude-plugin/plugin.json": JSON.stringify({ name: "mattpocock-skills", skills: Object.keys(skills) }),
+    ...(manifest ? { ".claude-plugin/plugin.json": JSON.stringify({ name: "mattpocock-skills", skills: Object.keys(skills) }) } : {}),
     ...Object.fromEntries(Object.entries(skills).map(([folder, text]) => [`${folder}/SKILL.md`, text])),
   });
   const archive = join(root, "skills.tar.gz");
@@ -51,4 +59,43 @@ export function serving(archive: Buffer): { readonly urls: string[]; readonly do
       return archive;
     },
   };
+}
+
+/** The URL codeload serves a repository's archive at, for one commit. */
+export function archiveUrl(repository: string, sha: string): string {
+  return `https://codeload.github.com/${repository}/tar.gz/${sha}`;
+}
+
+/**
+ * A download that serves each archive at its URL, records every URL it was
+ * asked for, and fails on any other, so no test reaches the network.
+ */
+export function servingEach(archives: Readonly<Record<string, Buffer>>): {
+  readonly urls: string[];
+  readonly download: (url: string) => Promise<Buffer>;
+} {
+  const urls: string[] = [];
+  return {
+    urls,
+    download: async (url) => {
+      urls.push(url);
+      const archive = archives[url];
+      if (archive === undefined) throw new Error(`Downloading ${url} failed: 404`);
+      return archive;
+    },
+  };
+}
+
+/** A Product checkout pinning these Skills sources, with these roles' Extra skill picks. */
+export async function aProductCheckout(
+  pins: readonly { readonly repository: string; readonly sha: string }[] = [],
+  picks: Readonly<Partial<Record<"triage" | "design" | "implement" | "review", readonly string[]>>> = {},
+): Promise<string> {
+  const product = await tempDir("product");
+  const roles = Object.fromEntries(Object.entries(picks).map(([role, skills]) => [role, { skills }]));
+  await writeFiles(product, {
+    ".fabrik/config.json": JSON.stringify({ roles }),
+    ...(pins.length > 0 ? { ".fabrik/skills.lock.json": JSON.stringify(pins) } : {}),
+  });
+  return product;
 }

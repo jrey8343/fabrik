@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runSummary } from "./summary.ts";
+import { missingSkills, runSummary } from "./summary.ts";
 
 const init = {
   type: "system",
@@ -86,26 +86,56 @@ describe("the agent job's step summary", () => {
     expect(summary).toContain("| review | claude-opus-5-5 | xhigh |");
   });
 
-  it("confirms from the init message that every pinned skill loaded", () => {
+  it("names each installed source with its short SHA and the skills from it, confirming from the init message that they loaded", () => {
     const summary = runSummary({
       role: "triage",
       effort: null,
       lines: lines(init, result),
-      pinnedSkills: { sha: "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d", names: ["tdd", "triage"] },
+      installed: [{ repository: "mattpocock/skills", sha: "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d", skills: ["tdd", "triage"] }],
     });
 
-    expect(summary).toContain("Pinned skills at 4ae2317: all 2 loaded");
+    expect(summary).toContain("Installed from mattpocock/skills at 4ae2317: tdd, triage (all 2 loaded)");
   });
 
-  it("names the pinned skills the init message didn't report", () => {
+  it("names the installed skills the init message didn't report", () => {
     const summary = runSummary({
       role: "triage",
       effort: null,
       lines: lines(init, result),
-      pinnedSkills: { sha: "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d", names: ["tdd", "triage", "to-spec", "grilling"] },
+      installed: [
+        { repository: "mattpocock/skills", sha: "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d", skills: ["tdd", "triage", "to-spec", "grilling"] },
+      ],
     });
 
-    expect(summary).toContain("Pinned skills at 4ae2317: 2 of 4 loaded; missing: to-spec, grilling");
+    expect(summary).toContain(
+      "Installed from mattpocock/skills at 4ae2317: tdd, triage, to-spec, grilling (2 of 4 loaded; missing: to-spec, grilling)",
+    );
+  });
+
+  it("flags every installed skill, across sources, that the init message didn't report", () => {
+    const installed = [
+      { repository: "mattpocock/skills", sha: "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d", skills: ["tdd", "grilling"] },
+      { repository: "jrey8343/skills", sha: "0123456789abcdef0123456789abcdef01234567", skills: ["event-storming"] },
+    ];
+
+    expect(missingSkills(lines(init, result), installed)).toEqual(["grilling", "event-storming"]);
+  });
+
+  it("lists every source, Extra skills included, with its short SHA, and flags an Extra skill missing at init like a Base one", () => {
+    const summary = runSummary({
+      role: "design",
+      effort: null,
+      lines: lines({ ...init, skills: ["tdd", "triage", "event-storming"] }, result),
+      installed: [
+        { repository: "mattpocock/skills", sha: "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d", skills: ["tdd", "triage"] },
+        { repository: "jrey8343/skills", sha: "0123456789abcdef0123456789abcdef01234567", skills: ["event-storming", "deciders"] },
+      ],
+    });
+
+    expect(summary).toContain("Installed from mattpocock/skills at 4ae2317: tdd, triage (all 2 loaded)");
+    expect(summary).toContain(
+      "Installed from jrey8343/skills at 0123456: event-storming, deciders (1 of 2 loaded; missing: deciders)",
+    );
   });
 
   it("says when no init message arrived, so no skills were seen to load", () => {

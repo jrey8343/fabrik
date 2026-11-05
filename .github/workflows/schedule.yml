@@ -3,11 +3,12 @@
 #
 # This file is wiring only. It runs the Loop's time-based rules (closing the
 # weekly-limit issue after its reset) through the Loop rules core, which
-# src/main.ts runs as a `scheduled-tick` event.
+# src/main.ts runs as a `scheduled-tick` event, and once a week the Product
+# repo's skills bumps for its own Skills sources.
 #
-# Like the Loop's push job (ADR-0002), the tick job runs on a fresh VM, loads
-# the Fabrik App key through the push service account, mints an App token, and
-# never checks out or runs Product code. It checks out only Fabrik itself, at
+# Like the Loop's push job (ADR-0002), the tick and skills bump jobs run on a
+# fresh VM, load the Fabrik App key through the push service account, mint an
+# App token, and never check out or run Product code. They check out only Fabrik itself, at
 # the exact commit the caller pinned.
 name: Fabrik scheduled tick
 
@@ -30,6 +31,7 @@ jobs:
       id-token: write
     outputs:
       sha: ${{ steps.kit.outputs.sha }}
+      started-at: ${{ steps.kit.outputs.started-at }}
     steps:
       # No expression context names the commit of a called workflow, so read
       # it from the OIDC token's job_workflow_sha claim.
@@ -47,6 +49,8 @@ jobs:
           esac
           echo "Kit: $ref ($sha)"
           echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          # When the run got going, for the weekly skills bump gate.
+          echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$GITHUB_OUTPUT"
 
   tick:
     name: Tick
@@ -71,3 +75,66 @@ jobs:
         uses: ./kit/.github/actions/run-loop
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+
+  # A Product repo's weekly skills bumps (src/skills/sourceBumps.ts): one PR per
+  # Skills source it pins in .fabrik/skills.lock.json whose picked skills changed
+  # upstream. Like the tick, it checks out only the Kit, mints a Fabrik App
+  # token through the push service account, and reads and writes the Product
+  # repo only through the API, never checking out or running its code. It acts
+  # on the Monday tick in the 04:00 UTC hour, judged by the tick the run was
+  # scheduled for, not when this job starts; a dropped tick waits a week.
+  skills-bump:
+    name: Skills bump
+    needs: kit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: fabrik-skills-bump
+      cancel-in-progress: false
+    permissions: {}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Check this is the weekly skills bump tick
+        id: due
+        env:
+          FABRIK_TICK_SCHEDULE: ${{ github.event.schedule }}
+          FABRIK_TICK_SEEN_AT: ${{ needs.kit.outputs.started-at }}
+        run: node kit/src/skills/source-bumps-due.ts
+
+      - name: Load the Fabrik App key
+        if: steps.due.outputs.due == 'true'
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}
+          FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+          FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+      - name: Mint a Fabrik App token
+        if: steps.due.outputs.due == 'true'
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+          private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+
+      # The App token, not GITHUB_TOKEN, so the bump branch it pushes starts CI.
+      - name: Open or refresh the Product repo's skills bump PRs
+        if: steps.due.outputs.due == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: node kit/src/skills/source-bumps-main.ts
