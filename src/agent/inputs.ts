@@ -16,7 +16,7 @@ import { GitHub, type Repo } from "../github/client.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
-import type { OperatorComment } from "./operatorComments.ts";
+import { operatorCommentId, type OperatorComment } from "./operatorComments.ts";
 
 /** What these reads need of a GitHub client. */
 export type Reader = Pick<GitHub, "graphql" | "rest">;
@@ -240,14 +240,14 @@ export async function readOperatorComments(
   const theirs = (written: Written): boolean => written.user?.login === operator && written.user.type !== "Bot";
   const comments: OperatorComment[] = [
     ...conversation.filter(theirs).map((c) => ({
-      id: `conversation-${c.id}`,
+      id: operatorCommentId("conversation", c.id),
       url: c.html_url,
       where: { kind: "conversation" as const },
       createdAt: c.created_at,
       body: c.body ?? "",
     })),
     ...inline.filter(theirs).map((c) => ({
-      id: `inline-${c.id}`,
+      id: operatorCommentId("inline", c.id),
       url: c.html_url,
       where: { kind: "inline" as const, path: c.path, line: c.line ?? c.original_line ?? null },
       createdAt: c.created_at,
@@ -256,7 +256,7 @@ export async function readOperatorComments(
     ...reviews
       .filter((r) => theirs(r) && r.state !== "CHANGES_REQUESTED" && r.state !== "PENDING" && (r.body ?? "").trim() !== "")
       .map((r) => ({
-        id: `review-${r.id}`,
+        id: operatorCommentId("review", r.id),
         url: r.html_url,
         where: { kind: "review" as const, state: r.state },
         createdAt: r.submitted_at ?? "",

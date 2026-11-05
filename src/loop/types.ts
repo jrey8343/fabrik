@@ -60,7 +60,7 @@ export interface BranchChanges {
  * Verdict or fix comment links when the run names it as weighed (ADR-0007).
  */
 export interface GivenOperatorComment {
-  /** `conversation-<id>`, `review-<id>` or `inline-<id>` (src/agent/operatorComments.ts). */
+  /** `conversation-<id>`, `review-<id>` or `inline-<id>`, as operatorCommentId makes it (src/agent/operatorComments.ts). */
   readonly id: string;
   readonly url: string;
 }

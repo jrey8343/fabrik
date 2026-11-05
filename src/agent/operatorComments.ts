@@ -5,6 +5,18 @@
 // return. Each is context for the run, never a request for work.
 import type { GivenOperatorComment } from "../loop/types.ts";
 
+/** The three places on a PR an Operator comment can be. */
+export type OperatorCommentKind = "conversation" | "review" | "inline";
+
+/**
+ * The id a run names an Operator comment by, from where it is and GitHub's own
+ * id for it: `conversation-<id>`, `review-<id>` or `inline-<id>`. Every such id
+ * is made here.
+ */
+export function operatorCommentId(kind: OperatorCommentKind, githubId: number): string {
+  return `${kind}-${githubId}`;
+}
+
 /** Where on the PR the Operator wrote the comment. */
 export type OperatorCommentPlace =
   | { readonly kind: "conversation" }
@@ -13,7 +25,7 @@ export type OperatorCommentPlace =
 
 /** One Operator comment, as fed to a run. Its `id` is what a run names when it reports weighing it. */
 export interface OperatorComment {
-  /** `conversation-<id>`, `review-<id>` or `inline-<id>`, from GitHub's own id for it. */
+  /** From operatorCommentId. */
   readonly id: string;
   readonly url: string;
   readonly where: OperatorCommentPlace;
