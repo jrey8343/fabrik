@@ -55,6 +55,13 @@ export interface WeekOverWeek<T> {
   readonly lastWeek: T;
 }
 
+/** A cost figure, in USD, and how many runs it leaves out, their cost basis being unknown. */
+export interface CostFigure {
+  /** Null when there's nothing to average over. */
+  readonly usd: number | null;
+  readonly unknownCost: number;
+}
+
 /** The week's headline figures. */
 export interface WeeklySummary {
   /** The Monday the week began on, in the Operator's time zone, as `yyyy-mm-dd`. */
@@ -63,6 +70,12 @@ export interface WeeklySummary {
   readonly cost: WeekOverWeek<number>;
   /** How many of the week's records the cost leaves out, their cost basis being unknown. */
   readonly unknownCost: WeekOverWeek<number>;
+  /**
+   * For each agent PR merged in the week, the cost of every Implement, Retry,
+   * Step-up and Review record on its Ticket, whatever week the run was in,
+   * averaged over the week's merged PRs.
+   */
+  readonly costPerMergedPullRequest: WeekOverWeek<CostFigure>;
   /** The latest weekly-limit reading across the week's records, or null if none read one. */
   readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
   readonly counts: {
@@ -101,6 +114,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     week: weeks.thisWeek.monday,
     cost: change("cost"),
     unknownCost: change("unknownCost"),
+    costPerMergedPullRequest: change("costPerMergedPullRequest"),
     weeklyLimit: change("weeklyLimit"),
     counts: {
       mergedPullRequests: change("mergedPullRequests"),
@@ -118,6 +132,7 @@ interface WeekMetrics {
   readonly records: number;
   readonly cost: number;
   readonly unknownCost: number;
+  readonly costPerMergedPullRequest: CostFigure;
   readonly weeklyLimit: RateLimitReading | null;
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
@@ -135,6 +150,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     records: records.length,
     cost: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
     unknownCost: records.filter((record) => record.totalCostUsd === null).length,
+    costPerMergedPullRequest: costPerMergedPullRequestOf(week, input),
     weeklyLimit: records.findLast((record) => record.rateLimit !== null)?.rateLimit ?? null,
     mergedPullRequests: pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt)).length,
     ticketsDispatched: tickets.filter((ticket) => {
@@ -143,6 +159,41 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     }).length,
     retries: records.filter((record) => record.role === "implement" && record.retry > 0).length,
     stepUps: records.filter((record) => record.stepUp).length,
+  };
+}
+
+/** The roles whose runs build a Ticket: Implement (Retries and Step-ups among them) and Review. */
+const BUILD_ROLES: readonly RunRecord["role"][] = ["implement", "review"];
+
+function costPerMergedPullRequestOf(week: Week, input: WeeklySummaryInput): CostFigure {
+  const ended = endedBy(week, input.records);
+  const perPullRequest = input.facts.flatMap((facts) =>
+    facts.pullRequests
+      .filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt))
+      .map((pullRequest) =>
+        ended.filter(
+          (record) =>
+            record.repo === facts.repo &&
+            pullRequest.ticket !== null &&
+            record.issue === pullRequest.ticket &&
+            BUILD_ROLES.includes(record.role),
+        ),
+      ),
+  );
+  const total = costOf(perPullRequest.flat());
+  return { usd: perPullRequest.length === 0 ? null : total.usd / perPullRequest.length, unknownCost: total.unknownCost };
+}
+
+/** The records that ended before the week did, whatever week they ended in. */
+function endedBy(week: Week, records: readonly RunRecord[]): RunRecord[] {
+  return records.filter((record) => Date.parse(record.endedAt) < week.end);
+}
+
+/** The summed cost of these records, leaving out (and counting) those whose cost basis is unknown. */
+function costOf(records: readonly RunRecord[]): { usd: number; unknownCost: number } {
+  return {
+    usd: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
+    unknownCost: records.filter((record) => record.totalCostUsd === null).length,
   };
 }
 

@@ -136,6 +136,80 @@ describe("the Weekly summary", () => {
     });
   });
 
+  describe("cost per merged PR", () => {
+    it("averages, over the week's merged agent PRs, every Implement, Retry, Step-up and Review record on each Ticket", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 2, retry: 1 }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-04T06:00:00Z", totalCostUsd: 3, retry: 2, stepUp: true }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-04T12:00:00Z", totalCostUsd: 0.5, role: "review" }),
+            aRunRecord({ issue: 8, endedAt: "2026-11-05T00:00:00Z", totalCostUsd: 1.5 }),
+            aRunRecord({ issue: 9, endedAt: "2026-11-05T00:00:00Z", totalCostUsd: 100 }), // its PR isn't merged
+            aRunRecord({ repo: "owner/other", issue: 8, endedAt: "2026-11-05T00:00:00Z", totalCostUsd: 100 }), // another repo's Ticket 8
+          ],
+          facts: [
+            factsOf({
+              pullRequests: [
+                aMergedPullRequest("2026-11-05T00:00:00Z", { number: 50, ticket: 7 }),
+                aMergedPullRequest("2026-11-06T00:00:00Z", { number: 51, ticket: 8 }),
+              ],
+            }),
+          ],
+        }),
+      );
+      // Ticket 7: $6.50, Ticket 8: $1.50.
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { costPerMergedPullRequest: { thisWeek: { usd: 4, unknownCost: 0 }, lastWeek: { usd: null, unknownCost: 0 } } },
+      });
+    });
+
+    it("counts a run from an earlier week toward a PR merged this week", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 2 }), // last week
+            aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1, role: "review" }),
+          ],
+          facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-03T06:00:00Z")] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerMergedPullRequest: { thisWeek: { usd: 3 } } } });
+    });
+
+    it("never counts the Ticket's Triage or Design records", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 5, role: "triage", pullRequest: null }),
+            aRunRecord({ endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 5, role: "design", pullRequest: null }),
+            aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+          ],
+          facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-03T06:00:00Z")] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerMergedPullRequest: { thisWeek: { usd: 1 } } } });
+    });
+
+    it("leaves a run whose cost basis is unknown out of the sum, and counts it", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", totalCostUsd: null, retry: 1 }),
+          ],
+          facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-04T00:00:00Z")] })],
+        }),
+      );
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { costPerMergedPullRequest: { thisWeek: { usd: 1, unknownCost: 1 } } },
+      });
+    });
+  });
+
   describe("rendered", () => {
     const week = input({
       records: [
