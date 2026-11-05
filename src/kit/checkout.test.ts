@@ -35,4 +35,12 @@ describe("Reading the Kit config from a Product checkout", () => {
 
     expect(result.ok && result.config.extraSkills.design).toEqual([{ source: "jrey8343/skills", name: "event-storming" }]);
   });
+
+  it("reads each role's instructions, the Auditor's .fabrik/audit.md included", async () => {
+    const dir = await checkoutWith({ ".fabrik/review.md": "Check the deciders.\n", ".fabrik/audit.md": "Booking first.\n" });
+
+    const result = await readKitConfigFromCheckout(dir);
+
+    expect(result.ok && result.config.instructions).toMatchObject({ review: "Check the deciders.\n", audit: "Booking first.\n" });
+  });
 });

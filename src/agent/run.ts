@@ -90,14 +90,14 @@ function schemaOf<T>(read: (value: unknown) => Checked<T>): StandardSchemaV1<unk
 
 /** How one AFK role runs: its prompt, its output tag and contract, and how to log what it emitted. */
 interface RoleSpec<T> {
-  /** The prompt file under prompts/, the output tag, and the Kit config phase. The Auditor has no spec yet. */
-  readonly role: Exclude<AgentRole, "audit">;
+  /** The prompt file under prompts/, the output tag, and the name of its .fabrik/<role>.md instructions. */
+  readonly role: AgentRole;
   /**
    * The output contract: a JSON object in the tag, checked by `schema`, or
    * for the Reviewer plain text, checked by `text`, which throws when it breaks the contract.
    */
   readonly output: { readonly schema: StandardSchemaV1<unknown, T> } | { readonly text: (reply: string) => T };
-  /** How the Product's own instructions for this phase relate to the Kit's prompt. */
+  /** How the Product's own instructions for this role relate to the Kit's prompt. */
   readonly instructionsNote: string;
   readonly describe: (issue: number, output: T) => string;
   /** The heading over the issue in the prompt. */
