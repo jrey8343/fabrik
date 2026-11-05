@@ -4,8 +4,7 @@
 // a Product repo's reads each source's default branch. Sources are public, so
 // this needs no credential.
 import type { UpstreamSkills } from "./bump.ts";
-
-const MANIFEST = ".claude-plugin/plugin.json";
+import { PLUGIN_MANIFEST_PATH } from "./lock.ts";
 
 /** A GET against the GitHub API with an `accept` type, throwing on any non-OK response. */
 export type ApiGet = (path: string, accept?: string) => Promise<Response>;
@@ -44,7 +43,7 @@ export async function readUpstreamSkills(
     commits: { sha: string; commit: { message: string } }[];
   };
   const manifest = async (sha: string) =>
-    (await get(`${repo}/contents/${MANIFEST}?ref=${sha}`, "application/vnd.github.raw+json")).text();
+    (await get(`${repo}/contents/${PLUGIN_MANIFEST_PATH}?ref=${sha}`, "application/vnd.github.raw+json")).text();
 
   // GitHub refuses a diff past its size limits; the compare link still works then.
   let diff: string;

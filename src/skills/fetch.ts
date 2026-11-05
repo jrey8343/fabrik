@@ -11,33 +11,15 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
-import { type ExtraSkill, type KitConfig, type Phase, PHASES } from "../kit/config.ts";
+import { type Phase, PHASES, picksIn } from "../kit/config.ts";
 import { checkExtraSkills } from "./extra.ts";
-import { readSkillsLock, SKILLS_LOCK_PATH, skillFolders } from "./lock.ts";
+import { INSTALL_RECORD, type InstallRecord, parseInstallRecord } from "./installRecord.ts";
+import { PLUGIN_MANIFEST_PATH, readSkillsLock, SKILLS_LOCK_PATH, skillFolders } from "./lock.ts";
 
 const run = promisify(execFile);
 
-/**
- * The install record, beside the skills: each Skills source installed, its SHA
- * and the skills installed from it. It's written last, so it only ever
- * describes a complete install.
- */
-export const INSTALL_RECORD = ".fabrik-install.json";
-
 /** The single-SHA marker the install record replaced, removed when a fetch finds it. */
 const OLD_SKILLS_MARKER = ".fabrik-skills-sha";
-
-/** One Skills source in the install record. */
-export interface InstalledSource {
-  /** `owner/name` on GitHub. */
-  readonly repository: string;
-  readonly sha: string;
-  /** The skill names installed from this source, as their folders under .claude/skills/. */
-  readonly skills: readonly string[];
-}
-
-/** What a fetch last installed into .claude/skills/, one entry per Skills source. */
-export type InstallRecord = readonly InstalledSource[];
 
 /** Which Extra skill picks a fetch installs: one role's, or every role's (a session at the wheel). */
 export type SkillsToInstall = Phase | "every";
@@ -76,9 +58,6 @@ const downloadFromGitHub: Download = async (url) => {
 /** Fabrik's own skills, the folders under the Kit's skills/. */
 const KIT_SKILLS_DIR = "skills";
 
-/** Where a Skills source keeps its plugin manifest. */
-const MANIFEST_PATH = join(".claude-plugin", "plugin.json");
-
 /** One Skills source the fetch was asked to install from, and what it found there. */
 interface Wanted {
   readonly repository: string;
@@ -116,7 +95,7 @@ export async function fetchSkills(
 
   const resolved = await readKitConfigFromCheckout(productDir);
   const config = resolved.ok ? resolved.config : null;
-  const picks = config === null ? [] : picksToInstall(config, install);
+  const picks = config === null ? [] : picksIn(config, install === "every" ? PHASES : [install]);
 
   const work = await mkdtemp(join(tmpdir(), "fabrik-skills-"));
   try {
@@ -126,7 +105,7 @@ export async function fetchSkills(
       await writeFile(archive, await download(`https://codeload.github.com/${repository}/tar.gz/${sha}`));
       await mkdir(extracted);
       await run("tar", ["-xzf", archive, "-C", extracted, "--strip-components=1"]);
-      const manifest = await readFile(join(extracted, MANIFEST_PATH), "utf8").catch(() => null);
+      const manifest = await readFile(join(extracted, PLUGIN_MANIFEST_PATH), "utf8").catch(() => null);
       return { extracted, manifest };
     };
 
@@ -210,16 +189,6 @@ function extraNames(wanted: readonly Wanted[]): readonly string[] {
   return wanted.slice(1).flatMap((source) => source.skills);
 }
 
-/** The picks a fetch installs: one role's, or every role's, each skill once. */
-function picksToInstall(config: KitConfig, install: SkillsToInstall): readonly ExtraSkill[] {
-  const roles = install === "every" ? PHASES : [install];
-  const picks = new Map<string, ExtraSkill>();
-  for (const role of roles) {
-    for (const pick of config.extraSkills[role]) picks.set(`${pick.source}/${pick.name}`, pick);
-  }
-  return [...picks.values()];
-}
-
 /** The names Fabrik's own skills install as: the folders under the Kit's skills/. */
 export async function kitSkillNames(kitDir: string): Promise<readonly string[]> {
   const entries = await readdir(join(kitDir, KIT_SKILLS_DIR), { withFileTypes: true }).catch(() => []);
@@ -240,24 +209,7 @@ function skillsDir(productDir: string): string {
  */
 export async function readInstallRecord(productDir: string): Promise<InstallRecord | undefined> {
   const text = await readFile(join(skillsDir(productDir), INSTALL_RECORD), "utf8").catch(() => null);
-  if (text === null) return undefined;
-  try {
-    const value: unknown = JSON.parse(text);
-    return Array.isArray(value) && value.every(isInstalledSource) ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isInstalledSource(value: unknown): value is InstalledSource {
-  if (typeof value !== "object" || value === null) return false;
-  const { repository, sha, skills } = value as Record<string, unknown>;
-  return (
-    typeof repository === "string" &&
-    typeof sha === "string" &&
-    Array.isArray(skills) &&
-    skills.every((skill) => typeof skill === "string")
-  );
+  return text === null ? undefined : parseInstallRecord(text);
 }
 
 if (import.meta.main) {

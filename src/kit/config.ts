@@ -1,5 +1,6 @@
 // The Kit config: loaded from a Product repo's .fabrik/ folder, with every v1
 // default filled in, and validated at the start of every run. Pure, no I/O.
+import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
 
 export interface AgentRole {
   readonly model: string;
@@ -55,6 +56,15 @@ export interface ExtraSkill {
 export type Phase = "triage" | "design" | "implement" | "review";
 
 export const PHASES: readonly Phase[] = ["triage", "design", "implement", "review"];
+
+/** Every Extra skill the given roles pick, each once however many of them pick it. */
+export function picksIn(config: KitConfig, roles: readonly Phase[] = PHASES): readonly ExtraSkill[] {
+  const picks = new Map<string, ExtraSkill>();
+  for (const role of roles) {
+    for (const pick of config.extraSkills[role]) picks.set(`${pick.source}/${pick.name}`, pick);
+  }
+  return [...picks.values()];
+}
 
 /** The raw files the Kit reads from the Kit config folder; null or left out when absent. */
 export interface KitConfigSources {
@@ -226,10 +236,6 @@ function readSkillsSources(text: string | null, context: ReadContext): readonly 
   });
   return sources;
 }
-
-/** The same `owner/name` pattern Fabrik's own skills lock uses. */
-const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const FULL_SHA = /^[0-9a-f]{40}$/;
 
 function checkRepository(repository: string): string | null {
   return REPOSITORY.test(repository) ? null : "a repository must be owner/name";

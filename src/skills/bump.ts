@@ -8,7 +8,7 @@
 // Upstream text (commit messages, the diff) only ever goes into the body
 // inside code fences, so it can't mention people or link issues here.
 import { SKILLS_SOURCES_LOCK_PATH, type SkillsSource } from "../kit/config.ts";
-import { type SkillsLock, skillFolders } from "./lock.ts";
+import { type SkillsLock, shortSha, skillFolders } from "./lock.ts";
 
 /** What the GitHub compare API says about upstream (main, or a source's default branch) against the pin. */
 export interface UpstreamSkills {
@@ -60,11 +60,11 @@ export function planSkillsBump(lock: SkillsLock, upstream: UpstreamSkills): Skil
   return {
     kind: "pull-request",
     branch: SKILLS_BUMP_BRANCH,
-    title: `Bump Matt Pocock's skills to ${short(upstream.head)}`,
+    title: `Bump Matt Pocock's skills to ${shortSha(upstream.head)}`,
     body: pullRequestBody({
       pin: lock,
       upstream,
-      intro: `Bumps Matt Pocock's skills (\`${lock.repository}\`) from \`${short(lock.sha)}\` to \`${short(upstream.head)}\` in \`skills.lock.json\`.`,
+      intro: `Bumps Matt Pocock's skills (\`${lock.repository}\`) from \`${shortSha(lock.sha)}\` to \`${shortSha(upstream.head)}\` in \`skills.lock.json\`.`,
       upstreamName: "Upstream main",
       notes,
       diffHeading: "### Upstream diff",
@@ -110,7 +110,7 @@ export function planSourceBump(
   if (removed.length > 0) {
     notes.push(
       "> [!CAUTION]",
-      `> Breaking: the source's plugin manifest at \`${short(upstream.head)}\` no longer lists ${removed.map((name) => `\`${name}\``).join(", ")}, which this repo picks. Drop the pick before merging, or every run that has it will fail.`,
+      `> Breaking: the source's plugin manifest at \`${shortSha(upstream.head)}\` no longer lists ${removed.map((name) => `\`${name}\``).join(", ")}, which this repo picks. Drop the pick before merging, or every run that has it will fail.`,
       "",
     );
   }
@@ -124,11 +124,11 @@ export function planSourceBump(
   return {
     kind: "pull-request",
     branch: sourceBumpBranch(source.repository),
-    title: `Bump the ${source.repository} Skills source to ${short(upstream.head)}`,
+    title: `Bump the ${source.repository} Skills source to ${shortSha(upstream.head)}`,
     body: pullRequestBody({
       pin: source,
       upstream,
-      intro: `Bumps the \`${source.repository}\` Skills source from \`${short(source.sha)}\` to \`${short(upstream.head)}\` in \`${SKILLS_SOURCES_LOCK_PATH}\`.`,
+      intro: `Bumps the \`${source.repository}\` Skills source from \`${shortSha(source.sha)}\` to \`${shortSha(upstream.head)}\` in \`${SKILLS_SOURCES_LOCK_PATH}\`.`,
       upstreamName: "The source's default branch",
       notes,
       diffHeading: unscoped ? "### Upstream diff" : "### Diff of the picked skills",
@@ -150,8 +150,6 @@ function hasMoved(pin: { readonly sha: string }, upstream: UpstreamSkills): bool
   return !(upstream.head === pin.sha || upstream.status === "identical" || upstream.status === "behind");
 }
 
-const short = (sha: string) => sha.slice(0, 7);
-
 interface BodyParts {
   readonly pin: { readonly repository: string; readonly sha: string };
   readonly upstream: UpstreamSkills;
@@ -167,7 +165,7 @@ interface BodyParts {
 /** The PR body both bumps share: the compare link, any warning, the commits, then the diff cut to fit. */
 function pullRequestBody({ pin, upstream, intro, upstreamName, notes, diffHeading, diff }: BodyParts): string {
   const compareUrl = `https://github.com/${pin.repository}/compare/${pin.sha}...${upstream.head}`;
-  const commitLines = upstream.commits.map((commit) => `${short(commit.sha)} ${commit.message.split("\n")[0]}`);
+  const commitLines = upstream.commits.map((commit) => `${shortSha(commit.sha)} ${commit.message.split("\n")[0]}`);
   const missing = upstream.aheadBy - upstream.commits.length;
 
   const head: string[] = [intro, "", `Compare on GitHub: ${compareUrl}`];

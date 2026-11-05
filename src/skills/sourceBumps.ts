@@ -14,7 +14,7 @@ import type { GitHub, Repo } from "../github/client.ts";
 import { readKitConfigSources } from "../github/snapshot.ts";
 import {
   type KitConfig,
-  PHASES,
+  picksIn,
   resolveKitConfig,
   SKILLS_SOURCES_LOCK_PATH,
   type SkillsSource,
@@ -75,9 +75,7 @@ async function bumpOne(
   readUpstream: ReadUpstream,
 ): Promise<SourceBumpOutcome> {
   const { repository } = source;
-  const picked = [
-    ...new Set(PHASES.flatMap((phase) => config.extraSkills[phase].filter((skill) => skill.source === repository).map((skill) => skill.name))),
-  ];
+  const picked = picksIn(config).filter((pick) => pick.source === repository).map((pick) => pick.name);
   const upstream = await readUpstream(source);
   // Read the default branch afresh for each source, so an earlier one's failure or timing can't leave this one stale.
   const head = await headOf(github, base, defaultBranch);

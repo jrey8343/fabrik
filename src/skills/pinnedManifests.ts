@@ -5,7 +5,7 @@
 // no manifest is read.
 import type { KitConfig } from "../kit/config.ts";
 import { checkExtraSkills, foldersIn } from "./extra.ts";
-import type { SkillsLock } from "./lock.ts";
+import { PLUGIN_MANIFEST_PATH, type SkillsLock } from "./lock.ts";
 
 /** A Skills source's `.claude-plugin/plugin.json` text at one commit, or null when it has none. */
 export type ReadManifest = (repository: string, sha: string) => Promise<string | null>;
@@ -38,7 +38,7 @@ export async function checkPicksAtPins(
 
 /** Reads a public source's manifest at a commit; a 404 means it has none. */
 export const readManifestFromGitHub: ReadManifest = async (repository, sha) => {
-  const url = `https://raw.githubusercontent.com/${repository}/${sha}/.claude-plugin/plugin.json`;
+  const url = `https://raw.githubusercontent.com/${repository}/${sha}/${PLUGIN_MANIFEST_PATH}`;
   const response = await fetch(url);
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Reading ${url} failed: ${response.status}`);

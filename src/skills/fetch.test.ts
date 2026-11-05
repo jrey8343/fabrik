@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, readFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -56,6 +56,26 @@ describe("Fetching the pinned skills", () => {
     expect(again.urls).toEqual([]);
     expect(installed).toEqual({ sha: LOCKED_SHA, skills: [], fetched: false, extraSkills: [], errors: [] });
   });
+
+  it.each(["../../src", "..", "nested/tdd", ""])(
+    "treats an install record naming %j as unreadable, so it never removes a folder outside .claude/skills",
+    async (name) => {
+      const product = await tempDir("product");
+      await mkdir(join(product, "src"), { recursive: true });
+      await writeFile(join(product, "src/app.ts"), "export {};\n");
+      await mkdir(join(product, ".claude/skills"), { recursive: true });
+      await writeFile(
+        join(product, ".claude/skills/.fabrik-install.json"),
+        JSON.stringify([{ repository: "mattpocock/skills", sha: LOCKED_SHA, skills: [name] }]),
+      );
+
+      expect(await readInstallRecord(product)).toBeUndefined();
+      await fetchSkills(await aKitCheckout(), product, serving(await aSkillsArchive()).download);
+
+      expect(await readFile(join(product, "src/app.ts"), "utf8")).toBe("export {};\n");
+      expect(await readInstallRecord(product)).toEqual([{ repository: "mattpocock/skills", sha: LOCKED_SHA, skills: ["tdd"] }]);
+    },
+  );
 
   it("downloads again when the Kit pins a different SHA from the one installed", async () => {
     const product = await tempDir("product");
