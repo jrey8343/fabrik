@@ -331,7 +331,6 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
   const records = input.records
     .filter((record) => within(week, record.endedAt))
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
-  const pullRequests = input.facts.flatMap((facts) => facts.pullRequests);
   const tickets = input.facts.flatMap((facts) => facts.tickets);
   const merged = input.facts.flatMap((facts) =>
     facts.pullRequests.flatMap((pullRequest) =>
@@ -343,7 +342,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     records: records.length,
     cost,
     unknownCost,
-    costPerMergedPullRequest: costPerMergedPullRequestOf(week, input),
+    costPerMergedPullRequest: costPerMergedPullRequestOf(week, input.records, merged),
     costPerSpec: costPerSpecOf(week, input),
     spendNeverMerged: spendNeverMergedOf(week, input),
     weeklyLimit: records.findLast((record) => record.rateLimit?.rateLimitType === WEEKLY_LIMIT)?.rateLimit ?? null,
@@ -356,7 +355,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
       }),
     ),
     revertRate: revertRateOf(week, input.facts),
-    mergedPullRequests: pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt)).length,
+    mergedPullRequests: merged.length,
     ticketsDispatched: tickets.filter((ticket) => {
       const dispatch = dispatchOf(ticket);
       return dispatch !== null && within(week, dispatch);
@@ -366,8 +365,9 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
   };
 }
 
-/** An agent PR merged in the week, with its Ticket and when that was dispatched. */
+/** An agent PR merged in the week, with its repo, its Ticket and when that was dispatched. */
 interface MergedPullRequest {
+  readonly repo: string;
   readonly pullRequest: AgentPullRequestFacts;
   readonly mergedAt: string;
   readonly ticket: TicketFacts | null;
@@ -376,7 +376,7 @@ interface MergedPullRequest {
 
 function mergedPullRequestOf(facts: GitHubFacts, pullRequest: AgentPullRequestFacts, mergedAt: string): MergedPullRequest {
   const ticket = facts.tickets.find((candidate) => candidate.number === pullRequest.ticket) ?? null;
-  return { pullRequest, mergedAt, ticket, dispatch: ticket === null ? null : dispatchOf(ticket) };
+  return { repo: facts.repo, pullRequest, mergedAt, ticket, dispatch: ticket === null ? null : dispatchOf(ticket) };
 }
 
 /**
@@ -452,20 +452,13 @@ function mean(values: readonly number[]): number | null {
 /** The roles whose runs build a Ticket: Implement (Retries and Step-ups among them) and Review. */
 const BUILD_ROLES: readonly RunRecord["role"][] = ["implement", "review"];
 
-function costPerMergedPullRequestOf(week: Week, input: WeeklySummaryInput): CostFigure {
-  const ended = endedBy(week, input.records);
-  const perPullRequest = input.facts.flatMap((facts) =>
-    facts.pullRequests
-      .filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt))
-      .map((pullRequest) =>
-        ended.filter(
-          (record) =>
-            record.repo === facts.repo &&
-            pullRequest.ticket !== null &&
-            record.issue === pullRequest.ticket &&
-            BUILD_ROLES.includes(record.role),
-        ),
-      ),
+function costPerMergedPullRequestOf(week: Week, records: readonly RunRecord[], merged: readonly MergedPullRequest[]): CostFigure {
+  const ended = endedBy(week, records);
+  const perPullRequest = merged.map(({ repo, pullRequest }) =>
+    ended.filter(
+      (record) =>
+        record.repo === repo && pullRequest.ticket !== null && record.issue === pullRequest.ticket && BUILD_ROLES.includes(record.role),
+    ),
   );
   return averageCostOf(perPullRequest);
 }
