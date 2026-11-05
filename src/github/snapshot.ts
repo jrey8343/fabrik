@@ -3,7 +3,7 @@
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
 import { instructionsPath, KIT_CONFIG_PATH, type KitConfigSources, PHASES } from "../kit/config.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
-import { KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
+import { DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
   DesignQueueIssue,
@@ -163,14 +163,26 @@ const DESIGN_QUEUE_QUERY = `
           createdAt
           labels(first: 100) { nodes { name } }
           comments(last: 100) { nodes { body author { __typename } } }
-          timelineItems(itemTypes: [LABELED_EVENT], last: 100) {
-            nodes { ... on LabeledEvent { createdAt label { name } } }
+          timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT], last: 100) {
+            nodes {
+              __typename
+              ... on LabeledEvent { createdAt label { name } }
+              ... on UnlabeledEvent { createdAt label { name } actor { __typename } }
+            }
           }
         }
       }
     }
   }
 `;
+
+/** A label coming on or off an issue, oldest first, as DESIGN_QUEUE_QUERY reads it. */
+interface DesignQueueTimelineItem {
+  __typename?: string;
+  createdAt?: string;
+  label?: { name: string };
+  actor?: { __typename: string } | null;
+}
 
 interface DesignQueueQueryResult {
   repository: {
@@ -182,8 +194,8 @@ interface DesignQueueQueryResult {
         createdAt: string;
         labels: { nodes: { name: string }[] };
         comments: { nodes: { body: string; author: { __typename: string } | null }[] };
-        // Only LabeledEvents are asked for, but the union's other members come back empty.
-        timelineItems: { nodes: { createdAt?: string; label?: { name: string } }[] };
+        // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
+        timelineItems: { nodes: DesignQueueTimelineItem[] };
       }[];
     };
   };
@@ -323,7 +335,6 @@ async function gatherEventPart(
       if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");
       return gatherDispatch(github, actions, repo, operator);
     case "design-queue-check":
-      if (actions === null) throw new Error("A Design queue check needs a token that can read workflow runs");
       return gatherDesignQueue(github, actions, repo, operator);
     case "kit-config-changed":
     case "scheduled-tick":
@@ -528,13 +539,21 @@ async function gatherDispatch(
   };
 }
 
+/**
+ * A Design queue check's slice. With a token that can read workflow runs (the
+ * Design queue job's), the turns in progress are read from their jobs. The
+ * scheduled tick has none (its caller grants no Actions permission), so it
+ * reads them from the issues instead, erring toward holding a slot: see
+ * firstTurnClaimed.
+ */
 async function gatherDesignQueue(
   github: GitHub,
-  actions: GitHub,
+  actions: GitHub | null,
   repo: Repo,
   operator: string | null,
 ): Promise<EventPart> {
   const issues: DesignQueueIssue[] = [];
+  const claimed: number[] = [];
   let after: string | null = null;
   let page: DesignQueueQueryResult;
   do {
@@ -549,10 +568,12 @@ async function gatherDesignQueue(
         body: comment.body,
         byBot: comment.author?.__typename === "Bot",
       }));
-      const added = issue.timelineItems.nodes
-        .filter((event) => event.label?.name === NEEDS_DESIGN && event.createdAt !== undefined)
+      const timeline = issue.timelineItems.nodes;
+      const added = timeline
+        .filter((event) => isLabeled(event, NEEDS_DESIGN) && event.createdAt !== undefined)
         .map((event) => event.createdAt as string);
       const session = designSessionOf(comments);
+      if (firstTurnClaimed(timeline)) claimed.push(issue.number);
       issues.push({
         number: issue.number,
         labels: issue.labels.nodes.map((label) => label.name),
@@ -571,9 +592,34 @@ async function gatherDesignQueue(
     issue: null,
     pullRequest: null,
     dispatch: null,
-    designQueue: { issues, designTurnsInProgress: await designTurnsInProgress(actions, repo) },
+    designQueue: {
+      issues,
+      designTurnsInProgress: actions === null ? claimed.sort((a, b) => a - b) : await designTurnsInProgress(actions, repo),
+    },
     operator: operator ?? page.repository.owner.login,
   };
+}
+
+function isLabeled(event: DesignQueueTimelineItem, name: string): boolean {
+  return event.__typename === "LabeledEvent" && event.label?.name === name;
+}
+
+/**
+ * Whether the Kit took agent:design off since the issue last got
+ * needs-design: the claim job does that as the session's first turn starts.
+ * Read without the Actions API, it takes a first turn as still in progress
+ * until its round or failure notice shows in the thread, so a check never
+ * starts a second session in that gap. Only a bot taking it off counts.
+ */
+function firstTurnClaimed(timeline: readonly DesignQueueTimelineItem[]): boolean {
+  let claimed = false;
+  for (const event of timeline) {
+    if (isLabeled(event, NEEDS_DESIGN)) claimed = false;
+    else if (event.__typename === "UnlabeledEvent" && event.label?.name === DESIGN_LABEL && event.actor?.__typename === "Bot") {
+      claimed = true;
+    }
+  }
+  return claimed;
 }
 
 /** Workflow-run statuses, short of completed, whose Implement job may still hold a slot. */

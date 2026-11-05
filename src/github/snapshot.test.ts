@@ -102,7 +102,13 @@ describe("The Design-session turn job's name", () => {
 describe("Gathering a Design queue check's needs-design issues", () => {
   const kit = (body: string) => ({ body, author: { __typename: "Bot" } });
   const person = (body: string) => ({ body, author: { __typename: "User" } });
-  const labelled = (name: string, createdAt: string) => ({ createdAt, label: { name } });
+  const labelled = (name: string, createdAt: string) => ({ __typename: "LabeledEvent", createdAt, label: { name } });
+  const unlabelled = (name: string, createdAt: string, actor = "Bot") => ({
+    __typename: "UnlabeledEvent",
+    createdAt,
+    label: { name },
+    actor: { __typename: actor },
+  });
 
   function issue(number: number, overrides: Record<string, unknown> = {}) {
     return {
@@ -115,7 +121,10 @@ describe("Gathering a Design queue check's needs-design issues", () => {
     };
   }
 
-  async function gathered(nodes: unknown[], runs: Parameters<typeof actionsWith>[0] = []): Promise<DesignQueueSnapshot> {
+  async function gathered(
+    nodes: unknown[],
+    runs: Parameters<typeof actionsWith>[0] | null = [],
+  ): Promise<DesignQueueSnapshot> {
     const github = {
       async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
         if (query.includes("labels: [$needsDesign]")) {
@@ -127,7 +136,8 @@ describe("Gathering a Design queue check's needs-design issues", () => {
         return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
       },
     } as unknown as GitHub;
-    const snapshot = await gatherSnapshot(github, repo, { kind: "design-queue-check" }, null, actionsWith(runs) as unknown as GitHub);
+    const actions = runs === null ? null : (actionsWith(runs) as unknown as GitHub);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "design-queue-check" }, null, actions);
     if (snapshot.designQueue === null) throw new Error("no Design queue slice");
     return snapshot.designQueue;
   }
@@ -267,16 +277,48 @@ describe("Gathering a Design queue check's needs-design issues", () => {
     expect(queue.issues[0]?.neededDesignAt).toBe("2026-10-01T09:00:00Z");
   });
 
-  it("needs a token that can read workflow runs", async () => {
-    const github = {
-      async graphql(): Promise<unknown> {
-        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
-      },
-    } as unknown as GitHub;
+  describe("without a token that can read workflow runs, as on the scheduled tick", () => {
+    it("reads a first turn in progress from the Kit taking agent:design off since the issue last got needs-design", async () => {
+      const queue = await gathered(
+        [
+          issue(3, {
+            timelineItems: {
+              nodes: [labelled("needs-design", "2026-11-01T09:00:00Z"), unlabelled("agent:design", "2026-11-01T10:00:00Z")],
+            },
+          }),
+          issue(4, {
+            timelineItems: {
+              nodes: [unlabelled("agent:design", "2026-10-01T10:00:00Z"), labelled("needs-design", "2026-11-01T09:00:00Z")],
+            },
+          }),
+          issue(5, {
+            timelineItems: {
+              nodes: [labelled("needs-design", "2026-11-01T09:00:00Z"), unlabelled("agent:design", "2026-11-01T10:00:00Z", "User")],
+            },
+          }),
+          issue(6),
+        ],
+        null,
+      );
 
-    await expect(gatherSnapshot(github, repo, { kind: "design-queue-check" }, null)).rejects.toThrow(
-      "A Design queue check needs a token that can read workflow runs",
-    );
+      expect(queue.designTurnsInProgress).toEqual([3]);
+      expect(holding(queue)).toEqual({ 3: true, 4: false, 5: false, 6: false });
+    });
+
+    it("doesn't take needs-design coming off for it being added", async () => {
+      const queue = await gathered(
+        [
+          issue(3, {
+            timelineItems: {
+              nodes: [labelled("needs-design", "2026-11-01T09:00:00Z"), unlabelled("needs-design", "2026-11-02T09:00:00Z")],
+            },
+          }),
+        ],
+        null,
+      );
+
+      expect(queue.issues[0]?.neededDesignAt).toBe("2026-11-01T09:00:00Z");
+    });
   });
 });
 
