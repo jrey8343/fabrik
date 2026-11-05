@@ -238,6 +238,13 @@ describe("The score file", () => {
       });
     });
 
+    it("a judge that failed before it built its prompt leaves whether its digest was trimmed unknown", () => {
+      const early = { ...judge, digestTrimmed: null };
+      const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: { kind: "judge-failed", judge: early } });
+
+      expect(file).toMatchObject({ judge: { model: "claude-sonnet-5", record: JUDGE_RECORD }, digestTrimmed: null, skip: { reason: "judge-failed" } });
+    });
+
     it("a skip goes where the scores would have", () => {
       const judged = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: { kind: "judged", judge, output: judgeOutput() } });
       const failed = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: { kind: "judge-failed", judge } });
