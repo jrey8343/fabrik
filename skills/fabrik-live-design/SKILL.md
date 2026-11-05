@@ -21,6 +21,7 @@ This session runs with the Operator's own GitHub credentials, so you publish the
 
 - **Post nothing to the issue until the end, and change none of its labels.** Every comment the Operator's account posts on a `needs-design` issue starts an async turn, and the Kit moves the labels when your outcome comment lands.
 - Grill the Operator as `.claude/skills/grilling/SKILL.md` describes: one decision at a time, each with your recommended answer. Never ask what the repository can answer.
+- **Facts only the Operator can fetch** (IDs, prices or settings held in another system) don't hold the session up. Settle the decisions without them and end with a Spec in which an Operator step gathers the facts and commits them, through its Pairing session's pull request, to a file in the Product repo that the code reads. The step's last task names that file and the shape the Tickets expect. Only the Tickets that read that file are blocked by it. If the Operator says they have the facts to hand, take them now and add no step.
 
 ## Ending the session
 
