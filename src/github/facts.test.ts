@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { productReposOf } from "./facts.ts";
+import { gatherGitHubFacts, productReposOf } from "./facts.ts";
 
 const CALLER = "jobs:\n  fabrik:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v1.2.0\n";
 
@@ -61,6 +61,146 @@ describe("Finding the Product repos the Weekly summary covers", () => {
     expect(await productReposOf(github)).toEqual([
       { owner: "jrey8343", name: "a" },
       { owner: "jrey8343", name: "c" },
+    ]);
+  });
+});
+
+const repo = { owner: "jrey8343", name: "shop" };
+const NOW = Date.parse("2026-11-08T20:00:00Z");
+const APP = { __typename: "Bot", login: "fabrik-app" };
+const OPERATOR = { __typename: "User", login: "jrey8343" };
+
+/** What a repo holds on GitHub, as the facts queries read it, with nothing unless a test says so. */
+interface RawRepo {
+  closedPullRequests?: unknown[];
+  openPullRequests?: unknown[];
+  updatedIssues?: unknown[];
+  openIssues?: unknown[];
+  defaultBranchCommits?: unknown[];
+}
+
+/** A read-only GraphQL API over `raw`, answering each facts query with one page. */
+function repoWith(raw: RawRepo) {
+  const page = (nodes: unknown[] = []) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes });
+  return {
+    async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+      expect(variables).toMatchObject({ owner: "jrey8343", name: "shop" });
+      const answer = (data: unknown) => data as T;
+      if (query.includes("history(")) return answer({ repository: { defaultBranchRef: { target: { history: page(raw.defaultBranchCommits) } } } });
+      if (query.includes("pullRequests(states: [MERGED, CLOSED]")) return answer({ repository: { pullRequests: page(raw.closedPullRequests) } });
+      if (query.includes("pullRequests(states: OPEN")) return answer({ repository: { pullRequests: page(raw.openPullRequests) } });
+      if (query.includes("filterBy: { since: $since }")) return answer({ repository: { issues: page(raw.updatedIssues) } });
+      if (query.includes("issues(states: OPEN")) return answer({ repository: { issues: page(raw.openIssues) } });
+      throw new Error(`Unexpected query: ${query}`);
+    },
+  };
+}
+
+/** Agent PR 50, the Fabrik App's from Ticket 7's branch, closing #7, merged on 2026-11-04 as `c…c`. */
+function aRawPullRequest(overrides: Record<string, unknown> = {}) {
+  return {
+    number: 50,
+    title: "Build the thing",
+    state: "MERGED",
+    mergedAt: "2026-11-04T00:00:00Z",
+    closedAt: "2026-11-04T00:00:00Z",
+    updatedAt: "2026-11-04T00:00:00Z",
+    headRefName: "fabrik/ticket-7",
+    author: APP,
+    mergeCommit: { oid: "c".repeat(40) },
+    closingIssuesReferences: { nodes: [{ number: 7 }] },
+    commits: { nodes: [] },
+    reviews: { nodes: [] },
+    comments: { nodes: [] },
+    timelineItems: { nodes: [] },
+    ...overrides,
+  };
+}
+
+function aRawLabelEvent(label: string, createdAt: string, actor: unknown = APP, kind = "LabeledEvent") {
+  return { __typename: kind, createdAt, actor, label: { name: label } };
+}
+
+describe("Gathering a Product repo's GitHub facts", () => {
+  it("holds each agent PR merged or closed in the window, with its Ticket from Closes #n, merge time and sha", async () => {
+    const github = repoWith({
+      closedPullRequests: [
+        aRawPullRequest(),
+        aRawPullRequest({ number: 51, state: "CLOSED", mergedAt: null, mergeCommit: null, closingIssuesReferences: { nodes: [] } }),
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW);
+
+    expect(facts.repo).toBe("jrey8343/shop");
+    expect(facts.pullRequests.map(({ number, ticket, title, mergedAt, mergeSha }) => ({ number, ticket, title, mergedAt, mergeSha }))).toEqual([
+      { number: 50, ticket: 7, title: "Build the thing", mergedAt: "2026-11-04T00:00:00Z", mergeSha: "c".repeat(40) },
+      { number: 51, ticket: null, title: "Build the thing", mergedAt: null, mergeSha: null },
+    ]);
+  });
+
+  it("leaves out a PR that isn't an agent PR, but keeps its merged title for spotting reverts", async () => {
+    const github = repoWith({
+      closedPullRequests: [aRawPullRequest({ number: 60, title: 'Revert "Build the thing"', headRefName: "revert-50", author: OPERATOR })],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW);
+
+    expect(facts.pullRequests).toEqual([]);
+    expect(facts.mergedPullRequestTitles).toEqual([{ title: 'Revert "Build the thing"', mergedAt: "2026-11-04T00:00:00Z" }]);
+  });
+
+  it("covers 37 days, so last week's 30-day revert window is whole", async () => {
+    const github = repoWith({
+      closedPullRequests: [
+        aRawPullRequest({ number: 50, mergedAt: "2026-10-03T00:00:00Z", closedAt: "2026-10-03T00:00:00Z", updatedAt: "2026-10-03T00:00:00Z" }),
+        aRawPullRequest({ number: 49, mergedAt: "2026-09-30T00:00:00Z", closedAt: "2026-09-30T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z" }),
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW);
+
+    expect(facts.pullRequests.map((pr) => pr.number)).toEqual([50]);
+  });
+
+  it("tells the Implementer's commits from a person's push, and reads the PR's reviews, comments and labels", async () => {
+    const github = repoWith({
+      closedPullRequests: [
+        aRawPullRequest({
+          commits: {
+            nodes: [
+              { commit: { committedDate: "2026-11-02T00:00:00Z", author: { email: "fabrik-implementer@users.noreply.github.com" } } },
+              { commit: { committedDate: "2026-11-03T00:00:00Z", author: { email: "jared@example.com" } } },
+            ],
+          },
+          reviews: {
+            nodes: [
+              { author: OPERATOR, state: "CHANGES_REQUESTED", submittedAt: "2026-11-03T01:00:00Z" },
+              { author: OPERATOR, state: "PENDING", submittedAt: null },
+            ],
+          },
+          comments: { nodes: [{ body: "Verdict", createdAt: "2026-11-03T02:00:00Z", author: APP }] },
+          timelineItems: {
+            nodes: [
+              aRawLabelEvent("agent:review", "2026-11-03T03:00:00Z", OPERATOR),
+              aRawLabelEvent("agent:review", "2026-11-03T04:00:00Z", APP, "UnlabeledEvent"),
+            ],
+          },
+        }),
+      ],
+    });
+
+    const [pullRequest] = (await gatherGitHubFacts(github, repo, NOW)).pullRequests;
+
+    expect(pullRequest?.commits).toEqual([
+      { byApp: true, at: "2026-11-02T00:00:00Z" },
+      { byApp: false, at: "2026-11-03T00:00:00Z" },
+    ]);
+    expect(pullRequest?.reviews).toEqual([{ author: "jrey8343", state: "changes-requested", at: "2026-11-03T01:00:00Z" }]);
+    expect(pullRequest?.comments).toEqual([{ author: "fabrik-app[bot]", byBot: true, body: "Verdict", at: "2026-11-03T02:00:00Z" }]);
+    expect(pullRequest?.labelEvents).toEqual([
+      { label: "agent:review", action: "labeled", actor: "jrey8343", at: "2026-11-03T03:00:00Z" },
+      { label: "agent:review", action: "unlabeled", actor: "fabrik-app[bot]", at: "2026-11-03T04:00:00Z" },
     ]);
   });
 });
