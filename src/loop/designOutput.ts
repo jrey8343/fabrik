@@ -14,7 +14,7 @@ export interface RoundQuestion {
   readonly recommendation: string;
 }
 
-export type DesignTurnOutput = DesignTurn & {
+export type DesignTurnOutput = DesignTurnOutcome & {
   /**
    * For a turn on a Ticket sent back from an agent PR: the ids of the Operator
    * comments on that PR it weighed, which the comment it posts links when the
@@ -25,7 +25,8 @@ export type DesignTurnOutput = DesignTurn & {
   readonly operatorCommentsConsidered?: readonly string[];
 };
 
-type DesignTurn =
+/** What a turn ends in: the next round, or one of the session's outcomes. */
+type DesignTurnOutcome =
   | {
       /** The next round of questions for the Operator. */
       readonly kind: "round";

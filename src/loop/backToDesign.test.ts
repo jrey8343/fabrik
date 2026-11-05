@@ -238,7 +238,7 @@ describe("The Design session after a Ticket comes back names the Operator commen
     expect(commentsOf(named)).toEqual(commentsOf(plain));
   });
 
-  it("posts what it does today when it names none, or gives a list that isn't one of ids", () => {
+  it("posts the comment unchanged when it names none, or gives a list that isn't one of ids", () => {
     const plain = commentsOf(planFor(turnFinished, snapshotOf(returnedTicket, { operator: "jrey" }), kitConfig()));
 
     for (const considered of [[], undefined, "inline-8", [8]]) {

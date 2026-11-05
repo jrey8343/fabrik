@@ -38,9 +38,9 @@ function fenced(body: string, language = ""): string {
  * gives the run. An issue that didn't come back is left as it is, with none.
  */
 export function sentBackContext(issue: unknown): {
-  issue: unknown;
-  parts: string[];
-  operatorComments: GivenOperatorComment[];
+  readonly issue: unknown;
+  readonly parts: string[];
+  readonly operatorComments: GivenOperatorComment[];
 } {
   if (typeof issue !== "object" || issue === null || !("sentBack" in issue)) return { issue, parts: [], operatorComments: [] };
   const { sentBack, ...rest } = issue as { sentBack: SentBackInput };
