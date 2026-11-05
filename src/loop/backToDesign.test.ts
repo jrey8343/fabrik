@@ -191,3 +191,105 @@ describe("The Design session after a Ticket comes back", () => {
     expect(round?.kind === "comment" ? round.body : "").not.toContain("came back from");
   });
 });
+
+const given = [
+  { id: "conversation-3", url: "https://github.com/acme/shop/pull/50#issuecomment-3" },
+  { id: "inline-8", url: "https://github.com/acme/shop/pull/50#discussion_r8" },
+];
+
+/** A finished turn on the returned Ticket that names `considered` and was given `operatorComments`. */
+function turnNaming(output: object, considered: unknown, operatorComments = given): LoopEvent {
+  return {
+    kind: "agent-run-finished",
+    role: "design",
+    issue: 7,
+    output: JSON.stringify({ ...output, operatorCommentsConsidered: considered }),
+    operatorComments,
+  };
+}
+
+function commentsOf(plan: Plan): string[] {
+  return actionsOf(plan).flatMap((action) =>
+    action.kind === "comment"
+      ? [action.body]
+      : action.kind === "close-as-superseded"
+        ? [action.comment.map((part) => (typeof part === "string" ? part : "#?")).join("")]
+        : [],
+  );
+}
+
+describe("The Design session after a Ticket comes back names the Operator comments it weighed", () => {
+  const round = JSON.parse(roundOutput) as object;
+
+  it("ends a round with a link to each comment it named that it was given", () => {
+    const plan = planFor(turnNaming(round, ["inline-8"]), snapshotOf(returnedTicket, { operator: "jrey" }), kitConfig());
+
+    const [body] = commentsOf(plan);
+    expect(body).toMatch(
+      /\n\n### Operator comments considered\n\n- \[`inline-8`\]\(https:\/\/github\.com\/acme\/shop\/pull\/50#discussion_r8\)$/,
+    );
+    expect(body).not.toContain("conversation-3");
+  });
+
+  it("never links an id it wasn't given, and adds nothing when none is left", () => {
+    const named = planFor(turnNaming(round, ["review-99"]), snapshotOf(returnedTicket, { operator: "jrey" }), kitConfig());
+    const plain = planFor(turnFinished, snapshotOf(returnedTicket, { operator: "jrey" }), kitConfig());
+
+    expect(commentsOf(named)).toEqual(commentsOf(plain));
+  });
+
+  it("posts the comment unchanged when it names none, or gives a list that isn't one of ids", () => {
+    const plain = commentsOf(planFor(turnFinished, snapshotOf(returnedTicket, { operator: "jrey" }), kitConfig()));
+
+    for (const considered of [[], undefined, "inline-8", [8]]) {
+      const plan = planFor(turnNaming(round, considered), snapshotOf(returnedTicket, { operator: "jrey" }), kitConfig());
+      expect(commentsOf(plan)).toEqual(plain);
+    }
+  });
+
+  it("links nothing on a turn that was given no comments, as on an issue that was never sent back", () => {
+    const issue = { ...returnedTicket, sentBack: null };
+    const plan = planFor(turnNaming(round, ["inline-8"], []), snapshotOf(issue), kitConfig());
+
+    expect(commentsOf(plan).join("\n")).not.toContain("Operator comments considered");
+    expect(commentsOf(plan)).toEqual(commentsOf(planFor(turnFinished, snapshotOf(issue), kitConfig())));
+  });
+
+  const brief = {
+    kind: "brief",
+    comment: "Checkout reads the cart total.",
+    brief: { summary: "Read the cart total at checkout.", acceptanceCriteria: ["Checkout shows the total."] },
+  };
+  const operatorBrief = {
+    kind: "brief",
+    comment: "Only the Operator can set the price.",
+    brief: { operator: true, summary: "Set the price.", steps: ["Set it."] },
+  };
+  const ticket = { key: "total", title: "Read the total", body: "Checkout reads it.", blockedBy: [] };
+  const split = { kind: "split", comment: "Two siblings.", tickets: [ticket, { ...ticket, key: "show", blockedBy: ["total"] }] };
+  const notPlanned = { kind: "not-planned", comment: "The Operator dropped it." };
+
+  it.each([
+    ["an agent brief", brief],
+    ["an Operator brief", operatorBrief],
+    ["a split", split],
+    ["not planned", notPlanned],
+  ])("ends the closing comment of %s with the comments it weighed", (_, output) => {
+    // returnedTicket blocks #12, so the split's moved edges and not-planned's note both come before the section.
+    const plan = planFor(turnNaming(output, ["conversation-3"]), snapshotOf({ ...returnedTicket, openBlocking: [12] }), kitConfig());
+
+    const closing = commentsOf(plan).filter((body) => body.includes("**Design session finished.**"));
+    expect(closing).toHaveLength(1);
+    expect(closing[0]).toMatch(
+      /\n\n### Operator comments considered\n\n- \[`conversation-3`\]\(https:\/\/github\.com\/acme\/shop\/pull\/50#issuecomment-3\)$/,
+    );
+  });
+
+  it("ends the closing comment of a Spec with the comments it weighed", () => {
+    const spec = { kind: "spec", comment: "A Spec.", spec: { title: "Totals", body: "The Spec." }, tickets: [ticket] };
+    const plan = planFor(turnNaming(spec, ["conversation-3"]), snapshotOf({ ...returnedTicket, parent: null }), kitConfig());
+
+    const [closing] = commentsOf(plan).filter((body) => body.includes("**Design session finished.**"));
+    expect(closing).toMatch(/### Operator comments considered\n\n- \[`conversation-3`\]\([^)]+issuecomment-3\)$/);
+  });
+});

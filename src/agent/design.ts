@@ -1,7 +1,9 @@
 // What a Design-session turn's prompt carries beyond the issue: when the
 // Ticket came back to design from an agent PR, that PR as src/agent/inputs.ts
-// read it into the issue's `sentBack`, set out as Markdown.
-import { operatorCommentsSection } from "./operatorComments.ts";
+// read it into the issue's `sentBack`, set out as Markdown, and the Operator
+// comments on that PR it gives the run, which the run's result passes out.
+import type { GivenOperatorComment } from "../loop/types.ts";
+import { givenOperatorComments, operatorCommentsSection } from "./operatorComments.ts";
 
 interface SentBackInput {
   readonly pullRequest?: { readonly number?: unknown; readonly title?: unknown; readonly baseRefName?: unknown; readonly headRefName?: unknown };
@@ -32,10 +34,15 @@ function fenced(body: string, language = ""): string {
 /**
  * The issue without its `sentBack`, and that PR set out for the prompt: what
  * sent it back (its Verdicts, oldest first, or the Operator's reviews), then
- * what its kept branch built. An issue that didn't come back is left as it is.
+ * what its kept branch built; and the Operator comments on it the prompt
+ * gives the run. An issue that didn't come back is left as it is, with none.
  */
-export function sentBackContext(issue: unknown): { issue: unknown; parts: string[] } {
-  if (typeof issue !== "object" || issue === null || !("sentBack" in issue)) return { issue, parts: [] };
+export function sentBackContext(issue: unknown): {
+  readonly issue: unknown;
+  readonly parts: string[];
+  readonly operatorComments: GivenOperatorComment[];
+} {
+  if (typeof issue !== "object" || issue === null || !("sentBack" in issue)) return { issue, parts: [], operatorComments: [] };
   const { sentBack, ...rest } = issue as { sentBack: SentBackInput };
   const pr = sentBack.pullRequest ?? {};
   const number = text(pr.number);
@@ -82,5 +89,5 @@ export function sentBackContext(issue: unknown): { issue: unknown; parts: string
       : `Its diff against \`${text(pr.baseRefName)}\`:`,
     fenced(text(sentBack.diff), "diff"),
   );
-  return { issue: rest, parts };
+  return { issue: rest, parts, operatorComments: givenOperatorComments(sentBack.operatorComments) };
 }

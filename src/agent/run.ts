@@ -274,8 +274,12 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     }
   }
   // The PR a Ticket came back to design from goes after the issue, set out on its own; only a Design session sees it.
-  const { issue, parts: sentBack } = sentBackContext(JSON.parse(issueText));
-  if (spec.readsParentSpec === true) extra.push(...sentBack);
+  const { issue, parts: sentBack, operatorComments: sentBackComments } = sentBackContext(JSON.parse(issueText));
+  if (spec.readsParentSpec === true) {
+    extra.push(...sentBack);
+    // A Design turn on an issue that was never sent back is given none, and its result says nothing of them.
+    if (sentBackComments.length > 0) given = sentBackComments;
+  }
   // The Reviewer's result is for the PR it judged, which its push job checks against the event.
   let subject = issueNumber;
   if (spec.reviewsPullRequest === true) {

@@ -24,8 +24,9 @@ export interface AgentRunResult {
   readonly branch?: BuiltBranch;
   /**
    * For a run that read an agent PR (a Review, a retry or a Request-changes
-   * run): the Operator comments the Kit gave it, recorded from its input before
-   * the agent ran, so its Verdict or fix comment links only those.
+   * run, or a Design turn on a Ticket sent back from one): the Operator
+   * comments the Kit gave it, recorded from its input before the agent ran, so
+   * the comment it posts links only those.
    */
   readonly operatorComments?: readonly GivenOperatorComment[];
 }

@@ -94,6 +94,8 @@ export type LoopEvent =
        * None for the first round, which adding needs-design starts.
        */
       readonly startedBy?: number;
+      /** For a Design turn on a Ticket sent back from an agent PR: the Operator comments on that PR it was given; none when left out. */
+      readonly operatorComments?: readonly GivenOperatorComment[];
     }
   | {
       /** An Implement run's agent job finished; its push job has the branch it built, not yet pushed. */
