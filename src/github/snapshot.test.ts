@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
 import { anIssue, aPullRequest, designQueueSnapshotOf, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
-import { resolveKitConfig } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
@@ -304,7 +304,7 @@ describe("Gathering a Design queue check's needs-design issues", () => {
         { number: 4, redesign: false },
         { number: 7, redesign: true },
       ]);
-      expect(planFor({ kind: "design-queue-check" }, designQueueSnapshotOf(queue.issues, { designTurnsInProgress: queue.designTurnsInProgress }), kitConfig({ caps: { designSessions: 1 } }))).toEqual({
+      expect(planFor({ kind: "design-queue-check" }, designQueueSnapshotOf(queue.issues, { designTurnsInProgress: queue.designTurnsInProgress }), kitConfig({ caps: { ...DEFAULT_KIT_CONFIG.caps, designSessions: 1 } }))).toEqual({
         kind: "act",
         actions: [{ kind: "add-labels", issue: 7, labels: ["agent:design"] }],
       });

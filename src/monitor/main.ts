@@ -374,6 +374,7 @@ async function main(): Promise<void> {
     issues,
     gatingChecks,
     mainChecks,
+    cap: config.caps.monitorIssues,
     now: new Date().toISOString(),
   };
   const read = await withLatestEvents(listed, monitorPlanFor(listed), errors);
