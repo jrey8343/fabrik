@@ -22,12 +22,12 @@
 // A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
 // PR, and its result is the Reviewer's reply, a Verdict line first.
-import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import { readIfPresent, readKitConfigFromCheckout } from "../kit/checkout.ts";
+import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
 import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
@@ -36,7 +36,7 @@ import type { AgentRole, GivenOperatorComment } from "../loop/types.ts";
 import { kitPromptPath } from "../guard/trust-root.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
-import { SKILLS_MARKER } from "../skills/fetch.ts";
+import { readInstallRecord } from "../skills/fetch.ts";
 import { type ParsedVerdict, parseVerdict } from "../loop/verdict.ts";
 import { AGENT_FAILURE_FILE, failureReportFor, MissingVerdictError } from "./failure.ts";
 import {
@@ -373,26 +373,18 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     console.log(`::error title=Infrastructure failure (${report.failure})::${report.detail}`);
     throw error;
   } finally {
-    const pinnedSkills = await installedSkills(productDir);
-    if (pinnedSkills === undefined) {
-      console.log("::warning title=Skills not installed::No pinned skills were found in .claude/skills");
+    // The install record src/skills/fetch.ts wrote last, naming each source and the skills from it.
+    const installed = await readInstallRecord(productDir);
+    if (installed === undefined) {
+      console.log("::warning title=Skills not installed::No install record was found in .claude/skills");
     } else {
-      const missing = missingSkills(lines, pinnedSkills.names);
+      const missing = missingSkills(lines, installed);
       if (missing.length > 0) {
-        console.log(`::warning title=Pinned skills missing at init::${missing.join(", ")}`);
+        console.log(`::warning title=Installed skills missing at init::${missing.join(", ")}`);
       }
     }
-    await writeSummary(runSummary({ role: name, effort: role.effort, lines, ...(pinnedSkills === undefined ? {} : { pinnedSkills }) }));
+    await writeSummary(runSummary({ role: name, effort: role.effort, lines, ...(installed === undefined ? {} : { installed }) }));
   }
-}
-
-/** The skills src/skills/fetch.ts installed into the checkout, and the commit they came from. */
-async function installedSkills(productDir: string): Promise<{ sha: string; names: string[] } | undefined> {
-  const dir = join(productDir, ".claude", "skills");
-  const sha = (await readIfPresent(join(dir, SKILLS_MARKER)))?.trim();
-  if (sha === undefined || sha === "") return undefined;
-  const entries = await readdir(dir, { withFileTypes: true });
-  return { sha, names: entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name) };
 }
 
 const roles: Record<string, () => Promise<void>> = {
