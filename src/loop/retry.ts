@@ -60,12 +60,16 @@ export function runInFlight(pullRequest: PullRequestSnapshot, operator: string):
   return review.commitSha === latest.headSha ? { kind: "request-changes", review: review.review } : null;
 }
 
+/** How the Kit's comments name a run in flight, at the start of a sentence. */
+export function runName(run: RunInFlight): string {
+  return run.kind === "retry" ? `Retry ${run.retry} of ${MAX_RETRIES}` : "The Operator's Request-changes run";
+}
+
 /** Why a Review on this PR posts no Verdict, while a run is in flight on it; otherwise null. */
 export function whyAwaitingRun(pullRequest: PullRequestSnapshot, operator: string): string | null {
   const run = runInFlight(pullRequest, operator);
   if (run === null) return null;
-  const name = run.kind === "retry" ? `Retry ${run.retry} of ${MAX_RETRIES}` : "The Operator's Request-changes run";
-  return `${name} on #${pullRequest.number} is still in flight, so ${pullRequest.headSha.slice(0, 7)} gets no Verdict: the run's push starts the next Review`;
+  return `${runName(run)} on #${pullRequest.number} is still in flight, so ${pullRequest.headSha.slice(0, 7)} gets no Verdict: the run's push starts the next Review`;
 }
 
 /**

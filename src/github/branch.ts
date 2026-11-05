@@ -173,8 +173,8 @@ async function onItsOwnBranch(git: Git, url: string, branch: BuiltBranch, bundle
   return {
     changes: {
       net,
-      // Every commit main doesn't hold, less, once rebased, the ones the run landed on.
-      commits: await commitsIn(git, tip, `^${main}`, ...(moved ? [`^${head}`] : [])),
+      // Only the run's own: neither main's nor the PR's commits it landed on, whoever pushed them.
+      commits: await commitsIn(git, tip, `^${main}`, `^${head}`),
       updatedFromMain: !(await isAncestor(git, main, head)) && (await isAncestor(git, main, tip)),
       ...(moved ? { rebase: { onto: head, conflicted: false } } : {}),
     },

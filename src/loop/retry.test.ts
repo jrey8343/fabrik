@@ -233,13 +233,13 @@ describe("A retry's branch", () => {
     const plan = planFor(retried(), retrySnapshot(), kitConfig());
 
     const actions = actionsOf(plan);
-    expect(actions[0]).toEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
-    expect(actions.map((action) => action.kind)).toEqual(["push-branch", "edit-issue-body", "comment"]);
-    expect(actions[2]).toMatchObject({ kind: "comment", issue: 50 });
-    expect(actions[2]).toHaveProperty("body", expect.stringContaining("Guards the empty-cart case the Reviewer flagged"));
-    expect(actions[2]).not.toHaveProperty("body", expect.stringContaining("Shows the empty state"));
+    expect(actions.at(-1)).toEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(actions[1]).toMatchObject({ kind: "comment", issue: 50 });
+    expect(actions[1]).toHaveProperty("body", expect.stringContaining("Guards the empty-cart case the Reviewer flagged"));
+    expect(actions[1]).not.toHaveProperty("body", expect.stringContaining("Shows the empty state"));
     expect(notificationsOf(plan, "jrey")).toEqual([]);
-    expect(actions[2]).not.toHaveProperty("body", expect.stringContaining("@someone"));
+    expect(actions[1]).not.toHaveProperty("body", expect.stringContaining("@someone"));
   });
 
   it("replaces the PR body with the refreshed summary, so the next Review reads the PR as it now stands", () => {
@@ -347,8 +347,8 @@ describe("A retry whose branch moved while it ran (ADR-0006)", () => {
   it("is pushed rebased onto the new head, with its note and refreshed body as usual", () => {
     const actions = actionsOf(planFor(rebased(false), movedSnapshot(), kitConfig()));
 
-    expect(actions.map((action) => action.kind)).toEqual(["push-branch", "edit-issue-body", "comment"]);
-    expect(actions[2]).toHaveProperty("body", expect.stringMatching(/^<!-- fabrik:retry-push -->\n/));
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(actions[1]).toHaveProperty("body", expect.stringMatching(/^<!-- fabrik:retry-push -->\n/));
   });
 
   it("that conflicts pushes nothing, says its work was discarded, and starts the same retry again, using no retry", () => {
@@ -366,10 +366,10 @@ describe("A retry whose branch moved while it ran (ADR-0006)", () => {
     expect(notificationsOf(plan, "jrey")).toEqual([]);
   });
 
-  it("that the branch moved past again, after the push job rebased it, starts again too", () => {
+  it("is pushed onto the head the push job rebased it onto, even when the snapshot's head lags behind it: the push's lease guards a real move", () => {
     const actions = actionsOf(planFor(rebased(false, "c".repeat(40)), movedSnapshot(), kitConfig()));
 
-    expect(actions.map((action) => action.kind)).toEqual(["comment", "add-labels"]);
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
   });
 
   it("a Request-changes run that conflicts starts again from the same review", () => {

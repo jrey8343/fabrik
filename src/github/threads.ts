@@ -71,6 +71,7 @@ export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean 
   return pushed;
 }
 
+/** Whether a comment is the Kit's note of a Retry's or Request-changes run's push: that run's outcome. */
 function isPushNote(body: string): boolean {
   return body.startsWith(RETRY_PUSH_MARKER) || body.startsWith(REQUEST_CHANGES_RUN_MARKER) || body.startsWith(UNMARKED_RETRY_PUSH);
 }
