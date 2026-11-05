@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { aKitCheckout, aSkillsArchive, LOCKED_SHA, serving, tempDir } from "../__fixtures__/skillsArchive.ts";
-import { fetchSkills } from "./fetch.ts";
+import { fetchSkills, readInstallRecord } from "./fetch.ts";
 
 describe("Fetching the pinned skills", () => {
   it("downloads the skills at the SHA the Kit's lockfile pins, and installs them flattened into .claude/skills", async () => {
@@ -15,7 +15,25 @@ describe("Fetching the pinned skills", () => {
     expect(urls).toEqual([`https://codeload.github.com/mattpocock/skills/tar.gz/${LOCKED_SHA}`]);
     expect(installed).toEqual({ sha: LOCKED_SHA, skills: ["tdd"], fetched: true });
     expect(await readFile(join(product, ".claude/skills/tdd/SKILL.md"), "utf8")).toBe("# tdd");
-    expect(await readFile(join(product, ".claude/skills/.fabrik-skills-sha"), "utf8")).toBe(`${LOCKED_SHA}\n`);
+    expect(await readInstallRecord(product)).toEqual([
+      { repository: "mattpocock/skills", sha: LOCKED_SHA, skills: ["tdd"] },
+    ]);
+  });
+
+  it("records every skill it installed from the source, and leaves no single-SHA marker", async () => {
+    const product = await tempDir("product");
+    const archive = await aSkillsArchive({ "skills/engineering/tdd": "# tdd", "skills/productivity/grilling": "# grilling" });
+
+    await fetchSkills(await aKitCheckout(), product, serving(archive).download);
+
+    expect(await readInstallRecord(product)).toEqual([
+      { repository: "mattpocock/skills", sha: LOCKED_SHA, skills: ["tdd", "grilling"] },
+    ]);
+    await expect(readFile(join(product, ".claude/skills/.fabrik-skills-sha"), "utf8")).rejects.toThrow();
+  });
+
+  it("finds no install record in a checkout the fetch never installed into", async () => {
+    expect(await readInstallRecord(await tempDir("product"))).toBeUndefined();
   });
 
   it("skips the download when the skills at that SHA are already installed", async () => {
@@ -39,6 +57,6 @@ describe("Fetching the pinned skills", () => {
     await fetchSkills(await aKitCheckout(bumped), product, download);
 
     expect(urls).toEqual([`https://codeload.github.com/mattpocock/skills/tar.gz/${bumped}`]);
-    expect(await readFile(join(product, ".claude/skills/.fabrik-skills-sha"), "utf8")).toBe(`${bumped}\n`);
+    expect(await readInstallRecord(product)).toEqual([{ repository: "mattpocock/skills", sha: bumped, skills: ["tdd"] }]);
   });
 });

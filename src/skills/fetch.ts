@@ -11,8 +11,27 @@ import { readSkillsLock, SKILLS_LOCK_PATH, skillFolders } from "./lock.ts";
 
 const run = promisify(execFile);
 
-/** Records which commit the installed skills came from, beside them. */
-export const SKILLS_MARKER = ".fabrik-skills-sha";
+/**
+ * The install record, beside the skills: each Skills source installed, its SHA
+ * and the skills installed from it. It's written last, so it only ever
+ * describes a complete install.
+ */
+export const INSTALL_RECORD = ".fabrik-install.json";
+
+/** The single-SHA marker the install record replaced, removed when a fetch finds it. */
+const OLD_SKILLS_MARKER = ".fabrik-skills-sha";
+
+/** One Skills source in the install record. */
+export interface InstalledSource {
+  /** `owner/name` on GitHub. */
+  readonly repository: string;
+  readonly sha: string;
+  /** The skill names installed from this source, as their folders under .claude/skills/. */
+  readonly skills: readonly string[];
+}
+
+/** What a fetch last installed into .claude/skills/, one entry per Skills source. */
+export type InstallRecord = readonly InstalledSource[];
 
 /** What a fetch left in .claude/skills/. */
 export interface InstalledSkills {
@@ -44,11 +63,10 @@ export async function fetchSkills(
   download: Download = downloadFromGitHub,
 ): Promise<InstalledSkills> {
   const lock = readSkillsLock(await readFile(join(kitDir, SKILLS_LOCK_PATH), "utf8"));
-  const dest = resolve(productDir, ".claude", "skills");
-  const marker = join(dest, SKILLS_MARKER);
-  // The marker is written last, so it only names a commit that installed in full.
-  const installedSha = (await readFile(marker, "utf8").catch(() => "")).trim();
-  if (installedSha === lock.sha) return { sha: lock.sha, skills: [], fetched: false };
+  const dest = skillsDir(productDir);
+  const recordPath = join(dest, INSTALL_RECORD);
+  const installed = (await readInstallRecord(productDir))?.find((source) => source.repository === lock.repository);
+  if (installed?.sha === lock.sha) return { sha: lock.sha, skills: [], fetched: false };
 
   const work = await mkdtemp(join(tmpdir(), "fabrik-skills-"));
   try {
@@ -61,18 +79,51 @@ export async function fetchSkills(
 
     const folders = skillFolders(await readFile(join(extracted, ".claude-plugin", "plugin.json"), "utf8"));
     await mkdir(dest, { recursive: true });
-    await rm(marker, { force: true });
+    await rm(recordPath, { force: true });
+    await rm(join(dest, OLD_SKILLS_MARKER), { force: true });
     for (const folder of folders) {
       const target = join(dest, folder.name);
       await rm(target, { recursive: true, force: true });
       // verbatimSymlinks keeps a link as a link rather than following it out of the archive.
       await cp(join(extracted, folder.from), target, { recursive: true, verbatimSymlinks: true });
     }
-    await writeFile(marker, `${lock.sha}\n`);
-    return { sha: lock.sha, skills: folders.map((folder) => folder.name), fetched: true };
+    const skills = folders.map((folder) => folder.name);
+    const record: InstallRecord = [{ repository: lock.repository, sha: lock.sha, skills }];
+    await writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+    return { sha: lock.sha, skills, fetched: true };
   } finally {
     await rm(work, { recursive: true, force: true });
   }
+}
+
+function skillsDir(productDir: string): string {
+  return resolve(productDir, ".claude", "skills");
+}
+
+/**
+ * The install record in a Product checkout, or undefined when there is none or
+ * it can't be read, in which case the next fetch installs afresh.
+ */
+export async function readInstallRecord(productDir: string): Promise<InstallRecord | undefined> {
+  const text = await readFile(join(skillsDir(productDir), INSTALL_RECORD), "utf8").catch(() => null);
+  if (text === null) return undefined;
+  try {
+    const value: unknown = JSON.parse(text);
+    return Array.isArray(value) && value.every(isInstalledSource) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isInstalledSource(value: unknown): value is InstalledSource {
+  if (typeof value !== "object" || value === null) return false;
+  const { repository, sha, skills } = value as Record<string, unknown>;
+  return (
+    typeof repository === "string" &&
+    typeof sha === "string" &&
+    Array.isArray(skills) &&
+    skills.every((skill) => typeof skill === "string")
+  );
 }
 
 if (import.meta.main) {
