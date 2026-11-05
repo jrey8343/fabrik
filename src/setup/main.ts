@@ -2,12 +2,14 @@
 // up, with the Operator's own `gh` and `op` sign-ins:
 //   node src/setup/main.ts <product checkout> <release>          prints the plan
 //   node src/setup/main.ts <product checkout> <release> --apply  carries it out
+// With --time-zone=<IANA zone> it also sets up the fabrik-runs store.
 // It gathers the Product repo's state, asks the planner (plan.ts) what's
 // missing, and applies that. Thin by design: every decision is in the planner.
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
+import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import { loadSetupKit } from "./kit.ts";
 import {
   ADMIN_BYPASS,
@@ -16,11 +18,13 @@ import {
   type MergeGateRuleset,
   type ProductState,
   planSetup,
+  type RunStoreState,
   type SetupAction,
+  type SetupAnswers,
   type SetupPlan,
   setupPaths,
 } from "./plan.ts";
-import { pinCaller } from "./shims.ts";
+import { DEPENDABOT_PATH, pinCaller, STORE_CALLER_PATH } from "./shims.ts";
 
 interface Run {
   readonly stdout: string;
@@ -70,8 +74,44 @@ async function gatherState(productDir: string, paths: readonly string[]): Promis
   const labels = names(await ok("gh", ["label", "list", "--limit", "1000", "--json", "name"], { cwd }));
   const secrets = names(await ok("gh", ["secret", "list", "--json", "name"], { cwd }));
   const vaults = names(await ok("op", ["vault", "list", "--format", "json"], { cwd }));
-  const [protection, mergeGate] = await Promise.all([gatherProtection(cwd, repo), gatherMergeGate(cwd, repo)]);
-  return { repo, files, labels, secrets, vaults, protection, mergeGate };
+  const [protection, mergeGate, store] = await Promise.all([
+    gatherProtection(cwd, repo),
+    gatherMergeGate(cwd, repo),
+    gatherStore(cwd),
+  ]);
+  return { repo, files, labels, secrets, vaults, protection, mergeGate, store };
+}
+
+/** The fabrik-runs store, read through the API: setup has no checkout of it. */
+async function gatherStore(cwd: string): Promise<RunStoreState> {
+  const view = await run("gh", ["repo", "view", RUN_STORE_REPO, "--json", "visibility"], { cwd });
+  if (view.code !== 0) {
+    if (/Could not resolve to a Repository|HTTP 404/.test(view.stderr + view.stdout)) {
+      return { exists: false, private: false, files: {}, secrets: [] };
+    }
+    throw new Error(`Reading ${RUN_STORE_REPO} failed: ${view.stderr.trim()}`);
+  }
+  const { visibility } = JSON.parse(view.stdout) as { visibility: string };
+  const files = Object.fromEntries(
+    await Promise.all(STORE_PATHS.map(async (path) => [path, (await storeFile(cwd, path))?.text ?? null] as const)),
+  );
+  const listed = JSON.parse(await ok("gh", ["secret", "list", "--repo", RUN_STORE_REPO, "--json", "name"], { cwd })) as { name: string }[];
+  return { exists: true, private: visibility === "PRIVATE", files, secrets: listed.map((secret) => secret.name) };
+}
+
+/** Every file planSetup reads from the store. */
+const STORE_PATHS = [STORE_CALLER_PATH, DEPENDABOT_PATH];
+
+/** One file on the store's default branch, with the blob sha an update must name, or null when it lacks it. */
+async function storeFile(cwd: string, path: string): Promise<{ text: string; sha: string } | null> {
+  const result = await run("gh", ["api", `repos/${RUN_STORE_REPO}/contents/${path}`], { cwd });
+  if (result.code !== 0) {
+    // An empty repo answers 404 for every path, as a missing file does.
+    if (/HTTP 404|This repository is empty/.test(result.stderr + result.stdout)) return null;
+    throw new Error(`Reading ${path} in ${RUN_STORE_REPO} failed: ${result.stderr.trim()}`);
+  }
+  const body = JSON.parse(result.stdout) as { content: string; sha: string };
+  return { text: Buffer.from(body.content, "base64").toString("utf8"), sha: body.sha };
 }
 
 interface ProtectionResponse {
@@ -149,7 +189,29 @@ async function apply(action: SetupAction, productDir: string, repo: ProductState
       // straight into the Actions secret and is never printed.
       const grants = action.vaults.flatMap((vault) => ["--vault", `${vault}:read_items`]);
       const token = (await ok("op", ["service-account", "create", action.name, ...grants, "--raw"], { cwd })).trim();
-      await ok("gh", ["secret", "set", action.secret], { cwd, input: token });
+      const where = action.repo === undefined ? [] : ["--repo", action.repo];
+      await ok("gh", ["secret", "set", action.secret, ...where], { cwd, input: token });
+      return;
+    }
+    case "create-run-store":
+      await ok(
+        "gh",
+        ["repo", "create", action.repo, "--private", "--description", "Fabrik's Run records, their transcripts and the Weekly summary (ADR-0009)"],
+        { cwd },
+      );
+      return;
+    case "write-store-file": {
+      // Committed straight to the store's default branch; on an empty repo this first commit creates it.
+      const current = await storeFile(cwd, action.path);
+      const body = {
+        message: `Fabrik setup: ${action.why}`,
+        content: Buffer.from(action.content, "utf8").toString("base64"),
+        ...(current === null ? {} : { sha: current.sha }),
+      };
+      await ok("gh", ["api", "--method", "PUT", `repos/${action.repo}/contents/${action.path}`, "--input", "-"], {
+        cwd,
+        input: JSON.stringify(body),
+      });
       return;
     }
     case "protect-branch": {
@@ -202,11 +264,15 @@ export function describeAction(action: SetupAction): string {
     case "create-vault":
       return `create the 1Password vault "${action.name}"`;
     case "create-service-account":
-      return `create the read-only service account "${action.name}" (reads ${action.vaults.map((v) => `"${v}"`).join(", ")}) and store it as the Actions secret ${action.secret}`;
+      return `create the read-only service account "${action.name}" (reads ${action.vaults.map((v) => `"${v}"`).join(", ")}) and store it as the Actions secret ${action.secret}${action.repo === undefined ? "" : ` on ${action.repo}`}`;
     case "protect-branch":
       return `protect ${action.branch}: a PR and ${action.requiredChecks.length === 0 ? "no required checks yet" : `the checks ${action.requiredChecks.join(", ")}`}, no bypass, no approving review`;
     case "restrict-default-branch":
       return `${action.rulesetId === null ? "create" : "repair"} the "${MERGE_GATE_RULESET}" ruleset: only repo admins (you) may update the default branch, so the Fabrik App can't merge`;
+    case "create-run-store":
+      return `create ${action.repo}, private, to hold Run records, their transcripts and the Weekly summary`;
+    case "write-store-file":
+      return `write ${action.path} in ${action.repo} (${action.why})`;
   }
 }
 
@@ -221,13 +287,13 @@ function report(plan: SetupPlan, applied: boolean): string {
   return lines.join("\n");
 }
 
-async function main(productDir: string, release: string, applying: boolean): Promise<void> {
+async function main(productDir: string, release: string, applying: boolean, answers: SetupAnswers): Promise<void> {
   const kitDir = resolve(import.meta.dirname, "..", "..");
   const kit = await loadSetupKit(kitDir, release);
   const pinned = checkCallerWorkflow(pinCaller(kit.templates.caller, release));
   if (!pinned.ok) throw new Error(`Can't set up Fabrik ${release}: ${pinned.error}`);
   const state = await gatherState(productDir, setupPaths(kit));
-  const plan = planSetup(state, kit);
+  const plan = planSetup(state, kit, answers);
   if (applying) {
     for (const action of plan.actions) {
       await apply(action, productDir, state.repo);
@@ -240,12 +306,13 @@ async function main(productDir: string, release: string, applying: boolean): Pro
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const applying = args.includes("--apply");
-  const [productDir, release] = args.filter((arg) => arg !== "--apply");
+  const timeZone = args.find((arg) => arg.startsWith("--time-zone="))?.slice("--time-zone=".length);
+  const [productDir, release] = args.filter((arg) => !arg.startsWith("--"));
   if (productDir === undefined || release === undefined) {
-    console.error("Usage: node src/setup/main.ts <product checkout> <release> [--apply]");
+    console.error("Usage: node src/setup/main.ts <product checkout> <release> [--time-zone=<IANA zone>] [--apply]");
     process.exit(2);
   }
-  main(resolve(productDir), release, applying).catch((error: unknown) => {
+  main(resolve(productDir), release, applying, timeZone === undefined ? {} : { timeZone }).catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   });

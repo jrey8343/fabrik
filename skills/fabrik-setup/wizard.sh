@@ -216,6 +216,14 @@ for tool in gh op; do
 done
 REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || { warn "Run this from the Product repo's checkout, signed in with gh."; exit 1; }
 
+# The fabrik-runs store (ADR-0009) holds every Product repo's Run records and
+# the Weekly summary. Setup creates it only when the Operator opts in, so its
+# stage shows only once it exists.
+STORE="jrey8343/fabrik-runs"
+HAS_STORE=0
+gh repo view "$STORE" >/dev/null 2>&1 && HAS_STORE=1
+(( HAS_STORE )) && TOTAL_STAGES=$((TOTAL_STAGES + 1))
+
 banner "Fabrik setup for $REPO"
 
 # ── 1. The Fabrik App on this repo ─────────────────────────────────────────
@@ -227,6 +235,18 @@ open_url "https://github.com/apps/${FABRIK_APP_SLUG}/installations/new"
 step "Pick the account that owns $REPO."
 step "Choose 'Only select repositories', add $REPO (keep the repos it already has), then Install or Save."
 pause "Press Enter once $REPO is in the App's repository list."
+
+# ── 1b. The Fabrik App on the fabrik-runs store ───────────────────────────
+if (( HAS_STORE )); then
+  stage "Install the Fabrik App on $STORE"
+  say "Each run's push job writes its Run record to $STORE, and the Weekly summary is filed there."
+  say "Both go through the Fabrik App, which needs Contents and Issues (read and write) on it."
+  say "Those are the permissions the App already has; installing it on $STORE is what turns this on."
+  open_url "https://github.com/apps/${FABRIK_APP_SLUG}/installations/new"
+  step "Pick the account that owns $STORE."
+  step "Choose 'Only select repositories', add $STORE (keep the repos it already has), then Install or Save."
+  pause "Press Enter once $STORE is in the App's repository list."
+fi
 
 # ── 2. The Fabrik App's key in 1Password ──────────────────────────────────
 stage "The Fabrik App's key in 1Password"
