@@ -2,6 +2,7 @@
 // Fabrik release being set up, it returns every step that would leave the repo
 // ready to run the Loop. A working install plans nothing, so re-running the
 // skill only repairs what's missing.
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { checkCallerWorkflow } from "../kit/caller.ts";
@@ -351,6 +352,14 @@ describe("Labels", () => {
     const labels = LOOP_LABELS.filter((l) => l !== "agent:review").map((l) => (l === "bug" ? "Bug" : l));
 
     expect(createdLabels(aCleanProduct({ labels }))).toEqual(["agent:review"]);
+  });
+
+  it("are each named in the README's list of the labels setup creates", () => {
+    const readme = readFileSync(resolve(KIT_DIR, "README.md"), "utf8");
+    const line = readme.split("\n").find((l) => l.startsWith("- **Labels**:")) ?? "";
+    const named = [...line.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+
+    expect(named.sort()).toEqual(createdLabels(aCleanProduct()).sort());
   });
 });
 
