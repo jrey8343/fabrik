@@ -27,6 +27,8 @@ This session runs with the Operator's own GitHub credentials, so you publish the
 
 Do exactly one of these, once nothing that matters is open or the Operator wants to stop. Every comment and issue you write here contains no @-mentions.
 
+When the issue's old body has a `From audit #<n>` line or a `<!-- fabrik:escape … -->` line, carry them forward into the body you write in its place, the rewritten brief or the Spec that supersedes it. After everything else, its `<sub>` line included, add a blank line and then each of those lines exactly as the old body had it, in its order. The next Audit reads `From audit` to skip the issue, and the Weekly summary counts the escape line as an Architectural escape, so both must survive the rewrite.
+
 ### The work fits one pull request: an agent brief
 
 1. Rewrite the issue's body as its agent brief (`gh issue edit <n> --body-file …`), following `.claude/skills/triage/AGENT-BRIEF.md`, in this shape:
@@ -86,7 +88,7 @@ Use this when only the Operator can do the work (a secret, a repo setting, a tru
    - A piece only the Operator can do, that later Tickets must wait for or that belongs to no one pull request, is an **Operator step** instead of a Ticket. It gets the category label and `ready-for-human` (never `ready-for-agent`), is assigned to the Operator (`--assignee <operator>`), and its body ends with its steps as a task list under `## Steps`, one `- [ ]` line per action the Operator takes. A Spec may be made only of Operator steps.
    - Each Ticket and Operator step is a sub-issue of the Spec (`gh issue create --parent <spec>`).
    - Each blocker is a native blocked-by edge (see **Blocking** in `docs/agents/issue-tracker.md`), in either direction between Tickets and Operator steps. Add every edge before step 2: your outcome comment starts Dispatch, which releases any Ticket with no open blocker.
-   - End the Spec's body with `<sub>Written by a live Fabrik Design session on #<n>, which this Spec supersedes.</sub>`.
+   - End the Spec's body with `<sub>Written by a live Fabrik Design session on #<n>, which this Spec supersedes.</sub>`, then any lines it carries forward from this issue's body.
 2. Post the outcome comment last. Its first line is exactly the marker:
 
    ```
