@@ -163,7 +163,7 @@ const ISSUES_OPENED_BY_QUERY = `
     repository(owner: $owner, name: $name) {
       issues(first: 25, after: $after, filterBy: { createdBy: $operator }, orderBy: { field: CREATED_AT, direction: DESC }) {
         ${PAGE_INFO}
-        nodes { number createdAt state body author ${ACTOR} }
+        nodes { number title createdAt state body author ${ACTOR} }
       }
     }
   }
@@ -261,6 +261,7 @@ interface RawIssue {
 
 interface RawOpenedIssue {
   number: number;
+  title: string;
   createdAt: string;
   state: "OPEN" | "CLOSED";
   body: string;
@@ -316,6 +317,7 @@ async function gatherEscapeMarkerIssues(
     .filter((issue) => Date.parse(issue.createdAt) >= sinceMs && escapeMarkerIn(issue.body) !== null)
     .map((issue) => ({
       number: issue.number,
+      title: issue.title,
       author: loginOf(issue.author),
       createdAt: issue.createdAt,
       state: issue.state === "CLOSED" ? "closed" : "open",

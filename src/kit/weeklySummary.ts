@@ -131,6 +131,7 @@ export interface OpenPullRequestFacts {
  */
 export interface EscapeMarkerIssueFacts {
   readonly number: number;
+  readonly title: string;
   /** Who opened it: only the Operator's issues count. */
   readonly author: string;
   /** ISO 8601. */
@@ -340,6 +341,9 @@ export interface EscapeThisWeek {
   /** The escape's issue. */
   readonly number: number;
   readonly url: string;
+  /** The issue's title and body as they stand: the candidate the Operator filed, or what a Design session rewrote it into. */
+  readonly title: string;
+  readonly body: string;
   /** Its marker's Strength, or null when it isn't one the Auditor gives. */
   readonly strength: Strength | null;
   /** The agent PRs merged in the 90 days to the week's end that its marker names. */
@@ -604,6 +608,8 @@ function escapesThisWeekOf(week: Week, { facts, records, operator }: WeeklySumma
         repo,
         number: issue.number,
         url: `https://github.com/${repo}/issues/${issue.number}`,
+        title: issue.title,
+        body: issue.body,
         strength,
         pullRequests: pullRequests.map((pullRequest) => {
           const passed = onRepo.findLast((record) => record.role === "review" && record.pullRequest === pullRequest.number && record.verdict === "pass");

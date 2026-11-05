@@ -104,7 +104,10 @@ function repoWith(raw: RawRepo) {
       }
       if (query.includes("filterBy: { createdBy: $operator }")) {
         expect(variables["operator"]).toBe("jrey8343");
-        return answer({ repository: { issues: page(raw.operatorIssues) } });
+        // GitHub answers only the fields the query selects.
+        const selectsTitle = /nodes \{[^}]*\btitle\b/.test(query);
+        const issues = (raw.operatorIssues ?? []) as Record<string, unknown>[];
+        return answer({ repository: { issues: page(issues.map(({ title, ...issue }) => (selectsTitle ? { title, ...issue } : issue))) } });
       }
       if (query.includes("filterBy: { since: $since }")) return answer({ repository: { issues: page(raw.updatedIssues) } });
       if (query.includes("issues(states: OPEN")) return answer({ repository: { issues: page(raw.openIssues) } });
@@ -366,7 +369,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
     });
   });
 
-  it("holds the issues the Operator opened in the 97 days whose body has an escape marker, with their state and body", async () => {
+  it("holds the issues the Operator opened in the 97 days whose body has an escape marker, with their title, state and body", async () => {
     const marked = "Split the parser.\n\nFrom audit #70\n<!-- fabrik:escape strong #50 -->";
     const github = repoWith({
       operatorIssues: [
@@ -380,8 +383,8 @@ describe("Gathering a Product repo's GitHub facts", () => {
     const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
 
     expect(facts.escapeMarkerIssues).toEqual([
-      { number: 80, author: "jrey8343", createdAt: "2026-11-03T00:00:00Z", state: "open", body: marked },
-      { number: 75, author: "jrey8343", createdAt: "2026-08-04T00:00:00Z", state: "closed", body: "<!-- fabrik:escape speculative #40 -->" },
+      { number: 80, title: "Issue 80", author: "jrey8343", createdAt: "2026-11-03T00:00:00Z", state: "open", body: marked },
+      { number: 75, title: "Issue 75", author: "jrey8343", createdAt: "2026-08-04T00:00:00Z", state: "closed", body: "<!-- fabrik:escape speculative #40 -->" },
     ]);
   });
 
@@ -414,9 +417,9 @@ describe("Gathering a Product repo's GitHub facts", () => {
   });
 });
 
-/** Issue `number`, which the Operator opened at `createdAt` with `body`, still open. */
+/** Issue `number`, titled "Issue <number>", which the Operator opened at `createdAt` with `body`, still open. */
 function aRawOperatorIssue(number: number, createdAt: string, body: string, overrides: Record<string, unknown> = {}) {
-  return { number, createdAt, state: "OPEN", body, author: OPERATOR, ...overrides };
+  return { number, title: `Issue ${number}`, createdAt, state: "OPEN", body, author: OPERATOR, ...overrides };
 }
 
 /** Open needs-design issue `number`, opened on 2026-10-01, which got needs-design on 2026-11-01. */
