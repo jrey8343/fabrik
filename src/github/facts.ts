@@ -18,6 +18,7 @@ import type {
   TicketFacts,
 } from "../kit/weeklySummary.ts";
 import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest.ts";
+import { AUDIT_LABEL } from "../loop/labels.ts";
 import { escapeMarkerIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import type { GitHub, Repo } from "./client.ts";
@@ -37,9 +38,6 @@ const WINDOW_MS = 37 * DAY_MS;
  * Revert rate reads its own 30 days of them.
  */
 const ESCAPE_WINDOW_MS = 97 * DAY_MS;
-
-/** The label on an Audit, the issue an Auditor files (#150). */
-const AUDIT_LABEL = "fabrik:audit";
 
 /** The GitHub facts the Weekly summary reads of one Product repo, as of `now`, with the Operator's login. */
 export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
