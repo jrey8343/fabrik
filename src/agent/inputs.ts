@@ -15,12 +15,12 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { GitHub, pagesOf, type Repo } from "../github/client.ts";
+import { gatherAuditSlice } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { type Audit, auditsIn, lastAudit } from "../loop/audit.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
-import { AUDIT_LABEL } from "../loop/labels.ts";
 import { fromAuditIn } from "../loop/markers.ts";
 import type { AuditIssueSnapshot, AuditWindow } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
@@ -396,29 +396,6 @@ export interface AuditInputs {
 /** How many closed Audits the Auditor weighs the Operator's rejections from. */
 const CLOSED_AUDITS = 3;
 
-const AUDITS_QUERY = `
-  query ($owner: String!, $name: String!, $label: String!) {
-    repository(owner: $owner, name: $name) {
-      issues(labels: [$label], states: [OPEN, CLOSED], first: 50, orderBy: { field: CREATED_AT, direction: DESC }) {
-        nodes {
-          number title state stateReason createdAt body
-          author { __typename }
-        }
-      }
-    }
-  }
-`;
-
-interface AuditNode {
-  number: number;
-  title: string;
-  state: "OPEN" | "CLOSED";
-  stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
-  createdAt: string;
-  body: string;
-  author: { __typename: string } | null;
-}
-
 const MERGED_PULL_REQUESTS_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
     repository(owner: $owner, name: $name) {
@@ -478,21 +455,7 @@ async function isAncestor(github: Reader, repo: Repo, from: string, to: string):
  * instructions to it.
  */
 export async function readAuditInputs(github: Reader, repo: Repo, audit: PendingAudit, operator: string): Promise<AuditInputs> {
-  const nodes = (
-    await github.graphql<{ repository: { issues: { nodes: AuditNode[] } } }>(AUDITS_QUERY, {
-      owner: repo.owner,
-      name: repo.name,
-      label: AUDIT_LABEL,
-    })
-  ).repository.issues.nodes;
-  const issues: AuditIssueSnapshot[] = nodes.map((node) => ({
-    number: node.number,
-    open: node.state === "OPEN",
-    stateReason: node.stateReason === null ? null : (node.stateReason.toLowerCase() as AuditIssueSnapshot["stateReason"]),
-    createdAt: node.createdAt,
-    byApp: node.author?.__typename === "Bot",
-    body: node.body,
-  }));
+  const { issues } = await gatherAuditSlice(github, repo);
   const audits = auditsIn(issues);
   const pendingAudit = audits.find((each) => each.number === audit.number);
   if (pendingAudit === undefined) throw new Error(`Audit #${audit.number} isn't an Audit the Fabrik App opened`);
@@ -547,7 +510,7 @@ export async function readAuditInputs(github: Reader, repo: Repo, audit: Pending
         const issue = issues.find((each) => each.number === number);
         return {
           number,
-          title: nodes.find((node) => node.number === number)?.title ?? "",
+          title: issue?.title ?? "",
           commit,
           closedAs: issue?.stateReason ?? null,
           body: issue?.body ?? "",

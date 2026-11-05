@@ -439,6 +439,8 @@ export interface AuditSnapshot {
 /** A `fabrik:audit` issue, open or closed, as the adapter read it (src/loop/audit.ts). */
 export interface AuditIssueSnapshot {
   readonly number: number;
+  /** Its title, which an Auditor run's inputs name each closed Audit by (src/agent/inputs.ts). */
+  readonly title: string;
   readonly open: boolean;
   /** Why it was last closed, or reopened, as GitHub records it; null when it never was. */
   readonly stateReason: "completed" | "not_planned" | "duplicate" | "reopened" | null;

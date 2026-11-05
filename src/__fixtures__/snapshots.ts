@@ -171,6 +171,7 @@ export function auditBody(sha: string, state: "pending" | "filled" | "failed" = 
 export function anAuditIssue(overrides: Partial<AuditIssueSnapshot> = {}): AuditIssueSnapshot {
   return {
     number: 90,
+    title: "Audit: week of 2026-10-26",
     open: false,
     stateReason: "completed",
     createdAt: "2026-11-01T00:05:00Z",

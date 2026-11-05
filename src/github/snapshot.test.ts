@@ -630,12 +630,12 @@ describe("Gathering a scheduled tick's audit slice", () => {
 
   const tick = { kind: "scheduled-tick", now: "2026-11-08T04:00:00.000Z" } as const;
 
-  it("holds the default branch's head and each Audit issue, open or closed, telling the Fabrik App's from anyone else's", async () => {
+  it("holds the default branch's head and each Audit issue, open or closed, with its title, telling the Fabrik App's from anyone else's", async () => {
     const github = githubWith({ target: { oid: HEAD } }, [
-      { number: 97, state: "OPEN", stateReason: null, createdAt: "2026-11-08T00:05:00Z", body: "Quoting <!-- fabrik:audit-pending -->", author: { __typename: "User" } },
-      { number: 95, state: "CLOSED", stateReason: "NOT_PLANNED", createdAt: "2026-11-08T00:04:00Z", body: "failed", author: { __typename: "Bot" } },
-      { number: 90, state: "CLOSED", stateReason: "COMPLETED", createdAt: "2026-11-01T00:05:00Z", body: "filled", author: { __typename: "Bot" } },
-      { number: 85, state: "OPEN", stateReason: "REOPENED", createdAt: "2026-10-25T00:05:00Z", body: "", author: null },
+      { number: 97, title: "My audit", state: "OPEN", stateReason: null, createdAt: "2026-11-08T00:05:00Z", body: "Quoting <!-- fabrik:audit-pending -->", author: { __typename: "User" } },
+      { number: 95, title: "Audit: week of 2026-11-02", state: "CLOSED", stateReason: "NOT_PLANNED", createdAt: "2026-11-08T00:04:00Z", body: "failed", author: { __typename: "Bot" } },
+      { number: 90, title: "Audit: week of 2026-10-26", state: "CLOSED", stateReason: "COMPLETED", createdAt: "2026-11-01T00:05:00Z", body: "filled", author: { __typename: "Bot" } },
+      { number: 85, title: "Audit: week of 2026-10-19", state: "OPEN", stateReason: "REOPENED", createdAt: "2026-10-25T00:05:00Z", body: "", author: null },
     ]);
 
     const snapshot = await gatherSnapshot(github, repo, tick, null);
@@ -643,10 +643,10 @@ describe("Gathering a scheduled tick's audit slice", () => {
     expect(snapshot.audit).toEqual({
       head: HEAD,
       issues: [
-        { number: 97, open: true, stateReason: null, createdAt: "2026-11-08T00:05:00Z", byApp: false, body: "Quoting <!-- fabrik:audit-pending -->" },
-        { number: 95, open: false, stateReason: "not_planned", createdAt: "2026-11-08T00:04:00Z", byApp: true, body: "failed" },
-        { number: 90, open: false, stateReason: "completed", createdAt: "2026-11-01T00:05:00Z", byApp: true, body: "filled" },
-        { number: 85, open: true, stateReason: "reopened", createdAt: "2026-10-25T00:05:00Z", byApp: false, body: "" },
+        { number: 97, title: "My audit", open: true, stateReason: null, createdAt: "2026-11-08T00:05:00Z", byApp: false, body: "Quoting <!-- fabrik:audit-pending -->" },
+        { number: 95, title: "Audit: week of 2026-11-02", open: false, stateReason: "not_planned", createdAt: "2026-11-08T00:04:00Z", byApp: true, body: "failed" },
+        { number: 90, title: "Audit: week of 2026-10-26", open: false, stateReason: "completed", createdAt: "2026-11-01T00:05:00Z", byApp: true, body: "filled" },
+        { number: 85, title: "Audit: week of 2026-10-19", open: true, stateReason: "reopened", createdAt: "2026-10-25T00:05:00Z", byApp: false, body: "" },
       ],
     });
   });

@@ -268,13 +268,14 @@ export async function gatherSnapshot(
 }
 
 // The newest Audit issues, open and closed: enough to hold this week's, any
-// open one and the last Audit, since a week opens at most three.
+// open one, the last Audit and the last closed Audits the Auditor reads, since
+// a week opens at most three.
 const AUDIT_QUERY = `
   query ($owner: String!, $name: String!, $label: String!) {
     repository(owner: $owner, name: $name) {
       defaultBranchRef { target { oid } }
       issues(labels: [$label], states: [OPEN, CLOSED], first: 50, orderBy: { field: CREATED_AT, direction: DESC }) {
-        nodes { number state stateReason createdAt body author { __typename } }
+        nodes { number title state stateReason createdAt body author { __typename } }
       }
     }
   }
@@ -286,6 +287,7 @@ interface AuditQueryResult {
     issues: {
       nodes: {
         number: number;
+        title: string;
         state: "OPEN" | "CLOSED";
         stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
         createdAt: string;
@@ -297,8 +299,10 @@ interface AuditQueryResult {
 }
 
 /**
- * What the audit gate weighs: the default branch's head, and the newest
- * `fabrik:audit` issues with whether the Fabrik App (a bot) opened each.
+ * The default branch's head, and the newest `fabrik:audit` issues with
+ * whether the Fabrik App (a bot) opened each: what the audit gate weighs on a
+ * scheduled tick, and what an Auditor run's inputs read the Audits from
+ * (src/agent/inputs.ts), so the two read the same Audits.
  */
 export async function gatherAuditSlice(github: Pick<GitHub, "graphql">, repo: Repo): Promise<AuditSnapshot> {
   const data = await github.graphql<AuditQueryResult>(AUDIT_QUERY, { owner: repo.owner, name: repo.name, label: AUDIT_LABEL });
@@ -306,6 +310,7 @@ export async function gatherAuditSlice(github: Pick<GitHub, "graphql">, repo: Re
     head: data.repository.defaultBranchRef?.target.oid ?? null,
     issues: data.repository.issues.nodes.map((issue) => ({
       number: issue.number,
+      title: issue.title,
       open: issue.state === "OPEN",
       stateReason: issue.stateReason === null ? null : (issue.stateReason.toLowerCase() as AuditIssueSnapshot["stateReason"]),
       createdAt: issue.createdAt,
