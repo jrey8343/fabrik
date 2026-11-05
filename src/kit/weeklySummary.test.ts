@@ -367,6 +367,41 @@ describe("the Weekly summary", () => {
       expect(body).toContain("Subscription usage: 62% of the weekly limit, resetting 2026-11-13 10:00 (Australia/Sydney).");
     });
 
+    it("shows each cost figure this week and last week, with the change, and a dash where there's nothing to average", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 7, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2 }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: null, retry: 1 }),
+            aRunRecord({ issue: 8, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 1.5 }),
+            aRunRecord({ issue: 9, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 0.25 }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-26T00:00:00Z", totalCostUsd: null }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 1 }),
+          ],
+          facts: [
+            factsOf({
+              // Ticket 7 merged this week; Ticket 8 merged last week.
+              pullRequests: [
+                aMergedPullRequest("2026-11-05T00:00:00Z", { number: 50, ticket: 7 }),
+                aMergedPullRequest("2026-10-29T00:00:00Z", { number: 51, ticket: 8 }),
+              ],
+              // Ticket 9 closed this week, unmerged.
+              tickets: [aTicketTimeline([], { number: 9, closedAt: "2026-11-05T00:00:00Z" })],
+              // Spec 3 left design last week.
+              specs: [aSpec([aLabelAdded("ready-for-agent", "2026-10-28T00:00:00Z")], { number: 3 })],
+            }),
+          ],
+        }),
+      );
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      expect(result.body).toContain("| Cost per merged PR | $2.00 | $1.50 | +$0.50 |");
+      expect(result.body).toContain("| Cost per Spec | – | $1.00 | – |");
+      expect(result.body).toContain("| Spend that never merged | $0.25 | $0.00 | +$0.25 |");
+      expect(result.body).toContain("1 run with an unknown cost basis is left out of cost per merged PR.");
+      expect(result.body).not.toContain("left out of cost per Spec");
+      expect(result.body).not.toContain("left out of spend that never merged");
+    });
+
     it("ends with exactly one mention of the Operator", () => {
       const { body } = rendered();
       expect(body.match(/@operator\b/g)).toHaveLength(1);

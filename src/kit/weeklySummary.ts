@@ -361,16 +361,31 @@ function localTime(time: number, timeZone: string): string {
 // their Specs ship.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
-  const { cost, unknownCost, weeklyLimit, counts } = summary;
+  const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, counts } = summary;
   const row = (name: string, { thisWeek, lastWeek }: WeekOverWeek<number>, format: (value: number) => string) =>
     `| ${name} | ${format(thisWeek)} | ${format(lastWeek)} | ${signed(thisWeek - lastWeek, format)} |`;
   const count = (value: number) => String(value);
+  const costRow = (name: string, figure: WeekOverWeek<CostFigure>) => {
+    const thisWeek = figure.thisWeek.usd;
+    const lastWeek = figure.lastWeek.usd;
+    const shown = (value: number | null) => (value === null ? NONE : dollars(value));
+    const change = thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, dollars);
+    return `| ${name} | ${shown(thisWeek)} | ${shown(lastWeek)} | ${change} |`;
+  };
+  const costFigures: [string, WeekOverWeek<CostFigure>][] = [
+    ["cost per merged PR", costPerMergedPullRequest],
+    ["cost per Spec", costPerSpec],
+    ["spend that never merged", spendNeverMerged],
+  ];
   const lines = [
     "## Metrics",
     "",
     "| | This week | Last week | Change |",
     "| --- | ---: | ---: | ---: |",
     row("API-equivalent cost", cost, dollars),
+    costRow("Cost per merged PR", costPerMergedPullRequest),
+    costRow("Cost per Spec", costPerSpec),
+    costRow("Spend that never merged", spendNeverMerged),
     row("Merged agent PRs", counts.mergedPullRequests, count),
     row("Tickets dispatched", counts.ticketsDispatched, count),
     row("Retries", counts.retries, count),
@@ -379,11 +394,13 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
   ];
   if (unknownCost.thisWeek > 0) {
     lines.push(
-      unknownCost.thisWeek === 1
-        ? "1 run with an unknown cost basis is left out of the cost."
-        : `${unknownCost.thisWeek} runs with an unknown cost basis are left out of the cost.`,
+`${runsWithUnknownCost(unknownCost.thisWeek)} left out of the cost.`,
       "",
     );
+  }
+  for (const [name, figure] of costFigures) {
+    const leftOut = figure.thisWeek.unknownCost;
+    if (leftOut > 0) lines.push(`${runsWithUnknownCost(leftOut)} left out of ${name}.`, "");
   }
   // The Operator's one mention, last: the week's only scheduled push.
   lines.push(subscriptionUsage(weeklyLimit, timeZone), "", `@${operator}`);
@@ -400,6 +417,14 @@ function subscriptionUsage({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading
   const usage =
     now === null ? "Subscription usage: no weekly-limit reading this week." : `Subscription usage: ${now} of the weekly limit${resets}.`;
   return before === null ? usage : `${usage} Last week: ${before}.`;
+}
+
+/** What the table shows for a figure with nothing to average over. */
+const NONE = "–";
+
+/** `1 run with an unknown cost basis is`, or `2 runs … are`. */
+function runsWithUnknownCost(count: number): string {
+  return count === 1 ? "1 run with an unknown cost basis is" : `${count} runs with an unknown cost basis are`;
 }
 
 function dollars(value: number): string {
