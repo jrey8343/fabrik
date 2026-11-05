@@ -13,11 +13,13 @@ const DEFAULTS = {
     design: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
     implement: { model: "claude-sonnet-5-5", effort: null, timeoutMinutes: 60 },
     review: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
+    audit: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 45 },
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: "claude-opus-5-5", effort: null },
   },
   maxInFlight: 2,
   caps: { designSessions: 2 },
+  audit: { day: "sunday" },
   operator: null,
   instructions: { triage: null, design: null, implement: null, review: null },
   skillsSources: [],
@@ -302,6 +304,88 @@ describe("Kit config", () => {
       });
     },
   );
+});
+
+describe("The Audit's Kit config", () => {
+  it("gives a repo that sets nothing a Sunday Audit on the Reviewer's model with a 45-minute timeout", () => {
+    const result = resolveKitConfig({ config: `{ "max_in_flight": 1 }` });
+
+    expect(result.ok && result.config.audit).toEqual({ day: "sunday" });
+    expect(result.ok && result.config.roles.audit).toEqual({
+      model: "claude-opus-5-5",
+      effort: null,
+      timeoutMinutes: 45,
+    });
+  });
+
+  it.each(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", null])(
+    "reads audit.day %j as written",
+    (day) => {
+      const result = resolveKitConfig({ config: JSON.stringify({ audit: { day } }) });
+
+      expect(result).toEqual({ ok: true, config: { ...DEFAULTS, audit: { day } } });
+    },
+  );
+
+  it.each(["Sunday", "sun", "everyday", ""])("refuses %j as audit.day, naming the field and the days it takes", (day) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ audit: { day } }) });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        `audit.day is ${JSON.stringify(day)}: the Audit day must be one of monday, tuesday, wednesday, thursday, friday, saturday, sunday, or null to turn the Audit off`,
+      ],
+    });
+  });
+
+  it.each([
+    [`{ "audit": { "day": 0 } }`, "audit.day must be a string"],
+    [`{ "audit": { "day": false } }`, "audit.day must be a string"],
+    [`{ "audit": "sunday" }`, "audit must be an object"],
+    [`{ "audit": null }`, "audit must be an object"],
+  ])("fails a mistyped audit field, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [`{ "audit": { "days": "monday" } }`, "audit.days is not a Kit config field"],
+    [`{ "audit": { "day": "monday", "candidates": 5 } }`, "audit.candidates is not a Kit config field"],
+    [`{ "audit": { "focus": "src/billing" } }`, "audit.focus is not a Kit config field"],
+  ])("fails an unknown field under audit, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("honours overrides of the Auditor's model, effort and timeout", () => {
+    const result = resolveKitConfig({
+      config: `{ "roles": { "audit": { "model": "claude-sonnet-5-5", "effort": "high", "timeout_minutes": 20 } } }`,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        roles: { ...DEFAULTS.roles, audit: { model: "claude-sonnet-5-5", effort: "high", timeoutMinutes: 20 } },
+      },
+    });
+  });
+
+  it.each([
+    [`{ "roles": { "audit": { "model": "fable" } } }`, `roles.audit.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role`],
+    [`{ "roles": { "audit": { "effort": "extreme" } } }`, `roles.audit.effort is "extreme": effort must be one of low, medium, high, xhigh, max`],
+    [`{ "roles": { "audit": { "timeout_minutes": 0 } } }`, "roles.audit.timeout_minutes must be a whole number of at least 1"],
+    [`{ "roles": { "audit": { "focus": "src/billing" } } }`, "roles.audit.focus is not a Kit config field"],
+  ])("fails a bad roles.audit field, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("refuses roles.audit.skills, naming the field, because only triage, design, implement and review take Extra skills", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ roles: { audit: { skills: ["jrey8343/skills/event-storming"] } } }),
+      skillsLock: null,
+    });
+
+    expect(result).toEqual({ ok: false, errors: ["roles.audit.skills is not a Kit config field"] });
+  });
 });
 
 describe("The Kit config template", () => {

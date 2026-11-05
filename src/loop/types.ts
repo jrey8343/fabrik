@@ -222,6 +222,8 @@ export interface IssueSnapshot {
   readonly number: number;
   readonly open: boolean;
   readonly author: string;
+  /** Its Markdown body as it stands, whose marker lines a Design session's rewrite carries forward (src/loop/carriedLines.ts). */
+  readonly body: string;
   readonly labels: readonly string[];
   /** The parent issue's number, or null if it isn't a sub-issue. */
   readonly parent: number | null;
