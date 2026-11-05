@@ -8,7 +8,7 @@
 // Upstream text (commit messages, the diff) only ever goes into the body
 // inside code fences, so it can't mention people or link issues here.
 import { SKILLS_SOURCES_LOCK_PATH, type SkillsSource } from "../kit/config.ts";
-import { type SkillsLock, skillFolders } from "./lock.ts";
+import { foldersIn, PLUGIN_MANIFEST_PATH, type SkillsLock, shortSha, skillFolders } from "./lock.ts";
 
 /** What the GitHub compare API says about upstream (main, or a source's default branch) against the pin. */
 export interface UpstreamSkills {
@@ -21,9 +21,10 @@ export interface UpstreamSkills {
   readonly commits: readonly { readonly sha: string; readonly message: string }[];
   /** The unified diff from the pin to head. */
   readonly diff: string;
-  /** `.claude-plugin/plugin.json` at the pin and at head. */
+  /** `.claude-plugin/plugin.json` at the pin. */
   readonly manifestAtPin: string;
-  readonly manifestAtHead: string;
+  /** `.claude-plugin/plugin.json` at head; null when head has none. */
+  readonly manifestAtHead: string | null;
 }
 
 export type SkillsBump =
@@ -49,6 +50,7 @@ export function planSkillsBump(lock: SkillsLock, upstream: UpstreamSkills): Skil
   if (!hasMoved(lock, upstream)) return { kind: "up-to-date" };
 
   const before = new Set(skillFolders(upstream.manifestAtPin).map((folder) => folder.name));
+  if (upstream.manifestAtHead === null) throw new Error(`Upstream main at ${upstream.head} has no ${PLUGIN_MANIFEST_PATH}`);
   const after = new Set(skillFolders(upstream.manifestAtHead).map((folder) => folder.name));
   const added = [...after].filter((name) => !before.has(name));
   const removed = [...before].filter((name) => !after.has(name));
@@ -60,11 +62,11 @@ export function planSkillsBump(lock: SkillsLock, upstream: UpstreamSkills): Skil
   return {
     kind: "pull-request",
     branch: SKILLS_BUMP_BRANCH,
-    title: `Bump Matt Pocock's skills to ${short(upstream.head)}`,
+    title: `Bump Matt Pocock's skills to ${shortSha(upstream.head)}`,
     body: pullRequestBody({
       pin: lock,
       upstream,
-      intro: `Bumps Matt Pocock's skills (\`${lock.repository}\`) from \`${short(lock.sha)}\` to \`${short(upstream.head)}\` in \`skills.lock.json\`.`,
+      intro: `Bumps Matt Pocock's skills (\`${lock.repository}\`) from \`${shortSha(lock.sha)}\` to \`${shortSha(upstream.head)}\` in \`skills.lock.json\`.`,
       upstreamName: "Upstream main",
       notes,
       diffHeading: "### Upstream diff",
@@ -95,7 +97,8 @@ export function planSourceBump(
 ): SkillsBump {
   if (!hasMoved(source, upstream)) return { kind: "up-to-date" };
 
-  const atHead = new Set(skillFolders(upstream.manifestAtHead).map((folder) => folder.name));
+  // A head manifest that's gone or unreadable lists no skills, so every pick is flagged as breaking.
+  const atHead = new Set((foldersIn(upstream.manifestAtHead) ?? []).map((folder) => folder.name));
   const removed = picked.filter((name) => !atHead.has(name));
   const folders = pickedFolders(picked, upstream);
   const files = splitDiff(upstream.diff);
@@ -110,25 +113,25 @@ export function planSourceBump(
   if (removed.length > 0) {
     notes.push(
       "> [!CAUTION]",
-      `> Breaking: the source's plugin manifest at \`${short(upstream.head)}\` no longer lists ${removed.map((name) => `\`${name}\``).join(", ")}, which this repo picks. Drop the pick before merging, or every run that has it will fail.`,
+      `> Breaking: the source's plugin manifest at \`${shortSha(upstream.head)}\` no longer lists ${removed.map((name) => `\`${name}\``).join(", ")}, which this repo picks. Drop the pick before merging, or every run that has it will fail.`,
       "",
     );
   }
   notes.push(`Picked skills from this source: ${picked.map((name) => `\`${name}\``).join(", ")}.`);
   const others = [...new Set(files.filter((file) => !touchesPicked(file)).flatMap((file) => file.paths))];
   if (others.length > 0) {
-    notes.push("", "Other upstream changes, outside the picked skills:", "", fenced("text", others.join(" ")));
+    notes.push("", "Other upstream changes, outside the picked skills:", "", ...pathList(others));
   }
 
   const diff = unscoped ? upstream.diff : inPicked.map((file) => file.text).join("");
   return {
     kind: "pull-request",
     branch: sourceBumpBranch(source.repository),
-    title: `Bump the ${source.repository} Skills source to ${short(upstream.head)}`,
+    title: `Bump the ${source.repository} Skills source to ${shortSha(upstream.head)}`,
     body: pullRequestBody({
       pin: source,
       upstream,
-      intro: `Bumps the \`${source.repository}\` Skills source from \`${short(source.sha)}\` to \`${short(upstream.head)}\` in \`${SKILLS_SOURCES_LOCK_PATH}\`.`,
+      intro: `Bumps the \`${source.repository}\` Skills source from \`${shortSha(source.sha)}\` to \`${shortSha(upstream.head)}\` in \`${SKILLS_SOURCES_LOCK_PATH}\`.`,
       upstreamName: "The source's default branch",
       notes,
       diffHeading: unscoped ? "### Upstream diff" : "### Diff of the picked skills",
@@ -146,11 +149,26 @@ export function isSkillsBumpTick(tickAt: Date): boolean {
   return tickAt.getUTCDay() === 1 && tickAt.getUTCHours() === 4;
 }
 
+/**
+ * The scheduled tick a run belongs to: the latest time at or before
+ * `observedAt` on the minute an hourly `schedule` (such as "17 * * * *")
+ * names. GitHub often starts a scheduled run late, so this, not the time the
+ * run got going, is what the weekly gate should check; a run up to an hour
+ * late still counts as its own tick. A schedule it can't read as an hourly
+ * cron leaves `observedAt` as it is.
+ */
+export function scheduledTickOf(observedAt: Date, schedule: string | undefined): Date {
+  const minute = /^\s*(\d{1,2})\s+\*\s+\*\s+\*\s+\*\s*$/.exec(schedule ?? "")?.[1];
+  if (minute === undefined || Number(minute) > 59) return observedAt;
+  const tick = new Date(observedAt);
+  tick.setUTCMinutes(Number(minute), 0, 0);
+  if (tick > observedAt) tick.setUTCHours(tick.getUTCHours() - 1);
+  return tick;
+}
+
 function hasMoved(pin: { readonly sha: string }, upstream: UpstreamSkills): boolean {
   return !(upstream.head === pin.sha || upstream.status === "identical" || upstream.status === "behind");
 }
-
-const short = (sha: string) => sha.slice(0, 7);
 
 interface BodyParts {
   readonly pin: { readonly repository: string; readonly sha: string };
@@ -167,7 +185,7 @@ interface BodyParts {
 /** The PR body both bumps share: the compare link, any warning, the commits, then the diff cut to fit. */
 function pullRequestBody({ pin, upstream, intro, upstreamName, notes, diffHeading, diff }: BodyParts): string {
   const compareUrl = `https://github.com/${pin.repository}/compare/${pin.sha}...${upstream.head}`;
-  const commitLines = upstream.commits.map((commit) => `${short(commit.sha)} ${commit.message.split("\n")[0]}`);
+  const commitLines = upstream.commits.map((commit) => `${shortSha(commit.sha)} ${commit.message.split("\n")[0]}`);
   const missing = upstream.aheadBy - upstream.commits.length;
 
   const head: string[] = [intro, "", `Compare on GitHub: ${compareUrl}`];
@@ -191,6 +209,24 @@ function pullRequestBody({ pin, upstream, intro, upstreamName, notes, diffHeadin
   return body;
 }
 
+/** Room in the PR body for the other changed paths, so a large upstream refactor still leaves room for the diff. */
+const OTHER_PATHS_BUDGET = 8_192;
+
+/** The paths on one fenced line, cut to the budget with a count of the rest. */
+function pathList(paths: readonly string[]): readonly string[] {
+  let shown = 0;
+  let length = 0;
+  for (const path of paths) {
+    if (length + path.length + 1 > OTHER_PATHS_BUDGET) break;
+    length += path.length + 1;
+    shown++;
+  }
+  const list = [fenced("text", paths.slice(0, shown).join(" "))];
+  const rest = paths.length - shown;
+  if (rest > 0) list.push("", `…and ${rest} more paths; see the compare link.`);
+  return list;
+}
+
 /** The lockfile with only this source's SHA changed, keeping the rest of the text as the Operator wrote it. */
 function bumpedLockText(lockText: string, source: SkillsSource, head: string): string {
   const entries = JSON.parse(lockText) as { repository: string; sha: string }[];
@@ -206,7 +242,7 @@ function bumpedLockText(lockText: string, source: SkillsSource, head: string): s
 /** The folders of the picked skills at the pin and at head, so a folder that moved still counts. */
 function pickedFolders(picked: readonly string[], upstream: UpstreamSkills): readonly string[] {
   const wanted = new Set(picked);
-  return [...skillFolders(upstream.manifestAtPin), ...skillFolders(upstream.manifestAtHead)]
+  return [...skillFolders(upstream.manifestAtPin), ...(foldersIn(upstream.manifestAtHead) ?? [])]
     .filter((folder) => wanted.has(folder.name))
     .map((folder) => folder.from);
 }

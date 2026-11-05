@@ -29,12 +29,9 @@ import { gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
-import { kitSkillNames } from "../skills/fetch.ts";
-import { readSkillsLock, SKILLS_LOCK_PATH } from "../skills/lock.ts";
-import { checkPicksAtPins } from "../skills/pinnedManifests.ts";
+import { kitConfigErrors } from "../skills/pinnedManifests.ts";
 import { callerWorkflowPath, checkKit } from "./caller.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
-import type { KitConfig } from "./config.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -51,14 +48,6 @@ function routeOf(plan: Plan): string {
 /** This Kit checkout, which holds the Base skills' lock and the Kit's own skills. */
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 
-async function checkPicksAtPinsFor(config: KitConfig): Promise<readonly string[]> {
-  if (config.skillsSources.length === 0) return [];
-  return checkPicksAtPins(config, {
-    baseLock: readSkillsLock(await readFile(join(KIT_DIR, SKILLS_LOCK_PATH), "utf8")),
-    kitSkills: await kitSkillNames(KIT_DIR),
-  });
-}
-
 async function main(productDir: string): Promise<void> {
   const [owner, name] = required("GITHUB_REPOSITORY").split("/");
   const repo: Repo = { owner: owner ?? "", name: name ?? "" };
@@ -71,7 +60,7 @@ async function main(productDir: string): Promise<void> {
   const check = checkKit(resolved, { path: callerPath, text: callerText });
   // The Extra skill picks against each pinned source's manifest, before routing
   // any agent run; it reads nothing when the Product pins no Skills source.
-  const errors = check.ok ? await checkPicksAtPinsFor(check.config) : check.errors;
+  const errors = await kitConfigErrors(check, { kitDir: KIT_DIR });
   if (!check.ok || errors.length > 0) {
     for (const error of errors) console.log(`::error title=Invalid Kit config::${error}`);
     process.exitCode = 1;

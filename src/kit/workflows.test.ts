@@ -109,6 +109,14 @@ describe("The Kit's workflows", () => {
       for (const later of steps.slice(gate + 1)) expect(later).toContain("if: steps.due.outputs.due == 'true'");
     });
 
+    it("gates on the tick the run was scheduled for, from the caller's cron and when the run's first job started", () => {
+      const gate = steps[step("src/skills/source-bumps-due.ts")]!;
+
+      expect(gate).toContain("FABRIK_TICK_SCHEDULE: ${{ github.event.schedule }}");
+      expect(gate).toContain("FABRIK_TICK_SEEN_AT: ${{ needs.kit.outputs.started-at }}");
+      expect(jobIn(schedule, "kit")).toContain("started-at: ${{ steps.kit.outputs.started-at }}");
+    });
+
     it("mints a Fabrik App token through the push service account, and bumps with it", () => {
       const secrets = steps[step("1password/load-secrets-action")]!;
       const mint = steps[step("actions/create-github-app-token@")]!;

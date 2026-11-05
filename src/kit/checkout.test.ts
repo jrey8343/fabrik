@@ -20,7 +20,7 @@ describe("Reading the Kit config from a Product checkout", () => {
       ".fabrik/skills.lock.json": "not json",
     });
 
-    const result = await readKitConfigFromCheckout(dir, { extraSkills: true });
+    const result = await readKitConfigFromCheckout(dir);
 
     expect(!result.ok && result.errors).toEqual([expect.stringMatching(/^\.fabrik\/skills\.lock\.json is not valid JSON/)]);
   });
@@ -31,7 +31,7 @@ describe("Reading the Kit config from a Product checkout", () => {
       ".fabrik/skills.lock.json": JSON.stringify([{ repository: "jrey8343/skills", sha: "a".repeat(40) }]),
     });
 
-    const result = await readKitConfigFromCheckout(dir, { extraSkills: true });
+    const result = await readKitConfigFromCheckout(dir);
 
     expect(result.ok && result.config.extraSkills.design).toEqual([{ source: "jrey8343/skills", name: "event-storming" }]);
   });

@@ -9,13 +9,13 @@
 // the branch moves only when its lockfile differs from the planned one, so an
 // unchanged week leaves an open PR and its review alone, a PR left behind by
 // another merged bump is rebuilt on the default branch, and a bump closed
-// unmerged at the same commit opens nothing until upstream moves again.
+// unmerged at the same commit opens nothing until upstream moves again. A
+// branch an earlier run pushed but never opened a PR for gets its PR.
 import type { GitHub, Repo } from "../github/client.ts";
 import { readKitConfigSources } from "../github/snapshot.ts";
 import {
   type KitConfig,
-  PHASES,
-  type ResolveOptions,
+  picksIn,
   resolveKitConfig,
   SKILLS_SOURCES_LOCK_PATH,
   type SkillsSource,
@@ -47,13 +47,12 @@ export async function pushSourceBumps(
   github: Pick<GitHub, "rest" | "fileText">,
   repo: Repo,
   readUpstream: ReadUpstream,
-  options?: ResolveOptions,
 ): Promise<SourceBumpsResult> {
   const base = `/repos/${repo.owner}/${repo.name}`;
   const { default_branch: defaultBranch } = (await github.rest("GET", base)) as { default_branch: string };
   const sources = await readKitConfigSources(github, repo, await headOf(github, base, defaultBranch));
   if (sources.skillsLock === null || sources.skillsLock === undefined) return { ok: true, sources: [] };
-  const resolved = resolveKitConfig(sources, options);
+  const resolved = resolveKitConfig(sources);
   if (!resolved.ok) return resolved;
 
   const outcomes: SourceBumpOutcome[] = [];
@@ -77,9 +76,7 @@ async function bumpOne(
   readUpstream: ReadUpstream,
 ): Promise<SourceBumpOutcome> {
   const { repository } = source;
-  const picked = [
-    ...new Set(PHASES.flatMap((phase) => config.extraSkills[phase].filter((skill) => skill.source === repository).map((skill) => skill.name))),
-  ];
+  const picked = picksIn(config).filter((pick) => pick.source === repository).map((pick) => pick.name);
   const upstream = await readUpstream(source);
   // Read the default branch afresh for each source, so an earlier one's failure or timing can't leave this one stale.
   const head = await headOf(github, base, defaultBranch);
@@ -88,16 +85,35 @@ async function bumpOne(
   const plan = planSourceBump(source, picked, upstream, lockText);
   if (plan.kind === "up-to-date") return { repository, outcome: "up-to-date" };
 
-  const open = (await github.rest(
-    "GET",
-    `${base}/pulls?head=${encodeURIComponent(`${repo.owner}:${plan.branch}`)}&base=${encodeURIComponent(defaultBranch)}&state=open`,
-  )) as { number: number; title: string; body: string | null }[];
+  const pulls = (state: "open" | "closed") =>
+    github.rest(
+      "GET",
+      `${base}/pulls?head=${encodeURIComponent(`${repo.owner}:${plan.branch}`)}&base=${encodeURIComponent(defaultBranch)}&state=${state}`,
+    );
+  const open = (await pulls("open")) as { number: number; title: string; body: string | null }[];
   const pullRequest = open[0];
   const onBranch = await github.fileText(repo, SKILLS_SOURCES_LOCK_PATH, plan.branch);
+  const openPullRequest = async (): Promise<SourceBumpOutcome> => {
+    const created = (await github.rest("POST", `${base}/pulls`, {
+      title: plan.title,
+      head: plan.branch,
+      base: defaultBranch,
+      body: plan.body,
+    })) as { number: number };
+    return { repository, outcome: "opened", pullRequest: created.number };
+  };
 
   if (onBranch === plan.lockText) {
-    // The Operator closed the PR for this commit: wait for upstream to move again.
-    if (pullRequest === undefined) return { repository, outcome: "closed-unmerged" };
+    if (pullRequest === undefined) {
+      // The Operator closed the PR for this commit: wait for upstream to move again.
+      const branchHead = await headOf(github, base, plan.branch);
+      const closed = (await pulls("closed")) as { merged_at: string | null; head: { sha: string } }[];
+      if (closed.some((pull) => pull.merged_at === null && pull.head.sha === branchHead)) {
+        return { repository, outcome: "closed-unmerged" };
+      }
+      // An earlier run pushed the branch but never opened its PR, so open it now.
+      return openPullRequest();
+    }
     if (pullRequest.title !== plan.title || pullRequest.body !== plan.body) {
       await github.rest("PATCH", `${base}/pulls/${pullRequest.number}`, { title: plan.title, body: plan.body });
     }
@@ -125,13 +141,7 @@ async function bumpOne(
     await github.rest("PATCH", `${base}/pulls/${pullRequest.number}`, { title: plan.title, body: plan.body });
     return { repository, outcome: "refreshed", pullRequest: pullRequest.number };
   }
-  const created = (await github.rest("POST", `${base}/pulls`, {
-    title: plan.title,
-    head: plan.branch,
-    base: defaultBranch,
-    body: plan.body,
-  })) as { number: number };
-  return { repository, outcome: "opened", pullRequest: created.number };
+  return openPullRequest();
 }
 
 async function headOf(github: Pick<GitHub, "rest">, base: string, branch: string): Promise<string> {

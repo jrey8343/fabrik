@@ -183,9 +183,6 @@ const PINS = [
   { repository: OTHER_SKILLS, sha: OTHER_SHA },
 ];
 
-/** Extra skills are switched on as shipped; these tests name the switch so they never depend on it. */
-const switchedOn = { extraSkills: true } as const;
-
 async function upstream() {
   return {
     [BASE_URL]: await aSkillsArchive({ "skills/engineering/grilling": "# grilling" }),
@@ -226,7 +223,6 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       productDir: product,
       release: "v1.2.3",
       download: servingEach(await upstream()).download,
-      ...switchedOn,
     });
 
     expect(await installedFolders(product)).toEqual([
@@ -253,7 +249,6 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       productDir: product,
       release: "v1.2.3",
       download: servingEach(await upstream()).download,
-      ...switchedOn,
     });
 
     expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
@@ -270,11 +265,46 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       productDir: product,
       release: "v1.2.3",
       download: servingEach(await upstream()).download,
-      ...switchedOn,
     });
 
     expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
     expect(output.systemMessage).toMatch(/^Fabrik installed its Base and Kit skills, but not this repo's Extra skills: .*roles\.design\.skills\[0\]/);
+  });
+
+  it("warns when an Extra skills source can't be downloaded, and still installs the Base and Kit skills", async () => {
+    const product = await aProductWithPicks(PINS, {
+      design: ["jrey8343/skills/event-storming"],
+      review: ["someone/skills/threat-model"],
+    });
+    const { [OTHER_URL]: _unreachable, ...reachable } = await upstream();
+
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      download: servingEach(reachable).download,
+    });
+
+    expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
+    expect(output.hookSpecificOutput.reloadSkills).toBe(true);
+    expect(output.systemMessage).toBe(
+      `Fabrik installed its Base and Kit skills, but not this repo's Extra skills: someone/skills at 2222222 could not be downloaded: Downloading ${OTHER_URL} failed: 404`,
+    );
+  });
+
+  it("says nothing of Extra skills when the repo picks none and its Kit config is invalid for another reason", async () => {
+    const product = await aProductWithPicks([], {});
+    await writeFile(join(product, ".fabrik/config.json"), JSON.stringify({ roles: { design: { model: "best" } } }));
+
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      download: servingEach(await upstream()).download,
+    });
+
+    expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
+    expect(output.systemMessage).toBeUndefined();
   });
 
   it("downloads nothing at a second session start when the pins and picks haven't changed", async () => {
@@ -284,7 +314,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       review: ["someone/skills/threat-model"],
     });
     const start = async (download: Download) =>
-      sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download, ...switchedOn });
+      sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download });
     await start(servingEach(await upstream()).download);
     const again = servingEach(await upstream());
 
@@ -306,7 +336,6 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       productDir: product,
       release: "v1.2.3",
       download: servingEach(await upstream()).download,
-      ...switchedOn,
     });
     await mkdir(join(product, ".claude/skills/my-own-skill"));
     await writeFile(
@@ -320,7 +349,6 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       productDir: product,
       release: "v1.2.3",
       download: servingEach(await upstream()).download,
-      ...switchedOn,
     });
 
     expect(output.systemMessage).toBeUndefined();
@@ -335,7 +363,6 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       productDir: product,
       release: "v1.2.3",
       download: servingEach(await upstream()).download,
-      ...switchedOn,
     });
 
     expect(output.systemMessage).toBeUndefined();

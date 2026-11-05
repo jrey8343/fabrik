@@ -234,7 +234,7 @@ describe("Reading the Kit config folder through the API", () => {
     const sources = await readKitConfigSources(github, repo, "abc123");
 
     expect(sources.skillsLock).toBe(files[".fabrik/skills.lock.json"]);
-    const result = resolveKitConfig(sources, { extraSkills: true });
+    const result = resolveKitConfig(sources);
     expect(result.ok && result.config.extraSkills.review).toEqual([{ source: "jrey8343/skills", name: "event-storming" }]);
     expect(result.ok && result.config.instructions.review).toBe("Check the deciders.\n");
   });

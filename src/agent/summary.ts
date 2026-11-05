@@ -3,7 +3,7 @@
 // message; duration, turns, tokens and cost from the final result message.
 // Effort is what the runner passed to the CLI, since the init message never
 // carries it. Pure, no I/O.
-import type { InstallRecord, InstalledSource } from "../skills/fetch.ts";
+import type { InstallRecord, InstalledSource } from "../skills/installRecord.ts";
 
 export interface RunSummaryInput {
   readonly role: string;

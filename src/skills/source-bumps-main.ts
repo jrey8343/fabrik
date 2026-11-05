@@ -1,7 +1,9 @@
 // A Product repo's weekly skills bumps, for the Kit's scheduled tick to run
 // (src/skills/sourceBumps.ts). It reads and writes the Product repo only
 // through the API, as the Fabrik App, and reads each Skills source upstream
-// through the public API with no credential.
+// through the API with the same token: the sources are public, and an
+// authenticated read keeps clear of the unauthenticated rate limit that shared
+// runner addresses often hit.
 //   GH_TOKEN=<Fabrik App token> GITHUB_REPOSITORY=owner/name node src/skills/source-bumps-main.ts
 // Exits non-zero when the Kit config is invalid or any source failed to bump,
 // after every other source has had its turn.
@@ -34,8 +36,9 @@ function describe(source: SourceBumpOutcome): string {
 
 async function main(): Promise<void> {
   const [owner = "", name = ""] = required("GITHUB_REPOSITORY").split("/");
-  const github = new GitHub(required("GH_TOKEN"), process.env["GITHUB_API_URL"] || undefined);
-  const upstream = publicGet();
+  const token = required("GH_TOKEN");
+  const github = new GitHub(token, process.env["GITHUB_API_URL"] || undefined);
+  const upstream = publicGet(token);
   const result = await pushSourceBumps(github, { owner, name }, async (source) =>
     readUpstreamSkills(upstream, source, await defaultBranchOf(upstream, source.repository)),
   );

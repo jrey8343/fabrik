@@ -11,8 +11,18 @@ export interface SkillsLock {
 /** Where the lockfile lives in Fabrik. */
 export const SKILLS_LOCK_PATH = "skills.lock.json";
 
-const FULL_SHA = /^[0-9a-f]{40}$/;
-const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+/** A full 40-character lowercase commit SHA. */
+export const FULL_SHA = /^[0-9a-f]{40}$/;
+/** A GitHub repository, `owner/name`. */
+export const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/** Where a Skills source keeps the plugin manifest that lists its skills. */
+export const PLUGIN_MANIFEST_PATH = ".claude-plugin/plugin.json";
+
+/** A commit SHA as the Kit shows it to people: its first seven characters. */
+export function shortSha(sha: string): string {
+  return sha.slice(0, 7);
+}
 
 export function readSkillsLock(text: string): SkillsLock {
   const value = JSON.parse(text) as Record<string, unknown>;
@@ -33,7 +43,7 @@ export interface SkillFolder {
   readonly name: string;
 }
 
-/** The folders listed in the upstream `.claude-plugin/plugin.json`, each to install as its last path segment. */
+/** The folders listed in the upstream plugin manifest, each to install as its last path segment. */
 export function skillFolders(manifestText: string): readonly SkillFolder[] {
   const manifest = JSON.parse(manifestText) as { skills?: unknown };
   if (!Array.isArray(manifest.skills) || !manifest.skills.every((path) => typeof path === "string")) {
@@ -61,4 +71,14 @@ function skillFolder(path: string): SkillFolder {
     throw new Error(`The skills plugin manifest lists ${path}, which is outside skills/`);
   }
   return { from: segments.join("/"), name };
+}
+
+/** The skill folders a manifest lists, or null when there is none or it can't be read as one. */
+export function foldersIn(manifest: string | null): readonly SkillFolder[] | null {
+  if (manifest === null) return null;
+  try {
+    return skillFolders(manifest);
+  } catch {
+    return null;
+  }
 }

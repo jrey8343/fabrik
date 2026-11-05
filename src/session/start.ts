@@ -9,7 +9,6 @@
 import { cp, readdir, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
-import type { ResolveOptions } from "../kit/config.ts";
 import { type Download, fetchSkills } from "../skills/fetch.ts";
 
 /** The caller workflow, the only place the Kit's version appears. */
@@ -30,7 +29,7 @@ export interface SessionStartOutput {
   readonly systemMessage?: string;
 }
 
-export interface SessionStartInput extends ResolveOptions {
+export interface SessionStartInput {
   /** Fabrik, checked out at `release`. */
   readonly kitDir: string;
   readonly productDir: string;
@@ -44,7 +43,6 @@ export async function sessionStart({
   productDir,
   release,
   download,
-  ...resolveOptions
 }: SessionStartInput): Promise<SessionStartOutput> {
   try {
     const caller = await readFile(join(productDir, CALLER_WORKFLOW_PATH), "utf8").catch(() => null);
@@ -56,7 +54,7 @@ export async function sessionStart({
     }
 
     // The Operator is at the wheel, so the session gets every role's picks.
-    const { sha, extraSkills, errors } = await fetchSkills(kitDir, productDir, download, { ...resolveOptions, install: "every" });
+    const { sha, extraSkills, errors } = await fetchSkills(kitDir, productDir, download, { install: "every" });
     const own = await installFabrikSkills(kitDir, productDir);
     return {
       hookSpecificOutput: {

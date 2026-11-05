@@ -6,13 +6,10 @@ const OPERATOR_SHA = "1111111111111111111111111111111111111111";
 
 function configPicking(picks: Record<string, readonly string[]>): KitConfig {
   const roles = Object.fromEntries(Object.entries(picks).map(([role, skills]) => [role, { skills }]));
-  const result = resolveKitConfig(
-    {
-      config: JSON.stringify({ roles }),
-      skillsLock: JSON.stringify([{ repository: "jrey8343/skills", sha: OPERATOR_SHA }]),
-    },
-    { extraSkills: true },
-  );
+  const result = resolveKitConfig({
+    config: JSON.stringify({ roles }),
+    skillsLock: JSON.stringify([{ repository: "jrey8343/skills", sha: OPERATOR_SHA }]),
+  });
   if (!result.ok) throw new Error(result.errors.join("\n"));
   return result.config;
 }
