@@ -5,6 +5,7 @@ import {
   designQueueSnapshotOf,
   kitConfig,
   notificationsOf,
+  repoSnapshot,
   snapshotOf,
 } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
@@ -288,5 +289,25 @@ describe("What triggers a Design queue check", () => {
 
     expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
     expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("an issue closing, which may end a Design session by hand", () => {
+    const issue = anIssue({ number: 7, open: false, labels: ["enhancement", "needs-design"] });
+
+    const plan = planFor({ kind: "issue-closed", issue: 7 }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
+  });
+
+  it("a change to the Kit config, since caps.design_sessions may have gone up", () => {
+    const plan = planFor({ kind: "kit-config-changed" }, repoSnapshot(), kitConfig());
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
+  });
+
+  it("the hourly scheduled tick, which catches a slot freed by needs-design coming off by hand", () => {
+    const plan = planFor({ kind: "scheduled-tick", now: "2026-11-09T04:05:00.000Z" }, repoSnapshot(), kitConfig());
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
   });
 });
