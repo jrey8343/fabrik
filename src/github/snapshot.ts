@@ -9,6 +9,7 @@ import {
   SKILLS_SOURCES_LOCK_PATH,
 } from "../kit/config.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
+import { parseAuditOutput } from "../loop/auditOutput.ts";
 import { AUDIT_LABEL, DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
@@ -18,6 +19,7 @@ import type {
   DesignQueueSnapshot,
   KitIssueSnapshot,
   LoopEvent,
+  NamedPullRequestSnapshot,
   PullRequestSnapshot,
   Snapshot,
   SpecSnapshot,
@@ -249,19 +251,20 @@ export async function gatherSnapshot(
   operator: string | null,
   actions: GitHub | null = null,
 ): Promise<Snapshot> {
-  const [{ owner, kitIssues }, part, startingComment, audit] = await Promise.all([
+  const [{ owner, kitIssues }, part, startingComment, audit, namedPullRequests] = await Promise.all([
     gatherKitIssues(github, repo),
     gatherEventPart(github, repo, event, operator, actions),
     gatherStartingComment(github, repo, event),
     event.kind === "scheduled-tick" ? gatherAuditSlice(github, repo) : null,
+    event.kind === "audit-run-finished" ? gatherNamedPullRequests(github, repo, event.output) : null,
   ]);
   // A closed Ticket may be its Spec's last.
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
   // By default the Operator owns the Product repos they run Fabrik in.
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment, audit }
-    : { ...part, spec, kitIssues, startingComment, audit };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment, audit, namedPullRequests }
+    : { ...part, spec, kitIssues, startingComment, audit, namedPullRequests };
 }
 
 // The newest Audit issues, open and closed: enough to hold this week's, any
@@ -310,6 +313,42 @@ export async function gatherAuditSlice(github: Pick<GitHub, "graphql">, repo: Re
       body: issue.body,
     })),
   };
+}
+
+/** A PR as the REST API returns it: the fields an Auditor's named PRs are read from. */
+interface RestPullRequest {
+  number: number;
+  merged: boolean;
+  head: { ref: string };
+  user: { type: string } | null;
+}
+
+/**
+ * For an Audit run finishing: each PR its reply names under "Introduced by",
+ * once. A number GitHub has no PR for is left out, and a reply that breaks
+ * its contract names none, since the core fails its Audit.
+ */
+async function gatherNamedPullRequests(github: GitHub, repo: Repo, output: string): Promise<NamedPullRequestSnapshot[]> {
+  const parsed = parseAuditOutput(output);
+  const named = parsed.ok ? [...new Set(parsed.output.candidates.flatMap((candidate) => candidate.introducedBy))] : [];
+  const pulls = await Promise.all(
+    named.map(
+      (number) =>
+        github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`, undefined, { allowNotFound: true }) as Promise<RestPullRequest | null>,
+    ),
+  );
+  return pulls.flatMap((pull) =>
+    pull === null
+      ? []
+      : [
+          {
+            number: pull.number,
+            merged: pull.merged,
+            headRef: pull.head.ref,
+            isAgent: isAgentPullRequest({ headRef: pull.head.ref, authorIsBot: pull.user?.type === "Bot" }),
+          },
+        ],
+  );
 }
 
 /**
@@ -428,7 +467,7 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "namedPullRequests">;
 
 const KIT_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $labels: [String!]!) {

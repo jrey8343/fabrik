@@ -7,6 +7,7 @@ import type {
   DispatchSnapshot,
   IssueSnapshot,
   KitConfig,
+  NamedPullRequestSnapshot,
   Plan,
   PullRequestSnapshot,
   Snapshot,
@@ -37,7 +38,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, ...overrides };
+  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, namedPullRequests: null, ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
@@ -66,7 +67,7 @@ export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
   overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, ...overrides };
+  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, namedPullRequests: null, ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -98,6 +99,7 @@ export function dispatchSnapshotOf(
     kitIssues: [],
     startingComment: null,
     audit: null,
+    namedPullRequests: null,
   };
 }
 
@@ -129,12 +131,13 @@ export function designQueueSnapshotOf(
     kitIssues: [],
     startingComment: null,
     audit: null,
+    namedPullRequests: null,
   };
 }
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
 export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, ...overrides };
+  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, namedPullRequests: null, ...overrides };
 }
 
 /** The commit anAuditIssue() audited unless a test says otherwise. */
@@ -167,6 +170,20 @@ export function anAuditIssue(overrides: Partial<AuditIssueSnapshot> = {}): Audit
     body: auditBody(AUDITED_SHA),
     ...overrides,
   };
+}
+
+/** A PR an Auditor named: by default a merged agent PR. */
+export function aNamedPullRequest(overrides: Partial<NamedPullRequestSnapshot> = {}): NamedPullRequestSnapshot {
+  return { number: 31, merged: true, headRef: "fabrik/ticket-7", isAgent: true, ...overrides };
+}
+
+/** An Audit run's snapshot: by default the App's pending Audit #97 at AUDITED_SHA, and the PRs its Auditor named. */
+export function auditRunSnapshotOf(
+  namedPullRequests: readonly NamedPullRequestSnapshot[] = [],
+  audit: Partial<IssueSnapshot> = {},
+): Snapshot {
+  const issue = anIssue({ number: 97, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "pending"), ...audit });
+  return snapshotOf(issue, { namedPullRequests });
 }
 
 /**

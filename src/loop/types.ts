@@ -170,6 +170,18 @@ export type LoopEvent =
       readonly operatorComments?: readonly GivenOperatorComment[];
     }
   | {
+      /** The Auditor finished on a pending Audit; its push job holds the reply, not yet landed (#150). */
+      readonly kind: "audit-run-finished";
+      /** The Audit. */
+      readonly issue: number;
+      /** The Auditor's structured output, the `<audit>` tag's JSON, unparsed (src/loop/auditOutput.ts). */
+      readonly output: string;
+      /** The hot-spot window the Auditor was given, as its agent job recorded it from the input the Kit wrote, never from the agent. */
+      readonly window: AuditWindow;
+      /** The Actions run, which a failed Audit links to. */
+      readonly runUrl: string;
+    }
+  | {
       /** A review that requests changes was submitted on a PR: at the Merge gate, the Operator's ask for another run. */
       readonly kind: "pull-request-changes-requested";
       readonly pullRequest: number;
@@ -207,6 +219,15 @@ export type LoopEvent =
       /** When the tick ran, as an ISO 8601 time. */
       readonly now: string;
     };
+
+/**
+ * The stretch of history an Auditor looks at first (#150): what changed since
+ * the last Audit's commit, or the last 30 days on a first run or when that
+ * commit isn't an ancestor of the Audit's own (a force-push).
+ */
+export type AuditWindow =
+  | { readonly kind: "since-audit"; readonly audit: number; readonly commit: string }
+  | { readonly kind: "last-days"; readonly days: number };
 
 /**
  * Where a PR comment was made: a conversation comment, by its id, or a
@@ -387,6 +408,22 @@ export interface Snapshot {
   readonly startingComment: StartingComment | null;
   /** Gathered for a scheduled tick only: what the audit gate weighs. */
   readonly audit: AuditSnapshot | null;
+  /**
+   * Gathered for an Audit run finishing only, whose Audit is `issue`: each PR
+   * its reply names under "Introduced by" that GitHub has, in any order. A
+   * number naming no PR isn't here.
+   */
+  readonly namedPullRequests: readonly NamedPullRequestSnapshot[] | null;
+}
+
+/** A PR an Auditor named, as GitHub has it (src/loop/auditLanding.ts). */
+export interface NamedPullRequestSnapshot {
+  readonly number: number;
+  readonly merged: boolean;
+  /** Its head branch. */
+  readonly headRef: string;
+  /** Whether it's an agent PR: one the Fabrik App opened from an agent branch (src/loop/agentPullRequest.ts). */
+  readonly isAgent: boolean;
 }
 
 /** What the audit gate weighs on a scheduled tick (src/loop/auditGate.ts). */
