@@ -8,7 +8,7 @@ import type { AuditInputs } from "./inputs.ts";
 const sha = (c: string) => c.repeat(40);
 
 const inputs: AuditInputs = {
-  audit: { number: 45, commit: sha("b"), openedAt: "2026-11-08T00:00:00Z" },
+  audit: { number: 45, commit: sha("b") },
   window: { kind: "since-audit", audit: 40, commit: sha("a") },
   drift: [{ path: "src/booking/slots.ts", changes: 6 }],
   closedAudits: [
@@ -36,11 +36,13 @@ async function fileOf(value: unknown): Promise<string> {
 const json = (value: unknown) => ["```json", JSON.stringify(value, null, 2), "```"];
 
 describe("An Auditor run's context", () => {
-  it("sets out each of its inputs in its own section, after the pending Audit, and gives back the window its result records", async () => {
+  it("names the pending Audit's number and marked commit under its heading, sets out each other input in its own section, and gives back the window its result records", async () => {
     const { window, parts } = await auditContext(await fileOf(inputs));
 
     expect(window).toEqual({ kind: "since-audit", audit: 40, commit: sha("a") });
     expect(parts).toEqual([
+      // Still under the pending Audit's heading, after its issue.
+      `This is Audit #45. Its marked commit, which you're checked out at, is \`${sha("b")}\`.`,
       `## ${AUDIT_SECTIONS.window}`,
       ...json(inputs.window),
       `## ${AUDIT_SECTIONS.drift}`,
@@ -55,6 +57,8 @@ describe("An Auditor run's context", () => {
   });
 
   it.each([
+    ["no pending Audit", { ...inputs, audit: undefined }],
+    ["a pending Audit with no marked commit", { ...inputs, audit: { number: 45 } }],
     ["no window", { ...inputs, window: undefined }],
     ["a window of neither kind", { ...inputs, window: { kind: "since-forever" } }],
     ["a list left out", { ...inputs, pullRequests: undefined }],

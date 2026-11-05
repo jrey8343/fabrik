@@ -78,19 +78,16 @@ interface Fake {
   readonly rest?: Record<string, unknown>;
 }
 
-/** A GitHub that answers the Audit's reads from these lists, recording every REST path it's asked for. */
-function gitHub({ audits = [pending], merged = [], open = [], rest = {} }: Fake): Reader & { paths: string[] } {
-  const paths: string[] = [];
+/** A GitHub that answers the Audit's reads from these lists. */
+function gitHub({ audits = [pending], merged = [], open = [], rest = {} }: Fake): Reader {
   const page = (nodes: unknown[]) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes });
   return {
-    paths,
     graphql: async <T>(query: string) => {
       if (query.includes("pullRequests(")) return { repository: { pullRequests: page(merged) } } as T;
       if (query.includes("labels:")) return { repository: { issues: { nodes: audits } } } as T;
       return { repository: { issues: page(open) } } as T;
     },
     rest: async (_method: string, path: string) => {
-      paths.push(path);
       const [route, query] = path.split("?");
       const value = rest[route ?? ""];
       if (value === undefined) {
@@ -124,7 +121,7 @@ describe("The Audit's inputs", () => {
 
     const inputs = await read(github);
 
-    expect(inputs.audit).toEqual({ number: 45, commit: sha("b"), openedAt: OPENED });
+    expect(inputs.audit).toEqual({ number: 45, commit: sha("b") });
     expect(inputs.window).toEqual({ kind: "since-audit", audit: 40, commit: sha("a") });
     expect(inputs.pullRequests).toEqual([
       {

@@ -1,6 +1,6 @@
 // An Auditor run's own context (#150): what the agent-inputs step gathered
-// into audit.json (src/agent/inputs.ts), set out after the pending Audit in
-// sections prompts/audit.md names. The Auditor works in a read-only checkout
+// into audit.json (src/agent/inputs.ts), the pending Audit's number and marked
+// commit under its issue, then the rest in sections prompts/audit.md names. The Auditor works in a read-only checkout
 // of the marked commit, holds no GitHub credential and runs none of the code.
 import { readFile } from "node:fs/promises";
 import type { AuditWindow } from "../loop/types.ts";
@@ -21,11 +21,16 @@ export const AUDIT_SECTIONS = {
 const json = (value: unknown): string[] => ["```json", JSON.stringify(value, null, 2), "```"];
 
 /**
- * What the Auditor's prompt carries after the pending Audit, and the hot-spot
- * window it was given, which its result records for the Audit to name.
+ * What the Auditor's prompt carries after the pending Audit's issue, still
+ * under its heading, and the hot-spot window it was given, which its result
+ * records for the Audit to name.
  */
 export async function auditContext(auditFile: string): Promise<{ window: AuditWindow; parts: string[] }> {
   const inputs = JSON.parse(await readFile(auditFile, "utf8")) as Partial<AuditInputs> | null;
+  const audit = inputs?.audit;
+  if (typeof audit?.number !== "number" || typeof audit.commit !== "string") {
+    throw new Error(`${AUDIT_INPUTS_FILE} has no pending Audit with its marked commit`);
+  }
   const window = inputs?.window;
   if (window?.kind !== "since-audit" && window?.kind !== "last-days") throw new Error(`${AUDIT_INPUTS_FILE} has no hot-spot window`);
   const lists = ["drift", "pullRequests", "closedAudits", "filedCandidates"] as const;
@@ -35,6 +40,7 @@ export async function auditContext(auditFile: string): Promise<{ window: AuditWi
   return {
     window,
     parts: [
+      `This is Audit #${audit.number}. Its marked commit, which you're checked out at, is \`${audit.commit}\`.`,
       `## ${AUDIT_SECTIONS.window}`,
       ...json(window),
       ...lists.flatMap((list) => [`## ${AUDIT_SECTIONS[list]}`, ...json(inputs?.[list])]),

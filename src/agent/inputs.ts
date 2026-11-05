@@ -382,8 +382,8 @@ export const AUDIT_INPUTS_FILE = "audit.json";
 
 /** What an Auditor run is given beyond the pending Audit's own issue, written to AUDIT_INPUTS_FILE. */
 export interface AuditInputs {
-  /** The pending Audit, with when the tick opened it at the marked commit. */
-  readonly audit: PendingAudit & { readonly openedAt: string };
+  /** The pending Audit, which the Auditor's prompt names with its marked commit. */
+  readonly audit: PendingAudit;
   /** The hot-spot window, which the agent job copies into its result for the landing to name. */
   readonly window: AuditWindow;
   /** The files merged agent PRs keep changing with no doc changed beside them (src/agent/comprehensionDrift.ts). */
@@ -523,7 +523,7 @@ export async function readAuditInputs(github: Reader, repo: Repo, audit: Pending
     const fromAudit = fromAuditIn(body);
     return fromAudit === null ? [] : [{ number, title, fromAudit, body }];
   });
-  return { audit: { ...audit, openedAt }, window, drift, closedAudits, filedCandidates, pullRequests };
+  return { audit, window, drift, closedAudits, filedCandidates, pullRequests };
 }
 
 /** The Operator's comments on an issue, oldest first; bots' and other people's are left out. */
