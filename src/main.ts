@@ -156,7 +156,7 @@ async function agentResultEvent(
   if (result.role !== input.role) throw new Error(`The agent's result is a ${result.role} result, not ${input.role}`);
   if (result.issue !== input.issue) throw new Error(`The agent's result is for #${result.issue}, not #${input.issue}`);
   const source = `the ${result.role} run on #${result.issue}`;
-  if (result.role === "audit") return { event: auditEventFrom(result, thisRunUrl()), source, branch: null };
+  if (result.role === "audit") return { event: auditEventFrom(result, thisRunUrl(), thisRepoUrl()), source, branch: null };
   if (result.role !== "implement") {
     return { event: agentRunEventFrom(result, null, null, input.startedBy), source, branch: null };
   }
@@ -202,7 +202,7 @@ async function failedRunEvent(
   return { event, source: `the failed ${input.role} run on #${input.issue}` };
 }
 
-/** The Product repo's web address, which a pass's Follow-ups open issues on. */
+/** The Product repo's web address, which a pass's Follow-ups and an Audit's candidates open issues on. */
 function thisRepoUrl(): string {
   return `${required("GITHUB_SERVER_URL")}/${required("GITHUB_REPOSITORY")}`;
 }

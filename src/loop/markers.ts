@@ -1,7 +1,7 @@
 // The markers the Kit's comments open with. The core writes them; the adapter
 // reads a thread's comments back through them into the snapshot
 // (src/github/threads.ts), so the Loop's history lives on GitHub alone.
-import type { VerdictRecord } from "./types.ts";
+import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
@@ -62,6 +62,11 @@ export interface EscapeMarker {
   readonly strength: string | null;
   /** The PR numbers it names, in order. */
   readonly pullRequests: readonly number[];
+}
+
+/** The escape marker for a candidate of this Strength that traces to these merged agent PRs, which escapeMarkerIn reads back. */
+export function escapeMarker(strength: Strength, pullRequests: readonly number[]): string {
+  return `<!-- fabrik:escape ${[strength, ...pullRequests.map((pullRequest) => `#${pullRequest}`)].join(" ")} -->`;
 }
 
 /** The first escape marker in `body`, or null if it has none. */

@@ -5,7 +5,8 @@
 import { isPendingAudit } from "./audit.ts";
 import { failAudit } from "./auditFailure.ts";
 import { type AuditCandidate, type AuditOutput, parseAuditOutput } from "./auditOutput.ts";
-import { auditMarker, auditMarksIn } from "./markers.ts";
+import { newIssueUrl } from "./followUps.ts";
+import { auditMarker, auditMarksIn, escapeMarker } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { AuditWindow, IssueContext, LoopEvent, NamedPullRequestSnapshot, Plan, Strength } from "./types.ts";
 
@@ -46,7 +47,7 @@ export function landAudit(event: AuditFinished, context: IssueContext, named: re
   }
   return {
     kind: "act",
-    actions: [{ kind: "edit-issue-body", issue: issue.number, body: filledBody(output, named, commit, event.window) }],
+    actions: [{ kind: "edit-issue-body", issue: issue.number, body: filledBody(output, named, commit, event) }],
   };
 }
 
@@ -81,11 +82,11 @@ function filledBody(
   { candidates, topRecommendation }: AuditOutput,
   named: readonly NamedPullRequestSnapshot[],
   commit: string,
-  window: AuditWindow,
+  { issue: audit, window, repoUrl }: AuditFinished,
 ): string {
   return [
     `The Auditor read the default branch up to \`${short(commit)}\`, ${lookedFirstAt(window)}. File the candidates you want, comment here on any you reject so the next Audit knows, and close this Audit when you're done.`,
-    ...candidates.flatMap((candidate) => ["", ...card(candidate, keptPullRequests(candidate, named))]),
+    ...candidates.flatMap((candidate) => ["", ...card(candidate, keptPullRequests(candidate, named), repoUrl, audit)]),
     "",
     "## Top recommendation",
     "",
@@ -111,20 +112,14 @@ function keptPullRequests(candidate: AuditCandidate, named: readonly NamedPullRe
   return [...new Set(candidate.introducedBy)].filter((number) => vouched.has(number));
 }
 
-/** One candidate's card, with the PRs kept from its Introduced by. */
-function card(candidate: AuditCandidate, introducedBy: readonly number[]): string[] {
+/** One candidate's card, with the PRs kept from its Introduced by, ending with its Open as issue link. */
+function card(candidate: AuditCandidate, introducedBy: readonly number[], repoUrl: string, audit: number): string[] {
   return [
     `## ${candidate.title}`,
     "",
     `\`${BADGES[candidate.strength]}\``,
     "",
-    `**Files:** ${candidate.files.map((file) => `\`${file}\``).join(", ")}`,
-    "",
-    `**Problem:** ${candidate.problem}`,
-    "",
-    `**Solution:** ${candidate.solution}`,
-    "",
-    `**Benefits:** ${candidate.benefits}`,
+    ...described(candidate),
     "",
     "**Before**",
     "",
@@ -135,8 +130,35 @@ function card(candidate: AuditCandidate, introducedBy: readonly number[]): strin
     ...mermaid(candidate.after),
     "",
     `**Introduced by:** ${introducedBy.length === 0 ? "No merged agent PR" : introducedBy.map((n) => `#${n}`).join(", ")}`,
-    // Each card ends with its Open as issue link (#207), after Introduced by.
+    "",
+    `[Open as issue](${openAsIssue(candidate, introducedBy, repoUrl, audit)})`,
   ];
+}
+
+/** A candidate's Files, Problem, Solution and Benefits, as its card and the issue it opens both show them. */
+function described(candidate: AuditCandidate): string[] {
+  return [
+    `**Files:** ${candidate.files.map((file) => `\`${file}\``).join(", ")}`,
+    "",
+    `**Problem:** ${candidate.problem}`,
+    "",
+    `**Solution:** ${candidate.solution}`,
+    "",
+    `**Benefits:** ${candidate.benefits}`,
+  ];
+}
+
+/**
+ * The Product repo's new-issue form, prefilled with the candidate, its
+ * diagrams left on the Audit to keep the link short. Its trailer names the
+ * Audit, so the next one skips the filed issue, and when the candidate traces
+ * to merged agent PRs, the escape marker that filing it records. A Design
+ * session's rewrite carries both lines forward (src/loop/carriedLines.ts).
+ */
+function openAsIssue(candidate: AuditCandidate, introducedBy: readonly number[], repoUrl: string, audit: number): string {
+  const body = [...described(candidate), "", `**Strength:** ${BADGES[candidate.strength]}`].join("\n");
+  const trailer = [`From audit #${audit}`, ...(introducedBy.length === 0 ? [] : [escapeMarker(candidate.strength, introducedBy)])];
+  return newIssueUrl(repoUrl, candidate.title, body, trailer.join("\n"));
 }
 
 function mermaid(source: string): string[] {
