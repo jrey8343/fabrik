@@ -18,6 +18,7 @@ const DEFAULTS = {
   },
   maxInFlight: 2,
   caps: { designSessions: 2 },
+  monitor: { errors: null, redMain: true },
   operator: null,
   instructions: { triage: null, design: null, implement: null, review: null },
   skillsSources: [],
@@ -302,6 +303,139 @@ describe("Kit config", () => {
       });
     },
   );
+});
+
+describe("The monitor block", () => {
+  it("leaves production errors off and red main on when the Kit config has no monitor block", () => {
+    const result = resolveKitConfig({ config: `{ "max_in_flight": 1, "operator": "jrey8343" }` });
+
+    expect(result.ok && result.config.monitor).toEqual({ errors: null, redMain: true });
+  });
+
+  it("reads the Sentry project, defaulting url to sentry.io and min_events to 3", () => {
+    const result = resolveKitConfig({
+      config: `{ "monitor": { "errors": { "provider": "sentry", "org": "acme-health", "project": "booking-web" } } }`,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        monitor: {
+          errors: { provider: "sentry", org: "acme-health", project: "booking-web", url: "https://sentry.io", minEvents: 3 },
+          redMain: true,
+        },
+      },
+    });
+  });
+
+  it("honours a Sentry-compatible url, a min_events and turning red main off", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        monitor: {
+          errors: {
+            provider: "sentry",
+            org: "acme-health",
+            project: "booking-web",
+            url: "https://de.sentry.io",
+            min_events: 10,
+          },
+          red_main: false,
+        },
+      }),
+    });
+
+    expect(result.ok && result.config.monitor).toEqual({
+      errors: { provider: "sentry", org: "acme-health", project: "booking-web", url: "https://de.sentry.io", minEvents: 10 },
+      redMain: false,
+    });
+  });
+
+  it("lets null leave production errors off, as the template will spell it", () => {
+    const result = resolveKitConfig({ config: `{ "monitor": { "errors": null, "red_main": true } }` });
+
+    expect(result).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  /** A Kit config whose monitor.errors is a valid Sentry project, with these fields changed. */
+  function withErrors(changes: Record<string, unknown>): string {
+    return JSON.stringify({
+      monitor: { errors: { provider: "sentry", org: "acme-health", project: "booking-web", ...changes } },
+    });
+  }
+
+  it.each([
+    [
+      { provider: "glitchtip" },
+      `monitor.errors.provider is "glitchtip": the only provider is sentry; point url at a Sentry-compatible host`,
+    ],
+    [{ provider: "Sentry" }, `monitor.errors.provider is "Sentry": the only provider is sentry; point url at a Sentry-compatible host`],
+    [{ provider: 1 }, "monitor.errors.provider must be a string"],
+    [{ provider: undefined }, "monitor.errors.provider is missing"],
+  ])("refuses a provider other than sentry, naming the field: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withErrors(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [{ org: undefined }, "monitor.errors.org is missing"],
+    [{ project: undefined }, "monitor.errors.project is missing"],
+    [{ org: null }, "monitor.errors.org must be a string"],
+    [{ project: 7 }, "monitor.errors.project must be a string"],
+    [{ org: "" }, `monitor.errors.org is "": a Sentry slug is lowercase letters, digits, hyphens and underscores`],
+    [
+      { project: "https://acme-health.sentry.io/projects/booking-web/" },
+      `monitor.errors.project is "https://acme-health.sentry.io/projects/booking-web/": a Sentry slug is lowercase letters, digits, hyphens and underscores`,
+    ],
+    [{ org: "Acme Health" }, `monitor.errors.org is "Acme Health": a Sentry slug is lowercase letters, digits, hyphens and underscores`],
+  ])("refuses a missing or malformed org or project, naming the field: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withErrors(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([0, -3, 2.5, "3", null])("refuses a min_events of %j, naming the field", (minEvents) => {
+    expect(resolveKitConfig({ config: withErrors({ min_events: minEvents }) })).toEqual({
+      ok: false,
+      errors: ["monitor.errors.min_events must be a whole number of at least 1"],
+    });
+  });
+
+  it.each([
+    [{ url: "http://glitchtip.example" }, `monitor.errors.url is "http://glitchtip.example": the Sentry token is sent there, so it must be an https:// URL`],
+    [{ url: "sentry.io" }, `monitor.errors.url is "sentry.io": the Sentry token is sent there, so it must be an https:// URL`],
+    [{ url: 443 }, "monitor.errors.url must be a string"],
+  ])("refuses a url that isn't https, naming the field: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withErrors(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([0, null, "false"])("refuses a red_main of %j, naming the field", (redMain) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ monitor: { red_main: redMain } }) })).toEqual({
+      ok: false,
+      errors: ["monitor.red_main must be true or false"],
+    });
+  });
+
+  it.each([
+    [{ monitor: { red_mian: false } }, "monitor.red_mian is not a Kit config field"],
+    [{ monitor: { caps: 5 } }, "monitor.caps is not a Kit config field"],
+    [
+      { monitor: { errors: { provider: "sentry", org: "acme-health", project: "booking-web", token: "sntrys_x" } } },
+      "monitor.errors.token is not a Kit config field",
+    ],
+    [
+      { monitor: { errors: { provider: "sentry", org: "acme-health", project: "booking-web", minEvents: 5 } } },
+      "monitor.errors.minEvents is not a Kit config field",
+    ],
+  ])("fails an unknown field under monitor, naming it: %j", (config, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify(config) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [{ monitor: [] }, "monitor must be an object"],
+    [{ monitor: true }, "monitor must be an object"],
+    [{ monitor: { errors: true } }, "monitor.errors must be an object or null"],
+    [{ monitor: { errors: "sentry" } }, "monitor.errors must be an object or null"],
+  ])("fails a monitor block that isn't an object, naming it: %j", (config, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify(config) })).toEqual({ ok: false, errors: [error] });
+  });
 });
 
 describe("The Kit config template", () => {
