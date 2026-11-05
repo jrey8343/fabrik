@@ -71,7 +71,7 @@ Ask the Operator to confirm before you go on.
 
 ## 6. Hand over the wizard
 
-Some steps only the Operator can take: installing the Fabrik App on this repo and on `fabrik-runs`, storing the App's key and the `claude setup-token` token in 1Password, setting GitHub mobile to push only when it's their move, and watching the repo on All activity. The wizard walks them through each, and is safe to re-run.
+Some steps only the Operator can take: installing the Fabrik App on this repo and on `fabrik-runs`, with Checks: read accepted; storing the App's key, the `claude setup-token` token and, when the repo reports to Sentry, a Sentry token in 1Password; setting GitHub mobile to push only when it's their move, and watching the repo on All activity. The wizard walks them through each, and is safe to re-run.
 
 It's interactive, so the Operator runs it in their own terminal, from this checkout:
 
@@ -89,6 +89,7 @@ Tell the Operator:
 - To list the CI checks that must pass in `sandbox.checks` in `.fabrik/config.json`, and the Sandbox's `setup`, `build` and `test` commands, then run `/fabrik-setup` again so branch protection requires those checks.
 - That once the Fabrik App is on `fabrik-runs`, each agent run's push job writes its Run record there, and they can run the Weekly summary by hand from the Actions tab of `fabrik-runs` (Fabrik weekly summary, Run workflow) instead of waiting for Monday.
 - That to give roles Extra skills from their own Skills sources, they pin each source by hand in `.fabrik/skills.lock.json` (`[{ "repository": "owner/name", "sha": "<full commit SHA>" }]`), pick skills under `roles.<role>.skills` in `.fabrik/config.json` (`"owner/name/skill"`, for triage, design, implement or review), and say when to use each in that phase's `.fabrik/<phase>.md`. The README's Extra skills section has the details; the Kit's weekly bump PRs keep the pins current after that.
+- That the Monitor files an issue for Triage when the default branch goes red, once the Fabrik App's Checks: read is accepted, and for each production error Sentry reports, once `monitor.errors` in `.fabrik/config.json` names the provider, org and project (`{ "provider": "sentry", "org": "<org slug>", "project": "<project slug>" }`) and the wizard has stored the Sentry token. Until then each source stays dormant, with a quiet note in the hourly tick's step summary.
 - That re-running `/fabrik-setup` repairs the install (a missing label, secret or shim), and that Kit updates arrive as Dependabot PRs bumping `.github/workflows/fabrik.yml`.
 
 Remove the temporary Fabrik folder once the Operator has finished the wizard.
