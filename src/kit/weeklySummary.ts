@@ -5,8 +5,8 @@ import { verdictsIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
-import type { DesignQueueSnapshot, InfrastructureFailure } from "../loop/types.ts";
+import { DESIGN_ROUND_MARKER, escapeMarkerIn } from "../loop/markers.ts";
+import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTHS, type Strength } from "../loop/types.ts";
 import { type RateLimitReading, type RunRecord, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
@@ -67,7 +67,7 @@ export interface SpecFacts {
   readonly tickets: readonly number[];
 }
 
-/** An agent PR merged or closed in the last 30 days. */
+/** An agent PR merged or closed in the last 97 days. */
 export interface AgentPullRequestFacts {
   readonly number: number;
   /** The Ticket its `Closes #n` names, or null. */
@@ -91,7 +91,7 @@ export interface DefaultBranchCommitFacts {
   readonly at: string;
 }
 
-/** Any PR merged in the last 30 days, agent or not, by its title. */
+/** Any PR merged in the last 97 days, agent or not, by its title. */
 export interface MergedTitleFacts {
   readonly title: string;
   /** ISO 8601. */
@@ -125,6 +125,20 @@ export interface OpenPullRequestFacts {
   readonly labelEvents: readonly LabelEvent[];
 }
 
+/**
+ * An issue the Operator opened whose body has a `fabrik:escape` marker, such
+ * as an Audit candidate filed through its Open as issue link.
+ */
+export interface EscapeMarkerIssueFacts {
+  readonly number: number;
+  /** Who opened it: only the Operator's issues count. */
+  readonly author: string;
+  /** ISO 8601. */
+  readonly createdAt: string;
+  readonly state: "open" | "closed";
+  readonly body: string;
+}
+
 /** What the summary reads of one Product repo on GitHub. */
 export interface GitHubFacts {
   /** The Product repo, as `owner/name`. */
@@ -144,6 +158,8 @@ export interface GitHubFacts {
    * the Design queue check reads them: Held counts the ones waiting for a slot.
    */
   readonly designQueue: DesignQueueSnapshot;
+  /** The issues the Operator opened in the last 97 days whose body has an escape marker. */
+  readonly escapeMarkerIssues: readonly EscapeMarkerIssueFacts[];
 }
 
 export interface WeeklySummaryInput {
@@ -209,6 +225,10 @@ export interface WeeklySummary {
   readonly operatorWaitMs: WeekOverWeek<number | null>;
   /** Of the agent PRs merged in the 30 days to the week's end, how many were reverted in that window. */
   readonly revertRate: WeekOverWeek<RevertRate>;
+  /** Of the agent PRs merged in the 90 days to the week's end, how many at least one Architectural escape names. */
+  readonly escapeRate: WeekOverWeek<EscapeRate>;
+  /** The Architectural escapes opened in the 90 days to the week's end, by Strength. */
+  readonly escapesByStrength: WeekOverWeek<EscapesByStrength>;
   readonly counts: {
     /** Agent PRs merged in the week, across every Product repo. */
     readonly mergedPullRequests: WeekOverWeek<number>;
@@ -287,6 +307,16 @@ export interface RevertRate {
   readonly merged: number;
 }
 
+export interface EscapeRate {
+  /** The agent PRs merged in the window that at least one escape names, each counted once. */
+  readonly escaped: number;
+  /** Every agent PR merged in the window. */
+  readonly merged: number;
+}
+
+/** A count of escapes per Strength, with `none` for a marker whose Strength isn't one the Auditor gives, or is missing. */
+export type EscapesByStrength = Readonly<Record<Strength | "none", number>>;
+
 export type WeeklySummaryResult =
   | { readonly kind: "skip" }
   | {
@@ -297,8 +327,21 @@ export type WeeklySummaryResult =
       readonly body: string;
     };
 
+/**
+ * The Kit-internal switch for the Weekly summary's Auditor lines (#150).
+ * While it's off, the summary still computes the architectural escape rate
+ * but its body shows none of it, so a release cut before switch-on reads as
+ * if the Auditor didn't exist.
+ */
+export const AUDITOR_SWITCHED_ON = false;
+
+export interface WeeklySummaryOptions {
+  /** Overrides the switch; only tests pass it. */
+  readonly auditor?: boolean;
+}
+
 /** The summary to file for the week that just ended, or skip. */
-export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
+export function weeklySummary(input: WeeklySummaryInput, { auditor = AUDITOR_SWITCHED_ON }: WeeklySummaryOptions = {}): WeeklySummaryResult {
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
@@ -322,6 +365,8 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     cycleTimeMs: change("cycleTimeMs"),
     operatorWaitMs: change("operatorWaitMs"),
     revertRate: change("revertRate"),
+    escapeRate: change("escapeRate"),
+    escapesByStrength: change("escapesByStrength"),
     counts: {
       mergedPullRequests: change("mergedPullRequests"),
       ticketsDispatched: change("ticketsDispatched"),
@@ -330,7 +375,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     },
     repos,
   };
-  return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
+  return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input, auditor) };
 }
 
 // The metrics: one week's figures, computed the same way for any week.
@@ -347,6 +392,8 @@ interface WeekMetrics {
   readonly cycleTimeMs: number | null;
   readonly operatorWaitMs: number | null;
   readonly revertRate: RevertRate;
+  readonly escapeRate: EscapeRate;
+  readonly escapesByStrength: EscapesByStrength;
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
   readonly retries: number;
@@ -364,6 +411,8 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     ),
   );
   const { usd: cost, unknownCost } = costOf(records);
+  const escapeWindow = escapeWindowOf(week);
+  const escapes = escapesIn(escapeWindow, input.facts, input.operator);
   return {
     records: records.length,
     cost,
@@ -381,6 +430,8 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
       }),
     ),
     revertRate: revertRateOf(week, input.facts),
+    escapeRate: escapeRateOf(escapeWindow, escapes, input.facts),
+    escapesByStrength: escapesByStrengthOf(escapes),
     mergedPullRequests: merged.length,
     ticketsDispatched: tickets.filter((ticket) => {
       const dispatch = dispatchOf(ticket);
@@ -452,6 +503,57 @@ function revertRateOf(week: Week, facts: readonly GitHubFacts[]): RevertRate {
     reverted: counts.reduce((sum, count) => sum + count.reverted, 0),
     merged: counts.reduce((sum, count) => sum + count.merged, 0),
   };
+}
+
+/** The 90 days to the week's end: slow decay needs longer than revert rate's 30 to show. */
+function escapeWindowOf(week: Week): Window {
+  return { start: week.end - ESCAPE_WINDOW_MS, end: week.end };
+}
+
+/**
+ * An Architectural escape: an issue whose escape marker names at least one
+ * agent PR merged in the window. It counts against those PRs alone.
+ */
+interface ArchitecturalEscape {
+  readonly repo: string;
+  readonly issue: EscapeMarkerIssueFacts;
+  /** The marker's Strength as written, or null when it isn't one the Auditor gives. */
+  readonly strength: Strength | null;
+  /** The marker's PRs that are agent PRs merged in the window. */
+  readonly pullRequests: readonly AgentPullRequestFacts[];
+}
+
+/**
+ * The Architectural escapes opened in the window, repo by repo. Only the
+ * Operator's issues count, so someone else's issue body can't move the metric.
+ */
+function escapesIn(window: Window, facts: readonly GitHubFacts[], operator: string): ArchitecturalEscape[] {
+  return facts.flatMap((repo) => {
+    const merged = mergedIn(window, repo);
+    return repo.escapeMarkerIssues.flatMap((issue) => {
+      const marker = escapeMarkerIn(issue.body);
+      if (marker === null || issue.author !== operator || !within(window, issue.createdAt)) return [];
+      const pullRequests = merged.filter((pullRequest) => marker.pullRequests.includes(pullRequest.number));
+      const strength = STRENGTHS.find((known) => known === marker.strength) ?? null;
+      return pullRequests.length === 0 ? [] : [{ repo: repo.repo, issue, strength, pullRequests }];
+    });
+  });
+}
+
+/** Of the agent PRs merged in the window, how many at least one escape names, each counted once however many do. */
+function escapeRateOf(window: Window, escapes: readonly ArchitecturalEscape[], facts: readonly GitHubFacts[]): EscapeRate {
+  const escaped = new Set(escapes.flatMap(({ repo, pullRequests }) => pullRequests.map((pullRequest) => `${repo}#${pullRequest.number}`)));
+  return { escaped: escaped.size, merged: facts.reduce((sum, repo) => sum + mergedIn(window, repo).length, 0) };
+}
+
+function escapesByStrengthOf(escapes: readonly ArchitecturalEscape[]): EscapesByStrength {
+  const count = (strength: Strength | null) => escapes.filter((escape) => escape.strength === strength).length;
+  return { strong: count("strong"), "worth-exploring": count("worth-exploring"), speculative: count("speculative"), none: count(null) };
+}
+
+/** The repo's agent PRs merged in the window. */
+function mergedIn(window: Window, { pullRequests }: GitHubFacts): AgentPullRequestFacts[] {
+  return pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(window, pullRequest.mergedAt));
 }
 
 /** When the PR's last passing Verdict before its merge was given, read through the Verdict marker on the App's comments, or null. */
@@ -715,9 +817,13 @@ interface Week {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REVERT_WINDOW_MS = 30 * DAY_MS;
+const ESCAPE_WINDOW_MS = 90 * DAY_MS;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-function within({ start, end }: Pick<Week, "start" | "end">, at: string): boolean {
+/** A span of time, from `start` (inclusive) to `end` (exclusive). */
+type Window = Pick<Week, "start" | "end">;
+
+function within({ start, end }: Window, at: string): boolean {
   const time = Date.parse(at);
   return time >= start && time < end;
 }
@@ -776,12 +882,13 @@ function localTime(time: number, timeZone: string): string {
 }
 
 // Rendering. Only shipped features get a section: the Retro, Audit, Map and
-// Monitor issues, the architectural escape rate and scores add theirs when
-// their Specs ship. Held shows only what the Design-session cap holds, until
-// the Monitor and Ideas and Maps caps add their lines.
+// Monitor issues and scores add theirs when their Specs ship. The
+// architectural escape rate's lines are written but wait for
+// AUDITOR_SWITCHED_ON. Held shows only what the Design-session cap holds,
+// until the Monitor and Ideas and Maps caps add their lines.
 
-function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
-  const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, counts } = summary;
+function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput, auditor: boolean): string {
+  const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
   const row = (name: string, { thisWeek, lastWeek }: WeekOverWeek<number | null>, format: (value: number) => string) =>
     `| ${name} | ${orNone(thisWeek, format)} | ${orNone(lastWeek, format)} | ${
       thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, format)
@@ -791,10 +898,17 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
   const percent = (value: number) => `${Math.round(value * 100)}%`;
   const reverts = { thisWeek: share(revertRate.thisWeek), lastWeek: share(revertRate.lastWeek) };
   const revertCell = (rate: RevertRate) => orNone(share(rate), (value) => `${percent(value)} (${rate.reverted} of ${rate.merged})`);
-  const revertChange =
-    reverts.thisWeek === null || reverts.lastWeek === null
-      ? NONE
-      : signed(Math.round(reverts.thisWeek * 100) - Math.round(reverts.lastWeek * 100), (points) => `${points} pts`);
+  /** The change between two shares, in whole percentage points. */
+  const pointsChange = (thisWeek: number | null, lastWeek: number | null) =>
+    thisWeek === null || lastWeek === null ? NONE : signed(Math.round(thisWeek * 100) - Math.round(lastWeek * 100), (points) => `${points} pts`);
+  const revertChange = pointsChange(reverts.thisWeek, reverts.lastWeek);
+  const escapeShare = ({ escaped, merged }: EscapeRate) => (merged === 0 ? null : escaped / merged);
+  const escapeCell = (rate: EscapeRate) => {
+    const value = escapeShare(rate);
+    return value === null ? "no merged agent PRs" : `${rate.escaped} of ${rate.merged} (${percent(value)})`;
+  };
+  const escapeChange = pointsChange(escapeShare(escapeRate.thisWeek), escapeShare(escapeRate.lastWeek));
+  const escapeRateRow = `| Architectural escape rate (90 days) | ${escapeCell(escapeRate.thisWeek)} | ${escapeCell(escapeRate.lastWeek)} | ${escapeChange} |`;
   const costRow = (name: string, figure: WeekOverWeek<CostFigure>) => {
     const thisWeek = figure.thisWeek.usd;
     const lastWeek = figure.lastWeek.usd;
@@ -824,8 +938,10 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     row("Cycle time (median)", cycleTimeMs, hours),
     row("Operator wait (median)", operatorWaitMs, hours),
     `| Revert rate (30 days) | ${revertCell(revertRate.thisWeek)} | ${revertCell(revertRate.lastWeek)} | ${revertChange} |`,
+    ...(auditor ? [escapeRateRow] : []),
     "",
   ];
+  if (auditor) lines.push(escapesByStrengthLine(summary.escapesByStrength.thisWeek), "");
   if (unknownCost.thisWeek > 0) {
     lines.push(
 `${runsWithUnknownCost(unknownCost.thisWeek)} left out of the cost.`,
@@ -842,6 +958,13 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
   // The Operator's one mention, last: the week's only scheduled push.
   lines.push(`@${operator}`);
   return `${lines.join("\n")}\n`;
+}
+
+/** The escapes opened in the 90 days by Strength, naming those with no known Strength only when there are some. */
+function escapesByStrengthLine(counts: EscapesByStrength): string {
+  const known = [`${counts.strong} Strong`, `${counts["worth-exploring"]} Worth exploring`, `${counts.speculative} Speculative`];
+  const all = counts.none === 0 ? known : [...known, `${counts.none} with no known Strength`];
+  return `Architectural escapes by Strength (90 days): ${all.join(", ")}.`;
 }
 
 /** The Held section: a line per repo and source with work held, or nothing at all when no repo has any. */

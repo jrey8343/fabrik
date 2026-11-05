@@ -109,7 +109,7 @@ async function main(): Promise<string> {
   const timeZone = (caller === null ? null : timeZoneIn(caller)) ?? "UTC";
   const records = await readRunRecords(required("FABRIK_STORE_DIR"));
   const repos = await productReposOf(products);
-  const facts = await Promise.all(repos.map((repo) => gatherGitHubFacts(products, repo, now)));
+  const facts = await Promise.all(repos.map((repo) => gatherGitHubFacts(products, repo, now, RUN_STORE.owner)));
 
   const result = weeklySummary({
     records,

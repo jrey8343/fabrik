@@ -47,3 +47,34 @@ export const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 
 /** The first line of the Kit's note that a Ticket came back to design from an agent PR. */
 export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
+
+/**
+ * An Architectural escape's record (#150): `<!-- fabrik:escape <strength> #<pr> #<pr> -->`,
+ * the hidden line an Audit candidate's prefilled issue body ends with when it
+ * traces to merged agent PRs. It can sit anywhere in a body, since a Design
+ * session's rewrite carries it forward, and the Operator may paste one by hand.
+ */
+const ESCAPE_MARKER = /<!--\s*fabrik:escape(\s[^>]*?)?\s*-->/;
+
+/** What an escape marker says, read as written. */
+export interface EscapeMarker {
+  /** The word in the Strength's place, known or not, or null when the marker opens with a PR. */
+  readonly strength: string | null;
+  /** The PR numbers it names, in order. */
+  readonly pullRequests: readonly number[];
+}
+
+/** The first escape marker in `body`, or null if it has none. */
+export function escapeMarkerIn(body: string): EscapeMarker | null {
+  const match = ESCAPE_MARKER.exec(body);
+  if (match === null) return null;
+  const words = (match[1] ?? "").split(/\s+/).filter((word) => word !== "");
+  const first = words[0];
+  return {
+    strength: first === undefined || first.startsWith("#") ? null : first,
+    pullRequests: words.flatMap((word) => {
+      const pullRequest = /^#([1-9][0-9]*)$/.exec(word);
+      return pullRequest === null ? [] : [Number(pullRequest[1])];
+    }),
+  };
+}

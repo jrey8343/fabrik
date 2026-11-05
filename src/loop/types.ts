@@ -291,6 +291,11 @@ export interface ChangesRequestedReview {
 /** The Reviewer's judgment on a PR (GLOSSARY.md). */
 export type Verdict = "pass" | "execution-flaw" | "design-flaw";
 
+/** How sure the Auditor is of an Audit candidate: its badge, which the escape marker carries (#150). */
+export type Strength = "strong" | "worth-exploring" | "speculative";
+
+export const STRENGTHS: readonly Strength[] = ["strong", "worth-exploring", "speculative"];
+
 /** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
 export interface VerdictRecord {
   readonly verdict: Verdict;

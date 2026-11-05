@@ -78,6 +78,8 @@ interface RawRepo {
   openIssues?: unknown[];
   defaultBranchCommits?: unknown[];
   needsDesignIssues?: unknown[];
+  /** The issues the Operator opened, newest first. */
+  operatorIssues?: unknown[];
 }
 
 /** A read-only GraphQL API over `raw`, answering each facts query with one page. */
@@ -93,6 +95,10 @@ function repoWith(raw: RawRepo) {
       if (query.includes("labels: [$needsDesign]")) {
         expect(variables["needsDesign"]).toBe("needs-design");
         return answer({ repository: { owner: { login: "jrey8343" }, issues: page(raw.needsDesignIssues) } });
+      }
+      if (query.includes("filterBy: { createdBy: $operator }")) {
+        expect(variables["operator"]).toBe("jrey8343");
+        return answer({ repository: { issues: page(raw.operatorIssues) } });
       }
       if (query.includes("filterBy: { since: $since }")) return answer({ repository: { issues: page(raw.updatedIssues) } });
       if (query.includes("issues(states: OPEN")) return answer({ repository: { issues: page(raw.openIssues) } });
@@ -135,7 +141,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
       ],
     });
 
-    const facts = await gatherGitHubFacts(github, repo, NOW);
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
 
     expect(facts.repo).toBe("jrey8343/shop");
     expect(facts.pullRequests.map(({ number, ticket, title, mergedAt, mergeSha }) => ({ number, ticket, title, mergedAt, mergeSha }))).toEqual([
@@ -149,21 +155,21 @@ describe("Gathering a Product repo's GitHub facts", () => {
       closedPullRequests: [aRawPullRequest({ number: 60, title: 'Revert "Build the thing"', headRefName: "revert-50", author: OPERATOR })],
     });
 
-    const facts = await gatherGitHubFacts(github, repo, NOW);
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
 
     expect(facts.pullRequests).toEqual([]);
     expect(facts.mergedPullRequestTitles).toEqual([{ title: 'Revert "Build the thing"', mergedAt: "2026-11-04T00:00:00Z" }]);
   });
 
-  it("covers 37 days, so last week's 30-day revert window is whole", async () => {
+  it("covers 97 days of PRs, so last week's 90-day escape window is whole", async () => {
     const github = repoWith({
       closedPullRequests: [
-        aRawPullRequest({ number: 50, mergedAt: "2026-10-03T00:00:00Z", closedAt: "2026-10-03T00:00:00Z", updatedAt: "2026-10-03T00:00:00Z" }),
-        aRawPullRequest({ number: 49, mergedAt: "2026-09-30T00:00:00Z", closedAt: "2026-09-30T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z" }),
+        aRawPullRequest({ number: 50, mergedAt: "2026-08-04T00:00:00Z", closedAt: "2026-08-04T00:00:00Z", updatedAt: "2026-08-04T00:00:00Z" }),
+        aRawPullRequest({ number: 49, mergedAt: "2026-08-03T00:00:00Z", closedAt: "2026-08-03T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z" }),
       ],
     });
 
-    const facts = await gatherGitHubFacts(github, repo, NOW);
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
 
     expect(facts.pullRequests.map((pr) => pr.number)).toEqual([50]);
   });
@@ -195,7 +201,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
       ],
     });
 
-    const [pullRequest] = (await gatherGitHubFacts(github, repo, NOW)).pullRequests;
+    const [pullRequest] = (await gatherGitHubFacts(github, repo, NOW, OPERATOR.login)).pullRequests;
 
     expect(pullRequest?.commits).toEqual([
       { byApp: true, at: "2026-11-02T00:00:00Z" },
@@ -224,7 +230,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
       openIssues: [aRawIssue({ number: 3, subIssues: { nodes: [{ number: 7 }, { number: 8 }] } }), aRawIssue({ number: 1 })],
     });
 
-    const facts = await gatherGitHubFacts(github, repo, NOW);
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
 
     expect(facts.tickets).toEqual([
       {
@@ -257,7 +263,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
       ],
     });
 
-    const facts = await gatherGitHubFacts(github, repo, NOW);
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
 
     expect(facts.openIssues).toEqual([
       {
@@ -304,7 +310,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
       ],
     });
 
-    const facts = await gatherGitHubFacts(github, repo, NOW);
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
 
     expect(facts.openPullRequests).toEqual([
       {
@@ -341,7 +347,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
       ],
     });
 
-    const { designQueue } = await gatherGitHubFacts(github, repo, NOW);
+    const { designQueue } = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
 
     expect(designQueue).toEqual({
       issues: [
@@ -354,18 +360,42 @@ describe("Gathering a Product repo's GitHub facts", () => {
     });
   });
 
+  it("holds the issues the Operator opened in the 97 days whose body has an escape marker, with their state and body", async () => {
+    const marked = "Split the parser.\n\nFrom audit #70\n<!-- fabrik:escape strong #50 -->";
+    const github = repoWith({
+      operatorIssues: [
+        aRawOperatorIssue(81, "2026-11-05T00:00:00Z", "Just an idea."),
+        aRawOperatorIssue(80, "2026-11-03T00:00:00Z", marked),
+        aRawOperatorIssue(75, "2026-08-04T00:00:00Z", "<!-- fabrik:escape speculative #40 -->", { state: "CLOSED" }),
+        aRawOperatorIssue(60, "2026-08-03T00:00:00Z", "<!-- fabrik:escape strong #30 -->"), // before the window
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(facts.escapeMarkerIssues).toEqual([
+      { number: 80, author: "jrey8343", createdAt: "2026-11-03T00:00:00Z", state: "open", body: marked },
+      { number: 75, author: "jrey8343", createdAt: "2026-08-04T00:00:00Z", state: "closed", body: "<!-- fabrik:escape speculative #40 -->" },
+    ]);
+  });
+
   it("holds the default branch's commit messages in the window", async () => {
     const github = repoWith({
       defaultBranchCommits: [{ message: `Revert "Build the thing"\n\nThis reverts commit ${"c".repeat(40)}.`, committedDate: "2026-11-05T00:00:00Z" }],
     });
 
-    const facts = await gatherGitHubFacts(github, repo, NOW);
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
 
     expect(facts.defaultBranchCommits).toEqual([
       { message: `Revert "Build the thing"\n\nThis reverts commit ${"c".repeat(40)}.`, at: "2026-11-05T00:00:00Z" },
     ]);
   });
 });
+
+/** Issue `number`, which the Operator opened at `createdAt` with `body`, still open. */
+function aRawOperatorIssue(number: number, createdAt: string, body: string, overrides: Record<string, unknown> = {}) {
+  return { number, createdAt, state: "OPEN", body, author: OPERATOR, ...overrides };
+}
 
 /** Open needs-design issue `number`, opened on 2026-10-01, which got needs-design on 2026-11-01. */
 function aRawNeedsDesignIssue(number: number, overrides: Record<string, unknown> = {}) {
