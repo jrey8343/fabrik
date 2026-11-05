@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aGroup, aMonitorIssue, aMonitorIssueBody, monitorInput } from "../__fixtures__/monitor.ts";
+import { aGroup, aMonitorIssue, aMonitorIssueBody, monitorInput, SENTRY_ON } from "../__fixtures__/monitor.ts";
 import { aCheckRun, aCommit, aRedMainBody, aRedMainIssue, commitUrl, RED_DETAILS, redMainInput, runUrl } from "../__fixtures__/redMain.ts";
 import { monitorPlanFor } from "./core.ts";
 
@@ -149,6 +149,30 @@ describe("The red-main issue", () => {
     const plan = monitorPlanFor(redMainInput(red, { issues: errorIssues }));
 
     expect(filedFor(plan)).toEqual(["badc0de"]);
+  });
+});
+
+describe("Red main at caps.monitor_issues 0", () => {
+  /** Error filings paused, with a qualifying Sentry group that would otherwise be filed. */
+  const paused = { cap: 0, monitor: { errors: SENTRY_ON, redMain: true }, sentry: { kind: "read" as const, groups: [aGroup()], groupsWithoutStats: 0 } };
+
+  it("still files the red-main issue while new error filings are paused", () => {
+    const plan = monitorPlanFor(redMainInput([aCommit(RED, [aCheckRun({ id: 901, name: "test", conclusion: "failure" })])], paused));
+
+    expect(plan.open.map((issue) => issue.sentryGroup)).toEqual([null]);
+    expect(filedFor(plan)).toEqual(["badc0de"]);
+  });
+
+  it("still closes the red-main issue once green while new error filings are paused", () => {
+    const plan = monitorPlanFor(
+      redMainInput([aCommit(GREEN, [aCheckRun({ id: 920, name: "test", conclusion: "success" })])], {
+        ...paused,
+        issues: [aRedMainIssue({ number: 41 })],
+      }),
+    );
+
+    expect(plan.open).toEqual([]);
+    expect(plan.close.map((close) => close.issue)).toEqual([41]);
   });
 });
 
