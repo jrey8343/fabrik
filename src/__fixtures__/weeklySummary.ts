@@ -80,6 +80,7 @@ export function aScoreFile(overrides: Partial<ScoreFile> = {}): ScoreFile {
     pullRequest: 50,
     record: "runs/owner/product/2026-11/1000-1-implement.json",
     scoredAt: "2026-11-04T12:05:00Z",
+    rubrics: ["efficiency@1", "ticket-compliance@1", "skill-use@1"],
     judge: { model: "claude-sonnet-5", record: "runs/owner/product/2026-11/1000-1-score.json" },
     digestTrimmed: false,
     skip: null,

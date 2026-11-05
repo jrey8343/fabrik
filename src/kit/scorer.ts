@@ -155,6 +155,8 @@ export interface ScoreFile {
   /** The scored run's Run record's store path. */
   readonly record: string;
   readonly scoredAt: string;
+  /** The rubric set the run was scored, or skipped, under: each rubric's `name@version`, in the rubrics' order. */
+  readonly rubrics: readonly string[];
   /** The judge's model and Run record path, or null for a skip decided before any judge ran. */
   readonly judge: { readonly model: string; readonly record: string } | null;
   /** Whether the judge read a trimmed digest; null when no judge ran, or it failed before it built its prompt. */
@@ -173,6 +175,7 @@ export interface ScoreFileFiles {
 /** The score file of a picked run: its scores, or why it has none. */
 export function scoreFileFor(input: ScoreFileInput): ScoreFileFiles {
   const { scored, rubrics, outcome } = input;
+  const set = rubricSet(rubrics);
   const file: ScoreFile = {
     schema: 1,
     kitSha: scored.kitSha,
@@ -184,11 +187,12 @@ export function scoreFileFor(input: ScoreFileInput): ScoreFileFiles {
     pullRequest: scored.pullRequest,
     record: input.scoredPath,
     scoredAt: input.scoredAt,
+    rubrics: set.pairs,
     ...judgeOf(outcome),
     ...resultOf(rubrics, outcome),
   };
   // Beside the scored run's record, and named by the rubric set, so re-scoring under new rubric versions writes a new file.
-  return { file, path: `scores/${runStoreName(scored, scored.role)}-${rubricSet(rubrics).hash}.json` };
+  return { file, path: `scores/${runStoreName(scored, scored.role)}-${set.hash}.json` };
 }
 
 /** The judge a score file names, if one ran. */
