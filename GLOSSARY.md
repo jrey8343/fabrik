@@ -231,3 +231,7 @@ _Avoid_: architecture regression, design debt
 **Replay**:
 An experiment the Operator starts that re-runs merged Tickets from their original base commit, once as before and once with one thing changed, to compare the two.
 _Avoid_: benchmark, eval, rerun
+
+**Weekly summary**:
+The one issue filed each week across all of the Operator's Product repos: the factory's metrics, and everything waiting on the Operator, held by a cap, or stuck.
+_Avoid_: inbox, Operator inbox, dashboard, report

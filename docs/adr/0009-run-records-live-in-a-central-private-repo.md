@@ -17,3 +17,7 @@ We chose this because Scorers, Replay, the Retro and the weekly summary all need
 - Parallel push jobs write one file per run and retry on conflict, so they never edit the same file.
 - A Pairing session writes no record. It runs locally, has no push job, and counts as a Human touch instead.
 - A run killed by its timeout still gets a record, with no result fields and, if the upload didn't survive, no transcript.
+
+## Addendum: the Weekly summary is filed from `fabrik-runs`
+
+The Weekly summary is one issue per week covering every Product repo, filed in `fabrik-runs` by a scheduled workflow there. Its App token therefore also gets Issues write on `fabrik-runs` and read access to the Product repos it summarises. The push job's token stays Contents-write only, and nothing in a Product repo's agent job gains a credential. Decided in [Operator inbox and weekly summary](https://github.com/jrey8343/fabrik/issues/84).
