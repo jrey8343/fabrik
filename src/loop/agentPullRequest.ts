@@ -5,6 +5,9 @@ import type { PullRequestSnapshot } from "./types.ts";
 /** What every agent branch's name starts with. */
 export const AGENT_BRANCH_PREFIX = "fabrik/ticket-";
 
+/** Commits the Implementer makes carry this identity; the PR itself is the Fabrik App's. */
+export const IMPLEMENTER_AUTHOR = { name: "Fabrik Implementer", email: "fabrik-implementer@users.noreply.github.com" } as const;
+
 /** The branch an Implementer works on for this Ticket. */
 export function agentBranchFor(ticket: number): string {
   return `${AGENT_BRANCH_PREFIX}${ticket}`;
