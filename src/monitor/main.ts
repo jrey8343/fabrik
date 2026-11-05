@@ -298,7 +298,7 @@ async function withLatestEvents(
   errors: MonitorErrors | null,
 ): Promise<{ readonly input: MonitorInput; readonly notes: readonly string[] }> {
   const filing = new Set(plan.open.flatMap((issue) => (issue.sentryGroup === null ? [] : [issue.sentryGroup])));
-  const rewriting = new Set(plan.rewrite.flatMap((rewrite) => (rewrite.sentryGroup === null ? [] : [rewrite.sentryGroup])));
+  const rewriting = new Set(plan.rewrite.flatMap((rewrite) => (rewrite.kind === "stats" ? [rewrite.sentryGroup] : [])));
   if (errors === null || input.sentry?.kind !== "read" || filing.size + rewriting.size === 0) return { input, notes: [] };
   const get = sentryClient(errors, process.env["FABRIK_SENTRY_TOKEN"] ?? "");
   const notes: string[] = [];
@@ -337,7 +337,7 @@ async function apply(github: GitHub, repo: Repo, plan: MonitorPlan): Promise<str
   for (const rewrite of plan.rewrite) {
     // Only the body changes: no comment, and an edit is no event the caller's workflow runs on.
     await github.rest("PATCH", `/repos/${repo.owner}/${repo.name}/issues/${rewrite.issue}`, { body: rewrite.body });
-    lines.push(rewrite.sentryGroup === null ? `Refreshed red main's details on #${rewrite.issue}.` : `Refreshed the stats block on #${rewrite.issue}.`);
+    lines.push(rewrite.summary);
   }
   for (const close of plan.close) {
     // The note goes first, so the close right after it reads as the Monitor's own in the issue's timeline.

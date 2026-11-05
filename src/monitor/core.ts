@@ -81,15 +81,25 @@ export interface IssueToOpen {
   readonly labels: readonly Label[];
 }
 
-export interface BodyRewrite {
-  readonly issue: number;
+/** A Monitor issue's body rewritten in place, with the step summary's line saying what changed. */
+export type BodyRewrite =
   /**
-   * The Sentry group whose stats it refreshes, whose latest release the block
-   * names once read; null when it refreshes none, as red main's and one that
-   * only puts in or takes out the held line don't.
+   * The stats in the block of a qualifying group's open issue refreshed, any
+   * held line going in or out with them: the release is the one the group's
+   * latest event names once read.
    */
-  readonly sentryGroup: string | null;
+  | (RewriteOf<"stats"> & { readonly sentryGroup: string })
+  /** Only the held line put in or taken out of an open error issue's stats block, refreshing no group's stats. */
+  | RewriteOf<"held-line">
+  /** The details of the open red-main issue brought up to date with the default branch's red commit. */
+  | RewriteOf<"red-main">;
+
+interface RewriteOf<Kind extends string> {
+  readonly kind: Kind;
+  readonly issue: number;
   readonly body: string;
+  /** The step summary's line for it, once it's applied. */
+  readonly summary: string;
 }
 
 export interface IssueToClose {
@@ -433,7 +443,9 @@ function statsRewriteFor(issue: MonitorIssue, group: GroupFacts, heldLine: strin
   const current = statsBlockIn(issue.body);
   if (current === null) return null;
   const kept = group.latestEvent === null ? current.find((line) => line.startsWith(RELEASE_LINE))?.slice(RELEASE_LINE.length) : undefined;
-  return blockRewrite(issue, group.id, statsLinesOf(group, heldLine, kept));
+  const body = rewrittenBlock(issue, statsLinesOf(group, heldLine, kept));
+  if (body === null) return null;
+  return { kind: "stats", issue: issue.number, sentryGroup: group.id, body, summary: `Refreshed the stats block on #${issue.number}.` };
 }
 
 /**
@@ -446,7 +458,13 @@ function heldRewriteFor(issue: MonitorIssue, heldLine: string | null): BodyRewri
   const current = statsBlockIn(issue.body);
   if (current === null) return null;
   const kept = current.filter((line) => !line.startsWith(HELD_LINE));
-  return blockRewrite(issue, null, heldLine === null ? kept : [...kept, heldLine]);
+  const body = rewrittenBlock(issue, heldLine === null ? kept : [...kept, heldLine]);
+  if (body === null) return null;
+  const summary =
+    heldLine === null
+      ? `Took the held count out of the stats block on #${issue.number}.`
+      : `Put the held count in the stats block on #${issue.number}.`;
+  return { kind: "held-line", issue: issue.number, body, summary };
 }
 
 // A Monitor issue's stats block: hidden opening and closing markers, each on a
@@ -490,12 +508,12 @@ function withStatsBlock(body: string, lines: readonly string[]): string {
 }
 
 /**
- * The rewrite putting these lines in the issue's stats block, or null when
- * they're there already or its body has no stats block, which leaves it alone.
+ * The issue's body with these lines in its stats block, or null when they're
+ * there already or its body has no stats block, which leaves it alone.
  */
-export function blockRewrite(issue: MonitorIssue, sentryGroup: string | null, lines: readonly string[]): BodyRewrite | null {
+export function rewrittenBlock(issue: MonitorIssue, lines: readonly string[]): string | null {
   const body = withStatsBlock(issue.body, lines);
-  return body === issue.body ? null : { issue: issue.number, sentryGroup, body };
+  return body === issue.body ? null : body;
 }
 
 /** The newest in-app frames, fenced as code; null when the latest event wasn't read. */

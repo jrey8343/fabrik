@@ -70,13 +70,14 @@ describe("Red main", () => {
     expect(plan.open).toEqual([]);
     expect(plan.rewrite).toEqual([
       {
+        kind: "red-main",
         issue: 41,
-        sentryGroup: null,
         body: aRedMainBody([
           `- Red at: [\`dead000\`](${commitUrl(STILL_RED)})`,
           "- Failed checks:",
           `  - [\`lint\`](${runUrl(912)}) failed`,
         ]),
+        summary: "Refreshed red main's details on #41.",
       },
     ]);
   });

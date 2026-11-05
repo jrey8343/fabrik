@@ -6,7 +6,7 @@
 import { CALLER_JOBS } from "../kit/caller.ts";
 import { MONITOR_LABEL } from "../loop/labels.ts";
 import { RED_MAIN_GREEN_MARKER, RED_MAIN_MARKER } from "../loop/markers.ts";
-import { blockRewrite, bodyCode, type MonitorInput, type MonitorIssue, type MonitorPlan, newestByMarker, statsBlock } from "./core.ts";
+import { bodyCode, type MonitorInput, type MonitorIssue, type MonitorPlan, newestByMarker, rewrittenBlock, statsBlock } from "./core.ts";
 
 export type MainChecksRead =
   /** The default branch's newest commits, newest first back to the program's bound, each with its check runs. */
@@ -67,8 +67,10 @@ export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: Monit
     return { ...nothing, summary: [`Red main: the default branch is green at ${shortSha(commit)}.`] };
   }
   if (issue?.open === true) {
-    const rewrite = blockRewrite(issue, null, detailsOf(commit, state.failed));
-    if (rewrite !== null) return { ...nothing, rewrite: [rewrite] };
+    const body = rewrittenBlock(issue, detailsOf(commit, state.failed));
+    if (body !== null) {
+      return { ...nothing, rewrite: [{ kind: "red-main", issue: issue.number, body, summary: `Refreshed red main's details on #${issue.number}.` }] };
+    }
     return { ...nothing, summary: [`Red main: the default branch is still red at ${shortSha(commit)}, as #${issue.number} says.`] };
   }
   if (issue !== undefined && heldClosed(issue, decided)) {
