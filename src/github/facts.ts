@@ -18,6 +18,7 @@ import type {
 import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import type { GitHub, Repo } from "./client.ts";
+import { gatherDesignQueueSlice } from "./snapshot.ts";
 
 /**
  * How far back the facts reach: 30 days of agent PRs, plus the week before,
@@ -28,12 +29,15 @@ const WINDOW_MS = 37 * 24 * 60 * 60 * 1000;
 /** The GitHub facts the Weekly summary reads of one Product repo, as of `now`. */
 export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }] = await Promise.all([
     gatherClosedPullRequests(github, repo, since),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
     pagesOf<RawIssue>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues),
     pagesOf<RawCommit>(github, DEFAULT_BRANCH_QUERY, repo, { since }, (data) => data.repository.defaultBranchRef?.target.history ?? null),
+    // The Design queue check's own slice, so Held and the check can't disagree. Its token can't read
+    // workflow runs, so it reads Design turns in progress from the issues, as the scheduled tick does.
+    gatherDesignQueueSlice(github, null, repo),
   ]);
   const issues = [...new Map([...updatedIssues, ...openIssues].map((issue) => [issue.number, issue])).values()];
   return {
@@ -45,6 +49,7 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     mergedPullRequestTitles: closed.flatMap((pr) => (pr.mergedAt === null ? [] : [{ title: pr.title, mergedAt: pr.mergedAt }])),
     openIssues: openIssues.map(openIssueOf),
     openPullRequests: open.filter(isAgent).map(openPullRequestOf),
+    designQueue,
   };
 }
 

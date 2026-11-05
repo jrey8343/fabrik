@@ -62,7 +62,7 @@ async function summaryIssues(store: GitHub): Promise<SummaryIssue[]> {
 async function file(store: GitHub, filing: WeeklyFiling): Promise<string> {
   switch (filing.kind) {
     case "nothing":
-      return "A quiet week: nothing ran and nothing is waiting or stuck, so no summary was filed.";
+      return "A quiet week: nothing ran and nothing is waiting, stuck or held, so no summary was filed.";
     case "file": {
       await ensureLabel(store);
       const issue = (await store.rest("POST", `${STORE_API}/issues`, {

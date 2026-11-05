@@ -13,6 +13,7 @@ import { DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from ".
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
   DesignQueueIssue,
+  DesignQueueSnapshot,
   KitIssueSnapshot,
   LoopEvent,
   PullRequestSnapshot,
@@ -562,19 +563,32 @@ async function gatherDispatch(
   };
 }
 
-/**
- * A Design queue check's slice. With a token that can read workflow runs (the
- * Design queue job's), the turns in progress are read from their jobs. The
- * scheduled tick has none (its caller grants no Actions permission), so it
- * reads them from the issues instead, erring toward holding a slot: see
- * firstTurnClaimed.
- */
+/** A Design queue check's slice, and the repo's owner, the Operator unless one is named. */
 async function gatherDesignQueue(
   github: GitHub,
   actions: GitHub | null,
   repo: Repo,
   operator: string | null,
 ): Promise<EventPart> {
+  const { designQueue, owner } = await gatherDesignQueueSlice(github, actions, repo);
+  return { issue: null, pullRequest: null, dispatch: null, designQueue, operator: operator ?? owner };
+}
+
+/**
+ * The open needs-design issues with their slot-holding signals, and the
+ * Design turns in progress: what the Design queue check decides on, and what
+ * the Weekly summary's Held section counts. With a token that can read
+ * workflow runs (the Design queue job's), the turns in progress are read from
+ * their jobs. Without one, as on the scheduled tick (its caller grants no
+ * Actions permission) and the Weekly summary (its Product-repo token can't
+ * read Actions), they are read from the issues instead, erring toward holding
+ * a slot: see firstTurnClaimed.
+ */
+export async function gatherDesignQueueSlice(
+  github: Pick<GitHub, "graphql">,
+  actions: Pick<GitHub, "rest"> | null,
+  repo: Repo,
+): Promise<{ readonly designQueue: DesignQueueSnapshot; readonly owner: string }> {
   const issues: DesignQueueIssue[] = [];
   const claimed: number[] = [];
   let after: string | null = null;
@@ -612,14 +626,11 @@ async function gatherDesignQueue(
   } while (after !== null);
 
   return {
-    issue: null,
-    pullRequest: null,
-    dispatch: null,
     designQueue: {
       issues,
       designTurnsInProgress: actions === null ? claimed.sort((a, b) => a - b) : await designTurnsInProgress(actions, repo),
     },
-    operator: operator ?? page.repository.owner.login,
+    owner: page.repository.owner.login,
   };
 }
 
