@@ -155,6 +155,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
   const last = stream?.result ?? null;
   const { recordPath, transcriptPath } = pathsFor(end, role);
   const implement = role === "implement";
+  const modelUsage = Object.fromEntries(Object.entries(stream?.modelUsage ?? {}).map(([model, usage]) => [model, costOf(usage)]));
   const record: RunRecord = {
     schema: 1,
     kitSha: end.kitSha,
@@ -181,9 +182,10 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     turns: numberOr(last?.["num_turns"]),
     permissionDenials: Array.isArray(last?.["permission_denials"]) ? last["permission_denials"].length : null,
     apiRetries: stream?.apiRetryCount ?? null,
-    totalCostUsd: numberOr(last?.["total_cost_usd"]),
-    modelUsage: Object.fromEntries(Object.entries(stream?.modelUsage ?? {}).map(([model, usage]) => [model, costOf(usage)])),
-    rateLimit: null,
+    // A run with any model of unknown cost basis has no total either: never a guessed figure.
+    totalCostUsd: Object.values(modelUsage).some((usage) => usage.costUsd === null) ? null : numberOr(last?.["total_cost_usd"]),
+    modelUsage,
+    rateLimit: readingOf(stream?.lastRateLimit ?? null),
     transcript: transcriptPath,
   };
   return { record, recordPath, transcriptPath };
@@ -232,8 +234,21 @@ function costOf(usage: StreamMessage): ModelCost {
     outputTokens: numberOr(usage["outputTokens"]),
     cacheWriteTokens: numberOr(usage["cacheCreationInputTokens"]),
     cacheReadTokens: numberOr(usage["cacheReadInputTokens"]),
-    costUsd: numberOr(usage["costUSD"]),
+    costUsd: costBasis === UNKNOWN_COST ? null : numberOr(usage["costUSD"]),
     costBasis,
+  };
+}
+
+/** The `costBasis` the CLI gives a model it has no price for. */
+const UNKNOWN_COST = "unknown";
+
+function readingOf(info: StreamMessage | null): RateLimitReading | null {
+  if (info === null) return null;
+  return {
+    status: stringOr(info["status"]),
+    rateLimitType: stringOr(info["rateLimitType"]),
+    utilization: numberOr(info["utilization"]),
+    resetsAt: numberOr(info["resetsAt"]),
   };
 }
 
