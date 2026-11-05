@@ -80,6 +80,8 @@ interface RawRepo {
   needsDesignIssues?: unknown[];
   /** The issues the Operator opened, newest first. */
   operatorIssues?: unknown[];
+  /** The open issues with the fabrik:audit label. */
+  openAudits?: unknown[];
 }
 
 /** A read-only GraphQL API over `raw`, answering each facts query with one page. */
@@ -95,6 +97,10 @@ function repoWith(raw: RawRepo) {
       if (query.includes("labels: [$needsDesign]")) {
         expect(variables["needsDesign"]).toBe("needs-design");
         return answer({ repository: { owner: { login: "jrey8343" }, issues: page(raw.needsDesignIssues) } });
+      }
+      if (query.includes("labels: [$audit]")) {
+        expect(variables["audit"]).toBe("fabrik:audit");
+        return answer({ repository: { issues: page(raw.openAudits) } });
       }
       if (query.includes("filterBy: { createdBy: $operator }")) {
         expect(variables["operator"]).toBe("jrey8343");
@@ -376,6 +382,22 @@ describe("Gathering a Product repo's GitHub facts", () => {
     expect(facts.escapeMarkerIssues).toEqual([
       { number: 80, author: "jrey8343", createdAt: "2026-11-03T00:00:00Z", state: "open", body: marked },
       { number: 75, author: "jrey8343", createdAt: "2026-08-04T00:00:00Z", state: "closed", body: "<!-- fabrik:escape speculative #40 -->" },
+    ]);
+  });
+
+  it("holds the open fabrik:audit issues, with who opened them and when", async () => {
+    const github = repoWith({
+      openAudits: [
+        { number: 90, title: "Audit: week of 2026-11-02", createdAt: "2026-11-01T00:00:00Z", author: APP },
+        { number: 91, title: "My own audit", createdAt: "2026-11-03T00:00:00Z", author: OPERATOR },
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(facts.openAudits).toEqual([
+      { number: 90, title: "Audit: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-01T00:00:00Z" },
+      { number: 91, title: "My own audit", author: "jrey8343", createdAt: "2026-11-03T00:00:00Z" },
     ]);
   });
 
