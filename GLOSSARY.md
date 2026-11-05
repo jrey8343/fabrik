@@ -203,3 +203,7 @@ _Avoid_: intervention, manual fix
 **Architectural escape**:
 An Audit candidate the Operator files as an issue that traces back to merged agent pull requests: structural decay that passed Review. Counted against those pull requests, never against a candidate the Operator set aside.
 _Avoid_: architecture regression, design debt
+
+**Replay**:
+An experiment the Operator starts that re-runs merged Tickets from their original base commit, once as before and once with one thing changed, to compare the two.
+_Avoid_: benchmark, eval, rerun
