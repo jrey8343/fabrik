@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aCommit, aLabelAdded, aMergedPullRequest, aReview, aRunRecord, aTicketTimeline, factsOf } from "../__fixtures__/weeklySummary.ts";
-import { type AgentPullRequestFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
+import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
 // week it covers runs from Monday 2 November 00:00 to Monday 9 November 00:00
@@ -237,6 +237,82 @@ describe("the Weekly summary", () => {
     it("averages over the week's merged PRs", () => {
       const other = aMergedPullRequest("2026-11-05T00:00:00Z", { number: 51, ticket: 8 });
       expect(touches({ reviews: [aReview("2026-11-03T00:00:00Z")] }, {}, [other])).toBe(0.5);
+    });
+  });
+
+  describe("cycle time and Operator wait", () => {
+    const HOUR = 60 * 60 * 1000;
+    const summaryOf = (facts: GitHubFacts) => {
+      const result = weeklySummary(input({ records: [aRunRecord()], facts: [facts] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary;
+    };
+
+    it("runs cycle time from Dispatch, the first agent:implement, to the merge, as a median", () => {
+      const summary = summaryOf(
+        factsOf({
+          pullRequests: [
+            aMergedPullRequest("2026-11-03T10:00:00Z", { number: 50, ticket: 1 }),
+            aMergedPullRequest("2026-11-04T00:00:00Z", { number: 51, ticket: 2 }),
+            aMergedPullRequest("2026-11-05T00:00:00Z", { number: 52, ticket: 3 }),
+            aMergedPullRequest("2026-10-30T00:00:00Z", { number: 53, ticket: 4 }), // last week
+          ],
+          tickets: [
+            // 10 hours, a Retry's agent:implement not restarting it.
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z"), aLabelAdded("agent:implement", "2026-11-03T05:00:00Z")], {
+              number: 1,
+            }),
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z")], { number: 2 }), // 24 hours
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z")], { number: 3 }), // 48 hours
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-10-29T00:00:00Z")], { number: 4 }), // 24 hours
+          ],
+        }),
+      );
+      expect(summary.cycleTimeMs).toEqual({ thisWeek: 24 * HOUR, lastWeek: 24 * HOUR });
+    });
+
+    it("takes the middle two's mean for an even count, and none in a week with no merged PR", () => {
+      const summary = summaryOf(
+        factsOf({
+          pullRequests: [
+            aMergedPullRequest("2026-11-03T10:00:00Z", { number: 50, ticket: 1 }),
+            aMergedPullRequest("2026-11-04T00:00:00Z", { number: 51, ticket: 2 }),
+          ],
+          tickets: [
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z")], { number: 1 }), // 10 hours
+            aTicketTimeline([aLabelAdded("agent:implement", "2026-11-03T00:00:00Z")], { number: 2 }), // 24 hours
+          ],
+        }),
+      );
+      expect(summary.cycleTimeMs).toEqual({ thisWeek: 17 * HOUR, lastWeek: null });
+    });
+
+    it("runs Operator wait from the last passing Verdict, read through its marker, to the merge", () => {
+      const verdict = (verdict: string, at: string, overrides: Partial<CommentFacts> = {}): CommentFacts => ({
+        author: "fabrik-app[bot]",
+        byApp: true,
+        body: `<!-- fabrik:verdict {"verdict":"${verdict}","source":"reviewer","requestChanges":false,"headSha":"abc"} -->\nThe Reviewer's Verdict.`,
+        at,
+        ...overrides,
+      });
+      const summary = summaryOf(
+        factsOf({
+          pullRequests: [
+            aMergedPullRequest("2026-11-04T00:00:00Z", {
+              number: 50,
+              comments: [
+                verdict("pass", "2026-11-03T00:00:00Z"),
+                verdict("execution-flaw", "2026-11-03T06:00:00Z"),
+                verdict("pass", "2026-11-03T12:00:00Z"), // the last pass: 12 hours
+                verdict("pass", "2026-11-03T20:00:00Z", { byApp: false, author: "operator" }), // quoting a marker fakes nothing
+                { author: "operator", byApp: false, body: "Merging.", at: "2026-11-03T22:00:00Z" },
+              ],
+            }),
+            aMergedPullRequest("2026-11-05T00:00:00Z", { number: 51 }), // no passing Verdict: left out
+          ],
+        }),
+      );
+      expect(summary.operatorWaitMs).toEqual({ thisWeek: 12 * HOUR, lastWeek: null });
     });
   });
 

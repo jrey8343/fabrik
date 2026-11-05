@@ -1,6 +1,7 @@
 // The Weekly summary (ADR-0009): from the store's Run records, a GitHub facts
 // snapshot per Product repo, the Operator and now, the one issue filed for the
 // week that just ended, or skip in a quiet week. Pure, no I/O, no model call.
+import { verdictsIn } from "../github/threads.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import type { RateLimitReading, RunRecord } from "./runRecord.ts";
 
@@ -107,6 +108,10 @@ export interface WeeklySummary {
   readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
   /** Human touches per agent PR merged in the week, or null in a week with none merged. */
   readonly humanTouches: WeekOverWeek<number | null>;
+  /** The median time from Dispatch to merge of the week's merged agent PRs, in ms, or null with none. */
+  readonly cycleTimeMs: WeekOverWeek<number | null>;
+  /** The median time from the last passing Verdict to merge of the week's merged agent PRs, in ms, or null with none. */
+  readonly operatorWaitMs: WeekOverWeek<number | null>;
   readonly counts: {
     /** Agent PRs merged in the week, across every Product repo. */
     readonly mergedPullRequests: WeekOverWeek<number>;
@@ -145,6 +150,8 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     unknownCost: change("unknownCost"),
     weeklyLimit: change("weeklyLimit"),
     humanTouches: change("humanTouches"),
+    cycleTimeMs: change("cycleTimeMs"),
+    operatorWaitMs: change("operatorWaitMs"),
     counts: {
       mergedPullRequests: change("mergedPullRequests"),
       ticketsDispatched: change("ticketsDispatched"),
@@ -163,6 +170,8 @@ interface WeekMetrics {
   readonly unknownCost: number;
   readonly weeklyLimit: RateLimitReading | null;
   readonly humanTouches: number | null;
+  readonly cycleTimeMs: number | null;
+  readonly operatorWaitMs: number | null;
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
   readonly retries: number;
@@ -186,6 +195,13 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     unknownCost: records.filter((record) => record.totalCostUsd === null).length,
     weeklyLimit: records.findLast((record) => record.rateLimit !== null)?.rateLimit ?? null,
     humanTouches: mean(merged.map((pullRequest) => humanTouchesOf(pullRequest, input.operator))),
+    cycleTimeMs: median(merged.flatMap(({ dispatch, mergedAt }) => (dispatch === null ? [] : [Date.parse(mergedAt) - Date.parse(dispatch)]))),
+    operatorWaitMs: median(
+      merged.flatMap(({ pullRequest, mergedAt }) => {
+        const passed = lastPassOf(pullRequest, mergedAt);
+        return passed === null ? [] : [Date.parse(mergedAt) - Date.parse(passed)];
+      }),
+    ),
     mergedPullRequests: pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt)).length,
     ticketsDispatched: tickets.filter((ticket) => {
       const dispatch = dispatchOf(ticket);
@@ -232,6 +248,23 @@ function humanTouchesOf({ pullRequest, mergedAt, ticket, dispatch }: MergedPullR
   const pairing = ticket?.labelEvents.some((event) => event.label === READY_FOR_HUMAN && event.action === "labeled" && after(event.at)) ? 1 : 0;
   const operatorSteps = ticket?.blockedBy.filter((blocker) => blocker.labels.includes(READY_FOR_HUMAN)).length ?? 0;
   return pushes + requestChanges + retriesAsked + pairing + operatorSteps;
+}
+
+/** When the PR's last passing Verdict before its merge was given, read through the Verdict marker on the App's comments, or null. */
+function lastPassOf(pullRequest: AgentPullRequestFacts, mergedAt: string): string | null {
+  return (
+    pullRequest.comments.findLast(
+      (comment) =>
+        comment.byApp && Date.parse(comment.at) <= Date.parse(mergedAt) && verdictsIn([comment.body]).some((record) => record.verdict === "pass"),
+    )?.at ?? null
+  );
+}
+
+function median(values: readonly number[]): number | null {
+  const sorted = values.toSorted((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length === 0) return null;
+  return sorted.length % 2 === 1 ? (sorted[middle] ?? null) : ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2;
 }
 
 function mean(values: readonly number[]): number | null {
