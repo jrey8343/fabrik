@@ -79,6 +79,18 @@ describe("the Weekly summary", () => {
     });
   });
 
+  it("reports Subscription usage from weekly-limit readings only, never a later five-hour one", () => {
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ endedAt: "2026-11-05T00:00:00Z", rateLimit: { status: "allowed", rateLimitType: "seven_day", utilization: 0.3, resetsAt: 1_794_000_000 } }),
+          aRunRecord({ endedAt: "2026-11-06T00:00:00Z", rateLimit: { status: "allowed", rateLimitType: "five_hour", utilization: 0.95, resetsAt: 1_793_500_000 } }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ kind: "summary", summary: { weeklyLimit: { thisWeek: { rateLimitType: "seven_day", utilization: 0.3 } } } });
+  });
+
   it("reports no weekly-limit reading in a week whose records read none", () => {
     const result = weeklySummary(input({ records: [aRunRecord({ endedAt: "2026-11-06T00:00:00Z", rateLimit: null })] }));
     expect(result).toMatchObject({ kind: "summary", summary: { weeklyLimit: { thisWeek: null, lastWeek: null } } });

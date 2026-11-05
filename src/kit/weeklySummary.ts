@@ -6,7 +6,7 @@ import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { InfrastructureFailure } from "../loop/types.ts";
-import type { RateLimitReading, RunRecord } from "./runRecord.ts";
+import { type RateLimitReading, type RunRecord, WEEKLY_LIMIT } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
 export interface LabelEvent {
@@ -345,7 +345,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     costPerMergedPullRequest: costPerMergedPullRequestOf(week, input),
     costPerSpec: costPerSpecOf(week, input),
     spendNeverMerged: spendNeverMergedOf(week, input),
-    weeklyLimit: records.findLast((record) => record.rateLimit !== null)?.rateLimit ?? null,
+    weeklyLimit: records.findLast((record) => record.rateLimit?.rateLimitType === WEEKLY_LIMIT)?.rateLimit ?? null,
     humanTouches: mean(merged.map((pullRequest) => humanTouchesOf(pullRequest, input.operator))),
     cycleTimeMs: median(merged.flatMap(({ dispatch, mergedAt }) => (dispatch === null ? [] : [Date.parse(mergedAt) - Date.parse(dispatch)]))),
     operatorWaitMs: median(
