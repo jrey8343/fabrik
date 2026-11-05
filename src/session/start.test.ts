@@ -183,9 +183,6 @@ const PINS = [
   { repository: OTHER_SKILLS, sha: OTHER_SHA },
 ];
 
-/** Extra skills are switched on as shipped; these tests name the switch so they never depend on it. */
-const switchedOn = { extraSkills: true } as const;
-
 async function upstream() {
   return {
     [BASE_URL]: await aSkillsArchive({ "skills/engineering/grilling": "# grilling" }),
@@ -226,7 +223,6 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       productDir: product,
       release: "v1.2.3",
       download: servingEach(await upstream()).download,
-      ...switchedOn,
     });
 
     expect(await installedFolders(product)).toEqual([
@@ -253,7 +249,6 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       productDir: product,
       release: "v1.2.3",
       download: servingEach(await upstream()).download,
-      ...switchedOn,
     });
 
     expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
@@ -270,7 +265,6 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       productDir: product,
       release: "v1.2.3",
       download: servingEach(await upstream()).download,
-      ...switchedOn,
     });
 
     expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
@@ -284,7 +278,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       review: ["someone/skills/threat-model"],
     });
     const start = async (download: Download) =>
-      sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download, ...switchedOn });
+      sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download });
     await start(servingEach(await upstream()).download);
     const again = servingEach(await upstream());
 
@@ -306,7 +300,6 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       productDir: product,
       release: "v1.2.3",
       download: servingEach(await upstream()).download,
-      ...switchedOn,
     });
     await mkdir(join(product, ".claude/skills/my-own-skill"));
     await writeFile(
@@ -320,7 +313,6 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       productDir: product,
       release: "v1.2.3",
       download: servingEach(await upstream()).download,
-      ...switchedOn,
     });
 
     expect(output.systemMessage).toBeUndefined();
@@ -335,7 +327,6 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       productDir: product,
       release: "v1.2.3",
       download: servingEach(await upstream()).download,
-      ...switchedOn,
     });
 
     expect(output.systemMessage).toBeUndefined();

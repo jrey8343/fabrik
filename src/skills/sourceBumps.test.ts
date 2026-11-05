@@ -206,7 +206,7 @@ function product(): FakeProduct {
 }
 
 const run = (github: FakeProduct, upstream: ReturnType<typeof upstreamOf>) =>
-  pushSourceBumps(github, repo, upstream.read, { extraSkills: true });
+  pushSourceBumps(github, repo, upstream.read);
 
 describe("pushing a Product repo's weekly skills bumps", () => {
   it("makes no upstream calls and writes nothing in a repo with no Skills sources lockfile", async () => {
@@ -369,13 +369,5 @@ describe("pushing a Product repo's weekly skills bumps", () => {
     expect(result.ok).toBe(false);
     expect(upstream.calls).toEqual([]);
     expect(github.writes).toEqual([]);
-  });
-
-  it("pays nothing while Extra skills are switched off", async () => {
-    const github = new FakeProduct({ [CONFIG]: "{}", [LOCK]: lockText(["jrey8343/skills", PIN]) });
-    const upstream = upstreamOf({});
-
-    expect(await pushSourceBumps(github, repo, upstream.read, { extraSkills: false })).toEqual({ ok: true, sources: [] });
-    expect(upstream.calls).toEqual([]);
   });
 });

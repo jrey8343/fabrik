@@ -15,7 +15,6 @@ import { readKitConfigSources } from "../github/snapshot.ts";
 import {
   type KitConfig,
   PHASES,
-  type ResolveOptions,
   resolveKitConfig,
   SKILLS_SOURCES_LOCK_PATH,
   type SkillsSource,
@@ -47,13 +46,12 @@ export async function pushSourceBumps(
   github: Pick<GitHub, "rest" | "fileText">,
   repo: Repo,
   readUpstream: ReadUpstream,
-  options?: ResolveOptions,
 ): Promise<SourceBumpsResult> {
   const base = `/repos/${repo.owner}/${repo.name}`;
   const { default_branch: defaultBranch } = (await github.rest("GET", base)) as { default_branch: string };
   const sources = await readKitConfigSources(github, repo, await headOf(github, base, defaultBranch));
   if (sources.skillsLock === null || sources.skillsLock === undefined) return { ok: true, sources: [] };
-  const resolved = resolveKitConfig(sources, options);
+  const resolved = resolveKitConfig(sources);
   if (!resolved.ok) return resolved;
 
   const outcomes: SourceBumpOutcome[] = [];

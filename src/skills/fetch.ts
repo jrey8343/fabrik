@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
-import { type ExtraSkill, type KitConfig, type Phase, PHASES, type ResolveOptions } from "../kit/config.ts";
+import { type ExtraSkill, type KitConfig, type Phase, PHASES } from "../kit/config.ts";
 import { checkExtraSkills } from "./extra.ts";
 import { readSkillsLock, SKILLS_LOCK_PATH, skillFolders } from "./lock.ts";
 
@@ -42,7 +42,7 @@ export type InstallRecord = readonly InstalledSource[];
 /** Which Extra skill picks a fetch installs: one role's, or every role's (a session at the wheel). */
 export type SkillsToInstall = Phase | "every";
 
-export interface FetchOptions extends ResolveOptions {
+export interface FetchOptions {
   /** Which picks to install beside the Base skills; every pick unless one role is named. */
   readonly install?: SkillsToInstall;
 }
@@ -106,7 +106,7 @@ export async function fetchSkills(
   kitDir: string,
   productDir: string,
   download: Download = downloadFromGitHub,
-  { install = "every", ...resolveOptions }: FetchOptions = {},
+  { install = "every" }: FetchOptions = {},
 ): Promise<InstalledSkills> {
   const lock = readSkillsLock(await readFile(join(kitDir, SKILLS_LOCK_PATH), "utf8"));
   const dest = skillsDir(productDir);
@@ -114,7 +114,7 @@ export async function fetchSkills(
   const record = (await readInstallRecord(productDir)) ?? [];
   const installedFrom = (repository: string) => record.find((source) => source.repository === repository);
 
-  const resolved = await readKitConfigFromCheckout(productDir, resolveOptions);
+  const resolved = await readKitConfigFromCheckout(productDir);
   const config = resolved.ok ? resolved.config : null;
   const picks = config === null ? [] : picksToInstall(config, install);
 

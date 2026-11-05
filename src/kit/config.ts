@@ -66,18 +66,6 @@ export interface KitConfigSources {
   readonly skillsLock?: string | null;
 }
 
-/**
- * The Kit-internal switch for Extra skills (#144), now on. While it was off,
- * picks were unknown fields and the Skills sources lockfile was ignored, so a
- * release cut before switch-on behaved as if the feature didn't exist.
- */
-export const EXTRA_SKILLS_SWITCHED_ON = true;
-
-export interface ResolveOptions {
-  /** Overrides the switch; only tests pass it. */
-  readonly extraSkills?: boolean;
-}
-
 /** Where each optional per-phase instruction file lives in a Product repo. */
 export function instructionsPath(phase: Phase): string {
   return `.fabrik/${phase}.md`;
@@ -111,10 +99,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
 export const KIT_CONFIG_PATH = ".fabrik/config.json";
 
 /** Fills in every default the file leaves out, or says what's wrong with it. */
-export function resolveKitConfig(
-  sources: KitConfigSources,
-  { extraSkills = EXTRA_SKILLS_SWITCHED_ON }: ResolveOptions = {},
-): KitConfigResult {
+export function resolveKitConfig(sources: KitConfigSources): KitConfigResult {
   const text = sources.config ?? "";
   let raw: unknown = {};
   if (text.trim() !== "") {
@@ -125,9 +110,9 @@ export function resolveKitConfig(
     }
   }
   const context: ReadContext = { errors: [], readers: [] };
-  const picks: Picks | null = extraSkills ? {} : null;
+  const picks: Picks = {};
   const config = readConfig(new Reader(raw, KIT_CONFIG_PATH, context), picks);
-  const skills = picks === null ? NO_SKILLS : readSkills(picks, sources.skillsLock ?? null, context);
+  const skills = readSkills(picks, sources.skillsLock ?? null, context);
   for (const reader of context.readers) reader.reportUnknownFields();
   const { errors } = context;
   if (errors.length > 0) return { ok: false, errors };
@@ -138,11 +123,6 @@ export function resolveKitConfig(
 type Picks = Partial<Record<Phase, readonly string[] | null>>;
 
 type Skills = Pick<KitConfig, "skillsSources" | "extraSkills">;
-
-const NO_SKILLS: Skills = {
-  skillsSources: DEFAULT_KIT_CONFIG.skillsSources,
-  extraSkills: DEFAULT_KIT_CONFIG.extraSkills,
-};
 
 /** Where a Product repo pins its own Skills sources (ADR-0008). */
 export const SKILLS_SOURCES_LOCK_PATH = ".fabrik/skills.lock.json";
@@ -268,8 +248,8 @@ function readInstructions(files: NonNullable<KitConfigSources["instructions"]>):
   return instructions;
 }
 
-/** Reads config.json; when `picks` is given, also collects each pickable role's `skills` into it. */
-function readConfig(file: Reader, picks: Picks | null): Omit<KitConfig, keyof Skills> {
+/** Reads config.json, collecting each pickable role's `skills` into `picks`. */
+function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
   const defaults = DEFAULT_KIT_CONFIG;
   const sandbox = file.object("sandbox");
   const roles = file.object("roles");
@@ -301,12 +281,10 @@ function orDefault<T>(value: T | null | undefined, fallback: T | null): T | null
   return value === undefined ? fallback : value;
 }
 
-function readAgentRole(role: Reader, defaults: AgentRole, picks: Picks | null, phase: Phase): AgentRole {
-  if (picks !== null) {
-    const skills = role.stringList("skills");
-    if (skills !== undefined) picks[phase] = skills;
-    else if (role.has("skills")) picks[phase] = null;
-  }
+function readAgentRole(role: Reader, defaults: AgentRole, picks: Picks, phase: Phase): AgentRole {
+  const skills = role.stringList("skills");
+  if (skills !== undefined) picks[phase] = skills;
+  else if (role.has("skills")) picks[phase] = null;
   return {
     model: role.string("model", refuseFable) ?? defaults.model,
     effort: orDefault(role.nullableString("effort", checkEffort), defaults.effort),

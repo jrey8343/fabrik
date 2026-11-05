@@ -78,9 +78,6 @@ const BASE_URL = archiveUrl("mattpocock/skills", LOCKED_SHA);
 const OPERATOR_URL = archiveUrl(OPERATOR_SKILLS, OPERATOR_SHA);
 const OTHER_URL = archiveUrl(OTHER_SKILLS, OTHER_SHA);
 
-/** Extra skills are switched on as shipped; these tests name the switch so they never depend on it. */
-const switchedOn = { extraSkills: true } as const;
-
 async function cpDir(from: string, to: string): Promise<void> {
   await cp(from, to, { recursive: true, verbatimSymlinks: true });
 }
@@ -116,7 +113,7 @@ describe("Installing a Product repo's Extra skills", () => {
     });
     const { download } = servingEach(await upstream());
 
-    const installed = await fetchSkills(await aKitCheckout(), product, download, { ...switchedOn, install: "implement" });
+    const installed = await fetchSkills(await aKitCheckout(), product, download, { install: "implement" });
 
     expect(installed.errors).toEqual([]);
     expect(await installedFolders(product)).toEqual(["deciders", "tdd"]);
@@ -135,7 +132,7 @@ describe("Installing a Product repo's Extra skills", () => {
     });
     const { download } = servingEach(await upstream());
 
-    const installed = await fetchSkills(await aKitCheckout(), product, download, { ...switchedOn, install: "every" });
+    const installed = await fetchSkills(await aKitCheckout(), product, download, { install: "every" });
 
     expect(installed.extraSkills).toEqual(["event-storming", "deciders", "threat-model"]);
     expect(await installedFolders(product)).toEqual(["deciders", "event-storming", "tdd", "threat-model"]);
@@ -153,7 +150,7 @@ describe("Installing a Product repo's Extra skills", () => {
     });
     const { urls, download } = servingEach(await upstream());
 
-    await fetchSkills(await aKitCheckout(), product, download, { ...switchedOn, install: "implement" });
+    await fetchSkills(await aKitCheckout(), product, download, { install: "implement" });
 
     expect(urls).toEqual([BASE_URL, OPERATOR_URL]);
   });
@@ -164,10 +161,10 @@ describe("Installing a Product repo's Extra skills", () => {
       design: ["jrey8343/skills/event-storming"],
       review: ["someone/skills/threat-model"],
     });
-    await fetchSkills(kit, product, servingEach(await upstream()).download, switchedOn);
+    await fetchSkills(kit, product, servingEach(await upstream()).download);
     const again = servingEach(await upstream());
 
-    const installed = await fetchSkills(kit, product, again.download, switchedOn);
+    const installed = await fetchSkills(kit, product, again.download);
 
     expect(again.urls).toEqual([]);
     expect(installed.extraSkills).toEqual(["event-storming", "threat-model"]);
@@ -178,12 +175,12 @@ describe("Installing a Product repo's Extra skills", () => {
     const kit = await aKitCheckout();
     const picks = { design: ["jrey8343/skills/event-storming"], review: ["someone/skills/threat-model"] };
     const product = await aProductCheckout(PINS, picks);
-    await fetchSkills(kit, product, servingEach(await upstream()).download, switchedOn);
+    await fetchSkills(kit, product, servingEach(await upstream()).download);
     const repicked = await aProductCheckout(PINS, { ...picks, implement: ["jrey8343/skills/deciders"] });
     await cpDir(join(product, ".claude"), join(repicked, ".claude"));
     const again = servingEach(await upstream());
 
-    await fetchSkills(kit, repicked, again.download, switchedOn);
+    await fetchSkills(kit, repicked, again.download);
 
     expect(again.urls).toEqual([OPERATOR_URL]);
     expect(await installedFolders(repicked)).toEqual(["deciders", "event-storming", "tdd", "threat-model"]);
@@ -195,14 +192,14 @@ describe("Installing a Product repo's Extra skills", () => {
       design: ["jrey8343/skills/event-storming", "jrey8343/skills/deciders"],
       review: ["someone/skills/threat-model"],
     });
-    await fetchSkills(kit, before, servingEach(await upstream()).download, switchedOn);
+    await fetchSkills(kit, before, servingEach(await upstream()).download);
     await mkdir(join(before, ".claude/skills/my-own-skill"));
     const after = await aProductCheckout([{ repository: OPERATOR_SKILLS, sha: OPERATOR_SHA }], {
       design: ["jrey8343/skills/event-storming"],
     });
     await cpDir(join(before, ".claude"), join(after, ".claude"));
 
-    await fetchSkills(kit, after, servingEach(await upstream()).download, switchedOn);
+    await fetchSkills(kit, after, servingEach(await upstream()).download);
 
     expect(await installedFolders(after)).toEqual(["event-storming", "my-own-skill", "tdd"]);
     expect(await readInstallRecord(after)).toEqual([
@@ -220,7 +217,7 @@ describe("The manifest check under the install", () => {
   ): Promise<{ readonly product: string; readonly installed: Awaited<ReturnType<typeof fetchSkills>> }> {
     const product = await aProductCheckout([{ repository: OPERATOR_SKILLS, sha: OPERATOR_SHA }], picks);
     const { download } = servingEach({ ...(await upstream()), [OPERATOR_URL]: operatorArchive });
-    const installed = await fetchSkills(kit ?? (await aKitCheckout()), product, download, { ...switchedOn, install: "every" });
+    const installed = await fetchSkills(kit ?? (await aKitCheckout()), product, download, { install: "every" });
     return { product, installed };
   }
 
@@ -243,9 +240,9 @@ describe("The manifest check under the install", () => {
     const product = await aProductCheckout([{ repository: OPERATOR_SKILLS, sha: OPERATOR_SHA }], {
       design: ["jrey8343/skills/sagas"],
     });
-    await fetchSkills(kit, product, servingEach(await upstream()).download, switchedOn);
+    await fetchSkills(kit, product, servingEach(await upstream()).download);
 
-    const again = await fetchSkills(kit, product, servingEach(await upstream()).download, switchedOn);
+    const again = await fetchSkills(kit, product, servingEach(await upstream()).download);
 
     expect(again.errors).toHaveLength(1);
     expect(again.extraSkills).toEqual([]);
@@ -295,7 +292,7 @@ describe("The manifest check under the install", () => {
       review: ["unpinned/skills/thing"],
     });
 
-    const installed = await fetchSkills(await aKitCheckout(), product, servingEach(await upstream()).download, switchedOn);
+    const installed = await fetchSkills(await aKitCheckout(), product, servingEach(await upstream()).download);
 
     expect(installed.errors).toEqual([
       'roles.review.skills[0] is "unpinned/skills/thing": unpinned/skills has no pin in .fabrik/skills.lock.json',

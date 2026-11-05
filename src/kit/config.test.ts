@@ -263,13 +263,12 @@ describe("Kit config", () => {
   );
 });
 
-describe("Skills sources and Extra skill picks, with the switch on", () => {
-  const on = { extraSkills: true } as const;
+describe("Skills sources and Extra skill picks", () => {
   const SHA_A = "a".repeat(40);
   const SHA_B = "b".repeat(40);
 
   it("resolves no lockfile and no picks to no Skills sources and no Extra skills for every role", () => {
-    expect(resolveKitConfig({ config: null, skillsLock: null }, on)).toEqual({ ok: true, config: DEFAULTS });
+    expect(resolveKitConfig({ config: null, skillsLock: null })).toEqual({ ok: true, config: DEFAULTS });
   });
 
   /** A config that picks one skill from each of these sources, so no pin goes unused. */
@@ -282,11 +281,11 @@ describe("Skills sources and Extra skill picks, with the switch on", () => {
     ["  \n", []],
     ["[]", []],
   ])("treats an empty lockfile (%j) as no Skills sources", (skillsLock) => {
-    expect(resolveKitConfig({ config: null, skillsLock }, on)).toEqual({ ok: true, config: DEFAULTS });
+    expect(resolveKitConfig({ config: null, skillsLock })).toEqual({ ok: true, config: DEFAULTS });
   });
 
   it("fails a lockfile that isn't JSON, naming the file", () => {
-    const result = resolveKitConfig({ config: null, skillsLock: "[{ repository: x }]" }, on);
+    const result = resolveKitConfig({ config: null, skillsLock: "[{ repository: x }]" });
 
     expect(!result.ok && result.errors).toEqual([expect.stringMatching(/^\.fabrik\/skills\.lock\.json is not valid JSON: /)]);
   });
@@ -317,7 +316,7 @@ describe("Skills sources and Extra skill picks, with the switch on", () => {
       ".fabrik/skills.lock.json[1] pins JRey8343/Skills, which .fabrik/skills.lock.json[0] already pins",
     ],
   ])("fails a bad lockfile, naming the entry: %s", (skillsLock, error) => {
-    expect(resolveKitConfig({ config: pickingFrom("jrey8343/skills"), skillsLock }, on)).toEqual({ ok: false, errors: [error] });
+    expect(resolveKitConfig({ config: pickingFrom("jrey8343/skills"), skillsLock })).toEqual({ ok: false, errors: [error] });
   });
 
   const LOCK = JSON.stringify([
@@ -360,20 +359,19 @@ describe("Skills sources and Extra skill picks, with the switch on", () => {
       `roles.design.skills[2] is "jrey8343/skills/event-storming": roles.design.skills[0] already picks it`,
     ],
   ])("fails a bad pick, naming it: %j", (roles, error) => {
-    expect(resolveKitConfig({ config: JSON.stringify({ roles }), skillsLock: LOCK }, on)).toEqual({ ok: false, errors: [error] });
+    expect(resolveKitConfig({ config: JSON.stringify({ roles }), skillsLock: LOCK })).toEqual({ ok: false, errors: [error] });
   });
 
   it("matches a pick to its pin whatever the case, resolving it to the pin's spelling", () => {
     const result = resolveKitConfig(
       { config: pickingFrom("JRey8343/Skills"), skillsLock: JSON.stringify([{ repository: "jrey8343/skills", sha: SHA_A }]) },
-      on,
     );
 
     expect(result.ok && result.config.extraSkills.design).toEqual([{ source: "jrey8343/skills", name: "skill-0" }]);
   });
 
   it("fails picks with no lockfile, naming the unpinned source", () => {
-    const result = resolveKitConfig({ config: pickingFrom("jrey8343/skills"), skillsLock: null }, on);
+    const result = resolveKitConfig({ config: pickingFrom("jrey8343/skills"), skillsLock: null });
 
     expect(result).toEqual({
       ok: false,
@@ -384,7 +382,6 @@ describe("Skills sources and Extra skill picks, with the switch on", () => {
   it.each(["dispatch", "step_up", "implementer"])("refuses skills under roles.%s as an unknown field", (role) => {
     const result = resolveKitConfig(
       { config: JSON.stringify({ roles: { [role]: { skills: ["jrey8343/skills/event-storming"] } } }), skillsLock: null },
-      on,
     );
 
     expect(!result.ok && result.errors).toContain(
@@ -406,7 +403,6 @@ describe("Skills sources and Extra skill picks, with the switch on", () => {
           { repository: "mattpocock/extras", sha: SHA_B },
         ]),
       },
-      on,
     );
 
     expect(result).toEqual({
@@ -434,7 +430,7 @@ describe("Skills sources and Extra skill picks, with the switch on", () => {
 describe("Skills sources and Extra skill picks, as shipped", () => {
   const SHA = "a".repeat(40);
 
-  it("resolves a Product repo's pins and picks with the switch on", () => {
+  it("resolves a Product repo's pins and picks", () => {
     const result = resolveKitConfig({
       config: JSON.stringify({ roles: { design: { skills: ["jrey8343/skills/event-storming"] } } }),
       skillsLock: JSON.stringify([{ repository: "jrey8343/skills", sha: SHA }]),
