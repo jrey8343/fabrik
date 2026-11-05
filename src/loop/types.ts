@@ -222,8 +222,11 @@ export interface IssueSnapshot {
   readonly number: number;
   readonly open: boolean;
   readonly author: string;
-  /** Whether a bot, the Fabrik App, opened it: only then does a Design session keep its body's Monitor marker (src/loop/design.ts). */
-  readonly authorIsBot: boolean;
+  /**
+   * Whether the Fabrik App itself opened it, not a person or any other bot:
+   * only then does a Design session keep its body's Monitor marker (src/loop/design.ts).
+   */
+  readonly authorIsApp: boolean;
   /** Its body as it stands. */
   readonly body: string;
   readonly labels: readonly string[];

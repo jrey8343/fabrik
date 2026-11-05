@@ -153,7 +153,7 @@ describe("Gathering a Design queue check's needs-design issues", () => {
       },
     } as unknown as GitHub;
     const actions = runs === null ? null : (actionsWith(runs) as unknown as GitHub);
-    const snapshot = await gatherSnapshot(github, repo, { kind: "design-queue-check" }, null, actions);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "design-queue-check" }, null, null, actions);
     if (snapshot.designQueue === null) throw new Error("no Design queue slice");
     return snapshot.designQueue;
   }
@@ -412,7 +412,7 @@ describe("Gathering an issue's blocked-by edges", () => {
       },
     } as unknown as GitHub;
 
-    const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 6, label: "needs-design" }, null);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 6, label: "needs-design" }, null, null);
 
     expect(snapshot.issue).toMatchObject({ openBlockers: [10], openBlocking: [7] });
   });
@@ -449,20 +449,51 @@ describe("Gathering an issue's body", () => {
   }
 
   const event = { kind: "label-added", issue: 6, label: "needs-design" } as const;
+  /** The Fabrik App's bot login, its slug with `[bot]`, as the run knows it. */
+  const appLogin = "fabrik-app[bot]";
 
   it("holds the body as it stands, and that the Fabrik App opened it, so a Design session keeps its Monitor marker", async () => {
-    const snapshot = await gatherSnapshot(githubWith({ login: "fabrik-app", __typename: "Bot" }), repo, event, null);
+    const snapshot = await gatherSnapshot(githubWith({ login: "fabrik-app", __typename: "Bot" }), repo, event, null, appLogin);
 
-    expect(snapshot.issue).toMatchObject({ body: "<!-- fabrik:monitor sentry:4504 -->\n## Production error", authorIsBot: true });
+    expect(snapshot.issue).toMatchObject({ body: "<!-- fabrik:monitor sentry:4504 -->\n## Production error", authorIsApp: true });
   });
 
   it.each([
     ["a person", { login: "someone", __typename: "User" }],
+    ["another bot", { login: "dependabot", __typename: "Bot" }],
     ["a deleted account", null],
   ])("holds that %s, not the Fabrik App, opened it", async (_, author) => {
-    const snapshot = await gatherSnapshot(githubWith(author), repo, event, null);
+    const snapshot = await gatherSnapshot(githubWith(author), repo, event, null, appLogin);
 
-    expect(snapshot.issue).toMatchObject({ authorIsBot: false });
+    expect(snapshot.issue).toMatchObject({ authorIsApp: false });
+  });
+
+  it("holds that the Fabrik App didn't open it when the run doesn't know the App's login, as the Kit job, which only routes, doesn't", async () => {
+    const snapshot = await gatherSnapshot(githubWith({ login: "fabrik-app", __typename: "Bot" }), repo, event, null, null);
+
+    expect(snapshot.issue).toMatchObject({ authorIsApp: false });
+  });
+
+  it("keeps no Monitor marker in the Spec a Design session writes from an issue another bot opened", async () => {
+    const finished = {
+      kind: "agent-run-finished",
+      role: "design",
+      issue: 6,
+      output: JSON.stringify({
+        kind: "spec",
+        comment: "Too big for one PR.",
+        spec: { title: "Spec: Booking form errors", body: "## Problem Statement\n\nThe booking form throws." },
+        tickets: [{ key: "fix", title: "Fix the form", body: "## What to build\n\nThe fix.", blockedBy: [] }],
+      }),
+    } as const;
+    const snapshot = await gatherSnapshot(githubWith({ login: "dependabot", __typename: "Bot" }), repo, finished, null, appLogin);
+
+    const plan = planFor(finished, snapshot, kitConfig());
+
+    const spec = plan.kind === "act" ? plan.actions.find((action) => action.kind === "create-issue" && action.key === "spec") : undefined;
+    expect(spec?.kind).toBe("create-issue");
+    expect(spec?.kind === "create-issue" ? spec.body : "").not.toContain("fabrik:monitor");
+    expect(spec?.kind === "create-issue" ? spec.labels : []).not.toContain("fabrik:monitor");
   });
 });
 
@@ -496,7 +527,7 @@ describe("Gathering an issue's Design session", () => {
       },
     } as unknown as GitHub;
     const event = { kind: "issue-comment-created", issue: 6, commenter: "operator", commenterIsBot: false, body: "More context", comment: 9 } as const;
-    return (await gatherSnapshot(github, repo, event, null)).issue;
+    return (await gatherSnapshot(github, repo, event, null, null)).issue;
   }
 
   it("reads a Design-session turn's failure notice as a failed turn, so the session keeps its slot", async () => {
@@ -575,7 +606,7 @@ describe("Gathering a Dispatch check's Tickets", () => {
       },
     } as unknown as GitHub;
 
-    const snapshot = await gatherSnapshot(github, repo, { kind: "dispatch-check" }, null, actionsWith([]) as unknown as GitHub);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "dispatch-check" }, null, null, actionsWith([]) as unknown as GitHub);
 
     expect(snapshot.dispatch?.tickets).toMatchObject([{ number: 6, openBlockers: [10], notPlannedBlockers: [9] }]);
   });
@@ -621,7 +652,7 @@ describe("Gathering a Design-session turn's starting reply", () => {
   it("finds the reply still there", async () => {
     const { github, reads } = githubWhere(() => ({ id: 7003 }));
 
-    const snapshot = await gatherSnapshot(github, repo, turn(7003), null);
+    const snapshot = await gatherSnapshot(github, repo, turn(7003), null, null);
 
     expect(snapshot.startingComment).toEqual({ id: 7003, exists: true });
     expect(reads).toEqual(["GET /repos/acme/shop/issues/comments/7003"]);
@@ -633,7 +664,7 @@ describe("Gathering a Design-session turn's starting reply", () => {
       return null;
     });
 
-    const snapshot = await gatherSnapshot(github, repo, turn(7003), null);
+    const snapshot = await gatherSnapshot(github, repo, turn(7003), null, null);
 
     expect(snapshot.startingComment).toEqual({ id: 7003, exists: false });
   });
@@ -643,13 +674,13 @@ describe("Gathering a Design-session turn's starting reply", () => {
       throw new Error("GitHub GET /repos/acme/shop/issues/comments/7003 failed: 502");
     });
 
-    await expect(gatherSnapshot(github, repo, turn(7003), null)).rejects.toThrow("502");
+    await expect(gatherSnapshot(github, repo, turn(7003), null, null)).rejects.toThrow("502");
   });
 
   it("reads no reply for a turn adding needs-design started", async () => {
     const { github, reads } = githubWhere(() => ({ id: 1 }));
 
-    const snapshot = await gatherSnapshot(github, repo, turn(), null);
+    const snapshot = await gatherSnapshot(github, repo, turn(), null, null);
 
     expect(snapshot.startingComment).toBeNull();
     expect(reads).toEqual([]);

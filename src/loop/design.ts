@@ -595,7 +595,7 @@ function briefBody(brief: AgentBrief): string {
  * marker in an issue a person opened is never kept.
  */
 function keptMarker(issue: IssueSnapshot): string[] {
-  const marker = issue.authorIsBot ? monitorMarkerIn(issue.body) : null;
+  const marker = issue.authorIsApp ? monitorMarkerIn(issue.body) : null;
   return marker === null ? [] : [marker];
 }
 

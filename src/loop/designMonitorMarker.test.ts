@@ -18,7 +18,7 @@ const monitorIssueBody = [
 ].join("\n");
 
 const monitorIssue = snapshotOf(
-  anIssue({ number: 7, labels: ["bug", "needs-design", "fabrik:monitor"], authorIsBot: true, body: monitorIssueBody }),
+  anIssue({ number: 7, labels: ["bug", "needs-design", "fabrik:monitor"], authorIsApp: true, body: monitorIssueBody }),
   { operator: "jrey" },
 );
 
@@ -100,7 +100,7 @@ describe("A Design session keeps a Monitor issue's marker", () => {
   });
 
   it("carries no marker from an issue a person opened, so the Spec the Fabrik App opens can't make a quoted marker count", () => {
-    const quoted = anIssue({ number: 7, labels: ["bug", "needs-design"], authorIsBot: false, body: monitorIssueBody });
+    const quoted = anIssue({ number: 7, labels: ["bug", "needs-design"], authorIsApp: false, body: monitorIssueBody });
 
     const plan = planFor(turnFinished(spec), snapshotOf(quoted), kitConfig());
 
@@ -111,7 +111,7 @@ describe("A Design session keeps a Monitor issue's marker", () => {
     const edited = anIssue({
       number: 7,
       labels: ["bug", "needs-design"],
-      authorIsBot: true,
+      authorIsApp: true,
       body: `Triage notes first.\r\n${MARKER}\r\n## Production error\r\n`,
     });
 
@@ -124,7 +124,7 @@ describe("A Design session keeps a Monitor issue's marker", () => {
     const redMain = anIssue({
       number: 7,
       labels: ["bug", "needs-design", "fabrik:monitor"],
-      authorIsBot: true,
+      authorIsApp: true,
       body: "<!-- fabrik:monitor red-main -->\n## Red main\n\n`main` is red at `abc1234`.",
     });
 
@@ -146,7 +146,7 @@ describe("A Design session keeps a Monitor issue's marker", () => {
     const redMain = anIssue({
       number: 7,
       labels: ["bug", "needs-design", "fabrik:monitor"],
-      authorIsBot: true,
+      authorIsApp: true,
       body: "<!-- fabrik:monitor red-main -->\n## Red main",
     });
 
@@ -167,7 +167,7 @@ describe("A Design session keeps a Monitor issue's marker", () => {
     const unmarked = anIssue({
       number: 7,
       labels: ["bug", "needs-design"],
-      authorIsBot: true,
+      authorIsApp: true,
       body: "Quoting `<!-- fabrik:monitor sentry:4504 -->` inline isn't a marker line.\n<!-- fabrik:monitor-stats -->",
     });
 
