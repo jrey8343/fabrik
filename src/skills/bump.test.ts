@@ -273,6 +273,29 @@ describe("a Product repo's weekly bump of one Skills source", () => {
     expect(body).toContain("> [!CAUTION]\n> Breaking: the source's plugin manifest at `bbbbbbb` no longer lists `decider`, which this repo picks.");
   });
 
+  it.each([
+    ["has no plugin manifest at head", null],
+    ["has a plugin manifest at head it can't read", "{ not json"],
+  ])("flags every picked skill as breaking when the source %s", (_, manifestAtHead) => {
+    const { body } = sourcePullRequest(sourceUpstream({ diff: fileDiff("README.md"), manifestAtHead }));
+
+    expect(body).toContain(
+      "> [!CAUTION]\n> Breaking: the source's plugin manifest at `bbbbbbb` no longer lists `event-storming`, `decider`, which this repo picks.",
+    );
+  });
+
+  it("keeps the PR body within GitHub's limit however many other upstream paths changed", () => {
+    const others = Array.from({ length: 5000 }, (_, i) => fileDiff(`docs/refactor/a-fairly-long-folder-name/file-${i}.md`)).join("");
+    const diff = fileDiff("skills/modeling/event-storming/SKILL.md") + others;
+
+    const { body } = sourcePullRequest(sourceUpstream({ diff }));
+
+    expect(body.length).toBeLessThanOrEqual(65_536);
+    expect(body).toContain("docs/refactor/a-fairly-long-folder-name/file-0.md");
+    expect(body).toMatch(/…and \d+ more paths; see the compare link\./);
+    expect(body).toContain("+new skills/modeling/event-storming/SKILL.md");
+  });
+
   it("names the source, its pin and head, and the compare link", () => {
     const { body } = sourcePullRequest(sourceUpstream());
 

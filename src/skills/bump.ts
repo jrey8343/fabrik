@@ -8,7 +8,7 @@
 // Upstream text (commit messages, the diff) only ever goes into the body
 // inside code fences, so it can't mention people or link issues here.
 import { SKILLS_SOURCES_LOCK_PATH, type SkillsSource } from "../kit/config.ts";
-import { type SkillsLock, shortSha, skillFolders } from "./lock.ts";
+import { foldersIn, PLUGIN_MANIFEST_PATH, type SkillsLock, shortSha, skillFolders } from "./lock.ts";
 
 /** What the GitHub compare API says about upstream (main, or a source's default branch) against the pin. */
 export interface UpstreamSkills {
@@ -21,9 +21,10 @@ export interface UpstreamSkills {
   readonly commits: readonly { readonly sha: string; readonly message: string }[];
   /** The unified diff from the pin to head. */
   readonly diff: string;
-  /** `.claude-plugin/plugin.json` at the pin and at head. */
+  /** `.claude-plugin/plugin.json` at the pin. */
   readonly manifestAtPin: string;
-  readonly manifestAtHead: string;
+  /** `.claude-plugin/plugin.json` at head; null when head has none. */
+  readonly manifestAtHead: string | null;
 }
 
 export type SkillsBump =
@@ -49,6 +50,7 @@ export function planSkillsBump(lock: SkillsLock, upstream: UpstreamSkills): Skil
   if (!hasMoved(lock, upstream)) return { kind: "up-to-date" };
 
   const before = new Set(skillFolders(upstream.manifestAtPin).map((folder) => folder.name));
+  if (upstream.manifestAtHead === null) throw new Error(`Upstream main at ${upstream.head} has no ${PLUGIN_MANIFEST_PATH}`);
   const after = new Set(skillFolders(upstream.manifestAtHead).map((folder) => folder.name));
   const added = [...after].filter((name) => !before.has(name));
   const removed = [...before].filter((name) => !after.has(name));
@@ -95,7 +97,8 @@ export function planSourceBump(
 ): SkillsBump {
   if (!hasMoved(source, upstream)) return { kind: "up-to-date" };
 
-  const atHead = new Set(skillFolders(upstream.manifestAtHead).map((folder) => folder.name));
+  // A head manifest that's gone or unreadable lists no skills, so every pick is flagged as breaking.
+  const atHead = new Set((foldersIn(upstream.manifestAtHead) ?? []).map((folder) => folder.name));
   const removed = picked.filter((name) => !atHead.has(name));
   const folders = pickedFolders(picked, upstream);
   const files = splitDiff(upstream.diff);
@@ -117,7 +120,7 @@ export function planSourceBump(
   notes.push(`Picked skills from this source: ${picked.map((name) => `\`${name}\``).join(", ")}.`);
   const others = [...new Set(files.filter((file) => !touchesPicked(file)).flatMap((file) => file.paths))];
   if (others.length > 0) {
-    notes.push("", "Other upstream changes, outside the picked skills:", "", fenced("text", others.join(" ")));
+    notes.push("", "Other upstream changes, outside the picked skills:", "", ...pathList(others));
   }
 
   const diff = unscoped ? upstream.diff : inPicked.map((file) => file.text).join("");
@@ -189,6 +192,24 @@ function pullRequestBody({ pin, upstream, intro, upstreamName, notes, diffHeadin
   return body;
 }
 
+/** Room in the PR body for the other changed paths, so a large upstream refactor still leaves room for the diff. */
+const OTHER_PATHS_BUDGET = 8_192;
+
+/** The paths on one fenced line, cut to the budget with a count of the rest. */
+function pathList(paths: readonly string[]): readonly string[] {
+  let shown = 0;
+  let length = 0;
+  for (const path of paths) {
+    if (length + path.length + 1 > OTHER_PATHS_BUDGET) break;
+    length += path.length + 1;
+    shown++;
+  }
+  const list = [fenced("text", paths.slice(0, shown).join(" "))];
+  const rest = paths.length - shown;
+  if (rest > 0) list.push("", `…and ${rest} more paths; see the compare link.`);
+  return list;
+}
+
 /** The lockfile with only this source's SHA changed, keeping the rest of the text as the Operator wrote it. */
 function bumpedLockText(lockText: string, source: SkillsSource, head: string): string {
   const entries = JSON.parse(lockText) as { repository: string; sha: string }[];
@@ -204,7 +225,7 @@ function bumpedLockText(lockText: string, source: SkillsSource, head: string): s
 /** The folders of the picked skills at the pin and at head, so a folder that moved still counts. */
 function pickedFolders(picked: readonly string[], upstream: UpstreamSkills): readonly string[] {
   const wanted = new Set(picked);
-  return [...skillFolders(upstream.manifestAtPin), ...skillFolders(upstream.manifestAtHead)]
+  return [...skillFolders(upstream.manifestAtPin), ...(foldersIn(upstream.manifestAtHead) ?? [])]
     .filter((folder) => wanted.has(folder.name))
     .map((folder) => folder.from);
 }

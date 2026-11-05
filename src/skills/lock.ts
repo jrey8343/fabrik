@@ -72,3 +72,13 @@ function skillFolder(path: string): SkillFolder {
   }
   return { from: segments.join("/"), name };
 }
+
+/** The skill folders a manifest lists, or null when there is none or it can't be read as one. */
+export function foldersIn(manifest: string | null): readonly SkillFolder[] | null {
+  if (manifest === null) return null;
+  try {
+    return skillFolders(manifest);
+  } catch {
+    return null;
+  }
+}

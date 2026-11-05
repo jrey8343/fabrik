@@ -4,8 +4,8 @@
 // the pure check in ./extra.ts. A Product repo that pins no source pays nothing:
 // no manifest is read.
 import type { KitConfig } from "../kit/config.ts";
-import { checkExtraSkills, foldersIn } from "./extra.ts";
-import { PLUGIN_MANIFEST_PATH, type SkillsLock } from "./lock.ts";
+import { checkExtraSkills } from "./extra.ts";
+import { foldersIn, PLUGIN_MANIFEST_PATH, type SkillsLock } from "./lock.ts";
 
 /** A Skills source's `.claude-plugin/plugin.json` text at one commit, or null when it has none. */
 export type ReadManifest = (repository: string, sha: string) => Promise<string | null>;

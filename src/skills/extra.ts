@@ -4,7 +4,7 @@
 // runs it before routing any agent run, and the skills fetch runs it again as a
 // backstop. Pure, no I/O.
 import { type KitConfig, type Phase, PHASES, picksIn, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
-import { PLUGIN_MANIFEST_PATH, type SkillFolder, shortSha, skillFolders } from "./lock.ts";
+import { foldersIn, PLUGIN_MANIFEST_PATH, type SkillFolder, shortSha } from "./lock.ts";
 
 export interface ExtraSkillsCheckInput {
   /** The resolved Kit config, its pins and picks already consistent with each other. */
@@ -57,14 +57,4 @@ export function checkExtraSkills({
     });
   }
   return errors;
-}
-
-/** The skill folders a manifest lists, or null when it can't be read as one. */
-export function foldersIn(manifest: string | null): readonly SkillFolder[] | null {
-  if (manifest === null) return null;
-  try {
-    return skillFolders(manifest);
-  } catch {
-    return null;
-  }
 }
