@@ -85,6 +85,8 @@ describe("Starting a retry", () => {
           model: "claude-sonnet-5-5",
           effort: config.roles.implement.effort,
           timeoutMinutes: 60,
+          retry: 1,
+          stepUp: false,
         },
       ],
     });
@@ -106,6 +108,14 @@ describe("Starting a retry", () => {
       model: "claude-opus-5-5",
       effort: config.roles.stepUp.effort,
     });
+  });
+
+  it("a retry on the PR says which Retry it is, and the second that it Steps up", () => {
+    const first = planFor(retryLabeled, resumeSnapshot(), kitConfig());
+    const second = planFor(retryLabeled, resumeSnapshot(flawedPullRequest([earlier("execution-flaw")])), kitConfig());
+
+    expect(actionsOf(first)[1]).toMatchObject({ kind: "start-agent-run", retry: 1, stepUp: false });
+    expect(actionsOf(second)[1]).toMatchObject({ kind: "start-agent-run", retry: 2, stepUp: true });
   });
 
   it("a Step-up uses whatever model Kit config gives the Step-up", () => {

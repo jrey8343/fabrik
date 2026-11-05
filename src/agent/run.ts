@@ -9,7 +9,8 @@
 //   FABRIK_OUT_DIR         where to write agent-result.json, the agent log and the
 //                          transcript (every stream-json line, appended as it arrives)
 //   FABRIK_MODEL, FABRIK_EFFORT  the model and effort the Kit job's plan chose (a Step-up, say);
-//                          when unset, the role's own from Kit config
+//                          when unset, the role's own from Kit config; the ones it passes go out
+//                          as the step outputs `model` and `effort`, for the run's Run record
 //   CLAUDE_CODE_OAUTH_TOKEN, from the agent service account (ADR-0004)
 // An Implement run instead takes the Claude token and its test secrets from
 // FABRIK_SECRETS (src/agent/implement.ts), its parent Spec from FABRIK_SPEC_FILE,
@@ -52,7 +53,8 @@ import { sentBackContext } from "./design.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
-import { initMessageOf, missingSkills, runSummary } from "./summary.ts";
+import { readStream } from "./stream.ts";
+import { missingSkills, runSummary } from "./summary.ts";
 import { TRANSCRIPT_FILE, transcriptWriter } from "./transcript.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
@@ -205,6 +207,13 @@ async function writeSummary(text: string): Promise<void> {
   if (path !== undefined && path !== "") await appendFile(path, text);
 }
 
+/** Appends step outputs, when the runner gives a file for them. */
+async function writeOutputs(outputs: Readonly<Record<string, string>>): Promise<void> {
+  const path = process.env["GITHUB_OUTPUT"];
+  if (path === undefined || path === "") return;
+  await appendFile(path, Object.entries(outputs).map(([key, value]) => `${key}=${value}\n`).join(""));
+}
+
 async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   const name = spec.role;
   const productDir = process.cwd();
@@ -216,6 +225,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
 
   const config = await loadConfig(productDir);
   const role = { ...config.roles[name], ...modelFor(config.roles[name]) };
+  // For the run's record (src/kit/runRecord.ts): the model and effort passed to the CLI.
+  await writeOutputs({ model: role.model, effort: role.effort ?? "" });
 
   // The Implementer builds on its own branch from main, with its test secrets.
   let branch: BuiltBranch | null = null;
@@ -325,8 +336,9 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
         onAgentStreamEvent(event) {
           if (event.type !== "raw") return;
           lines.push(event.line);
-          if (init.refused === null && initMessageOf([event.line]) !== null) {
-            const check = checkInitMessage(JSON.parse(event.line));
+          const initMessage = init.refused === null ? readStream([event.line]).init : null;
+          if (initMessage !== null) {
+            const check = checkInitMessage(initMessage);
             init.refused = check.kind === "refuse" ? check.routes : [];
             if (check.kind === "refuse") abort.abort(new Error(check.routes.join("; ")));
           }

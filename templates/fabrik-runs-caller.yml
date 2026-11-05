@@ -1,0 +1,26 @@
+# The fabrik-runs store's caller workflow, saved as
+# .github/workflows/weekly-summary.yml in jrey8343/fabrik-runs (ADR-0009).
+#
+# It files the Weekly summary each Monday morning in the Operator's time zone,
+# which setup writes below, and whenever the Operator runs it by hand. Like a
+# Product repo's caller, its `uses:` line pins one exact Fabrik release
+# (ADR-0003), and Dependabot bumps it.
+name: Fabrik weekly summary
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+      timezone: "UTC"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  summary:
+    uses: jrey8343/fabrik/.github/workflows/weekly-summary.yml@v0.1.0-pre.1
+    # Only to read the Kit's pinned commit; every read and write goes through
+    # the Fabrik App's scoped tokens.
+    permissions:
+      id-token: write
+    secrets:
+      OP_PUSH_TOKEN: ${{ secrets.FABRIK_OP_PUSH_TOKEN }}
