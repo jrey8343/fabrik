@@ -1,6 +1,7 @@
 // Small builders for the core's tests: say only what a test cares about.
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import type {
+  AuditIssueSnapshot,
   DesignQueueIssue,
   DesignQueueSnapshot,
   DispatchSnapshot,
@@ -35,7 +36,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, ...overrides };
+  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
@@ -64,7 +65,7 @@ export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
   overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, ...overrides };
+  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -95,6 +96,7 @@ export function dispatchSnapshotOf(
     operator: "operator",
     kitIssues: [],
     startingComment: null,
+    audit: null,
   };
 }
 
@@ -125,12 +127,45 @@ export function designQueueSnapshotOf(
     operator: "operator",
     kitIssues: [],
     startingComment: null,
+    audit: null,
   };
 }
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
-export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, ...overrides };
+export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit">> = {}): Snapshot {
+  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, ...overrides };
+}
+
+/** The commit anAuditIssue() audited unless a test says otherwise. */
+export const AUDITED_SHA = "b".repeat(40);
+
+/**
+ * An Audit's body in each of its states, with its markers as the Fabrik App
+ * writes them (#150): pending on its run, filled with its candidates (or
+ * clean), or failed.
+ */
+export function auditBody(sha: string, state: "pending" | "filled" | "failed" = "filled"): string {
+  switch (state) {
+    case "pending":
+      return `The Auditor is reading the default branch up to \`${sha.slice(0, 7)}\`, and this issue fills in when it's done.\n\n<!-- fabrik:audit ${sha} -->\n<!-- fabrik:audit-pending -->`;
+    case "filled":
+      return `The Auditor read the default branch up to \`${sha.slice(0, 7)}\`.\n\n## Make the cart module deeper\n\n<!-- fabrik:audit ${sha} -->`;
+    case "failed":
+      return `The Auditor's run failed: it timed out.\n\n<!-- fabrik:audit ${sha} -->\n<!-- fabrik:audit-failed -->`;
+  }
+}
+
+/** A `fabrik:audit` issue the Fabrik App opened: by default last week's, filled at AUDITED_SHA, and closed by the Operator. */
+export function anAuditIssue(overrides: Partial<AuditIssueSnapshot> = {}): AuditIssueSnapshot {
+  return {
+    number: 90,
+    open: false,
+    stateReason: "completed",
+    createdAt: "2026-11-01T00:05:00Z",
+    byApp: true,
+    body: auditBody(AUDITED_SHA),
+    ...overrides,
+  };
 }
 
 /**

@@ -78,3 +78,35 @@ export function escapeMarkerIn(body: string): EscapeMarker | null {
     }),
   };
 }
+
+/**
+ * An Audit's marker line (#150): `<!-- fabrik:audit <sha> -->`, the commit the
+ * Audit reads, which was the default branch's head when the tick opened it.
+ * Its body keeps the line through every state.
+ */
+export function auditMarker(sha: string): string {
+  return `<!-- fabrik:audit ${sha} -->`;
+}
+
+/** The marker line on an Audit still waiting on its run. */
+export const AUDIT_PENDING_MARKER = "<!-- fabrik:audit-pending -->";
+
+/** The marker line on an Audit whose run failed, in place of the pending one. */
+export const AUDIT_FAILED_MARKER = "<!-- fabrik:audit-failed -->";
+
+const AUDIT_MARKER = /^<!-- fabrik:audit ([0-9a-f]{40}) -->$/;
+
+/** What an Audit's body says through its marker lines. Only a body the Fabrik App wrote is read for them. */
+export interface AuditMarks {
+  /** The commit its audit marker names, or null when it has none. */
+  readonly commit: string | null;
+  readonly pending: boolean;
+  readonly failed: boolean;
+}
+
+/** The Audit marker lines in `body`, each matched against a whole line with its outer whitespace trimmed. */
+export function auditMarksIn(body: string): AuditMarks {
+  const lines = body.split("\n").map((line) => line.trim());
+  const commit = lines.map((line) => AUDIT_MARKER.exec(line)?.[1]).find((sha) => sha !== undefined) ?? null;
+  return { commit, pending: lines.includes(AUDIT_PENDING_MARKER), failed: lines.includes(AUDIT_FAILED_MARKER) };
+}
