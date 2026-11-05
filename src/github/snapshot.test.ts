@@ -549,6 +549,29 @@ describe("Gathering who opened an issue", () => {
 
     expect(plan).toMatchObject({ kind: "act", actions: [{ kind: "start-agent-run", role: "audit", issue: 98, commit: AUDITED_SHA }] });
   });
+
+  // The Kit job can't tell the App's bot from another, and telling it would take a setup step (#150 rules one out).
+  it("takes another bot's pending Audit for the App's only where the login isn't known: the Kit job starts its Auditor run, whose result the push job drops", async () => {
+    const github = issueGitHub({ author: { login: "other-app", __typename: "Bot" }, body: auditBody(AUDITED_SHA, "pending"), labels: ["fabrik:audit"] });
+    const finished = {
+      kind: "audit-run-finished",
+      issue: 98,
+      output: JSON.stringify({ candidates: [], topRecommendation: null }),
+      window: { kind: "last-days", days: 30 },
+      runUrl: "https://github.com/acme/shop/actions/runs/1",
+      repoUrl: "https://github.com/acme/shop",
+    } as const;
+
+    const kitJob = await gatherSnapshot(github, repo, opened, null, null);
+    const pushJob = await gatherSnapshot(github, repo, finished, null, APP_LOGIN);
+
+    expect([kitJob.issue?.byApp, pushJob.issue?.byApp]).toEqual([true, false]);
+    expect(planFor(opened, kitJob, kitConfig())).toMatchObject({ kind: "act", actions: [{ kind: "start-agent-run", role: "audit", issue: 98 }] });
+    expect(planFor(finished, pushJob, kitConfig())).toEqual({
+      kind: "nothing",
+      reason: "#98 is no longer a pending Audit, so its Auditor's result is stale",
+    });
+  });
 });
 
 describe("Gathering an issue's Design session", () => {
