@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { aLabelAdded, aMergedPullRequest, aRunRecord, aTicketTimeline, factsOf } from "../__fixtures__/weeklySummary.ts";
+import {
+  aComment,
+  aDesignRound,
+  aLabelAdded,
+  aMergedPullRequest,
+  anOpenIssue,
+  anOpenPullRequest,
+  aRunRecord,
+  aTicketTimeline,
+  aVerdictComment,
+  factsOf,
+} from "../__fixtures__/weeklySummary.ts";
 import { type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
@@ -133,6 +144,82 @@ describe("the Weekly summary", () => {
     expect(result).toMatchObject({
       kind: "summary",
       summary: { counts: { retries: { thisWeek: 2, lastWeek: 1 }, stepUps: { thisWeek: 1, lastWeek: 0 } } },
+    });
+  });
+
+  describe("Waiting on you", () => {
+    const HOUR = 60 * 60 * 1000;
+    const head = "h".repeat(40);
+    const operatorAnswer = (at: string) => aComment("Option A, please.", at, { author: "operator", byBot: false });
+    const waitingIn = (facts: Parameters<typeof factsOf>[0]) => {
+      const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary.repos[0]?.waitingOnYou;
+    };
+
+    it("lists unanswered Design rounds, ready-for-human issues and PRs at the Merge gate, oldest first, with their ages", () => {
+      const waiting = waitingIn({
+        openIssues: [
+          anOpenIssue({
+            number: 12,
+            title: "Design the thing",
+            labels: ["needs-design"],
+            comments: [aDesignRound(1, "2026-11-02T20:00:00Z"), operatorAnswer("2026-11-03T20:00:00Z"), aDesignRound(2, "2026-11-05T20:00:00Z")],
+          }),
+          anOpenIssue({
+            number: 13,
+            title: "Rotate the key",
+            labels: ["ready-for-human"],
+            labelEvents: [aLabelAdded("needs-triage", "2026-10-30T20:00:00Z"), aLabelAdded("ready-for-human", "2026-11-01T20:00:00Z")],
+          }),
+          // The Operator answered the last round: the next move is the session's.
+          anOpenIssue({
+            number: 14,
+            labels: ["needs-design"],
+            comments: [aDesignRound(1, "2026-11-02T20:00:00Z"), operatorAnswer("2026-11-03T20:00:00Z")],
+          }),
+        ],
+        openPullRequests: [
+          anOpenPullRequest({ number: 50, title: "Build the thing", draft: false, comments: [aVerdictComment("pass", head, "2026-11-07T20:00:00Z")] }),
+          // Passed on an older head: the Operator pushed since, so it waits for its Review.
+          anOpenPullRequest({ number: 51, draft: false, comments: [aVerdictComment("pass", "o".repeat(40), "2026-11-07T20:00:00Z")] }),
+          // Still a draft: the Loop has it.
+          anOpenPullRequest({ number: 52, comments: [aVerdictComment("pass", head, "2026-11-07T20:00:00Z")] }),
+          // Its latest Verdict on its head is a flaw.
+          anOpenPullRequest({
+            number: 53,
+            draft: false,
+            comments: [aVerdictComment("pass", head, "2026-11-06T20:00:00Z"), aVerdictComment("execution-flaw", head, "2026-11-07T20:00:00Z")],
+          }),
+        ],
+      });
+      expect(waiting).toEqual([
+        {
+          kind: "ready-for-human",
+          number: 13,
+          title: "Rotate the key",
+          url: "https://github.com/owner/product/issues/13",
+          since: "2026-11-01T20:00:00Z",
+          age: 7 * 24 * HOUR,
+        },
+        {
+          kind: "design-round",
+          number: 12,
+          title: "Design the thing",
+          url: "https://github.com/owner/product/issues/12",
+          since: "2026-11-05T20:00:00Z",
+          age: 3 * 24 * HOUR,
+        },
+        {
+          kind: "merge-gate",
+          number: 50,
+          title: "Build the thing",
+          url: "https://github.com/owner/product/pull/50",
+          since: "2026-11-07T20:00:00Z",
+          age: 24 * HOUR,
+          operatorWait: 24 * HOUR,
+        },
+      ]);
     });
   });
 

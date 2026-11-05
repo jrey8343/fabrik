@@ -1,7 +1,9 @@
 // The Weekly summary (ADR-0009): from the store's Run records, a GitHub facts
 // snapshot per Product repo, the Operator and now, the one issue filed for the
 // week that just ended, or skip in a quiet week. Pure, no I/O, no model call.
-import { DISPATCH_LABEL } from "../loop/labels.ts";
+import { verdictsIn } from "../github/threads.ts";
+import { DISPATCH_LABEL, READY_FOR_HUMAN } from "../loop/labels.ts";
+import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { RateLimitReading, RunRecord } from "./runRecord.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
@@ -30,12 +32,53 @@ export interface AgentPullRequestFacts {
   readonly mergeSha: string | null;
 }
 
+/** A comment on an issue or a PR. */
+export interface CommentFacts {
+  readonly author: string;
+  /** Whether a bot wrote it: only a bot's markers count, so quoting one fakes nothing. */
+  readonly byBot: boolean;
+  readonly body: string;
+  /** ISO 8601. */
+  readonly at: string;
+}
+
+/** An open issue, as Waiting on you and Stuck read it. */
+export interface OpenIssueFacts {
+  readonly number: number;
+  readonly title: string;
+  readonly labels: readonly string[];
+  /** ISO 8601. */
+  readonly createdAt: string;
+  /** Oldest first. */
+  readonly comments: readonly CommentFacts[];
+  readonly labelEvents: readonly LabelEvent[];
+}
+
+/** An open agent PR, as Waiting on you and Stuck read it. */
+export interface OpenPullRequestFacts {
+  readonly number: number;
+  readonly title: string;
+  readonly draft: boolean;
+  readonly headSha: string;
+  /** ISO 8601. */
+  readonly createdAt: string;
+  /** When each of its commits was made. */
+  readonly commits: readonly { readonly at: string }[];
+  /** Oldest first. */
+  readonly comments: readonly CommentFacts[];
+  readonly labelEvents: readonly LabelEvent[];
+}
+
 /** What the summary reads of one Product repo on GitHub. */
 export interface GitHubFacts {
   /** The Product repo, as `owner/name`. */
   readonly repo: string;
   readonly pullRequests: readonly AgentPullRequestFacts[];
   readonly tickets: readonly TicketFacts[];
+  /** The repo's open issues. */
+  readonly openIssues: readonly OpenIssueFacts[];
+  /** The repo's open agent PRs. */
+  readonly openPullRequests: readonly OpenPullRequestFacts[];
 }
 
 export interface WeeklySummaryInput {
@@ -75,7 +118,40 @@ export interface WeeklySummary {
     /** Records of a Step-up. */
     readonly stepUps: WeekOverWeek<number>;
   };
+  /** One section per Product repo, in the order the facts came. */
+  readonly repos: readonly RepoSection[];
 }
+
+/** What one Product repo has waiting on the Operator, as of the filing. */
+export interface RepoSection {
+  /** `owner/name`. */
+  readonly repo: string;
+  /** Oldest first. */
+  readonly waitingOnYou: readonly WaitingItem[];
+}
+
+interface ItemBase {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  /** When it started waiting, ISO 8601. */
+  readonly since: string;
+  /** How long it has waited at the filing, in milliseconds. */
+  readonly age: number;
+}
+
+/** Something whose next move is the Operator's. */
+export type WaitingItem =
+  /** An open Design session whose last comment is the App's round. */
+  | (ItemBase & { readonly kind: "design-round" })
+  /** An open `ready-for-human` issue, waiting since it got the label. */
+  | (ItemBase & { readonly kind: "ready-for-human" })
+  /** An agent PR out of draft with a passing Verdict at its head, waiting since that Verdict. */
+  | (ItemBase & {
+      readonly kind: "merge-gate";
+      /** The Operator wait so far: from the passing Verdict to the filing, in milliseconds. */
+      readonly operatorWait: number;
+    });
 
 export type WeeklySummaryResult =
   | { readonly kind: "skip" }
@@ -108,6 +184,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
       retries: change("retries"),
       stepUps: change("stepUps"),
     },
+    repos: input.facts.map((facts) => repoSectionOf(facts, Date.parse(input.now))),
   };
   return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
 }
@@ -150,6 +227,61 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
 function dispatchOf(ticket: TicketFacts): string | null {
   const added = ticket.labelEvents.filter((event) => event.label === DISPATCH_LABEL && event.action === "labeled");
   return added.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at))[0]?.at ?? null;
+}
+
+// Per repo: what waits on the Operator, as of the filing.
+
+function repoSectionOf(facts: GitHubFacts, now: number): RepoSection {
+  return { repo: facts.repo, waitingOnYou: waitingOnYou(facts, now) };
+}
+
+function waitingOnYou({ repo, openIssues, openPullRequests }: GitHubFacts, now: number): WaitingItem[] {
+  const issueUrl = (number: number) => `https://github.com/${repo}/issues/${number}`;
+  const item = (number: number, title: string, url: string, since: string): ItemBase => ({
+    number,
+    title,
+    url,
+    since,
+    age: now - Date.parse(since),
+  });
+  const items: WaitingItem[] = [];
+  for (const issue of openIssues) {
+    const round = unansweredRoundOf(issue);
+    if (round !== null) items.push({ kind: "design-round", ...item(issue.number, issue.title, issueUrl(issue.number), round) });
+    if (issue.labels.includes(READY_FOR_HUMAN)) {
+      const since = lastAdded(issue.labelEvents, READY_FOR_HUMAN) ?? issue.createdAt;
+      items.push({ kind: "ready-for-human", ...item(issue.number, issue.title, issueUrl(issue.number), since) });
+    }
+  }
+  for (const pullRequest of openPullRequests) {
+    const passed = passAtHeadOf(pullRequest);
+    if (pullRequest.draft || passed === null) continue;
+    const base = item(pullRequest.number, pullRequest.title, `https://github.com/${repo}/pull/${pullRequest.number}`, passed);
+    items.push({ kind: "merge-gate", ...base, operatorWait: base.age });
+  }
+  return items.toSorted((a, b) => Date.parse(a.since) - Date.parse(b.since));
+}
+
+/** When the App posted the Design round an issue's thread ends on, or null if its last comment is anything else. */
+function unansweredRoundOf(issue: OpenIssueFacts): string | null {
+  const last = issue.comments.at(-1);
+  return last !== undefined && last.byBot && DESIGN_ROUND_MARKER.test(last.body) ? last.at : null;
+}
+
+/** When a PR's latest Verdict on its head was posted, if that Verdict is a pass; otherwise null. */
+function passAtHeadOf(pullRequest: OpenPullRequestFacts): string | null {
+  // Only a bot's markers count, so nobody can fake a pass by quoting one.
+  const verdicts = pullRequest.comments.flatMap((comment) =>
+    comment.byBot ? verdictsIn([comment.body]).map((record) => ({ record, at: comment.at })) : [],
+  );
+  const latest = verdicts.filter(({ record }) => record.headSha === pullRequest.headSha).at(-1);
+  return latest?.record.verdict === "pass" ? latest.at : null;
+}
+
+/** When `label` was last added, or null. */
+function lastAdded(events: readonly LabelEvent[], label: string): string | null {
+  const added = events.filter((event) => event.label === label && event.action === "labeled");
+  return added.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at)).at(-1)?.at ?? null;
 }
 
 // The week: Monday 00:00 to Monday 00:00 in the Operator's time zone.
