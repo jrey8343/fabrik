@@ -63,4 +63,23 @@ describe("A Design session's context from the PR a Ticket came back from", () =>
     expect(text).toContain("#### `src/waitlist.ts` line 1\n\nPatients, not slots.");
     expect(text).not.toContain("### Verdict");
   });
+
+  const operatorComments = [
+    {
+      id: "inline-8",
+      url: "https://github.com/acme/shop/pull/50#discussion_r8",
+      where: { kind: "inline", path: "src/waitlist.ts", line: 2 },
+      createdAt: "2026-11-01T12:00:00Z",
+      body: "The waitlist is per clinic.",
+    },
+  ];
+
+  it.each(["verdict", "operator"])("sets out the Operator's comments on the PR when sent back by the %s, before what its branch built", (by) => {
+    const { parts } = sentBackContext({ ...issue, sentBack: { ...sentBack, sentBackBy: by, operatorComments } });
+
+    const text = parts.join("\n\n");
+    expect(text).toContain("### The Operator's comments on the pull request");
+    expect(text).toContain("#### `inline-8`: inline on `src/waitlist.ts` line 2, 2026-11-01T12:00:00Z\n\nThe waitlist is per clinic.");
+    expect(text.indexOf("The waitlist is per clinic.")).toBeLessThan(text.indexOf("### What its branch built"));
+  });
 });

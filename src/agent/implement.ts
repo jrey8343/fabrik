@@ -11,6 +11,7 @@ import type { KitConfig } from "../kit/config.ts";
 import { sandboxEnv } from "../kit/secrets.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { verdictsIn } from "../github/threads.ts";
+import { operatorCommentsSection } from "./operatorComments.ts";
 import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -79,16 +80,18 @@ function currentDescription(body: unknown): string[] {
 }
 
 /**
- * What a retry's prompt carries beyond the Ticket: the PR it fixes, and the
- * findings of that PR's latest Verdict, the Fabrik App's comment with a marker.
+ * What a retry's prompt carries beyond the Ticket: the PR it fixes, the
+ * findings of that PR's latest Verdict, the Fabrik App's comment with a marker,
+ * and the Operator's comments on the PR, set apart from the findings.
  */
 export async function retryContext(pullRequestFile: string): Promise<{ pullRequest: number; parts: string[] }> {
   const value: unknown = JSON.parse(await readFile(pullRequestFile, "utf8"));
-  const { number, title, body, comments } = (value ?? {}) as {
+  const { number, title, body, comments, operatorComments } = (value ?? {}) as {
     number?: unknown;
     title?: unknown;
     body?: unknown;
     comments?: { body?: unknown; author?: { __typename?: unknown } | null }[];
+    operatorComments?: unknown;
   };
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   // Only a bot's markers count, as in the core's snapshot, so nobody can plant findings by quoting one.
@@ -108,6 +111,7 @@ export async function retryContext(pullRequestFile: string): Promise<{ pullReque
       "## The findings to fix",
       "The latest Verdict on the PR, posted by the Kit:",
       latest.trimEnd(),
+      ...operatorCommentsSection(operatorComments),
     ],
   };
 }
@@ -115,14 +119,19 @@ export async function retryContext(pullRequestFile: string): Promise<{ pullReque
 /**
  * What a Request-changes run's prompt carries beyond the Ticket: the PR, and
  * the Operator's review that asked for the changes, its inline comments
- * included. The Kit job's plan named that review only once it checked the
+ * included, then the Operator's other comments on the PR. The Kit job's plan named that review only once it checked the
  * Operator wrote it, so this is the Operator speaking.
  */
 export async function requestChangesContext(
   pullRequestFile: string,
   reviewFile: string,
 ): Promise<{ pullRequest: number; parts: string[] }> {
-  const pullRequest = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as { number?: unknown; title?: unknown; body?: unknown };
+  const pullRequest = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
+    number?: unknown;
+    title?: unknown;
+    body?: unknown;
+    operatorComments?: unknown;
+  };
   const { number, title } = pullRequest;
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   const { review, comments } = (JSON.parse(await readFile(reviewFile, "utf8")) ?? {}) as {
@@ -147,6 +156,7 @@ export async function requestChangesContext(
       "## The Operator's requested changes",
       body === "" ? "(The review has no summary; see its comments below.)" : body,
       ...(inline.length === 0 ? [] : ["## The Operator's comments on the code", ...inline]),
+      ...operatorCommentsSection(pullRequest.operatorComments),
     ],
   };
 }

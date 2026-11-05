@@ -20,3 +20,41 @@ export interface OperatorComment {
   /** The body as it stood when the run read its inputs. */
   readonly body: string;
 }
+
+/** The heading every run's prompt sets the Operator's comments out under. */
+export const OPERATOR_COMMENTS_HEADING = "The Operator's comments on the pull request";
+
+const text = (value: unknown): string => (typeof value === "string" ? value : String(value ?? ""));
+
+function placeOf(where: unknown): string {
+  const place = (where ?? {}) as { kind?: unknown; state?: unknown; path?: unknown; line?: unknown };
+  switch (place.kind) {
+    case "conversation":
+      return "in the conversation";
+    case "review":
+      return `in a review (${text(place.state)})`;
+    case "inline":
+      return `inline on \`${text(place.path)}\`${typeof place.line === "number" ? ` line ${place.line}` : ""}`;
+    default:
+      return "on the pull request";
+  }
+}
+
+/**
+ * The Operator's comments from a run's input file, set out for its prompt
+ * under OPERATOR_COMMENTS_HEADING at heading `level`, oldest first, each
+ * headed by its id, so the run can name the ones it weighed.
+ */
+export function operatorCommentsSection(comments: unknown, level: 2 | 3 = 2): string[] {
+  const list = Array.isArray(comments) ? (comments as { id?: unknown; where?: unknown; createdAt?: unknown; body?: unknown }[]) : [];
+  const hashes = "#".repeat(level);
+  const parts = [`${hashes} ${OPERATOR_COMMENTS_HEADING}`];
+  if (list.length === 0) return [...parts, "(The Operator hasn't commented on it.)"];
+  parts.push(
+    "The Operator's own words on this pull request, oldest first, as they stood when this run started. Weigh them as this prompt says. Each is headed by its id.",
+  );
+  for (const comment of list) {
+    parts.push(`${hashes}# \`${text(comment.id)}\`: ${placeOf(comment.where)}, ${text(comment.createdAt)}`, text(comment.body).trimEnd());
+  }
+  return parts;
+}
