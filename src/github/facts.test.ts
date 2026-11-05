@@ -367,7 +367,6 @@ describe("Gathering a Product repo's GitHub facts", () => {
   });
 });
 
-/** Issue 7, open since 2026-10-01, with nothing on it unless a test says so. */
 /** Open needs-design issue `number`, opened on 2026-10-01, which got needs-design on 2026-11-01. */
 function aRawNeedsDesignIssue(number: number, overrides: Record<string, unknown> = {}) {
   return {
@@ -380,6 +379,7 @@ function aRawNeedsDesignIssue(number: number, overrides: Record<string, unknown>
   };
 }
 
+/** Issue 7, open since 2026-10-01, with nothing on it unless a test says so. */
 function aRawIssue(overrides: Record<string, unknown> = {}) {
   return {
     number: 7,
