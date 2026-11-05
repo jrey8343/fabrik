@@ -17,7 +17,7 @@ const DEFAULTS = {
     stepUp: { model: "claude-opus-5-5", effort: null },
   },
   maxInFlight: 2,
-  caps: { designSessions: 2 },
+  caps: { designSessions: 2, monitorIssues: 5 },
   monitor: { errors: null, redMain: true },
   operator: null,
   instructions: { triage: null, design: null, implement: null, review: null },
@@ -124,6 +124,8 @@ describe("Kit config", () => {
     [`{ "caps": { "design_sessions": 1.5 } }`, "caps.design_sessions must be a whole number of at least 0"],
     [`{ "caps": { "design_sessions": "1" } }`, "caps.design_sessions must be a whole number of at least 0"],
     [`{ "caps": { "design_sessions": null } }`, "caps.design_sessions must be a whole number of at least 0"],
+    [`{ "caps": { "monitor_issues": -1 } }`, "caps.monitor_issues must be a whole number of at least 0"],
+    [`{ "caps": { "monitor_issues": "2" } }`, "caps.monitor_issues must be a whole number of at least 0"],
     [`{ "roles": { "review": { "effort": "extreme" } } }`, `roles.review.effort is "extreme": effort must be one of low, medium, high, xhigh, max`],
     [`[]`, ".fabrik/config.json must be an object"],
   ])("fails a mistyped field, naming it: %s", (text, error) => {
@@ -261,16 +263,16 @@ describe("Kit config", () => {
     expect(result.ok && result.config.maxInFlight).toBe(0);
   });
 
-  it("gives a Product repo whose config never sets caps the Kit default of 2 Design sessions", () => {
+  it("gives a Product repo whose config never sets caps the Kit defaults: 2 Design sessions and 5 open Monitor error issues", () => {
     const result = resolveKitConfig({ config: `{ "max_in_flight": 1, "operator": "jrey8343" }` });
 
-    expect(result.ok && result.config.caps).toEqual({ designSessions: 2 });
+    expect(result.ok && result.config.caps).toEqual({ designSessions: 2, monitorIssues: 5 });
   });
 
   it.each([1, 0])("honours lowering caps.design_sessions to %i", (cap) => {
     const result = resolveKitConfig({ config: `{ "caps": { "design_sessions": ${cap} } }` });
 
-    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, caps: { designSessions: cap } } });
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, caps: { ...DEFAULTS.caps, designSessions: cap } } });
   });
 
   it("keeps the Kit default when caps.design_sessions is set to it", () => {
@@ -285,6 +287,21 @@ describe("Kit config", () => {
     expect(result).toEqual({
       ok: false,
       errors: [`caps.design_sessions is ${cap}, but a cap can only be lowered: the Kit default is 2`],
+    });
+  });
+
+  it.each([2, 0])("honours lowering caps.monitor_issues to %i, 0 pausing new error filings", (cap) => {
+    const result = resolveKitConfig({ config: `{ "caps": { "monitor_issues": ${cap} } }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, caps: { ...DEFAULTS.caps, monitorIssues: cap } } });
+  });
+
+  it.each([6, 99])("refuses raising caps.monitor_issues to %i, naming the field, the value and the Kit default", (cap) => {
+    const result = resolveKitConfig({ config: `{ "caps": { "monitor_issues": ${cap} } }` });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [`caps.monitor_issues is ${cap}, but a cap can only be lowered: the Kit default is 5`],
     });
   });
 

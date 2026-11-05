@@ -631,6 +631,83 @@ describe("The cap of 5 open error issues", () => {
     expect(planFor(read)).toEqual(planFor(listed));
     expect(planFor(read).filed).toEqual(["4702", "4703"]);
   });
+
+  describe("lowered by caps.monitor_issues", () => {
+    it("fills at most 2 open error issues at a cap of 2, holding the rest", () => {
+      const groups = [aGroup({ id: "4701", usersAffected: 9 }), aGroup({ id: "4702", usersAffected: 5 }), aGroup({ id: "4703", usersAffected: 1 })];
+
+      const plan = monitorPlanFor(monitorInput(groups, { cap: 2 }));
+
+      expect(filed(plan)).toEqual(["4701", "4702"]);
+      expect(plan.open[1]?.body).toContain("- Held: 1 error group waiting for a slot under the cap of 2 open error issues\n");
+      expect(plan.summary).toEqual(["Held 1 error group: the cap of 2 open error issues is full."]);
+    });
+
+    it("files nothing while more error issues are open than it allows, holding every group", () => {
+      const plan = monitorPlanFor(monitorInput([aGroup({ id: "4701" })], { issues: openErrorIssues(3), cap: 2 }));
+
+      expect(plan.open).toEqual([]);
+      expect(plan.rewrite).toEqual([
+        {
+          issue: 42,
+          sentryGroup: null,
+          body: openBody(2, [...AGROUP_STATS, "- Held: 1 error group waiting for a slot under the cap of 2 open error issues"]),
+        },
+      ]);
+      expect(plan.summary).toEqual(["Held 1 error group: the cap of 2 open error issues is full."]);
+    });
+  });
+
+  describe("at 0, which pauses new error filings", () => {
+    /** The stats block's held line, for this many groups held while filings are paused. */
+    const pausedLine = (groups: number) =>
+      `- Held: ${groups} error group${groups === 1 ? "" : "s"} waiting while new error filings are paused by \`caps.monitor_issues: 0\``;
+
+    it("files nothing, showing the held count in the newest open error issue and saying new filings are paused", () => {
+      const plan = monitorPlanFor(monitorInput([aGroup({ id: "4701" }), aGroup({ id: "4702" })], { issues: openErrorIssues(2), cap: 0 }));
+
+      expect(plan).toEqual({
+        open: [],
+        rewrite: [{ issue: 41, sentryGroup: null, body: openBody(1, [...AGROUP_STATS, pausedLine(2)]) }],
+        close: [],
+        summary: ["Held 2 error groups: new error filings are paused by `caps.monitor_issues: 0`."],
+      });
+    });
+
+    it("still counts the held groups in the step summary with no open error issue to show them in", () => {
+      const plan = monitorPlanFor(monitorInput([aGroup({ id: "4701" })], { cap: 0 }));
+
+      expect(plan.open).toEqual([]);
+      expect(plan.rewrite).toEqual([]);
+      expect(plan.summary).toEqual(["Held 1 error group: new error filings are paused by `caps.monitor_issues: 0`."]);
+    });
+
+    it("still rewrites the stats of an open error issue whose group qualifies", () => {
+      const plan = monitorPlanFor(monitorInput([aGroup({ events24h: 14 }), aGroup({ id: "4701" })], { issues: [aMonitorIssue()], cap: 0 }));
+
+      expect(plan.open).toEqual([]);
+      expect(plan.rewrite).toEqual([
+        {
+          issue: 40,
+          sentryGroup: "4504",
+          body: aMonitorIssueBody(["- Events in the last 24 hours: 14", ...AGROUP_STATS.slice(1), pausedLine(1)]),
+        },
+      ]);
+    });
+
+    it("leaves an open red-main issue alone, never showing the held count in its details block", () => {
+      const redMain = aMonitorIssue({
+        number: 45,
+        body: ["<!-- fabrik:monitor red-main -->", "The default branch is red.", "<!-- fabrik:monitor-stats -->", "- Commit: `0a1b2c3`", "<!-- /fabrik:monitor-stats -->"].join("\n"),
+      });
+
+      const alone = monitorPlanFor(monitorInput([aGroup({ id: "4701" })], { issues: [redMain], cap: 0 }));
+      const withAnErrorIssue = monitorPlanFor(monitorInput([aGroup({ id: "4701" })], { issues: [...openErrorIssues(1), redMain], cap: 0 }));
+
+      expect(alone.rewrite).toEqual([]);
+      expect(withAnErrorIssue.rewrite).toEqual([{ issue: 40, sentryGroup: null, body: openBody(0, [...AGROUP_STATS, pausedLine(1)]) }]);
+    });
+  });
 });
 
 describe("Reading the held count", () => {
@@ -639,6 +716,13 @@ describe("Reading the held count", () => {
     const body = monitorPlanFor(monitorInput(groups, { issues: openErrorIssues(4) })).open[0]?.body ?? "";
 
     expect(heldCountIn(body)).toBe(2);
+  });
+
+  it("reads it from the held line shown while a cap of 0 pauses new error filings", () => {
+    const groups = [aGroup({ id: "4701" }), aGroup({ id: "4702" }), aGroup({ id: "4703" })];
+    const body = monitorPlanFor(monitorInput(groups, { issues: openErrorIssues(1), cap: 0 })).rewrite[0]?.body ?? "";
+
+    expect(heldCountIn(body)).toBe(3);
   });
 
   it("reads 0 from a stats block with no held line", () => {

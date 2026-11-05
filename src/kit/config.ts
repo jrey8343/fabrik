@@ -32,6 +32,8 @@ export interface KitConfig {
   readonly caps: {
     /** How many Design sessions may hold a slot at once; 0 pauses new ones. */
     readonly designSessions: number;
+    /** How many open error issues the Monitor keeps at once; 0 pauses new error filings (#148). */
+    readonly monitorIssues: number;
   };
   /** What the Monitor watches in this Product repo (#148). Nothing reads it yet. */
   readonly monitor: {
@@ -124,7 +126,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     stepUp: { model: OPUS, effort: null },
   },
   maxInFlight: 2,
-  caps: { designSessions: 2 },
+  caps: { designSessions: 2, monitorIssues: 5 },
   monitor: { errors: null, redMain: true },
   operator: null,
   instructions: { triage: null, design: null, implement: null, review: null },
@@ -356,7 +358,10 @@ function readDispatch(role: Reader, defaults: KitConfig["roles"]["dispatch"]): K
  * Specs register their caps here.
  */
 function readCaps(caps: Reader, defaults: KitConfig["caps"]): KitConfig["caps"] {
-  return { designSessions: caps.cap("design_sessions", defaults.designSessions) ?? defaults.designSessions };
+  return {
+    designSessions: caps.cap("design_sessions", defaults.designSessions) ?? defaults.designSessions,
+    monitorIssues: caps.cap("monitor_issues", defaults.monitorIssues) ?? defaults.monitorIssues,
+  };
 }
 
 function readMonitor(monitor: Reader, defaults: KitConfig["monitor"]): KitConfig["monitor"] {

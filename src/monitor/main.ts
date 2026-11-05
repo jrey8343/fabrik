@@ -241,7 +241,7 @@ async function main(): Promise<void> {
   const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
   const { errors } = config.monitor;
   const [issues, reading] = await Promise.all([monitorIssues(github, repo, appLogin), readSentry(errors)]);
-  const listed: MonitorInput = { monitor: config.monitor, sentry: reading.sentry, issues, now: new Date().toISOString() };
+  const listed: MonitorInput = { monitor: config.monitor, sentry: reading.sentry, issues, cap: config.caps.monitorIssues, now: new Date().toISOString() };
   const read = await withLatestEvents(listed, monitorPlanFor(listed), errors);
   const plan = monitorPlanFor(read.input);
   const filed = await apply(github, repo, plan);
