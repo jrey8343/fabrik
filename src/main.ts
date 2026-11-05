@@ -7,7 +7,7 @@ import { AGENT_FAILURE_FILE, readFailureReport } from "./agent/failure.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult } from "./agent/result.ts";
 import { type AgentBranchGit, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
-import { applyPlan, wantsDispatchCheck } from "./github/apply.ts";
+import { applyPlan, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { GitHub, type Repo } from "./github/client.ts";
 import { agentFailureEventFrom, agentRunEventFrom, loopEventFrom, reviewEventFrom } from "./github/events.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
@@ -74,6 +74,8 @@ function describeAction(action: Action): string {
       return `- a ${action.role} run on #${action.issue}${action.pullRequest === undefined ? "" : `, ${action.requestChanges === undefined ? "retrying" : "with the Operator's requested changes on"} #${action.pullRequest}`} (${action.model}), which the Kit job routes to its agent job`;
     case "check-dispatch":
       return "- run a Dispatch check";
+    case "check-design-queue":
+      return "- run a Design queue check";
     case "push-branch":
       return `- push ${action.branch}`;
     case "open-pull-request":
@@ -96,11 +98,15 @@ type EventSource = { event: LoopEvent | null; source: string; branch: AgentBranc
 /**
  * The Loop event this run applies: in the push job (FABRIK_NEEDS), what the
  * jobs before it left (src/kit/pushJob.ts); a Dispatch check in the Dispatch
- * job (FABRIK_DISPATCH_CHECK); otherwise the Actions event itself.
+ * job (FABRIK_DISPATCH_CHECK); a Design queue check in the Design queue job
+ * (FABRIK_DESIGN_QUEUE_CHECK); otherwise the Actions event itself.
  */
 async function loopEvent(repo: Repo): Promise<EventSource> {
   if (process.env["FABRIK_DISPATCH_CHECK"] === "true") {
     return { event: { kind: "dispatch-check" }, source: "a Dispatch check", branch: null };
+  }
+  if (process.env["FABRIK_DESIGN_QUEUE_CHECK"] === "true") {
+    return { event: { kind: "design-queue-check" }, source: "a Design queue check", branch: null };
   }
   const eventName = required("GITHUB_EVENT_NAME");
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
@@ -278,7 +284,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Only the Dispatch job sets it: its GITHUB_TOKEN, scoped to actions: read.
+  // Only the Dispatch and Design queue jobs set it: their GITHUB_TOKEN, scoped to actions: read.
   const actionsToken = process.env["FABRIK_ACTIONS_TOKEN"];
   const actions =
     actionsToken === undefined || actionsToken === "" ? null : new GitHub(actionsToken, process.env["GITHUB_API_URL"]);
@@ -287,6 +293,8 @@ async function main(): Promise<void> {
   await applyPlan(github, repo, plan, branch);
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
+  // The Design queue job runs the check likewise, once this plan has landed.
+  if (wantsDesignQueueCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "design-queue=true\n");
   await report(describe(plan));
   if (plan.kind === "fail") {
     console.log(`::error title=Infrastructure failure::${plan.reason}`);

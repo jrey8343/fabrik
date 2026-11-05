@@ -26,6 +26,13 @@ export type CategoryLabel = (typeof CATEGORY_LABELS)[number];
  */
 export const DISPATCH_LABEL = "agent:implement";
 
+/**
+ * The trigger label the Design queue check adds to a waiting `needs-design`
+ * issue to start its Design session's first turn (#147), as Dispatch adds
+ * agent:implement (ADR-0001). The label comes off as the turn starts.
+ */
+export const DESIGN_LABEL = "agent:design";
+
 /** The trigger label on an agent PR that starts its Review, so re-adding it resumes one after a failure. */
 export const REVIEW_LABEL = "agent:review";
 
@@ -40,12 +47,13 @@ export const KIT_ISSUE_LABELS = [TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL] as co
 export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
 
 /** A label the Kit itself adds or removes. Labels read from GitHub stay plain strings: anyone can add any label. */
-export type Label = StateLabel | CategoryLabel | typeof DISPATCH_LABEL | typeof REVIEW_LABEL | KitIssueLabel;
+export type Label = StateLabel | CategoryLabel | typeof DISPATCH_LABEL | typeof DESIGN_LABEL | typeof REVIEW_LABEL | KitIssueLabel;
 
 /** Every label the Kit uses, so the setup skill can create each one. */
 export const ALL_LABELS: readonly Label[] = [
   ...STATE_LABELS,
   DISPATCH_LABEL,
+  DESIGN_LABEL,
   REVIEW_LABEL,
   ...CATEGORY_LABELS,
   ...KIT_ISSUE_LABELS,

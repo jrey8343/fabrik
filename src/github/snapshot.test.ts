@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
-import { countImplementRuns, gatherSnapshot, IMPLEMENT_JOB_NAME } from "./snapshot.ts";
+import { holdsSlot } from "../loop/designQueue.ts";
+import type { DesignQueueSnapshot } from "../loop/types.ts";
+import { countImplementRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME } from "./snapshot.ts";
 
 const repo = { owner: "acme", name: "shop" };
 
@@ -53,6 +55,134 @@ describe("The Implement job's name", () => {
     const implementJob = /^ {2}implement:\n {4}name: (.+)$/m.exec(workflow)?.[1];
 
     expect(implementJob).toBe(IMPLEMENT_JOB_NAME);
+  });
+});
+
+describe("Reading the Design-session turns a Design queue check sees in progress", () => {
+  it("reads the issue of each Design-session turn running, queued or waiting, from its job's name", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Design-session turn #7", status: "in_progress" }] },
+      { id: 2, status: "queued", jobs: [{ name: "fabrik / Design-session turn #9", status: "queued" }] },
+      { id: 3, status: "waiting", jobs: [{ name: "Design-session turn #4", status: "waiting" }] },
+    ]);
+
+    expect(await designTurnsInProgress(actions, repo)).toEqual([4, 7, 9]);
+  });
+
+  it("doesn't read a finished Design-session turn, or any other job", async () => {
+    const actions = actionsWith([
+      {
+        id: 1,
+        status: "in_progress",
+        jobs: [
+          { name: "fabrik / Design-session turn #7", status: "completed" },
+          { name: "fabrik / Implement", status: "in_progress" },
+          { name: "fabrik / Design-session turn #", status: "in_progress" },
+        ],
+      },
+    ]);
+
+    expect(await designTurnsInProgress(actions, repo)).toEqual([]);
+  });
+});
+
+describe("The Design-session turn job's name", () => {
+  it("is the name loop.yml gives the Design job, followed by its issue, which a Design queue check reads", async () => {
+    const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
+    const designJob = /^ {2}design:\n {4}name: (.+)$/m.exec(workflow)?.[1];
+
+    // Quoted, since an unquoted ` #` starts a YAML comment.
+    expect(designJob).toBe(`"${DESIGN_JOB_NAME} #\${{ github.event.issue.number }}"`);
+  });
+});
+
+describe("Gathering a Design queue check's needs-design issues", () => {
+  const kit = (body: string) => ({ body, author: { __typename: "Bot" } });
+  const person = (body: string) => ({ body, author: { __typename: "User" } });
+  const labelled = (name: string, createdAt: string) => ({ createdAt, label: { name } });
+
+  function issue(number: number, overrides: Record<string, unknown> = {}) {
+    return {
+      number,
+      createdAt: "2026-10-01T09:00:00Z",
+      labels: { nodes: [{ name: "needs-design" }] },
+      comments: { nodes: [] },
+      timelineItems: { nodes: [labelled("needs-design", "2026-11-01T09:00:00Z")] },
+      ...overrides,
+    };
+  }
+
+  async function gathered(nodes: unknown[], runs: Parameters<typeof actionsWith>[0] = []): Promise<DesignQueueSnapshot> {
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("labels: [$needsDesign]")) {
+          expect(variables["needsDesign"]).toBe("needs-design");
+          return {
+            repository: { owner: { login: "acme" }, issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+    const snapshot = await gatherSnapshot(github, repo, { kind: "design-queue-check" }, null, actionsWith(runs) as unknown as GitHub);
+    if (snapshot.designQueue === null) throw new Error("no Design queue slice");
+    return snapshot.designQueue;
+  }
+
+  function holding(queue: DesignQueueSnapshot): Record<number, boolean> {
+    return Object.fromEntries(queue.issues.map((i) => [i.number, holdsSlot(i, queue)]));
+  }
+
+  it("reads an issue with a posted round, a turn in progress or a failed turn as holding a slot, and one with none as waiting", async () => {
+    const queue = await gathered(
+      [
+        issue(3, { comments: { nodes: [kit("<!-- fabrik:design-round 1 -->\n@jrey **Design session, round 1.**"), person("yes")] } }),
+        issue(4),
+        issue(5, { comments: { nodes: [kit("<!-- fabrik:design-turn-failed -->\n@jrey The Design-session turn run on #5 failed.")] } }),
+        issue(6, { comments: { nodes: [person("Any news?")] } }),
+      ],
+      [{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Design-session turn #4", status: "in_progress" }] }],
+    );
+
+    expect(queue.designTurnsInProgress).toEqual([4]);
+    expect(holding(queue)).toEqual({ 3: true, 4: true, 5: true, 6: false });
+  });
+
+  it("reads when an issue got needs-design from its label timeline: the latest time it was added", async () => {
+    const queue = await gathered([
+      issue(3, {
+        timelineItems: {
+          nodes: [
+            labelled("needs-design", "2026-11-01T09:00:00Z"),
+            labelled("bug", "2026-11-02T09:00:00Z"),
+            labelled("needs-design", "2026-11-03T09:00:00Z"),
+            {},
+          ],
+        },
+      }),
+    ]);
+
+    expect(queue.issues).toEqual([
+      { number: 3, labels: ["needs-design"], designRounds: 0, turnFailed: false, neededDesignAt: "2026-11-03T09:00:00Z" },
+    ]);
+  });
+
+  it("falls back to when the issue was opened when its timeline shows no needs-design", async () => {
+    const queue = await gathered([issue(3, { timelineItems: { nodes: [] } })]);
+
+    expect(queue.issues[0]?.neededDesignAt).toBe("2026-10-01T09:00:00Z");
+  });
+
+  it("needs a token that can read workflow runs", async () => {
+    const github = {
+      async graphql(): Promise<unknown> {
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+
+    await expect(gatherSnapshot(github, repo, { kind: "design-queue-check" }, null)).rejects.toThrow(
+      "A Design queue check needs a token that can read workflow runs",
+    );
   });
 });
 

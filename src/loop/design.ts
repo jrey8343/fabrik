@@ -10,7 +10,7 @@ import {
   type OperatorBrief,
   type SpecTicket,
 } from "./designOutput.ts";
-import { isCategoryLabel, type Label, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, WONTFIX } from "./labels.ts";
+import { DESIGN_LABEL, isCategoryLabel, type Label, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, WONTFIX } from "./labels.ts";
 import { designRoundMarker, LIVE_OUTCOME_MARKER, SESSION_FINISHED } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { AgentBrief } from "./triageOutput.ts";
@@ -30,6 +30,19 @@ import type {
 /** Adding needs-design starts the session's first round. */
 export function startSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
   return whileInSession(issueNumber, issue) ?? startAgentRun("design", issueNumber, config);
+}
+
+/**
+ * agent:design, which the Design queue check adds when a slot frees up, starts
+ * the session's first turn. The label comes off as the turn starts, so the
+ * running turn and then its round hold the slot, not the label. It always
+ * comes off, so it never holds a slot for a session that can't start.
+ */
+export function startQueuedSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
+  const removeLabel: Action = { kind: "remove-label", issue: issueNumber, label: DESIGN_LABEL };
+  if (whileInSession(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
+  const start = startAgentRun("design", issueNumber, config);
+  return start.kind === "act" ? { kind: "act", actions: [removeLabel, ...start.actions] } : start;
 }
 
 /**

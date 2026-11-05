@@ -117,6 +117,11 @@ export function wantsDispatchCheck(plan: Plan): boolean {
   return plan.kind === "act" && plan.actions.some((action) => action.kind === "check-dispatch");
 }
 
+/** Whether the plan asks for a Design queue check, which the Design queue job then runs. */
+export function wantsDesignQueueCheck(plan: Plan): boolean {
+  return plan.kind === "act" && plan.actions.some((action) => action.kind === "check-design-queue");
+}
+
 async function apply(
   github: GitHubApi,
   repo: Repo,
@@ -128,6 +133,8 @@ async function apply(
   switch (action.kind) {
     // Not a GitHub change: the push job hands it on to the Dispatch job.
     case "check-dispatch":
+    // Nor this: the push job hands it on to the Design queue job.
+    case "check-design-queue":
       return;
     case "create-issue":
       return createIssue(github, repo, action, made.created);
@@ -222,6 +229,7 @@ async function applyToIssue(
     {
       kind:
         | "check-dispatch"
+        | "check-design-queue"
         | "create-issue"
         | "add-blocked-by"
         | "open-issue"

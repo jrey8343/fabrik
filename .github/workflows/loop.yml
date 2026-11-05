@@ -206,8 +206,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # Named for its issue: a Design queue check reads the issues with a turn in
+  # progress from these names (DESIGN_JOB_NAME in src/github/snapshot.ts).
   design:
-    name: Design-session turn
+    name: "Design-session turn #${{ github.event.issue.number }}"
     needs: kit
     if: needs.kit.outputs.route == 'design'
     runs-on: ubuntu-latest
@@ -304,13 +306,15 @@ jobs:
           retention-days: 7
 
   # Takes agent:implement off the Ticket as its Implement run starts, so the
-  # label never claims work that isn't running (the open draft PR does that).
-  # It applies the same plan the Kit job routed on; the run itself is the
-  # Implement job's. Like the push job, it never touches Product code.
+  # label never claims work that isn't running (the open draft PR does that),
+  # and agent:design off an issue as its Design session's first turn starts
+  # (the running turn, then its round, hold the slot). It applies the same plan
+  # the Kit job routed on; the run itself is the agent job's. Like the push
+  # job, it never touches Product code.
   implement-claim:
     name: Claim the Ticket
     needs: kit
-    if: needs.kit.outputs.route == 'implement'
+    if: needs.kit.outputs.route == 'implement' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions: {}
@@ -631,6 +635,8 @@ jobs:
     outputs:
       # "true" when the plan asked for a Dispatch check.
       dispatch: ${{ steps.loop.outputs.dispatch }}
+      # "true" when the plan asked for a Design queue check.
+      design-queue: ${{ steps.loop.outputs.design-queue }}
     env:
       # How each job ended and what it passed out, none of which the agent can rewrite.
       FABRIK_NEEDS: ${{ toJSON(needs) }}
@@ -689,6 +695,42 @@ jobs:
 
       # The App token adds agent:implement, so the label starts the Implement run.
       - name: Run a Dispatch check
+        uses: ./kit/.github/actions/run-loop
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          actions-token: ${{ github.token }}
+
+  # The Design queue check (#147): runs when the push job's plan asked for a
+  # check, on a fresh snapshot taken after that plan landed. It adds
+  # agent:design to the waiting needs-design issues it starts. Like the push
+  # job, it never checks out or runs Product code.
+  design-queue:
+    name: Design queue
+    needs: [kit, push]
+    if: ${{ !cancelled() && needs.push.result == 'success' && needs.push.outputs.design-queue == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.dispatch-timeout-minutes) }}
+    # One check at a time per repo, so two can't both fill the same free slot.
+    # A newer pending check replacing an older one is fine: each reads fresh state.
+    concurrency:
+      group: fabrik-design-queue
+      cancel-in-progress: false
+    permissions:
+      # Only to read Design-session turns in progress; the Fabrik App has no Actions permission.
+      actions: read
+    env:
+      FABRIK_DESIGN_QUEUE_CHECK: "true"
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # The App token adds agent:design, so the label starts the Design-session turn.
+      - name: Run a Design queue check
         uses: ./kit/.github/actions/run-loop
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}

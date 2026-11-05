@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { planFor } from "../loop/rules.ts";
 import type { LoopEvent, Plan, Snapshot } from "../loop/types.ts";
-import { countEmptyDiffs, designSessionOf, requestChangesRunIn, verdictsIn } from "./threads.ts";
+import { countEmptyDiffs, designSessionOf, designTurnFailedIn, requestChangesRunIn, verdictsIn } from "./threads.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const VERDICT_URL = "https://github.com/acme/shop/pull/50#issuecomment-9001";
@@ -180,5 +180,40 @@ describe("Reading a Ticket's Design session from its comments", () => {
     );
 
     expect(designSessionOf(commentsOf(plan).map(kit)).designRounds).toBe(1);
+  });
+});
+
+describe("Reading whether a Design-session turn failed in the current session", () => {
+  const failed = (): { body: string; byBot: boolean }[] => {
+    const plan = planFor(
+      { kind: "agent-run-failed", role: "design", issue: 7, runUrl: RUN, jobResult: "failure", secretsStep: "success", report: null },
+      snapshotOf(anIssue({ number: 7, labels: ["needs-design"] })),
+      kitConfig(),
+    );
+    return commentsOf(plan).map(kit);
+  };
+
+  it("reads the failure notice the core posted for a Design-session turn", () => {
+    expect(designTurnFailedIn(failed())).toBe(true);
+  });
+
+  it("reads a session with no failure notice as not failed", () => {
+    expect(designTurnFailedIn([round(1), person("yes")])).toBe(false);
+  });
+
+  it("forgets a failure once the session ends, or a new one follows a return", () => {
+    expect(designTurnFailedIn([...failed(), kit("**Design session finished.** This issue is now its agent brief.")])).toBe(false);
+    expect(designTurnFailedIn([...failed(), note(50)])).toBe(false);
+  });
+
+  it("doesn't read another role's failure notice, or a person quoting one, as a failed turn", () => {
+    const implement = planFor(
+      { kind: "agent-run-failed", role: "implement", issue: 7, runUrl: RUN, jobResult: "failure", secretsStep: "success", report: null },
+      snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })),
+      kitConfig(),
+    );
+
+    expect(designTurnFailedIn(commentsOf(implement).map(kit))).toBe(false);
+    expect(designTurnFailedIn(failed().map(({ body }) => person(body)))).toBe(false);
   });
 });

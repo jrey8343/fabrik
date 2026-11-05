@@ -330,6 +330,7 @@ describe("Labels", () => {
     "wontfix",
     "needs-design",
     "agent:implement",
+    "agent:design",
     "agent:review",
     "bug",
     "enhancement",

@@ -30,6 +30,12 @@ export function designRoundMarker(round: number): string {
   return `<!-- fabrik:design-round ${round} -->`;
 }
 
+/**
+ * The first line of the Kit's failure notice for a Design-session turn: the
+ * session keeps its slot while that notice is the Operator's move (#147).
+ */
+export const DESIGN_TURN_FAILED_MARKER = "<!-- fabrik:design-turn-failed -->";
+
 /** How the comment that ends a Design session starts, either way it ends. */
 export const SESSION_FINISHED = "**Design session finished.**";
 
