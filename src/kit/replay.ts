@@ -6,6 +6,7 @@
 // up to 10 Ticket numbers to replay in place of the default pick. A model or
 // effort is held to Kit config's own rules. The "Replay this" link files a
 // replay issue whose request names one variable. Pure, no I/O.
+import type { ChangedPath } from "../guard/trust-root.ts";
 import { newIssueUrl } from "../loop/followUps.ts";
 import { REPLAY_LABEL } from "../loop/labels.ts";
 import { spelled } from "../loop/readable.ts";
@@ -210,4 +211,31 @@ const CLAUDE_MODEL = /^claude-[a-z0-9][a-z0-9.[\]-]*$/;
 /** Why a replay won't run `model`: Kit config's rule first, then only Claude models, each named in full. */
 function refuseModel(model: string): string | null {
   return refuseFable(model) ?? (CLAUDE_MODEL.test(model) ? null : "a replay runs only a Claude model, named in full, such as claude-sonnet-5-5");
+}
+
+/** One file a merged PR changed, as its diff names it: a rename also carries the path it moved from. */
+export interface MergedFile extends ChangedPath {
+  /** Whether the PR removed it, so it isn't in the merged tree. */
+  readonly removed: boolean;
+}
+
+/**
+ * A merged PR's hidden tests: the files it added or changed that a fixed Kit
+ * list of test-path conventions names as tests, which a Replay lays over each
+ * arm's diff. None means "no hidden tests", never a pass.
+ */
+export function hiddenTests(files: readonly MergedFile[]): string[] {
+  return files.flatMap(({ path, removed }) => (!removed && isTestPath(path) ? [path] : []));
+}
+
+/** The file names a test takes: `*.test.*`, `*.spec.*`, `*_test.*` and `test_*.*`. */
+const TEST_NAMES: readonly RegExp[] = [/^.+\.test\..+$/, /^.+\.spec\..+$/, /^.+_test\..+$/, /^test_.+\..+$/];
+
+/** The folders everything under which is a test's, at any depth. */
+const TEST_FOLDERS: readonly string[] = ["test", "tests", "__tests__"];
+
+function isTestPath(path: string): boolean {
+  const folders = path.split("/");
+  const name = folders.pop() ?? "";
+  return TEST_NAMES.some((pattern) => pattern.test(name)) || folders.some((folder) => TEST_FOLDERS.includes(folder));
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readReplayRequest, type ReplayVariable, replayThisUrl } from "./replay.ts";
+import { hiddenTests, type MergedFile, readReplayRequest, type ReplayVariable, replayThisUrl } from "./replay.ts";
 
 /** A Fabrik commit with a prompt change to try. */
 const CANDIDATE = "0123456789abcdef0123456789abcdef01234567";
@@ -198,5 +198,37 @@ describe("The Replay this link", () => {
     expect(`${url.origin}${url.pathname}`).toBe(`${PRODUCT}/issues/new`);
     expect(url.searchParams.get("labels")).toBe("fabrik:replay");
     expect(readReplayRequest(url.searchParams.get("body") ?? "")).toEqual({ ok: true, request: { variable, tickets: null } });
+  });
+});
+
+describe("A merged PR's hidden tests", () => {
+  /** A file the merged PR added or changed. */
+  const changed = (path: string): MergedFile => ({ path, removed: false });
+
+  it.each([
+    ["*.test.*", "src/kit/replay.test.ts"],
+    ["*.spec.*", "web/components/Button.spec.tsx"],
+    ["*_test.*", "internal/store/store_test.go"],
+    ["test_*.*", "app/test_views.py"],
+    ["anything under test/", "test/helpers.js"],
+    ["anything under tests/", "packages/api/tests/fixtures/patient.json"],
+    ["anything under __tests__/", "src/__tests__/booking.tsx"],
+  ])("are its files named by %s", (_, path) => {
+    expect(hiddenTests([changed("src/kit/replay.ts"), changed(path), changed("README.md")])).toEqual([path]);
+  });
+
+  it("are none for a PR whose files follow no test convention", () => {
+    const files = ["src/testing.ts", "docs/test-plan.md", "src/contest/entry.ts", "src/latest_results.py", "testdata/patient.json"];
+
+    expect(hiddenTests(files.map(changed))).toEqual([]);
+  });
+
+  it("leave out a test file the PR removed, which the merged tree doesn't hold", () => {
+    const files: MergedFile[] = [
+      { path: "src/old.test.ts", removed: true },
+      { path: "src/booking.test.ts", from: "src/appointment.test.ts", removed: false },
+    ];
+
+    expect(hiddenTests(files)).toEqual(["src/booking.test.ts"]);
   });
 });
