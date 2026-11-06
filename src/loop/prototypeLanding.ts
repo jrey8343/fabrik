@@ -23,8 +23,8 @@ type PrototypeRunFinished = Extract<LoopEvent, { kind: "prototype-run-finished" 
 /** The capture failures that leave nothing to look at: the variants were never served. */
 const NOT_SERVED: readonly CaptureFailure[] = ["build-failed", "server-did-not-start"];
 
-/** The prototype round, as the plan posts it for its preview to be linked in. */
-const ROUND: PostedComment = { posted: "prototype-round" };
+/** The prototype round's comment, as the plan posts it for its preview to be linked in. */
+const ROUND_COMMENT: PostedComment = { posted: "prototype-round" };
 
 /**
  * The push job's decision on a prototype turn's branch and round. `found` is
@@ -101,16 +101,17 @@ export function applyPrototypeTurn(
     const said = `The Kit pushed the variants the prototype turn wrote to [\`${event.branch}\`](${branchUrl(event)}), but ${captureFailed(capture.reason, event.runUrl)}, and nothing to look at. [The run](${event.runUrl}) has the log.`;
     return { kind: "act", actions: [push, failed(said)] };
   }
-  const linked = previewOfRound(preview);
-  const body = prototypeRound(round, parsed.output, event, operator, linked);
-  if (linked.kind !== "pending") return { kind: "act", actions: [push, comment(body)] };
+  const roundPreview = previewOfRound(preview);
+  const body = prototypeRound(round, parsed.output, event, operator, roundPreview);
+  if (roundPreview.kind !== "pending") return { kind: "act", actions: [push, comment(body)] };
   // The push job polls the preview once the round is posted, and links it there only once it answers.
+  const { route } = event.request.request;
   return {
     kind: "act",
     actions: [
       push,
-      { kind: "comment", issue: event.issue, body, key: ROUND.posted },
-      { kind: "link-prototype-preview", issue: event.issue, round: ROUND, template: linked.template, route: event.request.request.route },
+      { kind: "comment", issue: event.issue, body, key: ROUND_COMMENT.posted },
+      { kind: "link-prototype-preview", issue: event.issue, round: ROUND_COMMENT, template: roundPreview.template, route },
     ],
   };
 }
@@ -197,7 +198,8 @@ export function withVariantPreviews(body: string, preview: Extract<PreviewLink, 
   const lines = body.split("\n").map((line) => (line.endsWith("\r") ? { text: line.slice(0, -1), end: "\r" } : { text: line, end: "" }));
   if (!DESIGN_ROUND_MARKER.test(body) || lines[1]?.text.trim() !== PROTOTYPE_ROUND_MARKER) return null;
   // The Kit writes it under the variants, one blank line between.
-  const at = lines.findIndex(({ text }, i) => text.trim() === PREVIEW_PENDING && lines[i - 1]?.text.trim() === "" && VARIANT_LINE.test(lines[i - 2]?.text ?? ""));
+  const underVariants = (i: number) => lines[i - 1]?.text.trim() === "" && VARIANT_LINE.test(lines[i - 2]?.text ?? "");
+  const at = lines.findIndex(({ text }, i) => text.trim() === PREVIEW_PENDING && underVariants(i));
   if (at === -1) return null;
   if (preview.kind === "never-answered") {
     lines[at] = { ...lines[at]!, text: `No preview links: the preview at ${code(preview.url)} never answered.` };
@@ -218,7 +220,7 @@ export function withVariantPreviews(body: string, preview: Extract<PreviewLink, 
 function variantPreviewUrl(page: string, letter: string): string {
   const url = new URL(page);
   url.searchParams.set("variant", letter);
-  return url.href.replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return withParensEscaped(url.href);
 }
 
 /** What the round says of the preview Kit config declares. */
@@ -283,6 +285,11 @@ function branchUrl({ repoUrl, branch }: PrototypeRunFinished): string {
 function pathInUrl(path: string): string {
   return path
     .split("/")
-    .map((segment) => encodeURIComponent(segment).replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`))
+    .map((segment) => withParensEscaped(encodeURIComponent(segment)))
     .join("/");
+}
+
+/** The URL text with each `(` and `)` percent-encoded, which a URL leaves as they are, but which could end a Markdown link. */
+function withParensEscaped(url: string): string {
+  return url.replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
