@@ -2,7 +2,10 @@
 // Ticket came back to design from an agent PR, that PR as src/agent/inputs.ts
 // read it into the issue's `sentBack`, set out as Markdown, and the Operator
 // comments on that PR it gives the run, which the run's result passes out;
-// and what the inputs say of the Map cap.
+// what the inputs say of the Map cap; and, on a repo the Kit can prototype,
+// that Prototypes are available.
+import type { KitConfig } from "../kit/config.ts";
+import { PROTOTYPES_SWITCHED_ON } from "../loop/designOutput.ts";
 import { spelled } from "../loop/readable.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 import { MAP_INPUTS_FILE, type MapOffer } from "./inputs.ts";
@@ -54,6 +57,23 @@ function readOffer(value: unknown): MapOffer {
     return { kind: "cap-full", cap, openMaps: openMaps.map((map: { number?: unknown; title?: unknown }) => ({ number: Number(map.number), title: text(map.title) })) };
   }
   throw new Error(`${MAP_INPUTS_FILE} doesn't say whether this turn may offer a Map`);
+}
+
+/** The heading a Design-session turn is told Prototypes are available under. */
+export const PROTOTYPES_HEADING = "Prototypes";
+
+/**
+ * What a Design-session turn is told of Prototypes: when and how it may offer
+ * one, ask for the one the Operator approved, read the Operator's choice, and
+ * record it in the outcome. Only tests pass `switchedOn`.
+ */
+export function prototypeContext(
+  config: Pick<KitConfig, "ui">,
+  issue: number,
+  { switchedOn = PROTOTYPES_SWITCHED_ON }: { readonly switchedOn?: boolean } = {},
+): string[] {
+  if (!switchedOn || config.ui === null) return [];
+  return [`## ${PROTOTYPES_HEADING}`];
 }
 
 interface SentBackInput {

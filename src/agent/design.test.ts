@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { agentRunEventFrom } from "../github/events.ts";
-import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, type UiConfig } from "../kit/config.ts";
 import { planFor } from "../loop/rules.ts";
-import { MAP_CAP_HEADING, mapCapContext, sentBackContext } from "./design.ts";
+import { MAP_CAP_HEADING, mapCapContext, PROTOTYPES_HEADING, prototypeContext, sentBackContext } from "./design.ts";
 import { readMapOffer } from "./inputs.ts";
 import { readAgentRunResult } from "./result.ts";
 
@@ -180,4 +180,22 @@ describe("What a Design-session turn's prompt says of the Map cap", () => {
       expect(() => mapCapContext(offer)).toThrow("map.json doesn't say whether this turn may offer a Map");
     },
   );
+});
+
+describe("What a Design-session turn's prompt says of Prototypes", () => {
+  const ui: UiConfig = { paths: ["src/pages/**"], serve: "npm run dev", url: "http://localhost:3000", beforeUrl: null, defaultRoutes: [] };
+  const withUi = kitConfig({ ui });
+  const switchedOn = { switchedOn: true };
+
+  it("sets out that Prototypes are available, under its own heading, for a repo with a ui block while Prototypes are switched on", () => {
+    expect(prototypeContext(withUi, 7, switchedOn)[0]).toBe(`## ${PROTOTYPES_HEADING}`);
+  });
+
+  it("adds nothing to the prompt of a repo without a ui block, even with Prototypes switched on", () => {
+    expect(prototypeContext(kitConfig({ ui: null }), 7, switchedOn)).toEqual([]);
+  });
+
+  it("adds nothing to the prompt of a repo with a ui block while Prototypes are dormant", () => {
+    expect(prototypeContext(withUi, 7)).toEqual([]);
+  });
 });
