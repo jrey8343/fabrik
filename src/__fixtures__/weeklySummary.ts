@@ -41,6 +41,7 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     retry: 0,
     stepUp: false,
     requestChanges: false,
+    prototype: false,
     baseSha: "b".repeat(40),
     jobResult: "success",
     subtype: "success",

@@ -110,6 +110,7 @@ describe("The Run record a run's end yields", () => {
       retry: 0,
       stepUp: false,
       requestChanges: false,
+      prototype: false,
       baseSha: BASE_SHA,
       jobResult: "success",
       subtype: "success",
@@ -138,10 +139,10 @@ describe("The Run record a run's end yields", () => {
     });
   });
 
-  it("a Design-session turn's record is for the event's issue", () => {
+  it("a Design-session turn's record is for the event's issue, and is no prototype turn's", () => {
     const files = runRecordFor(runEnd({ needs: needs("design", { design: job("success") }), agentResult: agentResult("design", 12) }));
 
-    expect(files?.record).toMatchObject({ role: "design", issue: 12, pullRequest: null, jobResult: "success", turns: 12 });
+    expect(files?.record).toMatchObject({ role: "design", issue: 12, pullRequest: null, jobResult: "success", turns: 12, prototype: false });
     expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-design.json");
   });
 
@@ -918,6 +919,7 @@ describe("A judge run's record", () => {
       retry: 0,
       stepUp: false,
       requestChanges: false,
+      prototype: false,
       baseSha: null,
       jobResult: "success",
       subtype: "success",

@@ -98,6 +98,8 @@ export interface RunRecord {
   readonly retry: number;
   readonly stepUp: boolean;
   readonly requestChanges: boolean;
+  /** Whether the run was a Design session's prototype turn (#155), whose role stays `design`. */
+  readonly prototype: boolean;
   /**
    * The commit the run started from: an Implement branch's base, a Review's PR
    * head, the event's commit for Triage and Design, the Audit's marked commit
@@ -193,6 +195,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     retry: implement ? (countOf(kit["retry"]) ?? 0) : 0,
     stepUp: implement && kit["step-up"] === "true",
     requestChanges: implement && kit["request-changes"] === "true",
+    prototype: false,
     baseSha: nonEmpty(agent["base-sha"]),
     jobResult: job?.result ?? "unknown",
     infrastructureFailure: ran.failure,
@@ -243,6 +246,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     retry: 0,
     stepUp: false,
     requestChanges: false,
+    prototype: false,
     baseSha: null,
     jobResult: judge.result,
     infrastructureFailure: failureOf(judge.result, judge.outputs["secrets-step"], end.failureReport),
