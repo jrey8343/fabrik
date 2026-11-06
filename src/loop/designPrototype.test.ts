@@ -122,7 +122,8 @@ describe("An ordinary Design turn that ends in a prototype round", () => {
 
 describe("agent:design on an issue whose Design session has a pending prototype request", () => {
   const added = { kind: "label-added", issue: 7, label: "agent:design" } as const;
-  const pending = { request: { route: "/book", variants: 3, brief: requested.brief }, reply: 9001 };
+  /** The request comment 9010, whose prototype turn hasn't started yet. */
+  const pending = { request: { route: "/book", variants: 3, brief: requested.brief }, reply: 9001, comment: 9010, started: false };
   // Told apart, so the run's model and effort are seen to be the Design role's and its timeout the Implement role's.
   const roles = {
     ...DEFAULT_KIT_CONFIG.roles,
@@ -134,7 +135,7 @@ describe("agent:design on an issue whose Design session has a pending prototype 
       operator: "jrey",
     });
 
-  it("starts the session's prototype turn, carrying the request, on the Design model and effort within the Implement role's timeout", () => {
+  it("starts the session's prototype turn, carrying the request, on the Design model and effort within the Implement role's timeout, and marks the request's comment started", () => {
     const plan = planFor(added, issue(), kitConfig({ ui: UI, roles }));
 
     expect(plan).toEqual({
@@ -148,12 +149,26 @@ describe("agent:design on an issue whose Design session has a pending prototype 
           model: "claude-designer",
           effort: "high",
           timeoutMinutes: 75,
-          prototype: pending,
+          prototype: { request: pending.request, reply: 9001 },
           subscription: "Claude token",
         },
+        { kind: "mark-prototype-request", issue: 7, comment: 9010, started: true },
       ],
     });
     expect(notificationsOf(plan, "jrey")).toEqual([]);
+  });
+
+  // The ordinary turn the Operator's reply started while the prototype turn built, refused or held, comes back through agent:design too.
+  it("starts an ordinary turn once the request's prototype turn has started, since agent:design then restarts another turn of the session", () => {
+    const plan = planFor(added, issue({ pendingPrototype: { ...pending, started: true } }), kitConfig({ ui: UI, roles }));
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:design" },
+        { kind: "start-agent-run", role: "design", issue: 7, model: "claude-designer", effort: "high", timeoutMinutes: 30, subscription: "Claude token" },
+      ],
+    });
   });
 
   it("starts an ordinary turn, as before, on an issue with no request pending", () => {
@@ -175,7 +190,7 @@ describe("agent:design on an issue whose Design session has a pending prototype 
     expect(plan.kind === "act" ? plan.actions.find(({ kind }) => kind === "start-agent-run") : null).not.toHaveProperty("prototype");
   });
 
-  // It waits behind the prototype turn in the session's concurrency group, and reads its round once it's posted.
+  // Its turn waits behind the prototype turn's job in the session's concurrency group: one turn of a session runs at a time.
   it("leaves the Operator's reply to start an ordinary turn, as any reply does, while the request is pending", () => {
     const replied = { kind: "issue-comment-created", issue: 7, commenter: "jrey", commenterIsBot: false, body: "Also try a dark one", comment: 9002 } as const;
 

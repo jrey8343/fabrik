@@ -1,8 +1,8 @@
 # Links each variant's preview in a prototype round (#155), as link-preview
 # links a UI PR's (#153): loads the Fabrik App key through the push service
 # account, mints a token for the Product repo alone that can edit an issue's
-# comments and nothing else, and runs src/kit/prototype-preview-main.ts. That
-# program polls the route's page Run the Loop filled Kit config's preview.url
+# comments and nothing else, and runs src/kit/preview-main.ts, link-preview's
+# program, given the round. That program polls the route's page Run the Loop filled Kit config's preview.url
 # template in to for prototype/<issue>, for PREVIEW_POLL_MINUTES at most
 # (src/kit/previewLink.ts), then edits the round to link it beside each
 # variant, with ?variant= and its letter, or to say it never answered. It
@@ -63,4 +63,4 @@ runs:
         FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
         FABRIK_PREVIEW_URL: ${{ inputs.url }}
         FABRIK_PREVIEW_ROUND: ${{ inputs.round }}
-      run: node src/kit/prototype-preview-main.ts
+      run: node src/kit/preview-main.ts

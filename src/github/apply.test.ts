@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { UI } from "../__fixtures__/uiEvidence.ts";
+import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
 import { applyPlan } from "./apply.ts";
+import { pendingPrototypeIn } from "./threads.ts";
 
 const repo = { owner: "acme", name: "shop" };
 const issues = "/repos/acme/shop/issues";
@@ -471,5 +475,65 @@ describe("Applying a prototype turn's plan (#155)", () => {
 
       await expect(applyPlan(fakeGitHub(), repo, plan, heldBranch())).rejects.toThrow("The plan refers to a comment it hasn't posted: prototype-round");
     });
+  });
+});
+
+describe("Marking whether a prototype request's prototype turn has started (#155)", () => {
+  /** A GitHub holding the request comment 9010 the core posted on #7, which a GET reads and a PATCH replaces. */
+  function holdingRequest() {
+    const output = JSON.stringify({ kind: "prototype", route: "/book", variants: 3, brief: "- **A**: a form.\n- **B**: a stepper.", comment: "Prototyping it." });
+    const posted = planFor(
+      { kind: "agent-run-finished", role: "design", issue: 7, output },
+      snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: 1 })),
+      kitConfig({ ui: UI }),
+    );
+    const comment = { body: posted.kind === "act" && posted.actions[0]?.kind === "comment" ? posted.actions[0].body : "" };
+    const calls: string[] = [];
+    return {
+      comment,
+      calls,
+      async rest(method: string, path: string, sent?: unknown): Promise<unknown> {
+        calls.push(`${method} ${path}`);
+        expect(path).toBe(`${issues}/comments/9010`);
+        if (method === "GET") return { id: 9010, body: comment.body };
+        if (method === "PATCH") comment.body = (sent as { body: string }).body;
+        return null;
+      },
+      async graphql(): Promise<never> {
+        throw new Error("no GraphQL expected");
+      },
+    };
+  }
+
+  const mark = (started: boolean): Plan => ({ kind: "act", actions: [{ kind: "mark-prototype-request", issue: 7, comment: 9010, started }] });
+  const read = ({ body }: { body: string }) => pendingPrototypeIn([{ id: 9010, body, byApp: true }]);
+
+  it("marks the request's comment started, which the snapshot reads back, leaving the request it holds and its text as they were", async () => {
+    const github = holdingRequest();
+    const before = github.comment.body;
+
+    await applyPlan(github, repo, mark(true));
+
+    expect(read(github.comment)).toEqual({ ...read({ body: before }), started: true });
+    expect(github.comment.body.split("\n").filter((line) => !line.startsWith("<!--"))).toEqual(before.split("\n").filter((line) => !line.startsWith("<!--")));
+  });
+
+  it("marks it waiting for its prototype turn again, as the core posted it", async () => {
+    const github = holdingRequest();
+    const before = github.comment.body;
+    await applyPlan(github, repo, mark(true));
+
+    await applyPlan(github, repo, mark(false));
+
+    expect(github.comment.body).toBe(before);
+    expect(read(github.comment)?.started).toBe(false);
+  });
+
+  it("leaves a comment already marked so as it is", async () => {
+    const github = holdingRequest();
+
+    await applyPlan(github, repo, mark(false));
+
+    expect(github.calls).toEqual([`GET ${issues}/comments/9010`]);
   });
 });

@@ -52,7 +52,7 @@ import { GitHub, type Repo } from "../github/client.ts";
 import { loopEventFrom } from "../github/events.ts";
 import { gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
-import type { PrototypeRequestMarker } from "../loop/markers.ts";
+import { prototypeRequestJson } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
 import { kitConfigErrors } from "../skills/pinnedManifests.ts";
@@ -179,13 +179,8 @@ export function kitJobOutputs(plan: Plan | null, ticket: number | null, config: 
     prototype: String(run?.prototype !== undefined),
     // The one output that holds agent text: the request's brief, written by the Design agent. One line of JSON,
     // whose newlines JSON.stringify escapes, as GITHUB_OUTPUT's key=value lines need; read only through `env:`.
-    prototype_request: run?.prototype === undefined ? "" : prototypeRequestOutput(run.prototype),
+    prototype_request: run?.prototype === undefined ? "" : prototypeRequestJson(run.prototype),
   };
-}
-
-/** A prototype turn's request, as the prototype job reads it: its route, variant count and brief, and the reply that asked for it. */
-function prototypeRequestOutput({ request: { route, variants, brief }, reply }: PrototypeRequestMarker): string {
-  return JSON.stringify({ route, variants, brief, reply });
 }
 
 if (import.meta.main) {

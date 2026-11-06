@@ -10,12 +10,13 @@
 // bundle, as an Implement run's commits.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { AgentRole, KitConfig } from "../kit/config.ts";
+import { pageAt, variantPage } from "../evidence/uiEvidence.ts";
+import type { KitConfig } from "../kit/config.ts";
 import { prototypeBranchFor, variantLetter } from "../loop/designOutput.ts";
-import { type PrototypeRequestMarker, readPrototypeRequest } from "../loop/markers.ts";
+import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import { fenced } from "./design.ts";
-import { cutBranch, setSandboxEnv } from "./implement.ts";
+import { cutBranch } from "./implement.ts";
 import type { BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -41,13 +42,13 @@ export function prototypeTurnContext(
   issue: number,
   requestText: string,
 ): { readonly request: PrototypeRequestMarker; readonly parts: string[] } {
-  const request = readPrototypeRequest(jsonOrNull(requestText));
+  const request = parsePrototypeRequest(requestText);
   if (request === null) throw new Error(`${PROTOTYPE_REQUEST_ENV} holds no prototype request: a route, a variant count and a brief`);
   const { ui } = config;
   if (ui === null) throw new Error("Kit config has no ui block, so the Kit can neither serve nor capture a Prototype");
   const { route, variants, brief } = request.request;
   const letters = Array.from({ length: variants }, (_, at) => variantLetter(at));
-  const served = `${ui.url.replace(/\/+$/, "")}${route}`;
+  const served = pageAt(ui.url, route);
   const { build } = config.sandbox;
   return {
     request,
@@ -58,19 +59,9 @@ export function prototypeTurnContext(
       fenced(brief.trimEnd(), "markdown"),
       `## ${PROTOTYPE_SECTIONS.sandbox}`,
       [build === null ? "- Build: none configured" : `- Build: \`${build}\``, `- Serve: \`${ui.serve}\`, which answers at \`${ui.url}\``].join("\n"),
-      `Once you finish, the Kit builds the branch, serves it, and captures each variant at mobile and desktop widths, at \`${served}?variant=${letters[0] ?? "A"}\` and so on, so each variant must render there from its letter alone.`,
+      `Once you finish, the Kit builds the branch, serves it, and captures each variant at mobile and desktop widths, at \`${variantPage(served, letters[0] ?? "A")}\` and so on, so each variant must render there from its letter alone.`,
     ],
   };
-}
-
-/**
- * The role a prototype turn runs as: the Design role's model and effort,
- * since it is a turn of the Design session, within the Implement role's
- * timeout, since it builds and serves the Product, as the prototype job's
- * agent step's timeout is.
- */
-export function prototypeRole(roles: Pick<KitConfig["roles"], "design" | "implement">): AgentRole {
-  return { model: roles.design.model, effort: roles.design.effort, timeoutMinutes: roles.implement.timeoutMinutes };
 }
 
 /**
@@ -79,15 +70,6 @@ export function prototypeRole(roles: Pick<KitConfig["roles"], "design" | "implem
  * code, never the Implementer's.
  */
 export const PROTOTYPE_AUTHOR = { name: "Fabrik Prototype", email: "fabrik-prototype@users.noreply.github.com" } as const;
-
-/**
- * Sets a prototype turn's env, which the agent inherits: the Claude token
- * and the Sandbox's values and test secrets, as the Implementer's, and the
- * Fabrik Prototype's commit identity.
- */
-export function setPrototypeEnv(config: KitConfig): void {
-  setSandboxEnv(config, PROTOTYPE_AUTHOR);
-}
 
 /**
  * Starts the issue's prototype branch: a later round carries on from the head
@@ -100,12 +82,4 @@ export async function startPrototypeBranch(productDir: string, issue: number): P
   const git = async (...args: string[]) => (await run("git", args, { cwd: productDir })).stdout.trim();
   if ((await git("rev-parse", "--abbrev-ref", "HEAD")) !== name) return cutBranch(productDir, name);
   return { name, base: { ref: name, sha: await git("rev-parse", "HEAD") }, head: null };
-}
-
-function jsonOrNull(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }

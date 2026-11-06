@@ -57,6 +57,14 @@ export interface BranchChanges {
    * the run's own changes, as rebased; with one, there's nothing to push.
    */
   readonly rebase?: { readonly onto: string; readonly conflicted: boolean };
+  /**
+   * For a prototype turn's branch (#155) that moved while the turn ran, as a
+   * live Design session's push may move it: the head the turn started on
+   * (null when it cut the branch afresh, there being none) and where the
+   * branch is now (null when it's gone). A prototype branch is only ever
+   * fast-forwarded from the head its turn started on, so there's nothing to push.
+   */
+  readonly moved?: { readonly from: string | null; readonly to: string | null };
 }
 
 /**
@@ -265,9 +273,9 @@ export type LoopEvent =
       readonly output: string;
       /**
        * The prototype request the turn built, as the Kit job's plan passed it
-       * out, never from the agent: what the push job checks is still the
-       * session's pending request, and, in it, the Operator's reply that
-       * approved it, which must still exist for the round to post.
+       * out, never from the agent: what the push job checks is still one of
+       * the session's unanswered requests, and, in it, the Operator's reply
+       * that approved it, which must still exist for the round to post.
        */
       readonly request: PrototypeRequestMarker;
       /** The issue's prototype branch (prototypeBranchFor). */
@@ -358,6 +366,18 @@ export type PullRequestCommentPlace =
   | { readonly kind: "conversation"; readonly comment: number }
   | { readonly kind: "review"; readonly review: number };
 
+/**
+ * A Design session's pending prototype request (#155), as the snapshot reads
+ * it from the Fabrik App's request comment: what it asks for, the comment it
+ * is, and whether its prototype turn has started, which the Kit marks on that
+ * comment as the turn starts, and clears if the turn is refused on its
+ * Subscription and held or re-run.
+ */
+export interface PendingPrototype extends PrototypeRequestMarker {
+  readonly comment: number;
+  readonly started: boolean;
+}
+
 /** An issue as the core sees it, gathered fresh by the GitHub adapter. */
 export interface IssueSnapshot {
   readonly number: number;
@@ -404,11 +424,20 @@ export interface IssueSnapshot {
   /**
    * Its current Design session's pending prototype request (#155): the
    * latest prototype request with no prototype round, prototype failure
-   * round or failed turn since, read from the Fabrik App's comments
-   * (src/github/threads.ts); null when there is none. While one is pending,
-   * agent:design starts the session's prototype turn (src/loop/design.ts).
+   * round or failed turn since, whose approving reply, if one approved it, is
+   * still there, read from the Fabrik App's comments (src/github/threads.ts);
+   * null when there is none. While one is pending, agent:design starts the
+   * session's prototype turn (src/loop/design.ts).
    */
-  readonly pendingPrototype: PrototypeRequestMarker | null;
+  readonly pendingPrototype: PendingPrototype | null;
+  /**
+   * Its current Design session's prototype requests that no prototype round
+   * or prototype failure round has answered (#155), oldest first, read from
+   * the Fabrik App's comments: what a prototype turn's result may still land
+   * on (src/loop/prototypeLanding.ts), though another turn's failure notice
+   * has ended its request as pending.
+   */
+  readonly unansweredPrototypes: readonly PrototypeRequestMarker[];
   /**
    * The agent PR whose Verdict sent this Ticket back to design, read from the
    * Kit's note on it (src/loop/backToDesign.ts), while the Design session that
@@ -899,6 +928,20 @@ export type Action =
    * It never opens a PR, and nothing in the Kit deletes the branch.
    */
   | { readonly kind: "push-prototype-branch"; readonly issue: number }
+  | {
+      /**
+       * Marks a Design session's prototype request (#155), on the Fabrik App's
+       * own request comment, as building, once its prototype turn starts, or
+       * waiting for it again, once that turn is refused on its Subscription
+       * and held or re-run: what agent:design next starts is read from it
+       * (src/loop/design.ts). An edit, so it notifies nobody.
+       */
+      readonly kind: "mark-prototype-request";
+      readonly issue: number;
+      /** The request's comment. */
+      readonly comment: number;
+      readonly started: boolean;
+    }
   | {
       /** Opens a PR as the Fabrik App, which starts CI on it. */
       readonly kind: "open-pull-request";

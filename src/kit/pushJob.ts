@@ -4,7 +4,7 @@
 // checks or Verdict, or, when the routed agent job failed or was cancelled,
 // its failure notice. Pure, no I/O.
 import { type CaptureResult, parseCaptureResult } from "../evidence/uiEvidence.ts";
-import { type PrototypeRequestMarker, readPrototypeRequest } from "../loop/markers.ts";
+import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
 import type { AgentRole } from "../loop/types.ts";
 
 /** One job's `needs.<job>`: its result and its outputs. */
@@ -98,14 +98,14 @@ export const RETRO_EVIDENCE_JOB = "retro-evidence";
  */
 export const PROTOTYPE_JOB = "prototype";
 
-/** Whether the Kit job's plan started a Design session's prototype turn: its `prototype` output. */
-export function isPrototypeTurn(needs: Needs): boolean {
-  return needs["kit"]?.outputs["prototype"] === "true";
+/** Whether the run the Kit job routed to `route` is a Design session's prototype turn: a Design run, with the Kit job's `prototype` output true. */
+export function isPrototypeTurn(needs: Needs, route: string): boolean {
+  return route === "design" && needs["kit"]?.outputs["prototype"] === "true";
 }
 
 /** The job that ran the agent the Kit job routed to: the prototype job for a prototype turn, else the route's own. */
 export function routedJob(needs: Needs, route: AgentRole): NeededJob | undefined {
-  return needs[route === "design" && isPrototypeTurn(needs) ? PROTOTYPE_JOB : route];
+  return needs[isPrototypeTurn(needs, route) ? PROTOTYPE_JOB : route];
 }
 
 /**
@@ -138,7 +138,7 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       const evidence = route === "retro" ? needs[RETRO_EVIDENCE_JOB] : undefined;
       if (evidence !== undefined && FAILED.includes(evidence.result)) return failure(route, issue, evidence, kit);
       const job = routedJob(needs, route);
-      const prototype = route === "design" && isPrototypeTurn(needs);
+      const prototype = isPrototypeTurn(needs, route);
       if (job !== undefined && FAILED.includes(job.result)) {
         const failed = failure(route, issue, job, kit);
         return prototype ? { ...failed, prototype: true } : failed;
@@ -204,12 +204,7 @@ function captureOutputs(outputs: NeededJob["outputs"]): CaptureOutputs {
 
 /** The prototype request the Kit job passed out, as one line of JSON, or null when it doesn't read. */
 function requestOf(text: string | undefined): PrototypeRequestMarker | null {
-  if (text === undefined || text === "") return null;
-  try {
-    return readPrototypeRequest(JSON.parse(text));
-  } catch {
-    return null;
-  }
+  return text === undefined || text === "" ? null : parsePrototypeRequest(text);
 }
 
 function numberOr(text: string | undefined): number | null {

@@ -102,6 +102,8 @@ function describeAction(action: Action): string {
       return `- push ${action.branch}`;
     case "push-prototype-branch":
       return `- push ${prototypeBranchFor(action.issue)}, only as a fast-forward`;
+    case "mark-prototype-request":
+      return `- mark #${action.issue}'s prototype request ${action.started ? "as its prototype turn started" : "as waiting for its prototype turn again"}`;
     case "open-pull-request":
       return `- open a draft PR from ${action.head} to ${action.base} that closes #${action.issue}`;
     case "convert-to-draft":

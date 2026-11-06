@@ -5,7 +5,8 @@
 // what the inputs say of the Map cap; and, on a repo the Kit can prototype,
 // that Prototypes are available.
 import type { KitConfig } from "../kit/config.ts";
-import { PROTOTYPE_DEFAULT_VARIANTS, PROTOTYPE_MIN_VARIANTS, PROTOTYPE_VARIANT_CAP } from "../loop/designOutput.ts";
+import { whyNoPrototype } from "../loop/design.ts";
+import { PROTOTYPE_DEFAULT_VARIANTS, PROTOTYPE_MIN_VARIANTS, PROTOTYPE_VARIANT_CAP, prototypeBranchFor } from "../loop/designOutput.ts";
 import { spelled } from "../loop/readable.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 import { MAP_INPUTS_FILE, type MapOffer } from "./inputs.ts";
@@ -74,13 +75,14 @@ const PROTOTYPE_EXAMPLE = {
 /**
  * What a Design-session turn is told of Prototypes: when and how it may offer
  * one, ask for the one the Operator approved, read the Operator's choice, and
- * record it in the outcome. Nothing at all on a repo without a `ui` block,
- * which the Kit can't serve and capture, so that turn's prompt never mentions
- * a Prototype. The Kit config decides, never an agent.
+ * record it in the outcome. Nothing at all on a repo that can't have one
+ * (whyNoPrototype: one without a `ui` block, which the Kit can't serve and
+ * capture), so that turn's prompt never mentions a Prototype. The Kit config
+ * decides, never an agent.
  */
 export function prototypeContext(config: Pick<KitConfig, "ui">, issue: number): string[] {
-  if (config.ui === null) return [];
-  const branch = `\`prototype/${issue}\``;
+  if (whyNoPrototype(config) !== null) return [];
+  const branch = `\`${prototypeBranchFor(issue)}\``;
   return [
     `## ${PROTOTYPES_HEADING}`,
     [

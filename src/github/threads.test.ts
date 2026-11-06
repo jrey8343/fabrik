@@ -7,7 +7,7 @@ import { UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "../loop/rules.ts";
 import type { LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
-import { countEmptyDiffs, designSessionOf, designTurnFailedIn, pendingPrototypeIn, requestChangesRunIn, verdictsIn } from "./threads.ts";
+import { countEmptyDiffs, designSessionOf, designTurnFailedIn, pendingPrototypeIn, requestChangesRunIn, unansweredPrototypesIn, verdictsIn } from "./threads.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const VERDICT_URL = "https://github.com/acme/shop/pull/50#issuecomment-9001";
@@ -237,18 +237,19 @@ describe("Reading whether a Design-session turn failed in the current session", 
 });
 
 describe("Reading an issue's pending prototype request in the current session", () => {
-  /** A comment as the adapter reads it for this: its text, and whether the Fabrik App wrote it. */
-  const app = (body: string) => ({ body, byApp: true });
-  const other = (body: string) => ({ body, byApp: false });
+  /** A comment as the adapter reads it for this: its id, its text, and whether the Fabrik App wrote it. */
+  let ids = 100;
+  const app = (body: string) => ({ id: ids++, body, byApp: true });
+  const other = (body: string, id = ids++) => ({ id, body, byApp: false });
   const brief = "- **A**: one long form.\n- **B**: a stepper.";
   const asked = { route: "/book", variants: 2, brief };
 
-  /** The prototype request the core posts for an ordinary turn that asked for this one. */
-  function requested(request: { route: string; variants: number; brief: string } = asked) {
+  /** The prototype request the core posts for an ordinary turn that asked for this one: started by the Operator's reply `reply`, or by agent:design. */
+  function requested(request: { route: string; variants: number; brief: string } = asked, reply: number | null = null) {
     const output = JSON.stringify({ kind: "prototype", ...request, comment: "Prototyping it." });
     const plan = planFor(
-      { kind: "agent-run-finished", role: "design", issue: 7, output },
-      snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: 1 })),
+      { kind: "agent-run-finished", role: "design", issue: 7, output, ...(reply === null ? {} : { startedBy: reply }) },
+      snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: 1 }), reply === null ? {} : { startingComment: { id: reply, exists: true } }),
       kitConfig({ ui: UI }),
     );
     return app(commentsOf(plan)[0] ?? "");
@@ -269,11 +270,25 @@ describe("Reading an issue's pending prototype request in the current session", 
     app([designRoundMarker(n), marker, `@jrey **Design session, round ${n}.** Here are the variants.`].join("\n"));
   const ordinaryRound = (n: number) => app(`${designRoundMarker(n)}\n@jrey **Design session, round ${n}.**`);
 
-  it("reads the request the core posted as pending, through the Operator's replies and the session's ordinary rounds since", () => {
-    expect(pendingPrototypeIn([ordinaryRound(1), other("Yes, prototype it."), requested(), other("Keep the header."), ordinaryRound(2)])).toEqual({
+  it("reads the request the core posted as pending, through the Operator's replies and the session's ordinary rounds since, with its comment, its prototype turn not yet started", () => {
+    const request = requested();
+
+    expect(pendingPrototypeIn([ordinaryRound(1), other("Yes, prototype it."), request, other("Keep the header."), ordinaryRound(2)])).toEqual({
       request: asked,
       reply: null,
+      comment: request.id,
+      started: false,
     });
+  });
+
+  it("reads a request whose approving reply is still on the issue as pending, with that reply", () => {
+    expect(pendingPrototypeIn([ordinaryRound(1), other("Yes, prototype it.", 9001), requested(asked, 9001)])).toMatchObject({ request: asked, reply: 9001 });
+  });
+
+  // The reply is older than its request, so it can fall outside the comments the snapshot reads while the request doesn't.
+  it("reads a request whose approving reply was deleted, or is older than every comment read, as not pending, so no agent:design builds it again", () => {
+    expect(pendingPrototypeIn([ordinaryRound(1), requested(asked, 9001)])).toBeNull();
+    expect(pendingPrototypeIn([other("Yes, prototype it.", 9001), requested(asked, 9001)], new Set([]))).toBeNull();
   });
 
   it("reads none in a session that asked for none", () => {
@@ -291,9 +306,13 @@ describe("Reading an issue's pending prototype request in the current session", 
   it("reads the latest request as pending when another follows one that ended", () => {
     const again = { route: "/checkout", variants: 3, brief: "Three checkouts." };
 
-    expect(pendingPrototypeIn([requested(), prototypeRound(2, PROTOTYPE_ROUND_MARKER), other("Try /checkout too."), requested(again)])).toEqual({
+    const latest = requested(again);
+
+    expect(pendingPrototypeIn([requested(), prototypeRound(2, PROTOTYPE_ROUND_MARKER), other("Try /checkout too."), latest])).toEqual({
       request: again,
       reply: null,
+      comment: latest.id,
+      started: false,
     });
   });
 
@@ -307,7 +326,7 @@ describe("Reading an issue's pending prototype request in the current session", 
     const { body } = requested();
 
     expect(pendingPrototypeIn([other(body)])).toBeNull();
-    expect(pendingPrototypeIn([requested(), other(prototypeRound(2, PROTOTYPE_ROUND_MARKER).body), other(turnFailed().body)])).toEqual({
+    expect(pendingPrototypeIn([requested(), other(prototypeRound(2, PROTOTYPE_ROUND_MARKER).body), other(turnFailed().body)])).toMatchObject({
       request: asked,
       reply: null,
     });
@@ -317,5 +336,59 @@ describe("Reading an issue's pending prototype request in the current session", 
     const quoting = app([designRoundMarker(2), "@jrey **Design session, round 2.**", "", PROTOTYPE_ROUND_MARKER].join("\n"));
 
     expect(pendingPrototypeIn([requested(), quoting, app(PROTOTYPE_FAILURE_ROUND_MARKER)])).not.toBeNull();
+  });
+
+  describe("and the requests a prototype turn's result may still land on", () => {
+    const again = { route: "/checkout", variants: 3, brief: "Three checkouts." };
+
+    /** The Map cap's refusal of a turn's Map, which opens like a failed turn's notice. */
+    function mapRefused() {
+      const output = JSON.stringify({
+        kind: "map",
+        comment: "Too foggy for one session, so it's a Map.",
+        destination: "Patients book group classes online.",
+        notes: "Notes.",
+        notYetSpecified: "- How classes are priced",
+        outOfScope: "- Video classes",
+        decisions: [{ key: "provider", title: "Group classes: provider?", body: "## Question\n\nWhich provider?", type: "research", blockedBy: [] }],
+      });
+      const plan = planFor(
+        { kind: "agent-run-finished", role: "design", issue: 7, output },
+        snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: 1 }), { openMaps: [12] }),
+        kitConfig({ caps: { ...kitConfig().caps, maps: 1 } }),
+      );
+      return app(commentsOf(plan)[0] ?? "");
+    }
+
+    it("reads a request no prototype round has answered as one, though another turn's failure notice or the Map cap's refusal ended it as pending", () => {
+      for (const ended of [turnFailed(), mapRefused()]) {
+        const thread = [requested(), other("Keep the header."), ended];
+
+        expect(pendingPrototypeIn(thread)).toBeNull();
+        expect(unansweredPrototypesIn(thread)).toEqual([{ request: asked, reply: null }]);
+      }
+    });
+
+    it.each([
+      ["a prototype round", PROTOTYPE_ROUND_MARKER],
+      ["a prototype failure round", PROTOTYPE_FAILURE_ROUND_MARKER],
+    ])("reads a request %s answered as answered, so a second landing of it is stale", (_, marker) => {
+      expect(unansweredPrototypesIn([requested(), prototypeRound(2, marker)])).toEqual([]);
+    });
+
+    it("reads each round as answering the oldest request it follows, as the session's turns build them in turn", () => {
+      const thread = [requested(), requested(again), prototypeRound(2, PROTOTYPE_ROUND_MARKER)];
+
+      expect(unansweredPrototypesIn(thread)).toEqual([{ request: again, reply: null }]);
+      expect(unansweredPrototypesIn([...thread, prototypeRound(3, PROTOTYPE_ROUND_MARKER)])).toEqual([]);
+    });
+
+    it("reads none once the session ends, from anyone but the Fabrik App, or a round's marker anywhere but under its round marker", () => {
+      expect(unansweredPrototypesIn([requested(), app("**Design session finished.** This issue is now its agent brief.")])).toEqual([]);
+      expect(unansweredPrototypesIn([requested(), app(note(50).body)])).toEqual([]);
+      expect(unansweredPrototypesIn([other(requested().body)])).toEqual([]);
+      expect(unansweredPrototypesIn([requested(), other(prototypeRound(2, PROTOTYPE_ROUND_MARKER).body)])).toHaveLength(1);
+      expect(unansweredPrototypesIn([requested(), app([designRoundMarker(2), "@jrey **Round 2.**", PROTOTYPE_ROUND_MARKER].join("\n"))])).toHaveLength(1);
+    });
   });
 });

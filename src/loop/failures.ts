@@ -13,12 +13,13 @@
 // Kit off that Subscription. A Retro run is never re-run or held: the tick
 // can't start one at a reset, so its Retro fails, for the tick to try again.
 import { isPendingAudit } from "./audit.ts";
+import { prototypeRole } from "./design.ts";
 import { type HeldRun, heldInOrder, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
 import { canHold, heldAfterKill } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
-import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
+import type { Action, AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 import { failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
@@ -57,8 +58,7 @@ export function infrastructureFailureOf(run: Pick<FailedRun, "secretsStep" | "re
 function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: KitConfig): string {
   switch (failure) {
     case "timeout":
-      // A prototype turn builds and serves the Product, so it ran within the Implement role's timeout.
-      return `it was cancelled, most likely by its ${config.roles[run.prototype === true ? "implement" : run.role].timeoutMinutes}-minute timeout`;
+      return `it was cancelled, most likely by its ${(run.prototype === true ? prototypeRole(config.roles) : config.roles[run.role]).timeoutMinutes}-minute timeout`;
     case "unreachable-1password":
       return "its secrets couldn't be loaded from 1Password";
     case "crash":
@@ -134,7 +134,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       ...(killed ? {} : { held }),
     });
     const holds = killed ? heldAfterKill(held, context.kitIssues) : holding(held, repoWide?.firstReset ?? null);
-    return { kind: "act", actions: [...holds, ...(repoWide?.actions ?? [])] };
+    return { kind: "act", actions: [...holds, ...waitingAgain(run, issue), ...(repoWide?.actions ?? [])] };
   }
   // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.
   if (isWeeklyRole(run.role)) {
@@ -154,14 +154,12 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   const where = labelled === target ? "" : ` on #${labelled}`;
   // A Design-session turn has none to re-add: its issue keeps needs-design, and the Operator's reply starts it again.
   const label = run.role === "design" ? null : RESUME_LABELS[run.role];
-  // The failure notice ends a prototype turn's request (src/github/threads.ts), so a reply starts an ordinary turn.
   const resume =
     label !== null
       ? `Re-add the \`${label}\` label${where} to run it again.`
       : run.prototype === true
-        ? "Reply on this issue to carry the session on: the turn your reply starts can ask for the prototype again."
+        ? CARRY_ON_AFTER_PROTOTYPE
         : "Reply on this issue to run the turn again.";
-  const detail = run.report === null || run.report.detail.trim() === "" ? [] : ["", `> ${run.report.detail.trim()}`];
   const repoWide = repoWideNotice(failure, context, {
     run: failedRun,
     runUrl: run.runUrl,
@@ -176,27 +174,24 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       kind: "act",
       actions: [
         { kind: "remove-label", issue: labelled, label: rerun },
+        // Before the label, whose Loop run reads it.
+        ...waitingAgain(run, issue),
         { kind: "add-labels", issue: labelled, labels: [rerun] },
         ...(repoWide?.actions ?? []),
       ],
     };
   }
-  const marker = FAILURE_MARKERS[run.role];
-  // A research Decision has no retries to count against, and Dispatch leaves it alone once its run failed.
-  const notRetried =
-    run.role === "research"
-      ? "neither the Loop nor Dispatch runs it again by itself"
-      : "the Loop won't retry it and it doesn't count against the Ticket's retries";
-  const body = [
-    ...(marker === undefined ? [] : [marker]),
-    `${repoWide === null ? `@${operator} ` : ""}${failedRun} failed: ${howItFailed(failure, run, config)}.`,
-    ...detail,
-    "",
-    `This is an Infrastructure failure, so ${notRetried}. ${resume}`,
-    ...(repoWide === null ? [] : ["", repoWide.pointer]),
-    "",
-    `[The run](${run.runUrl})`,
-  ].join("\n");
+  const body = noticeBody({
+    marker: FAILURE_MARKERS[run.role],
+    mention: repoWide === null ? operator : null,
+    failed: `${failedRun} failed: ${howItFailed(failure, run, config)}.`,
+    detail: run.report?.detail ?? "",
+    // A research Decision has no retries to count against, and Dispatch leaves it alone once its run failed.
+    notRetried: run.role === "research" ? "neither the Loop nor Dispatch runs it again by itself" : NOT_RETRIED,
+    resume,
+    pointer: repoWide?.pointer ?? null,
+    runUrl: run.runUrl,
+  });
   return {
     kind: "act",
     actions: [
@@ -206,4 +201,74 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       ...(repoWide?.actions ?? []),
     ],
   };
+}
+
+/**
+ * For a prototype turn refused on its Subscription, which the Kit holds or
+ * re-runs through agent:design (#155): its request marked waiting for its
+ * prototype turn again, so agent:design starts that turn and not an ordinary
+ * one (src/loop/design.ts). Nothing for any other run, nor once the request
+ * is no longer pending.
+ */
+function waitingAgain(run: FailedRun, { pendingPrototype }: IssueContext["issue"]): Action[] {
+  if (run.prototype !== true || pendingPrototype?.started !== true) return [];
+  return [{ kind: "mark-prototype-request", issue: run.issue, comment: pendingPrototype.comment, started: false }];
+}
+
+/** What a failure notice says of retrying a run that isn't a research Decision's. */
+const NOT_RETRIED = "the Loop won't retry it and it doesn't count against the Ticket's retries";
+
+/** How a failed prototype turn's notice says to go on: it ends the session's pending request (src/github/threads.ts), so a reply starts an ordinary turn. */
+const CARRY_ON_AFTER_PROTOTYPE = "Reply on this issue to carry the session on: the turn your reply starts can ask for the prototype again.";
+
+/**
+ * A prototype turn whose agent job passed but whose push job can't land what
+ * it passed out (#155): its output breaks the contract, or its branch can't be
+ * pushed. It is an Infrastructure failure all the same, so the Operator gets
+ * the Design-session turn's failure notice, as when its agent job fails. The
+ * notice ends the session's pending request, keeps the session's slot, and the
+ * Operator's reply starts an ordinary turn. `how` says what went wrong.
+ */
+export function prototypeTurnRefused(issueNumber: number, operator: string, how: string, runUrl: string): Plan {
+  const body = noticeBody({
+    marker: DESIGN_TURN_FAILED_MARKER,
+    mention: operator,
+    failed: `The prototype turn on #${issueNumber} failed: ${how}.`,
+    detail: "",
+    notRetried: NOT_RETRIED,
+    resume: CARRY_ON_AFTER_PROTOTYPE,
+    pointer: null,
+    runUrl,
+  });
+  return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body }] };
+}
+
+/**
+ * A failure notice's comment: the marker the snapshot reads back, if the role
+ * has one; what failed and how, with the Operator's @-mention unless a
+ * Kit-owned issue notifies instead; the agent's own word on it, quoted; what
+ * the Loop does about it and how to resume; where the Kit tracks a repo-wide
+ * stall; and the run.
+ */
+function noticeBody(notice: {
+  readonly marker: string | undefined;
+  readonly mention: string | null;
+  readonly failed: string;
+  readonly detail: string;
+  readonly notRetried: string;
+  readonly resume: string;
+  readonly pointer: string | null;
+  readonly runUrl: string;
+}): string {
+  const detail = notice.detail.trim();
+  return [
+    ...(notice.marker === undefined ? [] : [notice.marker]),
+    `${notice.mention === null ? "" : `@${notice.mention} `}${notice.failed}`,
+    ...(detail === "" ? [] : ["", `> ${detail}`]),
+    "",
+    `This is an Infrastructure failure, so ${notice.notRetried}. ${notice.resume}`,
+    ...(notice.pointer === null ? [] : ["", notice.pointer]),
+    "",
+    `[The run](${notice.runUrl})`,
+  ].join("\n");
 }

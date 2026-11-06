@@ -3,7 +3,7 @@ import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import type { CaptureResult } from "../evidence/uiEvidence.ts";
-import { designSessionOf, designTurnFailedIn, pendingPrototypeIn } from "../github/threads.ts";
+import { designSessionOf, designTurnFailedIn, pendingPrototypeIn, unansweredPrototypesIn } from "../github/threads.ts";
 import type { PrototypeRequestMarker } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { IssueSnapshot, LoopEvent, Plan, Snapshot } from "./types.ts";
@@ -69,9 +69,12 @@ function finished(overrides: Partial<PrototypeRunFinished> = {}): PrototypeRunFi
   };
 }
 
+/** #7's request as the push job reads it from its comment, 9003: its prototype turn has started. */
+const PENDING = { ...REQUEST, comment: 9003, started: true };
+
 /** #7 two rounds into its Design session, its request still pending and the reply that approved it still there. */
 function inSession(issue: Partial<IssueSnapshot> = {}, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"], designRounds: 2, pendingPrototype: REQUEST, ...issue }), {
+  return snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"], designRounds: 2, pendingPrototype: PENDING, ...issue }), {
     operator: "jrey",
     startingComment: { id: 9001, exists: true },
     ...overrides,
@@ -159,9 +162,9 @@ describe("Landing a prototype turn whose capture failed after it built", () => {
   const failed = (reason: string): CaptureResult => ({ ...CAPTURED, outcome: "failed", reason, captures: [] }) as CaptureResult;
 
   it.each([
-    ["timeout", "capture ran out of time"],
-    ["error", `capture hit an error the Kit didn't expect, which [the run](${RUN}) shows`],
-    ["no-variants", "capture found no variant to capture in the turn's output"],
+    ["timeout", "capture failed because it ran out of time"],
+    ["error", "capture failed because it hit an error the Kit didn't expect, which the prototype job's log shows"],
+    ["no-variants", "capture failed because there was no variant to capture: the prototype turn's output named none"],
   ])("still pushes the branch and asks \"Which variant?\", giving the reason in place of the gallery, when it failed with %s", (reason, words) => {
     const plan = planFor(finished({ capture: failed(reason), gallery: null }), inSession(), kitConfig());
 
@@ -214,11 +217,11 @@ describe("Landing a prototype turn whose build or dev server failed", () => {
     expect(notificationsOf(plan, "jrey")).toEqual(["mention on #7"]);
   });
 
-  it("says the dev server didn't start when it never answered", () => {
+  it("says the server didn't start when it never answered", () => {
     const [round] = commentsOf(planFor(finished({ capture: failed("server-did-not-start"), gallery: null }), inSession(), kitConfig()));
 
     expect(round).toContain(
-      "but the dev server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran, and nothing to look at.",
+      "but the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran, and nothing to look at.",
     );
     expect(round).toContain("**1. Carry on without a prototype, or try again?**");
   });
@@ -396,6 +399,22 @@ describe("The Operator's reply that approved the prototype", () => {
     });
   });
 
+  it("deleted, leaves the request no longer pending, so the next agent:design starts an ordinary turn rather than build it again", () => {
+    const deleted = inSession({}, { startingComment: { id: 9001, exists: false } });
+    const thread = requestThen(planFor(finished(), deleted, kitConfig())).filter(({ id }) => id !== 9001);
+    const after = snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design", "agent:design"], designRounds: 2, pendingPrototype: pendingPrototypeIn(thread) }), {
+      operator: "jrey",
+    });
+
+    expect(planFor({ kind: "label-added", issue: 7, label: "agent:design" }, after, kitConfig({ ui: UI }))).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:design" },
+        { kind: "start-agent-run", role: "design", issue: 7, model: DESIGN.model, effort: DESIGN.effort, timeoutMinutes: DESIGN.timeoutMinutes, subscription: DEFAULT_KIT_CONFIG.subscriptions[0] },
+      ],
+    });
+  });
+
   it("fails the run when the push job didn't check it is still there", () => {
     const plan = planFor(finished(), inSession({}, { startingComment: null }), kitConfig());
 
@@ -409,11 +428,32 @@ describe("The Operator's reply that approved the prototype", () => {
   it("needs no check when agent:design started the turn that asked for the prototype, which no reply did", () => {
     const request = { ...REQUEST, reply: null };
 
-    const plan = planFor(finished({ request }), inSession({ pendingPrototype: request }, { startingComment: null }), kitConfig());
+    const plan = planFor(finished({ request }), inSession({ pendingPrototype: { ...PENDING, reply: null } }, { startingComment: null }), kitConfig());
 
     expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
   });
 });
+
+/** The Design-session turn's failure notice for the prototype turn on #7, saying how it failed. */
+const failureNoticeSaying = (how: string) =>
+  [
+    "<!-- fabrik:design-turn-failed -->",
+    `@jrey The prototype turn on #7 failed: ${how}.`,
+    "",
+    "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Reply on this issue to carry the session on: the turn your reply starts can ask for the prototype again.",
+    "",
+    `[The run](${RUN})`,
+  ].join("\n");
+
+/** The Operator's reply 9001 that approved #7's request, then the request as the App posted it, then what the plan posted after it. */
+const requestThen = (plan: Plan) => [
+  { id: 9001, body: "Yes, prototype it.", byApp: false },
+  ...[`<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`, ...(plan.kind === "act" ? commentsOf(plan) : [])].map((body, i) => ({
+    id: 9500 + i,
+    body,
+    byApp: true,
+  })),
+];
 
 describe("A prototype turn's output that breaks its contract", () => {
   it.each([
@@ -421,21 +461,61 @@ describe("A prototype turn's output that breaks its contract", () => {
     ["a session outcome", { kind: "not-planned", comment: "Not building it." }, 'a prototype turn ends only in a prototype-round, not "not-planned"'],
     ["another prototype request", { kind: "prototype", route: "/book", variants: 3, brief: "Again.", comment: "Again." }, 'a prototype turn ends only in a prototype-round, not "prototype"'],
     ["a prototype-round of one variant", { ...ROUND, variants: [ROUND.variants[0]] }, "a prototype-round needs from 2 to 5 variants"],
-  ])("fails as a broken contract on %s, changing nothing", (_name, output, error) => {
+  ])("pushes nothing, and posts the Design-session turn's failure notice on %s, which ends the pending request", (_name, output, error) => {
     const plan = planFor(finished({ output: JSON.stringify(output) }), inSession(), kitConfig());
 
-    expect(plan.kind).toBe("fail");
-    expect(plan.kind === "fail" && plan.reason).toContain(`The prototype turn on #7 emitted output that breaks its contract: ${error}`);
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [{ kind: "comment", issue: 7, body: failureNoticeSaying(`its output broke the prototype turn's output contract (${error})`) }],
+    });
+    expect(pendingPrototypeIn(requestThen(plan))).toBeNull();
+  });
+
+  it("names the broken contract on one line that mentions nobody, though the output it quotes holds a mention", () => {
+    const plan = planFor(finished({ output: JSON.stringify({ kind: "@jrey\nlook" }) }), inSession(), kitConfig());
+
+    expect(notificationsOf(plan, "jrey")).toEqual(["mention on #7"]);
+    expect(commentsOf(plan)[0]?.split("\n")[1]).toMatch(/^@jrey The prototype turn on #7 failed: its output broke the prototype turn's output contract \(.*\)\.$/);
+  });
+
+  it("posts nothing when the session no longer waits on it, as any result it doesn't", () => {
+    const output = JSON.stringify({ kind: "not-planned", comment: "Not building it." });
+
+    expect(planFor(finished({ output }), inSession({ open: false }), kitConfig())).toEqual({ kind: "nothing", reason: "#7 is closed" });
   });
 });
 
 describe("A prototype turn's branch that isn't its issue's prototype branch", () => {
-  it.each(["prototype/8", "fabrik/ticket-7", "main"])("fails the run on %s, pushing and posting nothing", (branch) => {
+  it.each(["prototype/8", "fabrik/ticket-7", "main"])("pushes nothing on %s, and posts the Design-session turn's failure notice", (branch) => {
     expect(planFor(finished({ branch }), inSession(), kitConfig())).toEqual({
-      kind: "fail",
-      failure: "infrastructure",
-      reason: `\`${branch}\` isn't #7's prototype branch, prototype/7`,
+      kind: "act",
+      actions: [{ kind: "comment", issue: 7, body: failureNoticeSaying(`it built \`${branch}\`, which isn't #7's prototype branch, prototype/7`) }],
     });
+  });
+});
+
+describe("A prototype branch that moved while its turn ran, as a live Design session's push may move it", () => {
+  const OTHER = "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567";
+  const BASE = "1f2e3d4c5b6a79880716253443526170f8e9d0c1";
+
+  it.each([
+    ["moved on", { from: BASE, to: OTHER }, "`prototype/7` moved from 1f2e3d4 to 0a1b2c3 while it ran"],
+    ["was pushed when the turn cut it afresh", { from: null, to: OTHER }, "`prototype/7` was pushed, at 0a1b2c3, while it ran, though the turn cut it afresh"],
+    ["was deleted", { from: BASE, to: null }, "`prototype/7` was deleted while it ran"],
+  ])("pushes nothing when it %s, and posts the Design-session turn's failure notice, which ends the pending request", (_name, moved, said) => {
+    const plan = planFor(finished({ changes: { ...finished().changes, moved }, headSha: null }), inSession(), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: 7,
+          body: failureNoticeSaying(`${said}, and the Kit only ever fast-forwards a prototype branch from the head its turn started on, so it pushed nothing`),
+        },
+      ],
+    });
+    expect(pendingPrototypeIn(requestThen(plan))).toBeNull();
   });
 });
 
@@ -449,11 +529,39 @@ describe("A prototype turn's result the session no longer waits on", () => {
 
   // The Kit job routes on any bot's request marker; the push job, which knows the App's login, reads only the App's (src/github/snapshot.ts's byAppOf).
   it.each([
-    ["the session has no pending request: another bot's look-alike started it, or a round already answered it", null],
-    ["the session's pending request is another one", { ...REQUEST, request: { ...REQUEST.request, route: "/checkout" } }],
-    ["the session's pending request names another reply", { ...REQUEST, reply: 9002 }],
-  ])("drops the result as stale, changing nothing, when %s", (_name, pendingPrototype) => {
-    expect(planFor(finished(), inSession({ pendingPrototype }), kitConfig())).toEqual({
+    ["the session holds no unanswered request: another bot's look-alike started it, or a round already answered it", []],
+    ["the session's unanswered request is another one", [{ ...REQUEST, request: { ...REQUEST.request, route: "/checkout" } }]],
+    ["the session's unanswered request names another reply", [{ ...REQUEST, reply: 9002 }]],
+  ])("drops the result as stale, changing nothing, when %s", (_name, unansweredPrototypes) => {
+    expect(planFor(finished(), inSession({ unansweredPrototypes }), kitConfig())).toEqual({
+      kind: "nothing",
+      reason: "#7's Design session isn't waiting on the prototype request this turn built, so its result is stale",
+    });
+  });
+
+  /** #7 as the push job reads it from this thread: its rounds, and its requests pending and unanswered. */
+  const readFrom = (thread: readonly { id: number; body: string; byApp: boolean }[]) =>
+    inSession({ pendingPrototype: pendingPrototypeIn(thread), unansweredPrototypes: unansweredPrototypesIn(thread) });
+
+  it("lands its round though another turn's failure notice ended the request as pending first, since no round has answered it", () => {
+    const otherTurnFailed = planFor(
+      { kind: "agent-run-failed", role: "design", issue: 7, runUrl: RUN, jobResult: "failure", secretsStep: "success", report: null },
+      inSession(),
+      kitConfig(),
+    );
+    const thread = requestThen(otherTurnFailed);
+    expect(pendingPrototypeIn(thread)).toBeNull();
+
+    const plan = planFor(finished(), readFrom(thread), kitConfig());
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
+    expect(commentsOf(plan)[0]).toContain("**Design session, round 3: the prototype.**");
+  });
+
+  it("drops a second landing of the request as stale once a round answered it, as when a restarted turn built it twice", () => {
+    const thread = requestThen(planFor(finished(), inSession(), kitConfig()));
+
+    expect(planFor(finished(), readFrom(thread), kitConfig())).toEqual({
       kind: "nothing",
       reason: "#7's Design session isn't waiting on the prototype request this turn built, so its result is stale",
     });
@@ -463,11 +571,11 @@ describe("A prototype turn's result the session no longer waits on", () => {
 describe("The Design session after a prototype round", () => {
   /** The session's comments, oldest first, as the push job reads them: rounds 1 and 2, the request, then what the landing posted. */
   const threadAfter = (plan: Plan) => [
-    { body: "<!-- fabrik:design-round 1 -->\n@jrey **Design session, round 1.** …", byBot: true, byApp: true },
-    { body: "<!-- fabrik:design-round 2 -->\n@jrey **Design session, round 2.** …", byBot: true, byApp: true },
-    { body: `<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`, byBot: true, byApp: true },
-    { body: "Yes, prototype it.", byBot: false, byApp: false },
-    ...commentsOf(plan).map((body) => ({ body, byBot: true, byApp: true })),
+    { id: 9000, body: "<!-- fabrik:design-round 1 -->\n@jrey **Design session, round 1.** …", byBot: true, byApp: true },
+    { id: 9001, body: "Yes, prototype it.", byBot: false, byApp: false },
+    { id: 9002, body: "<!-- fabrik:design-round 2 -->\n@jrey **Design session, round 2.** …", byBot: true, byApp: true },
+    { id: 9003, body: `<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`, byBot: true, byApp: true },
+    ...commentsOf(plan).map((body, i) => ({ id: 9100 + i, body, byBot: true, byApp: true })),
   ];
 
   it.each([
@@ -543,9 +651,6 @@ describe("A failed prototype turn", () => {
   });
 
   it("ends the pending request, so the Operator's reply starts an ordinary turn", () => {
-    const [notice = ""] = commentsOf(planFor(failedTurn({ jobResult: "failure" }), inSession(), kitConfig()));
-    const request = `<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`;
-
-    expect(pendingPrototypeIn([request, notice].map((body) => ({ body, byApp: true })))).toBeNull();
+    expect(pendingPrototypeIn(requestThen(planFor(failedTurn({ jobResult: "failure" }), inSession(), kitConfig())))).toBeNull();
   });
 });

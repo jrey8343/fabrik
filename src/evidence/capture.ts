@@ -15,9 +15,11 @@ import {
   type CaptureSide,
   type ChosenRoute,
   isUi,
+  pageAt,
   routesFor,
   screenshots,
   type VariantCapture,
+  variantPage,
 } from "./uiEvidence.ts";
 
 /**
@@ -312,11 +314,11 @@ function recorded(result: CaptureResult<Capture>): CaptureOutcome {
  * each variant in letter order, at mobile then desktop.
  */
 function takesFor(route: string, variants: readonly string[], ui: UiConfig): VariantTake[] {
-  const page = `${ui.url.replace(/\/+$/, "")}${route}`;
+  const page = pageAt(ui.url, route);
   return variants.flatMap((variant) =>
     UI_VIEWPORTS.map((viewport) => {
       const name = `variant-${variant.toLowerCase()}-${viewport.name}`;
-      return { route, variant, viewport, url: `${page}${page.includes("?") ? "&" : "?"}variant=${variant}`, image: `${name}.png`, video: `${name}.webm` };
+      return { route, variant, viewport, url: variantPage(page, variant), image: `${name}.png`, video: `${name}.webm` };
     }),
   );
 }
@@ -336,7 +338,7 @@ function shotsFor(routes: readonly ChosenRoute[], ui: UiConfig): Shot[] {
         reason,
         viewport,
         side,
-        url: `${base.replace(/\/+$/, "")}${route}`,
+        url: pageAt(base, route),
         image: `${side}-${viewport.name}-${at + 1}-${routeSlug(route)}.png`,
       })),
     ),

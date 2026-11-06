@@ -93,7 +93,7 @@ describe("The Kit job's routing", () => {
 
   // A prototype turn is a Design run (#155), so it routes to design; the prototype job, not the design job, runs it on `prototype`.
   it("passes out a prototype turn as one, with its request as one line of JSON for the prototype job's prompt, its brief's newlines escaped", () => {
-    const pending = { request: { route: "/book", variants: 3, brief: "- **A**: a form.\n- **B**: a stepper -->\n- **C**: a calendar" }, reply: 9001 };
+    const pending = { request: { route: "/book", variants: 3, brief: "- **A**: a form.\n- **B**: a stepper -->\n- **C**: a calendar" }, reply: 9001, comment: 9010, started: false };
     const issue = anIssue({ number: 7, labels: ["needs-design", "agent:design"], designRounds: 1, pendingPrototype: pending });
     const prototypes = kitConfig({ ui: UI });
 

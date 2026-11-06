@@ -34,39 +34,68 @@ export interface GalleryMeta {
  */
 const POLICY = "default-src 'none'; img-src data:; style-src 'unsafe-inline'";
 
-/** Before and After share a row, half each, and a side alone takes the whole row. */
-const STYLE = [
+/** The style every gallery's page and sections share. */
+const PAGE_STYLE = [
   ":root { color-scheme: light dark; font-family: system-ui, sans-serif; }",
   "body { margin: 0 auto; max-width: 1600px; padding: 16px; }",
   "section { margin-top: 32px; }",
+];
+
+/** The style every gallery's figures share: a caption over each, flagged when its page answered a server error. */
+const FIGURE_STYLE = ["figure { margin: 0; }", "figcaption { margin-bottom: 4px; font-weight: 600; }", "figure.error figcaption { color: #c62828; }"];
+
+/** Before and After share a row, half each, and a side alone takes the whole row. */
+const STYLE = [
+  ...PAGE_STYLE,
   ".pair { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 16px; align-items: start; }",
-  "figure { margin: 0; }",
-  "figcaption { margin-bottom: 4px; font-weight: 600; }",
-  "figure.error figcaption { color: #c62828; }",
+  ...FIGURE_STYLE,
   "img { display: block; max-width: 100%; height: auto; border: 1px solid #8888; }",
 ].join(" ");
 
-/** The gallery page: every capture's image inlined, so it refers to nothing outside itself. */
-export function gallery(captures: readonly GalleryShot[], meta: GalleryMeta): string {
-  const { ticket, headSha } = meta;
+/**
+ * A gallery's page, which every gallery shares: self-contained under its
+ * content security `policy`, with its title, style, heading and note, then
+ * its sections. Each is HTML, any text in it already escaped.
+ */
+function galleryPage(page: {
+  readonly policy: string;
+  readonly title: string;
+  readonly style: string;
+  readonly heading: string;
+  readonly note: string;
+  readonly sections: readonly string[];
+}): string {
   return [
     "<!doctype html>",
     '<html lang="en">',
     "<head>",
     '<meta charset="utf-8">',
-    `<meta http-equiv="Content-Security-Policy" content="${POLICY}">`,
+    `<meta http-equiv="Content-Security-Policy" content="${page.policy}">`,
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
-    `<title>UI evidence for #${ticket} at ${headSha.slice(0, 7)}</title>`,
-    `<style>${STYLE}</style>`,
+    `<title>${page.title}</title>`,
+    `<style>${page.style}</style>`,
     "</head>",
     "<body>",
-    `<h1>UI evidence for #${ticket}</h1>`,
-    `<p>Captured at <code>${headSha}</code>. After is this branch, served in the Sandbox; Before, where there is one, is the production site.</p>`,
-    ...routesOf(captures).flatMap((route) => routeSection(route, captures)),
+    `<h1>${page.heading}</h1>`,
+    `<p>${page.note}</p>`,
+    ...page.sections,
     "</body>",
     "</html>",
     "",
   ].join("\n");
+}
+
+/** The gallery page: every capture's image inlined, so it refers to nothing outside itself. */
+export function gallery(captures: readonly GalleryShot[], meta: GalleryMeta): string {
+  const { ticket, headSha } = meta;
+  return galleryPage({
+    policy: POLICY,
+    title: `UI evidence for #${ticket} at ${headSha.slice(0, 7)}`,
+    style: STYLE,
+    heading: `UI evidence for #${ticket}`,
+    note: `Captured at <code>${headSha}</code>. After is this branch, served in the Sandbox; Before, where there is one, is the production site.`,
+    sections: routesOf(captures).flatMap((route) => routeSection(route, captures)),
+  });
 }
 
 /** Each route once, in the order capture first took it. */
@@ -117,15 +146,11 @@ const PROTOTYPE_POLICY = "default-src 'none'; img-src data:; media-src data:; st
  * mobile and desktop show at one scale side by side; a narrow screen stacks them.
  */
 const PROTOTYPE_STYLE = [
-  ":root { color-scheme: light dark; font-family: system-ui, sans-serif; }",
-  "body { margin: 0 auto; max-width: 1600px; padding: 16px; }",
-  "section { margin-top: 32px; }",
+  ...PAGE_STYLE,
   `.viewports { display: grid; grid-template-columns: ${UI_VIEWPORTS.map(({ width }) => `minmax(0, ${width}fr)`).join(" ")}; gap: 16px; align-items: start; }`,
   ...UI_VIEWPORTS.map(({ name }, at) => `figure.${name} { grid-column: ${at + 1}; }`),
   "@media (max-width: 720px) { .viewports { grid-template-columns: minmax(0, 1fr); } .viewports > figure { grid-column: auto; } }",
-  "figure { margin: 0; }",
-  "figcaption { margin-bottom: 4px; font-weight: 600; }",
-  "figure.error figcaption { color: #c62828; }",
+  ...FIGURE_STYLE,
   "img, video { display: block; max-width: 100%; height: auto; border: 1px solid #8888; }",
   "video { margin-top: 8px; }",
 ].join(" ");
@@ -138,24 +163,14 @@ const PROTOTYPE_STYLE = [
  */
 export function prototypeGallery(captures: readonly VariantShot[], variants: readonly GalleryVariant[], meta: PrototypeGalleryMeta): string {
   const { issue, route, headSha } = meta;
-  return [
-    "<!doctype html>",
-    '<html lang="en">',
-    "<head>",
-    '<meta charset="utf-8">',
-    `<meta http-equiv="Content-Security-Policy" content="${PROTOTYPE_POLICY}">`,
-    '<meta name="viewport" content="width=device-width, initial-scale=1">',
-    `<title>${escaped(`Prototype of ${route} for #${issue} at ${headSha.slice(0, 7)}`)}</title>`,
-    `<style>${PROTOTYPE_STYLE}</style>`,
-    "</head>",
-    "<body>",
-    `<h1>Prototype of <code>${escaped(route)}</code> for #${issue}</h1>`,
-    `<p>Captured at <code>${headSha}</code>, served in the Sandbox: each variant is the route with <code>?variant=</code> and its letter, with a short video of it loading and scrolling where capture recorded one.</p>`,
-    ...VARIANT_LETTERS.flatMap((letter) => variantSection(letter, variants, captures)),
-    "</body>",
-    "</html>",
-    "",
-  ].join("\n");
+  return galleryPage({
+    policy: PROTOTYPE_POLICY,
+    title: escaped(`Prototype of ${route} for #${issue} at ${headSha.slice(0, 7)}`),
+    style: PROTOTYPE_STYLE,
+    heading: `Prototype of <code>${escaped(route)}</code> for #${issue}`,
+    note: `Captured at <code>${headSha}</code>, served in the Sandbox: each variant is the route with <code>?variant=</code> and its letter, with a short video of it loading and scrolling where capture recorded one.`,
+    sections: VARIANT_LETTERS.flatMap((letter) => variantSection(letter, variants, captures)),
+  });
 }
 
 /** A variant's heading and summary, then its screenshots and videos, mobile beside desktop; none for a letter neither names. */

@@ -50,6 +50,8 @@ export function heldWhileUsedUp(
   const held = heldInOrder(starts.map(heldRunOf), kitIssues);
   const comments: Action[] = held.map((run) => ({ kind: "comment", issue: on.number, body: heldLine(run, until) }));
   const actions = planned.flatMap((action): Action[] => {
+    // A held prototype turn hasn't started, so its request isn't marked so, and its resumption starts it (src/loop/design.ts).
+    if (action.kind === "mark-prototype-request" && action.started && held.some((run) => run.issue === action.issue)) return [];
     const run = action.kind === "start-agent-run" ? held[starts.indexOf(action)] : undefined;
     if (run === undefined) return [action];
     // A Plan that already takes the trigger label off, as a Design-session turn's does, takes it off once.

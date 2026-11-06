@@ -379,7 +379,9 @@ jobs:
   # Implement run's commits. It builds and serves the Product, so, like the
   # Implement job, it holds the implement service account (the Claude token
   # and this repo's test secrets, in its agent step's env only), no GitHub
-  # write credential, and the Implement timeouts.
+  # write credential, and the Implement timeouts. Named for its issue, as the
+  # design job is: a Design queue check reads it as the session's turn in
+  # progress (PROTOTYPE_JOB_NAME in src/github/snapshot.ts).
   prototype:
     name: "Prototype turn #${{ github.event.issue.number }}"
     needs: kit
@@ -589,9 +591,10 @@ jobs:
   # agent:research off a research Decision as its Research run starts (the
   # running job holds the slot), and agent:design off an issue as its Design
   # session's first turn, or a prototype turn, starts (the running turn, then
-  # its round, hold the slot). It applies the same plan the Kit job routed on;
-  # the run itself is the agent job's. Like the push job, it never touches
-  # Product code.
+  # its round, hold the slot), marking a prototype turn's request started on
+  # the request's own comment (src/loop/design.ts). It applies the same plan
+  # the Kit job routed on; the run itself is the agent job's. Like the push
+  # job, it never touches Product code.
   implement-claim:
     name: Claim the work
     needs: kit

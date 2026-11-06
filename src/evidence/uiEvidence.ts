@@ -486,16 +486,26 @@ export function evidenceSection(evidence: UiEvidence): string {
   ].join("\n");
 }
 
-/** Why capture failed, in plain words. */
-export const FAILURE_WORDS: Readonly<Record<CaptureFailure, string>> = {
-  "build-failed": "`sandbox.build` failed, so there was no build to serve",
-  "server-did-not-start": "the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran",
-  timeout: "it ran out of time",
-  "no-routes": "there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`",
-  "no-variants": "there was no variant to capture: the prototype turn's output named none",
-  error: "it hit an error the Kit didn't expect, which the Implement job's log shows",
-  "no-result": "it left no result the push job could read",
-};
+/**
+ * Why capture failed, in plain words, the one place each reason is worded:
+ * `job` is the job that captured, whose log shows an error the Kit didn't
+ * expect, the Implement job for a PR's evidence, the prototype job for a
+ * prototype round (#155).
+ */
+export function failureWords(job: string): Readonly<Record<CaptureFailure, string>> {
+  return {
+    "build-failed": "`sandbox.build` failed, so there was no build to serve",
+    "server-did-not-start": "the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran",
+    timeout: "it ran out of time",
+    "no-routes": "there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`",
+    "no-variants": "there was no variant to capture: the prototype turn's output named none",
+    error: `it hit an error the Kit didn't expect, which ${job}'s log shows`,
+    "no-result": "it left no result the push job could read",
+  };
+}
+
+/** Why a PR's capture failed, in the Implement job. */
+const FAILURE_WORDS = failureWords("the Implement job");
 
 /** A failed capture's reason, and the screenshots it took first: a failed capture keeps them. */
 function failureLine(reason: CaptureFailure, captures: readonly Capture[]): string {
@@ -678,6 +688,30 @@ function link(text: string, url: string): string {
  * break or other control character shows as U+FFFD, so agent text can never
  * start a line of its own, and the span's backticks outnumber any run of them inside.
  */
+/**
+ * A route's page on the site served at `base`, as capture takes it: the
+ * route after the base, without the base's trailing slash.
+ */
+export function pageAt(base: string, route: string): string {
+  return `${base.replace(/\/+$/, "")}${route}`;
+}
+
+/**
+ * A Prototype's variant (#155) on its route's page: the page with `variant`
+ * set to the variant's letter in its query, keeping whatever else the query
+ * holds, as capture takes it and a prototype round links its preview.
+ */
+export function variantPage(page: string, letter: string): string {
+  const url = new URL(page);
+  url.searchParams.set("variant", letter);
+  return url.href;
+}
+
+/** The URL text with each `(` and `)` percent-encoded, which a URL leaves as they are, but which could end a Markdown link. */
+export function withParensEscaped(url: string): string {
+  return url.replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
 export function code(text: string): string {
   const oneLine = text.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, "\uFFFD");
   const longest = Math.max(0, ...[...oneLine.matchAll(/`+/g)].map(([run]) => run.length));

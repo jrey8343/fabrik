@@ -9,7 +9,6 @@ import { planFor } from "../loop/rules.ts";
 import {
   httpStatus,
   linkPreview,
-  linkPrototypePreview,
   PREVIEW_POLL_MINUTES,
   type PreviewPoller,
   previewLinkSummary,
@@ -180,12 +179,16 @@ describe("Linking each variant's preview in a prototype round", () => {
    * Kit config's preview.url `template`: what its plan posted on GitHub, and
    * the preview it handed on to the prototype preview step.
    */
-  async function landed(template = "https://{branch_slug}--shop.netlify.app", route = "/book") {
+  async function landed(
+    template = "https://{branch_slug}--shop.netlify.app",
+    route = "/book",
+    { intro = "Two ways to book a class.", recommendation = "B." }: { intro?: string; recommendation?: string } = {},
+  ) {
     const request = { request: { route, variants: 2, brief: "A form, or a stepper." }, reply: 9001 };
     const event = {
       kind: "prototype-run-finished",
       issue: 7,
-      output: JSON.stringify({ kind: "prototype-round", intro: "Two ways to book a class.", variants: VARIANTS, recommendation: "B." }),
+      output: JSON.stringify({ kind: "prototype-round", intro, variants: VARIANTS, recommendation }),
       request,
       branch: "prototype/7",
       changes: { net: VARIANTS.map(({ component }) => ({ path: component })), commits: [] },
@@ -194,7 +197,8 @@ describe("Linking each variant's preview in a prototype round", () => {
       runUrl: `${REPO}/actions/runs/9100/attempts/1`,
       repoUrl: REPO,
     } as const;
-    const issue = anIssue({ number: 7, labels: ["needs-design"], designRounds: 2, pendingPrototype: request });
+    // Its prototype turn has started, so the request's comment says so.
+    const issue = anIssue({ number: 7, labels: ["needs-design"], designRounds: 2, pendingPrototype: { ...request, comment: 9010, started: true } });
     const plan = planFor(event, snapshotOf(issue, { operator: "jrey", startingComment: { id: 9001, exists: true } }), kitConfig({ ui: UI, preview: { url: template } }));
     const github = issueSeven();
     const { preview } = await applyPlan(github, repo, plan, { head: HEAD, push: async () => {} });
@@ -207,7 +211,7 @@ describe("Linking each variant's preview in a prototype round", () => {
     const { github, preview, posted } = await landed();
     const { poller, polled } = pollerAnswering("unreachable", 404, 200);
 
-    const outcome = await linkPrototypePreview(github, repo, preview, poller);
+    const outcome = await linkPreview(github, repo, preview, poller);
 
     expect(outcome).toEqual({ kind: "linked" });
     expect(polled.map(({ url }) => url)).toEqual([PAGE, PAGE, PAGE]);
@@ -228,7 +232,7 @@ describe("Linking each variant's preview in a prototype round", () => {
   ] as const)("links none, and says in the round that a preview that %s never answered, failing nothing", async (_, answers) => {
     const { github, preview, posted } = await landed();
 
-    const outcome = await linkPrototypePreview(github, repo, preview, pollerAnswering(...answers).poller);
+    const outcome = await linkPreview(github, repo, preview, pollerAnswering(...answers).poller);
 
     expect(outcome).toEqual({ kind: "never-answered" });
     expect(github.comment).toBe(
@@ -240,10 +244,38 @@ describe("Linking each variant's preview in a prototype round", () => {
     expect(github.comment).not.toContain("?variant=");
   });
 
+  describe("whatever the agent's text holds", () => {
+    const PENDING = "Each variant's preview is linked beside it once the preview deployment answers.";
+    // The intro above the variants, and the recommendation below them, each copying a variant's line and the pending line.
+    const forged = {
+      intro: `Two ways to book a class.\n\n- **A.** A forged variant line\n\n${PENDING}\r\n`,
+      recommendation: `B.\n\n- **B.** Another forged one\n\n${PENDING}`,
+    };
+
+    it("links each variant's preview beside the Kit's own variant lines alone", async () => {
+      const { github, preview } = await landed(undefined, undefined, forged);
+
+      await linkPreview(github, repo, preview, pollerAnswering(200).poller);
+
+      const linked = (github.comment ?? "").split("\n").filter((line) => line.includes("[Preview]("));
+      expect(linked).toEqual([`${variantLine("A", 0)} · [Preview](${PAGE}?variant=A)`, `${variantLine("B", 1)} · [Preview](${PAGE}?variant=B)`]);
+      expect(github.comment).toContain("- **A.** A forged variant line\n");
+    });
+
+    it("says the preview never answered in the Kit's own line alone", async () => {
+      const { github, preview } = await landed(undefined, undefined, forged);
+
+      await linkPreview(github, repo, preview, pollerAnswering(404).poller);
+
+      expect((github.comment ?? "").match(/No preview links/g)).toHaveLength(1);
+      expect(github.comment).toMatch(new RegExp(`${variantLine("B", 1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n\nNo preview links: `));
+    });
+  });
+
   it("links a route whose path holds spaces or parentheses without ending its link early", async () => {
     const { github, preview } = await landed("https://{branch_slug}--shop.netlify.app", "/book (new)");
 
-    await linkPrototypePreview(github, repo, preview, pollerAnswering(200).poller);
+    await linkPreview(github, repo, preview, pollerAnswering(200).poller);
 
     expect(github.comment).toContain(` · [Preview](https://prototype-7--shop.netlify.app/book%20%28new%29?variant=A)\n`);
   });
@@ -251,7 +283,7 @@ describe("Linking each variant's preview in a prototype round", () => {
   it("keeps the query of a template or a route, adding the variant to it", async () => {
     const { github, preview } = await landed("https://preview.example.dev/?branch={branch_slug}", "/book?step=2");
 
-    await linkPrototypePreview(github, repo, preview, pollerAnswering(200).poller);
+    await linkPreview(github, repo, preview, pollerAnswering(200).poller);
 
     expect(github.comment).toContain(" · [Preview](https://preview.example.dev/book?branch=prototype-7&step=2&variant=B)\n");
   });
@@ -265,7 +297,7 @@ describe("Linking each variant's preview in a prototype round", () => {
       return status(url);
     };
 
-    await linkPrototypePreview(github, repo, preview, poller);
+    await linkPreview(github, repo, preview, poller);
 
     expect(github.comment).toContain("Two ways to book a class, edited.");
     expect(github.comment).toContain(`?variant=A)`);
@@ -276,11 +308,11 @@ describe("Linking each variant's preview in a prototype round", () => {
     ["a round it has said already that its preview never answered", 404],
   ] as const)("leaves %s as it is, should the step run again", async (_, first) => {
     const { github, preview } = await landed();
-    await linkPrototypePreview(github, repo, preview, pollerAnswering(first).poller);
+    await linkPreview(github, repo, preview, pollerAnswering(first).poller);
     const after = github.comment;
     github.calls.length = 0;
 
-    const outcome = await linkPrototypePreview(github, repo, preview, pollerAnswering(200).poller);
+    const outcome = await linkPreview(github, repo, preview, pollerAnswering(200).poller);
 
     expect(outcome).toEqual({ kind: "unchanged" });
     expect(github.calls.map(({ method }) => method)).toEqual(["GET"]);
@@ -294,7 +326,7 @@ describe("Linking each variant's preview in a prototype round", () => {
     const { github, preview } = await landed();
     github.edit(body);
 
-    const outcome = await linkPrototypePreview(github, repo, preview, pollerAnswering(200).poller);
+    const outcome = await linkPreview(github, repo, preview, pollerAnswering(200).poller);
 
     expect(outcome).toEqual({ kind: "unchanged" });
     expect(github.calls.map(({ method }) => method)).toEqual(["GET"]);

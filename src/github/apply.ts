@@ -3,6 +3,7 @@
 import { prototypePreviewUrl, previewUrl } from "../kit/config.ts";
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
+import { withPrototypeStarted } from "../loop/markers.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
 import type { GitHub, Repo } from "./client.ts";
 
@@ -213,6 +214,14 @@ async function apply(
       if (branches === null) throw new Error(`This job holds no branch to push (${action.branch})`);
       await branches.push(action.branch);
       return;
+    case "mark-prototype-request": {
+      // Read fresh, so the edit changes only the one line the mark is.
+      const path = `/repos/${repo.owner}/${repo.name}/issues/comments/${action.comment}`;
+      const { body } = (await github.rest("GET", path)) as { body: string };
+      const marked = withPrototypeStarted(body, action.started);
+      if (marked !== body) await github.rest("PATCH", path, { body: marked });
+      return;
+    }
     case "push-prototype-branch": {
       // Only ever the issue's own prototype branch, which the branch the push job holds fast-forwards (src/github/branch.ts).
       const branch = prototypeBranchFor(action.issue);
