@@ -134,7 +134,7 @@ const LABEL_EVENTS = `
 `;
 const COMMENTS = `comments(last: 100) { nodes { body createdAt author ${ACTOR} } }`;
 const COMMIT = "commit { oid message committedDate author { email user { login } } }";
-const REVIEWS = `reviews(first: 100) { nodes { author ${ACTOR} state submittedAt body comments(first: 100) { nodes { path line body } } } }`;
+const REVIEWS = `reviews(first: 100) { nodes { author ${ACTOR} state submittedAt body comments(first: 50) { nodes { path line body } } } }`;
 const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
 
 // Newest-updated first, so paging stops at the first page older than the window.

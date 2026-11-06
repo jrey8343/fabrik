@@ -65,7 +65,7 @@ export interface ReviewFacts {
   readonly state: "approved" | "changes-requested" | "commented" | "dismissed";
   /** What the review says, "" when it says nothing beyond its inline comments. */
   readonly body: string;
-  /** Its inline comments, in the order GitHub lists them. */
+  /** Its first 50 inline comments, in the order GitHub lists them. */
   readonly comments: readonly InlineCommentFacts[];
   /** ISO 8601. */
   readonly at: string;
