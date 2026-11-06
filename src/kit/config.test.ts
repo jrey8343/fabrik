@@ -923,4 +923,65 @@ describe("The ui and preview blocks, which Visual evidence reads", () => {
       expect(resolveKitConfig({ config: text })).toEqual({ ok: true, config: DEFAULTS });
     },
   );
+
+  /** A Kit config whose ui block is valid, with these fields changed; undefined leaves a field out. */
+  function withUi(changes: Record<string, unknown>): string {
+    return JSON.stringify({
+      ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", ...changes },
+    });
+  }
+
+  it.each([
+    [{ paths: undefined }, "ui.paths is missing"],
+    [{ paths: [] }, "ui.paths is empty: list at least one glob of the files that make a pull request UI"],
+    [{ paths: "src/**" }, "ui.paths must be a list of strings"],
+    [{ paths: ["src/**", 7] }, "ui.paths must be a list of strings"],
+    [{ paths: ["src/**", " "] }, `ui.paths[1] is " ": a glob can't be blank`],
+  ])("refuses missing, empty or malformed paths, naming the field: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withUi(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [{ serve: undefined }, "ui.serve is missing"],
+    [{ serve: ["npm", "run", "preview"] }, "ui.serve must be a string"],
+    [{ serve: "" }, `ui.serve is "": the command that serves the branch can't be blank`],
+    [{ url: undefined }, "ui.url is missing"],
+    [{ url: 4321 }, "ui.url must be a string"],
+    [{ url: "localhost:4321" }, `ui.url is "localhost:4321": a URL must start with http:// or https://`],
+    [{ url: "ws://localhost:4321" }, `ui.url is "ws://localhost:4321": a URL must start with http:// or https://`],
+    [{ before_url: "penrithphysio.com.au" }, `ui.before_url is "penrithphysio.com.au": a URL must start with http:// or https://`],
+    [{ before_url: "ftp://penrithphysio.com.au" }, `ui.before_url is "ftp://penrithphysio.com.au": a URL must start with http:// or https://`],
+    [{ before_url: false }, "ui.before_url must be a string"],
+  ])("refuses a missing or malformed serve, url or before_url, naming the field: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withUi(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each(["http://127.0.0.1:4321", "https://localhost:8443/app"])("takes %s as a ui.url", (url) => {
+    const result = resolveKitConfig({ config: withUi({ url }) });
+
+    expect(result.ok && result.config.ui?.url).toBe(url);
+  });
+
+  it.each([
+    [{ default_routes: "/" }, "ui.default_routes must be a list of strings"],
+    [{ default_routes: ["/", 1] }, "ui.default_routes must be a list of strings"],
+    [{ default_routes: ["/", "book"] }, `ui.default_routes[1] is "book": a route must be a path starting with one /, such as /book`],
+    [{ default_routes: [""] }, `ui.default_routes[0] is "": a route must be a path starting with one /, such as /book`],
+    [
+      { default_routes: ["https://penrithphysio.com.au/book"] },
+      `ui.default_routes[0] is "https://penrithphysio.com.au/book": a route must be a path starting with one /, such as /book`,
+    ],
+    [{ default_routes: ["//evil.example"] }, `ui.default_routes[0] is "//evil.example": a route must be a path starting with one /, such as /book`],
+  ])("refuses a default route that isn't a path starting with /, naming it: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withUi(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("names every bad default route, not just the first", () => {
+    const result = resolveKitConfig({ config: withUi({ default_routes: ["book", "/", "services"] }) });
+
+    expect(!result.ok && result.errors).toEqual([
+      `ui.default_routes[0] is "book": a route must be a path starting with one /, such as /book`,
+      `ui.default_routes[2] is "services": a route must be a path starting with one /, such as /book`,
+    ]);
+  });
 });

@@ -473,13 +473,31 @@ function checkHttpsUrl(url: string): string | null {
 /** The `ui` block; left out or null, Visual evidence never captures. */
 function readUi(ui: Reader | null | undefined): UiConfig | null {
   if (ui === undefined || ui === null) return null;
-  const paths = ui.stringList("paths");
-  const serve = ui.requiredString("serve");
-  const url = ui.requiredString("url");
-  const beforeUrl = ui.nullableString("before_url");
-  const defaultRoutes = ui.stringList("default_routes");
+  const paths = ui.requiredList("paths", "list at least one glob of the files that make a pull request UI", checkGlob);
+  const serve = ui.requiredString("serve", checkServe);
+  const url = ui.requiredString("url", checkHttpOrHttpsUrl);
+  const beforeUrl = ui.nullableString("before_url", checkHttpOrHttpsUrl);
+  const defaultRoutes = ui.stringList("default_routes", checkRoute);
   if (paths === undefined || serve === undefined || url === undefined) return null;
   return { paths, serve, url, beforeUrl: beforeUrl ?? null, defaultRoutes: defaultRoutes ?? [] };
+}
+
+function checkGlob(glob: string): string | null {
+  return glob.trim() === "" ? "a glob can't be blank" : null;
+}
+
+function checkServe(command: string): string | null {
+  return command.trim() === "" ? "the command that serves the branch can't be blank" : null;
+}
+
+/** A path on the site captured under `ui.url`; `//` would leave it for another host. */
+function checkRoute(route: string): string | null {
+  return route.startsWith("/") && !route.startsWith("//") ? null : "a route must be a path starting with one /, such as /book";
+}
+
+function checkHttpOrHttpsUrl(url: string): string | null {
+  const protocol = URL.parse(url)?.protocol;
+  return protocol === "http:" || protocol === "https:" ? null : "a URL must start with http:// or https://";
 }
 
 /** The `preview` block; left out, null, or with no `url`, the pull request links no preview. */
@@ -657,14 +675,35 @@ class Reader {
     return this.string(key, check);
   }
 
-  stringList(key: string): readonly string[] | undefined {
+  /** A list of strings, each refused, by its place in the list, when `check` returns a reason. */
+  stringList(key: string, check?: (value: string) => string | null): readonly string[] | undefined {
     const value = this.#take(key);
     if (value === undefined) return undefined;
     if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
       this.#fail(`${this.#field(key)} must be a list of strings`);
       return undefined;
     }
-    return value;
+    let refused = false;
+    value.forEach((item, i) => {
+      const refusal = check?.(item) ?? null;
+      if (refusal === null) return;
+      refused = true;
+      this.#fail(`${this.#field(key)}[${i}] is ${JSON.stringify(item)}: ${refusal}`);
+    });
+    return refused ? undefined : value;
+  }
+
+  /** A list of strings that must be there and hold at least one; `empty` says what to list. */
+  requiredList(key: string, empty: string, check?: (value: string) => string | null): readonly string[] | undefined {
+    if (!Object.hasOwn(this.#value, key)) {
+      this.#take(key);
+      this.#fail(`${this.#field(key)} is missing`);
+      return undefined;
+    }
+    const list = this.stringList(key, check);
+    if (list === undefined || list.length > 0) return list;
+    this.#fail(`${this.#field(key)} is empty: ${empty}`);
+    return undefined;
   }
 
   /** The Subscriptions: an ordered, non-empty list of distinct `Fabrik` vault item names. */
