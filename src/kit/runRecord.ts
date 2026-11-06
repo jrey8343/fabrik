@@ -1,13 +1,14 @@
 // The Run record (ADR-0009): from what the push job knows when an AFK agent
-// run ends, the one schema 3 record of that run, and the paths it and its
+// run ends, the one schema 4 record of that run, and the paths it and its
 // transcript take in the store, or no record when no agent run ended. A judge
 // run, scoring a finished run, gets a record too, in role `score`, from what
 // the score-record job knows when it ends. The stream is read through the one
 // stream-json reader (src/agent/stream.ts). The paths are inside the store,
 // RUN_STORE (src/kit/runStore.ts). A record read back from the store is read
 // at the current schema: a schema 1 record, written before runs were given a
-// Subscription, as being on the first listed one, and a schema 1 or 2 record,
-// written before prototype turns, as no prototype turn. Pure, no I/O.
+// Subscription, as being on the first listed one, a schema 1 or 2 record,
+// written before prototype turns, as no prototype turn, and a schema 1, 2 or
+// 3 record, written before Replays, as no replay's. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
@@ -69,10 +70,22 @@ export interface RateLimitReading {
 /** A record's role: the agent role that ran, or `score` for a judge run scoring a finished run. */
 export type RunRecordRole = AgentRole | "score";
 
-/** The schema a Run record is written at: 2 added `subscription`, 3 added `prototype`. */
-export const RUN_RECORD_SCHEMA = 3;
+/** The schema a Run record is written at: 2 added `subscription`, 3 added `prototype`, 4 added `replay`. */
+export const RUN_RECORD_SCHEMA = 4;
 
-/** One AFK agent run, schema 3. */
+/** A Replay's two arms (#156): the baseline, run as the Ticket was built, and the variant, with the one variable changed. */
+export type ReplayArm = "baseline" | "variant";
+
+/** Which Replay a run was an arm of, and of which Ticket. */
+export interface ReplayRun {
+  /** The replay issue, the `fabrik:replay` issue the Operator filed. */
+  readonly issue: number;
+  readonly arm: ReplayArm;
+  /** The replayed Ticket, the run's subject. */
+  readonly ticket: number;
+}
+
+/** One AFK agent run, schema 4. */
 export interface RunRecord {
   readonly schema: typeof RUN_RECORD_SCHEMA;
   readonly kitSha: string;
@@ -101,6 +114,8 @@ export interface RunRecord {
   readonly requestChanges: boolean;
   /** Whether the run was a Design session's prototype turn (#155), whose role stays `design`. */
   readonly prototype: boolean;
+  /** null for a live run, else the Replay arm the run was. */
+  readonly replay: ReplayRun | null;
   /**
    * The commit the run started from: an Implement branch's base, a Review's PR
    * head, the event's commit for Triage and Design, the Audit's marked commit
@@ -197,6 +212,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     stepUp: implement && kit["step-up"] === "true",
     requestChanges: implement && kit["request-changes"] === "true",
     prototype: isPrototypeTurn(end.needs, role),
+    replay: null,
     baseSha: nonEmpty(agent["base-sha"]),
     jobResult: job?.result ?? "unknown",
     infrastructureFailure: ran.failure,
@@ -248,6 +264,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     stepUp: false,
     requestChanges: false,
     prototype: false,
+    replay: null,
     baseSha: null,
     jobResult: judge.result,
     infrastructureFailure: failureOf(judge.result, judge.outputs["secrets-step"], end.failureReport),
@@ -303,18 +320,21 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
 /**
  * A Run record as read back from the store, at the current schema: a schema 1
  * record, which names no Subscription, is read as being on the first listed
- * one, and a schema 1 or 2 record, written before there were prototype turns,
- * as no prototype turn. Null for anything that isn't a record of a schema the
- * Kit knows.
+ * one, a schema 1 or 2 record, written before there were prototype turns, as
+ * no prototype turn, and a schema 1, 2 or 3 record, written before there were
+ * Replays, as no replay's. Null for anything that isn't a record of a schema
+ * the Kit knows.
  */
 export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
   if (typeof stored !== "object" || stored === null) return null;
   const { schema } = stored as { schema?: unknown };
   if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
-  if (schema === 2) return { ...(stored as Omit<RunRecord, "schema" | "prototype">), schema: RUN_RECORD_SCHEMA, prototype: false };
+  const current: Pick<RunRecord, "schema" | "replay"> = { schema: RUN_RECORD_SCHEMA, replay: null };
+  if (schema === 3) return { ...(stored as Omit<RunRecord, "schema" | "replay">), ...current };
+  if (schema === 2) return { ...(stored as Omit<RunRecord, "schema" | "prototype" | "replay">), ...current, prototype: false };
   if (schema === 1) {
-    const record = stored as Omit<RunRecord, "schema" | "subscription" | "prototype">;
-    return { ...record, schema: RUN_RECORD_SCHEMA, subscription: firstSubscription({ subscriptions }), prototype: false };
+    const record = stored as Omit<RunRecord, "schema" | "subscription" | "prototype" | "replay">;
+    return { ...record, ...current, subscription: firstSubscription({ subscriptions }), prototype: false };
   }
   return null;
 }
