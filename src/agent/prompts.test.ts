@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MAX_AUDIT_CANDIDATES, readAuditOutput } from "../loop/auditOutput.ts";
 import { readDesignTurnOutput } from "../loop/designOutput.ts";
 import { readPullRequestRunOutput } from "../loop/implementOutput.ts";
+import { readTriageOutput } from "../loop/triageOutput.ts";
 import { STRENGTHS } from "../loop/types.ts";
 import { CONSIDERED_PREFIX, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
@@ -59,6 +60,24 @@ describe("The prompts of the runs that read an agent PR", () => {
     const example: unknown = JSON.parse(/<design>\n([\s\S]*?)\n<\/design>/.exec(text)?.[1] ?? "null");
     expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "round", operatorCommentsConsidered: ["conversation-3"] } });
     expect(text).toContain("- `operatorCommentsConsidered`");
+  });
+});
+
+describe("Product intent in the Triage prompt", () => {
+  it("takes the Fast path only on all six tests, the sixth being that it changes no product intent", async () => {
+    const decision = section(await prompt("triage"), "The decision");
+    expect(decision).toContain("**all six** tests");
+    expect(decision).toContain("### The six Fast-path tests");
+    expect(decision).not.toMatch(/\bfive\b/);
+    expect(decision).toContain("It changes no product intent");
+    for (const door of ["public names", "URLs", "data shapes", "pricing", "anything an End user is told"]) expect(decision).toContain(door);
+    expect(decision).toContain("the Vision says the product deliberately doesn't do");
+    expect(decision).toContain("**Any doubt on any test sends the issue to `needs-design`.**");
+  });
+
+  it("keeps its example output, which the Kit still reads", async () => {
+    const example: unknown = JSON.parse(/<triage>\n([\s\S]*?)\n<\/triage>/.exec(await prompt("triage"))?.[1] ?? "null");
+    expect(readTriageOutput(example)).toMatchObject({ ok: true, output: { state: "needs-design" } });
   });
 });
 
