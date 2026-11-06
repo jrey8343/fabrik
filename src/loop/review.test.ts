@@ -51,6 +51,14 @@ describe("Review: starting one", () => {
     });
   });
 
+  // Dormant (#153): nothing reads a PR's UI evidence marker yet.
+  it("a push to a UI PR, whose body marks where its UI evidence is kept, starts the same Review as a push to any agent draft PR", () => {
+    const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
+    const marked = aPullRequest({ uiEvidence: { run: 9100, artifact: 9202 } });
+
+    expect(planFor(pushed, snapshotOfPullRequest(marked), kitConfig())).toEqual(planFor(pushed, snapshotOfPullRequest(aPullRequest()), kitConfig()));
+  });
+
   it("agent:review added to an agent draft PR starts a Review again", () => {
     const plan = planFor(
       { kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" },
