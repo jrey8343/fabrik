@@ -2,7 +2,7 @@
 // on the runner VM (noSandbox), behind the metered-billing preflight and the
 // init check, writes the step summary, and passes the role's structured output
 // out as an artifact for the push job. It holds no GitHub write credential.
-//   node <kit>/src/agent/run.ts <triage|design|prototype|implement|review|audit|retro|research>
+//   node <kit>/src/agent/run.ts <triage|design|prototype|implement|review|audit|retro|research|replay-implement|replay-review>
 //
 // Run from the Product checkout. Env:
 //   FABRIK_ISSUE_FILE      JSON from `gh issue view --json number,title,body,author,labels,comments`
@@ -50,6 +50,14 @@
 // the Kit names from the Decision (src/agent/research.ts). The runner cuts the
 // Decision's throwaway branch, commits what the run left to it, and passes it
 // out as a git bundle beside agent-result.json, as an Implement run does.
+// A Replay arm's runs (#156, src/agent/replay.ts) take FABRIK_BASE_SHA, the
+// replayed Ticket's baseSha, and leave the Product repo untouched.
+// `replay-implement` is a first Implement run in a checkout at baseSha, with an
+// Implement run's env and inputs but no PR or review file, and passes its
+// commits out as replay.patch, its diff from baseSha, beside agent-result.json.
+// `replay-review` is a Review in a checkout of that patch as a commit on
+// baseSha: FABRIK_ISSUE_FILE is the Ticket and FABRIK_SPEC_FILE its Spec, it
+// takes no PR file, and its result is the Reviewer's reply for the Ticket.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
@@ -73,17 +81,8 @@ import { type KitPrompt, kitPromptPath } from "../guard/trust-root.ts";
 import { readInstallRecord } from "../skills/fetch.ts";
 import { type ParsedVerdict, parseVerdict } from "../loop/verdict.ts";
 import { AGENT_FAILURE_FILE, MissingVerdictError } from "./failure.ts";
-import {
-  bundleAgentBranch,
-  continueAgentBranch,
-  cutBranch,
-  implementContext,
-  requestChangesContext,
-  retryContext,
-  setImplementerEnv,
-  setSandboxEnv,
-  startAgentBranch,
-} from "./implement.ts";
+import { bundleAgentBranch, cutBranch, implementInput, setImplementerEnv, setSandboxEnv } from "./implement.ts";
+import { BASE_SHA_ENV, replayImplementInput, replayReviewContext, writeReplayPatch } from "./replay.ts";
 import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
@@ -147,6 +146,15 @@ interface RoleSpec<T> {
   readonly buildsBranch?: boolean;
   /** The Reviewer judges a PR, checked out at its head; its result is for the PR, not the Ticket. */
   readonly reviewsPullRequest?: boolean;
+  /**
+   * A replay arm's run (#156), in a checkout of the Ticket's baseSha
+   * (FABRIK_BASE_SHA) that nothing is pushed from (src/agent/replay.ts). Its
+   * `implement` run builds as a first Implement run would and passes its
+   * commits out as a patch from baseSha, never a bundle; its `review` judges
+   * that change, a commit on baseSha, with the Ticket and its Spec in place of
+   * a PR, and its result is for the Ticket.
+   */
+  readonly replay?: "implement" | "review";
   /**
    * The Auditor reads the Product repo up to its pending Audit's marked
    * commit, with the inputs in FABRIK_AUDIT_FILE; its result names the
@@ -264,6 +272,24 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<ResearchOutput>,
 };
 
+/**
+ * A replay arm's runs (#156): the Implementer and the Reviewer on their own
+ * prompts and output contracts, on the arm's model and effort.
+ */
+const REPLAY_SPECS = {
+  implement: {
+    ...ROLE_SPECS.implement,
+    describe: (ticket, output) => `The Implementer on the replay of #${ticket} finished: ${output.title}`,
+    replay: "implement",
+  } satisfies RoleSpec<ImplementOutput>,
+  review: {
+    ...ROLE_SPECS.review,
+    describe: (ticket, output) => `The Reviewer on the replay of #${ticket} gave the Verdict ${output.verdict}`,
+    reviewsPullRequest: false,
+    replay: "review",
+  } satisfies RoleSpec<ParsedVerdict & { ok: true }>,
+};
+
 /** The model and effort to run: what the Kit job's plan chose, else the role's own. */
 function modelFor(role: { model: string; effort: string | null }): { model: string; effort: string | null } {
   const model = process.env["FABRIK_MODEL"];
@@ -299,19 +325,23 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   const extra: string[] = [];
   if (spec.buildsBranch === true) {
     setImplementerEnv(config);
-    // A retry carries on its PR's branch with the findings to fix; a first run cuts the branch from main.
-    const retryFile = process.env["FABRIK_PULL_REQUEST_FILE"] ?? "";
-    branch =
-      retryFile === "" ? await startAgentBranch(productDir, issueNumber) : await continueAgentBranch(productDir, issueNumber);
-    extra.push(...(await implementContext(productDir, required("FABRIK_SPEC_FILE"), config)));
-    // A Request-changes run works to the Operator's review instead of a Verdict's findings.
+    // A retry carries on its PR's branch with the findings to fix, and a
+    // Request-changes run works to the Operator's review instead; a first run
+    // cuts the branch from main, and a replay arm's from the Ticket's baseSha.
+    const pullRequestFile = process.env["FABRIK_PULL_REQUEST_FILE"] ?? "";
     const reviewFile = process.env["FABRIK_REVIEW_FILE"] ?? "";
-    if (retryFile !== "") {
-      onPullRequest = true;
-      const context = reviewFile === "" ? await retryContext(retryFile) : await requestChangesContext(retryFile, reviewFile);
-      extra.push(...context.parts);
-      given = context.operatorComments;
+    const specFile = required("FABRIK_SPEC_FILE");
+    if (spec.replay === "implement" && (pullRequestFile !== "" || reviewFile !== "")) {
+      throw new Error("A replay arm's Implement run is a first run, so it takes no PR and no review");
     }
+    const input =
+      spec.replay === "implement"
+        ? await replayImplementInput(productDir, issueNumber, config, specFile, required(BASE_SHA_ENV))
+        : await implementInput(productDir, issueNumber, config, { spec: specFile, pullRequest: pullRequestFile, review: reviewFile });
+    branch = input.branch;
+    extra.push(...input.parts);
+    onPullRequest = input.onPullRequest;
+    given = input.operatorComments;
   }
   if (prototypeTurn) {
     // The Claude token and the Sandbox's values and test secrets, as the Implementer's, committing as the Fabrik Prototype.
@@ -372,7 +402,12 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...review.parts);
     given = review.operatorComments;
   }
-  const runsProductCode = spec.reviewsPullRequest !== true && spec.audits !== true && spec.retros !== true && spec.researches !== true;
+  // A replay arm's Reviewer judges the arm's change from baseSha with no PR, so its result is for the Ticket, and names no Operator comments.
+  if (spec.replay === "review") {
+    extra.push(...(await replayReviewContext(productDir, required("FABRIK_SPEC_FILE"), required(BASE_SHA_ENV))));
+  }
+  const runsProductCode =
+    spec.reviewsPullRequest !== true && spec.replay !== "review" && spec.audits !== true && spec.retros !== true && spec.researches !== true;
   const output =
     "schema" in spec.output
       ? Output.object({
@@ -428,7 +463,13 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     const checked = "text" in spec.output ? spec.output.text(String(reply)) : (reply as T);
     // The Researcher commits nothing itself: the Kit commits what it left, as the Fabrik Researcher.
     if (spec.researches === true) await commitResearch(productDir, issueNumber);
-    const built = branch === null ? null : await bundleAgentBranch(productDir, branch, outDir);
+    // A replay arm's commits go out as a patch from baseSha, which nothing pushes; every other run's as a bundle.
+    const built =
+      branch === null
+        ? null
+        : spec.replay === "implement"
+          ? await writeReplayPatch(productDir, branch, outDir)
+          : await bundleAgentBranch(productDir, branch, outDir);
     const artifact: AgentRunResult = {
       role: name,
       issue: subject,
@@ -467,6 +508,8 @@ const roles: Record<string, () => Promise<void>> = {
   audit: () => runRole(ROLE_SPECS.audit),
   retro: () => runRole(ROLE_SPECS.retro),
   research: () => runRole(ROLE_SPECS.research),
+  "replay-implement": () => runRole(REPLAY_SPECS.implement),
+  "replay-review": () => runRole(REPLAY_SPECS.review),
 };
 
 const roleName = process.argv[2] ?? "";

@@ -1,6 +1,8 @@
 # Readies an agent job, before any secret loads: installs the Kit's pinned
-# Sandcastle and Claude Code CLI, fetches the pinned skills (the Base skills
-# plus its role's Extra skills) into the Product checkout's .claude/skills, and
+# Sandcastle and Claude Code CLI, for a Replay arm's candidate Kit sha lays
+# its prompts and Base skills pin over the Kit, fetches the pinned skills (the
+# Base skills plus its role's Extra skills) into the Product checkout's
+# .claude/skills, and
 # reads what the agent is given (the issue, its parent Spec, for Implement
 # and Review runs the PR and the Operator's review, for a Design-session turn
 # whether it may offer a Map, and for an Auditor run its inputs) into
@@ -41,6 +43,10 @@ inputs:
     description: For an Auditor run, the pending Audit's marked commit (a full SHA); its inputs go to audit.json.
     required: false
     default: ""
+  kit-candidate:
+    description: For a Replay arm whose variable is a candidate Kit sha, that sha; its prompts and Base skills pin, and nothing else, are laid over the Kit before the skills fetch.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -54,6 +60,19 @@ runs:
       shell: bash
       working-directory: kit
       run: npm ci
+
+    # A Replay arm's candidate Kit sha (#156): its prompts and Base skills pin,
+    # and nothing else, laid over the pinned Kit, so the fetch below and the
+    # agent's prompt read the candidate's while every program stays pinned
+    # (ADR-0003). The sha must be a commit on a branch of the Fabrik repo,
+    # checked through the read-only token, or the job fails here.
+    - name: Lay the candidate Kit sha's prompts and Base skills over the Kit
+      if: inputs.kit-candidate != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        FABRIK_KIT_CANDIDATE: ${{ inputs.kit-candidate }}
+      run: node kit/src/kit/overlay-main.ts kit "$FABRIK_KIT_CANDIDATE"
 
     # The Base skills plus this role's Extra skills. An install error fails the
     # job here, before any secret loads and before claude starts.
