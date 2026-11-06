@@ -10,20 +10,13 @@ function bodyWith(...lines: string[]): string {
 }
 
 describe("Reading a replay request", () => {
-  it("reads a role's effort as the variable, with the default pick of Tickets", () => {
-    expect(readReplayRequest(bodyWith("review.effort: high"))).toEqual({
-      ok: true,
-      request: { variable: { kind: "effort", role: "review", effort: "high" }, tickets: null },
-    });
-  });
-
   it.each([
     ["implement.model: claude-opus-5-5", { kind: "model", role: "implement", model: "claude-opus-5-5" }],
     ["implement.effort: max", { kind: "effort", role: "implement", effort: "max" }],
     ["review.model: claude-sonnet-5-5", { kind: "model", role: "review", model: "claude-sonnet-5-5" }],
     ["review.effort: low", { kind: "effort", role: "review", effort: "low" }],
     [`kit: ${CANDIDATE}`, { kind: "kit", sha: CANDIDATE }],
-  ])("reads %j as its variable", (line, variable) => {
+  ])("reads %j as its variable, with the default pick of Tickets", (line, variable) => {
     expect(readReplayRequest(bodyWith(line))).toEqual({ ok: true, request: { variable, tickets: null } });
   });
 
