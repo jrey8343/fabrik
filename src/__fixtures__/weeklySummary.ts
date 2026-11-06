@@ -127,6 +127,7 @@ export function aMergedPullRequest(mergedAt: string, overrides: Partial<AgentPul
     reviews: [],
     comments: [],
     labelEvents: [],
+    changedPaths: [],
     ...overrides,
   };
 }

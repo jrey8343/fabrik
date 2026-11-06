@@ -142,6 +142,7 @@ function aRawPullRequest(overrides: Record<string, unknown> = {}) {
     reviews: { nodes: [] },
     comments: { nodes: [] },
     timelineItems: { nodes: [] },
+    files: { nodes: [] },
     ...overrides,
   };
 }
@@ -166,6 +167,16 @@ describe("Gathering a Product repo's GitHub facts", () => {
       { number: 50, ticket: 7, title: "Build the thing", mergedAt: "2026-11-04T00:00:00Z", mergeSha: "c".repeat(40) },
       { number: 51, ticket: null, title: "Build the thing", mergedAt: null, mergeSha: null },
     ]);
+  });
+
+  it("holds the paths each agent PR changed", async () => {
+    const github = repoWith({
+      closedPullRequests: [aRawPullRequest({ files: { nodes: [{ path: "src/cart.ts" }, { path: "src/cart.test.ts" }] } })],
+    });
+
+    const [pullRequest] = (await gatherGitHubFacts(github, repo, NOW, OPERATOR.login)).pullRequests;
+
+    expect(pullRequest?.changedPaths).toEqual(["src/cart.ts", "src/cart.test.ts"]);
   });
 
   it("leaves out a PR that isn't an agent PR, but keeps its merged title for spotting reverts", async () => {
@@ -489,6 +500,21 @@ describe("Gathering a Product repo's GitHub facts", () => {
       { number: 120, title: "Retro: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-07T00:00:00Z" },
       { number: 121, title: "My own retro", author: "jrey8343", createdAt: "2026-11-08T00:00:00Z" },
     ]);
+  });
+
+  it("reads the default branch's commits from 97 days back, so a revert is seen across the streak table's 90 days", async () => {
+    const github = repoWith({});
+    const asked: unknown[] = [];
+    const watched = {
+      graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        if (query.includes("history(")) asked.push(variables["since"]);
+        return github.graphql<T>(query, variables);
+      },
+    };
+
+    await gatherGitHubFacts(watched, repo, NOW, OPERATOR.login);
+
+    expect(asked).toEqual(["2026-08-03T20:00:00.000Z"]);
   });
 
   it("holds the default branch's commit messages in the window", async () => {

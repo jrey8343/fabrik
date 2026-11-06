@@ -31,15 +31,16 @@ import { gatherDesignQueueSlice, loginOf } from "./snapshot.ts";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * How far back the issue and default-branch facts reach: 30 days, plus the
- * week before, so last week's 30-day revert window is as whole as this week's.
+ * How far back the issue facts reach: 30 days, plus the week before, so last
+ * week's 30-day revert window is as whole as this week's.
  */
 const WINDOW_MS = 37 * DAY_MS;
 
 /**
- * How far back the PRs and the escape-marked issues reach: 90 days, plus the
- * week before, so last week's 90-day escape window is as whole as this week's.
- * Revert rate reads its own 30 days of them.
+ * How far back the PRs, the default branch's commits and the issues the
+ * Operator opened reach: 90 days, plus the week before, so last week's 90-day
+ * escape window is as whole as this week's, and a Retro's 90-day streak table
+ * sees every revert in it. Revert rate reads its own 30 days of them.
  */
 const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 
@@ -52,7 +53,7 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
     pagesOf<RawIssue>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues),
-    pagesOf<RawDefaultBranchCommit>(github, DEFAULT_BRANCH_QUERY, repo, { since }, (data) => data.repository.defaultBranchRef?.target.history ?? null),
+    pagesOf<RawDefaultBranchCommit>(github, DEFAULT_BRANCH_QUERY, repo, { since: escapeSince }, (data) => data.repository.defaultBranchRef?.target.history ?? null),
     // The Design queue check's own slice, so Held and the check can't disagree. Its token can't read
     // workflow runs, so it reads Design turns in progress from the issues, as the scheduled tick does.
     gatherDesignQueueSlice(github, null, repo),
@@ -114,6 +115,7 @@ const CLOSED_PULL_REQUESTS_QUERY = `
           ${REVIEWS}
           ${COMMENTS}
           ${LABEL_EVENTS}
+          files(first: 100) { nodes { path } }
         }
       }
     }
@@ -269,6 +271,7 @@ interface RawClosedPullRequest {
   reviews: { nodes: RawReview[] };
   comments: { nodes: RawComment[] };
   timelineItems: { nodes: RawLabelEvent[] };
+  files: { nodes: { path: string }[] };
 }
 
 interface RawOpenPullRequest {
@@ -373,6 +376,7 @@ function agentPullRequestOf(pr: RawClosedPullRequest): AgentPullRequestFacts {
     reviews: pr.reviews.nodes.flatMap(reviewOf),
     comments: pr.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(pr.timelineItems.nodes),
+    changedPaths: pr.files.nodes.map((file) => file.path),
   };
 }
 

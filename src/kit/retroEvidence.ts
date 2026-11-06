@@ -102,6 +102,8 @@ export interface AgentPullRequestFacts {
   /** Its comments, oldest first. */
   readonly comments: readonly CommentFacts[];
   readonly labelEvents: readonly LabelEvent[];
+  /** The paths of the files it changed, its first 100. */
+  readonly changedPaths: readonly string[];
 }
 
 /** An open agent PR. */
@@ -166,7 +168,7 @@ export interface MetricFacts {
   /** The repo's open agent PRs. */
   readonly openPullRequests: readonly OpenPullRequestFacts[];
   readonly tickets: readonly TicketFacts[];
-  /** The default branch's commits in the last 30 days. */
+  /** The default branch's commits in the last 97 days. */
   readonly defaultBranchCommits: readonly DefaultBranchCommitFacts[];
   readonly mergedPullRequestTitles: readonly MergedTitleFacts[];
   /** The issues the Operator opened in the last 97 days whose body has an escape marker. */
@@ -380,6 +382,9 @@ export const FIRST_RUN_WINDOW_MS = 7 * DAY_MS;
 /** How far back an escape's PRs may have merged to count, as for the Weekly summary's escape rate: slow decay takes time to show. */
 export const ESCAPE_WINDOW_MS = 90 * DAY_MS;
 
+/** How far back the streak table reaches: long enough to count a streak a loosening can rest on. */
+export const STREAK_WINDOW_MS = 90 * DAY_MS;
+
 /** What a Retro reads of one Product repo, as the Retro evidence job gathers it. */
 export interface RetroEvidenceInput {
   /** The store's Run records. */
@@ -407,6 +412,8 @@ export interface EvidenceBundle {
   readonly feedback: readonly FeedbackEvidence[];
   /** The Follow-ups on the pass Verdicts of the agent PRs merged in the window, PR by PR. */
   readonly followUps: readonly FollowUpEvidence[];
+  /** Every agent PR merged in the 90 days to the window's end, oldest first: the counts a loosening's streak rests on. */
+  readonly streakTable: readonly StreakRow[];
 }
 
 /** A Run record, by its path in the store. */
@@ -495,6 +502,24 @@ export interface FollowUpEvidence {
   readonly openedAs: number | null;
 }
 
+/** An agent PR in the streak table, and whatever breaks a streak it's counted in. */
+export interface StreakRow {
+  /** `#<pr>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  /** ISO 8601. */
+  readonly mergedAt: string;
+  /** The paths it changed, by which the Retro tells what kind of PR it is. */
+  readonly paths: readonly string[];
+  /** Whether an Architectural escape the Operator opened in the 90 days counts against it. */
+  readonly escaped: boolean;
+  /** Whether a revert in the 90 days reverted it, by the revert rule the Weekly summary's revert rate counts by. */
+  readonly reverted: boolean;
+  /** Whether the Operator sent it a Request changes. */
+  readonly requestChanges: boolean;
+}
+
 /** The evidence bundle for one Retro: what it reads of one Product repo for its window. Pure, no I/O. */
 export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
   const end = Date.parse(input.windowEnd);
@@ -505,6 +530,7 @@ export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
     escapes: escapesOf(window, metrics),
     feedback: feedbackOf(window, input),
     followUps: followUpsOf(window, input),
+    streakTable: streakTableOf({ start: window.end - STREAK_WINDOW_MS, end: window.end }, metrics),
   };
 }
 
@@ -596,6 +622,23 @@ function followUpsOf(window: Window, { facts, operator }: RetroEvidenceInput): F
         return { ref: `#${number}`, pullRequest: number, title, body, openedAs: opened?.number ?? null };
       }),
   );
+}
+
+/** The agent PRs merged in the streak window, oldest first, each flagged for what breaks a streak in the same window. */
+function streakTableOf(window: Window, metrics: MetricsInput): StreakRow[] {
+  const escaped = new Set(escapesIn(window, metrics).flatMap(({ pullRequests }) => pullRequests.map(({ pullRequest }) => pullRequest.number)));
+  return mergedAgentPullRequestsIn(window, metrics)
+    .toSorted((a, b) => Date.parse(a.mergedAt) - Date.parse(b.mergedAt))
+    .map(({ pullRequest: { number, title, changedPaths, reviews }, mergedAt, reverted }) => ({
+      ref: `#${number}`,
+      number,
+      title,
+      mergedAt,
+      paths: changedPaths,
+      escaped: escaped.has(number),
+      reverted,
+      requestChanges: reviews.some((review) => review.author === metrics.operator && review.state === "changes-requested"),
+    }));
 }
 
 function recordEvidenceOf(record: RunRecord): RecordEvidence {

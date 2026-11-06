@@ -15,7 +15,7 @@ import {
   factsOf,
 } from "../__fixtures__/weeklySummary.ts";
 import type { Verdict } from "../loop/types.ts";
-import { type CommentFacts, escapesIn, evidenceBundle, mergedAgentPullRequestsIn, verdictsOn } from "./retroEvidence.ts";
+import { type AgentPullRequestFacts, type CommentFacts, escapesIn, evidenceBundle, mergedAgentPullRequestsIn, verdictsOn } from "./retroEvidence.ts";
 
 // A week in UTC: Monday 2 November 2026 00:00 to Monday 9 November 00:00.
 const WINDOW = { start: Date.parse("2026-11-02T00:00:00Z"), end: Date.parse("2026-11-09T00:00:00Z") };
@@ -521,6 +521,72 @@ describe("the evidence bundle", () => {
         }),
       );
       expect(followUps).toEqual([]);
+    });
+  });
+
+  describe("the streak table", () => {
+    it("lists every agent PR merged in the 90 days to the window's end, oldest first, with the paths it changed", () => {
+      const { streakTable } = evidenceBundle(
+        aRetroEvidenceInput({
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-06T00:00:00Z", { number: 53, title: "Build the till", changedPaths: ["src/till.ts"] }),
+              aMergedPullRequest("2026-08-09T00:00:00Z", { number: 50, title: "Build the cart", changedPaths: ["src/cart.ts", "src/cart.test.ts"] }), // 90 days before
+              aMergedPullRequest("2026-08-08T23:59:59Z", { number: 49 }),
+              aMergedPullRequest("2026-11-07T00:00:00Z", { number: 54 }), // the next Retro's
+              aMergedPullRequest("2026-11-01T00:00:00Z", { number: 52, mergedAt: null, mergeSha: null }), // closed unmerged
+            ],
+          }),
+        }),
+      );
+      expect(streakTable).toEqual([
+        {
+          ref: "#50",
+          number: 50,
+          title: "Build the cart",
+          mergedAt: "2026-08-09T00:00:00Z",
+          paths: ["src/cart.ts", "src/cart.test.ts"],
+          escaped: false,
+          reverted: false,
+          requestChanges: false,
+        },
+        { ref: "#53", number: 53, title: "Build the till", mergedAt: "2026-11-06T00:00:00Z", paths: ["src/till.ts"], escaped: false, reverted: false, requestChanges: false },
+      ]);
+    });
+
+    it("flags each one an Operator's escape named, a revert reverted or the Operator sent a Request changes", () => {
+      const merged = (number: number, overrides: Partial<AgentPullRequestFacts> = {}) =>
+        aMergedPullRequest("2026-09-01T00:00:00Z", { number, title: `Build thing ${number}`, mergeSha: String(number).repeat(20), ...overrides });
+      const { streakTable } = evidenceBundle(
+        aRetroEvidenceInput({
+          facts: factsOf({
+            pullRequests: [
+              merged(50),
+              merged(51),
+              merged(52),
+              merged(53),
+              merged(54, { reviews: [aReview("2026-08-31T00:00:00Z")] }),
+              merged(55, { reviews: [aReview("2026-08-31T00:00:00Z", { author: "someone" }), aReview("2026-08-31T01:00:00Z", { state: "approved" })] }),
+              merged(56),
+            ],
+            escapeMarkerIssues: [
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 80, createdAt: "2026-10-01T00:00:00Z" }),
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #51 -->", { number: 81, createdAt: "2026-10-01T00:00:00Z", author: "someone" }),
+            ],
+            defaultBranchCommits: [{ message: `Revert "Build thing 52"\n\nThis reverts commit ${"52".repeat(20)}.`, at: "2026-09-10T00:00:00Z" }],
+            mergedPullRequestTitles: [{ title: 'Revert "Build thing 53"', mergedAt: "2026-09-12T00:00:00Z" }],
+          }),
+        }),
+      );
+      expect(streakTable.map(({ number, escaped, reverted, requestChanges }) => [number, { escaped, reverted, requestChanges }])).toEqual([
+        [50, { escaped: true, reverted: false, requestChanges: false }],
+        [51, { escaped: false, reverted: false, requestChanges: false }],
+        [52, { escaped: false, reverted: true, requestChanges: false }],
+        [53, { escaped: false, reverted: true, requestChanges: false }],
+        [54, { escaped: false, reverted: false, requestChanges: true }],
+        [55, { escaped: false, reverted: false, requestChanges: false }],
+        [56, { escaped: false, reverted: false, requestChanges: false }],
+      ]);
     });
   });
 });
