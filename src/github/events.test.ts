@@ -163,7 +163,7 @@ describe("A finished Implement run's UI evidence", () => {
     captures: [{ route: "/book", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-book.png" }],
   } as const;
   /** Run 9100's push job, in acme/shop, with what its Implement job passed out. */
-  const pushJob = (capture: CaptureOutputs) => ({ capture, run: 9100, repoUrl: "https://github.com/acme/shop" });
+  const pushJob = (capture: CaptureOutputs) => ({ ...capture, run: 9100, repoUrl: "https://github.com/acme/shop" });
 
   it("carries the capture result, the head the run built, and where the push job's own run keeps the images and the gallery", () => {
     const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: captured, artifact: 9202, galleryArtifact: 9201 }));

@@ -1,7 +1,7 @@
 // The setup skill's planner. Pure, no I/O: given what a Product repo holds now
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
-import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig, type UiConfig } from "../kit/config.ts";
 import {
   ALL_LABELS,
   AUDIT_LABEL,
@@ -99,21 +99,15 @@ export interface SetupAnswers {
   readonly visualEvidence?: VisualEvidenceAnswers;
 }
 
-/** The Operator's answers to the Visual evidence step, which setup writes as the Kit config's `ui` and `preview` blocks. */
-export interface VisualEvidenceAnswers {
-  /** `ui.paths`: globs of the files whose change makes a pull request UI. */
-  readonly paths: readonly string[];
-  /** `ui.serve`: the command the Sandbox runs in the background, after `sandbox.build`, to serve the branch. */
-  readonly serve: string;
-  /** `ui.url`: the local base URL the Kit polls until it answers, then captures routes under. */
-  readonly url: string;
-  /** `ui.before_url`: the production base URL Before is captured from; left out, Before is skipped. */
-  readonly beforeUrl?: string;
-  /** `ui.default_routes`: the routes captured when neither the Ticket nor the Implementer names any. */
-  readonly defaultRoutes?: readonly string[];
-  /** `preview.url`: a template that may use `{pr}`, `{branch_slug}` (the branch's slug, as src/kit/config.ts's slug makes it) and `{sha}`; left out, no preview is linked. */
-  readonly previewUrl?: string;
-}
+/**
+ * The Operator's answers to the Visual evidence step, which setup writes as
+ * the Kit config's `ui` and `preview` blocks: the `ui` block's, with
+ * `before_url` and `default_routes` left out when the Operator gives none,
+ * and `preview.url`, a template that may use `{pr}`, `{branch_slug}` and
+ * `{sha}` (src/kit/config.ts), left out when no preview is linked.
+ */
+export type VisualEvidenceAnswers = Pick<UiConfig, "paths" | "serve" | "url"> &
+  Partial<Pick<UiConfig, "beforeUrl" | "defaultRoutes">> & { readonly previewUrl?: string };
 
 export interface BranchProtection {
   readonly requiredChecks: readonly string[];

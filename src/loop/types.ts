@@ -61,10 +61,11 @@ export interface BranchChanges {
 /**
  * What an Implement run's push job knows of its UI evidence (#153): what the
  * Implement job's capture step recorded, when it passed out a result, and
- * where the run keeps it. The core puts it on the PR only when it finds the
- * run UI (src/loop/implement.ts).
+ * where the run keeps it, as its PR's marker will record it, the run being
+ * the push job's own. The core puts it on the PR only when it finds the run
+ * UI (src/loop/implement.ts).
  */
-export interface ImplementEvidence {
+export interface ImplementEvidence extends Pick<EvidenceMarker, "run" | "artifact"> {
   /**
    * What capture recorded, read from the Implement job's outputs; absent when
    * the job passed out none the push job could read, as when it captured nothing.
@@ -72,10 +73,6 @@ export interface ImplementEvidence {
   readonly result?: CaptureResult;
   /** The head the Implement run built, which capture is of. */
   readonly headSha: string;
-  /** The Actions run whose Implement job captured it: the push job's own. */
-  readonly run: number;
-  /** The id of that run's artifact holding the screenshots and the capture result, or null when it kept none. */
-  readonly artifact: number | null;
   /** The gallery's web address, or null when the run kept none. */
   readonly gallery: string | null;
 }

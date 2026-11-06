@@ -4,6 +4,7 @@
 // for PREVIEW_POLL_MINUTES at most, then edits the PR's evidence section to
 // link it, or to say it never answered. It fetches only that URL: never a
 // hosting provider's API, and it waits on no deployment status.
+import type { PreviewToLink } from "../github/apply.ts";
 import type { GitHub, Repo } from "../github/client.ts";
 import { type PreviewLink, withPreviewLink } from "../evidence/uiEvidence.ts";
 
@@ -28,10 +29,8 @@ export interface PreviewPoller {
   now(): number;
 }
 
-/** The PR whose preview to link, the URL to poll, and the Actions run whose evidence section waits on it. */
-export interface PreviewToPoll {
-  readonly pullRequest: number;
-  readonly url: string;
+/** The preview to link, as Run the Loop handed it on, and the Actions run whose evidence section waits on it. */
+export interface PreviewToPoll extends PreviewToLink {
   readonly run: number;
 }
 

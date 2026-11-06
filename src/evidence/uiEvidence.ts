@@ -374,7 +374,7 @@ export interface EvidenceMarker {
 }
 
 /** A UI pull request's evidence, as the push job puts it together for the PR body. */
-export interface UiEvidence extends Omit<EvidenceMarker, "failure"> {
+export interface UiEvidence extends Pick<EvidenceMarker, "run" | "artifact"> {
   /** What capture recorded. */
   readonly result: CaptureResult;
   /** The gallery's web address, or null when the run kept none. */
