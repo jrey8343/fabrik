@@ -41,7 +41,7 @@ import type { KitConfig, Viewport } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
 import { writeOutputs, writeSummary } from "../kit/stepFiles.ts";
 import { parsePrototypeTurnOutput } from "../loop/designOutput.ts";
-import { readPrototypeRequest } from "../loop/markers.ts";
+import { parsePrototypeRequest } from "../loop/markers.ts";
 import {
   buildAndServeEnv,
   CAPTURE_RESULT_FILE,
@@ -424,7 +424,7 @@ async function prototypeMain(): Promise<void> {
   const known = await defaultBranch(productDir);
   if (known === null) return;
   const { base, config } = known;
-  const request = readPrototypeRequest(JSON.parse(required(PROTOTYPE_REQUEST_ENV)));
+  const request = parsePrototypeRequest(required(PROTOTYPE_REQUEST_ENV));
   if (request === null) throw new Error(`${PROTOTYPE_REQUEST_ENV} holds no prototype request`);
   const result = readAgentRunResult(await readFile(join(outDir, AGENT_RESULT_FILE), "utf8"));
   // The runner checked the output against the contract, so only a run that broke it names no variant.

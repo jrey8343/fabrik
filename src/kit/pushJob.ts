@@ -4,7 +4,7 @@
 // checks or Verdict, or, when the routed agent job failed or was cancelled,
 // its failure notice. Pure, no I/O.
 import { type CaptureResult, parseCaptureResult } from "../evidence/uiEvidence.ts";
-import { type PrototypeRequestMarker, readPrototypeRequest } from "../loop/markers.ts";
+import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
 import type { AgentRole } from "../loop/types.ts";
 
 /** One job's `needs.<job>`: its result and its outputs. */
@@ -204,12 +204,7 @@ function captureOutputs(outputs: NeededJob["outputs"]): CaptureOutputs {
 
 /** The prototype request the Kit job passed out, as one line of JSON, or null when it doesn't read. */
 function requestOf(text: string | undefined): PrototypeRequestMarker | null {
-  if (text === undefined || text === "") return null;
-  try {
-    return readPrototypeRequest(JSON.parse(text));
-  } catch {
-    return null;
-  }
+  return text === undefined || text === "" ? null : parsePrototypeRequest(text);
 }
 
 function numberOr(text: string | undefined): number | null {

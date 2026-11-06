@@ -12,7 +12,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { KitConfig } from "../kit/config.ts";
 import { prototypeBranchFor, variantLetter } from "../loop/designOutput.ts";
-import { type PrototypeRequestMarker, readPrototypeRequest } from "../loop/markers.ts";
+import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import { fenced } from "./design.ts";
 import { cutBranch, setSandboxEnv } from "./implement.ts";
@@ -41,7 +41,7 @@ export function prototypeTurnContext(
   issue: number,
   requestText: string,
 ): { readonly request: PrototypeRequestMarker; readonly parts: string[] } {
-  const request = readPrototypeRequest(jsonOrNull(requestText));
+  const request = parsePrototypeRequest(requestText);
   if (request === null) throw new Error(`${PROTOTYPE_REQUEST_ENV} holds no prototype request: a route, a variant count and a brief`);
   const { ui } = config;
   if (ui === null) throw new Error("Kit config has no ui block, so the Kit can neither serve nor capture a Prototype");
@@ -90,12 +90,4 @@ export async function startPrototypeBranch(productDir: string, issue: number): P
   const git = async (...args: string[]) => (await run("git", args, { cwd: productDir })).stdout.trim();
   if ((await git("rev-parse", "--abbrev-ref", "HEAD")) !== name) return cutBranch(productDir, name);
   return { name, base: { ref: name, sha: await git("rev-parse", "HEAD") }, head: null };
-}
-
-function jsonOrNull(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }

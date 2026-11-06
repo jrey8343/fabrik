@@ -6,8 +6,7 @@
 // comments back through them into the snapshot (src/github/threads.ts), and
 // the body lines are read from the issues themselves, so the Loop's history
 // lives on GitHub alone.
-import { isRoute } from "../kit/config.ts";
-import { isVariantCount, type PrototypeRequest } from "./designOutput.ts";
+import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
 import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
@@ -85,45 +84,52 @@ export interface PrototypeRequestMarker {
 const ESCAPED: Readonly<Record<string, string>> = { "<": "\\u003c", ">": "\\u003e", "@": "\\u0040" };
 
 /**
- * The marker a prototype request opens with, on one line, which
- * prototypeRequestIn reads back. Its JSON spells `<`, `>` and `@` as escapes,
- * so a brief can neither end the HTML comment early nor mention anyone.
+ * A prototype request as one line of JSON: its route, variant count and
+ * brief, and the reply that asked for it, which parsePrototypeRequest reads
+ * back. Its marker holds it (prototypeRequestMarker), and so does the Kit
+ * job's output that carries it to the prototype job (src/kit/jobs.ts), whose
+ * GITHUB_OUTPUT lines can't hold a newline, which JSON escapes.
  */
-export function prototypeRequestMarker({ request: { route, variants, brief }, reply }: PrototypeRequestMarker): string {
-  const json = JSON.stringify({ route, variants, brief, reply }).replace(/[<>@]/g, (c) => ESCAPED[c] ?? c);
-  return `<!-- fabrik:prototype-request ${json} -->`;
+export function prototypeRequestJson({ request: { route, variants, brief }, reply }: PrototypeRequestMarker): string {
+  return JSON.stringify({ route, variants, brief, reply });
 }
 
 /**
- * What a prototype request's marker says, read from the comment's first line,
- * so quoting one further down doesn't count; null when the comment opens with
- * no marker, or with one whose request the Design turn output contract
- * wouldn't take.
+ * A prototype request from its JSON (prototypeRequestJson): null when it
+ * doesn't parse, or holds a request the Design turn output contract wouldn't
+ * take (prototypeRequestOf), or a reply that isn't a comment id.
  */
-export function prototypeRequestIn(body: string): PrototypeRequestMarker | null {
-  const json = PROTOTYPE_REQUEST_MARKER.exec(body)?.[1];
-  if (json === undefined) return null;
+export function parsePrototypeRequest(json: string): PrototypeRequestMarker | null {
   let value: unknown;
   try {
     value = JSON.parse(json);
   } catch {
     return null;
   }
-  return readPrototypeRequest(value);
+  const request = prototypeRequestOf(value);
+  if (request === null) return null;
+  const { reply = null } = value as Record<string, unknown>;
+  if (reply !== null && !(Number.isSafeInteger(reply) && (reply as number) > 0)) return null;
+  return { request, reply: reply as number | null };
 }
 
 /**
- * A prototype request as its marker's JSON holds it, and the Kit job passes
- * it out to the prototype job (src/kit/jobs.ts): its route, variant count and
- * brief, and the reply that asked for it; null when it isn't one the Design
- * turn output contract would take.
+ * The marker a prototype request opens with, on one line, which
+ * prototypeRequestIn reads back. Its JSON spells `<`, `>` and `@` as escapes,
+ * so a brief can neither end the HTML comment early nor mention anyone.
  */
-export function readPrototypeRequest(value: unknown): PrototypeRequestMarker | null {
-  if (typeof value !== "object" || value === null) return null;
-  const { route, variants, brief, reply = null } = value as Record<string, unknown>;
-  if (!isRoute(route) || !isVariantCount(variants) || typeof brief !== "string" || brief.trim() === "") return null;
-  if (reply !== null && !(Number.isSafeInteger(reply) && (reply as number) > 0)) return null;
-  return { request: { route, variants, brief }, reply: reply as number | null };
+export function prototypeRequestMarker(marker: PrototypeRequestMarker): string {
+  return `<!-- fabrik:prototype-request ${prototypeRequestJson(marker).replace(/[<>@]/g, (c) => ESCAPED[c] ?? c)} -->`;
+}
+
+/**
+ * What a prototype request's marker says, read from the comment's first line,
+ * so quoting one further down doesn't count; null when the comment opens with
+ * no marker, or with one parsePrototypeRequest doesn't take.
+ */
+export function prototypeRequestIn(body: string): PrototypeRequestMarker | null {
+  const json = PROTOTYPE_REQUEST_MARKER.exec(body)?.[1];
+  return json === undefined ? null : parsePrototypeRequest(json);
 }
 
 /**

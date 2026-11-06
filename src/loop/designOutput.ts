@@ -359,6 +359,27 @@ function isRepoPath(value: unknown): value is string {
   return isLine(value) && !value.startsWith("/");
 }
 
+/**
+ * What a `prototype` output asks the prototype turn to build: its route, its
+ * variant count and its brief, as the contract checks them, or null with what
+ * breaks it pushed onto `errors`. The prototype request's marker, and the Kit
+ * job's output that carries it to the prototype job, are read back with the
+ * same checks (src/loop/markers.ts).
+ */
+function readRequest(value: Readonly<Record<string, unknown>>, errors: string[]): PrototypeRequest | null {
+  const { route, variants, brief } = value;
+  const before = errors.length;
+  if (!isRoute(route)) errors.push("a prototype needs a route, a path starting with /");
+  if (!isVariantCount(variants)) errors.push(`a prototype needs variants, a whole number from ${PROTOTYPE_MIN_VARIANTS} to ${PROTOTYPE_VARIANT_CAP}`);
+  if (!isText(brief)) errors.push("a prototype needs non-empty brief text");
+  return errors.length > before ? null : { route: route as string, variants: variants as number, brief: brief as string };
+}
+
+/** A prototype request, from JSON already parsed, as a `prototype` output's contract would take it; null when it breaks it. */
+export function prototypeRequestOf(value: unknown): PrototypeRequest | null {
+  return typeof value === "object" && value !== null ? readRequest(value as Record<string, unknown>, []) : null;
+}
+
 /** A whole number of variants within the Kit's minimum and cap. */
 export function isVariantCount(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= PROTOTYPE_MIN_VARIANTS && (value as number) <= PROTOTYPE_VARIANT_CAP;
@@ -471,23 +492,10 @@ function readTurn(value: unknown): DesignTurnOutputResult {
       };
     }
     case "prototype": {
-      if (!isRoute(value.route)) errors.push("a prototype needs a route, a path starting with /");
-      if (!isVariantCount(value.variants)) {
-        errors.push(`a prototype needs variants, a whole number from ${PROTOTYPE_MIN_VARIANTS} to ${PROTOTYPE_VARIANT_CAP}`);
-      }
-      if (!isText(value.brief)) errors.push("a prototype needs non-empty brief text");
+      const request = readRequest(value, errors);
       if (!isLine(value.comment)) errors.push("a prototype needs a comment, one non-empty line");
-      if (errors.length > 0) return { ok: false, errors };
-      return {
-        ok: true,
-        output: {
-          kind: "prototype",
-          route: value.route as string,
-          variants: value.variants as number,
-          brief: value.brief as string,
-          comment: value.comment as string,
-        },
-      };
+      if (request === null || errors.length > 0) return { ok: false, errors };
+      return { ok: true, output: { kind: "prototype", ...request, comment: value.comment as string } };
     }
     case "prototype-round": {
       if (!isText(value.intro)) errors.push("a prototype-round needs non-empty intro text");
