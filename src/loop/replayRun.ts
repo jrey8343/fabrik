@@ -9,7 +9,17 @@
 // once the last Ticket is in, and for a weekly-limit refusal the weekly-limit
 // issue, as any refused run opens it, with the Ticket back to pending. Pure,
 // no I/O.
-import { nextReplayTicket, replayMarksIn, replayResultsIn, withReplayResults, withTicketFinished } from "../kit/replay.ts";
+import {
+  isOperatorsReplay,
+  nextReplayTicket,
+  oneAtATime,
+  type ReplayIssue,
+  replayInProgress,
+  replayMarksIn,
+  replayResultsIn,
+  withReplayResults,
+  withTicketFinished,
+} from "../kit/replay.ts";
 import { repoWideNotice } from "./kitIssues.ts";
 import { REPLAY_LABEL, REPLAY_TRIGGER_LABEL } from "./labels.ts";
 import { whyUsedUp } from "./replayGate.ts";
@@ -20,18 +30,25 @@ import type { Action, IssueContext, KitConfig, LoopEvent, Plan } from "./types.t
  * agent:replay added to `issueNumber`: the claim's plan, which takes the
  * label off, marks the Ticket the replay issue's plan runs next in progress,
  * and starts its two arms; or nothing, with why, when it isn't the
- * Operator's open, accepted replay issue with a Ticket waiting, when a Ticket
- * of it is in progress already, or while any Subscription is used up.
+ * Operator's open, accepted replay issue with a Ticket waiting, when a replay
+ * Ticket is in progress on any of the Operator's replay issues, `replayIssues`
+ * being every open one, or while any Subscription is used up. Like
+ * agent:implement added by hand, which starts past Dispatch's cap, it starts
+ * the Ticket whether or not the tick's spare-capacity gate would: the label
+ * is the Operator's own start, or the tick's that weighed the gate already.
  */
-export function startReplay(issueNumber: number, { issue, operator, kitIssues }: IssueContext): Plan {
+export function startReplay(issueNumber: number, { issue, operator, kitIssues }: IssueContext, replayIssues: readonly ReplayIssue[] | null): Plan {
   const name = `#${issueNumber}`;
   if (!issue.labels.includes(REPLAY_LABEL)) return { kind: "nothing", reason: `${name} isn't a replay issue: it has no ${REPLAY_LABEL}` };
   if (!issue.open) return { kind: "nothing", reason: `${name} is closed, which cancels its Replay` };
-  if (issue.author !== operator) return { kind: "nothing", reason: `${name} isn't the Operator's, so its Replay never runs` };
+  if (!isOperatorsReplay(issue, operator)) return { kind: "nothing", reason: `${name} isn't the Operator's, so its Replay never runs` };
   const marks = replayMarksIn(issue.body);
   if (marks === null) return { kind: "nothing", reason: `${name}'s request isn't accepted yet` };
-  const running = marks.progress.find(({ state }) => state === "in-progress");
-  if (running !== undefined) return { kind: "nothing", reason: `#${running.ticket} is in progress on ${name} already, and one replay Ticket runs at a time` };
+  if (replayIssues === null) return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the replay issues a replay Ticket's claim weighs" };
+  // This issue as the claim read it, beside every other open replay issue.
+  const itself: ReplayIssue = { number: issueNumber, open: issue.open, author: issue.author, body: issue.body, comments: [] };
+  const running = replayInProgress({ operator, issues: [itself, ...replayIssues.filter(({ number }) => number !== issueNumber)] });
+  if (running !== null) return { kind: "nothing", reason: oneAtATime(running) };
   const next = nextReplayTicket(marks);
   if (next === null) return { kind: "nothing", reason: `No Ticket of ${name} waits to run` };
   // The tick checked, but one may have hit a limit since; a live run would be held or rotated here.

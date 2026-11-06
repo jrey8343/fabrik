@@ -79,7 +79,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
         return weekly === null ? intake(event.issue, context.issue) : WEEKLY_RUNS[weekly].start(context, config);
       });
     case "label-added":
-      return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, snapshot.pullRequest, config));
+      return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, snapshot, config));
     case "issue-comment-created":
       // A needs-design issue is in a Design session; a needs-info one waits on its author.
       return withIssue(snapshot, (context) =>
@@ -258,14 +258,14 @@ function labelAdded(
   issueNumber: number,
   label: string,
   context: IssueContext,
-  pullRequest: PullRequestSnapshot | null,
+  { pullRequest, replay }: Pick<Snapshot, "pullRequest" | "replay">,
   config: KitConfig,
 ): Plan {
   if (label === NEEDS_DESIGN) return startSession(issueNumber, context);
   if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config);
   if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
   if (label === RESEARCH_LABEL) return startResearcher(issueNumber, context, config);
-  if (label === REPLAY_TRIGGER_LABEL) return startReplay(issueNumber, context);
+  if (label === REPLAY_TRIGGER_LABEL) return startReplay(issueNumber, context, replay?.issues ?? null);
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }

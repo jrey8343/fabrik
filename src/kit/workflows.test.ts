@@ -1964,6 +1964,12 @@ describe("loop.yml's replay jobs", () => {
     expect(readFileSync(new URL("src/main.ts", root), "utf8")).toContain("`replay-ticket=${claimed}\\n`");
   });
 
+  it("claims one replay Ticket at a time across the repo, so two replay issues' claims can't both find none in progress, and holds back no other claim", () => {
+    expect(job("implement-claim")).toContain(
+      "\n    concurrency:\n      group: ${{ needs.kit.outputs.route == 'replay' && 'fabrik-replay-claim' || format('fabrik-claim-{0}', github.run_id) }}\n      cancel-in-progress: false\n      queue: max\n",
+    );
+  });
+
   it.each(REPLAY_JOBS)("%s runs only on the Ticket the claim marked in progress in this run, once the claim has", (name) => {
     expect(needsOf(job(name))).toEqual(expect.arrayContaining(["kit", "implement-claim"]));
     expect(/\n    if: (.*)\n/.exec(job(name))?.[1]).toContain(CLAIMED);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aPullRequest, anIssue, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
-import { acceptedBody, baseOf } from "../__fixtures__/replay.ts";
+import { acceptedBody, aReplayIssue, baseOf } from "../__fixtures__/replay.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 import { planFor } from "../loop/rules.ts";
@@ -14,7 +14,9 @@ const config = kitConfig({
 
 describe("The Kit job's routing of a replay Ticket (#156)", () => {
   const replay = anIssue({ number: 140, author: "operator", labels: ["fabrik:replay", "agent:replay"], body: acceptedBody() });
-  const started = planFor({ kind: "label-added", issue: 140, label: "agent:replay" }, snapshotOf(replay), kitConfig());
+  // The claim's snapshot holds every open replay issue, this one among them.
+  const issues = { issues: [aReplayIssue({ author: "operator" })], capacity: null, acceptance: null };
+  const started = planFor({ kind: "label-added", issue: 140, label: "agent:replay" }, snapshotOf(replay, { replay: issues }), kitConfig());
 
   it("routes agent:replay on an accepted replay issue to replay, passing out its next Ticket, merged PR and baseSha, each arm's settings and the Subscription", () => {
     expect(kitJobOutputs(started, null, kitConfig())).toMatchObject({

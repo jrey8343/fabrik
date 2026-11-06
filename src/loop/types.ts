@@ -662,7 +662,11 @@ export interface Snapshot {
   readonly audit: AuditSnapshot | null;
   /** Gathered for a scheduled tick only: what the retro gate weighs. */
   readonly retro: RetroSnapshot | null;
-  /** Gathered for a scheduled tick only: what the replay step weighs. */
+  /**
+   * Gathered for a scheduled tick: what the replay step weighs. And for
+   * agent:replay added: every open replay issue alone, which a replay
+   * Ticket's claim weighs, with no capacity or acceptance read.
+   */
   readonly replay: ReplaySnapshot | null;
   /**
    * Gathered for an Audit run finishing only, whose Audit is `issue`: each PR

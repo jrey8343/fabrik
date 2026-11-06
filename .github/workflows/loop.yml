@@ -618,6 +618,12 @@ jobs:
     if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || needs.kit.outputs.route == 'replay' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # One replay claim at a time across the repo, since one replay Ticket runs at a time across
+    # every replay issue: a claim waiting here reads the one before it. Every other claim runs at once.
+    concurrency:
+      group: ${{ needs.kit.outputs.route == 'replay' && 'fabrik-replay-claim' || format('fabrik-claim-{0}', github.run_id) }}
+      cancel-in-progress: false
+      queue: max
     permissions: {}
     outputs:
       # For a replay: the Ticket the claim marked in progress in this run, empty when it marked

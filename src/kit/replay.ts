@@ -557,12 +557,8 @@ export function nextReplayStep(tick: ReplayTick): ReplayStep {
     const step = requestStep(issue, tick.acceptance);
     if (step !== null) return step;
   }
-  for (const { issue, marks } of accepted) {
-    const running = marks.progress.find(({ state }) => state === "in-progress");
-    if (running !== undefined) {
-      return { kind: "nothing", reason: `#${running.ticket} is in progress on replay #${issue}, and one replay Ticket runs at a time` };
-    }
-  }
+  const running = replayInProgress(tick);
+  if (running !== null) return { kind: "nothing", reason: oneAtATime(running) };
   const next = accepted.flatMap(({ issue, marks }) => {
     const planned = nextReplayTicket(marks);
     return planned === null ? [] : [{ issue, ticket: planned.ticket }];
@@ -610,9 +606,44 @@ export function replayReads(tick: Pick<ReplayTick, "operator" | "issues">, candi
   return { acceptance: requests.length > 0, fabrikShas: [...new Set(fabrikShas)], baseShas: [...new Set(baseShas)] };
 }
 
+/**
+ * Whether the Operator filed this replay issue. Only the Operator's replay
+ * issues count: one anyone else files gets no comment, runs nothing and never
+ * waits on the Operator, so nobody else can spend the Subscriptions or load
+ * their own prompts.
+ */
+export function isOperatorsReplay(issue: Pick<ReplayIssue, "author">, operator: string): boolean {
+  return issue.author === operator;
+}
+
 /** The open replay issues the Operator filed, oldest first: no one else's count, nor a closed one. */
 function operatorsOpenIssues({ operator, issues }: Pick<ReplayTick, "operator" | "issues">): ReplayIssue[] {
-  return issues.filter((issue) => issue.open && issue.author === operator).toSorted((a, b) => a.number - b.number);
+  return issues.filter((issue) => issue.open && isOperatorsReplay(issue, operator)).toSorted((a, b) => a.number - b.number);
+}
+
+/** A replay Ticket in progress, with the replay issue it's on. */
+export interface ReplayRunning {
+  readonly issue: number;
+  readonly progress: Extract<TicketProgress, { readonly state: "in-progress" }>;
+}
+
+/**
+ * The replay Ticket in progress on any of the Operator's open replay issues,
+ * the oldest issue's first, or null while none is. One replay Ticket runs at
+ * a time across them all, so while one is in progress, no other starts: not
+ * on the tick, and not on agent:replay added by hand (src/loop/replayRun.ts).
+ */
+export function replayInProgress(tick: Pick<ReplayTick, "operator" | "issues">): ReplayRunning | null {
+  for (const issue of operatorsOpenIssues(tick)) {
+    const progress = replayMarksIn(issue.body)?.progress.find((each) => each.state === "in-progress");
+    if (progress?.state === "in-progress") return { issue: issue.number, progress };
+  }
+  return null;
+}
+
+/** Why no other replay Ticket starts while `running` is in progress. */
+export function oneAtATime({ issue, progress }: ReplayRunning): string {
+  return `#${progress.ticket} is in progress on replay #${issue}, and one replay Ticket runs at a time`;
 }
 
 /**

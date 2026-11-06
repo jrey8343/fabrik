@@ -2067,3 +2067,42 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
     });
   });
 });
+
+describe("Gathering a replay Ticket's claim (#156)", () => {
+  const claim = { kind: "label-added", issue: 98, label: "agent:replay" } as const;
+
+  /** The issue API, holding these open replay issues beside the labelled one, #98. */
+  function githubHolding(replayIssues: unknown[]): GitHub {
+    const issues = issueGitHub({ author: { login: "jrey8343", __typename: "User" }, labels: ["fabrik:replay", "agent:replay"] });
+    return {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("$replay")) return { repository: { issues: { nodes: replayIssues } } };
+        return issues.graphql(query, variables);
+      },
+    } as unknown as GitHub;
+  }
+
+  it("reads every open replay issue, with its body whole, so the claim can start none while a Ticket of any is in progress", async () => {
+    const other = {
+      number: 130,
+      body: acceptedBody([20], [{ ticket: 20, state: "in-progress", run: 8000, retrying: null }]),
+      author: { login: "jrey8343", __typename: "User" },
+      labels: { nodes: [{ name: "fabrik:replay" }] },
+      comments: { pageInfo: { hasPreviousPage: false, startCursor: null }, nodes: [] },
+    };
+
+    const snapshot = await gatherSnapshot(githubHolding([other]), repo, claim, "jrey8343", APP_LOGIN);
+
+    expect(snapshot.replay).toEqual({
+      issues: [{ number: 130, open: true, author: "jrey8343", body: other.body, comments: [], labels: ["fabrik:replay"] }],
+      capacity: null,
+      acceptance: null,
+    });
+  });
+
+  it("reads none for any other label", async () => {
+    const snapshot = await gatherSnapshot(githubHolding([]), repo, { ...claim, label: "agent:implement" }, "jrey8343", APP_LOGIN);
+
+    expect(snapshot.replay).toBeNull();
+  });
+});
