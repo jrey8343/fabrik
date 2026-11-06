@@ -341,6 +341,12 @@ describe("Labels", () => {
     "fabrik:audit",
     "fabrik:retro",
     "fabrik:monitor",
+    "wayfinder:map",
+    "wayfinder:research",
+    "wayfinder:prototype",
+    "wayfinder:grilling",
+    "wayfinder:task",
+    "agent:research",
   ];
 
   function createdLabels(state: ProductState): string[] {

@@ -108,19 +108,18 @@ export type Label =
   | DecisionLabel
   | typeof RESEARCH_LABEL;
 
-/**
- * Every label the Kit uses, so the setup skill can create each one. The Map
- * and Decision labels join it when Ideas and Maps is switched on (#263);
- * until then GitHub creates them as a Map lands.
- */
+/** Every label the Kit uses, so the setup skill can create each one. */
 export const ALL_LABELS: readonly Label[] = [
   ...STATE_LABELS,
   DISPATCH_LABEL,
   DESIGN_LABEL,
   REVIEW_LABEL,
+  RESEARCH_LABEL,
   ...CATEGORY_LABELS,
   ...KIT_ISSUE_LABELS,
   MONITOR_LABEL,
+  MAP_LABEL,
+  ...DECISION_TYPES.map((type): DecisionLabel => `wayfinder:${type}`),
 ];
 
 export function isStateLabel(label: string): label is StateLabel {
