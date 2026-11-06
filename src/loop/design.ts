@@ -75,7 +75,7 @@ const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
  *
  * Which turn it starts is read from the thread, never from the label: while
  * the session has a pending prototype request whose prototype turn hasn't
- * started, and this Kit can take a Prototype (`noPrototype` is null), it's
+ * started, and this Kit can take a Prototype (whyNoPrototype), it's
  * the prototype turn, which marks the request started on its comment as it
  * starts; otherwise an ordinary turn. A prototype turn refused on its
  * Subscription and held or re-run has that mark taken off (src/loop/failures.ts),
@@ -83,10 +83,10 @@ const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
  * started while the request was pending leaves it, so it restarts as an
  * ordinary turn, and its reply is answered.
  */
-export function startQueuedSession(issueNumber: number, { issue }: IssueContext, config: KitConfig, noPrototype: string | null): Plan {
+export function startQueuedSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
   const removeLabel: Action = { kind: "remove-label", issue: issueNumber, label: DESIGN_LABEL };
   if (whileInSession(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
-  const pending = noPrototype === null ? issue.pendingPrototype : null;
+  const pending = whyNoPrototype(config) === null ? issue.pendingPrototype : null;
   if (pending !== null && !pending.started) {
     const started: Action = { kind: "mark-prototype-request", issue: issueNumber, comment: pending.comment, started: true };
     return { kind: "act", actions: [removeLabel, prototypeTurn(issueNumber, pending, config), started] };

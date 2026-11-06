@@ -76,9 +76,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
         return weekly === null ? intake(event.issue, context.issue) : WEEKLY_RUNS[weekly].start(context, config);
       });
     case "label-added":
-      return withIssue(snapshot, (context) =>
-        labelAdded(event.issue, event.label, context, snapshot.pullRequest, config, whyNoPrototype(config)),
-      );
+      return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, snapshot.pullRequest, config));
     case "issue-comment-created":
       // A needs-design issue is in a Design session; a needs-info one waits on its author.
       return withIssue(snapshot, (context) =>
@@ -256,10 +254,9 @@ function labelAdded(
   context: IssueContext,
   pullRequest: PullRequestSnapshot | null,
   config: KitConfig,
-  noPrototype: string | null,
 ): Plan {
   if (label === NEEDS_DESIGN) return startSession(issueNumber, context);
-  if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config, noPrototype);
+  if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config);
   if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
   if (label === RESEARCH_LABEL) return startResearcher(issueNumber, context, config);
   if (label !== NEEDS_TRIAGE) {
