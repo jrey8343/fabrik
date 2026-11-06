@@ -4,10 +4,16 @@ import { DEFAULT_KIT_CONFIG, type KitConfig } from "./config.ts";
 import {
   hiddenTests,
   type MergedFile,
+  nextReplayStep,
   pickReplayTickets,
   readReplayRequest,
+  type ReplayAcceptance,
   replayArms,
   type ReplayCandidate,
+  type ReplayIssue,
+  replayMarksIn,
+  type ReplayStep,
+  type ReplayTick,
   type ReplayVariable,
   replayThisUrl,
 } from "./replay.ts";
@@ -213,34 +219,34 @@ describe("The Replay this link", () => {
   });
 });
 
+/** The commit Ticket `ticket`'s first Implement run started from. */
+const baseOf = (ticket: number) => ticket.toString(16).padStart(40, "0");
+
+/**
+ * Ticket `ticket`, merged in PR `ticket + 100` on day `ticket` of November
+ * with a test file, after one first Implement run costing $1: eligible, and
+ * flagged for nothing.
+ */
+function aCandidate(ticket: number, overrides: Partial<ReplayCandidate> = {}): ReplayCandidate {
+  return {
+    ticket,
+    merged: {
+      number: ticket + 100,
+      mergedAt: `2026-10-${String(ticket).padStart(2, "0")}T12:00:00Z`,
+      reverted: false,
+      files: [
+        { path: "src/booking.ts", removed: false },
+        { path: "src/booking.test.ts", removed: false },
+      ],
+    },
+    records: [aRunRecord({ issue: ticket, pullRequest: null, baseSha: baseOf(ticket), endedAt: "2026-10-01T09:00:00Z" })],
+    humanTouches: 0,
+    lastEdited: { ticket: null, spec: null },
+    ...overrides,
+  };
+}
+
 describe("Picking a Replay's Tickets", () => {
-  /** The commit Ticket `ticket`'s first Implement run started from. */
-  const baseOf = (ticket: number) => ticket.toString(16).padStart(40, "0");
-
-  /**
-   * Ticket `ticket`, merged in PR `ticket + 100` on day `ticket` of November
-   * with a test file, after one first Implement run costing $1: eligible, and
-   * flagged for nothing.
-   */
-  function aCandidate(ticket: number, overrides: Partial<ReplayCandidate> = {}): ReplayCandidate {
-    return {
-      ticket,
-      merged: {
-        number: ticket + 100,
-        mergedAt: `2026-10-${String(ticket).padStart(2, "0")}T12:00:00Z`,
-        reverted: false,
-        files: [
-          { path: "src/booking.ts", removed: false },
-          { path: "src/booking.test.ts", removed: false },
-        ],
-      },
-      records: [aRunRecord({ issue: ticket, pullRequest: null, baseSha: baseOf(ticket), endedAt: "2026-10-01T09:00:00Z" })],
-      humanTouches: 0,
-      lastEdited: { ticket: null, spec: null },
-      ...overrides,
-    };
-  }
-
   it("picks a listed eligible Ticket to replay from its first Implement run's base, with its merged PR", () => {
     expect(pickReplayTickets({ tickets: [12] }, [aCandidate(12)])).toEqual({
       picked: [{ ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags: [] }],
@@ -478,3 +484,92 @@ describe("A merged PR's hidden tests", () => {
     expect(hiddenTests(files)).toEqual(["src/booking.test.ts"]);
   });
 });
+
+describe("A Replay's next step on the tick", () => {
+  /** The Operator, who files every replay issue that counts. */
+  const OPERATOR = "jrey8343";
+
+  /** Kit config at every candidate's baseSha: Implement on Sonnet at medium effort, Review on Opus at the CLI's default. */
+  const BASE: KitConfig = {
+    ...DEFAULT_KIT_CONFIG,
+    roles: {
+      ...DEFAULT_KIT_CONFIG.roles,
+      implement: { model: "claude-sonnet-5-5", effort: "medium", timeoutMinutes: 60 },
+      review: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
+    },
+  };
+
+  /** The arms of a Ticket built under BASE, replayed with review.effort: high. */
+  const REVIEW_HIGH_ARMS = {
+    baseline: { implement: { model: "claude-sonnet-5-5", effort: "medium" }, review: { model: "claude-opus-5-5", effort: null }, candidateSha: null },
+    variant: { implement: { model: "claude-sonnet-5-5", effort: "medium" }, review: { model: "claude-opus-5-5", effort: "high" }, candidateSha: null },
+  };
+
+  /** Replay issue `number`, open and the Operator's, asking for review.effort: high on Tickets 12 and 7. */
+  function aReplayIssue(number: number, overrides: Partial<ReplayIssue> = {}): ReplayIssue {
+    return { number, open: true, author: OPERATOR, body: bodyWith("review.effort: high", "tickets: 12, 7"), comments: [], ...overrides };
+  }
+
+  /** What accepting a request weighs: these candidates, each built under BASE, and no candidate Kit checked. */
+  function acceptanceOf(candidates: readonly ReplayCandidate[]): ReplayAcceptance {
+    const baseConfigs = Object.fromEntries(candidates.map(({ ticket }) => [baseOf(ticket), { ok: true, config: BASE } as const]));
+    return { candidates, baseConfigs, fabrikCommits: {} };
+  }
+
+  /** A tick with spare capacity, these replay issues, and Tickets 7, 12 and 20 to pick from. */
+  function aTick(issues: readonly ReplayIssue[], overrides: Partial<ReplayTick> = {}): ReplayTick {
+    return { operator: OPERATOR, issues, capacity: { spare: true }, acceptance: acceptanceOf([aCandidate(7), aCandidate(12), aCandidate(20)]), ...overrides };
+  }
+
+  /** The body an accept step writes, failing the test on any other step. */
+  function acceptedBody(step: ReplayStep): string {
+    if (step.kind !== "accept") throw new Error(`expected an accept step, got ${JSON.stringify(step)}`);
+    return step.body;
+  }
+
+  describe("accepts a valid new request", () => {
+    it("writing its plan into the body: the picked Tickets, their flags and each arm's settings, every Ticket pending", () => {
+      const step = nextReplayStep(aTick([aReplayIssue(140)]));
+
+      expect(step).toMatchObject({ kind: "accept", issue: 140 });
+      expect(replayMarksIn(acceptedBody(step))).toEqual({
+        plan: {
+          variable: { kind: "effort", role: "review", effort: "high" },
+          tickets: [
+            { ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags: [], arms: REVIEW_HIGH_ARMS },
+            { ticket: 7, pullRequest: 107, baseSha: baseOf(7), flags: [], arms: REVIEW_HIGH_ARMS },
+          ],
+          leftOut: [],
+        },
+        progress: [
+          { ticket: 12, state: "pending" },
+          { ticket: 7, state: "pending" },
+        ],
+      });
+    });
+
+    it("listing the picked Tickets in the body for the Operator to read, each with its flags", () => {
+      const touched = aCandidate(12, { humanTouches: 2 });
+      const untested = aCandidate(7, { merged: { ...aCandidate(7).merged!, files: [{ path: "src/booking.ts", removed: false }] } });
+
+      const shown = visible(acceptedBody(nextReplayStep(aTick([aReplayIssue(140)], { acceptance: acceptanceOf([touched, untested]) }))));
+
+      expect(shown.find((line) => line.includes("#12"))).toContain("Human touches");
+      expect(shown.find((line) => line.includes("#7"))).toContain("no hidden tests");
+    });
+
+    it("keeping the Operator's text above the Kit's part as it was, so the request still reads the same", () => {
+      const body = "Does Review hold up at a higher effort?  \r\n\r\n```replay\r\nreview.effort: high\r\ntickets: 12\r\n```";
+
+      const accepted = acceptedBody(nextReplayStep(aTick([aReplayIssue(140, { body })])));
+
+      expect(accepted.startsWith(body)).toBe(true);
+      expect(readReplayRequest(accepted)).toEqual(readReplayRequest(body));
+    });
+  });
+});
+
+/** The lines of a body the Operator sees: none of its hidden marker lines. */
+function visible(body: string): string[] {
+  return body.split("\n").filter((line) => !line.trim().startsWith("<!--"));
+}

@@ -12,9 +12,10 @@
 import { type ChangedPath, checkTrustRoot } from "../guard/trust-root.ts";
 import { newIssueUrl } from "../loop/followUps.ts";
 import { REPLAY_LABEL } from "../loop/labels.ts";
+import { withoutMentions } from "../loop/mentions.ts";
 import { spelled } from "../loop/readable.ts";
 import type { AgentRole } from "../loop/types.ts";
-import { FULL_SHA } from "../skills/lock.ts";
+import { FULL_SHA, shortSha } from "../skills/lock.ts";
 import { checkEffort, type KitConfig, refuseFable } from "./config.ts";
 import type { ReplayArm, RunRecord } from "./runRecord.ts";
 
@@ -448,3 +449,191 @@ function isTestPath(path: string): boolean {
   const name = folders.pop() ?? "";
   return TEST_NAMES.some((pattern) => pattern.test(name)) || folders.some((folder) => TEST_FOLDERS.includes(folder));
 }
+
+/** A replay issue, as the tick reads it. */
+export interface ReplayIssue {
+  readonly number: number;
+  readonly open: boolean;
+  /** Who filed it: only the Operator's replay issues count. */
+  readonly author: string;
+  /** Its body as it stands: the Operator's request, with the Kit's part below it once accepted. */
+  readonly body: string;
+  /** The Fabrik App's own comments on it, oldest first. */
+  readonly comments: readonly string[];
+}
+
+/** Whether this tick has spare capacity for a replay Ticket, or why not. */
+export type ReplayCapacity = { readonly spare: true } | { readonly spare: false; readonly why: string };
+
+/** A Product repo's Kit config at a Ticket's baseSha, as resolveKitConfig read it there. */
+export type BaseKitConfig = { readonly ok: true; readonly config: Pick<KitConfig, "roles"> } | { readonly ok: false; readonly errors: readonly string[] };
+
+/** What accepting a waiting request weighs. */
+export interface ReplayAcceptance {
+  /** This Product repo's merged Tickets, as pickReplayTickets weighs them. */
+  readonly candidates: readonly ReplayCandidate[];
+  /** The Kit config at each baseSha that replayReads names, keyed by that sha. */
+  readonly baseConfigs: Readonly<Record<string, BaseKitConfig>>;
+  /** Whether each candidate Kit sha that replayReads names is a commit in the Fabrik repo, keyed by that sha. */
+  readonly fabrikCommits: Readonly<Record<string, boolean>>;
+}
+
+/** What the tick's replay step weighs. */
+export interface ReplayTick {
+  /** The Operator's GitHub login. */
+  readonly operator: string;
+  /** The `fabrik:replay` issues, in any order. */
+  readonly issues: readonly ReplayIssue[];
+  readonly capacity: ReplayCapacity;
+  /** What accepting a waiting request weighs, or null when the adapter read none. */
+  readonly acceptance: ReplayAcceptance | null;
+}
+
+/** What the tick does next for the Replays. */
+export type ReplayStep =
+  | { readonly kind: "nothing"; readonly reason: string }
+  /** Writes the request's plan into the issue's body, which becomes `body`. */
+  | { readonly kind: "accept"; readonly issue: number; readonly body: string }
+  /** Comments on the issue, once, saying why its request can't run. */
+  | { readonly kind: "reject"; readonly issue: number; readonly comment: string }
+  /** Starts the issue's next pending Ticket, both arms. */
+  | { readonly kind: "start"; readonly issue: number; readonly ticket: number };
+
+/** The tick's next step for the Replays. */
+export function nextReplayStep(tick: ReplayTick): ReplayStep {
+  const [issue] = tick.issues;
+  if (issue === undefined || tick.acceptance === null) return { kind: "nothing", reason: "No replay issue is open" };
+  const read = readReplayRequest(issue.body);
+  if (!read.ok) return { kind: "nothing", reason: "" };
+  const plan = planOf(read.request, tick.acceptance);
+  const progress = plan.tickets.map(({ ticket }): TicketProgress => ({ ticket, state: "pending" }));
+  return { kind: "accept", issue: issue.number, body: replayBody(issue.body, { plan, progress }) };
+}
+
+/** The request's plan, from the Tickets it picks and each one's Kit config at its baseSha. */
+function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): ReplayPlan {
+  const { picked, leftOut } = pickReplayTickets(request, acceptance.candidates);
+  const tickets = picked.flatMap((ticket) => {
+    const base = acceptance.baseConfigs[ticket.baseSha];
+    return base?.ok === true ? [{ ...ticket, arms: replayArms(base.config, request.variable) }] : [];
+  });
+  return { variable: request.variable, tickets, leftOut };
+}
+
+// The Kit's part of a replay issue's body: below the Operator's request, from
+// a hidden start line to the end of the body, the plan listed for the
+// Operator to read, then the hidden markers that hold it: the plan, written
+// once when the request is accepted, and each Ticket's progress. The Kit only
+// ever rewrites its own part, so the Operator's text above it stays theirs.
+
+/** What a Replay runs: the variable, and each picked Ticket with its arms. */
+export interface ReplayPlan {
+  readonly variable: ReplayVariable;
+  /** In the order they run. */
+  readonly tickets: readonly PlannedTicket[];
+  /** Each listed Ticket left out, with why. */
+  readonly leftOut: readonly LeftOutTicket[];
+}
+
+/** A picked Ticket, with what each of its arms runs it with. */
+export interface PlannedTicket extends PickedTicket {
+  readonly arms: ReplayArms;
+}
+
+/** Where a planned Ticket's replay stands. */
+export type ReplayProgress = { readonly state: "pending" };
+
+/** A planned Ticket's progress. */
+export type TicketProgress = { readonly ticket: number } & ReplayProgress;
+
+/** What a replay issue's markers hold: its plan, and each planned Ticket's progress, in plan order. */
+export interface ReplayMarks {
+  readonly plan: ReplayPlan;
+  readonly progress: readonly TicketProgress[];
+}
+
+/** The hidden line the Kit's part opens with. */
+const KIT_PART_START = "<!-- fabrik:replay-start -->";
+
+/** The plan's marker line, carrying it as JSON. */
+const PLAN_MARKER = /^<!-- fabrik:replay-plan (\{.*\}) -->$/;
+
+/** How a marker's JSON spells the characters that could end its HTML comment early or mention someone. */
+const MARKER_ESCAPES: Readonly<Record<string, string>> = { "<": "\\u003c", ">": "\\u003e", "@": "\\u0040" };
+
+function markerJson(value: unknown): string {
+  return JSON.stringify(value).replace(/[<>@]/g, (c) => MARKER_ESCAPES[c] ?? c);
+}
+
+/** What the markers in a replay issue's body hold, or null when the Kit hasn't accepted its request. */
+export function replayMarksIn(body: string): ReplayMarks | null {
+  const lines = body
+    .slice(kitPartAt(body) ?? body.length)
+    .split("\n")
+    .map((line) => line.trim());
+  const planJson = lines.map((line) => PLAN_MARKER.exec(line)?.[1]).find((json) => json !== undefined);
+  if (planJson === undefined) return null;
+  const plan = JSON.parse(planJson) as ReplayPlan;
+  return { plan, progress: plan.tickets.map(({ ticket }): TicketProgress => ({ ticket, state: "pending" })) };
+}
+
+/** Where the Kit's part of the body starts: its start line, the last one. */
+function kitPartAt(body: string): number | null {
+  const starts = [...body.matchAll(/^<!-- fabrik:replay-start -->\r?$/gm)];
+  return starts.at(-1)?.index ?? null;
+}
+
+/** The body with its Kit's part written for `marks`, the Operator's part above it as it was. */
+export function replayBody(body: string, marks: ReplayMarks): string {
+  const operatorPart = body.slice(0, kitPartAt(body) ?? body.length);
+  const separator = operatorPart === "" ? "" : operatorPart.endsWith("\n") ? "\n" : "\n\n";
+  const markers = [
+    `<!-- fabrik:replay-plan ${markerJson(marks.plan)} -->`,
+    ...marks.progress.map((progress) => `<!-- fabrik:replay-ticket ${markerJson(progress)} -->`),
+  ];
+  return `${operatorPart}${separator}${[KIT_PART_START, ...planLines(marks), ...markers].join("\n")}\n`;
+}
+
+/** The plan as the Operator reads it: each Ticket with its progress, baseline and flags, then each one left out. */
+function planLines({ plan, progress }: ReplayMarks): string[] {
+  const { variable } = plan;
+  return [
+    "## Replay plan",
+    "",
+    `Each Ticket runs twice from the commit its first Implement run started from: a baseline as it was built, and a variant with \`${variableLine(variable)}\`.`,
+    "",
+    ...plan.tickets.map((planned) => {
+      const flags = planned.flags.length === 0 ? "" : ` Flags: ${planned.flags.map((flag) => FLAG_WORDS[flag]).join(", ")}.`;
+      const state = progress.find(({ ticket }) => ticket === planned.ticket) ?? { state: "pending" };
+      return `- #${planned.ticket}, merged in #${planned.pullRequest} from \`${shortSha(planned.baseSha)}\`: ${PROGRESS_WORDS[state.state]}.${baselineWords(planned.arms.baseline, variable)}${flags}`;
+    }),
+    ...(plan.leftOut.length === 0 ? [] : ["", "Left out:", "", ...plan.leftOut.map(({ ticket, reason }) => `- #${ticket}: ${withoutMentions(reason)}`)]),
+    "",
+  ];
+}
+
+/** How the plan names each flag. */
+const FLAG_WORDS: Readonly<Record<ReplayFlag, string>> = {
+  "human-touches": "Human touches",
+  "edited-input": "edited input",
+  "no-hidden-tests": "no hidden tests",
+};
+
+/** How the plan names each state of a Ticket's progress. */
+const PROGRESS_WORDS: Readonly<Record<ReplayProgress["state"], string>> = { pending: "pending" };
+
+/** How a Ticket's baseline runs what the variable changes, a sentence to show after its progress; none for a candidate Kit, whose baseline is always the pinned release. */
+function baselineWords(baseline: ReplayArmSettings, variable: ReplayVariable): string {
+  switch (variable.kind) {
+    case "model":
+      return ` Its baseline runs ${ROLE_WORDS[variable.role]} on ${baseline[variable.role].model}.`;
+    case "effort": {
+      const { effort } = baseline[variable.role];
+      return ` Its baseline runs ${ROLE_WORDS[variable.role]} at ${effort === null ? "the default effort" : `effort ${effort}`}.`;
+    }
+    case "kit":
+      return "";
+  }
+}
+
+const ROLE_WORDS: Readonly<Record<ReplayRole, string>> = { implement: "Implement", review: "Review" };
