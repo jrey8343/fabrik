@@ -2,7 +2,7 @@
 // on the runner VM (noSandbox), behind the metered-billing preflight and the
 // init check, writes the step summary, and passes the role's structured output
 // out as an artifact for the push job. It holds no GitHub write credential.
-//   node <kit>/src/agent/run.ts <triage|design|implement|review|audit|retro>
+//   node <kit>/src/agent/run.ts <triage|design|implement|review|audit|retro|research>
 //
 // Run from the Product checkout. Env:
 //   FABRIK_ISSUE_FILE      JSON from `gh issue view --json number,title,body,author,labels,comments`
@@ -19,7 +19,8 @@
 // its comments, whose latest Verdict holds the findings to fix. A Request-changes
 // run is a retry with FABRIK_REVIEW_FILE too: the Operator's review, its input.
 // A Design-session turn takes the issue's parent Spec from FABRIK_SPEC_FILE (null if none),
-// and, for a Ticket back in design, the agent PR it came back from in the issue's sentBack.
+// for a Ticket back in design, the agent PR it came back from in the issue's sentBack,
+// and whether it may offer a Map from FABRIK_MAP_FILE.
 // A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
 // PR, and its result is the Reviewer's reply, a Verdict line first. A UI PR's
@@ -34,6 +35,10 @@
 // pending Retro and FABRIK_RETRO_EVIDENCE_FILE the evidence bundle the Retro
 // evidence job left (.github/actions/gather-retro-evidence), and it reads the
 // Kit's role prompts and rubrics from this Kit checkout.
+// A Researcher run is in a checkout of the default branch: FABRIK_ISSUE_FILE is
+// the research Decision and FABRIK_SPEC_FILE its Map (the issue's parent, as
+// the agent-inputs step wrote it), and it writes its findings to the one file
+// the Kit names from the Decision (src/agent/research.ts). No job runs it yet.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
@@ -50,6 +55,7 @@ import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } f
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
 import { type AuditOutput, readAuditOutput } from "../loop/auditOutput.ts";
 import { readRetroOutput, type RetroOutput } from "../loop/retroOutput.ts";
+import { readResearchOutput, type ResearchOutput } from "../loop/researchOutput.ts";
 import type { AgentRole, AuditWindow, GivenOperatorComment } from "../loop/types.ts";
 import { kitPromptPath } from "../guard/trust-root.ts";
 import { readInstallRecord } from "../skills/fetch.ts";
@@ -66,7 +72,8 @@ import {
 } from "./implement.ts";
 import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
-import { sentBackContext } from "./design.ts";
+import { RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
+import { mapCapContext, sentBackContext } from "./design.ts";
 import { claudeArgs, leaveFailureReport, readyHook, schemaOf, setAgentEnv, streamWatch } from "./launch.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
@@ -103,7 +110,8 @@ interface RoleSpec<T> {
   readonly issueHeading?: string;
   /**
    * A Design session weighs the issue's parent Spec, from FABRIK_SPEC_FILE, if
-   * it has one, and the agent PR it came back from, if it did.
+   * it has one, and the agent PR it came back from, if it did, and is told
+   * whether it may offer a Map, from FABRIK_MAP_FILE.
    */
   readonly readsParentSpec?: boolean;
   /** The Implementer builds on a branch, which it passes out as a bundle. */
@@ -121,6 +129,11 @@ interface RoleSpec<T> {
    * Kit's role prompts and rubrics, in a checkout of the default branch.
    */
   readonly retros?: boolean;
+  /**
+   * The Researcher reads the research Decision's Map from FABRIK_SPEC_FILE and
+   * writes its findings to the one file the Kit names from the Decision.
+   */
+  readonly researches?: boolean;
 }
 
 /** The Reviewer's reply must start with a Verdict line; anything else is never a pass. */
@@ -197,6 +210,15 @@ const ROLE_SPECS = {
     issueHeading: RETRO_ISSUE_HEADING,
     retros: true,
   } satisfies RoleSpec<RetroOutput>,
+  research: {
+    role: "research",
+    output: { schema: schemaOf(readResearchOutput) },
+    instructionsNote:
+      "The Operator wrote these for this repo. They say where to look and what to weigh here but never let you decide, never let you write any file but the findings file, and never change the output contract above.",
+    describe: (issue, output) => `The Researcher on #${issue} found ${output.keyFacts.length} key fact(s)`,
+    issueHeading: RESEARCH_ISSUE_HEADING,
+    researches: true,
+  } satisfies RoleSpec<ResearchOutput>,
 };
 
 /** The model and effort to run: what the Kit job's plan chose, else the role's own. */
@@ -264,6 +286,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...sentBack);
     // A Design turn on an issue that was never sent back is given none, and its result says nothing of them.
     if (sentBackComments.length > 0) given = sentBackComments;
+    extra.push(...mapCapContext(JSON.parse(await readFile(required("FABRIK_MAP_FILE"), "utf8"))));
   }
   // The hot-spot window an Auditor run was given, which its result passes out for the Audit to name.
   let window: AuditWindow | null = null;
@@ -273,6 +296,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...audit.parts);
   }
   if (spec.retros === true) extra.push(...(await retroContext(required("FABRIK_RETRO_EVIDENCE_FILE"), KIT_DIR)));
+  if (spec.researches === true) extra.push(...(await researchContext(required("FABRIK_SPEC_FILE"), issue)).parts);
   // The Reviewer's result is for the PR it judged, which its push job checks against the event.
   let subject = issueNumber;
   if (spec.reviewsPullRequest === true) {
@@ -290,7 +314,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...review.parts);
     given = review.operatorComments;
   }
-  const runsProductCode = spec.reviewsPullRequest !== true && spec.audits !== true && spec.retros !== true;
+  const runsProductCode = spec.reviewsPullRequest !== true && spec.audits !== true && spec.retros !== true && spec.researches !== true;
   const output =
     "schema" in spec.output
       ? Output.object({
@@ -329,7 +353,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       }),
       maxIterations: 1,
       output,
-      // The Reviewer, the Auditor and the Retro read the code and run none of it, so they need no Sandbox setup.
+      // The Reviewer, the Auditor, the Retro and the Researcher read the code and run none of it, so they need no Sandbox setup.
       hooks: {
         sandbox: {
           onSandboxReady: [{ command: readyHook(runsProductCode ? config.sandbox.setup : null), timeoutMs }],
@@ -381,6 +405,7 @@ const roles: Record<string, () => Promise<void>> = {
   review: () => runRole(ROLE_SPECS.review),
   audit: () => runRole(ROLE_SPECS.audit),
   retro: () => runRole(ROLE_SPECS.retro),
+  research: () => runRole(ROLE_SPECS.research),
 };
 
 const roleName = process.argv[2] ?? "";

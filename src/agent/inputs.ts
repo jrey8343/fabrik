@@ -4,7 +4,9 @@
 //   node <kit>/src/agent/inputs.ts <out dir>
 // Run beside the Product checkout at product/, whose Kit config names the Operator.
 // Env: GH_TOKEN, GITHUB_REPOSITORY, GITHUB_API_URL, and
-//   FABRIK_ISSUE                 the issue or Ticket: writes issue.json and spec.json (its parent Spec, or null);
+//   FABRIK_ROLE                  the agent's role: a Design-session turn's also writes map.json, whether
+//                                it may offer a Map (readMapOffer)
+//   FABRIK_ISSUE                 the issue or Ticket: writes issue.json and spec.json (its parent: a Ticket's Spec, a Decision's Map, or null);
 //                                a Ticket back in design from an agent PR carries that PR in issue.json's sentBack
 //   FABRIK_PULL_REQUEST          optional, a PR: writes pull-request.json, with the Operator's comments on it
 //                                in operatorComments (sentBack carries them too, for the closed PR)
@@ -15,14 +17,15 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
-import { gatherAuditSliceFor } from "../github/snapshot.ts";
+import { gatherAuditSliceFor, gatherOpenMaps, type OpenMap } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { type Audit, auditsIn, lastAudit } from "../loop/audit.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
+import { mapCapFull } from "../loop/mapCap.ts";
 import { fromAuditIn } from "../loop/markers.ts";
-import type { AuditIssueSnapshot, AuditWindow } from "../loop/types.ts";
+import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
 import { operatorCommentId, type OperatorComment } from "./operatorComments.ts";
 
@@ -325,6 +328,44 @@ export async function readReview(github: Reader, repo: Repo, pullRequest: number
   return { review: await github.rest("GET", path), comments };
 }
 
+// --- A Design-session turn's Map inputs (#154) -------------------------------
+
+/** Where the inputs step writes what a Design-session turn is told of the Map cap, beside issue.json. */
+export const MAP_INPUTS_FILE = "map.json";
+
+/**
+ * Whether a Design-session turn may offer a Map at all. Off until Ideas and
+ * Maps is switched on (#263): until then a turn's inputs always say it can't,
+ * so no turn asks to chart a Map. Only tests pass `switchedOn`.
+ */
+export const MAPS_SWITCHED_ON = false;
+
+/**
+ * What a Design-session turn is told of the Map cap: it may offer a Map; or
+ * the cap is full, at `cap` (0 stops new Maps), and these open Maps hold it;
+ * or Maps aren't switched on yet.
+ */
+export type MapOffer =
+  | { readonly kind: "may-offer" }
+  | { readonly kind: "cap-full"; readonly cap: number; readonly openMaps: readonly OpenMap[] }
+  | { readonly kind: "switched-off" };
+
+/**
+ * Whether this turn may offer a Map, counting the open Maps as the push job's
+ * landing does (src/loop/mapCap.ts), so the turn isn't asked a question the
+ * Operator can't say yes to.
+ */
+export async function readMapOffer(
+  github: Pick<Reader, "graphql">,
+  repo: Repo,
+  config: Pick<KitConfig, "caps">,
+  { switchedOn = MAPS_SWITCHED_ON }: { readonly switchedOn?: boolean } = {},
+): Promise<MapOffer> {
+  if (!switchedOn) return { kind: "switched-off" };
+  const openMaps = await gatherOpenMaps(github, repo);
+  return mapCapFull(openMaps, config) ? { kind: "cap-full", cap: config.caps.maps, openMaps } : { kind: "may-offer" };
+}
+
 // --- An Auditor run's inputs (#150) -----------------------------------------
 
 /** The Audit an Auditor run fills in: the pending one, at the commit its audit marker names. */
@@ -556,15 +597,6 @@ function optionalNumber(name: string): number | null {
 /** Where the agent job checks out the Product repo, beside the Kit at kit/. */
 const PRODUCT_DIR = "product";
 
-/**
- * The Operator, as the Loop's snapshot names them: the Kit config's
- * `operator`, from the Product checkout beside the Kit's, or else the repo's owner.
- */
-async function operatorOf(productDir: string, owner: string): Promise<string> {
-  const resolved = await readKitConfigFromCheckout(productDir);
-  return (resolved.ok ? resolved.config.operator : null) ?? owner;
-}
-
 async function main(outDir: string): Promise<void> {
   const [owner, name] = (process.env["GITHUB_REPOSITORY"] ?? "").split("/");
   if (owner === undefined || name === undefined) throw new Error("GITHUB_REPOSITORY is not owner/name");
@@ -579,10 +611,17 @@ async function main(outDir: string): Promise<void> {
   const auditCommit = process.env["FABRIK_AUDIT_COMMIT"] ?? "";
   if (auditCommit !== "" && !/^[0-9a-f]{40}$/.test(auditCommit)) throw new Error("FABRIK_AUDIT_COMMIT is not a full commit SHA");
 
-  const operator = await operatorOf(PRODUCT_DIR, owner);
+  // The Kit config from the Product checkout beside the Kit's. The Operator is
+  // its `operator`, as the Loop's snapshot names them, or else the repo's owner.
+  const resolved = await readKitConfigFromCheckout(PRODUCT_DIR);
+  const operator = (resolved.ok ? resolved.config.operator : null) ?? owner;
   const { issue, spec } = await readIssue(github, repo, issueNumber, operator);
   await writeFile(join(outDir, "issue.json"), JSON.stringify(issue));
   await writeFile(join(outDir, "spec.json"), JSON.stringify(spec));
+  // A turn on an invalid Kit config fails before its agent starts (src/agent/run.ts), so it's told nothing of Maps.
+  if (process.env["FABRIK_ROLE"] === "design" && resolved.ok) {
+    await writeFile(join(outDir, MAP_INPUTS_FILE), JSON.stringify(await readMapOffer(github, repo, resolved.config)));
+  }
   if (pullRequest !== null) {
     const withComments = process.env["FABRIK_PULL_REQUEST_COMMENTS"] === "true";
     await writeFile(

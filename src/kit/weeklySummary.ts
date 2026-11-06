@@ -826,7 +826,7 @@ function heldMapsOf(openIssues: readonly OpenIssueFacts[]): HeldMaps | null {
     .filter(isMap)
     .map((map) => map.number)
     .toSorted((a, b) => a - b);
-  return open.length > 0 && mapCapFull(open.length, DEFAULT_KIT_CONFIG) ? { open } : null;
+  return open.length > 0 && mapCapFull(open, DEFAULT_KIT_CONFIG) ? { open } : null;
 }
 
 /**

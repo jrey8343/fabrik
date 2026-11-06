@@ -1,15 +1,18 @@
-// The Map cap (caps.maps, #154): how many Maps may be open in a Product repo
-// at once. One rule for every reader of it, so the Map landing's check and
-// the Weekly summary's Held line can't disagree.
+// The Map cap (#154): at most caps.maps Maps open in a Product repo at once,
+// so attention stays on one exploration at a time. It counts the open
+// `wayfinder:map` issues, whoever made them, the Kit or the Operator by hand,
+// and it holds silently: no mention, no assignee. One predicate, so that a
+// Design turn landing a Map (src/loop/design.ts), the turn's inputs
+// (src/agent/inputs.ts) and the Weekly summary agree on when it's full.
 import { MAP_LABEL } from "./labels.ts";
 import type { KitConfig } from "./types.ts";
+
+/** Whether the Map cap is full: the open Maps already meet caps.maps, so no new Map is charted. */
+export function mapCapFull(openMaps: readonly unknown[], config: Pick<KitConfig, "caps">): boolean {
+  return openMaps.length >= config.caps.maps;
+}
 
 /** Whether an issue is a Map: it has the `wayfinder:map` label, whoever charted it, the Kit or the Operator by hand. */
 export function isMap({ labels }: { readonly labels: readonly string[] }): boolean {
   return labels.includes(MAP_LABEL);
-}
-
-/** Whether this many open Maps fill the Map cap, so no other Map may land. A cap of 0 is full with none open. */
-export function mapCapFull(openMaps: number, config: Pick<KitConfig, "caps">): boolean {
-  return openMaps >= config.caps.maps;
 }

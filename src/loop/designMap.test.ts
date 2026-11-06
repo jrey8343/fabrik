@@ -24,7 +24,8 @@ const charted = {
 const turnFinished = (output: unknown) =>
   ({ kind: "agent-run-finished", role: "design", issue: 7, output: JSON.stringify(output) }) as const;
 
-const inSession = snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"] }), { operator: "jrey" });
+// No Map is open, so the Map cap has room (src/loop/mapCap.test.ts holds a full one).
+const inSession = snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"] }), { operator: "jrey", openMaps: [] });
 
 describe("Finishing a Design session with a Map and its Decisions", () => {
   it("rewrites the issue as a Map, files its Decisions as sub-issues, swaps needs-design for wayfinder:map, and checks Dispatch and the Design queue", () => {
@@ -128,7 +129,7 @@ describe("The Map and the Decisions a Design session charts", () => {
     const issue = anIssue({ number: 7, labels: ["bug", "needs-design"], openBlockers: [10], openBlocking: [20] });
     const output = { ...charted, decisions: ["research", "prototype", "grilling", "task"].map((type) => decision(type, type)) };
 
-    const plan = planFor(turnFinished(output), snapshotOf(issue), kitConfig());
+    const plan = planFor(turnFinished(output), snapshotOf(issue, { openMaps: [] }), kitConfig());
 
     expect(created(plan).map((action) => [action.labels, action.parent, action.blockedBy])).toEqual([
       [["wayfinder:research"], 7, []],
@@ -142,7 +143,7 @@ describe("The Map and the Decisions a Design session charts", () => {
   it("leaves the issue's category label on the Map, taking off only needs-design", () => {
     const issue = anIssue({ number: 7, labels: ["bug", "needs-design"] });
 
-    const plan = planFor(turnFinished(charted), snapshotOf(issue), kitConfig());
+    const plan = planFor(turnFinished(charted), snapshotOf(issue, { openMaps: [] }), kitConfig());
 
     const labelChanges = plan.kind === "act" ? plan.actions.filter((action) => action.kind === "remove-label" || action.kind === "add-labels") : [];
     expect(labelChanges).toEqual([
