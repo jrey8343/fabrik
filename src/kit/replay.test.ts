@@ -11,6 +11,7 @@ import {
   type ReplayVariable,
   replayThisUrl,
 } from "./replay.ts";
+import type { RunRecord } from "./runRecord.ts";
 
 /** A Fabrik commit with a prompt change to try. */
 const CANDIDATE = "0123456789abcdef0123456789abcdef01234567";
@@ -276,6 +277,45 @@ describe("Picking a Replay's Tickets", () => {
 
       expect(pick.picked.map(({ ticket }) => ticket)).toEqual([13, 14, 15, 10, 11]);
       expect(pick.leftOut).toEqual([]);
+    });
+
+    it("picks every eligible Ticket when fewer than 5 are, and never one whose merged PR changed a Trust-root file", () => {
+      const trustRoot = aCandidate(9, { merged: { ...aCandidate(9).merged!, files: [{ path: ".fabrik/config.json", removed: false }] } });
+      const candidates = [costing(1, 3), costing(2, 1), trustRoot, costing(3, 8), aCandidate(5, { merged: null }), costing(4, 2)];
+
+      const pick = pickReplayTickets({ tickets: null }, candidates);
+
+      expect(pick.picked.map(({ ticket }) => ticket).toSorted((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+      expect(pick.leftOut).toEqual([]);
+    });
+
+    it.each<[string, ReplayCandidate[]]>([
+      ["no candidates", []],
+      ["no eligible candidate", [aCandidate(4, { merged: null }), aCandidate(6, { records: [] })]],
+    ])("picks nothing from %s", (_, candidates) => {
+      expect(pickReplayTickets({ tickets: null }, candidates)).toEqual({ picked: [], leftOut: [] });
+    });
+
+    it("ranks a Ticket by the cost of all its Implement and Review runs, never its Triage, Design, judge or past Replay runs", () => {
+      const run = (overrides: Partial<RunRecord>) => aRunRecord({ issue: 1, pullRequest: 101, baseSha: baseOf(1), totalCostUsd: 1, ...overrides });
+      const replayed = { issue: 300, arm: "baseline", ticket: 2, candidateSha: null } as const;
+      // $4 in all: its first run, a Retry, a Step-up and a Review.
+      const retried = aCandidate(1, {
+        records: [run({ pullRequest: null }), run({ retry: 1 }), run({ stepUp: true }), run({ role: "review", verdict: "pass" })],
+      });
+      // $2 of its own, beside $50 of other runs on it.
+      const busy = aCandidate(2, {
+        records: [
+          aRunRecord({ issue: 2, pullRequest: null, baseSha: baseOf(2), totalCostUsd: 2 }),
+          ...(["triage", "design", "score"] as const).map((role) => aRunRecord({ role, issue: 2, totalCostUsd: 10 })),
+          aRunRecord({ issue: 2, pullRequest: 102, baseSha: baseOf(2), totalCostUsd: 10, replay: replayed }),
+          aRunRecord({ role: "review", issue: 2, pullRequest: 102, totalCostUsd: 10, replay: replayed }),
+        ],
+      });
+      // One third each, taken cheapest first: $2, $3.50, then $4.
+      const pick = pickReplayTickets({ tickets: null }, [retried, busy, costing(3, 3.5)]);
+
+      expect(pick.picked.map(({ ticket }) => ticket)).toEqual([2, 3, 1]);
     });
   });
 

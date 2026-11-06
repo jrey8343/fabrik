@@ -336,7 +336,9 @@ function eligibilityOf(candidate: ReplayCandidate | undefined): Eligible | strin
   if (guard.kind === "refuse") {
     return `its merged PR #${merged.number} changed ${spelled(guard.paths, "and")}, which steer agents, so no agent may build it`;
   }
-  const implementRuns = candidate.records.filter((record) => record.replay === null && record.role === "implement");
+  // A past Replay's runs on the Ticket are never the original's.
+  const originalRuns = candidate.records.filter((record) => record.replay === null && (record.role === "implement" || record.role === "review"));
+  const implementRuns = originalRuns.filter((record) => record.role === "implement");
   if (implementRuns.length === 0) return "the store holds no Implement run of it";
   const first = implementRuns.find(isFirstRun);
   if (first?.baseSha == null) return "the store has no baseSha for its first Implement run";
@@ -346,7 +348,7 @@ function eligibilityOf(candidate: ReplayCandidate | undefined): Eligible | strin
   if (hiddenTests(merged.files).length === 0) flags.push("no-hidden-tests");
   return {
     picked: { ticket: candidate.ticket, pullRequest: merged.number, baseSha: first.baseSha, flags },
-    cost: implementRuns.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
+    cost: originalRuns.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
     mergedAt: Date.parse(merged.mergedAt),
   };
 }
