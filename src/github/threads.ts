@@ -133,6 +133,13 @@ export function designTurnFailedIn(comments: readonly { readonly body: string; r
   return failed;
 }
 
+/** A comment as the snapshot reads an issue's thread: its id, its text, and whether the Fabrik App wrote it. */
+export interface ThreadComment {
+  readonly id: number;
+  readonly body: string;
+  readonly byApp: boolean;
+}
+
 /**
  * An issue's pending prototype request (#155), from its current Design
  * session's comments oldest first: the latest prototype request with no
@@ -140,9 +147,19 @@ export function designTurnFailedIn(comments: readonly { readonly body: string; r
  * of the session, or return starting a new one. The Operator's replies and
  * the ordinary rounds in between leave it pending. Only the Fabrik App's
  * comments count (`byApp`), since the request steers what a prototype turn
- * builds.
+ * builds. A request the Operator's reply approved is pending only while that
+ * reply is among `existing`, the ids of every comment the snapshot read:
+ * once they delete it, its prototype turn would post nothing, so no
+ * agent:design should build it again. The reply is older than its request, so
+ * it can fall outside the last 100 comments the snapshot reads while the
+ * request doesn't; that reads as not pending too, the safe side, since a
+ * request taken for pending builds a Prototype, where one taken for not
+ * pending leaves the Operator's next reply to start an ordinary turn.
  */
-export function pendingPrototypeIn(comments: readonly { readonly body: string; readonly byApp: boolean }[]): PrototypeRequestMarker | null {
+export function pendingPrototypeIn(
+  comments: readonly ThreadComment[],
+  existing: ReadonlySet<number> = new Set(comments.map(({ id }) => id)),
+): PrototypeRequestMarker | null {
   let pending: PrototypeRequestMarker | null = null;
   for (const { body, byApp } of comments) {
     if (!byApp) continue;
@@ -150,7 +167,7 @@ export function pendingPrototypeIn(comments: readonly { readonly body: string; r
     if (request !== null) pending = request;
     else if (endsPrototypeRequest(body)) pending = null;
   }
-  return pending;
+  return pending !== null && pending.reply !== null && !existing.has(pending.reply) ? null : pending;
 }
 
 /** Whether the App's comment ends a pending prototype request: the round that answers it, a failed turn, or the session's end or return. */

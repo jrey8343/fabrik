@@ -69,7 +69,7 @@ const ISSUE_QUERY = `
         body
         labels(first: 100) { nodes { name } }
         parent { number state labels(first: 100) { nodes { name } } }
-        comments(last: 100) { nodes { body createdAt author { login __typename } } }
+        comments(last: 100) { nodes { fullDatabaseId body createdAt author { login __typename } } }
         timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT], last: 100) {
           nodes {
             __typename
@@ -96,7 +96,8 @@ interface IssueQueryResult {
       body: string;
       labels: { nodes: { name: string }[] };
       parent: ParentNode | null;
-      comments: { nodes: { body: string; createdAt: string; author: { login: string; __typename: string } | null }[] };
+      // A comment's id is a BigInt in GraphQL, which comes back as a string: the REST id the Kit's own comments link to.
+      comments: { nodes: { fullDatabaseId: string; body: string; createdAt: string; author: { login: string; __typename: string } | null }[] };
       // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
       timelineItems: { nodes: LabelTimelineItem[] };
       closedByPullRequestsReferences: { nodes: { number: number }[] };
@@ -961,6 +962,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
     throw new Error(`Issue #${number} not found in ${repo.owner}/${repo.name}`);
   }
   const comments = issue.comments.nodes.map((comment) => ({
+    id: Number(comment.fullDatabaseId),
     body: comment.body,
     createdAt: comment.createdAt,
     byBot: comment.author?.__typename === "Bot",
@@ -984,7 +986,8 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       sentBack: designSessionOf(comments).sentBack,
       turnFailed: designTurnFailedIn(thisSession),
       firstTurnClaimed: firstTurnClaimed(timeline),
-      pendingPrototype: pendingPrototypeIn(thisSession),
+      // Every comment read counts for whether the reply that approved the request is still there, not only this session's.
+      pendingPrototype: pendingPrototypeIn(thisSession, new Set(comments.map(({ id }) => id))),
       emptyDiffs: countEmptyDiffs(comments.map((comment) => comment.body)),
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),

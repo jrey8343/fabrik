@@ -396,6 +396,22 @@ describe("The Operator's reply that approved the prototype", () => {
     });
   });
 
+  it("deleted, leaves the request no longer pending, so the next agent:design starts an ordinary turn rather than build it again", () => {
+    const deleted = inSession({}, { startingComment: { id: 9001, exists: false } });
+    const thread = requestThen(planFor(finished(), deleted, kitConfig())).filter(({ id }) => id !== 9001);
+    const after = snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design", "agent:design"], designRounds: 2, pendingPrototype: pendingPrototypeIn(thread) }), {
+      operator: "jrey",
+    });
+
+    expect(planFor({ kind: "label-added", issue: 7, label: "agent:design" }, after, kitConfig({ ui: UI }))).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:design" },
+        { kind: "start-agent-run", role: "design", issue: 7, model: DESIGN.model, effort: DESIGN.effort, timeoutMinutes: DESIGN.timeoutMinutes, subscription: DEFAULT_KIT_CONFIG.subscriptions[0] },
+      ],
+    });
+  });
+
   it("fails the run when the push job didn't check it is still there", () => {
     const plan = planFor(finished(), inSession({}, { startingComment: null }), kitConfig());
 
@@ -426,12 +442,15 @@ const failureNoticeSaying = (how: string) =>
     `[The run](${RUN})`,
   ].join("\n");
 
-/** #7's request, as the App posted it, then what the plan posted after it. */
-const requestThen = (plan: Plan) =>
-  [`<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`, ...commentsOf(plan)].map((body) => ({
+/** The Operator's reply 9001 that approved #7's request, then the request as the App posted it, then what the plan posted after it. */
+const requestThen = (plan: Plan) => [
+  { id: 9001, body: "Yes, prototype it.", byApp: false },
+  ...[`<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`, ...(plan.kind === "act" ? commentsOf(plan) : [])].map((body, i) => ({
+    id: 9500 + i,
     body,
     byApp: true,
-  }));
+  })),
+];
 
 describe("A prototype turn's output that breaks its contract", () => {
   it.each([
@@ -521,11 +540,11 @@ describe("A prototype turn's result the session no longer waits on", () => {
 describe("The Design session after a prototype round", () => {
   /** The session's comments, oldest first, as the push job reads them: rounds 1 and 2, the request, then what the landing posted. */
   const threadAfter = (plan: Plan) => [
-    { body: "<!-- fabrik:design-round 1 -->\n@jrey **Design session, round 1.** …", byBot: true, byApp: true },
-    { body: "<!-- fabrik:design-round 2 -->\n@jrey **Design session, round 2.** …", byBot: true, byApp: true },
-    { body: `<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`, byBot: true, byApp: true },
-    { body: "Yes, prototype it.", byBot: false, byApp: false },
-    ...commentsOf(plan).map((body) => ({ body, byBot: true, byApp: true })),
+    { id: 9000, body: "<!-- fabrik:design-round 1 -->\n@jrey **Design session, round 1.** …", byBot: true, byApp: true },
+    { id: 9001, body: "Yes, prototype it.", byBot: false, byApp: false },
+    { id: 9002, body: "<!-- fabrik:design-round 2 -->\n@jrey **Design session, round 2.** …", byBot: true, byApp: true },
+    { id: 9003, body: `<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`, byBot: true, byApp: true },
+    ...commentsOf(plan).map((body, i) => ({ id: 9100 + i, body, byBot: true, byApp: true })),
   ];
 
   it.each([
@@ -601,9 +620,6 @@ describe("A failed prototype turn", () => {
   });
 
   it("ends the pending request, so the Operator's reply starts an ordinary turn", () => {
-    const [notice = ""] = commentsOf(planFor(failedTurn({ jobResult: "failure" }), inSession(), kitConfig()));
-    const request = `<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`;
-
-    expect(pendingPrototypeIn([request, notice].map((body) => ({ body, byApp: true })))).toBeNull();
+    expect(pendingPrototypeIn(requestThen(planFor(failedTurn({ jobResult: "failure" }), inSession(), kitConfig())))).toBeNull();
   });
 });

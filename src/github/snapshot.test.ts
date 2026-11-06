@@ -898,7 +898,7 @@ describe("Gathering a pull request's UI evidence marker", () => {
 
 describe("Gathering an issue's Design session", () => {
   async function gatheredIssue(
-    comments: { body: string; createdAt?: string; author: { login?: string; __typename: string } }[],
+    comments: { body: string; createdAt?: string; author: { login?: string; __typename: string }; fullDatabaseId?: string }[],
     timeline: unknown[] = [],
     appLogin: string | null = null,
   ) {
@@ -914,7 +914,8 @@ describe("Gathering an issue's Design session", () => {
                 author: { login: "someone" },
                 labels: { nodes: [{ name: "needs-design" }] },
                 parent: null,
-                comments: { nodes: comments.map((comment) => ({ createdAt: "2026-11-02T09:00:00Z", ...comment })) },
+                // GitHub reads a comment's id as a BigInt, which comes back as a string.
+                comments: { nodes: comments.map((comment, i) => ({ createdAt: "2026-11-02T09:00:00Z", fullDatabaseId: String(5000 + i), ...comment })) },
                 timelineItems: { nodes: timeline },
                 closedByPullRequestsReferences: { nodes: [] },
                 blockedBy: { nodes: [] },
@@ -1002,10 +1003,19 @@ describe("Gathering an issue's Design session", () => {
       return plan.kind === "act" && plan.actions[0]?.kind === "comment" ? plan.actions[0].body : "";
     }
 
-    it("reads the prototype request the core posted as the session's pending request, with the reply that asked for it", async () => {
-      const issue = await gatheredIssue([{ body: requestComment(), author: app }]);
+    /** The Operator's reply 9001, which approved the Prototype. */
+    const approval = { body: "Yes, prototype it.", author: { login: "operator", __typename: "User" }, fullDatabaseId: "9001" };
 
-      expect(issue?.pendingPrototype).toEqual({ request: { route: "/book", variants: 3, brief }, reply: 9001 });
+    it("reads the prototype request the core posted as the session's pending request, with the reply that asked for it", async () => {
+      const issue = await gatheredIssue([approval, { body: requestComment(), author: app }]);
+
+      expect(issue?.pendingPrototype).toMatchObject({ request: { route: "/book", variants: 3, brief }, reply: 9001 });
+    });
+
+    it("reads a request whose approving reply isn't among the comments it read, deleted or older than them, as not pending", async () => {
+      const issue = await gatheredIssue([{ body: "Earlier.", author: { login: "operator", __typename: "User" }, fullDatabaseId: "9000" }, { body: requestComment(), author: app }]);
+
+      expect(issue?.pendingPrototype).toBeNull();
     });
 
     it("counts only a request posted since the issue last got needs-design", async () => {
@@ -1022,10 +1032,10 @@ describe("Gathering an issue's Design session", () => {
       const other = { login: "other-app", __typename: "Bot" };
       const person = { login: "jrey", __typename: "User" };
 
-      expect((await gatheredIssue([{ body: requestComment(), author: app }], [], "fabrik-app[bot]"))?.pendingPrototype).not.toBeNull();
-      expect((await gatheredIssue([{ body: requestComment(), author: other }], [], "fabrik-app[bot]"))?.pendingPrototype).toBeNull();
-      expect((await gatheredIssue([{ body: requestComment(), author: other }]))?.pendingPrototype).not.toBeNull();
-      expect((await gatheredIssue([{ body: requestComment(), author: person }]))?.pendingPrototype).toBeNull();
+      expect((await gatheredIssue([approval, { body: requestComment(), author: app }], [], "fabrik-app[bot]"))?.pendingPrototype).not.toBeNull();
+      expect((await gatheredIssue([approval, { body: requestComment(), author: other }], [], "fabrik-app[bot]"))?.pendingPrototype).toBeNull();
+      expect((await gatheredIssue([approval, { body: requestComment(), author: other }]))?.pendingPrototype).not.toBeNull();
+      expect((await gatheredIssue([approval, { body: requestComment(), author: person }]))?.pendingPrototype).toBeNull();
     });
   });
 });

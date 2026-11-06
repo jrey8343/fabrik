@@ -237,18 +237,19 @@ describe("Reading whether a Design-session turn failed in the current session", 
 });
 
 describe("Reading an issue's pending prototype request in the current session", () => {
-  /** A comment as the adapter reads it for this: its text, and whether the Fabrik App wrote it. */
-  const app = (body: string) => ({ body, byApp: true });
-  const other = (body: string) => ({ body, byApp: false });
+  /** A comment as the adapter reads it for this: its id, its text, and whether the Fabrik App wrote it. */
+  let ids = 100;
+  const app = (body: string) => ({ id: ids++, body, byApp: true });
+  const other = (body: string, id = ids++) => ({ id, body, byApp: false });
   const brief = "- **A**: one long form.\n- **B**: a stepper.";
   const asked = { route: "/book", variants: 2, brief };
 
-  /** The prototype request the core posts for an ordinary turn that asked for this one. */
-  function requested(request: { route: string; variants: number; brief: string } = asked) {
+  /** The prototype request the core posts for an ordinary turn that asked for this one: started by the Operator's reply `reply`, or by agent:design. */
+  function requested(request: { route: string; variants: number; brief: string } = asked, reply: number | null = null) {
     const output = JSON.stringify({ kind: "prototype", ...request, comment: "Prototyping it." });
     const plan = planFor(
-      { kind: "agent-run-finished", role: "design", issue: 7, output },
-      snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: 1 })),
+      { kind: "agent-run-finished", role: "design", issue: 7, output, ...(reply === null ? {} : { startedBy: reply }) },
+      snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: 1 }), reply === null ? {} : { startingComment: { id: reply, exists: true } }),
       kitConfig({ ui: UI }),
     );
     return app(commentsOf(plan)[0] ?? "");
@@ -274,6 +275,16 @@ describe("Reading an issue's pending prototype request in the current session", 
       request: asked,
       reply: null,
     });
+  });
+
+  it("reads a request whose approving reply is still on the issue as pending, with that reply", () => {
+    expect(pendingPrototypeIn([ordinaryRound(1), other("Yes, prototype it.", 9001), requested(asked, 9001)])).toMatchObject({ request: asked, reply: 9001 });
+  });
+
+  // The reply is older than its request, so it can fall outside the comments the snapshot reads while the request doesn't.
+  it("reads a request whose approving reply was deleted, or is older than every comment read, as not pending, so no agent:design builds it again", () => {
+    expect(pendingPrototypeIn([ordinaryRound(1), requested(asked, 9001)])).toBeNull();
+    expect(pendingPrototypeIn([other("Yes, prototype it.", 9001), requested(asked, 9001)], new Set([]))).toBeNull();
   });
 
   it("reads none in a session that asked for none", () => {
