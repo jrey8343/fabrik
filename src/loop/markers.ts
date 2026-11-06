@@ -116,6 +116,20 @@ export function prototypeRequestIn(body: string): PrototypeRequestMarker | null 
   return { request: { route, variants, brief }, reply: reply as number | null };
 }
 
+/**
+ * The line a prototype round (#155) carries right under its round marker,
+ * the round's first line, so the round still counts as a round. A round
+ * ends its session's pending prototype request (src/github/threads.ts).
+ */
+export const PROTOTYPE_ROUND_MARKER = "<!-- fabrik:prototype-round -->";
+
+/**
+ * The line a prototype failure round (#155) carries in the same place: the
+ * round that says what stopped a prototype turn and asks whether to carry
+ * on without one. It too ends the session's pending prototype request.
+ */
+export const PROTOTYPE_FAILURE_ROUND_MARKER = "<!-- fabrik:prototype-failed -->";
+
 /** The heading of a Map's Decisions so far: one line under it per Decision resolved. */
 export const DECISIONS_SO_FAR_HEADING = "## Decisions so far";
 

@@ -9,6 +9,8 @@ import {
   DESIGN_TURN_FAILED_MARKER,
   EMPTY_DIFF_MARKER,
   LIVE_OUTCOME_MARKER,
+  PROTOTYPE_FAILURE_ROUND_MARKER,
+  PROTOTYPE_ROUND_MARKER,
   type PrototypeRequestMarker,
   prototypeRequestIn,
   REQUEST_CHANGES_RUN_MARKER,
@@ -133,16 +135,35 @@ export function designTurnFailedIn(comments: readonly { readonly body: string; r
 
 /**
  * An issue's pending prototype request (#155), from its current Design
- * session's comments oldest first: the latest prototype request. Only the
- * Fabrik App's comments count (`byApp`), since the request steers what a
- * prototype turn builds.
+ * session's comments oldest first: the latest prototype request with no
+ * prototype round, prototype failure round or failed turn since, and no end
+ * of the session, or return starting a new one. The Operator's replies and
+ * the ordinary rounds in between leave it pending. Only the Fabrik App's
+ * comments count (`byApp`), since the request steers what a prototype turn
+ * builds.
  */
 export function pendingPrototypeIn(comments: readonly { readonly body: string; readonly byApp: boolean }[]): PrototypeRequestMarker | null {
   let pending: PrototypeRequestMarker | null = null;
   for (const { body, byApp } of comments) {
-    if (byApp) pending = prototypeRequestIn(body) ?? pending;
+    if (!byApp) continue;
+    const request = prototypeRequestIn(body);
+    if (request !== null) pending = request;
+    else if (endsPrototypeRequest(body)) pending = null;
   }
   return pending;
+}
+
+/** Whether the App's comment ends a pending prototype request: the round that answers it, a failed turn, or the session's end or return. */
+function endsPrototypeRequest(body: string): boolean {
+  const [first = "", second] = body.split("\n", 2);
+  const prototypeRound = DESIGN_ROUND_MARKER.test(first) && (second === PROTOTYPE_ROUND_MARKER || second === PROTOTYPE_FAILURE_ROUND_MARKER);
+  return (
+    prototypeRound ||
+    body.startsWith(DESIGN_TURN_FAILED_MARKER) ||
+    body.startsWith(SESSION_FINISHED) ||
+    LIVE_OUTCOME_MARKER.test(body) ||
+    sentBackIn(body) !== null
+  );
 }
 
 /**
