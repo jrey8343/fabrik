@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, AUDITED_SHA, auditBody, kitConfig, notificationsOf, snapshotOf, tickSnapshot } from "../__fixtures__/snapshots.ts";
+import {
+  anIssue,
+  AUDITED_SHA,
+  auditBody,
+  kitConfig,
+  notificationsOf,
+  RETRO_WINDOW_END,
+  retroBody,
+  snapshotOf,
+  tickSnapshot,
+} from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AgentRole, HeldTargetSnapshot, KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
@@ -117,6 +127,8 @@ describe("A held run whose issue or PR has closed, or moved on in the Loop, at t
     ["an agent PR out of draft", "review", "agent:review", aDraftHeld(7, { draft: false }), "#7 is no longer a draft"],
     ["a closed agent PR", "review", "agent:review", aDraftHeld(7, { open: false }), "#7 is closed"],
     ["an Audit no longer pending", "audit", null, anIssueHeld(7, ["fabrik:audit"], { byApp: true, body: auditBody(AUDITED_SHA, "failed") }), "#7 is no longer a pending Audit"],
+    ["a Retro no longer pending", "retro", null, anIssueHeld(7, ["fabrik:retro"], { byApp: true, body: retroBody(RETRO_WINDOW_END, "failed") }), "#7 is no longer a pending Retro"],
+    ["a pending Retro someone else opened", "retro", null, anIssueHeld(7, ["fabrik:retro"], { body: retroBody(RETRO_WINDOW_END, "pending") }), "#7 is no longer a pending Retro"],
   ];
 
   it.each(STALE)("on %s is dropped, and named in the step summary", (_, role, label, on, why) => {
@@ -303,5 +315,54 @@ describe("A held Auditor run, at the reset, with rotation on", () => {
       expect.objectContaining({ role: "audit", issue: 98, commit: AUDITED_SHA, subscription: "Claude token 2" }),
     ]);
     expect(actionsOf(plan).filter((action) => action.kind === "hold-agent-run")).toEqual([]);
+  });
+});
+
+describe("A held Retro run, at the reset, with rotation on", () => {
+  const retro = anIssueHeld(120, ["fabrik:retro"], { byApp: true, body: retroBody(RETRO_WINDOW_END, "pending") });
+
+  it("is started again on its pending Retro, on roles.retro and the freed Subscription", () => {
+    const kitIssues = [
+      weeklyLimitIssue(41, "Claude token", LATER, [held(120, "retro", null)], true),
+      weeklyLimitIssue(40, "Claude token 2", EARLIER),
+    ];
+    const config = kitConfig({
+      subscriptions: ["Claude token", "Claude token 2"],
+      roles: { ...TWO_SUBSCRIPTIONS.roles, retro: { model: "claude-retro", effort: "high", timeoutMinutes: 50 } },
+    });
+
+    const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: [retro] }), config);
+
+    expect(actionsOf(plan).filter((action) => action.kind === "start-agent-run")).toEqual([
+      {
+        kind: "start-agent-run",
+        role: "retro",
+        issue: 120,
+        model: "claude-retro",
+        effort: "high",
+        timeoutMinutes: 50,
+        subscription: "Claude token 2",
+      },
+    ]);
+    expect(actionsOf(plan).filter((action) => action.kind === "hold-agent-run")).toEqual([]);
+  });
+
+  // A Loop run starts at most one agent run, and neither has a trigger label to start it through a Loop run of its own.
+  it("held after an Auditor run, waits for the next reset while the Auditor run starts, keeping its held marker", () => {
+    const kitIssues = [
+      weeklyLimitIssue(41, "Claude token", LATER, [held(98, "audit", null), held(120, "retro", null)], true),
+      weeklyLimitIssue(40, "Claude token 2", EARLIER),
+    ];
+    const audit = anIssueHeld(98, ["fabrik:audit"], { byApp: true, body: auditBody(AUDITED_SHA, "pending") });
+
+    const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: [audit, retro] }), TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(plan).filter((action) => action.kind === "start-agent-run")).toEqual([
+      expect.objectContaining({ role: "audit", issue: 98 }),
+    ]);
+    expect(actionsOf(plan).filter((action) => action.kind === "drop-held-run")).toEqual([]);
+    const resumed = actionsOf(plan).find((action) => action.kind === "comment" && action.issue === 41);
+    expect(resumed).toEqual(expect.objectContaining({ body: expect.stringContaining('"role":"audit"') }));
+    expect(resumed).not.toEqual(expect.objectContaining({ body: expect.stringContaining('"role":"retro"') }));
   });
 });

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, auditBody, AUDITED_SHA, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import {
+  anIssue,
+  auditBody,
+  AUDITED_SHA,
+  kitConfig,
+  notificationsOf,
+  RETRO_WINDOW_END,
+  retroBody,
+  snapshotOf,
+} from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AgentRole, IssueSnapshot, KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
@@ -175,6 +184,7 @@ function heldMarker(issue: number, role: AgentRole, label: string | null, order 
 }
 
 const PENDING_AUDIT = anIssue({ number: 98, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "pending") });
+const PENDING_RETRO = anIssue({ number: 120, byApp: true, labels: ["fabrik:retro"], body: retroBody(RETRO_WINDOW_END, "pending") });
 
 describe("The killed run, with rotation on", () => {
   it.each(ROLES)(
@@ -240,6 +250,27 @@ describe("The killed run, with rotation on", () => {
 
     expect(actions.filter((action) => "issue" in action && action.issue === 98 && action.kind !== "hold-agent-run")).toEqual([]);
     expect(actions).toContainEqual({ kind: "hold-agent-run", role: "audit", issue: 98, label: null, until: RESETS_AT });
+  });
+
+  it("a killed Retro run fails its Retro, for the scheduled tick to try again, while another Subscription is free", () => {
+    const actions = actionsOf(planFor(killed("retro", { issue: 120 }), snapshotOf(PENDING_RETRO), TWO_SUBSCRIPTIONS));
+
+    expect(actions).toContainEqual({ kind: "close", issue: 120, reason: "not_planned" });
+    expect(actions).toContainEqual(expect.objectContaining({ kind: "open-issue", labels: ["ready-for-human", "fabrik:usage-credits"] }));
+  });
+
+  it("a killed Retro run is held, its Retro left pending, when no other Subscription is free", () => {
+    const actions = actionsOf(
+      planFor(
+        killed("retro", { issue: 120 }),
+        snapshotOf(PENDING_RETRO, { kitIssues: [weeklyLimitIssue(41, "Claude token 2")] }),
+        TWO_SUBSCRIPTIONS,
+      ),
+    );
+
+    expect(actions.filter((action) => "issue" in action && action.issue === 120 && action.kind !== "hold-agent-run")).toEqual([]);
+    expect(actions).toContainEqual({ kind: "hold-agent-run", role: "retro", issue: 120, label: null, until: RESETS_AT });
+    expect(actions).toContainEqual({ kind: "comment", issue: 41, body: expect.stringContaining(heldMarker(120, "retro", null)) });
   });
 });
 

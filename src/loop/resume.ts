@@ -3,20 +3,21 @@
 // tick resumes every held run, in the order it was first held. A run with a
 // trigger label gets it back on the App token, so a normal Loop run starts it
 // on the freed Subscription, under Dispatch's max_in_flight cap and the
-// Design session cap as usual. A held Auditor run, which has none, the tick
-// starts itself on its pending Audit. A run whose issue or PR has closed, or
-// moved on in the Loop, since it was held is dropped instead. A weekly-limit
-// issue that stays open gets a resumed marker for each run dealt with, so
-// that only a later held marker, if the resumed run is refused again, holds
-// it again; the marker carries the run's place in the order, so that held
-// again it keeps its first place even once the issue its first held marker
-// was on has closed. Only when every weekly-limit issue closes in one tick is
-// no open issue left to carry it, and a run held again then takes a new place.
-// Pure, no I/O.
+// Design session cap as usual. A held Auditor or Retro run, which has none,
+// the tick starts itself on its pending Audit or Retro. A run whose issue or
+// PR has closed, or moved on in the Loop, since it was held is dropped
+// instead. A weekly-limit issue that stays open gets a resumed marker for
+// each run dealt with, so that only a later held marker, if the resumed run
+// is refused again, holds it again; the marker carries the run's place in the
+// order, so that held again it keeps its first place even once the issue its
+// first held marker was on has closed. Only when every weekly-limit issue
+// closes in one tick is no open issue left to carry it, and a run held again
+// then takes a new place. Pure, no I/O.
 import { auditMarksIn, retroMarksIn } from "./markers.ts";
 import { startAuditorRun } from "./audit.ts";
 import { type HeldRun, RUN_NAMES, resumedMarker, type Waiting, waitingHeldRuns } from "./heldRun.ts";
 import { AUDIT_LABEL, isStateLabel, NEEDS_DESIGN, READY_FOR_AGENT, RETRO_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
+import { startAgentRun } from "./runs.ts";
 import { rotationIsOn } from "./subscriptions.ts";
 import type { Action, HeldTargetSnapshot, KitConfig, Plan, Snapshot } from "./types.ts";
 
@@ -41,7 +42,7 @@ export function resumingHeldRuns(tick: Plan, snapshot: Snapshot, config: KitConf
   }
   const resumes: Action[] = [];
   const dealtWith: Waiting[] = [];
-  let auditorStarted = false;
+  let pendingStarted = false;
   for (const entry of waiting) {
     const { run } = entry;
     const on = snapshot.held.find((target) => target.number === run.issue);
@@ -51,12 +52,13 @@ export function resumingHeldRuns(tick: Plan, snapshot: Snapshot, config: KitConf
     } else if (run.label !== null) {
       resumes.push({ kind: "add-labels", issue: run.issue, labels: [run.label] });
     } else {
-      // A Loop run starts at most one agent run, so a second held Auditor run waits for the next reset.
-      if (auditorStarted) continue;
-      const start = startAuditorRun(on, config);
+      // A Loop run starts at most one agent run, so a second held run with no
+      // trigger label, an Auditor or Retro run, waits for the next reset.
+      if (pendingStarted) continue;
+      const start = run.role === "retro" ? startAgentRun("retro", on.number, config) : startAuditorRun(on, config);
       if (start.kind === "act") resumes.push(...start.actions);
       else resumes.push({ kind: "drop-held-run", role: run.role, issue: run.issue, reason: start.reason });
-      auditorStarted = true;
+      pendingStarted = true;
     }
     dealtWith.push(entry);
   }

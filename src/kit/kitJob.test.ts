@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, auditBody, AUDITED_SHA, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, auditBody, AUDITED_SHA, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { planFor } from "../loop/rules.ts";
 import type { KitIssueSnapshot } from "../loop/types.ts";
 import { kitJobSummary } from "./kitJob.ts";
@@ -65,6 +65,21 @@ describe("The Kit job's step summary", () => {
       "### Fabrik Kit job\n\n" +
         "The Audit run on #98 was held until a Subscription's weekly limit resets, which isn't known: every listed Subscription has hit its weekly limit. " +
         "Its Audit stays pending.\n",
+    );
+  });
+
+  it("says a held Retro run's Retro stays pending", () => {
+    const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
+    const v1Issue: KitIssueSnapshot = { ...firstUsedUp, number: 41, body: "<!-- fabrik:notified -->" };
+    const retro = anIssue({ number: 120, byApp: true, labels: ["fabrik:retro"], body: retroBody(RETRO_WINDOW_END, "pending") });
+    const secondUsedUp: KitIssueSnapshot = { ...firstUsedUp, number: 42, body: "<!-- fabrik:subscription Claude token 2 -->" };
+    const kitIssues = [v1Issue, secondUsedUp];
+    const plan = planFor({ kind: "issue-opened", issue: 120 }, snapshotOf(retro, { kitIssues }), config);
+
+    expect(kitJobSummary(plan, config, kitIssues)).toBe(
+      "### Fabrik Kit job\n\n" +
+        "The Retro run on #120 was held until a Subscription's weekly limit resets, which isn't known: every listed Subscription has hit its weekly limit. " +
+        "Its Retro stays pending.\n",
     );
   });
 

@@ -21,9 +21,10 @@ export function heldLine(held: HeldRun, until: string | null): string {
     until === null
       ? "a Subscription's weekly limit resets, which isn't known"
       : `${readable(until)}, when the first Subscription's weekly limit resets`;
+  // Only an Auditor or Retro run has no trigger label: its pending Audit or Retro is what it's started on.
   const resume =
     held.label === null
-      ? "The Kit starts it again on that pending Audit then."
+      ? `The Kit starts it again on that pending ${RUN_NAMES[held.role]} then.`
       : `The Kit re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
   return [`The ${RUN_NAMES[held.role]} run on #${held.issue} is held until ${when}. ${resume}`, "", heldMarker(held)].join("\n");
 }
