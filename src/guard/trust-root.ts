@@ -44,9 +44,10 @@ const KIT_RUBRICS = `${RUBRICS_DIR}/`;
 
 /**
  * Folders that are trust roots only at the repo root: the Product repo's Kit
- * config and phase files, and the workflows GitHub runs.
+ * config and phase files, the workflows GitHub runs, and the Vision and
+ * Roadmap that hold its Product intent.
  */
-const ROOT_FOLDERS = [".fabrik/", ".github/workflows/"];
+const ROOT_FOLDERS = [".fabrik/", ".github/workflows/", "docs/product/"];
 
 function isTrustRoot(path: string): boolean {
   if (KIT_PROMPTS.includes(path) || path.startsWith(KIT_RUBRICS)) return true;

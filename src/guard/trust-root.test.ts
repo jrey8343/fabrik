@@ -30,6 +30,9 @@ describe("Trust-root guard", () => {
     ["the Kit config", ".fabrik/config.yml"],
     ["a phase file", ".fabrik/implement.md"],
     ["a workflow", ".github/workflows/fabrik.yml"],
+    ["the Vision", "docs/product/vision.md"],
+    ["the Roadmap", "docs/product/roadmap.md"],
+    ["another file beside the Vision", "docs/product/end-users/clinic-owners.md"],
   ])("refuses a change to %s", (_class, path) => {
     expect(checkTrustRoot([{ path }])).toEqual({ kind: "refuse", paths: [path] });
   });
@@ -56,6 +59,11 @@ describe("Trust-root guard", () => {
     // A Product's own prompts folder: only the Kit's role prompts are trust roots.
     "prompts/onboarding.md",
     "prompts/chatbot/system.txt",
+    // Only the docs/product/ folder at the repo root holds the Vision and Roadmap.
+    "packages/web/docs/product/vision.md",
+    "docs/products/vision.md",
+    "docs/product.md",
+    "src/product/vision.ts",
   ])("allows %s, which only looks like a trust-root path", (path) => {
     expect(checkTrustRoot([{ path }])).toEqual({ kind: "allow" });
   });
@@ -71,6 +79,20 @@ describe("Trust-root guard", () => {
     expect(checkTrustRoot([{ from: "docs/draft-review.md", path: "prompts/review.md" }])).toEqual({
       kind: "refuse",
       paths: ["prompts/review.md"],
+    });
+  });
+
+  it("refuses a rename out of docs/product/, naming where it came from", () => {
+    expect(checkTrustRoot([{ from: "docs/product/vision.md", path: "docs/vision-draft.md" }])).toEqual({
+      kind: "refuse",
+      paths: ["docs/product/vision.md"],
+    });
+  });
+
+  it("refuses a rename into docs/product/, naming where it went", () => {
+    expect(checkTrustRoot([{ from: "docs/roadmap-draft.md", path: "docs/product/roadmap.md" }])).toEqual({
+      kind: "refuse",
+      paths: ["docs/product/roadmap.md"],
     });
   });
 
