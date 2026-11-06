@@ -43,6 +43,8 @@ export type PushJobInput =
       readonly issue: number;
       readonly jobResult: string;
       readonly secretsStep: string;
+      /** The Subscription the run used, as the Kit job passed it out; absent when it passed none. */
+      readonly subscription?: string;
     }
   | { readonly kind: "nothing"; readonly reason: string };
 
@@ -81,9 +83,9 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       if (issue === null) return { kind: "nothing", reason: `the ${route} run names no issue` };
       // A Retro whose evidence job failed never ran its agent, and is that run's failure.
       const evidence = route === "retro" ? needs[RETRO_EVIDENCE_JOB] : undefined;
-      if (evidence !== undefined && FAILED.includes(evidence.result)) return failure(route, issue, evidence);
+      if (evidence !== undefined && FAILED.includes(evidence.result)) return failure(route, issue, evidence, kit);
       const job = needs[route];
-      if (job !== undefined && FAILED.includes(job.result)) return failure(route, issue, job);
+      if (job !== undefined && FAILED.includes(job.result)) return failure(route, issue, job, kit);
       if (job?.result !== "success") return { kind: "nothing", reason: `the ${route} job ended ${job?.result ?? "unknown"}` };
       return {
         kind: "agent-result",
@@ -100,8 +102,8 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       const checks = needs["review-checks"];
       const reviewer = needs["review"];
       // Waiting on checks or in the Reviewer, a Review that failed is an Infrastructure failure, never a pass.
-      if (checks !== undefined && FAILED.includes(checks.result)) return failure("review", ticket, checks);
-      if (reviewer !== undefined && FAILED.includes(reviewer.result)) return failure("review", ticket, reviewer);
+      if (checks !== undefined && FAILED.includes(checks.result)) return failure("review", ticket, checks, kit);
+      if (reviewer !== undefined && FAILED.includes(reviewer.result)) return failure("review", ticket, reviewer, kit);
       if (checks?.result !== "success") return { kind: "nothing", reason: `the Review checks job ended ${checks?.result ?? "unknown"}` };
       const outcome = checks.outputs["checks"];
       const headSha = checks.outputs["head-sha"] ?? "";
@@ -117,8 +119,16 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
   }
 }
 
-function failure(role: AgentRole, issue: number, job: NeededJob): PushJobInput {
-  return { kind: "agent-failure", role, issue, jobResult: job.result, secretsStep: job.outputs["secrets-step"] ?? "" };
+function failure(role: AgentRole, issue: number, job: NeededJob, kit: NeededJob): PushJobInput {
+  const subscription = kit.outputs["subscription"] ?? "";
+  return {
+    kind: "agent-failure",
+    role,
+    issue,
+    jobResult: job.result,
+    secretsStep: job.outputs["secrets-step"] ?? "",
+    ...(subscription === "" ? {} : { subscription }),
+  };
 }
 
 function numberOr(text: string | undefined): number | null {

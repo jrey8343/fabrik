@@ -39,7 +39,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, ...overrides };
+  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
@@ -68,7 +68,7 @@ export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
   overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, ...overrides };
+  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -102,6 +102,7 @@ export function dispatchSnapshotOf(
     audit: null,
     retro: null,
     namedPullRequests: null,
+    held: null,
   };
 }
 
@@ -135,20 +136,21 @@ export function designQueueSnapshotOf(
     audit: null,
     retro: null,
     namedPullRequests: null,
+    held: null,
   };
 }
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
-export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, ...overrides };
+export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "held">> = {}): Snapshot {
+  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, ...overrides };
 }
 
 /**
  * A scheduled tick's snapshot: the repo's, with the audit slice every tick
  * gathers, by default an unaudited repo whose default branch is at HEAD_SHA.
  */
-export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro">> = {}): Snapshot {
-  return repoSnapshot({ audit: { head: HEAD_SHA, issues: [] }, ...overrides });
+export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "held">> = {}): Snapshot {
+  return repoSnapshot({ audit: { head: HEAD_SHA, issues: [] }, held: [], ...overrides });
 }
 
 /** The commit anAuditIssue() audited unless a test says otherwise. */

@@ -232,6 +232,8 @@ export interface FailedJob {
   /** The agent job's 1Password step outcome, passed out as a job output; empty if it never got that far. */
   readonly secretsStep: string;
   readonly report: FailureReport | null;
+  /** The Subscription the run used, from the Kit job's `subscription` output; absent when it passed none. */
+  readonly subscription?: string;
 }
 
 const SECRETS_OUTCOMES = ["success", "failure", "cancelled", "skipped"] as const;
@@ -247,5 +249,6 @@ export function agentFailureEventFrom(job: FailedJob): LoopEvent {
     jobResult: job.jobResult === "cancelled" ? "cancelled" : "failure",
     secretsStep,
     report: job.report,
+    ...(job.subscription === undefined ? {} : { subscription: job.subscription }),
   };
 }

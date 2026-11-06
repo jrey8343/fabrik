@@ -168,6 +168,13 @@ export interface WeeklySummary {
   readonly spendNeverMerged: WeekOverWeek<CostFigure>;
   /** The latest weekly-limit reading across the week's records, or null if none read one. */
   readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
+  /**
+   * Each Subscription the week's records ran on, by vault item name, with its
+   * API-equivalent cost this week and its latest weekly-limit reading this
+   * week and last week. A record written before runs named their Subscription
+   * reads as the first listed one's (readRunRecord).
+   */
+  readonly subscriptions: readonly SubscriptionUsage[];
   /** Human touches per agent PR merged in the week, or null in a week with none merged. */
   readonly humanTouches: WeekOverWeek<number | null>;
   /** The median time from Dispatch to merge of the week's merged agent PRs, in ms, or null with none. */
@@ -364,6 +371,14 @@ export type WeeklySummaryResult =
       readonly body: string;
     };
 
+/** One Subscription's share of the week: what its runs cost and how close it came to its weekly limit. */
+export interface SubscriptionUsage {
+  /** The `Fabrik` vault item name the runs used. */
+  readonly subscription: string;
+  readonly cost: number;
+  readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
+}
+
 /**
  * The Kit-internal switch for the Weekly summary's Retro line (#151). While
  * it's off, an open Retro waits on nobody: it neither shows in Waiting on you
@@ -398,6 +413,11 @@ export function weeklySummary(input: WeeklySummaryInput, { retro = RETRO_SWITCHE
     costPerSpec: change("costPerSpec"),
     spendNeverMerged: change("spendNeverMerged"),
     weeklyLimit: change("weeklyLimit"),
+    subscriptions: thisWeek.subscriptions.map(({ subscription, cost, weeklyLimit }) => ({
+      subscription,
+      cost,
+      weeklyLimit: { thisWeek: weeklyLimit, lastWeek: lastWeek.subscriptions.find((other) => other.subscription === subscription)?.weeklyLimit ?? null },
+    })),
     humanTouches: change("humanTouches"),
     cycleTimeMs: change("cycleTimeMs"),
     operatorWaitMs: change("operatorWaitMs"),
@@ -430,6 +450,7 @@ interface WeekMetrics {
   readonly costPerSpec: CostFigure;
   readonly spendNeverMerged: CostFigure;
   readonly weeklyLimit: RateLimitReading | null;
+  readonly subscriptions: readonly { readonly subscription: string; readonly cost: number; readonly weeklyLimit: RateLimitReading | null }[];
   readonly humanTouches: number | null;
   readonly cycleTimeMs: number | null;
   readonly operatorWaitMs: number | null;
@@ -461,7 +482,8 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     costPerMergedPullRequest: costPerMergedPullRequestOf(week, input.records, merged),
     costPerSpec: costPerSpecOf(week, input),
     spendNeverMerged: spendNeverMergedOf(week, input),
-    weeklyLimit: records.findLast((record) => record.rateLimit?.rateLimitType === WEEKLY_LIMIT)?.rateLimit ?? null,
+    weeklyLimit: lastWeeklyLimitOf(records),
+    subscriptions: subscriptionsOf(records),
     humanTouches: mean(merged.map((pullRequest) => pullRequest.humanTouches)),
     cycleTimeMs: median(merged.flatMap(({ dispatch, mergedAt }) => (dispatch === null ? [] : [Date.parse(mergedAt) - Date.parse(dispatch)]))),
     operatorWaitMs: median(merged.flatMap(({ mergedAt, lastPass }) => (lastPass === null ? [] : [Date.parse(mergedAt) - Date.parse(lastPass)]))),
@@ -654,6 +676,20 @@ function averageCostOf(groups: readonly (readonly RunRecord[])[]): CostFigure {
 /** The records that ended before the week did, whatever week they ended in. */
 function endedBy(week: Week, records: readonly RunRecord[]): RunRecord[] {
   return records.filter((record) => Date.parse(record.endedAt) < week.end);
+}
+
+/** The latest weekly-limit reading among these records, sorted by when they ended, or null if none read one. */
+function lastWeeklyLimitOf(records: readonly RunRecord[]): RateLimitReading | null {
+  return records.findLast((record) => record.rateLimit?.rateLimitType === WEEKLY_LIMIT)?.rateLimit ?? null;
+}
+
+/** Each Subscription these records ran on, in name order, with their cost and latest weekly-limit reading. */
+function subscriptionsOf(records: readonly RunRecord[]): WeekMetrics["subscriptions"] {
+  const names = [...new Set(records.map((record) => record.subscription))].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return names.map((subscription) => {
+    const its = records.filter((record) => record.subscription === subscription);
+    return { subscription, cost: costOf(its).usd, weeklyLimit: lastWeeklyLimitOf(its) };
+  });
 }
 
 /**
@@ -971,7 +1007,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     const leftOut = figure.thisWeek.unknownCost;
     if (leftOut > 0) lines.push(`${runsWithUnknownCost(leftOut)} left out of ${name}.`, "");
   }
-  lines.push(subscriptionUsage(weeklyLimit, timeZone), "");
+  lines.push(...subscriptionUsageLines(weeklyLimit, summary.subscriptions, timeZone), "");
   lines.push(...scoresLines(summary.scores, summary.scoringCost));
   lines.push(...heldLines(summary.repos));
   for (const repo of summary.repos) {
@@ -1136,15 +1172,34 @@ function duration(ms: number): string {
   return `${Math.floor(hours / 24)} days`;
 }
 
-function subscriptionUsage({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading | null>, timeZone: string): string {
+/**
+ * How close the Subscriptions came to their weekly limits: today's one line
+ * for a week on one Subscription (or none), else a line for each, with its cost.
+ */
+function subscriptionUsageLines(
+  weeklyLimit: WeekOverWeek<RateLimitReading | null>,
+  subscriptions: readonly SubscriptionUsage[],
+  timeZone: string,
+): string[] {
+  if (subscriptions.length < 2) return [`Subscription usage: ${limitReading(weeklyLimit, timeZone)}`];
+  return [
+    "Subscription usage:",
+    "",
+    ...subscriptions.map(
+      ({ subscription, cost, weeklyLimit: reading }) => `- ${subscription}: ${dollars(cost)} API-equivalent cost, ${limitReading(reading, timeZone)}`,
+    ),
+  ];
+}
+
+/** A weekly-limit reading this week, when it resets, and last week's beside it. */
+function limitReading({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading | null>, timeZone: string): string {
   const share = (reading: RateLimitReading | null) =>
     reading === null || reading.utilization === null ? null : `${Math.round(reading.utilization * 100)}%`;
   const now = share(thisWeek);
   const before = share(lastWeek);
   const resets =
     thisWeek === null || thisWeek.resetsAt === null ? "" : `, resetting ${localTime(thisWeek.resetsAt * 1000, timeZone)} (${timeZone})`;
-  const usage =
-    now === null ? "Subscription usage: no weekly-limit reading this week." : `Subscription usage: ${now} of the weekly limit${resets}.`;
+  const usage = now === null ? "no weekly-limit reading this week." : `${now} of the weekly limit${resets}.`;
   return before === null ? usage : `${usage} Last week: ${before}.`;
 }
 

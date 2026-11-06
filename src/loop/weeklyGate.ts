@@ -5,6 +5,9 @@
 import { AUDIT_DAYS, type AuditDay } from "../kit/config.ts";
 import { scheduledTick } from "./kitIssues.ts";
 import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
+import { readable } from "./readable.ts";
+import { resumingHeldRuns } from "./resume.ts";
+import { rotationIsOn } from "./subscriptions.ts";
 import type { Action, AuditIssueSnapshot, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
 
 export const DAY = 24 * 60 * 60 * 1000;
@@ -16,12 +19,14 @@ const FAILED_RUNS_A_WEEK = 2;
 export type TickGate = (now: string, snapshot: Snapshot, config: KitConfig) => Plan;
 
 /**
- * The scheduled tick with these gates: closes the weekly-limit issue after
- * its reset, as scheduledTick does, alongside each gate's plan.
+ * The scheduled tick with these gates: closes each weekly-limit issue after
+ * its reset, as scheduledTick does, and resumes held runs then, alongside
+ * each gate's plan.
  */
 export function scheduledTickWith(gates: readonly TickGate[], now: string, snapshot: Snapshot, config: KitConfig): Plan {
-  const tick = scheduledTick(now, snapshot);
-  // The weekly-limit issue this tick closes after its reset no longer holds a gate back.
+  // With rotation on, a weekly-limit issue it closes resumes the held runs.
+  const tick = resumingHeldRuns(scheduledTick(now, snapshot, config), snapshot, config);
+  // A weekly-limit issue this tick closes after its reset no longer holds a gate back.
   const closing = actionsOf(tick).flatMap((action) => (action.kind === "close" ? [action.issue] : []));
   const kitIssues = snapshot.kitIssues.filter((issue) => !closing.includes(issue.number));
   return gates.reduce((plan, gate) => alongside(plan, gate(now, { ...snapshot, kitIssues }, config)), tick);
@@ -66,8 +71,9 @@ export interface WeeklyIssue {
  * nothing here holds it back. It waits for the day's 00:00 UTC, and then
  * opens nothing once one of its issues this week didn't fail, while one is
  * open (pending, filled, or not yet closed by the Operator), while the
- * weekly-limit issue is open, or after two failed this week. `issues` are
- * the gate's own, newest first, and `name` is what it opens, such as "Audit".
+ * weekly-limit issue is open with rotation off, or after two failed this
+ * week. `issues` are the gate's own, newest first, and `name` is what it
+ * opens, such as "Audit".
  */
 export function heldBack(
   name: string,
@@ -75,6 +81,7 @@ export function heldBack(
   issues: readonly WeeklyIssue[],
   now: string,
   kitIssues: readonly KitIssueSnapshot[],
+  config: Pick<KitConfig, "subscriptions">,
 ): string | null {
   const week = weekStart(now);
   const due = week + AUDIT_DAYS.indexOf(day) * DAY;
@@ -85,7 +92,9 @@ export function heldBack(
   if (done !== undefined) return `#${done.number} is this week's ${name}`;
   const open = issues.find((issue) => issue.open);
   if (open !== undefined) return `${name} #${open.number} is still open`;
-  const limit = kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
+  // With rotation on it opens anyway: its run starts on a free Subscription,
+  // or is held on the pending issue while none is.
+  const limit = rotationIsOn(config) ? undefined : kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
   if (limit !== undefined) return `The weekly usage limit is reached, as #${limit.number} says`;
   const failed = thisWeek.filter((issue) => issue.failed).reverse();
   if (failed.length >= FAILED_RUNS_A_WEEK) {
@@ -100,12 +109,6 @@ export function weekStart(now: string): number {
   const at = new Date(now);
   const sinceMonday = (at.getUTCDay() + 6) % 7;
   return Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()) - sinceMonday * DAY;
-}
-
-/** Such as "2026-11-08 00:00 UTC". */
-export function readable(time: number): string {
-  const at = new Date(time).toISOString();
-  return `${at.slice(0, 10)} ${at.slice(11, 16)} UTC`;
 }
 
 /** Such as "2026-11-02". */

@@ -2,7 +2,7 @@
 // terminal, so it's run here as they'd run it: with `gh`, `op` and the browser
 // stubbed, and their answers piped in.
 import { spawnSync } from "node:child_process";
-import { chmod, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
@@ -20,8 +20,11 @@ appendFileSync(process.env.STUB_DIR + "/op.log", JSON.stringify({
 }) + "\\n");
 if (args[0] === "item" && args[1] === "get") {
   const items = JSON.parse(process.env.STUB_OP_ITEMS);
-  process.exit(items.includes(flag("--vault") + "/" + args[2]) ? 0 : 1);
+  const found = items.includes(flag("--vault") + "/" + args[2]);
+  if (found && flag("--format") === "json") process.stdout.write(JSON.stringify({ id: "id of " + args[2], title: args[2] }));
+  process.exit(found ? 0 : 1);
 }
+if (args[0] === "item" && args[1] === "create" && process.env.STUB_OP_CREATE_FAILS === "1") process.exit(1);
 `;
 
 const FAKE_GH = `#!/bin/sh
@@ -77,13 +80,18 @@ async function linesOf(path: string): Promise<string[]> {
 /**
  * Walks the wizard with 1Password holding `items`, answering `answers` in turn
  * and then nothing, which every stage after the Sentry token's takes as Enter or No.
+ * `kitConfig` is the checkout's .fabrik/config.json, when it has one.
  */
-async function walk(items: string[], answers: string[]): Promise<Walk> {
+async function walk(items: string[], answers: string[], kitConfig?: string, { createFails = false } = {}): Promise<Walk> {
   const bin = await tempDir("wizard-bin");
   await stub(bin, "op", FAKE_OP);
   await stub(bin, "gh", FAKE_GH);
   await stub(bin, "wslview", FAKE_BROWSER);
   const checkout = await tempDir("wizard-checkout");
+  if (kitConfig !== undefined) {
+    await mkdir(join(checkout, ".fabrik"));
+    await writeFile(join(checkout, ".fabrik", "config.json"), kitConfig);
+  }
   const run = spawnSync("bash", [WIZARD], {
     cwd: checkout,
     input: answers.map((a) => `${a}\n`).join(""),
@@ -94,6 +102,7 @@ async function walk(items: string[], answers: string[]): Promise<Walk> {
       PATH: `${bin}:${process.env["PATH"] ?? ""}`,
       STUB_DIR: bin,
       STUB_OP_ITEMS: JSON.stringify(items),
+      STUB_OP_CREATE_FAILS: createFails ? "1" : "0",
     },
   });
   return {
@@ -200,5 +209,98 @@ describe("The setup wizard's Sentry token stage", () => {
         },
       },
     ]);
+  });
+});
+
+describe("The setup wizard's second Subscription stage", () => {
+  /** Past the Sentry stage, skipping it, to the second Subscription's opt-in. */
+  const TO_THE_SECOND_SUBSCRIPTION = [...TO_THE_SENTRY_STAGE, "n", ""];
+  const ADDING_IT = [
+    ...TO_THE_SECOND_SUBSCRIPTION,
+    "y", // add a second Subscription
+    "", // the second account exists
+    "sk-ant-oat01-second", // its token
+    "", // usage credits are off on every account
+  ];
+  const BOTH_LISTED = '{ "subscriptions": ["Claude token", "Claude token 2"] }\n';
+
+  it("walks through the second account, `claude setup-token`, usage credits off on every account and the Kit config list", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT);
+
+    expect(w.stdout).toContain("Create a second Claude account");
+    expect(w.stdout).toContain("run: claude setup-token");
+    expect(w.stdout).toContain("signed in as the second account");
+    expect(w.opened).toContain("https://claude.ai/settings/usage");
+    expect(w.stdout).toContain("turn usage credits off on every account, the first one included");
+    expect(w.stdout).toContain('"subscriptions": ["Claude token", "Claude token 2"]');
+  });
+
+  it("stores the second token as the 'Claude token 2' API Credential, with its expiry date, in the 'Fabrik' vault", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT);
+
+    expect(w.status).toBe(0);
+    expect(created(w)).toEqual([
+      {
+        vault: "Fabrik",
+        item: {
+          title: "Claude token 2",
+          category: "API_CREDENTIAL",
+          fields: [
+            { id: "credential", type: "CONCEALED", label: "credential", value: "sk-ant-oat01-second" },
+            { id: "expires", type: "DATE", label: "expires", value: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) as unknown },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("leaves listing it in the Kit config to do by hand until .fabrik/config.json lists it", async () => {
+    const unlisted = await walk(THE_APP_AND_CLAUDE, ADDING_IT);
+    const listed = await walk(THE_APP_AND_CLAUDE, ADDING_IT, BOTH_LISTED);
+
+    expect(unlisted.stdout).toMatch(/still to do by hand:\n.*"Claude token 2" in subscriptions in \.fabrik\/config\.json/);
+    expect(listed.stdout).toContain(".fabrik/config.json lists both Subscriptions.");
+    expect(listed.stdout).not.toContain("still to do by hand");
+  });
+
+  it("is skipped unless the Operator asks for a second Subscription, which still finishes setup", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SECOND_SUBSCRIPTION);
+
+    expect(w.status).toBe(0);
+    expect(created(w)).toEqual([]);
+    expect(w.stdout).not.toContain("Create a second Claude account");
+    expect(w.stdout).toContain("Setup complete");
+  });
+
+  const REPLACING_IT = [...TO_THE_SECOND_SUBSCRIPTION, "y", "sk-ant-oat01-new", ""];
+
+  it("replaces the second token by storing the new one first, then archiving the old item by its id", async () => {
+    const w = await walk([...THE_APP_AND_CLAUDE, "Fabrik/Claude token 2"], REPLACING_IT, BOTH_LISTED);
+
+    expect(w.status).toBe(0);
+    const writes = w.op.filter((c) => c.args[0] === "item" && (c.args[1] === "create" || c.args[1] === "delete"));
+    expect(writes.map((c) => c.args.slice(0, 3))).toEqual([
+      ["item", "create", "--vault"],
+      ["item", "delete", "id of Claude token 2"],
+    ]);
+    expect(deleted(w)).toEqual([["item", "delete", "id of Claude token 2", "--vault", "Fabrik", "--archive"]]);
+  });
+
+  it("leaves the old second token in place when storing the new one fails", async () => {
+    const w = await walk([...THE_APP_AND_CLAUDE, "Fabrik/Claude token 2"], REPLACING_IT, BOTH_LISTED, { createFails: true });
+
+    expect(w.status).not.toBe(0);
+    expect(deleted(w)).toEqual([]);
+  });
+
+  it("keeps the second token 1Password already holds, and still checks usage credits and the Kit config list", async () => {
+    const w = await walk([...THE_APP_AND_CLAUDE, "Fabrik/Claude token 2"], [...TO_THE_SECOND_SUBSCRIPTION, "n"], BOTH_LISTED);
+
+    expect(w.status).toBe(0);
+    expect(created(w)).toEqual([]);
+    expect(deleted(w)).toEqual([]);
+    expect(w.stdout).toContain("Keeping the current second token.");
+    expect(w.stdout).toContain("turn usage credits off on every account, the first one included");
+    expect(w.stdout).toContain(".fabrik/config.json lists both Subscriptions.");
   });
 });

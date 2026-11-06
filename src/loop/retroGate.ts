@@ -2,15 +2,17 @@
 // week's pending Retro, whose opening starts the Retro's run.
 import { RETRO_LABEL } from "./labels.ts";
 import { RETRO_PENDING_MARKER, retroMarker } from "./markers.ts";
+import { readable } from "./readable.ts";
 import { retrosIn, retroWindowStart } from "./retro.ts";
 import type { Action, KitConfig, Plan, Snapshot } from "./types.ts";
-import { dateOf, heldBack, readable, scheduledTickWith, weekStart } from "./weeklyGate.ts";
+import { dateOf, heldBack, scheduledTickWith, weekStart } from "./weeklyGate.ts";
 
 /**
- * The scheduled tick with the retro gate: closes the weekly-limit issue after
- * its reset, as scheduledTick does, alongside opening a pending Retro when
- * one is due. Nothing calls it until the switch-on Ticket (#228), which runs
- * the retro gate beside the audit gate (scheduledTickWith).
+ * The scheduled tick with the retro gate: closes each weekly-limit issue
+ * after its reset, as scheduledTick does, and resumes held runs then,
+ * alongside opening a pending Retro when one is due. Nothing calls it until
+ * the switch-on Ticket (#228), which runs the retro gate beside the audit
+ * gate (scheduledTickWith).
  */
 export function scheduledTickWithRetroGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   return scheduledTickWith([retroGate], now, snapshot, config);
@@ -24,7 +26,7 @@ export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): P
   if (slice === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the retro slice the retro gate weighs" };
   }
-  const held = heldBack("Retro", day, retrosIn(slice.issues), now, snapshot.kitIssues);
+  const held = heldBack("Retro", day, retrosIn(slice.issues), now, snapshot.kitIssues, config);
   if (held !== null) return { kind: "nothing", reason: held };
   // The store's opt-in step isn't done: a Retro would have nothing to read, and isn't worth a notice (#139).
   if (!slice.storeReady) return { kind: "nothing", reason: "The fabrik-runs store isn't ready: the Fabrik App isn't on it, or it isn't private" };

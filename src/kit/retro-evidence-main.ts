@@ -23,10 +23,8 @@ import { retroMarksIn } from "../loop/markers.ts";
 import { retroWindowEnd } from "../loop/retro.ts";
 import { resolveKitConfig } from "./config.ts";
 import { type EvidenceBundle, evidenceBundle, RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
-import type { RunRecord } from "./runRecord.ts";
 import { RUN_STORE_REPO, storeIsPrivate } from "./runStore.ts";
-import type { ScoreFile } from "./scorer.ts";
-import { readStoreFiles, readStoreTranscripts } from "./storeCheckout.ts";
+import { readStoreRunRecords, readStoreScoreFiles, readStoreTranscripts } from "./storeCheckout.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -60,8 +58,9 @@ async function main(): Promise<string> {
 
   const storeDir = required("FABRIK_STORE_DIR");
   const [records, scoreFiles, transcripts, facts, history] = await Promise.all([
-    readStoreFiles<RunRecord>(storeDir, "runs"),
-    readStoreFiles<ScoreFile>(storeDir, "scores"),
+    // A schema 1 record, written before runs were given a Subscription, reads as on the first this repo lists.
+    readStoreRunRecords(storeDir, config.config.subscriptions),
+    readStoreScoreFiles(storeDir),
     readStoreTranscripts(storeDir),
     gatherRetroFacts(product, repo, Date.now(), operator),
     gatherRetroHistory(product, repo, `${required("FABRIK_APP_SLUG")}[bot]`),

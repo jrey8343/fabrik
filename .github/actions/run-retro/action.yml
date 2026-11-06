@@ -1,14 +1,15 @@
 # Runs the Retro (#151): the Retro job, the second of a Retro run's two jobs,
 # shaped like the Audit job. It holds no GitHub write credential (ADR-0002):
 # only the read-only GITHUB_TOKEN, which prepare-agent reads the pending Retro
-# with, and the Claude token, loaded through the agent service account
-# (ADR-0004). The agent gets neither a GitHub token nor `gh` access. It checks
-# out the Product repo's default branch read-only, with its full history and
-# no credential left behind, and runs none of its code. It takes the evidence
-# job's bundle (fabrik-retro-evidence), and the agent runner
-# (src/agent/run.ts retro) builds the Retro's prompt from it and from the
-# Kit's role prompts and rubrics in this Kit checkout. prepare-agent installs
-# the Base skills alone for it (ADR-0008).
+# with, and the Claude token of the Subscription the Kit job chose, loaded
+# through the agent service account (ADR-0004). The agent gets neither a
+# GitHub token nor `gh` access. It checks out the Product repo's default
+# branch read-only, with its full history and no credential left behind, and
+# runs none of its code. It takes the evidence job's bundle
+# (fabrik-retro-evidence), and the agent runner (src/agent/run.ts retro)
+# builds the Retro's prompt from it and from the Kit's role prompts and
+# rubrics in this Kit checkout. prepare-agent installs the Base skills alone
+# for it (ADR-0008).
 #
 # It leaves its result (fabrik-agent-result) or its failure report
 # (fabrik-agent-failure) for the push job, and keeps its transcript as
@@ -24,6 +25,7 @@
 #       github-token: ${{ github.token }}
 #       model: ${{ needs.kit.outputs.model }}
 #       effort: ${{ needs.kit.outputs.effort }}
+#       subscription: ${{ needs.kit.outputs.subscription }}
 # Its outputs are for the job to pass out, as every agent job does, for the
 # push job and the Run record.
 name: Run the Retro
@@ -44,6 +46,9 @@ inputs:
     description: The effort the Kit job's plan chose (needs.kit.outputs.effort); empty for roles.retro's own.
     required: false
     default: ""
+  subscription:
+    description: The Subscription whose Claude token the Retro runs on, the Fabrik vault item name the Kit job chose (needs.kit.outputs.subscription).
+    required: true
 
 outputs:
   secrets-step:
@@ -98,7 +103,7 @@ runs:
         export-env: false
       env:
         OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-agent-token }}
-        CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+        CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ inputs.subscription }}/credential
 
     - name: Run the Retro
       id: agent

@@ -8,9 +8,10 @@ import type { Action, KitConfig, Plan, Snapshot } from "./types.ts";
 import { dateOf, heldBack, scheduledTickWith, weekStart } from "./weeklyGate.ts";
 
 /**
- * The scheduled tick with the audit gate: closes the weekly-limit issue after
- * its reset, as scheduledTick does, alongside opening a pending Audit when
- * one is due. The scheduled-tick rule calls it on every tick.
+ * The scheduled tick with the audit gate: closes each weekly-limit issue
+ * after its reset, as scheduledTick does, and resumes held runs then,
+ * alongside opening a pending Audit when one is due. The scheduled-tick rule
+ * calls it on every tick.
  */
 export function scheduledTickWithAuditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   return scheduledTickWith([auditGate], now, snapshot, config);
@@ -24,7 +25,7 @@ export function auditGate(now: string, snapshot: Snapshot, config: KitConfig): P
   if (slice === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the audit slice the audit gate weighs" };
   }
-  const held = heldBack("Audit", day, auditsIn(slice.issues), now, snapshot.kitIssues);
+  const held = heldBack("Audit", day, auditsIn(slice.issues), now, snapshot.kitIssues, config);
   if (held !== null) return { kind: "nothing", reason: held };
 
   const { head } = slice;

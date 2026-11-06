@@ -266,7 +266,7 @@ describe("agent:design", () => {
       kind: "act",
       actions: [
         { kind: "remove-label", issue: 7, label: "agent:design" },
-        { kind: "start-agent-run", role: "design", issue: 7, model, effort, timeoutMinutes },
+        { kind: "start-agent-run", role: "design", issue: 7, model, effort, timeoutMinutes, subscription: "Claude token" },
       ],
     });
   });

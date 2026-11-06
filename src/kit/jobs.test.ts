@@ -31,6 +31,22 @@ describe("The Kit job's routing", () => {
     });
   });
 
+  // As for every agent run (#152): the Retro job loads the chosen Subscription's Claude token.
+  it("passes out the Subscription a Retro run is given and whether rotation is on, for the Retro job's Claude token", () => {
+    const rotating = kitConfig({ ...config, subscriptions: ["Claude token", "Claude token 2"] });
+    const retro = anIssue({ number: 120, byApp: true, labels: ["fabrik:retro"], body: retroBody(RETRO_WINDOW_END, "pending") });
+    const firstUsedUp = {
+      number: 40,
+      labels: ["fabrik:weekly-limit"],
+      body: "<!-- fabrik:subscription Claude token -->\n<!-- fabrik:resets-at 2026-11-09T04:00:00.000Z -->",
+      comments: [],
+    };
+
+    const plan = planFor({ kind: "issue-opened", issue: 120 }, snapshotOf(retro, { kitIssues: [firstUsedUp] }), rotating);
+
+    expect(kitJobOutputs(plan, null, rotating)).toMatchObject({ route: "retro", subscription: "Claude token 2", rotation: "true" });
+  });
+
   it("passes out roles.retro's timeout whatever it routes to, as it does every role's", () => {
     const outputs = kitJobOutputs(null, null, kitConfig());
 

@@ -9,10 +9,10 @@ import type { DesignQueueIssue, DesignQueueSnapshot, KitConfig, Plan } from "./t
  * free slots: re-designs first, then oldest `needs-design` first. A held issue is left exactly as it
  * is: no comment, no label, no mention.
  */
-export function checkDesignQueue(snapshot: DesignQueueSnapshot, config: KitConfig): Plan {
+export function checkDesignQueue(snapshot: DesignQueueSnapshot, config: KitConfig, held: readonly number[] = []): Plan {
   const cap = config.caps.designSessions;
-  const holding = holders(snapshot).sort((a, b) => a - b);
-  const queue = waiting(snapshot).map((issue) => issue.number);
+  const holding = holders(snapshot, held).sort((a, b) => a - b);
+  const queue = waiting(snapshot, held).map((issue) => issue.number);
   if (queue.length === 0) {
     return { kind: "nothing", reason: "No needs-design issue is waiting for a Design session slot" };
   }
@@ -50,17 +50,17 @@ function list(numbers: readonly number[]): string {
 }
 
 /** The issues holding a Design session slot, by number. */
-function holders(snapshot: DesignQueueSnapshot): number[] {
-  return snapshot.issues.filter((issue) => holdsSlot(issue, snapshot)).map((issue) => issue.number);
+function holders(snapshot: DesignQueueSnapshot, held: readonly number[]): number[] {
+  return snapshot.issues.filter((issue) => holdsSlot(issue, snapshot, held)).map((issue) => issue.number);
 }
 
 /**
  * The issues waiting for a slot, in the order they start: re-designs first,
  * then oldest `needs-design` first, then by number.
  */
-function waiting(snapshot: DesignQueueSnapshot): DesignQueueIssue[] {
+function waiting(snapshot: DesignQueueSnapshot, held: readonly number[]): DesignQueueIssue[] {
   return snapshot.issues
-    .filter((issue) => !holdsSlot(issue, snapshot))
+    .filter((issue) => !holdsSlot(issue, snapshot, held))
     .sort(
       (a, b) =>
         Number(b.redesign) - Number(a.redesign) ||
@@ -74,11 +74,14 @@ function waiting(snapshot: DesignQueueSnapshot): DesignQueueIssue[] {
  * doesn't is waiting. A session holds its slot from its first turn until it
  * ends: once the queue check gives it agent:design, while a turn is in
  * progress, once the Kit has posted a round in it, and after a turn fails,
- * whose failure notice is the Operator's move.
+ * whose failure notice is the Operator's move. A turn held while every
+ * Subscription is used up (`held`, src/loop/heldRun.ts) keeps its slot too,
+ * though its agent:design came off, until the scheduled tick resumes it.
  */
-export function holdsSlot(issue: DesignQueueIssue, snapshot: DesignQueueSnapshot): boolean {
+export function holdsSlot(issue: DesignQueueIssue, snapshot: DesignQueueSnapshot, held: readonly number[] = []): boolean {
   return (
     issue.designRounds > 0 ||
+    held.includes(issue.number) ||
     issue.turnFailed ||
     issue.labels.includes(DESIGN_LABEL) ||
     snapshot.designTurnsInProgress.includes(issue.number)

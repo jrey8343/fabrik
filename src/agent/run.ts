@@ -40,6 +40,7 @@ import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
 import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
+import { rotationIsOn } from "../loop/subscriptions.ts";
 import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
 import { type AuditOutput, readAuditOutput } from "../loop/auditOutput.ts";
@@ -288,7 +289,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   setAgentEnv(claudeArgs(role.model, role.effort));
 
   const abort = new AbortController();
-  const watch = streamWatch(join(outDir, TRANSCRIPT_FILE), abort);
+  // With rotation on, a run that shows overage is stopped, so no Subscription spends usage credits.
+  const watch = streamWatch(join(outDir, TRANSCRIPT_FILE), abort, { rotation: rotationIsOn(config) });
   const timeoutMs = role.timeoutMinutes * 60_000;
 
   try {

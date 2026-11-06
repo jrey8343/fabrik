@@ -8,6 +8,9 @@ import { readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readTranscriptGzip } from "../agent/transcript.ts";
+import type { KitConfig } from "./config.ts";
+import { readRunRecord, type RunRecord } from "./runRecord.ts";
+import type { ScoreFile } from "./scorer.ts";
 
 /** Every path under one of the checkout's directories ending in `suffix`, as a path in the store: none when the directory isn't there. */
 async function pathsIn(storeDir: string, directory: string, suffix: string): Promise<string[]> {
@@ -20,11 +23,40 @@ async function pathsIn(storeDir: string, directory: string, suffix: string): Pro
   }
 }
 
-/** Every schema 1 file under `runs/` or `scores/`, by its path in the store, whatever repo or month. */
-export async function readStoreFiles<T extends { readonly schema: number }>(storeDir: string, directory: "runs" | "scores"): Promise<Record<string, T>> {
+/** Every file under `runs/` or `scores/`, parsed, by its path in the store, whatever repo or month. */
+async function readStoreFiles(storeDir: string, directory: "runs" | "scores"): Promise<[string, unknown][]> {
   const paths = await pathsIn(storeDir, directory, ".json");
-  const files = await Promise.all(paths.map(async (path) => [path, JSON.parse(await readFile(join(storeDir, path), "utf8")) as T] as const));
-  return Object.fromEntries(files.filter(([, file]) => file.schema === 1));
+  return Promise.all(paths.map(async (path): Promise<[string, unknown]> => [path, JSON.parse(await readFile(join(storeDir, path), "utf8"))]));
+}
+
+/**
+ * Every Run record under `runs/`, by its path in the store, at the current
+ * schema: a schema 1 record, which names no Subscription, as being on the
+ * first of `subscriptions` (readRunRecord). A file of a schema the Kit
+ * doesn't know is left out.
+ */
+export async function readStoreRunRecords(
+  storeDir: string,
+  subscriptions: KitConfig["subscriptions"],
+): Promise<Record<string, RunRecord>> {
+  const files = await readStoreFiles(storeDir, "runs");
+  return Object.fromEntries(
+    files.flatMap(([path, file]): [string, RunRecord][] => {
+      const record = readRunRecord(file, subscriptions);
+      return record === null ? [] : [[path, record]];
+    }),
+  );
+}
+
+/** Every schema 1 score file under `scores/`, by its path in the store. */
+export async function readStoreScoreFiles(storeDir: string): Promise<Record<string, ScoreFile>> {
+  const files = await readStoreFiles(storeDir, "scores");
+  return Object.fromEntries(
+    files.filter((entry): entry is [string, ScoreFile] => {
+      const [, file] = entry;
+      return typeof file === "object" && file !== null && (file as { schema?: unknown }).schema === 1;
+    }),
+  );
 }
 
 /**

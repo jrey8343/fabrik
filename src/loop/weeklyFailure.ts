@@ -4,9 +4,11 @@
 // a Ticket's failure there's no trigger label to re-add and nobody to tell,
 // unless the failure stalls the whole repo.
 import { isPendingAudit } from "./audit.ts";
+import { RUN_NAMES } from "./heldRun.ts";
 import { repoWideNotice } from "./kitIssues.ts";
 import { AUDIT_FAILED_MARKER, auditMarker, auditMarksIn, RETRO_FAILED_MARKER, retroMarker, retroMarksIn } from "./markers.ts";
 import { isPendingRetro } from "./retro.ts";
+import type { RanOn } from "./subscriptions.ts";
 import type { InfrastructureFailure, IssueContext, Plan } from "./types.ts";
 
 /** How an Auditor run or a Retro run failed. */
@@ -17,6 +19,12 @@ export interface WeeklyRunFailure {
   readonly runUrl: string;
   /** For the weekly limit, when it resets, if known. */
   readonly resetsAt: string | null;
+  /**
+   * The Subscription it ran on, and whether rotation is on, for the repo-wide
+   * notice; absent when the run's own reply failed it, which stalls no other
+   * run.
+   */
+  readonly ranOn?: RanOn;
 }
 
 /**
@@ -33,7 +41,7 @@ export function failAudit(context: IssueContext, run: WeeklyRunFailure): Plan {
     pending: isPendingAudit(context.issue),
     name: "Audit",
     run: "The Auditor's run",
-    stalled: "The Audit run",
+    stalled: `The ${RUN_NAMES.audit} run`,
     markers: [...(commit === null ? [] : [auditMarker(commit)]), AUDIT_FAILED_MARKER],
   });
 }
@@ -53,7 +61,7 @@ export function failRetro(context: IssueContext, run: WeeklyRunFailure): Plan {
     pending: isPendingRetro(context.issue),
     name: "Retro",
     run: "The Retro's run",
-    stalled: "The Retro run",
+    stalled: `The ${RUN_NAMES.retro} run`,
     markers: [...(windowEnd === null ? [] : [retroMarker(windowEnd)]), RETRO_FAILED_MARKER],
   });
 }
@@ -72,12 +80,19 @@ interface PendingIssue {
   readonly markers: readonly string[];
 }
 
-function failPending(context: IssueContext, { failure, how, runUrl, resetsAt }: WeeklyRunFailure, pending: PendingIssue): Plan {
+function failPending(
+  context: IssueContext,
+  { failure, how, runUrl, resetsAt, ranOn }: WeeklyRunFailure,
+  pending: PendingIssue,
+): Plan {
   const { issue } = context;
   if (!pending.pending) {
     return { kind: "nothing", reason: `#${issue.number} is no longer a pending ${pending.name}, so its failed run changes nothing` };
   }
-  const repoWide = repoWideNotice(failure, context, { run: `${pending.stalled} on #${issue.number}`, runUrl, resetsAt });
+  const repoWide =
+    ranOn === undefined
+      ? null
+      : repoWideNotice(failure, context, { run: `${pending.stalled} on #${issue.number}`, runUrl, resetsAt, ...ranOn });
   return {
     kind: "act",
     actions: [

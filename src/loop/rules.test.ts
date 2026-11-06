@@ -362,6 +362,7 @@ describe("Starting Triage", () => {
           model: "claude-opus-5-5",
           effort: null,
           timeoutMinutes: 10,
+          subscription: "Claude token",
         },
       ],
     });

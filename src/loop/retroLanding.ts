@@ -8,11 +8,11 @@ import { newIssueUrl } from "./followUps.ts";
 import { READY_FOR_HUMAN } from "./labels.ts";
 import { FROM_AUDIT_LINE, FROM_PULL_REQUEST_LINE, FROM_RETRO_LINE, fencedRunsOf, fromRetroLine, retroMarker, retroMarksIn } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
+import { readable } from "./readable.ts";
 import { isPendingRetro } from "./retro.ts";
 import { LOOSENING_STREAK_MINIMUM, type LooseningProposal, parseRetroOutput, type ProposalDirection, type ProposalKind, type RetroProposal, type Streak } from "./retroOutput.ts";
 import type { Action, IssueContext, LoopEvent, Plan, RetroEvidence } from "./types.ts";
 import { failRetro } from "./weeklyFailure.ts";
-import { readable } from "./weeklyGate.ts";
 
 type RetroFinished = Extract<LoopEvent, { kind: "retro-run-finished" }>;
 
