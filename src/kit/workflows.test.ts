@@ -1169,6 +1169,20 @@ describe("The Subscription each agent job runs on", () => {
     },
   );
 
+  // The Retro job loads its token in its action, so the job's own text names none.
+  it("a Retro run loads one Claude token: the Kit job's Subscription's, which its Retro job passes in, and its evidence job none", () => {
+    const runRetro = readFileSync(new URL(".github/actions/run-retro/action.yml", root), "utf8");
+    const retro = jobIn(loop, "retro");
+
+    expect(stepsOf(retro).find((step) => step.includes("uses: ./kit/.github/actions/run-retro"))).toContain(
+      "subscription: ${{ needs.kit.outputs.subscription }}",
+    );
+    expect(claudeTokensIn(retro)).toEqual([]);
+    expect(runRetro).toMatch(/\n  subscription:\n\s+description: .*\n\s+required: true\n/);
+    expect(claudeTokensIn(runRetro)).toEqual(["op://Fabrik/${{ inputs.subscription }}/credential"]);
+    expect(claudeTokensIn(jobIn(loop, RETRO_EVIDENCE_JOB))).toEqual([]);
+  });
+
   it("the judge loads one Claude token: the Kit job's Subscription's, which its Score job passes in", () => {
     expect(jobIn(loop, "score")).toContain("subscription: ${{ needs.kit.outputs.subscription }}");
     expect(judge).toMatch(/\n  subscription:\n\s+description: .*\n\s+required: true\n/);

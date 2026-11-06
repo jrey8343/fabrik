@@ -885,6 +885,8 @@ jobs:
         with:
           op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
           github-token: ${{ github.token }}
+          # The Subscription whose Claude token the Retro runs on, chosen by the Kit job.
+          subscription: ${{ needs.kit.outputs.subscription }}
           model: ${{ needs.kit.outputs.model }}
           effort: ${{ needs.kit.outputs.effort }}
 
