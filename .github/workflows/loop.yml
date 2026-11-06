@@ -513,11 +513,12 @@ jobs:
       # result, never the job's: continue-on-error, and its own timeout, the
       # Kit's CAPTURE_TIMEOUT_MINUTES (src/evidence/capture.ts; a test holds the
       # two together). No secret reaches it, nor the build and server it runs.
-      # Gated off, with both uploads below, until Visual evidence's switch-on
-      # Ticket drops each `false && `.
+      # Without a ui block it captures nothing and passes out no result, so
+      # neither upload below runs; the Kit job's step summary says Visual
+      # evidence is off (src/kit/kitJob.ts).
       - name: Capture UI evidence
         id: capture
-        if: false && success()
+        if: success()
         continue-on-error: true
         timeout-minutes: 20
         working-directory: product
@@ -555,7 +556,7 @@ jobs:
       # continue-on-error: keeping evidence must never fail a run that passed.
       - name: Keep the UI evidence
         id: evidence
-        if: false && steps.capture.outputs.ui-evidence != ''
+        if: steps.capture.outputs.ui-evidence != ''
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -569,7 +570,7 @@ jobs:
       # screenshot leaves none.
       - name: Keep the UI evidence gallery
         id: gallery
-        if: false && steps.capture.outputs.ui-evidence != ''
+        if: steps.capture.outputs.ui-evidence != ''
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

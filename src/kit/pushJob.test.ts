@@ -85,7 +85,7 @@ describe("What the push job applies", () => {
       expect(input).toMatchObject({ kind: "agent-result", capture: { result: captured, artifact: 9202, galleryArtifact: 9201 } });
     });
 
-    it("is none while capture is gated off, the Implement job passing out empty outputs", () => {
+    it("is none when capture recorded nothing, as in a repo without a ui block, the Implement job passing out empty outputs", () => {
       const input = withOutputs({ "ui-evidence": "", "ui-evidence-artifact": "", "ui-gallery-artifact": "" });
 
       expect(input).toMatchObject({ kind: "agent-result", capture: { result: null, artifact: null, galleryArtifact: null } });
