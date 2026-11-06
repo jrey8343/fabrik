@@ -652,7 +652,7 @@ describe("loop.yml's prototype job", () => {
 
   it("runs a Design run only when the Kit job's plan made it a prototype turn, and the design job only when it didn't", () => {
     expect(prototype()).toMatch(/\n    needs: kit\n/);
-    expect(prototype()).toMatch(/\n    if: (?:false && )?needs\.kit\.outputs\.route == 'design' && needs\.kit\.outputs\.prototype == 'true'\n/);
+    expect(prototype()).toContain("\n    if: needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype == 'true'\n");
     expect(job("design")).toContain("\n    if: needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype != 'true'\n");
   });
 
@@ -836,12 +836,10 @@ describe("loop.yml's prototype job", () => {
     expect(prototype()).toContain("base-sha: ${{ steps.base.outputs.sha }}");
   });
 
-  // Dormant until UI prototypes' switch-on Ticket (#282), which drops the gate and adds the job to the push job's needs.
-  it("is gated off until switch-on, and nothing waits on it, so V1's Design turns run as they did", () => {
+  it("is in the push job's needs, so the push job lands the prototype round or posts the failure notice once it has ended", () => {
     const needs = /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ");
 
-    expect(prototype()).toContain("\n    if: false && needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype == 'true'\n");
-    expect(needs).not.toContain(PROTOTYPE_JOB);
+    expect(needs).toContain(PROTOTYPE_JOB);
   });
 });
 
