@@ -186,6 +186,7 @@ describe("What a Design-session turn's prompt says of Prototypes", () => {
   const ui: UiConfig = { paths: ["src/pages/**"], serve: "npm run dev", url: "http://localhost:3000", beforeUrl: null, defaultRoutes: [] };
   const withUi = kitConfig({ ui });
   const switchedOn = { switchedOn: true };
+  const said = prototypeContext(withUi, 7, switchedOn).join("\n\n");
 
   it("sets out that Prototypes are available, under its own heading, for a repo with a ui block while Prototypes are switched on", () => {
     expect(prototypeContext(withUi, 7, switchedOn)[0]).toBe(`## ${PROTOTYPES_HEADING}`);
@@ -197,5 +198,16 @@ describe("What a Design-session turn's prompt says of Prototypes", () => {
 
   it("adds nothing to the prompt of a repo with a ui block while Prototypes are dormant", () => {
     expect(prototypeContext(withUi, 7)).toEqual([]);
+  });
+
+  it("lets the turn offer a Prototype in a round only when the open question is how a page looks, naming the route and the count, with a recommendation", () => {
+    expect(said).toContain("**Offer a Prototype only when the open question is how a page looks**");
+    expect(said).toContain("Never offer one for a question of logic, data or behaviour, which an ordinary round settles.");
+    expect(said).toContain("Ask it as one question of a round, naming the route and how many variants it builds, with your recommendation");
+    expect(said).toContain("Nothing is built until the Operator says yes.");
+  });
+
+  it("offers 3 variants unless the Operator asks for another count, never fewer than 2 or more than 5", () => {
+    expect(said).toContain("Offer 3 variants unless the Operator asked for another count, never fewer than 2 or more than 5.");
   });
 });

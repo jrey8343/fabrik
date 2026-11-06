@@ -5,7 +5,12 @@
 // what the inputs say of the Map cap; and, on a repo the Kit can prototype,
 // that Prototypes are available.
 import type { KitConfig } from "../kit/config.ts";
-import { PROTOTYPES_SWITCHED_ON } from "../loop/designOutput.ts";
+import {
+  PROTOTYPE_DEFAULT_VARIANTS,
+  PROTOTYPE_MIN_VARIANTS,
+  PROTOTYPE_VARIANT_CAP,
+  PROTOTYPES_SWITCHED_ON,
+} from "../loop/designOutput.ts";
 import { spelled } from "../loop/readable.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 import { MAP_INPUTS_FILE, type MapOffer } from "./inputs.ts";
@@ -73,7 +78,23 @@ export function prototypeContext(
   { switchedOn = PROTOTYPES_SWITCHED_ON }: { readonly switchedOn?: boolean } = {},
 ): string[] {
   if (!switchedOn || config.ui === null) return [];
-  return [`## ${PROTOTYPES_HEADING}`];
+  const branch = `\`prototype/${issue}\``;
+  return [
+    `## ${PROTOTYPES_HEADING}`,
+    [
+      `This Product repo has a \`ui\` block, so this session may offer a **Prototype**: throwaway variants of one route, built on the branch ${branch}, which is never merged, so the Operator can choose how a page looks by looking at it.`,
+      'A prototype turn of this session builds the variants and the Kit captures each one. Then the Kit posts a prototype round: a round numbered like the others, whose one question is "Which variant?".',
+    ].join(" "),
+    [
+      [
+        "- **Offer a Prototype only when the open question is how a page looks**: its layout, what it shows first, how its parts sit together.",
+        "Never offer one for a question of logic, data or behaviour, which an ordinary round settles.",
+        'Ask it as one question of a round, naming the route and how many variants it builds, with your recommendation, such as "Prototype the booking page (`/book`) as 3 variants first?".',
+        `Offer ${PROTOTYPE_DEFAULT_VARIANTS} variants unless the Operator asked for another count, never fewer than ${PROTOTYPE_MIN_VARIANTS} or more than ${PROTOTYPE_VARIANT_CAP}.`,
+        "Nothing is built until the Operator says yes.",
+      ].join(" "),
+    ].join("\n"),
+  ];
 }
 
 interface SentBackInput {
