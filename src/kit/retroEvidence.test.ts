@@ -308,17 +308,18 @@ describe("the evidence bundle", () => {
   // The window, unless a test says otherwise: Saturday 2026-10-31 00:00 UTC to Saturday 2026-11-07.
 
   describe("Architectural escapes", () => {
-    it("holds each escape the Operator opened in the window, with its body and the agent PRs merged in the 90 days to its end that it names", () => {
+    it("holds each escape the Operator opened in the window, with its body and the agent PRs merged in the 90 days to it that it names", () => {
       const { escapes } = evidenceBundle(
         aRetroEvidenceInput({
           facts: factsOf({
             pullRequests: [
               aMergedPullRequest("2026-11-02T00:00:00Z", { number: 50, ticket: 7, title: "Build the cart" }),
-              aMergedPullRequest("2026-09-01T00:00:00Z", { number: 51, ticket: 8, title: "Build the till" }), // 67 days before the window's end
-              aMergedPullRequest("2026-08-01T00:00:00Z", { number: 52, ticket: 9 }), // 98 days before it
+              aMergedPullRequest("2026-09-01T00:00:00Z", { number: 51, ticket: 8, title: "Build the till" }), // 63 days before #80
+              aMergedPullRequest("2026-08-01T00:00:00Z", { number: 52, ticket: 9 }), // 94 days before it
+              aMergedPullRequest("2026-08-06T00:00:00Z", { number: 53, ticket: 10, title: "Build the shelf" }), // 89 days before it, 93 before the window's end
             ],
             escapeMarkerIssues: [
-              anEscapeMarkerIssue("The cart leaks its rules.\n\n<!-- fabrik:escape strong #50 #51 #52 -->", { number: 80, createdAt: "2026-11-03T00:00:00Z" }),
+              anEscapeMarkerIssue("The cart leaks its rules.\n\n<!-- fabrik:escape strong #50 #51 #52 #53 -->", { number: 80, createdAt: "2026-11-03T00:00:00Z" }),
               anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 81, createdAt: "2026-10-30T23:59:59Z" }), // the last Retro's
               anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 82, createdAt: "2026-11-07T00:00:00Z" }), // the next Retro's
             ],
@@ -330,18 +331,19 @@ describe("the evidence bundle", () => {
           ref: "#80",
           number: 80,
           title: "Make the cart module deeper",
-          body: "The cart leaks its rules.\n\n<!-- fabrik:escape strong #50 #51 #52 -->",
+          body: "The cart leaks its rules.\n\n<!-- fabrik:escape strong #50 #51 #52 #53 -->",
           strength: "strong",
           pullRequests: [
             ["#50", "Build the cart"],
             ["#51", "Build the till"],
+            ["#53", "Build the shelf"],
           ],
         },
       ]);
     });
 
     // A Retro held back for weeks reads a window longer than the 90 days escapes count PRs over.
-    it("holds each escape opened in a window longer than 90 days, one opened before its last 90 days counted against the agent PRs merged in the 90 days to it", () => {
+    it("holds each escape opened in a window longer than 90 days, even one opened before its last 90 days, counted against the agent PRs merged in the 90 days to it", () => {
       const { window, escapes } = evidenceBundle(
         aRetroEvidenceInput({
           retros: [aPastRetro({ number: 100, body: retroBody("2026-06-01T00:00:00.000Z") }), theRetroBeingFilled("2026-11-07T00:00:00.000Z")],
@@ -362,6 +364,25 @@ describe("the evidence bundle", () => {
       expect(escapes.map(({ number, pullRequests }) => [number, pullRequests.map((pr) => pr.number)])).toEqual([
         [80, [50]],
         [70, [40]],
+      ]);
+    });
+
+    it("counts an escape in the last 90 days of a longer window against an agent PR merged in the 90 days to it, before those last 90 days", () => {
+      const { escapes } = evidenceBundle(
+        aRetroEvidenceInput({
+          retros: [aPastRetro({ number: 100, body: retroBody("2026-06-01T00:00:00.000Z") }), theRetroBeingFilled("2026-11-07T00:00:00.000Z")],
+          facts: factsOf({
+            pullRequests: [aMergedPullRequest("2026-07-20T00:00:00Z", { number: 45, ticket: 5 })], // 110 days before the window's end
+            escapeMarkerIssues: [
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #45 -->", { number: 91, createdAt: "2026-08-08T00:00:00Z" }), // 91 days before the window's end
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #45 -->", { number: 90, createdAt: "2026-08-15T00:00:00Z" }), // 84 days before it, 26 after #45
+            ],
+          }),
+        }),
+      );
+      expect(escapes.map(({ number, pullRequests }) => [number, pullRequests.map((pr) => pr.number)])).toEqual([
+        [91, [45]],
+        [90, [45]],
       ]);
     });
 

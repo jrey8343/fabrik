@@ -901,13 +901,12 @@ type Digested = (record: RunRecord) => DigestedRecordEvidence;
 type TicketOf = (number: number | null) => TicketEvidence | null;
 
 /**
- * Every escape the Operator opened in the window, each counted, as the Weekly
- * summary counts it, against the agent PRs merged in the 90 days to the
- * window's end that its marker names; or, for one opened before those 90
- * days, in a window that long, against those merged in the 90 days to it.
+ * Every escape the Operator opened in the window, each counted, by the Weekly
+ * summary's rule, against the agent PRs its marker names that merged in the
+ * 90 days to it. Counting each from itself rather than from the window's end
+ * keeps every escape's PRs however long a held-back Retro's window runs.
  */
 function escapesOf(window: Window, metrics: MetricsInput, digested: Digested, ticketOf: TicketOf): EscapeEvidence[] {
-  const last90Days = { start: window.end - ESCAPE_WINDOW_MS, end: window.end };
   return metrics.facts
     .flatMap((repo) =>
       repo.escapeMarkerIssues
@@ -915,7 +914,7 @@ function escapesOf(window: Window, metrics: MetricsInput, digested: Digested, ti
         .flatMap((issue) => {
           const at = Date.parse(issue.createdAt);
           // A window holds its start but not its end, so the 90 days to an escape end just after it.
-          const counted = at >= last90Days.start ? last90Days : { start: at + 1 - ESCAPE_WINDOW_MS, end: at + 1 };
+          const counted = { start: at + 1 - ESCAPE_WINDOW_MS, end: at + 1 };
           return escapesIn(counted, { ...metrics, facts: [{ ...repo, escapeMarkerIssues: [issue] }] });
         }),
     )
