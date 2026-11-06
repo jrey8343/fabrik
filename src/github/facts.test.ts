@@ -87,6 +87,8 @@ interface RawRepo {
   openAudits?: unknown[];
   /** The open issues with the fabrik:retro label. */
   openRetros?: unknown[];
+  /** The open issues with the wayfinder:map label. */
+  openMaps?: unknown[];
 }
 
 /** A read-only GraphQL API over `raw`, answering each facts query with one page. */
@@ -106,6 +108,10 @@ function repoWith(raw: RawRepo) {
       if (query.includes("labels: [$monitor]")) {
         expect(variables["monitor"]).toBe("fabrik:monitor");
         return answer({ repository: { issues: page(raw.monitorIssues) } });
+      }
+      if (query.includes("labels: [$map]")) {
+        expect(variables["map"]).toBe("wayfinder:map");
+        return answer({ repository: { issues: page(raw.openMaps) } });
       }
       if (query.includes("labels: [$label]")) {
         if (variables["label"] === "fabrik:audit") return answer({ repository: { issues: page(raw.openAudits) } });
@@ -518,6 +524,19 @@ describe("Gathering a Product repo's GitHub facts", () => {
       { number: 120, title: "Retro: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-07T00:00:00Z" },
       { number: 121, title: "My own retro", author: "jrey8343", createdAt: "2026-11-08T00:00:00Z" },
     ]);
+  });
+
+  it("holds the open wayfinder:map issues, whoever opened them, by number, read as the Map cap reads them", async () => {
+    const github = repoWith({
+      openMaps: [
+        { number: 30, title: "Let patients book group classes" },
+        { number: 40, title: "Move intake online" },
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(facts.openMaps).toEqual([30, 40]);
   });
 
   it("reads the default branch's commits from 97 days back, so a revert is seen across the streak table's 90 days", async () => {

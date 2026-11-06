@@ -2,15 +2,16 @@
 // a GitHub facts snapshot per Product repo, the Operator and now, the one issue
 // filed for the week that just ended, or skip in a quiet week. Pure, no I/O, no
 // model call.
-import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { researchRunFailedIn } from "../github/threads.ts";
+import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DECISION_TYPES, type DecisionLabel, MAP_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, RESEARCH_LABEL } from "../loop/labels.ts";
-import { isMap, mapCapFull } from "../loop/mapCap.ts";
-import { whyNotResearchable } from "../loop/research.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
+import { mapCapFull } from "../loop/mapCap.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
+import { whyNotResearchable } from "../loop/research.ts";
 import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
+import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import {
   type ArchitecturalEscape,
   type CommentFacts,
@@ -26,7 +27,6 @@ import {
   type Window,
   within,
 } from "./retroEvidence.ts";
-import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
 import { type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
@@ -115,6 +115,8 @@ export interface GitHubFacts extends MetricFacts {
   readonly openAudits: readonly OpenAuditFacts[];
   /** The repo's open `fabrik:retro` issues, whoever opened them. */
   readonly openRetros: readonly OpenRetroFacts[];
+  /** The repo's open Maps, by number, oldest first, read as the Map cap reads them: whoever charted them. */
+  readonly openMaps: readonly number[];
 }
 
 export interface WeeklySummaryInput {
@@ -771,12 +773,12 @@ const OPERATOR_DECISION_LABELS: readonly string[] = DECISION_TYPES.filter((type)
 );
 
 /**
- * Each open Map, whoever charted it, aged from when it got `wayfinder:map`
- * (or was opened, for one labelled as it was opened), with how many of its
- * open Decisions wait on the Operator.
+ * Each open Map, read as the Map cap reads them (gatherOpenMaps), aged from
+ * when it got `wayfinder:map` (or was opened, for one labelled as it was
+ * opened), with how many of its open Decisions wait on the Operator.
  */
-function openMapsOf({ openIssues }: GitHubFacts, items: Items): WaitingItem[] {
-  return openIssues.filter(isMap).map((map) => ({
+function openMapsOf({ openIssues, openMaps }: GitHubFacts, items: Items): WaitingItem[] {
+  return openIssues.filter((issue) => openMaps.includes(issue.number)).map((map) => ({
     kind: "map",
     ...items.issue(map, lastAdded(map.labelEvents, MAP_LABEL) ?? map.createdAt),
     decisionsWaiting: openIssues.filter(
@@ -787,8 +789,9 @@ function openMapsOf({ openIssues }: GitHubFacts, items: Items): WaitingItem[] {
 
 /**
  * Each research Decision on an open Map whose last run failed, aged from the
- * Kit's failure notice: by Dispatch's own rules (whyNotResearchable,
- * researchRunFailedIn), so the summary lists just the Decisions Dispatch
+ * Kit's failure notice: by the Kit's own rules for which Decisions the
+ * Researcher may run on (whyNotResearchable) and whose last run failed
+ * (researchRunFailedIn), so the summary lists just the Decisions Dispatch
  * won't run again until the Operator re-adds agent:research.
  */
 function failedResearchOf({ openIssues }: GitHubFacts, items: Items): WaitingItem[] {
@@ -806,26 +809,23 @@ function failedResearchOf({ openIssues }: GitHubFacts, items: Items): WaitingIte
 }
 
 /** What a cap holds in the repo, or null when nothing is held. Until switch-on the Map cap holds nothing. */
-function heldIn({ designQueue, monitorIssues, openIssues }: GitHubFacts, appLogin: string, now: number, maps: boolean): Held | null {
+function heldIn({ designQueue, monitorIssues, openMaps }: GitHubFacts, appLogin: string, now: number, maps: boolean): Held | null {
   const designSessions = heldDesignSessionsOf(designQueue, now);
   const monitor = heldMonitorOf(monitorIssues, appLogin);
-  const mapCap = maps ? heldMapsOf(openIssues) : null;
+  const mapCap = maps ? heldMapsOf(openMaps) : null;
   return designSessions === null && monitor === null && mapCap === null ? null : { designSessions, monitor, maps: mapCap };
 }
 
 /**
- * The open Maps, when they fill the Map cap: by the cap's own rules (isMap,
- * mapCapFull), so the summary and the Map landing's check can't disagree.
- * Null while the cap has room, or with no Map open to name. The summary has
- * no Product's Kit config, so it holds the open Maps to the Kit's default
- * cap: a repo's cap only tightens it, so Maps that fill the default fill
- * every repo's cap too.
+ * The open Maps, when they fill the Map cap: read and counted as the cap
+ * reads and counts them (gatherOpenMaps, mapCapFull), so the summary and the
+ * Map landing's check can't disagree. Null while the cap has room, or with no
+ * Map open to name. The summary has no Product's Kit config, so it holds the
+ * open Maps to the Kit's default cap: a repo's cap only tightens it, so Maps
+ * that fill the default fill every repo's cap too.
  */
-function heldMapsOf(openIssues: readonly OpenIssueFacts[]): HeldMaps | null {
-  const open = openIssues
-    .filter(isMap)
-    .map((map) => map.number)
-    .toSorted((a, b) => a - b);
+function heldMapsOf(openMaps: readonly number[]): HeldMaps | null {
+  const open = openMaps.toSorted((a, b) => a - b);
   return open.length > 0 && mapCapFull(open, DEFAULT_KIT_CONFIG) ? { open } : null;
 }
 

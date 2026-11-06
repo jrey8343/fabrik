@@ -63,7 +63,7 @@ describe("the Weekly summary", () => {
   });
 
   it("isn't skipped in a week with no records but an open Map, once Ideas and Maps is switched on", () => {
-    const facts = [factsOf({ repo: "owner/quiet" }), factsOf({ openIssues: [anOpenIssue({ number: 30, labels: ["wayfinder:map"] })] })];
+    const facts = [factsOf({ repo: "owner/quiet" }), factsOf({ openIssues: [anOpenIssue({ number: 30, labels: ["wayfinder:map"] })], openMaps: [30] })];
     expect(weeklySummary(input({ facts }), { maps: true }).kind).toBe("summary");
     expect(weeklySummary(input({ facts }))).toEqual({ kind: "skip" });
   });
@@ -449,6 +449,7 @@ describe("the Weekly summary", () => {
             anOpenIssue({ number: 40, title: "Move intake online", labels: ["wayfinder:map"], createdAt: "2026-11-05T20:00:00Z", subIssues: [41] }),
             anOpenIssue({ number: 41, labels: ["wayfinder:task"] }),
           ],
+          openMaps: [30, 40],
         });
         expect(waiting).toEqual([
           {
@@ -497,6 +498,7 @@ describe("the Weekly summary", () => {
             // Its run never failed.
             anOpenIssue({ number: 33, labels: ["wayfinder:research"] }),
           ],
+          openMaps: [30],
         });
         expect(waiting).toEqual([
           {
@@ -525,6 +527,7 @@ describe("the Weekly summary", () => {
             anOpenIssue({ number: 3, labels: ["ready-for-agent"], subIssues: [33] }),
             failed(33),
           ],
+          openMaps: [30],
         });
         expect(waiting).toEqual([expect.objectContaining({ kind: "map", number: 30 })]);
       });
@@ -1744,6 +1747,7 @@ describe("the Weekly summary", () => {
               anOpenIssue({ number: 41, labels: ["wayfinder:task"] }),
               anOpenIssue({ number: 50, title: "Pick a CRM", labels: ["wayfinder:map"], createdAt: hoursAgo(10) }),
             ],
+            openMaps: [30, 40, 50],
           }),
         );
         expect(body).toContain(
@@ -1767,10 +1771,10 @@ describe("the Weekly summary", () => {
         anOpenIssue({ number: 31, labels: ["wayfinder:research"], comments: [aComment(`${RESEARCH_RUN_FAILED_MARKER}\nThe Research run failed.`, hoursAgo(30))] }),
         anOpenIssue({ number: 32, labels: ["wayfinder:grilling"] }),
       ];
-      const withMaps = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf({ openIssues: [readyForHuman(13, 30), ...maps] })] }));
+      const withMaps = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf({ openIssues: [readyForHuman(13, 30), ...maps], openMaps: [30] })] }));
       expect(withMaps).toMatchObject({ kind: "summary", summary: { repos: [{ waitingOnYou: [{ kind: "ready-for-human", number: 13 }], held: null }] } });
       expect(withMaps.kind === "summary" && withMaps.body).toBe(bodyOf(factsOf({ openIssues: [readyForHuman(13, 30)] })));
-      expect(weeklySummary(input({ facts: [factsOf({ openIssues: maps })] }))).toEqual({ kind: "skip" });
+      expect(weeklySummary(input({ facts: [factsOf({ openIssues: maps, openMaps: [30] })] }))).toEqual({ kind: "skip" });
     });
 
     it("collapses the 11th item onward in a repo into details", () => {
@@ -2013,10 +2017,9 @@ describe("the Weekly summary", () => {
         if (result.kind !== "summary") throw new Error("expected a summary");
         return result;
       };
-      const aMap = (number: number) => anOpenIssue({ number, labels: ["wayfinder:map"] });
 
       it("names the open Map when open Maps fill caps.maps, so the Operator knows why no Map was offered", () => {
-        const result = switchedOn(factsOf({ openIssues: [aMap(30), anOpenIssue({ number: 31, labels: ["wayfinder:grilling"] })] }));
+        const result = switchedOn(factsOf({ openMaps: [30] }));
         expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30] } });
         expect(result.body).toContain(
           ["## Held", "", "- owner/product: the Map cap is full with [#30](https://github.com/owner/product/issues/30) open, so Design sessions offer no new Map", ""].join(
@@ -2026,7 +2029,7 @@ describe("the Weekly summary", () => {
       });
 
       it("names every open Map, lowest number first, one charted by hand beyond the cap among them", () => {
-        const result = switchedOn(factsOf({ openIssues: [aMap(40), aMap(30)] }));
+        const result = switchedOn(factsOf({ openMaps: [40, 30] }));
         expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30, 40] } });
         expect(result.body).toContain(
           "- owner/product: the Map cap is full with [#30](https://github.com/owner/product/issues/30) and [#40](https://github.com/owner/product/issues/40) open, so Design sessions offer no new Map",
@@ -2036,7 +2039,7 @@ describe("the Weekly summary", () => {
       it("gives a repo whose Map cap has room no Maps line", () => {
         const result = switchedOn(
           factsOf({ repo: "owner/quiet", openIssues: [anOpenIssue({ number: 31, labels: ["wayfinder:grilling"] })] }),
-          factsOf({ repo: "owner/busy", openIssues: [aMap(30)] }),
+          factsOf({ repo: "owner/busy", openMaps: [30] }),
         );
         expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
           ["owner/quiet", null],
