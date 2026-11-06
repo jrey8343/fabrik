@@ -241,11 +241,12 @@ A Product repo's Kit config lives in `.fabrik/`. Every file is optional and ever
     "review": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 30 },
     "audit": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 45 },
     "retro": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 45 },
+    "research": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 30 },
     "dispatch": { "timeout_minutes": 10 },
     "step_up": { "model": "claude-opus-5-5", "effort": null }
   },
   "max_in_flight": 2,
-  "caps": { "design_sessions": 2, "monitor_issues": 5 },
+  "caps": { "design_sessions": 2, "monitor_issues": 5, "maps": 1 },
   "monitor": { "errors": null, "red_main": true },
   "audit": { "day": "sunday" },
   "retro": { "day": "saturday" },
