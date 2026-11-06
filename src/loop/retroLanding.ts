@@ -2,6 +2,7 @@
 // proposals against the evidence it was given and fills in the pending Retro.
 // The Kit renders every word of layout; the Retro wrote only its proposals'
 // text. The Retro stays silent: no state label, no assignee, no mention.
+import { KIT_REPO } from "../kit/caller.ts";
 import { type KitConfig, picksIn } from "../kit/config.ts";
 import { storeFileUrl } from "../kit/runStore.ts";
 import { newIssueUrl } from "./followUps.ts";
@@ -15,9 +16,6 @@ import type { Action, IssueContext, LoopEvent, Plan, RetroEvidence } from "./typ
 import { failWeekly } from "./weeklyRuns.ts";
 
 type RetroFinished = Extract<LoopEvent, { kind: "retro-run-finished" }>;
-
-/** The Kit's own repo, as owner/name, where a proposal to change the Kit is filed. A Kit constant, like the run store. */
-export const KIT_REPO = "jrey8343/fabrik";
 
 const KIT_REPO_URL = `https://github.com/${KIT_REPO}`;
 

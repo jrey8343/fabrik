@@ -7,8 +7,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { allPages, type GitHub, GitHubError } from "../github/client.ts";
 import { KIT_PROMPT_NAMES, kitPromptPath } from "../guard/trust-root.ts";
-import { KIT_REPO } from "../loop/retroLanding.ts";
 import { FULL_SHA, readSkillsLock, SKILLS_LOCK_PATH } from "../skills/lock.ts";
+import { KIT_REPO } from "./caller.ts";
 
 /** What the overlay reads of the Fabrik repo, through a read-only token. */
 export type KitReader = Pick<GitHub, "rest" | "fileText">;

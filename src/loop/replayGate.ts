@@ -5,7 +5,7 @@
 // (ADR-0001), whose claim takes it off as the run starts (src/loop/replayRun.ts).
 import { type ReplayCapacity, type ReplayStep, nextReplayStep, resultsReady } from "../kit/replay.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "../kit/runStore.ts";
-import { atOrOver, REPLAY_UTILIZATION_LIMIT } from "../kit/scorer.ts";
+import { atOrOver } from "../kit/scorer.ts";
 import { waitingForDispatch } from "./dispatch.ts";
 import { heldOf } from "./heldRun.ts";
 import { REPLAY_TRIGGER_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
@@ -61,6 +61,14 @@ export function replayRunLimitMinutes({ roles }: Pick<KitConfig, "roles">): numb
   const implement = roles.implement.timeoutMinutes;
   return kit + claim + implement + Math.max(implement, roles.review.timeoutMinutes, JUDGE_TIMEOUT_MINUTES) + record + REPLAY_QUEUE_MINUTES;
 }
+
+/**
+ * The weekly-limit utilization, from 0 to 1, at or above which no replay
+ * Ticket starts (#156), so a Replay stays in the lower half of the week's
+ * budget: a Kit constant, like the Scorers' SCORING_UTILIZATION_LIMIT in
+ * src/kit/scorer.ts, and read the same way (atOrOver).
+ */
+export const REPLAY_UTILIZATION_LIMIT = 0.5;
 
 /**
  * The spare-capacity gate: whether a replay Ticket may start now, or why

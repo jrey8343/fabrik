@@ -17,15 +17,10 @@ export const SAMPLED_SHARE = 1 / 4;
 /**
  * The weekly-limit utilization, from 0 to 1, at or above which a run isn't
  * scored, so scoring never pushes the factory into its Subscription's limit.
+ * A Replay's own limit, REPLAY_UTILIZATION_LIMIT, sits with the replay step
+ * that weighs it (src/loop/replayGate.ts).
  */
 export const SCORING_UTILIZATION_LIMIT = 0.75;
-
-/**
- * The weekly-limit utilization, from 0 to 1, at or above which no replay
- * Ticket starts (#156), so a Replay stays in the lower half of the week's
- * budget (src/loop/replayGate.ts).
- */
-export const REPLAY_UTILIZATION_LIMIT = 0.5;
 
 /**
  * A skip the scoring plan decides from the run's record, before any judge
