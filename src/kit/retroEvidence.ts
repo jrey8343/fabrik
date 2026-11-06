@@ -5,7 +5,8 @@
 // agent PRs merged in a window, each with its Ticket, Dispatch, Human touches,
 // last passing Verdict and whether it was reverted; the Verdicts on a PR; and
 // the Architectural escapes opened in a window, with what let each PR through.
-// Pure, no I/O.
+// Then the evidence bundle a Retro reads for its window (evidenceBundle), each
+// of its items carrying the ref the Retro cites it by (refsOf). Pure, no I/O.
 import { verdictsIn } from "../github/threads.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { followUpsIn } from "../loop/followUps.ts";
@@ -395,7 +396,7 @@ export interface RetroIssueFacts extends RetroIssueSnapshot {
 export interface RetroEvidenceInput {
   /** The store's Run records. */
   readonly records: readonly RunRecord[];
-  /** The Product repo's GitHub facts. */
+  /** The Product repo's GitHub facts, as the facts adapter gathers them for a Retro (gatherRetroFacts, src/github/facts.ts). */
   readonly facts: MetricFacts;
   /** The Operator's GitHub login. */
   readonly operator: string;
@@ -681,29 +682,32 @@ function operatorFeedbackOn(
   const conversation = comments
     .filter((comment) => !comment.byBot && comment.author === operator && within(window, comment.at))
     .map((comment): OperatorFeedback => ({ kind: "comment", at: comment.at, body: comment.body, inline: [] }));
-  const pushes = pushesOf(
-    commits.filter((commit) => within(window, commit.at)),
-    operator,
-  );
+  const pushes = pushesOf(commits.filter((commit) => within(window, commit.at)), operator);
   return [...requestChanges, ...reviewComments, ...conversation, ...pushes].toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
 
 /** Each run of consecutive commits the Operator made, as one push: anyone else's commit ends a run. */
 function pushesOf(commits: readonly CommitFacts[], operator: string): OperatorFeedback[] {
   const runs: CommitFacts[][] = [];
-  commits.forEach((commit, i) => {
-    if (commit.byApp || commit.author !== operator) return;
-    const previous = commits[i - 1];
-    const run = runs.at(-1);
-    if (run !== undefined && previous !== undefined && run.at(-1) === previous) run.push(commit);
-    else runs.push([commit]);
+  let inRun = false;
+  for (const commit of commits) {
+    const theirs = !commit.byApp && commit.author === operator;
+    if (theirs && inRun) runs.at(-1)?.push(commit);
+    else if (theirs) runs.push([commit]);
+    inRun = theirs;
+  }
+  return runs.flatMap((run) => {
+    const last = run.at(-1);
+    if (last === undefined) return [];
+    return [
+      {
+        kind: "push",
+        at: last.at,
+        commits: run.map(({ sha, message, at }) => ({ sha, message, at })),
+        patch: run.flatMap((commit) => (commit.patch === null ? [] : [commit.patch])).join("\n"),
+      },
+    ];
   });
-  return runs.map((run) => ({
-    kind: "push",
-    at: run.at(-1)?.at ?? "",
-    commits: run.map(({ sha, message, at }) => ({ sha, message, at })),
-    patch: run.flatMap((commit) => (commit.patch === null ? [] : [commit.patch])).join("\n"),
-  }));
 }
 
 /** The Follow-ups the Fabrik App's pass Verdicts listed on each agent PR merged in the window, read back from the Verdict comments. */
@@ -743,7 +747,7 @@ function historyOf(retros: readonly RetroIssueFacts[], { operator, fromRetroIssu
   const closed = retrosIn(retros)
     .filter((retro) => !retro.open && !retro.failed)
     .slice(0, HISTORY_DEPTH)
-    .flatMap(({ number }) => retros.filter((issue) => issue.number === number))
+    .flatMap(({ number }) => retros.find((issue) => issue.number === number) ?? [])
     .map(({ number, title, stateReason, body, comments }) => ({
       ref: `#${number}`,
       number,

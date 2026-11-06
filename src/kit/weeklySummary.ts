@@ -12,6 +12,7 @@ import {
   type ArchitecturalEscape,
   type CommentFacts,
   dispatchOf,
+  ESCAPE_WINDOW_MS,
   escapesIn,
   type LabelEvent,
   type MergedAgentPullRequest,
@@ -853,7 +854,6 @@ interface Week extends Window {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REVERT_WINDOW_MS = 30 * DAY_MS;
-const ESCAPE_WINDOW_MS = 90 * DAY_MS;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /** The week ending at the last Monday 00:00 at or before `now`, and the week before it. */
