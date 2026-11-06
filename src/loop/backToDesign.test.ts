@@ -298,7 +298,7 @@ describe("The Design session after a Ticket comes back names the Operator commen
   it("ends the closing comment of a Map with the comments it weighed, after the Decisions it lists", () => {
     const decision = { key: "why", title: "Why did it come back?", body: "The question.", type: "grilling", blockedBy: [] };
     const map = { kind: "map", comment: "A Map.", destination: "Totals.", notes: "", notYetSpecified: "", outOfScope: "", decisions: [decision] };
-    const plan = planFor(turnNaming(map, ["conversation-3"]), snapshotOf({ ...returnedTicket, parent: null }), kitConfig());
+    const plan = planFor(turnNaming(map, ["conversation-3"]), snapshotOf({ ...returnedTicket, parent: null }, { openMaps: [] }), kitConfig());
 
     const closing = commentsOf(plan).filter((body) => body.includes("**Design session finished.**"));
     expect(closing).toHaveLength(1);

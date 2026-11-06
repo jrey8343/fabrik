@@ -17,6 +17,7 @@ import {
   AUDIT_LABEL,
   DESIGN_LABEL,
   KIT_ISSUE_LABELS,
+  MAP_LABEL,
   NEEDS_DESIGN,
   READY_FOR_AGENT,
   RESEARCH_DECISION_LABEL,
@@ -311,6 +312,14 @@ interface DesignQueueQueryResult {
 export const IMPLEMENT_JOB_NAME = "Implement";
 
 /**
+ * The name of the Research job, which Dispatch counts Research runs by as it
+ * counts Implement runs by IMPLEMENT_JOB_NAME. loop.yml has no Research job
+ * until #260 adds one by this name, and the job-name test holds the two
+ * together from then.
+ */
+export const RESEARCH_JOB_NAME = "Research";
+
+/**
  * The name of the Design job in .github/workflows/loop.yml, which follows it
  * with ` #<issue>` (a test holds the two together). Called from a Product
  * repo's caller workflow, it shows up as `<caller job> / Design-session turn #7`.
@@ -345,6 +354,9 @@ export async function gatherSnapshot(
     event.kind === "scheduled-tick" ? gatherAuditSlice(github, repo, appLogin) : null,
     event.kind === "audit-run-finished" ? gatherNamedPullRequests(github, repo, event.output) : null,
   ]);
+  // A Design turn's Map is weighed against the Map cap, which counts every open Map.
+  const openMaps =
+    event.kind === "agent-run-finished" && event.role === "design" ? (await gatherOpenMaps(github, repo)).map(({ number }) => number) : null;
   // A closed Ticket may be its Spec's last.
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
@@ -353,8 +365,8 @@ export async function gatherSnapshot(
   const theOperator = part?.operator ?? operator ?? owner;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, namedPullRequests, held }
-    : { ...part, spec, kitIssues, startingComment, audit, retro, namedPullRequests, held };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, namedPullRequests, held, openMaps }
+    : { ...part, spec, kitIssues, startingComment, audit, retro, namedPullRequests, held, openMaps };
 }
 
 /**
@@ -588,6 +600,41 @@ async function gatherNamedPullRequests(github: GitHub, repo: Repo, output: strin
 }
 
 /**
+ * The open `wayfinder:map` issues, oldest first, whoever opened them. One
+ * page is enough: the Map cap is never above its default of 1, so the first
+ * 50 hold every Map that fills it.
+ */
+const OPEN_MAPS_QUERY = `
+  query ($owner: String!, $name: String!, $map: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, labels: [$map], first: 50, orderBy: { field: CREATED_AT, direction: ASC }) {
+        nodes { number title }
+      }
+    }
+  }
+`;
+
+/** An open Map, as the Map cap counts it and a Design turn's inputs name it. */
+export interface OpenMap {
+  readonly number: number;
+  readonly title: string;
+}
+
+/**
+ * The open Maps in the repo, oldest first, made by the Kit or by the Operator
+ * by hand: what the Map cap counts (src/loop/mapCap.ts). Read for a
+ * Design-session turn landing, and for the turn's inputs (src/agent/inputs.ts).
+ */
+export async function gatherOpenMaps(github: Pick<GitHub, "graphql">, repo: Repo): Promise<OpenMap[]> {
+  const data = await github.graphql<{ repository: { issues: { nodes: OpenMap[] } } }>(OPEN_MAPS_QUERY, {
+    owner: repo.owner,
+    name: repo.name,
+    map: MAP_LABEL,
+  });
+  return data.repository.issues.nodes.map(({ number, title }) => ({ number, title }));
+}
+
+/**
  * For a Design-session turn the Operator's reply started: whether that reply
  * is still on the issue. Only a 404 means it was deleted; any other failed
  * read fails the run, as every failed read does, and never counts as deleted.
@@ -704,7 +751,7 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "namedPullRequests" | "held">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "namedPullRequests" | "held" | "openMaps">;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body author { login __typename } }";
 
@@ -1034,14 +1081,20 @@ async function gatherDispatch(
     (pr) => pr.isDraft && isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }),
   ).length;
 
-  const [implementRunsInProgress, researchDecisions] = await Promise.all([
-    countImplementRuns(actions, repo),
+  const [runs, researchDecisions] = await Promise.all([
+    countDispatchedRuns(actions, repo),
     gatherResearchDecisions(github, repo),
   ]);
   return {
     issue: null,
     pullRequest: null,
-    dispatch: { tickets, openAgentDraftPullRequests, implementRunsInProgress, researchDecisions },
+    dispatch: {
+      tickets,
+      openAgentDraftPullRequests,
+      implementRunsInProgress: runs.implement,
+      researchDecisions,
+      researchRunsInProgress: runs.research,
+    },
     designQueue: null,
     operator: operator ?? page.repository.owner.login,
   };
@@ -1197,16 +1250,19 @@ interface Job {
 }
 
 /**
- * Implement jobs not yet finished, across every workflow run in the repo:
- * running, and also queued or waiting (behind its concurrency group, say)
- * after its claim took agent:implement off the Ticket, so no slot goes
- * uncounted between the label coming off and the run starting.
+ * The Implement and Research jobs not yet finished, across every workflow
+ * run in the repo: running, and also queued or waiting (behind its
+ * concurrency group, say) after its claim took the trigger label off, so no
+ * slot goes uncounted between the label coming off and the run starting.
  */
-export async function countImplementRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<number> {
-  const jobs = await jobsOfUnfinishedRuns(github, repo);
-  return jobs
-    .filter((job) => job.status !== "completed")
-    .filter(({ name }) => name === IMPLEMENT_JOB_NAME || name.endsWith(` / ${IMPLEMENT_JOB_NAME}`)).length;
+export async function countDispatchedRuns(
+  github: Pick<GitHub, "rest">,
+  repo: Repo,
+): Promise<{ implement: number; research: number }> {
+  const unfinished = (await jobsOfUnfinishedRuns(github, repo)).filter((job) => job.status !== "completed");
+  const named = (jobName: string) =>
+    unfinished.filter(({ name }) => name === jobName || name.endsWith(` / ${jobName}`)).length;
+  return { implement: named(IMPLEMENT_JOB_NAME), research: named(RESEARCH_JOB_NAME) };
 }
 
 const DESIGN_JOB = new RegExp(`^(?:.+ / )?${DESIGN_JOB_NAME} #([1-9][0-9]*)$`);

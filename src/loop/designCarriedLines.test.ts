@@ -22,7 +22,7 @@ const turnFinished = (output: unknown) =>
   ({ kind: "agent-run-finished", role: "design", issue: 7, output: JSON.stringify(output) }) as const;
 
 const inSession = (body: string) =>
-  snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"], body }), { operator: "jrey" });
+  snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"], body }), { operator: "jrey", openMaps: [] });
 
 const operatorBrief = {
   kind: "brief",

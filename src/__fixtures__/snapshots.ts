@@ -10,6 +10,7 @@ import type {
   NamedPullRequestSnapshot,
   Plan,
   PullRequestSnapshot,
+  ResearchDecisionSnapshot,
   RetroIssueSnapshot,
   Snapshot,
   TicketSnapshot,
@@ -41,7 +42,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, ...overrides };
+  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, openMaps: null, ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
@@ -71,7 +72,7 @@ export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
   overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, ...overrides };
+  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, openMaps: null, ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -88,7 +89,21 @@ export function aTicket(overrides: Partial<TicketSnapshot> = {}): TicketSnapshot
   };
 }
 
-/** A Dispatch check's snapshot: these Tickets and, by default, nothing in flight. */
+/** A research Decision Dispatch can release: open, unassigned, unblocked, under the open Map #3, its last run not failed. */
+export function aResearchDecision(overrides: Partial<ResearchDecisionSnapshot> = {}): ResearchDecisionSnapshot {
+  return {
+    number: 1,
+    open: true,
+    labels: ["wayfinder:research"],
+    assignees: [],
+    openBlockers: [],
+    parentIssue: { number: 3, open: true, labels: ["enhancement", "wayfinder:map"] },
+    lastRunFailed: false,
+    ...overrides,
+  };
+}
+
+/** A Dispatch check's snapshot: these Tickets and, by default, no research Decision and nothing in flight. */
 export function dispatchSnapshotOf(
   tickets: readonly TicketSnapshot[],
   inFlight: Partial<Omit<DispatchSnapshot, "tickets">> = {},
@@ -96,7 +111,14 @@ export function dispatchSnapshotOf(
   return {
     issue: null,
     pullRequest: null,
-    dispatch: { tickets, openAgentDraftPullRequests: 0, implementRunsInProgress: 0, researchDecisions: [], ...inFlight },
+    dispatch: {
+      tickets,
+      openAgentDraftPullRequests: 0,
+      implementRunsInProgress: 0,
+      researchDecisions: [],
+      researchRunsInProgress: 0,
+      ...inFlight,
+    },
     designQueue: null,
     spec: null,
     operator: "operator",
@@ -106,6 +128,7 @@ export function dispatchSnapshotOf(
     retro: null,
     namedPullRequests: null,
     held: null,
+    openMaps: null,
   };
 }
 
@@ -140,12 +163,13 @@ export function designQueueSnapshotOf(
     retro: null,
     namedPullRequests: null,
     held: null,
+    openMaps: null,
   };
 }
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
 export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "held">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, ...overrides };
+  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, openMaps: null, ...overrides };
 }
 
 /**

@@ -496,8 +496,10 @@ export interface DispatchSnapshot {
   readonly tickets: readonly TicketSnapshot[];
   readonly openAgentDraftPullRequests: number;
   readonly implementRunsInProgress: number;
-  /** Every open `wayfinder:research` issue, in any order. No Dispatch check releases one yet (#154). */
+  /** Every open `wayfinder:research` issue, in any order. No Dispatch check releases one until research Dispatch is switched on (#154). */
   readonly researchDecisions: readonly ResearchDecisionSnapshot[];
+  /** Research jobs not yet finished: they hold slots under max_in_flight with the Implement runs. */
+  readonly researchRunsInProgress: number;
 }
 
 /** An open `needs-design` issue that a Design queue check weighs (src/loop/designQueue.ts). */
@@ -567,6 +569,12 @@ export interface Snapshot {
    * (src/loop/resume.ts). A number naming nothing GitHub has isn't here.
    */
   readonly held: readonly HeldTargetSnapshot[] | null;
+  /**
+   * Gathered for a Design-session turn finishing only: the open `wayfinder:map`
+   * issues, by number, oldest first, whoever made them, the Kit or the
+   * Operator by hand. What the Map cap counts (src/loop/mapCap.ts).
+   */
+  readonly openMaps: readonly number[] | null;
 }
 
 /** An issue or PR a held run is on, as the adapter read it on a scheduled tick (src/loop/resume.ts). */

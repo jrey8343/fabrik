@@ -9,7 +9,7 @@ import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
-import { countImplementRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, readKitConfigSources } from "./snapshot.ts";
+import { countDispatchedRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, readKitConfigSources } from "./snapshot.ts";
 
 const repo = { owner: "acme", name: "shop" };
 
@@ -31,7 +31,7 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
   it("counts a running Implement job, called from a Product repo's caller workflow", async () => {
     const actions = actionsWith([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "in_progress" }] }]);
 
-    expect(await countImplementRuns(actions, repo)).toBe(1);
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 0 });
   });
 
   it("counts an Implement job still queued or waiting after its claim took agent:implement off the Ticket", async () => {
@@ -42,7 +42,7 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
       { id: 4, status: "waiting", jobs: [{ name: "fabrik / Implement", status: "pending" }] },
     ]);
 
-    expect(await countImplementRuns(actions, repo)).toBe(4);
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 4, research: 0 });
   });
 
   it("doesn't count a finished Implement job, or any other job", async () => {
@@ -51,7 +51,28 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
       { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement failed", status: "in_progress" }] },
     ]);
 
-    expect(await countImplementRuns(actions, repo)).toBe(0);
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0 });
+  });
+});
+
+describe("Counting the Research runs a Dispatch check sees in flight", () => {
+  it("counts a Research job running, queued or waiting, called from a Product repo's caller workflow or not, beside the Implement jobs", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "in_progress" }, { name: "fabrik / Implement", status: "in_progress" }] },
+      { id: 2, status: "queued", jobs: [{ name: "fabrik / Research", status: "queued" }] },
+      { id: 3, status: "waiting", jobs: [{ name: "Research", status: "waiting" }] },
+    ]);
+
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 3 });
+  });
+
+  it("doesn't count a finished Research job, or any other job", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed" }, { name: "fabrik / Push", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Retro evidence", status: "in_progress" }, { name: "fabrik / Research failed", status: "in_progress" }] },
+    ]);
+
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0 });
   });
 });
 
@@ -66,7 +87,7 @@ describe("The Implement job's name", () => {
 
 describe("The judge job's name", () => {
   // #149: scoring never takes a Dispatch slot, nor a Design session slot.
-  it("is never counted as an Implement run or a Design-session turn in flight while it scores a run", async () => {
+  it("is never counted as an Implement run, a Research run or a Design-session turn in flight while it scores a run", async () => {
     const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
     const judgeJob = new RegExp(`^ {2}${JUDGE_JOB}:\n {4}name: (.+)$`, "m").exec(workflow)?.[1];
     expect(judgeJob).toBeDefined();
@@ -75,7 +96,7 @@ describe("The judge job's name", () => {
       { id: 2, status: "queued", jobs: [{ name: `fabrik / ${judgeJob}`, status: "queued" }] },
     ]);
 
-    expect(await countImplementRuns(actions, repo)).toBe(0);
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0 });
     expect(await designTurnsInProgress(actions, repo)).toEqual([]);
   });
 });
@@ -500,6 +521,36 @@ const APP_LOGIN = "fabrik-app[bot]";
 /** The Fabrik App's bot, as GraphQL names it: without its [bot] suffix. */
 const APP_BOT = { login: "fabrik-app", __typename: "Bot" };
 
+/** An open needs-design issue with nothing else on it, as the issue query answers for it. */
+const issueData = (number: number) => ({
+  repository: {
+    owner: { login: "acme" },
+    issue: {
+      number,
+      state: "OPEN",
+      author: { login: "someone" },
+      labels: { nodes: [{ name: "needs-design" }] },
+      parent: null,
+      comments: { nodes: [] },
+      timelineItems: { nodes: [] },
+      closedByPullRequestsReferences: { nodes: [] },
+      blockedBy: { nodes: [] },
+      blocking: { nodes: [] },
+    },
+  },
+});
+
+/** A Design-session turn's map outcome, with one research Decision. */
+const aMap = {
+  kind: "map",
+  comment: "Too foggy for one session.",
+  destination: "Patients book group classes online.",
+  notes: "",
+  notYetSpecified: "",
+  outOfScope: "",
+  decisions: [{ key: "provider", title: "Which provider?", body: "Which one?", type: "research", blockedBy: [] }],
+};
+
 describe("Gathering an issue's body", () => {
   it("holds the body as it stands, so a Design session's rewrite can keep its Monitor marker and carry its marker lines forward", async () => {
     const body = "<!-- fabrik:monitor sentry:4504 -->\n## Production error\n\nFrom audit #40\n<!-- fabrik:escape strong #31 -->";
@@ -846,6 +897,73 @@ describe("Gathering an issue's Design session", () => {
 
     expect(issue).toMatchObject({ designRounds: 0, turnFailed: false });
   });
+
+  it("reads the Kit's refusal of a Map past the Map cap as the Operator's move, so the session keeps its slot and their reply starts its next turn", async () => {
+    const refused = planFor(
+      { kind: "agent-run-finished", role: "design", issue: 6, output: JSON.stringify(aMap) },
+      snapshotOf(anIssue({ number: 6, labels: ["needs-design"] }), { openMaps: [12] }),
+      kitConfig(),
+    );
+    const refusal = refused.kind === "act" && refused.actions[0]?.kind === "comment" ? refused.actions[0].body : "";
+
+    const issue = await gatheredIssue([{ body: refusal, author: { __typename: "Bot" } }]);
+
+    expect(issue).toMatchObject({ designRounds: 0, turnFailed: true });
+    const reply = { kind: "issue-comment-created", issue: 6, commenter: "operator", commenterIsBot: false, body: "Make it a Spec then", comment: 9 } as const;
+    expect(planFor(reply, snapshotOf(issue ?? anIssue()), kitConfig())).toMatchObject({
+      kind: "act",
+      actions: [{ kind: "start-agent-run", role: "design", issue: 6 }],
+    });
+  });
+});
+
+describe("Gathering the open Maps a Design-session turn's Map is weighed against", () => {
+  /** GitHub holding these open wayfinder:map issues, oldest first; the open Maps query is answered from them alone. */
+  function githubWithMaps(maps: { number: number; title: string; author: { login: string; __typename: string } }[]) {
+    const asked: Record<string, unknown>[] = [];
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("labels: [$map]")) {
+          asked.push(variables);
+          expect(query).toContain("states: OPEN");
+          return { repository: { issues: { nodes: maps } } };
+        }
+        if (query.includes("issue(number: $number)")) return issueData(7);
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+    return { github, asked };
+  }
+
+  const designTurn = { kind: "agent-run-finished", role: "design", issue: 7, output: "{}" } as const;
+
+  it("holds every open wayfinder:map issue, whoever made it, the Kit or the Operator by hand", async () => {
+    const { github, asked } = githubWithMaps([
+      { number: 12, title: "Group classes", author: { login: "jrey", __typename: "User" } },
+      { number: 14, title: "Online intake", author: { login: "fabrik-app", __typename: "Bot" } },
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, designTurn, null, APP_LOGIN);
+
+    expect(snapshot.openMaps).toEqual([12, 14]);
+    expect(asked).toEqual([expect.objectContaining({ owner: "acme", name: "shop", map: "wayfinder:map" })]);
+  });
+
+  it("holds none when no Map is open", async () => {
+    const { github } = githubWithMaps([]);
+
+    expect((await gatherSnapshot(github, repo, designTurn, null, APP_LOGIN)).openMaps).toEqual([]);
+  });
+
+  it.each([
+    ["a Triage run finishing", { kind: "agent-run-finished", role: "triage", issue: 7, output: "{}" }],
+    ["a reply in a Design session", { kind: "issue-comment-created", issue: 7, commenter: "operator", commenterIsBot: false, body: "Yes", comment: 9 }],
+  ] as const)("isn't gathered for %s", async (_, event) => {
+    const { github, asked } = githubWithMaps([{ number: 12, title: "Group classes", author: { login: "jrey", __typename: "User" } }]);
+
+    expect((await gatherSnapshot(github, repo, event, null, APP_LOGIN)).openMaps).toBeNull();
+    expect(asked).toEqual([]);
+  });
 });
 
 describe("Gathering a Dispatch check's Tickets", () => {
@@ -977,6 +1095,17 @@ describe("Gathering a Dispatch check's research Decisions", () => {
       { number: 14, open: true, labels: ["wayfinder:research"], assignees: [], openBlockers: [], parentIssue: { number: 5, open: false, labels: ["wayfinder:map"] }, lastRunFailed: false },
       { number: 15, open: true, labels: ["wayfinder:research"], assignees: [], openBlockers: [], parentIssue: null, lastRunFailed: false },
     ]);
+  });
+
+  it("holds the Research runs in flight beside the Implement runs, read through the Actions token", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "in_progress" }] },
+      { id: 2, status: "queued", jobs: [{ name: "fabrik / Implement", status: "queued" }, { name: "fabrik / Research", status: "queued" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(researchGitHub([]), repo, { kind: "dispatch-check" }, null, null, actions as unknown as GitHub);
+
+    expect(snapshot.dispatch).toMatchObject({ implementRunsInProgress: 1, researchRunsInProgress: 2 });
   });
 
   const BOT = { __typename: "Bot" };
