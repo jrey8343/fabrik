@@ -241,3 +241,160 @@ describe("Applying a plan that links a UI PR's preview deployment", () => {
     expect(await applyPlan(fakeGitHub(), repo, { kind: "nothing", reason: "no change" })).toEqual({ preview: null });
   });
 });
+
+describe("Applying a plan that appends a line to a Map's Decisions so far", () => {
+  /**
+   * A GitHub holding Map #9, whose body is whatever it holds when the adapter
+   * reads it, and which each PATCH of its body replaces. A comment it posts
+   * gets a URL from its count, from 1.
+   */
+  function gitHubWithMap(body: string | null) {
+    const map = { body };
+    let comments = 0;
+    return {
+      map,
+      async rest(method: string, path: string, sent?: unknown): Promise<unknown> {
+        if (method === "GET" && path === `${issues}/9`) return { number: 9, id: 1009, body: map.body };
+        if (method === "PATCH" && path === `${issues}/9`) map.body = (sent as { body: string }).body;
+        if (method === "POST" && path.endsWith("/comments")) {
+          return { html_url: `https://github.com/acme/shop/issues/13#issuecomment-${++comments}` };
+        }
+        return null;
+      },
+      async graphql(): Promise<never> {
+        throw new Error("no GraphQL expected");
+      },
+    };
+  }
+
+  const MAP = [
+    "## Destination",
+    "",
+    "A waitlist the shop can open and close.",
+    "",
+    "## Notes",
+    "",
+    "Read the checkout code first.",
+    "",
+    "## Decisions so far",
+    "",
+    "- [Which email provider?](https://github.com/acme/shop/issues/12#issuecomment-1): Postmark, for its sandbox.",
+    "",
+    "## Not yet specified",
+    "",
+    "How invites expire.",
+    "",
+    "## Out of scope",
+    "",
+    "Paid tiers.",
+    "",
+  ].join("\n");
+
+  /** A plan that appends one line to Map #9's Decisions so far. */
+  const APPENDING: Plan = {
+    kind: "act",
+    actions: [{ kind: "append-to-decisions-so-far", issue: 9, line: ["- [Which queue?](https://x/13): SQS."] }],
+  };
+
+  it("lands the line at the end of Decisions so far, linking the resolution posted earlier in the plan, and changes nothing else", async () => {
+    const github = gitHubWithMap(MAP);
+    const plan: Plan = {
+      kind: "act",
+      actions: [
+        { kind: "comment", issue: 13, body: "SQS, for its dead-letter queue.", key: "resolution" },
+        {
+          kind: "append-to-decisions-so-far",
+          issue: 9,
+          line: ["- [Which queue?](", { posted: "resolution" }, "): SQS, for its dead-letter queue."],
+        },
+      ],
+    };
+
+    await applyPlan(github, repo, plan);
+
+    expect(github.map.body).toBe(
+      MAP.replace(
+        "Postmark, for its sandbox.\n",
+        "Postmark, for its sandbox.\n- [Which queue?](https://github.com/acme/shop/issues/13#issuecomment-1): SQS, for its dead-letter queue.\n",
+      ),
+    );
+  });
+
+  it("keeps what the Operator edited in the Map after the plan was made, appending after their own last line", async () => {
+    const edited = MAP.replace("Read the checkout code first.", "Read the checkout code first, then the mailer.").replace(
+      "Postmark, for its sandbox.\n",
+      "Postmark, for its sandbox.\n- [Invite copy](https://github.com/acme/shop/issues/14): settled live, short and plain.\n",
+    );
+    const github = gitHubWithMap(edited);
+
+    await applyPlan(github, repo, APPENDING);
+
+    expect(github.map.body).toBe(
+      edited.replace("short and plain.\n", "short and plain.\n- [Which queue?](https://x/13): SQS.\n"),
+    );
+  });
+
+  it("makes the line the first entry of an empty Decisions so far, under its heading", async () => {
+    const empty = MAP.replace(/(## Decisions so far\n\n)[^\n]+\n\n/, "$1");
+    const github = gitHubWithMap(empty);
+
+    await applyPlan(github, repo, APPENDING);
+
+    expect(github.map.body).toBe(
+      empty.replace("## Decisions so far\n", "## Decisions so far\n- [Which queue?](https://x/13): SQS.\n"),
+    );
+  });
+
+  it("ends the line as the rest of a body edited on GitHub's web editor ends its lines, in \\r\\n", async () => {
+    const crlf = MAP.replaceAll("\n", "\r\n");
+    const github = gitHubWithMap(crlf);
+
+    await applyPlan(github, repo, APPENDING);
+
+    expect(github.map.body).toBe(crlf.replace("sandbox.\r\n", "sandbox.\r\n- [Which queue?](https://x/13): SQS.\r\n"));
+  });
+
+  it("reads a heading quoted as code as no heading, in Notes or in the section itself", async () => {
+    const quoting = MAP.replace(
+      "Read the checkout code first.",
+      "Read the checkout code first. A Map reads:\n\n```markdown\n## Decisions so far\n\n- [title](link): gist\n```",
+    ).replace("Postmark, for its sandbox.\n", "Postmark, for its sandbox.\n\n~~~\n## Not yet specified\n~~~\n");
+    const github = gitHubWithMap(quoting);
+
+    await applyPlan(github, repo, APPENDING);
+
+    expect(github.map.body).toBe(
+      quoting.replace("## Not yet specified\n~~~\n", "## Not yet specified\n~~~\n- [Which queue?](https://x/13): SQS.\n"),
+    );
+  });
+
+  it.each([
+    [
+      "ends with a newline",
+      "## Destination\n\nA waitlist.\n\n## Out of scope\n\nPaid tiers.\n",
+      "## Destination\n\nA waitlist.\n\n## Out of scope\n\nPaid tiers.\n\n## Decisions so far\n- [Which queue?](https://x/13): SQS.\n",
+    ],
+    [
+      "ends without one",
+      "## Destination\n\nA waitlist.\n\n## Out of scope\n\nPaid tiers.",
+      "## Destination\n\nA waitlist.\n\n## Out of scope\n\nPaid tiers.\n\n## Decisions so far\n- [Which queue?](https://x/13): SQS.",
+    ],
+    [
+      "ends its lines in \\r\\n",
+      "## Destination\r\n\r\nA waitlist.\r\n",
+      "## Destination\r\n\r\nA waitlist.\r\n\r\n## Decisions so far\r\n- [Which queue?](https://x/13): SQS.\r\n",
+    ],
+    ["is empty", null, "## Decisions so far\n- [Which queue?](https://x/13): SQS."],
+    [
+      "quotes the heading only as code",
+      "## Notes\n\n```markdown\n## Decisions so far\n```\n",
+      "## Notes\n\n```markdown\n## Decisions so far\n```\n\n## Decisions so far\n- [Which queue?](https://x/13): SQS.\n",
+    ],
+  ])("adds the heading at the end of a Map with no Decisions so far, with the line under it, when its body %s", async (_, body, appended) => {
+    const github = gitHubWithMap(body);
+
+    await applyPlan(github, repo, APPENDING);
+
+    expect(github.map.body).toBe(appended);
+  });
+});

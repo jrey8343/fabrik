@@ -72,7 +72,11 @@ export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
  */
 export const MONITOR_LABEL = "fabrik:monitor";
 
-/** The label on a Map: an issue charting the way to a destination still in fog, whose children are Decisions. */
+/**
+ * The label on a Map: an issue charting the way to a destination still in fog,
+ * whose children are Decisions (#154). A Design session that ends in a Map puts
+ * it on in place of needs-design.
+ */
 export const MAP_LABEL = "wayfinder:map";
 
 /** How a Decision on a Map gets resolved. Each names the `wayfinder:<type>` label the Decision carries. */

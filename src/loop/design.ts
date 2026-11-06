@@ -118,7 +118,7 @@ export function answerRound(
  */
 function landLiveOutcome(issueNumber: number, outcome: string, operator: string): Plan {
   const leaveSession: Action = { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN };
-  // A brief or a Spec leaves new ready work, so see whether it can start.
+  // A brief, a Spec or a Map leaves new ready work, so see whether it can start.
   switch (outcome) {
     case "brief":
       return {
@@ -146,6 +146,19 @@ function landLiveOutcome(issueNumber: number, outcome: string, operator: string)
       return {
         kind: "act",
         actions: [leaveSession, { kind: "close", issue: issueNumber, reason: "completed" }, { kind: "check-dispatch" }, CHECK_DESIGN_QUEUE],
+      };
+    case "map":
+      // The live session rewrote the body as the Map and filed its first
+      // Decisions before posting the marker, so only the labels move here.
+      // Nothing posts this marker until the Map is switched on (#263).
+      return {
+        kind: "act",
+        actions: [
+          leaveSession,
+          { kind: "add-labels", issue: issueNumber, labels: [MAP_LABEL] },
+          { kind: "check-dispatch" },
+          CHECK_DESIGN_QUEUE,
+        ],
       };
     default:
       return {

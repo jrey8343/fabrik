@@ -239,7 +239,7 @@ describe("A held run, under Dispatch's max_in_flight cap and the Design session 
     kitIssues: [{ ...BOTH_USED_UP[0]!, comments: markers }, BOTH_USED_UP[1]!],
   });
   const ONE_IN_FLIGHT = kitConfig({ subscriptions: ["Claude token", "Claude token 2"], maxInFlight: 1 });
-  const ONE_SESSION = kitConfig({ subscriptions: ["Claude token", "Claude token 2"], caps: { designSessions: 1, monitorIssues: DEFAULT_KIT_CONFIG.caps.monitorIssues } });
+  const ONE_SESSION = kitConfig({ subscriptions: ["Claude token", "Claude token 2"], caps: { ...DEFAULT_KIT_CONFIG.caps, designSessions: 1 } });
 
   it("a held Implement run counts as in flight, so Dispatch neither dispatches its Ticket again nor another past the cap", () => {
     const snapshot = withHeld(

@@ -44,9 +44,6 @@ export const DESIGN_TURN_FAILED_MARKER = "<!-- fabrik:design-turn-failed -->";
 /** How the comment that ends a Design session starts, either way it ends. */
 export const SESSION_FINISHED = "**Design session finished.**";
 
-/** The heading of a Map body's index of resolved Decisions, which a Map's rewrite leaves empty and each resolution adds a line to. */
-export const DECISIONS_SO_FAR_HEADING = "## Decisions so far";
-
 /**
  * Opens the comment a live Design session ends with. Only the start of a
  * comment counts, so quoting it doesn't.
@@ -55,6 +52,9 @@ export const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 
 /** The first line of the Kit's note that a Ticket came back to design from an agent PR. */
 export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
+
+/** The heading of a Map's Decisions so far: one line under it per Decision resolved. */
+export const DECISIONS_SO_FAR_HEADING = "## Decisions so far";
 
 /** What a Monitor issue's marker line says it tracks (#148): a Sentry group, or red main. */
 export type MonitorMarker = { readonly kind: "sentry"; readonly group: string } | { readonly kind: "red-main" };

@@ -26,6 +26,12 @@ const section = (text: string, heading: string) => text.split(`\n## ${heading}\n
 /** The first line of a prompt's text that starts with `start`, after its indent. */
 const lineStarting = (text: string, start: string) => text.split("\n").find((line) => line.trimStart().startsWith(start)) ?? "";
 
+/** The body of a section's `### <heading>` part, up to the next `### ` heading. */
+const part = (text: string, heading: string) => text.split(`\n### ${heading}\n`)[1]?.split("\n### ")[0] ?? "";
+
+/** The line Triage's comment carries on an idea too foggy for one Design session, which a Design session looks for. */
+const FOG_LINE = "This looks too foggy for one Design session.";
+
 describe("The prompts of the runs that read an agent PR", () => {
   it.each(["review", "implement", "design"])("%s names the section the Operator's comments arrive under", async (role) => {
     // The prompt's weighing rules point at the section the run's context sets the comments out under.
@@ -138,6 +144,34 @@ describe("Product intent in the Triage prompt", () => {
     expect(rules).toContain("`docs/product/vision.md`");
     expect(rules).toContain("`docs/product/roadmap.md`");
     expect(rules).toContain("The Roadmap gates nothing");
+  });
+});
+
+describe("Fog in the Triage prompt", () => {
+  it("sends an idea too foggy for one Design session to needs-design on the size test, its comment carrying the fog line", async () => {
+    const fog = part(section(await prompt("triage"), "The decision"), "A foggy idea");
+    expect(fog).toContain("fails the size test");
+    expect(fog).toContain("no single Design session could design it");
+    expect(fog).toContain("Send it to `needs-design`");
+    expect(fog).toContain(`put the fog line in your comment, word for word and on a line of its own: \`${FOG_LINE}\``);
+  });
+
+  it("sends a clear but large idea to needs-design without the fog line, as work too big for one pull request fails the size test", async () => {
+    const decision = section(await prompt("triage"), "The decision");
+    const test2 = lineStarting(decision, "2. ");
+    expect(test2).toContain("This is the size test: work too big for one pull request fails it");
+    const fog = part(decision, "A foggy idea");
+    expect(fog).toContain("Give the line only for fog.");
+    expect(fog).toContain("A clear but large idea, which one Design session can split into a Spec and its Tickets, also fails the size test");
+    expect(fog).toContain("goes to `needs-design` without the line");
+  });
+
+  it("leaves charting a Map to the Operator's Design session, and carries the fog line in its comment, the output having no field for it", async () => {
+    const text = await prompt("triage");
+    expect(part(section(text, "The decision"), "A foggy idea")).toContain(
+      "Don't chart a Map of the questions yourself: whether to chart one is the Operator's call in the Design session.",
+    );
+    expect(lineStarting(section(text, "Your output"), "- `comment`")).toContain("The fog line goes here too: the output has no field for it.");
   });
 });
 
