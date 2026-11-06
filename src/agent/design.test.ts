@@ -155,12 +155,26 @@ describe("What a Design-session turn's prompt says of the Map cap", () => {
     const github = {
       graphql: async <T>() => ({ repository: { issues: { nodes: [] } } }) as T,
     };
-    const written = JSON.stringify(await readMapOffer(github, { owner: "acme", name: "shop" }, DEFAULT_KIT_CONFIG));
+    const written = JSON.stringify(await readMapOffer(github, { owner: "acme", name: "shop" }, DEFAULT_KIT_CONFIG, null));
 
     expect(said(JSON.parse(written))).toContain("The Map cap has room, so this session may offer to chart the issue as a Map.");
   });
 
-  it.each([null, {}, { kind: "maybe" }, { kind: "cap-full", cap: "1", openMaps: [] }, { kind: "cap-full", cap: 1 }])(
+  it("tells a turn on a Ticket under a Spec, from the file the inputs step writes, not to offer a Map, and why", async () => {
+    const github = {
+      graphql: async <T>(): Promise<T> => {
+        throw new Error("a Ticket under a Spec reads no open Maps");
+      },
+    };
+    const written = JSON.stringify(await readMapOffer(github, { owner: "acme", name: "shop" }, DEFAULT_KIT_CONFIG, { number: 3 }));
+    const text = said(JSON.parse(written));
+
+    expect(text).toContain("This issue is a Ticket under the Spec #3, and a Ticket under a Spec never becomes a Map: the Spec stays the single parent of its Tickets.");
+    expect(text).toContain("Don't offer a Map, and never end in `map`: the Kit would refuse it.");
+    expect(text).not.toContain("The Map cap has room");
+  });
+
+  it.each([null, {}, { kind: "maybe" }, { kind: "cap-full", cap: "1", openMaps: [] }, { kind: "cap-full", cap: 1 }, { kind: "under-a-spec" }])(
     "fails the turn on inputs it can't read: %j",
     (offer) => {
       expect(() => mapCapContext(offer)).toThrow("map.json doesn't say whether this turn may offer a Map");

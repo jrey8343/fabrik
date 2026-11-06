@@ -497,14 +497,14 @@ describe("What a Design-session turn's inputs say of the Map cap", () => {
   it("says a Map may be offered while the cap has room", async () => {
     const github = githubWithMaps([]);
 
-    expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG)).toEqual({ kind: "may-offer" });
+    expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG, null)).toEqual({ kind: "may-offer" });
     expect(github.reads).toEqual(["wayfinder:map"]);
   });
 
   it("says the cap is full and which Map holds it, a Map made by hand included", async () => {
     const github = githubWithMaps([{ number: 12, title: "Group classes" }]);
 
-    expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG)).toEqual({
+    expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG, null)).toEqual({
       kind: "cap-full",
       cap: 1,
       openMaps: [{ number: 12, title: "Group classes" }],
@@ -512,6 +512,16 @@ describe("What a Design-session turn's inputs say of the Map cap", () => {
   });
 
   it("says the cap is full when caps.maps is 0, with no Map open", async () => {
-    expect(await readMapOffer(githubWithMaps([]), repo, capOf(0))).toEqual({ kind: "cap-full", cap: 0, openMaps: [] });
+    expect(await readMapOffer(githubWithMaps([]), repo, capOf(0), null)).toEqual({ kind: "cap-full", cap: 0, openMaps: [] });
+  });
+
+  it.each([
+    ["the cap has room", []],
+    ["the cap is full", [{ number: 12, title: "Group classes" }]],
+  ])("says a Ticket under a Spec can't be offered a Map, whether or not %s, and reads no open Maps", async (_cap, maps) => {
+    const github = githubWithMaps(maps);
+
+    expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG, { number: 3 })).toEqual({ kind: "under-a-spec", spec: 3 });
+    expect(github.reads).toEqual([]);
   });
 });
