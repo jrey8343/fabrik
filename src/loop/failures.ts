@@ -3,18 +3,18 @@
 // Ticket's retries; the Operator gets one comment saying how to resume it. A
 // failed Auditor run goes to failAudit instead, which fails its Audit with no
 // trigger to re-add, since the scheduled tick opens the next one
-// (src/loop/auditFailure.ts). The Kit doesn't land a failed Retro run yet.
-import { failAudit } from "./auditFailure.ts";
+// (src/loop/weeklyFailure.ts). The Kit doesn't land a failed Retro run yet.
 import { repoWideNotice } from "./kitIssues.ts";
 import { DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
 import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
+import { failAudit } from "./weeklyFailure.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
 /**
  * A role whose failed run gets a failure notice: a failed Auditor run fails
- * its Audit instead (src/loop/auditFailure.ts), and a failed Retro run gets nothing yet.
+ * its Audit instead (src/loop/weeklyFailure.ts), and a failed Retro run gets nothing yet.
  */
 type NoticedRole = Exclude<AgentRole, "audit" | "retro">;
 
