@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { agentRunEventFrom } from "../github/events.ts";
 import { DEFAULT_KIT_CONFIG, type UiConfig } from "../kit/config.ts";
+import { readDesignTurnOutput } from "../loop/designOutput.ts";
 import { planFor } from "../loop/rules.ts";
 import { MAP_CAP_HEADING, mapCapContext, PROTOTYPES_HEADING, prototypeContext, sentBackContext } from "./design.ts";
 import { readMapOffer } from "./inputs.ts";
@@ -209,5 +210,17 @@ describe("What a Design-session turn's prompt says of Prototypes", () => {
 
   it("offers 3 variants unless the Operator asks for another count, never fewer than 2 or more than 5", () => {
     expect(said).toContain("Offer 3 variants unless the Operator asked for another count, never fewer than 2 or more than 5.");
+  });
+
+  it("ends in prototype on the Operator's yes, which may change the route or the count, and never without it", () => {
+    expect(said).toContain("- **End in `prototype` on the Operator's yes.** Their reply may change the route or the count");
+    expect(said).toContain("ask for what they approved.");
+    expect(said).toContain("Never end in `prototype` without the Operator's yes.");
+  });
+
+  it("describes the prototype output with an example the Kit accepts", () => {
+    const example: unknown = JSON.parse(/<design>\n([\s\S]*?)\n<\/design>/.exec(said)?.[1] ?? "null");
+
+    expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "prototype", route: "/book", variants: 3 } });
   });
 });

@@ -67,6 +67,15 @@ function readOffer(value: unknown): MapOffer {
 /** The heading a Design-session turn is told Prototypes are available under. */
 export const PROTOTYPES_HEADING = "Prototypes";
 
+/** The `prototype` output a Design-session turn is shown, which the Kit accepts as it stands. */
+const PROTOTYPE_EXAMPLE = {
+  kind: "prototype",
+  comment: "The Operator chose to see the booking page before settling its layout.",
+  route: "/book",
+  variants: PROTOTYPE_DEFAULT_VARIANTS,
+  brief: "Markdown: what each variant explores, and anything the Operator asked for.",
+};
+
 /**
  * What a Design-session turn is told of Prototypes: when and how it may offer
  * one, ask for the one the Operator approved, read the Operator's choice, and
@@ -93,6 +102,20 @@ export function prototypeContext(
         `Offer ${PROTOTYPE_DEFAULT_VARIANTS} variants unless the Operator asked for another count, never fewer than ${PROTOTYPE_MIN_VARIANTS} or more than ${PROTOTYPE_VARIANT_CAP}.`,
         "Nothing is built until the Operator says yes.",
       ].join(" "),
+      [
+        "- **End in `prototype` on the Operator's yes.** Their reply may change the route or the count, such as \"yes, but 4 variants\" or \"prototype /checkout instead\": ask for what they approved.",
+        "A reply asking for another prototype round, or to try again after one failed, is a yes too.",
+        "The Kit then posts a comment saying what is being built, and the prototype round follows when the variants are ready.",
+        "Never end in `prototype` without the Operator's yes.",
+      ].join(" "),
+    ].join("\n"),
+    "To ask for the Prototype the Operator approved:",
+    `<design>\n${JSON.stringify(PROTOTYPE_EXAMPLE, null, 2)}\n</design>`,
+    [
+      "- `route` is the one route every variant renders on, a path starting with `/`, never a full URL.",
+      `- \`variants\` is how many to build, a whole number from ${PROTOTYPE_MIN_VARIANTS} to ${PROTOTYPE_VARIANT_CAP}.`,
+      "- `brief` says what each variant explores, so they differ properly from one another rather than tweak one layout, and carries anything the Operator asked for.",
+      "- `comment` is one line. The Kit's comment names the route and the count and says the round follows, so don't.",
     ].join("\n"),
   ];
 }
