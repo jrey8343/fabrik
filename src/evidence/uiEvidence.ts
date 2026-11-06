@@ -2,8 +2,9 @@
 // capture and why, and the capture result the Implement job's capture step
 // writes and every later reader shares. Pure, no I/O.
 import { posix } from "node:path";
-import { UI_ROUTE_CAP, type UiConfig } from "../kit/config.ts";
+import { UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
+import { FULL_SHA } from "../skills/lock.ts";
 
 /**
  * Whether a pull request is UI: some changed path matches one of `ui.paths`,
@@ -13,8 +14,10 @@ export function isUi(diffPaths: readonly string[], ui: UiConfig | null): boolean
   return ui !== null && diffPaths.some((path) => ui.paths.some((glob) => posix.matchesGlob(path, glob)));
 }
 
-/** Why a route is captured: the Ticket named it, the Implementer did, or it's one of `ui.default_routes`. */
-export type RouteReason = "ticket" | "implementer" | "default";
+/** Why a route is captured, in the order routes are chosen: the Ticket named it, the Implementer did, or it's one of `ui.default_routes`. */
+export const ROUTE_REASONS = ["ticket", "implementer", "default"] as const;
+
+export type RouteReason = (typeof ROUTE_REASONS)[number];
 
 /** A route UI evidence captures, and why. */
 export interface ChosenRoute {
@@ -25,8 +28,8 @@ export interface ChosenRoute {
 /** An inline code span in a Ticket body: text between single backticks on one line. */
 const CODE_SPAN = /`([^`\n]+)`/g;
 
-/** A route: a path starting with a single `/` (so never `//host/...`), with no spaces. */
-const ROUTE = /^\/(?!\/)\S*$/;
+/** A route a Ticket names: a path starting with a single `/` (so never `//host/...`), with no spaces. */
+const TICKET_ROUTE = /^\/(?!\/)\S*$/;
 
 /**
  * The routes a Ticket body names, in the order it names them. A Ticket names
@@ -39,7 +42,7 @@ const ROUTE = /^\/(?!\/)\S*$/;
 function ticketRoutes(body: string): string[] {
   return linesOutsideCode(body)
     .flatMap((line) => [...line.matchAll(CODE_SPAN)].map(([, text = ""]) => text))
-    .filter((text) => ROUTE.test(text));
+    .filter((text) => TICKET_ROUTE.test(text));
 }
 
 /** The routes to capture, each with its reason. */
@@ -60,4 +63,156 @@ export function routesFor(
 /** Each route once, where it first appears. */
 function onceEach(routes: readonly ChosenRoute[]): ChosenRoute[] {
   return routes.filter(({ route }, index) => routes.findIndex((other) => other.route === route) === index);
+}
+
+/** Which site a capture is of: the production site at `ui.before_url`, or the branch served in the Sandbox. */
+export const CAPTURE_SIDES = ["before", "after"] as const;
+
+export type CaptureSide = (typeof CAPTURE_SIDES)[number];
+
+/**
+ * Why capture failed: the server never answered at `ui.url`, capture ran out
+ * of time, there was no route to capture, or anything else it caught.
+ */
+export const CAPTURE_FAILURES = ["server-did-not-start", "timeout", "no-routes", "error"] as const;
+
+export type CaptureFailure = (typeof CAPTURE_FAILURES)[number];
+
+/** One screenshot: of which route and why, at which viewport, of which side, and what the page answered. */
+export interface Capture {
+  readonly route: string;
+  readonly reason: RouteReason;
+  readonly viewport: Viewport["name"];
+  readonly side: CaptureSide;
+  /** The HTTP status the page answered with; a 5xx is an error page, not a design. */
+  readonly status: number;
+  /** The image's file name: a plain name, in the same folder as the capture result. */
+  readonly image: string;
+}
+
+/**
+ * What the Implement job's capture step records, as a contract every later
+ * reader shares: the PR body's evidence section, the Reviewer's images, and
+ * the UI prototypes Spec (#80). A failed capture keeps whatever it took first.
+ */
+export type CaptureResult =
+  | {
+      readonly outcome: "captured";
+      /** The head commit the branch was captured at. */
+      readonly headSha: string;
+      /** Never empty. */
+      readonly captures: readonly Capture[];
+    }
+  | {
+      readonly outcome: "failed";
+      readonly reason: CaptureFailure;
+      readonly headSha: string;
+      readonly captures: readonly Capture[];
+    };
+
+export type CaptureResultRead =
+  | { readonly ok: true; readonly result: CaptureResult }
+  | { readonly ok: false; readonly errors: readonly string[] };
+
+/** Parses the capture result's text, then checks it against the contract. */
+export function parseCaptureResult(text: string): CaptureResultRead {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    return { ok: false, errors: [`the capture result is not valid JSON: ${(error as Error).message}`] };
+  }
+  return readCaptureResult(value);
+}
+
+/** Checks an already-parsed capture result against the contract, naming every problem. */
+export function readCaptureResult(value: unknown): CaptureResultRead {
+  if (!isObject(value)) return { ok: false, errors: ["the capture result must be a JSON object"] };
+  const { outcome, reason, headSha, captures } = value;
+  const errors: string[] = [];
+  if (outcome !== "captured" && outcome !== "failed") errors.push(`outcome must be "captured" or "failed"`);
+  if (outcome === "failed" && !isOneOf(CAPTURE_FAILURES, reason)) errors.push(`reason must be ${spelled(CAPTURE_FAILURES)}`);
+  if (typeof headSha !== "string" || !FULL_SHA.test(headSha)) errors.push("headSha must be a full commit SHA");
+  if (!Array.isArray(captures)) errors.push("captures must be a list");
+  else if (outcome === "captured" && captures.length === 0) errors.push(`captures can't be empty when the outcome is "captured"`);
+  const read = Array.isArray(captures) ? captures.map((capture, at) => readCapture(capture, `captures[${at}]`, errors)) : [];
+  errors.push(...repeatedCaptures(read));
+  if (errors.length > 0) return { ok: false, errors };
+  const checked = read as Capture[];
+  const result: CaptureResult =
+    outcome === "captured"
+      ? { outcome, headSha: headSha as string, captures: checked }
+      : { outcome: "failed", reason: reason as CaptureFailure, headSha: headSha as string, captures: checked };
+  return { ok: true, result };
+}
+
+const VIEWPORT_NAMES = UI_VIEWPORTS.map(({ name }) => name);
+
+/** A plain file name in the capture's folder: never a path, `..`, or a hidden file. */
+const IMAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** One capture, or null after naming its problems in `errors`. */
+function readCapture(value: unknown, at: string, errors: string[]): Capture | null {
+  if (!isObject(value)) {
+    errors.push(`${at} must be an object`);
+    return null;
+  }
+  const { route, reason, viewport, side, status, image } = value;
+  const before = errors.length;
+  // As the Implementer output reads a route, so a route it named never makes its capture unreadable.
+  if (typeof route !== "string" || !route.startsWith("/") || route.startsWith("//")) {
+    errors.push(`${at}.route must be a path starting with one /, such as /book`);
+  }
+  if (!isOneOf(ROUTE_REASONS, reason)) errors.push(`${at}.reason must be ${spelled(ROUTE_REASONS)}`);
+  if (!isOneOf(VIEWPORT_NAMES, viewport)) errors.push(`${at}.viewport must be ${spelled(VIEWPORT_NAMES)}`);
+  if (!isOneOf(CAPTURE_SIDES, side)) errors.push(`${at}.side must be ${spelled(CAPTURE_SIDES)}`);
+  if (!Number.isInteger(status) || (status as number) < 100 || (status as number) > 599) {
+    errors.push(`${at}.status must be an HTTP status from 100 to 599`);
+  }
+  if (typeof image !== "string" || !IMAGE_NAME.test(image) || image.includes("..")) {
+    errors.push(`${at}.image must be a plain file name, such as after-mobile-book.png, with no / or ..`);
+  }
+  if (errors.length > before) return null;
+  return {
+    route: route as string,
+    reason: reason as RouteReason,
+    viewport: viewport as Viewport["name"],
+    side: side as CaptureSide,
+    status: status as number,
+    image: image as string,
+  };
+}
+
+/**
+ * Each image file and each route, viewport and side is one capture's alone,
+ * since the gallery pairs Before and After by them and opens each file by name.
+ */
+function repeatedCaptures(captures: readonly (Capture | null)[]): string[] {
+  const problems: string[] = [];
+  captures.forEach((capture, at) => {
+    if (capture === null) return;
+    const earlier = captures.slice(0, at);
+    const sameFile = earlier.findIndex((other) => other?.image === capture.image);
+    const sameShot = earlier.findIndex(
+      (other) => other?.route === capture.route && other.viewport === capture.viewport && other.side === capture.side,
+    );
+    if (sameFile !== -1) problems.push(`captures[${at}].image ${capture.image} is captures[${sameFile}]'s too`);
+    if (sameShot !== -1) {
+      problems.push(`captures[${at}] is ${capture.route} at ${capture.viewport}, ${capture.side}, which captures[${sameShot}] already is`);
+    }
+  });
+  return problems;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isOneOf<T extends string>(options: readonly T[], value: unknown): value is T {
+  return (options as readonly unknown[]).includes(value);
+}
+
+/** `a`, `a or b`, or `a, b or c`. */
+function spelled(options: readonly string[]): string {
+  return options.length <= 1 ? options.join("") : `${options.slice(0, -1).join(", ")} or ${options.at(-1)}`;
 }
