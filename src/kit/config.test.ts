@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { resolveKitConfig } from "./config.ts";
+import { REVIEWER_IMAGE_CAP, resolveKitConfig, UI_VIEWPORTS } from "./config.ts";
 
 const root = new URL("../../", import.meta.url);
 const template = readFileSync(new URL("templates/fabrik-config.json", root), "utf8");
@@ -26,6 +26,8 @@ const DEFAULTS = {
   instructions: { triage: null, design: null, implement: null, review: null, audit: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
+  ui: null,
+  preview: null,
 };
 
 describe("Kit config", () => {
@@ -850,5 +852,237 @@ describe("A Subscription name, which goes into a job output and an op:// referen
       ok: false,
       errors: [`subscriptions names ${JSON.stringify(name)}, but a Fabrik vault item name can't hold a control character or a slash`],
     });
+  });
+});
+
+describe("The ui and preview blocks, which Visual evidence reads", () => {
+  it("leaves ui and preview off when the Kit config has neither", () => {
+    const result = resolveKitConfig({ config: `{ "max_in_flight": 1, "operator": "jrey8343" }` });
+
+    expect(result.ok && result.config.ui).toBeNull();
+    expect(result.ok && result.config.preview).toBeNull();
+  });
+
+  it("resolves a full ui block and a preview block", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        ui: {
+          paths: ["src/**/*.astro", "src/components/**", "public/**"],
+          serve: "node ./dist/server/entry.mjs",
+          url: "http://127.0.0.1:4321",
+          before_url: "https://penrithphysio.com.au",
+          default_routes: ["/", "/book", "/services"],
+        },
+        preview: { url: "https://deploy-preview-{pr}--penrith-physio.netlify.app" },
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        ui: {
+          paths: ["src/**/*.astro", "src/components/**", "public/**"],
+          serve: "node ./dist/server/entry.mjs",
+          url: "http://127.0.0.1:4321",
+          beforeUrl: "https://penrithphysio.com.au",
+          defaultRoutes: ["/", "/book", "/services"],
+        },
+        preview: { url: "https://deploy-preview-{pr}--penrith-physio.netlify.app" },
+      },
+    });
+  });
+
+  it("resolves a ui block with only paths, serve and url to no Before and no default routes", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } }),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", beforeUrl: null, defaultRoutes: [] },
+      },
+    });
+  });
+
+  it("lets null skip Before, as a repo with no public production site spells it", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", before_url: null },
+      }),
+    });
+
+    expect(result.ok && result.config.ui?.beforeUrl).toBeNull();
+  });
+
+  it.each([`{ "ui": null }`, `{ "preview": null }`, `{ "preview": {} }`, `{ "preview": { "url": null } }`])(
+    "resolves %s to Visual evidence off and no preview link",
+    (text) => {
+      expect(resolveKitConfig({ config: text })).toEqual({ ok: true, config: DEFAULTS });
+    },
+  );
+
+  /** A Kit config whose ui block is valid, with these fields changed; undefined leaves a field out. */
+  function withUi(changes: Record<string, unknown>): string {
+    return JSON.stringify({
+      ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", ...changes },
+    });
+  }
+
+  it.each([
+    [{ paths: undefined }, "ui.paths is missing"],
+    [{ paths: [] }, "ui.paths is empty: list at least one glob of the files that make a pull request UI"],
+    [{ paths: "src/**" }, "ui.paths must be a list of strings"],
+    [{ paths: ["src/**", 7] }, "ui.paths must be a list of strings"],
+    [{ paths: ["src/**", " "] }, `ui.paths[1] is " ": a glob can't be blank`],
+  ])("refuses missing, empty or malformed paths, naming the field: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withUi(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [{ serve: undefined }, "ui.serve is missing"],
+    [{ serve: ["npm", "run", "preview"] }, "ui.serve must be a string"],
+    [{ serve: "" }, `ui.serve is "": the command that serves the branch can't be blank`],
+    [{ url: undefined }, "ui.url is missing"],
+    [{ url: 4321 }, "ui.url must be a string"],
+    [{ url: "localhost:4321" }, `ui.url is "localhost:4321": a URL must start with http:// or https://`],
+    [{ url: "ws://localhost:4321" }, `ui.url is "ws://localhost:4321": a URL must start with http:// or https://`],
+    [{ before_url: "penrithphysio.com.au" }, `ui.before_url is "penrithphysio.com.au": a URL must start with http:// or https://`],
+    [{ before_url: "ftp://penrithphysio.com.au" }, `ui.before_url is "ftp://penrithphysio.com.au": a URL must start with http:// or https://`],
+    [{ before_url: false }, "ui.before_url must be a string"],
+  ])("refuses a missing or malformed serve, url or before_url, naming the field: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withUi(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each(["http://127.0.0.1:4321", "https://localhost:8443/app"])("takes %s as a ui.url", (url) => {
+    const result = resolveKitConfig({ config: withUi({ url }) });
+
+    expect(result.ok && result.config.ui?.url).toBe(url);
+  });
+
+  it.each([
+    [{ default_routes: "/" }, "ui.default_routes must be a list of strings"],
+    [{ default_routes: ["/", 1] }, "ui.default_routes must be a list of strings"],
+    [{ default_routes: ["/", "book"] }, `ui.default_routes[1] is "book": a route must be a path starting with one /, such as /book`],
+    [{ default_routes: [""] }, `ui.default_routes[0] is "": a route must be a path starting with one /, such as /book`],
+    [
+      { default_routes: ["https://penrithphysio.com.au/book"] },
+      `ui.default_routes[0] is "https://penrithphysio.com.au/book": a route must be a path starting with one /, such as /book`,
+    ],
+    [{ default_routes: ["//evil.example"] }, `ui.default_routes[0] is "//evil.example": a route must be a path starting with one /, such as /book`],
+  ])("refuses a default route that isn't a path starting with /, naming it: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withUi(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("names every bad default route, not just the first", () => {
+    const result = resolveKitConfig({ config: withUi({ default_routes: ["book", "/", "services"] }) });
+
+    expect(!result.ok && result.errors).toEqual([
+      `ui.default_routes[0] is "book": a route must be a path starting with one /, such as /book`,
+      `ui.default_routes[2] is "services": a route must be a path starting with one /, such as /book`,
+    ]);
+  });
+
+  it.each([
+    "https://deploy-preview-{pr}--penrith-physio.netlify.app",
+    "https://{branch_slug}-penrith-physio.workers.dev",
+    "https://preview.example.dev/{pr}/{branch_slug}/{sha}",
+    "https://staging.penrithphysio.com.au",
+  ])("takes %s as a preview.url template", (url) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ preview: { url } }) });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, preview: { url } } });
+  });
+
+  it.each([
+    [
+      "https://{branch}-penrith-physio.workers.dev",
+      `preview.url is "https://{branch}-penrith-physio.workers.dev": {branch} is not a placeholder; a preview URL may use only {pr}, {branch_slug} and {sha}`,
+    ],
+    [
+      "https://pr-{PR}.example.dev/{commit}",
+      `preview.url is "https://pr-{PR}.example.dev/{commit}": {PR} and {commit} are not placeholders; a preview URL may use only {pr}, {branch_slug} and {sha}`,
+    ],
+    [
+      "https://pr-{pr.example.dev",
+      `preview.url is "https://pr-{pr.example.dev": it has a { or } that isn't part of a placeholder; a preview URL may use only {pr}, {branch_slug} and {sha}`,
+    ],
+    ["deploy-preview-{pr}.netlify.app", `preview.url is "deploy-preview-{pr}.netlify.app": a URL must start with http:// or https://`],
+    ["{pr}", `preview.url is "{pr}": a URL must start with http:// or https://`],
+    [42, "preview.url must be a string"],
+  ])("refuses a preview.url with an unknown placeholder or that isn't http(s), naming it: %j", (url, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ preview: { url } }) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [withUi({ viewports: [{ name: "tablet", width: 768, height: 1024 }] }), "ui.viewports is not a Kit config field"],
+    [withUi({ video: true }), "ui.video is not a Kit config field"],
+    [withUi({ beforeUrl: "https://penrithphysio.com.au" }), "ui.beforeUrl is not a Kit config field"],
+    [`{ "preview": { "url": null, "ready_timeout_minutes": 15 } }`, "preview.ready_timeout_minutes is not a Kit config field"],
+    [`{ "previews": { "url": "https://pr-{pr}.example.dev" } }`, "previews is not a Kit config field"],
+  ])("fails an unknown field under ui or preview, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [`{ "ui": ["src/**"] }`, "ui must be an object or null"],
+    [`{ "ui": false }`, "ui must be an object or null"],
+    [`{ "preview": "https://pr-{pr}.example.dev" }`, "preview must be an object or null"],
+  ])("fails a ui or preview block that isn't an object, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("names every problem in the ui and preview blocks at once", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        ui: { paths: [], url: "localhost:4321", before_url: "ftp://penrithphysio.com.au", default_routes: ["book"], video: true },
+        preview: { url: "https://{branch}.example.dev", bypass_header: "x-vercel-protection-bypass" },
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        "ui.paths is empty: list at least one glob of the files that make a pull request UI",
+        "ui.serve is missing",
+        `ui.url is "localhost:4321": a URL must start with http:// or https://`,
+        `ui.before_url is "ftp://penrithphysio.com.au": a URL must start with http:// or https://`,
+        `ui.default_routes[0] is "book": a route must be a path starting with one /, such as /book`,
+        `preview.url is "https://{branch}.example.dev": {branch} is not a placeholder; a preview URL may use only {pr}, {branch_slug} and {sha}`,
+        "ui.video is not a Kit config field",
+        "preview.bypass_header is not a Kit config field",
+      ],
+    });
+  });
+
+  it("names the ui and preview problems alongside the rest of the Kit config's", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ max_in_flight: -1, ui: { serve: "npm run preview", url: "http://localhost:4321" } }),
+    });
+
+    expect(!result.ok && result.errors).toEqual(["max_in_flight must be a whole number of at least 0", "ui.paths is missing"]);
+  });
+});
+
+describe("Visual evidence's Kit constants, which no Kit config can change", () => {
+  it("captures at one mobile and one desktop viewport, mobile first", () => {
+    expect(UI_VIEWPORTS).toEqual([
+      { name: "mobile", width: 390, height: 844 },
+      { name: "desktop", width: 1440, height: 900 },
+    ]);
+  });
+
+  it("gives the Reviewer at most 8 images", () => {
+    expect(REVIEWER_IMAGE_CAP).toBe(8);
+  });
+
+  it.each(["viewports", "max_images", "reviewer_images"])("refuses ui.%s as an unknown field", (key) => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", [key]: 4 } }),
+    });
+
+    expect(result).toEqual({ ok: false, errors: [`ui.${key} is not a Kit config field`] });
   });
 });
