@@ -985,6 +985,14 @@ describe("The Retro action", () => {
     expect(agent).toContain("FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out");
   });
 
+  // The push job's record step takes the transcript the Kit job's route names: `retro` for a Retro run.
+  it("keeps its transcript under the name the write the Run record action takes for the retro route", () => {
+    const record = actionNamed("write-run-record").steps.find((candidate) => candidate.includes("actions/download-artifact@"));
+
+    expect(record).toContain("name: fabrik-transcript-${{ inputs.role }}\n");
+    expect(steps[step("name: fabrik-transcript-retro\n")]).toBeDefined();
+  });
+
   it("passes out how its secrets loaded, the model and effort it ran and the commit it started from, for the push job and the Run record", () => {
     expect(text).toMatch(/\n  secrets-step:\n.*\n\s+value: \$\{\{ steps\.op\.outcome \}\}\n/);
     expect(text).toMatch(/\n  model:\n.*\n\s+value: \$\{\{ steps\.agent\.outputs\.model \}\}\n/);
