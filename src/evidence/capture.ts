@@ -81,7 +81,7 @@ export interface Capturer {
 export type CaptureOutcome =
   | { readonly kind: "off" }
   | { readonly kind: "skipped"; readonly why: string }
-  | { readonly kind: "recorded"; readonly result: CaptureResult };
+  | { readonly kind: "recorded"; readonly result: CaptureResult<Capture> };
 
 /**
  * The capture step's own timeout-minutes in loop.yml: a Kit constant, so a
@@ -185,7 +185,7 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function recorded(result: CaptureResult): CaptureOutcome {
+function recorded(result: CaptureResult<Capture>): CaptureOutcome {
   return { kind: "recorded", result };
 }
 
@@ -232,7 +232,7 @@ export interface CaptureStepFiles {
 }
 
 /** The capture result's file text, and the gallery of every screenshot with its PNG's bytes in `images`, by file name. */
-export function captureStepFiles(result: CaptureResult, images: ReadonlyMap<string, Uint8Array>, ticket: number): CaptureStepFiles {
+export function captureStepFiles(result: CaptureResult<Capture>, images: ReadonlyMap<string, Uint8Array>, ticket: number): CaptureStepFiles {
   const shots = result.captures.flatMap((capture): GalleryShot[] => {
     const png = images.get(capture.image);
     return png === undefined ? [] : [{ ...capture, png }];

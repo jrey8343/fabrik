@@ -301,7 +301,7 @@ const evidence = (result: CaptureResult, changes: Partial<UiEvidence> = {}): UiE
 });
 
 /** Every capture 200 OK: the Ticket's /book at both viewports and sides, and the Implementer's /book/waitlist at both viewports, After only. */
-const allCaptured: CaptureResult = {
+const allCaptured: CaptureResult<Capture> = {
   outcome: "captured",
   headSha: HEAD,
   captures: [
@@ -332,6 +332,14 @@ describe("The evidence section a UI PR's body carries", () => {
         `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null} -->`,
       ].join("\n"),
     );
+  });
+
+  // The Reviewer, and the Ticket's UI evidence, get nothing from a Prototype.
+  it("leaves out every capture of a Prototype's variant, in its counts, its widths and its routes", () => {
+    const [first, ...rest] = allCaptured.captures;
+    const mixed: CaptureResult = { ...allCaptured, captures: [variantCaptures[0]!, first!, ...variantCaptures.slice(1), ...rest] };
+
+    expect(evidenceSection(evidence(mixed))).toBe(evidenceSection(evidence(allCaptured)));
   });
 });
 

@@ -136,23 +136,27 @@ function sideCaptures(captures: readonly (Capture | VariantCapture)[]): Capture[
 }
 
 /**
- * What the Implement job's capture step records, as a contract every later
- * reader shares: the PR body's evidence section, the Reviewer's images, and
- * the UI prototypes Spec (#80). A failed capture keeps whatever it took first.
+ * What the Implement job's capture step records, and a prototype turn's
+ * capture of its variants, as a contract every later reader shares: the PR
+ * body's evidence section, the Reviewer's images, and the prototype round
+ * (#155). A failed capture keeps whatever it took first. A pull request's
+ * capture holds only Captures, and a prototype turn's only VariantCaptures,
+ * as CaptureResult<Capture> and CaptureResult<VariantCapture> say; a reader
+ * takes either.
  */
-export type CaptureResult =
+export type CaptureResult<C extends Capture | VariantCapture = Capture | VariantCapture> =
   | {
       readonly outcome: "captured";
       /** The head commit the branch was captured at. */
       readonly headSha: string;
       /** Never empty. */
-      readonly captures: readonly Capture[];
+      readonly captures: readonly C[];
     }
   | {
       readonly outcome: "failed";
       readonly reason: CaptureFailure;
       readonly headSha: string;
-      readonly captures: readonly Capture[];
+      readonly captures: readonly C[];
     };
 
 export type CaptureResultRead =
@@ -422,16 +426,17 @@ const SECTION_START = "<!-- fabrik:ui-evidence-start -->";
  * captured route with why it was chosen, flagged when it answered a server
  * error. A failed capture keeps the screenshots it took first, so the
  * section shows those too. Its routes may be agent text, so each shows as
- * code on one line and mentions nobody.
+ * code on one line and mentions nobody. It never shows a capture of a
+ * Prototype's variant: a Ticket's UI evidence gets nothing from a Prototype.
  */
 export function evidenceSection(evidence: UiEvidence): string {
   const { result, gallery, preview } = evidence;
-  const { captures } = result;
+  const captures = sideCaptures(result.captures);
   return [
     SECTION_START,
     "## UI evidence",
     ...(result.outcome === "failed" ? ["", failureLine(result.reason, captures)] : []),
-    ...(captures.length === 0 ? [] : ["", galleryLine(gallery, result)]),
+    ...(captures.length === 0 ? [] : ["", galleryLine(gallery, result.headSha, captures)]),
     "",
     previewLine(preview),
     ...(captures.length === 0 ? [] : ["", "Captured routes:", "", ...capturedRoutes(captures).map((chosen) => routeLine(chosen, captures))]),
@@ -488,7 +493,7 @@ export function serverErrorWords(answered: string, shows: string): string {
 /** How the evidence names each side. */
 export const SIDE_WORDS: Readonly<Record<CaptureSide, string>> = { before: "Before", after: "After" };
 
-function galleryLine(url: string | null, { headSha, captures }: CaptureResult): string {
+function galleryLine(url: string | null, headSha: string, captures: readonly Capture[]): string {
   if (url === null) return `The Implement run kept no gallery of its ${screenshots(captures.length)}.`;
   const besideProduction = captures.some(({ side }) => side === "before") ? " beside the production site" : "";
   const viewports = UI_VIEWPORTS.map(({ name }) => name).filter((name) => captures.some(({ viewport }) => viewport === name));
