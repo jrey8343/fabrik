@@ -82,6 +82,8 @@ jobs:
         uses: ./kit/.github/actions/run-loop
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          # Whether the fabrik-runs store is ready for a Retro, which the retro gate weighs.
+          find-store: "true"
 
   # The hourly Design queue check (#147), which catches a slot freed by an
   # event the Loop doesn't watch, such as needs-design coming off by hand.

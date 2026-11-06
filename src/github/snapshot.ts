@@ -8,9 +8,12 @@ import {
   type KitConfigSources,
   SKILLS_SOURCES_LOCK_PATH,
 } from "../kit/config.ts";
+import { storeIsPrivate } from "../kit/runStore.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
-import { AUDIT_LABEL, DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
+import { AUDIT_LABEL, DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT, RETRO_LABEL } from "../loop/labels.ts";
+import { escapeMarkerIn } from "../loop/markers.ts";
+import { retroWindowStart } from "../loop/retro.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
   AuditIssueSnapshot,
@@ -21,12 +24,13 @@ import type {
   LoopEvent,
   NamedPullRequestSnapshot,
   PullRequestSnapshot,
+  RetroSnapshot,
   Snapshot,
   SpecSnapshot,
   StartingComment,
   TicketSnapshot,
 } from "../loop/types.ts";
-import type { GitHub, Repo } from "./client.ts";
+import { type GitHub, pagesOf, type Repo } from "./client.ts";
 import { countEmptyDiffs, designSessionOf, designTurnFailedIn, pushedSinceVerdictIn, requestChangesRunIn, verdictsIn } from "./threads.ts";
 
 const ISSUE_QUERY = `
@@ -246,7 +250,8 @@ export const DESIGN_JOB_NAME = "Design-session turn";
  * bot's issue is taken for the App's (see byAppOf). A
  * Dispatch check also reads workflow runs, through `actions`: the Fabrik App
  * has no Actions permission (ADR-0002), so that is the Dispatch job's own
- * read-only GITHUB_TOKEN.
+ * read-only GITHUB_TOKEN. A scheduled tick also reads whether the fabrik-runs
+ * store is private, through `store` (see gatherRetroSlice).
  */
 export async function gatherSnapshot(
   github: GitHub,
@@ -255,6 +260,7 @@ export async function gatherSnapshot(
   operator: string | null,
   appLogin: string | null,
   actions: GitHub | null = null,
+  store: Pick<GitHub, "rest"> | null = null,
 ): Promise<Snapshot> {
   const [{ owner, kitIssues }, part, startingComment, audit, namedPullRequests] = await Promise.all([
     gatherKitIssues(github, repo),
@@ -267,15 +273,18 @@ export async function gatherSnapshot(
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
   // By default the Operator owns the Product repos they run Fabrik in.
+  const theOperator = part?.operator ?? operator ?? owner;
+  const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment, audit, retro: null, namedPullRequests }
-    : { ...part, spec, kitIssues, startingComment, audit, retro: null, namedPullRequests };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, namedPullRequests }
+    : { ...part, spec, kitIssues, startingComment, audit, retro, namedPullRequests };
 }
 
-// The newest Audit issues, open and closed: enough to hold this week's, any
-// open one, the last Audit and the last closed Audits the Auditor reads, since
-// a week opens at most three.
-const AUDIT_QUERY = `
+// The newest issues with a weekly gate's label (src/loop/weeklyGate.ts),
+// Audits or Retros, open and closed: enough to hold this week's, any open
+// one, the last one and the last closed Audits the Auditor reads, since a
+// week opens at most three.
+const WEEKLY_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $label: String!) {
     repository(owner: $owner, name: $name) {
       defaultBranchRef { target { oid } }
@@ -286,7 +295,7 @@ const AUDIT_QUERY = `
   }
 `;
 
-interface AuditQueryResult {
+interface WeeklyIssuesQueryResult {
   repository: {
     defaultBranchRef: { target: { oid: string } } | null;
     issues: {
@@ -309,7 +318,7 @@ interface AuditQueryResult {
  * byAppOf): what the audit gate weighs on a scheduled tick.
  */
 async function gatherAuditSlice(github: Pick<GitHub, "graphql">, repo: Repo, appLogin: string | null): Promise<AuditSnapshot> {
-  return auditSliceOf(await queryAuditIssues(github, repo), appLogin);
+  return auditSliceOf(await queryWeeklyIssues(github, repo, AUDIT_LABEL), appLogin);
 }
 
 /**
@@ -323,28 +332,130 @@ async function gatherAuditSlice(github: Pick<GitHub, "graphql">, repo: Repo, app
  * Audit here.
  */
 export async function gatherAuditSliceFor(github: Pick<GitHub, "graphql">, repo: Repo, pending: number): Promise<AuditSnapshot> {
-  const data = await queryAuditIssues(github, repo);
+  const data = await queryWeeklyIssues(github, repo, AUDIT_LABEL);
   const opener = data.repository.issues.nodes.find((issue) => issue.number === pending)?.author ?? null;
   return auditSliceOf(data, opener?.__typename === "Bot" ? loginOf(opener) : null);
 }
 
-function queryAuditIssues(github: Pick<GitHub, "graphql">, repo: Repo): Promise<AuditQueryResult> {
-  return github.graphql<AuditQueryResult>(AUDIT_QUERY, { owner: repo.owner, name: repo.name, label: AUDIT_LABEL });
+function queryWeeklyIssues(github: Pick<GitHub, "graphql">, repo: Repo, label: string): Promise<WeeklyIssuesQueryResult> {
+  return github.graphql<WeeklyIssuesQueryResult>(WEEKLY_ISSUES_QUERY, { owner: repo.owner, name: repo.name, label });
 }
 
-function auditSliceOf(data: AuditQueryResult, appLogin: string | null): AuditSnapshot {
-  return {
-    head: data.repository.defaultBranchRef?.target.oid ?? null,
-    issues: data.repository.issues.nodes.map((issue) => ({
-      number: issue.number,
-      title: issue.title,
-      open: issue.state === "OPEN",
-      stateReason: issue.stateReason === null ? null : (issue.stateReason.toLowerCase() as AuditIssueSnapshot["stateReason"]),
-      createdAt: issue.createdAt,
-      byApp: byAppOf(issue.author, appLogin),
-      body: issue.body,
-    })),
-  };
+function auditSliceOf(data: WeeklyIssuesQueryResult, appLogin: string | null): AuditSnapshot {
+  return { head: data.repository.defaultBranchRef?.target.oid ?? null, issues: weeklyIssuesOf(data, appLogin) };
+}
+
+/** Each issue the query read, with whether the Fabrik App, whose bot login is `appLogin`, opened it (see byAppOf). */
+function weeklyIssuesOf(data: WeeklyIssuesQueryResult, appLogin: string | null): AuditIssueSnapshot[] {
+  return data.repository.issues.nodes.map((issue) => ({
+    number: issue.number,
+    title: issue.title,
+    open: issue.state === "OPEN",
+    stateReason: issue.stateReason === null ? null : (issue.stateReason.toLowerCase() as AuditIssueSnapshot["stateReason"]),
+    createdAt: issue.createdAt,
+    byApp: byAppOf(issue.author, appLogin),
+    body: issue.body,
+  }));
+}
+
+/**
+ * What the retro gate weighs on the scheduled tick at `now`: whether the
+ * fabrik-runs store is ready, the newest `fabrik:retro` issues with whether
+ * the Fabrik App, whose bot login is `appLogin`, opened each (see byAppOf),
+ * and whether anything is new since the window a Retro opened now would
+ * start (src/loop/retro.ts): an agent PR merged or closed, or an issue the
+ * Operator opened with an escape marker. `store` is a token that reads only
+ * the store's metadata, which the tick mints once it has found the Fabrik App
+ * on fabrik-runs (src/kit/find-store-main.ts, the record action's store
+ * finder); null when it found none, so the store isn't ready.
+ */
+async function gatherRetroSlice(
+  github: Pick<GitHub, "graphql">,
+  repo: Repo,
+  now: string,
+  operator: string,
+  appLogin: string | null,
+  store: Pick<GitHub, "rest"> | null,
+): Promise<RetroSnapshot> {
+  const [storeReady, data] = await Promise.all([
+    store === null ? false : storeIsPrivate(store),
+    queryWeeklyIssues(github, repo, RETRO_LABEL),
+  ]);
+  const issues = weeklyIssuesOf(data, appLogin);
+  const since = Date.parse(retroWindowStart(now, issues));
+  const [agentPullRequestClosed, escapeFiled] = await Promise.all([
+    agentPullRequestClosedSince(github, repo, since),
+    escapeFiledSince(github, repo, operator, since),
+  ]);
+  return { storeReady, issues, agentPullRequestClosed, escapeFiled };
+}
+
+// Merged and closed PRs, newest-updated first, so paging stops at the first
+// page that reaches back past the window start: a PR that closed in the
+// window was updated in it.
+const CLOSED_PULL_REQUESTS_QUERY = `
+  query ($owner: String!, $name: String!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequests(states: [MERGED, CLOSED], first: 50, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
+        pageInfo { hasNextPage endCursor }
+        nodes { headRefName closedAt updatedAt author { __typename } }
+      }
+    }
+  }
+`;
+
+interface ClosedPullRequestNode {
+  headRefName: string;
+  closedAt: string | null;
+  updatedAt: string;
+  author: { __typename: string } | null;
+}
+
+/** Whether an agent PR (src/loop/agentPullRequest.ts) merged, or closed unmerged, at or after `since`. */
+async function agentPullRequestClosedSince(github: Pick<GitHub, "graphql">, repo: Repo, since: number): Promise<boolean> {
+  const closedAgentPullRequest = (pr: ClosedPullRequestNode) =>
+    pr.closedAt !== null &&
+    Date.parse(pr.closedAt) >= since &&
+    isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" });
+  const pullRequests = await pagesOf<ClosedPullRequestNode>(
+    github,
+    CLOSED_PULL_REQUESTS_QUERY,
+    repo,
+    {},
+    (data) => data.repository.pullRequests,
+    (page) => page.some((pr) => closedAgentPullRequest(pr) || Date.parse(pr.updatedAt) < since),
+  );
+  return pullRequests.some(closedAgentPullRequest);
+}
+
+// The issues one person opened, newest first, so paging stops at the first page older than the window.
+const ISSUES_OPENED_BY_QUERY = `
+  query ($owner: String!, $name: String!, $after: String, $operator: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(first: 25, after: $after, filterBy: { createdBy: $operator }, orderBy: { field: CREATED_AT, direction: DESC }) {
+        pageInfo { hasNextPage endCursor }
+        nodes { createdAt body }
+      }
+    }
+  }
+`;
+
+/**
+ * Whether the Operator opened an issue whose body has an escape marker at or
+ * after `since`, such as a filed Audit candidate: an Architectural escape,
+ * which only the Operator's issues count as.
+ */
+async function escapeFiledSince(github: Pick<GitHub, "graphql">, repo: Repo, operator: string, since: number): Promise<boolean> {
+  const filed = (issue: { createdAt: string; body: string }) => Date.parse(issue.createdAt) >= since && escapeMarkerIn(issue.body) !== null;
+  const issues = await pagesOf<{ createdAt: string; body: string }>(
+    github,
+    ISSUES_OPENED_BY_QUERY,
+    repo,
+    { operator },
+    (data) => data.repository.issues,
+    (page) => page.some((issue) => filed(issue) || Date.parse(issue.createdAt) < since),
+  );
+  return issues.some(filed);
 }
 
 /** A PR as the REST API returns it: the fields an Auditor's named PRs are read from. */
