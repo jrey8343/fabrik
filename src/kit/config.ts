@@ -149,24 +149,26 @@ export interface PreviewOf {
 
 /**
  * The pull request's preview deployment: `template` with `{pr}` its number,
- * `{branch_slug}` its branch's slug (branchSlug) and `{sha}` its full head
- * commit, written out as a parsed URL, so it is one line that can't break out of a link.
+ * `{branch_slug}` its branch's slug and `{sha}` its full head commit, written
+ * out as a parsed URL, so it is one line that can't break out of a link. So
+ * the agent branch fabrik/ticket-12 is fabrik-ticket-12, a name that fits in
+ * a hostname, as hosts name a branch's preview. The Kit never shortens it,
+ * though a host may shorten a long one.
  */
 export function previewUrl(template: string, { number, branch, headSha }: PreviewOf): string {
-  const url = URL.parse(fillPlaceholders(template, { pr: String(number), branch_slug: branchSlug(branch), sha: headSha }));
+  const url = URL.parse(fillPlaceholders(template, { pr: String(number), branch_slug: slug(branch), sha: headSha }));
   if (url === null) throw new Error(`The preview.url template ${template} doesn't fill in to a URL`);
   return url.href;
 }
 
 /**
- * `{branch_slug}`: the branch name in lower case, with each run of characters
- * other than a letter or a digit (a to z, 0 to 9) made one `-`, and no `-` at
- * either end. So the agent branch fabrik/ticket-12 is fabrik-ticket-12, a name
- * that fits in a hostname, as hosts name a branch's preview. The Kit never
- * shortens it, though a host may shorten a long one.
+ * The text as a slug: in lower case, with each run of characters other than a
+ * letter or a digit (a to z, 0 to 9) made one `-`, and no `-` at either end.
+ * A preview's `{branch_slug}` is its branch's, and a screenshot's file name
+ * holds its route's (src/evidence/capture.ts).
  */
-export function branchSlug(branch: string): string {
-  return branch
+export function slug(text: string): string {
+  return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");

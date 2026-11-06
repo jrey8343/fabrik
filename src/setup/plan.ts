@@ -111,7 +111,7 @@ export interface VisualEvidenceAnswers {
   readonly beforeUrl?: string;
   /** `ui.default_routes`: the routes captured when neither the Ticket nor the Implementer names any. */
   readonly defaultRoutes?: readonly string[];
-  /** `preview.url`: a template that may use `{pr}`, `{branch_slug}` (branchSlug's rule) and `{sha}`; left out, no preview is linked. */
+  /** `preview.url`: a template that may use `{pr}`, `{branch_slug}` (the branch's slug, as src/kit/config.ts's slug makes it) and `{sha}`; left out, no preview is linked. */
   readonly previewUrl?: string;
 }
 

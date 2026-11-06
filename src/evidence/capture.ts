@@ -2,7 +2,7 @@
 // agent has ended: every decision the capture step makes, behind the
 // Capturer, which does what capture does to the runner. The Playwright shell
 // (src/evidence/capture-main.ts) is the real Capturer, and tests fake it. Pure, no I/O.
-import { UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+import { slug, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { parseImplementOutput } from "../loop/implementOutput.ts";
 import { gallery, type GalleryShot } from "./gallery.ts";
 import {
@@ -205,7 +205,7 @@ function shotsFor(routes: readonly ChosenRoute[], ui: UiConfig): Shot[] {
         viewport,
         side,
         url: `${base.replace(/\/+$/, "")}${route}`,
-        image: `${side}-${viewport.name}-${at + 1}-${slug(route)}.png`,
+        image: `${side}-${viewport.name}-${at + 1}-${routeSlug(route)}.png`,
       })),
     ),
   );
@@ -215,9 +215,8 @@ function shotsFor(routes: readonly ChosenRoute[], ui: UiConfig): Shot[] {
 const SLUG_LENGTH = 40;
 
 /** A route as a file name's part: its letters and digits, lowercased, with a dash for each run of anything else, `root` for `/`. */
-function slug(route: string): string {
-  const dashed = route.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+/, "");
-  return dashed.slice(0, SLUG_LENGTH).replace(/-+$/, "") || "root";
+function routeSlug(route: string): string {
+  return slug(route).slice(0, SLUG_LENGTH).replace(/-+$/, "") || "root";
 }
 
 /** The step output the push job reads the capture result from: one compact JSON line, empty when nothing was captured. */
