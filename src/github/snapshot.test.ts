@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
 import { anIssue, aPullRequest, AUDITED_SHA, auditBody, designQueueSnapshotOf, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { type CaptureResult, evidenceSection } from "../evidence/uiEvidence.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
@@ -571,6 +572,94 @@ describe("Gathering who opened an issue", () => {
       kind: "nothing",
       reason: "#98 is no longer a pending Audit, so its Auditor's result is stale",
     });
+  });
+});
+
+/** The pull request a Loop event is about, as GitHub holds it: opened by `author`, with this body. */
+function pullRequestGitHub({
+  author = APP_BOT,
+  body = "",
+}: { author?: { login: string; __typename: string } | null; body?: string } = {}): GitHub {
+  return {
+    async graphql(query: string): Promise<unknown> {
+      if (!query.includes("pullRequest(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      // GitHub answers only the fields the query selects.
+      const pullRequestQuery = query.slice(query.indexOf("pullRequest(number: $number)"));
+      const selectsLogin = /^\s*author \{[^}]*login/m.test(pullRequestQuery);
+      return {
+        repository: {
+          owner: { login: "acme" },
+          pullRequest: {
+            number: 50,
+            state: "OPEN",
+            isDraft: true,
+            headRefName: "fabrik/ticket-7",
+            headRefOid: HEAD_SHA,
+            author: author === null || selectsLogin ? author : { __typename: author.__typename },
+            ...(/^\s*body$/m.test(pullRequestQuery) ? { body } : {}),
+            labels: { nodes: [] },
+            comments: { nodes: [] },
+            reviews: { nodes: [] },
+          },
+        },
+      };
+    },
+  } as unknown as GitHub;
+}
+
+describe("Gathering a pull request's UI evidence marker", () => {
+  const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
+  const captured: CaptureResult = {
+    outcome: "captured",
+    headSha: HEAD_SHA,
+    captures: [{ route: "/book", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-book.png" }],
+  };
+  /** A UI PR's body as the push job writes it: the summary, the evidence section and its marker, then Closes. */
+  const uiBody = (run: number, artifact: number | null) =>
+    [
+      "Adds a waitlist to full days.",
+      evidenceSection({ result: captured, run, artifact, gallery: "https://github.com/acme/shop/actions/runs/9100/artifacts/9201", preview: { kind: "none" } }),
+      "Closes #7",
+    ].join("\n\n");
+
+  /** The pull request as gathered, opened by this account, by a run that knows the App's login, or that doesn't (null). */
+  async function gathered(body: string, author: { login: string; __typename: string } | null = APP_BOT, appLogin: string | null = APP_LOGIN) {
+    return (await gatherSnapshot(pullRequestGitHub({ author, body }), repo, pushed, null, appLogin)).pullRequest;
+  }
+
+  it("reads back where the evidence section's marker says the UI evidence is kept, in a body the Fabrik App wrote", async () => {
+    expect(await gathered(uiBody(9100, 9202))).toMatchObject({ uiEvidence: { run: 9100, artifact: 9202 } });
+  });
+
+  it("reads back a marker naming no artifact, as when capture left no result", async () => {
+    expect(await gathered(uiBody(9100, null))).toMatchObject({ uiEvidence: { run: 9100, artifact: null } });
+  });
+
+  it("finds no UI evidence on a PR whose body has no marker: not a UI PR", async () => {
+    expect(await gathered("Adds a retry to the booking API.\n\nCloses #7")).toMatchObject({ uiEvidence: null });
+  });
+
+  it.each([
+    ["a person", { login: "fabrik-app", __typename: "User" }],
+    ["another bot", { login: "other-app", __typename: "Bot" }],
+    ["a deleted account", null],
+  ])("ignores a marker in the body of a PR %s opened, so nobody can fake one", async (_, author) => {
+    expect(await gathered(uiBody(9100, 9202), author)).toMatchObject({ uiEvidence: null });
+  });
+
+  it("takes any bot's body for the App's when the run doesn't know the App's login, as the Kit job, which only routes, doesn't", async () => {
+    expect(await gathered(uiBody(9100, 9202), APP_BOT, null)).toMatchObject({ uiEvidence: { run: 9100, artifact: 9202 } });
+    expect(await gathered(uiBody(9100, 9202), { login: "fabrik-app", __typename: "User" }, null)).toMatchObject({ uiEvidence: null });
+  });
+
+  it.each([
+    ["isn't JSON", "<!-- fabrik:ui-evidence {run:9100} -->"],
+    ["names no run", `<!-- fabrik:ui-evidence {"artifact":9202} -->`],
+    ["names a run that isn't an id", `<!-- fabrik:ui-evidence {"run":"9100","artifact":9202} -->`],
+    ["names an artifact that isn't an id", `<!-- fabrik:ui-evidence {"run":9100,"artifact":-1} -->`],
+    ["shares its line", `See <!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`],
+  ])("finds no UI evidence where the marker %s", async (_, marker) => {
+    expect(await gathered(`Adds a waitlist.\n\n${marker}\n\nCloses #7`)).toMatchObject({ uiEvidence: null });
   });
 });
 

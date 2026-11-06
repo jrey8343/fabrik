@@ -1,9 +1,13 @@
 // The UI evidence module (#153): whether a pull request is UI, which routes to
-// capture and why, and the capture result the Implement job's capture step
-// writes and every later reader shares. Pure, no I/O.
+// capture and why, the capture result the Implement job's capture step
+// writes and every later reader shares, and what the Operator reads of it on
+// the PR: the evidence section, its marker, which the PR snapshot reads back,
+// and withoutEvidence, which keeps both out of agent text. The gallery is
+// beside it (src/evidence/gallery.ts). Pure, no I/O.
 import { posix } from "node:path";
 import { UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
+import { withoutMentions } from "../loop/mentions.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 
 /**
@@ -78,9 +82,11 @@ export type CaptureSide = (typeof CAPTURE_SIDES)[number];
 
 /**
  * Why capture failed: the server never answered at `ui.url`, capture ran out
- * of time, there was no route to capture, or anything else it caught.
+ * of time, there was no route to capture, or anything else it caught. The
+ * push job records the last, `no-result`, itself: a UI pull request whose
+ * Implement job passed it no capture result it could read.
  */
-export const CAPTURE_FAILURES = ["server-did-not-start", "timeout", "no-routes", "error"] as const;
+export const CAPTURE_FAILURES = ["server-did-not-start", "timeout", "no-routes", "error", "no-result"] as const;
 
 export type CaptureFailure = (typeof CAPTURE_FAILURES)[number];
 
@@ -218,7 +224,226 @@ function isOneOf<T extends string>(options: readonly T[], value: unknown): value
   return (options as readonly unknown[]).includes(value);
 }
 
-/** `a`, `a or b`, or `a, b or c`. */
-function spelled(options: readonly string[]): string {
-  return options.length <= 1 ? options.join("") : `${options.slice(0, -1).join(", ")} or ${options.at(-1)}`;
+/** `a`, `a or b`, or `a, b or c`; or with `and`. */
+function spelled(options: readonly string[], conjunction: "or" | "and" = "or"): string {
+  return options.length <= 1 ? options.join("") : `${options.slice(0, -1).join(", ")} ${conjunction} ${options.at(-1)}`;
+}
+
+/** How the evidence section names why each route was captured. */
+export const ROUTE_REASON_WORDS: Readonly<Record<RouteReason, string>> = {
+  ticket: "named by the Ticket",
+  implementer: "named by the Implementer",
+  default: "a default route",
+};
+
+/** Whether a pull request's preview deployment is linked: none is declared, it answered and is linked, or it never answered. */
+export type PreviewLink =
+  | { readonly kind: "none" }
+  | { readonly kind: "linked"; readonly url: string }
+  | { readonly kind: "never-answered"; readonly url: string };
+
+/** Where a UI pull request's evidence is kept, as its marker records it. */
+export interface EvidenceMarker {
+  /** The Actions run whose Implement job captured it. */
+  readonly run: number;
+  /** The id of that run's artifact holding the screenshots and the capture result, or null when it kept none. */
+  readonly artifact: number | null;
+}
+
+/** A UI pull request's evidence, as the push job puts it together for the PR body. */
+export interface UiEvidence extends EvidenceMarker {
+  /** What capture recorded. */
+  readonly result: CaptureResult;
+  /** The gallery's web address, or null when the run kept none. */
+  readonly gallery: string | null;
+  readonly preview: PreviewLink;
+}
+
+/** The hidden line the evidence section opens with, so it can be found and replaced whole. */
+const SECTION_START = "<!-- fabrik:ui-evidence-start -->";
+
+/**
+ * The evidence section of a UI pull request's body, between a hidden start
+ * line and the marker (evidenceMarkerIn): why capture failed, when it did;
+ * the gallery link; the preview link, or why there is none; and each
+ * captured route with why it was chosen, flagged when it answered a server
+ * error. A failed capture keeps the screenshots it took first, so the
+ * section shows those too. Its routes may be agent text, so each shows as
+ * code on one line and mentions nobody.
+ */
+export function evidenceSection(evidence: UiEvidence): string {
+  const { result, gallery, preview } = evidence;
+  const { captures } = result;
+  return [
+    SECTION_START,
+    "## UI evidence",
+    ...(result.outcome === "failed" ? ["", failureLine(result.reason, captures)] : []),
+    ...(captures.length === 0 ? [] : ["", galleryLine(gallery, result)]),
+    "",
+    previewLine(preview),
+    ...(captures.length === 0 ? [] : ["", "Captured routes:", "", ...capturedRoutes(captures).map((chosen) => routeLine(chosen, captures))]),
+    evidenceMarker(evidence),
+  ].join("\n");
+}
+
+/** Why capture failed, in plain words. */
+const FAILURE_WORDS: Readonly<Record<CaptureFailure, string>> = {
+  "server-did-not-start": "the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran",
+  timeout: "it ran out of time",
+  "no-routes": "there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`",
+  error: "it hit an error the Kit didn't expect, which the Implement job's log shows",
+  "no-result": "it left no result the push job could read",
+};
+
+/** A failed capture's reason, and the screenshots it took first: a failed capture keeps them. */
+function failureLine(reason: CaptureFailure, captures: readonly Capture[]): string {
+  const took = captures.length === 0 ? "There are no screenshots." : `It took ${screenshots(captures.length)} first.`;
+  return `**Capture failed:** ${FAILURE_WORDS[reason]}. ${took}`;
+}
+
+function screenshots(count: number): string {
+  return `${count} screenshot${count === 1 ? "" : "s"}`;
+}
+
+/** A captured route, why it was chosen, and every screenshot of it that shows a server's error page rather than the design. */
+function routeLine({ route, reason }: ChosenRoute, captures: readonly Capture[]): string {
+  // Its route may be the Implementer's: agent text, which never mentions anyone.
+  const line = `- ${code(withoutMentions(route))}, ${ROUTE_REASON_WORDS[reason]}`;
+  const errors = captures.filter((capture) => capture.route === route && isServerError(capture.status));
+  if (errors.length === 0) return line;
+  const answered = errors.map(({ status, side, viewport }) => `${status} for ${SIDE_WORDS[side]} at ${viewport}`);
+  const shows = errors.length === 1 ? "that screenshot shows" : "those screenshots show";
+  return `${line}. **Server error:** it answered ${spelled(answered, "and")}, so ${shows} an error page, not the design.`;
+}
+
+/** Whether a page answered with a server error, so its screenshot is of an error page. */
+export function isServerError(status: number): boolean {
+  return status >= 500 && status <= 599;
+}
+
+/** How the evidence names each side. */
+export const SIDE_WORDS: Readonly<Record<CaptureSide, string>> = { before: "Before", after: "After" };
+
+function galleryLine(url: string | null, { headSha, captures }: CaptureResult): string {
+  if (url === null) return `The Implement run kept no gallery of its ${screenshots(captures.length)}.`;
+  const besideProduction = captures.some(({ side }) => side === "before") ? " beside the production site" : "";
+  const viewports = UI_VIEWPORTS.map(({ name }) => name).filter((name) => captures.some(({ viewport }) => viewport === name));
+  return `${link("Open the gallery", url)} of ${screenshots(captures.length)}: this branch at \`${headSha.slice(0, 7)}\`${besideProduction}, at ${spelled(viewports, "and")} ${viewports.length === 1 ? "width" : "widths"}.`;
+}
+
+function previewLine(preview: PreviewLink): string {
+  switch (preview.kind) {
+    case "linked":
+      return `${link("Open the preview deployment", preview.url)}.`;
+    case "never-answered":
+      // As code, so GitHub doesn't link an address that never answered.
+      return `No preview link: the preview at ${code(preview.url)} never answered.`;
+    case "none":
+      return "No preview link: Kit config declares no `preview.url`.";
+  }
+}
+
+/** Each captured route once, in the order it was first captured, with its reason. */
+function capturedRoutes(captures: readonly Capture[]): ChosenRoute[] {
+  return onceEach(captures.map(({ route, reason }) => ({ route, reason })));
+}
+
+/** The marker line closing the evidence section. */
+function evidenceMarker({ run, artifact }: EvidenceMarker): string {
+  return `<!-- fabrik:ui-evidence ${JSON.stringify({ run, artifact })} -->`;
+}
+
+/** The marker line, matched against a whole line with its outer whitespace trimmed. */
+const EVIDENCE_MARKER = /^<!-- fabrik:ui-evidence (\{.*\}) -->$/;
+
+/**
+ * Where the marker in this body says its UI evidence is kept, or null when it
+ * has none: not a UI pull request. Read only from a body the Fabrik App wrote
+ * (src/github/snapshot.ts). The last marker counts, the section being Kit
+ * text after the Implementer's summary, and one that doesn't read is none.
+ */
+export function evidenceMarkerIn(body: string): EvidenceMarker | null {
+  const markers = body.split("\n").flatMap((line) => {
+    const marker = markerOf(EVIDENCE_MARKER.exec(line.trim())?.[1]);
+    return marker === null ? [] : [marker];
+  });
+  return markers.at(-1) ?? null;
+}
+
+function markerOf(json: string | undefined): EvidenceMarker | null {
+  if (json === undefined) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!isObject(value)) return null;
+  const { run, artifact } = value;
+  if (!isId(run) || !(artifact === null || isId(artifact))) return null;
+  return { run, artifact };
+}
+
+/** A GitHub id: a whole number above zero. */
+function isId(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
+/**
+ * A line that looks like one of the evidence section's hidden lines, matched
+ * with its outer whitespace trimmed: its start line, its marker, or anything
+ * spaced or spelled near enough to pass for either. withoutEvidence drops them all.
+ */
+const EVIDENCE_LINE = /^<!--\s*fabrik:ui-evidence\b.*-->$/;
+
+const SECTION_START_LINE = /^<!--\s*fabrik:ui-evidence-start\s*-->$/;
+
+/**
+ * The text without its evidence: every evidence section, from its start line
+ * through the marker after it, and any other line that looks like an evidence
+ * line, even in a code block, each with the blank lines that set it apart.
+ * The rest stays as it was. Run on agent text, so no agent can forge a marker
+ * or carry an old section forward.
+ */
+export function withoutEvidence(text: string): string {
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  for (let at = 0; at < lines.length; at++) {
+    const line = lines[at] ?? "";
+    if (!EVIDENCE_LINE.test(line.trim())) {
+      kept.push(line);
+      continue;
+    }
+    // A start line opens a section through the marker after it; with no marker after it, it goes alone.
+    const end = SECTION_START_LINE.test(line.trim())
+      ? lines.findIndex((each, i) => i > at && EVIDENCE_LINE.test(each.trim()) && !SECTION_START_LINE.test(each.trim()))
+      : -1;
+    if (end !== -1) at = end;
+    while (at + 1 < lines.length && isBlank(lines[at + 1])) at++;
+    if (at === lines.length - 1) while (kept.length > 0 && isBlank(kept.at(-1))) kept.pop();
+  }
+  return kept.join("\n");
+}
+
+function isBlank(line: string | undefined): boolean {
+  return line !== undefined && line.trim() === "";
+}
+
+/** A Markdown link. */
+function link(text: string, url: string): string {
+  return `[${text}](<${url}>)`;
+}
+
+/**
+ * Text as one Markdown code span on one line, whatever it holds: a line
+ * break or other control character shows as U+FFFD, so agent text can never
+ * start a line of its own, and the span's backticks outnumber any run of them inside.
+ */
+function code(text: string): string {
+  const oneLine = text.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, "\uFFFD");
+  const longest = Math.max(0, ...[...oneLine.matchAll(/`+/g)].map(([run]) => run.length));
+  const fence = "`".repeat(longest + 1);
+  // CommonMark drops one space each side, so a backtick at either end stays in the span.
+  const pad = oneLine.startsWith("`") || oneLine.endsWith("`") ? " " : "";
+  return `${fence}${pad}${oneLine}${pad}${fence}`;
 }

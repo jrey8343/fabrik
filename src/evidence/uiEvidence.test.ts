@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { type CaptureResult, isUi, parseCaptureResult, routesFor } from "./uiEvidence.ts";
+import { type CaptureFailure, type CaptureResult, evidenceSection, isUi, parseCaptureResult, routesFor, type UiEvidence, withoutEvidence } from "./uiEvidence.ts";
 
 /** The Pilot's ui block: an Astro site served from its build. */
 const ui: UiConfig = {
@@ -197,11 +197,11 @@ describe("The capture result", () => {
     ["a short head SHA", withResult({ headSha: "4f2b9c0" }), "headSha must be a full commit SHA"],
     ["captures that aren't a list", withResult({ captures: { "/book": [] } }), "captures must be a list"],
     ["a capture outcome with no captures", withResult({ captures: [] }), `captures can't be empty when the outcome is "captured"`],
-    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be server-did-not-start, timeout, no-routes or error"],
+    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be server-did-not-start, timeout, no-routes, error or no-result"],
     [
       "a failed outcome with an unknown reason",
       withResult({ outcome: "failed", reason: "flaky" }),
-      "reason must be server-did-not-start, timeout, no-routes or error",
+      "reason must be server-did-not-start, timeout, no-routes, error or no-result",
     ],
     ["a capture that isn't an object", withResult({ captures: ["after-mobile-book.png"] }), "captures[0] must be an object"],
     ["a route that isn't a path", withCapture({ route: "book" }), "captures[0].route must be a path starting with one /"],
@@ -256,11 +256,251 @@ describe("The capture result", () => {
     expect(parseCaptureResult(text)).toEqual({
       ok: false,
       errors: [
-        "reason must be server-did-not-start, timeout, no-routes or error",
+        "reason must be server-did-not-start, timeout, no-routes, error or no-result",
         "headSha must be a full commit SHA",
         "captures[1].side must be before or after",
         "captures[1].status must be an HTTP status from 100 to 599",
       ],
     });
+  });
+});
+
+const GALLERY = "https://github.com/acme/shop/actions/runs/9100/artifacts/9201";
+
+/** The evidence the push job puts together for a UI PR's body: this result, kept by run 9100, with no preview declared. */
+const evidence = (result: CaptureResult, changes: Partial<UiEvidence> = {}): UiEvidence => ({
+  result,
+  run: 9100,
+  artifact: 9202,
+  gallery: GALLERY,
+  preview: { kind: "none" },
+  ...changes,
+});
+
+/** Every capture 200 OK: the Ticket's /book at both viewports and sides, and the Implementer's /book/waitlist at both viewports, After only. */
+const allCaptured: CaptureResult = {
+  outcome: "captured",
+  headSha: HEAD,
+  captures: [
+    { route: "/book", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-book.png" },
+    { route: "/book", reason: "ticket", viewport: "desktop", side: "after", status: 200, image: "after-desktop-book.png" },
+    { route: "/book/waitlist", reason: "implementer", viewport: "mobile", side: "after", status: 200, image: "after-mobile-book-waitlist.png" },
+    { route: "/book/waitlist", reason: "implementer", viewport: "desktop", side: "after", status: 200, image: "after-desktop-book-waitlist.png" },
+    { route: "/book", reason: "ticket", viewport: "mobile", side: "before", status: 200, image: "before-mobile-book.png" },
+    { route: "/book", reason: "ticket", viewport: "desktop", side: "before", status: 200, image: "before-desktop-book.png" },
+  ],
+};
+
+describe("The evidence section a UI PR's body carries", () => {
+  it("links the gallery, lists each captured route with why it was chosen, and ends with the marker naming where the images are kept", () => {
+    expect(evidenceSection(evidence(allCaptured))).toBe(
+      [
+        "<!-- fabrik:ui-evidence-start -->",
+        "## UI evidence",
+        "",
+        `[Open the gallery](<${GALLERY}>) of 6 screenshots: this branch at \`4f2b9c0\` beside the production site, at mobile and desktop widths.`,
+        "",
+        "No preview link: Kit config declares no `preview.url`.",
+        "",
+        "Captured routes:",
+        "",
+        "- `/book`, named by the Ticket",
+        "- `/book/waitlist`, named by the Implementer",
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`,
+      ].join("\n"),
+    );
+  });
+});
+
+describe("The evidence section's gallery line", () => {
+  it("says so when the run kept the screenshots but no gallery of them", () => {
+    const lines = evidenceSection(evidence(allCaptured, { gallery: null })).split("\n");
+
+    expect(lines).toContain("The Implement run kept no gallery of its 6 screenshots.");
+    expect(lines.some((line) => line.includes("Open the gallery"))).toBe(false);
+  });
+});
+
+describe("The evidence section's preview line", () => {
+  /** The section's lines, without the marker and start lines. */
+  const linesOf = (changes: Partial<UiEvidence>) => evidenceSection(evidence(allCaptured, changes)).split("\n");
+
+  it("links the preview deployment once it answers", () => {
+    const lines = linesOf({ preview: { kind: "linked", url: "https://pr-12.shop.example.dev/" } });
+
+    expect(lines).toContain("[Open the preview deployment](<https://pr-12.shop.example.dev/>).");
+    expect(lines).not.toContain("No preview link: Kit config declares no `preview.url`.");
+  });
+
+  it("says when the preview never answered, naming the address it polled but not linking it", () => {
+    const lines = linesOf({ preview: { kind: "never-answered", url: "https://pr-12.shop.example.dev/" } });
+
+    expect(lines).toContain("No preview link: the preview at `https://pr-12.shop.example.dev/` never answered.");
+  });
+
+  it("says when Kit config declares no preview", () => {
+    expect(linesOf({ preview: { kind: "none" } })).toContain("No preview link: Kit config declares no `preview.url`.");
+  });
+});
+
+describe("The evidence section's routes", () => {
+  /** The section's route lines. */
+  const routeLines = (result: CaptureResult) =>
+    evidenceSection(evidence(result))
+      .split("\n")
+      .filter((line) => line.startsWith("- "));
+
+  it("flag a route that answered a server error, naming each screenshot that shows the error page", () => {
+    const result: CaptureResult = {
+      ...allCaptured,
+      captures: allCaptured.captures.map((capture) =>
+        capture.route === "/book/waitlist" && capture.viewport === "mobile" ? { ...capture, status: 503 } : capture,
+      ),
+    };
+
+    expect(routeLines(result)).toEqual([
+      "- `/book`, named by the Ticket",
+      "- `/book/waitlist`, named by the Implementer. **Server error:** it answered 503 for After at mobile, so that screenshot shows an error page, not the design.",
+    ]);
+  });
+
+  it("flag every screenshot of a route that answered a server error, Before or After", () => {
+    const result: CaptureResult = {
+      ...allCaptured,
+      captures: allCaptured.captures.map((capture) =>
+        capture.route !== "/book" ? capture : { ...capture, status: capture.side === "after" ? 500 : 502 },
+      ),
+    };
+
+    expect(routeLines(result)).toEqual([
+      "- `/book`, named by the Ticket. **Server error:** it answered 500 for After at mobile, 500 for After at desktop, 502 for Before at mobile and 502 for Before at desktop, so those screenshots show an error page, not the design.",
+      "- `/book/waitlist`, named by the Implementer",
+    ]);
+  });
+
+  it("don't flag a page that answered other than with a server error", () => {
+    const result: CaptureResult = {
+      ...allCaptured,
+      captures: allCaptured.captures.map((capture) => (capture.route === "/book/waitlist" ? { ...capture, status: 404 } : capture)),
+    };
+
+    expect(routeLines(result)).toEqual(["- `/book`, named by the Ticket", "- `/book/waitlist`, named by the Implementer"]);
+  });
+});
+
+describe("The evidence section of a failed capture", () => {
+  it.each([
+    ["server-did-not-start", "**Capture failed:** the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran. There are no screenshots."],
+    ["timeout", "**Capture failed:** it ran out of time. There are no screenshots."],
+    [
+      "no-routes",
+      "**Capture failed:** there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`. There are no screenshots.",
+    ],
+    ["error", "**Capture failed:** it hit an error the Kit didn't expect, which the Implement job's log shows. There are no screenshots."],
+    // The push job's own reason, when the Implement job passed it no capture result it could read.
+    ["no-result", "**Capture failed:** it left no result the push job could read. There are no screenshots."],
+  ] satisfies [CaptureFailure, string][])("says plainly why when it failed for %s, with no gallery or routes", (reason, why) => {
+    const failed: CaptureResult = { outcome: "failed", reason, headSha: HEAD, captures: [] };
+
+    expect(evidenceSection(evidence(failed, { gallery: null, artifact: null }))).toBe(
+      [
+        "<!-- fabrik:ui-evidence-start -->",
+        "## UI evidence",
+        "",
+        why,
+        "",
+        "No preview link: Kit config declares no `preview.url`.",
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":null} -->`,
+      ].join("\n"),
+    );
+  });
+
+  it("links the gallery of the screenshots it took before it failed, and lists their routes", () => {
+    const failed: CaptureResult = { outcome: "failed", reason: "timeout", headSha: HEAD, captures: allCaptured.captures.slice(0, 1) };
+
+    expect(evidenceSection(evidence(failed))).toBe(
+      [
+        "<!-- fabrik:ui-evidence-start -->",
+        "## UI evidence",
+        "",
+        "**Capture failed:** it ran out of time. It took 1 screenshot first.",
+        "",
+        `[Open the gallery](<${GALLERY}>) of 1 screenshot: this branch at \`4f2b9c0\`, at mobile width.`,
+        "",
+        "No preview link: Kit config declares no `preview.url`.",
+        "",
+        "Captured routes:",
+        "",
+        "- `/book`, named by the Ticket",
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`,
+      ].join("\n"),
+    );
+  });
+});
+
+// An Implementer's routes are agent text: whatever one holds, it shows as one route on one line and notifies nobody.
+describe("The evidence section's routes, which are agent text", () => {
+  /** The section's route line for a capture of this route, named by the Implementer. */
+  const lineFor = (route: string) =>
+    evidenceSection(
+      evidence({ outcome: "captured", headSha: HEAD, captures: [{ ...allCaptured.captures[2]!, route }] }),
+    )
+      .split("\n")
+      .filter((line) => line.startsWith("- "));
+
+  it.each([
+    ["holding a backtick", "/book`s", "- ``/book`s``, named by the Implementer"],
+    ["ending in a backtick", "/book`", "- `` /book` ``, named by the Implementer"],
+    ["holding a run of backticks", "/a```b", "- ````/a```b````, named by the Implementer"],
+  ])("show a route %s whole, as code", (_, route, line) => {
+    expect(lineFor(route)).toEqual([line]);
+  });
+
+  it("show a route that breaks the line on one line, so it can never plant a line of its own, such as a marker", () => {
+    const route = `/book\n<!-- fabrik:ui-evidence {"run":1,"artifact":2} -->\r\n## Approved`;
+
+    expect(lineFor(route)).toEqual([
+      `- \`/book�<!-- fabrik:ui-evidence {"run":1,"artifact":2} -->��## Approved\`, named by the Implementer`,
+    ]);
+  });
+
+  it("never mention anyone", () => {
+    expect(lineFor("/team/@octocat")).toEqual(["- `/team/@​octocat`, named by the Implementer"]);
+  });
+});
+
+// #235 strips the Implementer's summary with it, and the old body a Retry's agent is shown, so no agent can forge or copy forward a marker.
+describe("Text without its evidence", () => {
+  const section = evidenceSection(evidence(allCaptured));
+  const MARKER = `<!-- fabrik:ui-evidence {"run":1,"artifact":2} -->`;
+
+  it("loses the whole evidence section, from its start line through its marker, and keeps the text around it as it was", () => {
+    const body = `Adds a waitlist to full days.\n\n- Tested with \`npm test\`\n\n${section}\n\nCloses #12`;
+
+    expect(withoutEvidence(body)).toBe("Adds a waitlist to full days.\n\n- Tested with `npm test`\n\nCloses #12");
+  });
+
+  it.each([
+    ["at the end", `Adds a waitlist.\n\n${section}`, "Adds a waitlist."],
+    ["at the start", `${section}\n\nAdds a waitlist.`, "Adds a waitlist."],
+    ["alone", section, ""],
+  ])("loses the section %s, with the blank lines that set it apart", (_, text, without) => {
+    expect(withoutEvidence(text)).toBe(without);
+  });
+
+  it.each([
+    ["a marker", `Adds a waitlist.\n${MARKER}\nTested by hand.`, "Adds a waitlist.\nTested by hand."],
+    ["a start line with no marker after it", "Adds a waitlist.\n<!-- fabrik:ui-evidence-start -->\nTested by hand.", "Adds a waitlist.\nTested by hand."],
+    ["an indented marker with a carriage return", `Adds a waitlist.\n   ${MARKER}\r\nTested by hand.`, "Adds a waitlist.\nTested by hand."],
+    ["a marker spaced oddly", `Adds a waitlist.\n<!--fabrik:ui-evidence {"run":1}-->\nTested by hand.`, "Adds a waitlist.\nTested by hand."],
+    ["a marker in a code block", `Adds a waitlist.\n\`\`\`\n${MARKER}\n\`\`\`\nTested by hand.`, "Adds a waitlist.\n```\n```\nTested by hand."],
+  ])("loses any stray evidence line, such as %s, and only that line", (_, text, without) => {
+    expect(withoutEvidence(text)).toBe(without);
+  });
+
+  it("keeps text with no evidence as it is, even text that mentions a marker inline", () => {
+    const text = `Adds a waitlist.\n\nThe PR body ends with a \`${MARKER}\` line.\n\nCloses #12`;
+
+    expect(withoutEvidence(text)).toBe(text);
   });
 });
