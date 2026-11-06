@@ -206,6 +206,32 @@ describe("Opening the draft PR", () => {
     });
   });
 
+  it.each([
+    ["names the routes its change shows on", ["/waitlist"]],
+    ["names routes that aren't paths", ["waitlist", 5]],
+    ["gives routes that aren't a list", "/waitlist"],
+  ])("a run that %s opens the same draft PR as one that names none", (_, routes) => {
+    const output = JSON.stringify({ title: "Let patients join a waitlist", summary: "Adds a waitlist to full days.", routes });
+
+    const plan = planFor(finished({ output }), snapshotOf(readyTicket()), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "push-branch", branch: "fabrik/ticket-7" },
+        {
+          kind: "open-pull-request",
+          issue: 7,
+          head: "fabrik/ticket-7",
+          base: "main",
+          title: "Let patients join a waitlist",
+          body: "Adds a waitlist to full days.\n\nCloses #7",
+          draft: true,
+        },
+      ],
+    });
+  });
+
   it("the PR never @-mentions anyone, so opening it notifies nobody", () => {
     const output = JSON.stringify({ title: "Ask @someone", summary: "Thanks @operator for the idea." });
 

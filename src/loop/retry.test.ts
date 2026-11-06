@@ -264,6 +264,19 @@ describe("A retry's branch", () => {
   });
 
   it.each([
+    ["names the routes its change shows on", ["/cart"]],
+    ["names routes that aren't paths", ["cart"]],
+  ])("lands as any retry does when its output %s", (_, routes) => {
+    const output = JSON.stringify({ title: "Handle the empty cart", summary: "Shows the empty state.", fix: "Guards the empty cart.", routes });
+
+    const actions = actionsOf(planFor(retried({ output }), retrySnapshot(), kitConfig()));
+
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(actions[0]).toEqual({ kind: "edit-issue-body", issue: 50, body: "Shows the empty state.\n\nCloses #7" });
+    expect(actions[1]).toHaveProperty("body", expect.stringMatching(/\n\nGuards the empty cart\.$/));
+  });
+
+  it.each([
     ["no fix", { title: "Handle the empty cart", summary: "Shows the empty state." }],
     ["an empty fix", { title: "Handle the empty cart", summary: "Shows the empty state.", fix: "  " }],
   ])("output with %s breaks the contract on a retry: an Infrastructure failure that pushes nothing", (_, output) => {

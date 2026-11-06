@@ -181,6 +181,19 @@ describe("Product intent in the Implement prompt", () => {
   });
 });
 
+describe("Routes in the Implement prompt", () => {
+  it("asks a run that touched the UI to name the routes its change shows on, which its example carries", async () => {
+    const text = await prompt("implement");
+    const example: unknown = JSON.parse(/<implement>\n([\s\S]*?)\n<\/implement>/.exec(text)?.[1] ?? "null");
+    expect(readPullRequestRunOutput(example)).toMatchObject({ ok: true, output: { routes: ["/book"] } });
+    const routes = lineStarting(section(text, "Your output"), "- `routes`");
+    expect(routes).toContain("when your change touched the UI");
+    expect(routes).toContain("the routes it shows on");
+    expect(routes).toContain("a path starting with `/`");
+    expect(routes).toContain("Leave it out when you touched no UI");
+  });
+});
+
 describe("Questions for the Operator", () => {
   it("the Implementer is told to ask them under one fixed heading in its summary", async () => {
     expect(section(await prompt("implement"), "Your output")).toContain('"Questions for the Operator"');
