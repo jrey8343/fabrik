@@ -157,6 +157,15 @@ export function waitingHeldRuns(kitIssues: readonly KitIssueSnapshot[]): Waiting
 }
 
 /**
+ * The issues and PRs a held run of this role still waits on: it holds the
+ * slot it had under Dispatch's max_in_flight cap or the Design session cap,
+ * so that resuming it never runs more than the caps allow.
+ */
+export function heldOf(role: AgentRole, kitIssues: readonly KitIssueSnapshot[]): number[] {
+  return waitingHeldRuns(kitIssues).flatMap(({ run }) => (run.role === role ? [run.issue] : []));
+}
+
+/**
  * Each run's place, from the held and resumed markers on the open
  * weekly-limit issues: the earliest any of them gives it.
  */

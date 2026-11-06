@@ -15,6 +15,7 @@ import {
   snapshotOfPullRequest,
 } from "../__fixtures__/snapshots.ts";
 import { agentRunIn } from "../github/apply.ts";
+import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AgentRole, KitIssueSnapshot, LoopEvent, Plan, Snapshot } from "./types.ts";
 
@@ -202,6 +203,53 @@ describe("Jobs with no agent in them, while every Subscription is used up", () =
 
     expect(free.kind).toBe("act");
     expect(planFor(event, { ...snapshot, kitIssues: BOTH_USED_UP }, TWO_SUBSCRIPTIONS)).toEqual(free);
+  });
+});
+
+// A held run's trigger label is off and no agent job runs, yet it resumes at
+// the reset, so it keeps the slot it held under Dispatch's max_in_flight cap
+// and the Design session cap: resuming never runs more than the caps allow.
+describe("A held run, under Dispatch's max_in_flight cap and the Design session cap", () => {
+  const withHeld = (snapshot: Snapshot, ...markers: string[]): Snapshot => ({
+    ...snapshot,
+    kitIssues: [{ ...BOTH_USED_UP[0]!, comments: markers }, BOTH_USED_UP[1]!],
+  });
+  const ONE_IN_FLIGHT = kitConfig({ subscriptions: ["Claude token", "Claude token 2"], maxInFlight: 1 });
+  const ONE_SESSION = kitConfig({ subscriptions: ["Claude token", "Claude token 2"], caps: { designSessions: 1, monitorIssues: DEFAULT_KIT_CONFIG.caps.monitorIssues } });
+
+  it("a held Implement run counts as in flight, so Dispatch neither dispatches its Ticket again nor another past the cap", () => {
+    const snapshot = withHeld(
+      dispatchSnapshotOf([aTicket({ number: 7 }), aTicket({ number: 12 })]),
+      heldMarker(7, "implement", "agent:implement"),
+    );
+
+    const plan = planFor({ kind: "dispatch-check" }, snapshot, ONE_IN_FLIGHT);
+
+    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("max_in_flight is 1 and 1 are in flight") });
+    expect(plan.kind === "nothing" && plan.reason).toContain("1 held");
+  });
+
+  it("a held Implement run the tick has resumed frees its slot", () => {
+    const snapshot = withHeld(
+      dispatchSnapshotOf([aTicket({ number: 12 })]),
+      heldMarker(7, "implement", "agent:implement"),
+      '<!-- fabrik:resumed {"issue":7,"role":"implement","held":1} -->',
+    );
+
+    expect(actionsOf(planFor({ kind: "dispatch-check" }, snapshot, ONE_IN_FLIGHT))).toEqual([
+      { kind: "add-labels", issue: 12, labels: ["agent:implement"] },
+    ]);
+  });
+
+  it("a held first Design-session turn holds its Design session slot, so the queue starts no other", () => {
+    const snapshot = withHeld(
+      designQueueSnapshotOf([aDesignQueueIssue({ number: 7 }), aDesignQueueIssue({ number: 12 })]),
+      heldMarker(7, "design", "agent:design"),
+    );
+
+    const plan = planFor({ kind: "design-queue-check" }, snapshot, ONE_SESSION);
+
+    expect(plan).toEqual({ kind: "nothing", reason: "caps.design_sessions is 1 and #7 holds a slot, so #12 waits" });
   });
 });
 

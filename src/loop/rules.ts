@@ -22,6 +22,7 @@ import {
 import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
 import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
+import { heldOf } from "./heldRun.ts";
 import { heldWhileUsedUp } from "./hold.ts";
 import { startAgentRun } from "./runs.ts";
 import { onChosenSubscription } from "./subscriptions.ts";
@@ -135,11 +136,11 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     case "dispatch-check":
       return snapshot.dispatch === null
         ? missingFromSnapshot("the Tickets a Dispatch check weighs")
-        : dispatch(snapshot.dispatch, config);
+        : dispatch(snapshot.dispatch, config, heldOf("implement", snapshot.kitIssues));
     case "design-queue-check":
       return snapshot.designQueue === null
         ? missingFromSnapshot("the needs-design issues a Design queue check weighs")
-        : checkDesignQueue(snapshot.designQueue, config);
+        : checkDesignQueue(snapshot.designQueue, config, heldOf("design", snapshot.kitIssues));
     case "kit-config-changed":
       // max_in_flight or caps.design_sessions may have gone up, or from 0 back
       // above it, so see what can start now.
