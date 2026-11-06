@@ -312,6 +312,15 @@ describe("The evidence section a UI PR's body carries", () => {
   });
 });
 
+describe("The evidence section's gallery line", () => {
+  it("says so when the run kept the screenshots but no gallery of them", () => {
+    const lines = evidenceSection(evidence(allCaptured, { gallery: null })).split("\n");
+
+    expect(lines).toContain("The Implement run kept no gallery of its 6 screenshots.");
+    expect(lines.some((line) => line.includes("Open the gallery"))).toBe(false);
+  });
+});
+
 describe("The evidence section's preview line", () => {
   /** The section's lines, without the marker and start lines. */
   const linesOf = (changes: Partial<UiEvidence>) => evidenceSection(evidence(allCaptured, changes)).split("\n");

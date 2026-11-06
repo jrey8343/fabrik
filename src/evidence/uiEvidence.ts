@@ -1,6 +1,9 @@
 // The UI evidence module (#153): whether a pull request is UI, which routes to
-// capture and why, and the capture result the Implement job's capture step
-// writes and every later reader shares. Pure, no I/O.
+// capture and why, the capture result the Implement job's capture step
+// writes and every later reader shares, and what the Operator reads of it on
+// the PR: the evidence section, its marker, which the PR snapshot reads back,
+// and withoutEvidence, which keeps both out of agent text. The gallery is
+// beside it (src/evidence/gallery.ts). Pure, no I/O.
 import { posix } from "node:path";
 import { UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
@@ -260,9 +263,13 @@ export interface UiEvidence extends EvidenceMarker {
 const SECTION_START = "<!-- fabrik:ui-evidence-start -->";
 
 /**
- * The evidence section of a UI pull request's body: the gallery link, the
- * preview link or why there is none, and each captured route with why it was
- * chosen, between a hidden start line and the marker (evidenceMarkerIn).
+ * The evidence section of a UI pull request's body, between a hidden start
+ * line and the marker (evidenceMarkerIn): why capture failed, when it did;
+ * the gallery link; the preview link, or why there is none; and each
+ * captured route with why it was chosen, flagged when it answered a server
+ * error. A failed capture keeps the screenshots it took first, so the
+ * section shows those too. Its routes may be agent text, so each shows as
+ * code on one line and mentions nobody.
  */
 export function evidenceSection(evidence: UiEvidence): string {
   const { result, gallery, preview } = evidence;
@@ -271,7 +278,7 @@ export function evidenceSection(evidence: UiEvidence): string {
     SECTION_START,
     "## UI evidence",
     ...(result.outcome === "failed" ? ["", failureLine(result.reason, captures)] : []),
-    ...(gallery === null || captures.length === 0 ? [] : ["", galleryLine(gallery, result)]),
+    ...(captures.length === 0 ? [] : ["", galleryLine(gallery, result)]),
     "",
     previewLine(preview),
     ...(captures.length === 0 ? [] : ["", "Captured routes:", "", ...capturedRoutes(captures).map((chosen) => routeLine(chosen, captures))]),
@@ -317,7 +324,8 @@ export function isServerError(status: number): boolean {
 /** How the evidence names each side. */
 export const SIDE_WORDS: Readonly<Record<CaptureSide, string>> = { before: "Before", after: "After" };
 
-function galleryLine(url: string, { headSha, captures }: CaptureResult): string {
+function galleryLine(url: string | null, { headSha, captures }: CaptureResult): string {
+  if (url === null) return `The Implement run kept no gallery of its ${screenshots(captures.length)}.`;
   const besideProduction = captures.some(({ side }) => side === "before") ? " beside the production site" : "";
   const viewports = UI_VIEWPORTS.map(({ name }) => name).filter((name) => captures.some(({ viewport }) => viewport === name));
   return `${link("Open the gallery", url)} of ${screenshots(captures.length)}: this branch at \`${headSha.slice(0, 7)}\`${besideProduction}, at ${spelled(viewports, "and")} ${viewports.length === 1 ? "width" : "widths"}.`;
