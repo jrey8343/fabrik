@@ -45,7 +45,13 @@ function ticketRoutes(body: string): string[] {
     .filter((text) => TICKET_ROUTE.test(text));
 }
 
-/** The routes to capture, each with its reason. */
+/**
+ * The routes to capture, each with its reason: every route the Ticket names,
+ * then the Implementer's, or `ui.default_routes` when neither names one. Each
+ * route comes once, under the reason it was first named for, and the list
+ * stops at UI_ROUTE_CAP unless the Ticket alone names more. An empty list is
+ * what capture records as `no-routes`.
+ */
 export function routesFor(
   ticketBody: string,
   implementerRoutes: readonly string[],
