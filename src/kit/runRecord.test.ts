@@ -63,6 +63,8 @@ function needs(route: string, jobs: Needs = {}, kitOutputs: Record<string, strin
         retry: "",
         "step-up": "false",
         "request-changes": "false",
+        prototype: "false",
+        prototype_request: "",
         ...kitOutputs,
       },
     },
@@ -95,7 +97,7 @@ function runEnd(overrides: Partial<RunEnd> = {}): RunEnd {
 describe("The Run record a run's end yields", () => {
   it("a passing Triage run gets a record with its identity, what ran, its outcome, effort spent and cost", () => {
     expect(runRecordFor(runEnd())?.record).toEqual({
-      schema: 2,
+      schema: 3,
       kitSha: KIT_SHA,
       repo: "acme/widgets",
       runId: 9001,
@@ -110,6 +112,7 @@ describe("The Run record a run's end yields", () => {
       retry: 0,
       stepUp: false,
       requestChanges: false,
+      prototype: false,
       baseSha: BASE_SHA,
       jobResult: "success",
       subtype: "success",
@@ -138,10 +141,10 @@ describe("The Run record a run's end yields", () => {
     });
   });
 
-  it("a Design-session turn's record is for the event's issue", () => {
+  it("a Design-session turn's record is for the event's issue, and is no prototype turn's", () => {
     const files = runRecordFor(runEnd({ needs: needs("design", { design: job("success") }), agentResult: agentResult("design", 12) }));
 
-    expect(files?.record).toMatchObject({ role: "design", issue: 12, pullRequest: null, jobResult: "success", turns: 12 });
+    expect(files?.record).toMatchObject({ role: "design", issue: 12, pullRequest: null, jobResult: "success", turns: 12, prototype: false });
     expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-design.json");
   });
 
@@ -351,7 +354,7 @@ describe("The Run record a run's end yields", () => {
       expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-retro.json");
     });
 
-    it("a Retro run names the Subscription the Kit job gave it, at schema 2, its evidence job's failure included", () => {
+    it("a Retro run names the Subscription the Kit job gave it, at schema 3, its evidence job's failure included", () => {
       const subscriptions = ["Claude token", "Claude token 2"];
       const passed = retro("success", {
         needs: needs("retro", { retro: job("success", { "base-sha": DEFAULT_BRANCH_SHA }) }, { subscription: "Claude token 2" }),
@@ -367,8 +370,8 @@ describe("The Run record a run's end yields", () => {
         transcript: null,
       });
 
-      expect(passed?.record).toMatchObject({ schema: 2, role: "retro", subscription: "Claude token 2" });
-      expect(evidenceFailed?.record).toMatchObject({ schema: 2, role: "retro", infrastructureFailure: "crash", subscription: "Claude token 2" });
+      expect(passed?.record).toMatchObject({ schema: 3, role: "retro", subscription: "Claude token 2" });
+      expect(evidenceFailed?.record).toMatchObject({ schema: 3, role: "retro", infrastructureFailure: "crash", subscription: "Claude token 2" });
     });
 
     it("a failed Retro run is recorded as the Infrastructure failure its report names", () => {
@@ -417,7 +420,7 @@ describe("The Run record a run's end yields", () => {
       const files = research("success");
 
       expect(files?.record).toMatchObject({
-        schema: 2,
+        schema: 3,
         role: "research",
         issue: 42,
         pullRequest: null,
@@ -495,6 +498,94 @@ describe("The Run record a run's end yields", () => {
     // loop.yml's push job needs the Research job (src/kit/workflows.test.ts), so this is only ever a miswiring.
     it("no record is written for a research route whose needs don't name the Research job, rather than guess at one", () => {
       expect(runRecordFor(runEnd({ needs: needs("research"), eventIssue: 42, agentResult: null, transcript: null }))).toBeNull();
+    });
+  });
+
+  describe("a prototype turn's record is a Design-session turn's on the event's issue, marked as a prototype turn", () => {
+    const REQUEST = JSON.stringify({ route: "/book", variants: 3, brief: "Try a calendar-first layout.", reply: 7003 });
+    /** The prototype job on #12 ended `result`, the Design job skipped: the Kit job routed a pending prototype request to it. */
+    const prototypeTurn = (result: string, outputs: Record<string, string> = {}, overrides: Partial<RunEnd> = {}) =>
+      runRecordFor(
+        runEnd({
+          needs: needs(
+            "design",
+            { design: { result: "skipped", outputs: {} }, prototype: job(result, { "base-sha": DEFAULT_BRANCH_SHA, effort: "high", ...outputs }) },
+            { prototype: "true", prototype_request: REQUEST, effort: "high" },
+          ),
+          agentResult: result === "success" ? agentResult("design", 12) : null,
+          ...overrides,
+        }),
+      );
+
+    it("a passing prototype turn is in role design, with the prototype job's model, effort, base and cost", () => {
+      const files = prototypeTurn("success");
+
+      expect(files?.record).toMatchObject({
+        role: "design",
+        prototype: true,
+        issue: 12,
+        pullRequest: null,
+        model: "claude-opus-5-5",
+        effort: "high",
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: DEFAULT_BRANCH_SHA,
+        verdict: null,
+        jobResult: "success",
+        infrastructureFailure: null,
+        turns: 12,
+        totalCostUsd: 1.25,
+      });
+      expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-design.json");
+      expect(files?.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-1-design.jsonl.gz");
+    });
+
+    it("a prototype turn whose 1Password load failed is recorded as that Infrastructure failure of the prototype job", () => {
+      const files = prototypeTurn("failure", { "secrets-step": "failure", model: "", effort: "" }, { transcript: null });
+
+      expect(files?.record).toMatchObject({
+        role: "design",
+        prototype: true,
+        issue: 12,
+        jobResult: "failure",
+        infrastructureFailure: "unreachable-1password",
+        baseSha: DEFAULT_BRANCH_SHA,
+        turns: null,
+      });
+    });
+
+    it("a prototype turn timed out by its timeout-minutes, with its transcript, gets a record with no result fields", () => {
+      const files = prototypeTurn("cancelled", {}, { transcript: [init] });
+
+      expect(files?.record).toMatchObject({
+        role: "design",
+        prototype: true,
+        jobResult: "cancelled",
+        infrastructureFailure: "timeout",
+        subtype: null,
+        turns: null,
+        totalCostUsd: null,
+      });
+    });
+
+    // loop.yml's push job needs the prototype job, so this is only ever a miswiring.
+    it("no record is written for a prototype turn whose needs don't name the prototype job, rather than take the skipped Design job's", () => {
+      const end = runEnd({
+        needs: needs("design", { design: { result: "skipped", outputs: {} } }, { prototype: "true", prototype_request: REQUEST }),
+        agentResult: null,
+        transcript: null,
+      });
+
+      expect(runRecordFor(end)).toBeNull();
+    });
+
+    it("is known from the jobs alone, as any run's end is", () => {
+      const ended = (result: string) =>
+        agentRunEnded(needs("design", { design: { result: "skipped", outputs: {} }, prototype: job(result) }, { prototype: "true", prototype_request: REQUEST }), 12);
+
+      expect(ended("success")).toBe(true);
+      expect(ended("failure")).toBe(true);
     });
   });
 
@@ -770,8 +861,8 @@ describe("The Run record a run's end yields", () => {
     expect(files?.record).toMatchObject({ runAttempt: 2, transcript: files?.transcriptPath });
   });
 
-  it("carries schema 2 and the Kit sha that wrote it", () => {
-    expect(runRecordFor(runEnd({ kitSha: "c".repeat(40) }))?.record).toMatchObject({ schema: 2, kitSha: "c".repeat(40) });
+  it("carries schema 3 and the Kit sha that wrote it", () => {
+    expect(runRecordFor(runEnd({ kitSha: "c".repeat(40) }))?.record).toMatchObject({ schema: 3, kitSha: "c".repeat(40) });
   });
 
   describe("names the Subscription the run used", () => {
@@ -783,7 +874,7 @@ describe("The Run record a run's end yields", () => {
         subscriptions: TWO_SUBSCRIPTIONS,
       });
 
-      expect(runRecordFor(end)?.record).toMatchObject({ schema: 2, subscription: "Claude token 2" });
+      expect(runRecordFor(end)?.record).toMatchObject({ schema: 3, subscription: "Claude token 2" });
     });
 
     it("the first listed Subscription when the Kit job gave the run none", () => {
@@ -839,15 +930,22 @@ describe("A Run record read back from the store", () => {
     expect(readRunRecord(JSON.parse(JSON.stringify(written)), ["Claude token", "Claude token 2"])).toEqual(written);
   });
 
-  it("of the older schema, which names no Subscription, reads as being on the first listed one, at the current schema", () => {
-    const { subscription: _, ...rest } = written ?? { subscription: "" };
+  it("of schema 2, written before prototype turns, reads as no prototype turn, at the current schema", () => {
+    const { prototype: _, ...rest } = written ?? { prototype: false };
+    const older = { ...rest, schema: 2 };
+
+    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 3, prototype: false });
+  });
+
+  it("of schema 1, which names no Subscription, reads as being on the first listed one and no prototype turn, at the current schema", () => {
+    const { subscription: _, prototype: __, ...rest } = written ?? { subscription: "", prototype: false };
     const older = { ...rest, schema: 1 };
 
-    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 2, subscription: "Work token" });
+    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 3, subscription: "Work token", prototype: false });
   });
 
   it("of a schema the Kit doesn't know reads as no record", () => {
-    expect(readRunRecord({ ...written, schema: 3 }, ["Claude token"])).toBeNull();
+    expect(readRunRecord({ ...written, schema: 4 }, ["Claude token"])).toBeNull();
     expect(readRunRecord("not a record", ["Claude token"])).toBeNull();
   });
 });
@@ -903,7 +1001,7 @@ describe("A judge run's record", () => {
 
   it("is for the scored run's subject, in role score, with its own model, outcome, effort spent and cost", () => {
     expect(judgeRunRecordFor(judgeRunEnd()).record).toEqual({
-      schema: 2,
+      schema: 3,
       kitSha: KIT_SHA,
       repo: "acme/widgets",
       runId: 9001,
@@ -918,6 +1016,7 @@ describe("A judge run's record", () => {
       retry: 0,
       stepUp: false,
       requestChanges: false,
+      prototype: false,
       baseSha: null,
       jobResult: "success",
       subtype: "success",

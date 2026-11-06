@@ -31,6 +31,8 @@ import {
   type MonitorMarker,
   monitorMarkerIn,
   monitorMarkerLine,
+  type PrototypeRequestMarker,
+  prototypeRequestMarker,
   SESSION_FINISHED,
 } from "./markers.ts";
 import { spelled } from "./readable.ts";
@@ -66,14 +68,52 @@ const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
  * agent:design, which the Design queue check adds when a slot frees up, starts
  * the session's first turn. The Kit also re-adds it to start a turn refused on
  * its Subscription's weekly limit again, on the next free one, whichever round
- * it was (src/loop/failures.ts). The label comes off as the turn starts, so
- * the running turn and then its round hold the slot, not the label. It always
- * comes off, so it never holds a slot for a session that can't start.
+ * it was (src/loop/failures.ts), and to start the prototype turn a prototype
+ * request asks for. The label comes off as the turn starts, so the running
+ * turn and then its round hold the slot, not the label. It always comes off,
+ * so it never holds a slot for a session that can't start.
+ *
+ * Which turn it starts is read from the thread, never from the label: while
+ * the session has a pending prototype request whose prototype turn hasn't
+ * started, and this Kit can take a Prototype (whyNoPrototype), it's
+ * the prototype turn, which marks the request started on its comment as it
+ * starts; otherwise an ordinary turn. A prototype turn refused on its
+ * Subscription and held or re-run has that mark taken off (src/loop/failures.ts),
+ * so it restarts as a prototype turn; an ordinary turn the Operator's reply
+ * started while the request was pending leaves it, so it restarts as an
+ * ordinary turn, and its reply is answered.
  */
 export function startQueuedSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
   const removeLabel: Action = { kind: "remove-label", issue: issueNumber, label: DESIGN_LABEL };
   if (whileInSession(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
+  const pending = whyNoPrototype(config) === null ? issue.pendingPrototype : null;
+  if (pending !== null && !pending.started) {
+    const started: Action = { kind: "mark-prototype-request", issue: issueNumber, comment: pending.comment, started: true };
+    return { kind: "act", actions: [removeLabel, prototypeTurn(issueNumber, pending, config), started] };
+  }
   return { kind: "act", actions: [removeLabel, ...startAgentRun("design", issueNumber, config).actions] };
+}
+
+/** A session's prototype turn (#155): the Design run that builds its pending request, as its role, prototypeRole, runs. */
+function prototypeTurn(issueNumber: number, pending: PrototypeRequestMarker, config: KitConfig): Action {
+  return {
+    kind: "start-agent-run",
+    role: "design",
+    issue: issueNumber,
+    ...prototypeRole(config.roles),
+    prototype: { request: pending.request, reply: pending.reply },
+  };
+}
+
+/**
+ * The role a session's prototype turn (#155) runs as: the Design role's model
+ * and effort, so the variants come from the model the Operator has been
+ * talking to, within the Implement role's timeout, since building and serving
+ * the Product takes a build's time. The Kit job's plan, the runner and a
+ * failed turn's notice all read it here.
+ */
+export function prototypeRole(roles: Pick<KitConfig["roles"], "design" | "implement">): KitConfig["roles"]["design"] {
+  return { model: roles.design.model, effort: roles.design.effort, timeoutMinutes: roles.implement.timeoutMinutes };
 }
 
 /**
@@ -188,12 +228,40 @@ export function turnStartFrom(comment: number | undefined, found: StartingCommen
 }
 
 /**
+ * What a finished turn, ordinary or a prototype turn, does when the reply it
+ * answers can't be counted on, or null when it can, or none started it: a
+ * reply the push job didn't check fails the run, and one the Operator deleted
+ * posts nothing, since the turn answered a reply that is no longer there.
+ * `said` words each, with the reply's comment id.
+ */
+export function replyNotThere(
+  start: TurnStart,
+  said: { readonly unchecked: (comment: number) => string; readonly deleted: (comment: number) => string },
+): Plan | null {
+  if (start.kind === "unchecked-reply") return { kind: "fail", failure: "infrastructure", reason: said.unchecked(start.comment) };
+  if (start.kind === "reply" && !start.comment.exists) return { kind: "nothing", reason: said.deleted(start.comment.id) };
+  return null;
+}
+
+/**
+ * Why a turn can't ask for a Prototype in this Kit, nor a pending request
+ * start a prototype turn, or null when it can: only a Product repo with a
+ * `ui` block takes one, since its prototype turn serves and captures the
+ * variants through that block. Kit config decides, never an agent.
+ */
+export function whyNoPrototype({ ui }: Pick<KitConfig, "ui">): string | null {
+  if (ui === null) return "this Product repo's Kit config has no `ui` block, so the Kit can't serve or capture a Prototype";
+  return null;
+}
+
+/**
  * A finished turn posts the next round, or ends the session with its outcome.
  * A turn whose starting reply the Operator deleted posts nothing: it answered
  * a reply that is no longer there. A Map is weighed against `mapCap`, the
- * Map cap over the open Maps the snapshot holds. Whichever comment it posts ends
- * with the Operator comments it weighed, among those on the PR it came back
- * from that it was `given` (ADR-0007).
+ * Map cap over the open Maps the snapshot holds, and a Prototype is refused
+ * for `noPrototype`, why this Kit can't take one, when that isn't null.
+ * Whichever comment it posts ends with the Operator comments it weighed,
+ * among those on the PR it came back from that it was `given` (ADR-0007).
  */
 export function applyTurn(
   issueNumber: number,
@@ -201,21 +269,14 @@ export function applyTurn(
   snapshot: IssueContext,
   start: TurnStart,
   mapCap: MapCap | null,
+  noPrototype: string | null,
   given: readonly GivenOperatorComment[] = [],
 ): Plan {
-  if (start.kind === "unchecked-reply") {
-    return {
-      kind: "fail",
-      failure: "infrastructure",
-      reason: `The Design-session turn on #${issueNumber} was started by a reply (comment ${start.comment}) the push job didn't check is still there`,
-    };
-  }
-  if (start.kind === "reply" && !start.comment.exists) {
-    return {
-      kind: "nothing",
-      reason: `The Operator's reply that started this Design-session turn on #${issueNumber} (comment ${start.comment.id}) was deleted, so the turn posts nothing`,
-    };
-  }
+  const gone = replyNotThere(start, {
+    unchecked: (comment) => `The Design-session turn on #${issueNumber} was started by a reply (comment ${comment}) the push job didn't check is still there`,
+    deleted: (comment) => `The Operator's reply that started this Design-session turn on #${issueNumber} (comment ${comment}) was deleted, so the turn posts nothing`,
+  });
+  if (gone !== null) return gone;
   const parsed = parseDesignTurnOutput(text);
   if (!parsed.ok) {
     return {
@@ -224,7 +285,8 @@ export function applyTurn(
       reason: `The Design-session turn on #${issueNumber} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
     };
   }
-  const plan = landTurn(issueNumber, parsed.output, snapshot, mapCap);
+  const reply = start.kind === "reply" ? start.comment.id : null;
+  const plan = landTurn(issueNumber, parsed.output, snapshot, mapCap, noPrototype, reply);
   if (plan.kind !== "act") return plan;
   const considered = consideredSection(parsed.output.operatorCommentsConsidered ?? [], given);
   return considered.length === 0 ? plan : { ...plan, actions: plan.actions.map((action) => endedWith(action, considered)) };
@@ -239,7 +301,14 @@ function endedWith(action: Action, lines: readonly string[]): Action {
   return action;
 }
 
-function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: IssueContext, mapCap: MapCap | null): Plan {
+function landTurn(
+  issueNumber: number,
+  output: DesignTurnOutput,
+  snapshot: IssueContext,
+  mapCap: MapCap | null,
+  noPrototype: string | null,
+  reply: number | null,
+): Plan {
   const notNow = whileInSession(issueNumber, snapshot.issue);
   if (notNow !== null) return notNow;
 
@@ -251,6 +320,13 @@ function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: Issue
       kind: "act",
       actions: [{ kind: "comment", issue: issueNumber, body: roundComment(round, output, snapshot.operator, sentBack) }],
     };
+  }
+  if (output.kind === "prototype") {
+    if (noPrototype !== null) return wrongOutcome(issueNumber, noPrototype);
+    return { kind: "act", actions: requestPrototype(issueNumber, output, reply) };
+  }
+  if (output.kind === "prototype-round") {
+    return wrongOutcome(issueNumber, "only a prototype turn ends in a prototype-round, and this was an ordinary turn");
   }
   // Every outcome but a round ends the session and frees its slot, so the next waiting issue can start.
   if (output.kind === "not-planned") {
@@ -345,6 +421,37 @@ function heldByMapCap(issueNumber: number, { openMaps, cap }: Extract<MapCap, { 
       ? `This turn ended in a Map, but \`caps.maps\` is 0, so the Kit charts no new Map in this repo. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way.`
       : `This turn ended in a Map, but the Map cap is full: ${spelled(maps, "and")} ${maps.length === 1 ? "is the open Map" : "are the open Maps"}, and \`caps.maps\` is ${cap}. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way, or close ${maps.length === 1 ? maps[0] : "an open Map"} first and ask for the Map again.`;
   return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body: [DESIGN_TURN_FAILED_MARKER, said].join("\n") }] };
+}
+
+/**
+ * The Operator approved a Prototype, in their `reply` when one started this
+ * turn, so the Kit posts its prototype request, whose marker holds what the
+ * prototype turn builds and that reply, then adds agent:design afresh, on the
+ * App token, as it does to restart a turn refused on its weekly limit, to
+ * start that turn. The request is no round, so it carries no round marker
+ * and the round count stays where it was, and it mentions nobody: only the
+ * prototype round that follows notifies.
+ */
+function requestPrototype(
+  issueNumber: number,
+  output: Extract<DesignTurnOutput, { kind: "prototype" }>,
+  reply: number | null,
+): Action[] {
+  const { route, variants, brief } = output;
+  return [
+    {
+      kind: "comment",
+      issue: issueNumber,
+      body: [
+        prototypeRequestMarker({ request: { route, variants, brief }, reply }),
+        `**Prototype requested.** ${withoutMentions(output.comment)}`,
+        "",
+        `The Kit is building ${variants} variants of \`${withoutMentions(route)}\`. The prototype round follows when they're ready.`,
+      ].join("\n"),
+    },
+    { kind: "remove-label", issue: issueNumber, label: DESIGN_LABEL },
+    { kind: "add-labels", issue: issueNumber, labels: [DESIGN_LABEL] },
+  ];
 }
 
 /**
@@ -728,7 +835,7 @@ function rewrittenBody(rewritten: string, issue: IssueSnapshot, marker: MonitorM
 }
 
 /** Why a session on this issue can't take a turn now, or null when it can. */
-function whileInSession(issueNumber: number, issue: IssueSnapshot): Plan | null {
+export function whileInSession(issueNumber: number, issue: IssueSnapshot): Plan | null {
   if (!issue.open) return { kind: "nothing", reason: `#${issueNumber} is closed` };
   if (!issue.labels.includes(NEEDS_DESIGN)) {
     return { kind: "nothing", reason: `#${issueNumber} no longer has ${NEEDS_DESIGN}` };

@@ -2,7 +2,7 @@
 // on the runner VM (noSandbox), behind the metered-billing preflight and the
 // init check, writes the step summary, and passes the role's structured output
 // out as an artifact for the push job. It holds no GitHub write credential.
-//   node <kit>/src/agent/run.ts <triage|design|implement|review|audit|retro|research>
+//   node <kit>/src/agent/run.ts <triage|design|prototype|implement|review|audit|retro|research>
 //
 // Run from the Product checkout. Env:
 //   FABRIK_ISSUE_FILE      JSON from `gh issue view --json number,title,body,author,labels,comments`
@@ -20,7 +20,16 @@
 // run is a retry with FABRIK_REVIEW_FILE too: the Operator's review, its input.
 // A Design-session turn takes the issue's parent Spec from FABRIK_SPEC_FILE (null if none),
 // for a Ticket back in design, the agent PR it came back from in the issue's sentBack,
-// and whether it may offer a Map from FABRIK_MAP_FILE.
+// and whether it may offer a Map from FABRIK_MAP_FILE; on a repo with a `ui` block,
+// it is told it may offer a Prototype.
+// A Design session's prototype turn (#155), `prototype`, is a design run with
+// prompts/prototype.md, on the Design model and effort within the Implement
+// timeout: it takes the request the Operator approved from
+// FABRIK_PROTOTYPE_REQUEST, the Kit job's one line of JSON, and the Claude token
+// and the test secrets from FABRIK_SECRETS, as an Implement run does. It builds
+// the variants on the issue's prototype branch, which it carries on when the
+// job checked it out and cuts from the default branch otherwise, and passes it
+// out as a git bundle beside agent-result.json.
 // A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
 // PR, and its result is the Reviewer's reply, a Verdict line first. A UI PR's
@@ -51,7 +60,8 @@ import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
 import { writeOutputs, writeSummary } from "../kit/stepFiles.ts";
-import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
+import { prototypeRole } from "../loop/design.ts";
+import { type DesignTurnOutput, type PrototypeRoundOutput, readDesignTurnOutput, readPrototypeTurnOutput } from "../loop/designOutput.ts";
 import { rotationIsOn } from "../loop/subscriptions.ts";
 import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
@@ -59,7 +69,7 @@ import { type AuditOutput, readAuditOutput } from "../loop/auditOutput.ts";
 import { readRetroOutput, type RetroOutput } from "../loop/retroOutput.ts";
 import { readResearchOutput, type ResearchOutput } from "../loop/researchOutput.ts";
 import type { AgentRole, AuditWindow, GivenOperatorComment } from "../loop/types.ts";
-import { kitPromptPath } from "../guard/trust-root.ts";
+import { type KitPrompt, kitPromptPath } from "../guard/trust-root.ts";
 import { readInstallRecord } from "../skills/fetch.ts";
 import { type ParsedVerdict, parseVerdict } from "../loop/verdict.ts";
 import { AGENT_FAILURE_FILE, MissingVerdictError } from "./failure.ts";
@@ -71,12 +81,14 @@ import {
   requestChangesContext,
   retryContext,
   setImplementerEnv,
+  setSandboxEnv,
   startAgentBranch,
 } from "./implement.ts";
 import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
-import { mapCapContext, sentBackContext } from "./design.ts";
+import { mapCapContext, prototypeContext, sentBackContext } from "./design.ts";
+import { PROTOTYPE_AUTHOR, PROTOTYPE_REQUEST_ENV, prototypeTurnContext, startPrototypeBranch } from "./prototype.ts";
 import { claudeArgs, leaveFailureReport, readyHook, schemaOf, setAgentEnv, streamWatch } from "./launch.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
@@ -99,8 +111,21 @@ async function loadConfig(productDir: string): Promise<KitConfig> {
 
 /** How one AFK role runs: its prompt, its output tag and contract, and how to log what it emitted. */
 interface RoleSpec<T> {
-  /** The prompt file under prompts/, the output tag, and the name of its .fabrik/<role>.md instructions. */
+  /**
+   * The role: its Kit config model, effort and timeout, the name of its
+   * .fabrik/<role>.md instructions and its Extra skills, and, unless `prompt`
+   * says otherwise, its prompt file under prompts/ and its output tag.
+   */
   readonly role: AgentRole;
+  /**
+   * The prompt file under prompts/ and the output tag, when they aren't the
+   * role's own. `prototype` is a prototype turn's: it builds the approved
+   * variants, from FABRIK_PROTOTYPE_REQUEST, on the issue's prototype branch,
+   * which it passes out as a bundle; it runs on the Design role's model and
+   * effort within the Implement role's timeout, with the test secrets, and is
+   * never told it may offer a Map or a Prototype.
+   */
+  readonly prompt?: KitPrompt;
   /**
    * The output contract: a JSON object in the tag, checked by `schema`, or
    * for the Reviewer plain text, checked by `text`, which throws when it breaks the contract.
@@ -114,7 +139,8 @@ interface RoleSpec<T> {
   /**
    * A Design session weighs the issue's parent Spec, from FABRIK_SPEC_FILE, if
    * it has one, and the agent PR it came back from, if it did, and is told
-   * whether it may offer a Map, from FABRIK_MAP_FILE.
+   * whether it may offer a Map, from FABRIK_MAP_FILE, and whether it may offer
+   * a Prototype, from the Kit config.
    */
   readonly readsParentSpec?: boolean;
   /** The Implementer builds on a branch, which it passes out as a bundle. */
@@ -174,10 +200,23 @@ const ROLE_SPECS = {
           return `The Design session on #${issue} finished as not planned`;
         case "map":
           return `The Design session on #${issue} charted it as a Map with ${output.decisions.length} Decision(s)`;
+        case "prototype":
+          return `The Design-session turn on #${issue} asked for a Prototype of ${output.route} in ${output.variants} variants`;
+        case "prototype-round":
+          return `The prototype turn on #${issue} built ${output.variants.length} variants`;
       }
     },
     readsParentSpec: true,
   } satisfies RoleSpec<DesignTurnOutput>,
+  prototype: {
+    role: "design",
+    prompt: "prototype",
+    // A prototype turn ends only in a prototype-round, so Sandcastle asks the agent to fix any other kind.
+    output: { schema: schemaOf(readPrototypeTurnOutput) },
+    instructionsNote:
+      "The Operator wrote these for this repo's Design sessions. They refine how you build the variants here but never change the rules or the output contract above.",
+    describe: (issue, output) => `The prototype turn on #${issue} built ${output.variants.length} variants`,
+  } satisfies RoleSpec<PrototypeRoundOutput>,
   implement: {
     role: "implement",
     output: { schema: schemaOf(readImplementOutput) },
@@ -237,6 +276,7 @@ function modelFor(role: { model: string; effort: string | null }): { model: stri
 
 async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   const name = spec.role;
+  const prompt = spec.prompt ?? name;
   const productDir = process.cwd();
   const outDir = resolve(required("FABRIK_OUT_DIR"));
   await mkdir(outDir, { recursive: true });
@@ -245,7 +285,9 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   if (typeof issueNumber !== "number") throw new Error("FABRIK_ISSUE_FILE has no issue number");
 
   const config = await loadConfig(productDir);
-  const role = { ...config.roles[name], ...modelFor(config.roles[name]) };
+  const prototypeTurn = spec.prompt === "prototype";
+  const own = prototypeTurn ? prototypeRole(config.roles) : config.roles[name];
+  const role = { ...own, ...modelFor(own) };
   // For the run's record (src/kit/runRecord.ts): the model and effort passed to the CLI.
   await writeOutputs({ model: role.model, effort: role.effort ?? "" });
 
@@ -271,6 +313,12 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       given = context.operatorComments;
     }
   }
+  if (prototypeTurn) {
+    // The Claude token and the Sandbox's values and test secrets, as the Implementer's, committing as the Fabrik Prototype.
+    setSandboxEnv(config, PROTOTYPE_AUTHOR);
+    extra.push(...prototypeTurnContext(config, issueNumber, required(PROTOTYPE_REQUEST_ENV)).parts);
+    branch = await startPrototypeBranch(productDir, issueNumber);
+  }
   if (spec.readsParentSpec === true) {
     const specFile = process.env["FABRIK_SPEC_FILE"] ?? "";
     const parent: unknown = specFile === "" ? null : JSON.parse(await readFile(specFile, "utf8"));
@@ -291,6 +339,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     // A Design turn on an issue that was never sent back is given none, and its result says nothing of them.
     if (sentBackComments.length > 0) given = sentBackComments;
     extra.push(...mapCapContext(JSON.parse(await readFile(required("FABRIK_MAP_FILE"), "utf8"))));
+    extra.push(...prototypeContext(config, issueNumber));
   }
   // The hot-spot window an Auditor run was given, which its result passes out for the Audit to name.
   let window: AuditWindow | null = null;
@@ -327,12 +376,12 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   const output =
     "schema" in spec.output
       ? Output.object({
-          tag: name,
+          tag: prompt,
           // A run on an existing PR owes a fix as well, which its push job checks too.
           schema: onPullRequest ? schemaOf(readPullRequestRunOutput) : spec.output.schema,
           maxRetries: 1,
         })
-      : Output.string({ tag: name });
+      : Output.string({ tag: prompt });
 
   // The agent inherits this process's env (noSandbox), so set what it needs here.
   setAgentEnv(claudeArgs(role.model, role.effort));
@@ -344,7 +393,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
 
   try {
     const result = await run({
-      name: `${name}-${subject}`,
+      name: `${prompt}-${subject}`,
       agent: claudeCode(
         role.model,
         role.effort === null ? {} : { effort: role.effort as "low" | "medium" | "high" | "xhigh" | "max" },
@@ -352,7 +401,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       sandbox: noSandbox(),
       cwd: productDir,
       prompt: promptFor({
-        template: await readFile(join(KIT_DIR, kitPromptPath(name)), "utf8"),
+        template: await readFile(join(KIT_DIR, kitPromptPath(prompt)), "utf8"),
         role: name,
         note: spec.instructionsNote,
         config,
@@ -412,6 +461,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
 const roles: Record<string, () => Promise<void>> = {
   triage: () => runRole(ROLE_SPECS.triage),
   design: () => runRole(ROLE_SPECS.design),
+  prototype: () => runRole(ROLE_SPECS.prototype),
   implement: () => runRole(ROLE_SPECS.implement),
   review: () => runRole(ROLE_SPECS.review),
   audit: () => runRole(ROLE_SPECS.audit),

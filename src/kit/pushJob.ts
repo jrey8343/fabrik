@@ -4,6 +4,7 @@
 // checks or Verdict, or, when the routed agent job failed or was cancelled,
 // its failure notice. Pure, no I/O.
 import { type CaptureResult, parseCaptureResult } from "../evidence/uiEvidence.ts";
+import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
 import type { AgentRole } from "../loop/types.ts";
 
 /** One job's `needs.<job>`: its result and its outputs. */
@@ -43,6 +44,8 @@ export type PushJobInput =
       readonly startedBy: number | null;
       /** For an Implement run: what its job passed out about UI evidence. */
       readonly capture?: CaptureOutputs;
+      /** For a Design session's prototype turn (#155), which the prototype job ran. */
+      readonly prototype?: PrototypeTurnOutputs;
     }
   | {
       readonly kind: "review";
@@ -62,8 +65,22 @@ export type PushJobInput =
       readonly secretsStep: string;
       /** The Subscription the run used, as the Kit job passed it out; absent when it passed none. */
       readonly subscription?: string;
+      /** For a Design-session turn: true when it was the session's prototype turn, which the prototype job ran. */
+      readonly prototype?: true;
     }
   | { readonly kind: "nothing"; readonly reason: string };
+
+/**
+ * What the push job knows of a prototype turn (#155) beside its result: the
+ * request the Kit job's plan built it on, from the Kit job's
+ * `prototype_request` output, never from the agent, or null when that doesn't
+ * read; and what the prototype job passed out about capturing its variants,
+ * read leniently, as an Implement job's UI evidence is.
+ */
+export interface PrototypeTurnOutputs {
+  readonly request: PrototypeRequestMarker | null;
+  readonly capture: CaptureOutputs;
+}
 
 const FAILED = ["failure", "cancelled"];
 
@@ -73,6 +90,23 @@ const FAILED = ["failure", "cancelled"];
  * keyed `retro`, runs the agent on it.
  */
 export const RETRO_EVIDENCE_JOB = "retro-evidence";
+
+/**
+ * The key of the job that runs a Design session's prototype turn (#155). The
+ * turn's route and role stay `design`, so it's the Kit job's `prototype`
+ * output that says this job ran it, and the Design job was skipped.
+ */
+export const PROTOTYPE_JOB = "prototype";
+
+/** Whether the run the Kit job routed to `route` is a Design session's prototype turn: a Design run, with the Kit job's `prototype` output true. */
+export function isPrototypeTurn(needs: Needs, route: string): boolean {
+  return route === "design" && needs["kit"]?.outputs["prototype"] === "true";
+}
+
+/** The job that ran the agent the Kit job routed to: the prototype job for a prototype turn, else the route's own. */
+export function routedJob(needs: Needs, route: AgentRole): NeededJob | undefined {
+  return needs[isPrototypeTurn(needs, route) ? PROTOTYPE_JOB : route];
+}
 
 /**
  * What the push job applies. `eventIssue` is the Actions event's issue number,
@@ -103,8 +137,12 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       // A Retro whose evidence job failed never ran its agent, and is that run's failure.
       const evidence = route === "retro" ? needs[RETRO_EVIDENCE_JOB] : undefined;
       if (evidence !== undefined && FAILED.includes(evidence.result)) return failure(route, issue, evidence, kit);
-      const job = needs[route];
-      if (job !== undefined && FAILED.includes(job.result)) return failure(route, issue, job, kit);
+      const job = routedJob(needs, route);
+      const prototype = isPrototypeTurn(needs, route);
+      if (job !== undefined && FAILED.includes(job.result)) {
+        const failed = failure(route, issue, job, kit);
+        return prototype ? { ...failed, prototype: true } : failed;
+      }
       if (job?.result !== "success") return { kind: "nothing", reason: `the ${route} job ended ${job?.result ?? "unknown"}` };
       return {
         kind: "agent-result",
@@ -115,6 +153,7 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
         // A Design turn routed from a comment answers that reply (src/loop/design.ts).
         startedBy: route === "design" ? eventComment : null,
         ...(route === "implement" ? { capture: captureOutputs(job.outputs) } : {}),
+        ...(prototype ? { prototype: { request: requestOf(kit.outputs["prototype_request"]), capture: captureOutputs(job.outputs) } } : {}),
       };
     }
     case "review": {
@@ -139,7 +178,7 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
   }
 }
 
-function failure(role: AgentRole, issue: number, job: NeededJob, kit: NeededJob): PushJobInput {
+function failure(role: AgentRole, issue: number, job: NeededJob, kit: NeededJob): Extract<PushJobInput, { kind: "agent-failure" }> {
   const subscription = kit.outputs["subscription"] ?? "";
   return {
     kind: "agent-failure",
@@ -161,6 +200,11 @@ function captureOutputs(outputs: NeededJob["outputs"]): CaptureOutputs {
     artifact: numberOr(outputs["ui-evidence-artifact"]),
     galleryArtifact: numberOr(outputs["ui-gallery-artifact"]),
   };
+}
+
+/** The prototype request the Kit job passed out, as one line of JSON, or null when it doesn't read. */
+function requestOf(text: string | undefined): PrototypeRequestMarker | null {
+  return text === undefined || text === "" ? null : parsePrototypeRequest(text);
 }
 
 function numberOr(text: string | undefined): number | null {

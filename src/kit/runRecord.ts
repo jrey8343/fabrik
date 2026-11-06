@@ -1,12 +1,13 @@
 // The Run record (ADR-0009): from what the push job knows when an AFK agent
-// run ends, the one schema 2 record of that run, and the paths it and its
+// run ends, the one schema 3 record of that run, and the paths it and its
 // transcript take in the store, or no record when no agent run ended. A judge
 // run, scoring a finished run, gets a record too, in role `score`, from what
 // the score-record job knows when it ends. The stream is read through the one
 // stream-json reader (src/agent/stream.ts). The paths are inside the store,
 // RUN_STORE (src/kit/runStore.ts). A record read back from the store is read
 // at the current schema: a schema 1 record, written before runs were given a
-// Subscription, as being on the first listed one. Pure, no I/O.
+// Subscription, as being on the first listed one, and a schema 1 or 2 record,
+// written before prototype turns, as no prototype turn. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
@@ -14,7 +15,7 @@ import { infrastructureFailureOf } from "../loop/failures.ts";
 import { firstSubscription } from "../loop/subscriptions.ts";
 import type { AgentRole, InfrastructureFailure, KitConfig, Verdict } from "../loop/types.ts";
 import { parseVerdict } from "../loop/verdict.ts";
-import { type NeededJob, type Needs, pushJobInput, RETRO_EVIDENCE_JOB } from "./pushJob.ts";
+import { isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RETRO_EVIDENCE_JOB, routedJob } from "./pushJob.ts";
 
 /** What the push job knows when the run ends. */
 export interface RunEnd {
@@ -68,10 +69,10 @@ export interface RateLimitReading {
 /** A record's role: the agent role that ran, or `score` for a judge run scoring a finished run. */
 export type RunRecordRole = AgentRole | "score";
 
-/** The schema a Run record is written at: 2 added `subscription`. */
-export const RUN_RECORD_SCHEMA = 2;
+/** The schema a Run record is written at: 2 added `subscription`, 3 added `prototype`. */
+export const RUN_RECORD_SCHEMA = 3;
 
-/** One AFK agent run, schema 2. */
+/** One AFK agent run, schema 3. */
 export interface RunRecord {
   readonly schema: typeof RUN_RECORD_SCHEMA;
   readonly kitSha: string;
@@ -98,6 +99,8 @@ export interface RunRecord {
   readonly retry: number;
   readonly stepUp: boolean;
   readonly requestChanges: boolean;
+  /** Whether the run was a Design session's prototype turn (#155), whose role stays `design`. */
+  readonly prototype: boolean;
   /**
    * The commit the run started from: an Implement branch's base, a Review's PR
    * head, the event's commit for Triage and Design, the Audit's marked commit
@@ -152,7 +155,7 @@ function endedRun(end: Pick<RunEnd, "needs" | "eventIssue" | "failureReport">): 
   const input = pushJobInput(end.needs, end.eventIssue);
   switch (input.kind) {
     case "agent-result":
-      return { role: input.role, issue: input.issue, pullRequest: input.pullRequest, job: end.needs[input.role], failure: null };
+      return { role: input.role, issue: input.issue, pullRequest: input.pullRequest, job: routedJob(end.needs, input.role), failure: null };
     case "review": {
       if (!input.withResult) return null;
       return { role: "review", issue: input.ticket, pullRequest: input.pullRequest, job: end.needs["review"], failure: null };
@@ -193,6 +196,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     retry: implement ? (countOf(kit["retry"]) ?? 0) : 0,
     stepUp: implement && kit["step-up"] === "true",
     requestChanges: implement && kit["request-changes"] === "true",
+    prototype: isPrototypeTurn(end.needs, role),
     baseSha: nonEmpty(agent["base-sha"]),
     jobResult: job?.result ?? "unknown",
     infrastructureFailure: ran.failure,
@@ -243,6 +247,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     retry: 0,
     stepUp: false,
     requestChanges: false,
+    prototype: false,
     baseSha: null,
     jobResult: judge.result,
     infrastructureFailure: failureOf(judge.result, judge.outputs["secrets-step"], end.failureReport),
@@ -298,14 +303,18 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
 /**
  * A Run record as read back from the store, at the current schema: a schema 1
  * record, which names no Subscription, is read as being on the first listed
- * one. Null for anything that isn't a record of a schema the Kit knows.
+ * one, and a schema 1 or 2 record, written before there were prototype turns,
+ * as no prototype turn. Null for anything that isn't a record of a schema the
+ * Kit knows.
  */
 export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
   if (typeof stored !== "object" || stored === null) return null;
   const { schema } = stored as { schema?: unknown };
   if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
+  if (schema === 2) return { ...(stored as Omit<RunRecord, "schema" | "prototype">), schema: RUN_RECORD_SCHEMA, prototype: false };
   if (schema === 1) {
-    return { ...(stored as Omit<RunRecord, "schema" | "subscription">), schema: RUN_RECORD_SCHEMA, subscription: firstSubscription({ subscriptions }) };
+    const record = stored as Omit<RunRecord, "schema" | "subscription" | "prototype">;
+    return { ...record, schema: RUN_RECORD_SCHEMA, subscription: firstSubscription({ subscriptions }), prototype: false };
   }
   return null;
 }
@@ -313,11 +322,12 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
 /**
  * The job whose failure the push job saw: for a Review, the Reviewer, unless
  * its checks job failed first and the Reviewer never ran; for a Retro, the
- * Retro job, unless its evidence job failed first and the Retro never ran.
+ * Retro job, unless its evidence job failed first and the Retro never ran; for
+ * a prototype turn, the prototype job.
  */
 function failedJob(needs: Needs, role: AgentRole): NeededJob | undefined {
   const first = role === "review" ? needs["review-checks"] : role === "retro" ? needs[RETRO_EVIDENCE_JOB] : undefined;
-  return first !== undefined && FAILED.includes(first.result) ? first : needs[role];
+  return first !== undefined && FAILED.includes(first.result) ? first : routedJob(needs, role);
 }
 
 const FAILED = ["failure", "cancelled"];

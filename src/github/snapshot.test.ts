@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
 import { anIssue, aPullRequest, AUDITED_SHA, auditBody, designQueueSnapshotOf, HEAD_SHA, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { UI } from "../__fixtures__/uiEvidence.ts";
 import { type CaptureResult, evidenceSection } from "../evidence/uiEvidence.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
@@ -9,7 +10,7 @@ import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
-import { countDispatchedRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, readKitConfigSources, RESEARCH_JOB_NAME } from "./snapshot.ts";
+import { countDispatchedRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, PROTOTYPE_JOB_NAME, readKitConfigSources, RESEARCH_JOB_NAME } from "./snapshot.ts";
 
 const repo = { owner: "acme", name: "shop" };
 
@@ -136,6 +137,16 @@ describe("Reading the Design-session turns a Design queue check sees in progress
     expect(await designTurnsInProgress(actions, repo)).toEqual([7]);
   });
 
+  it("reads a session's prototype turn running, queued or waiting as its Design-session turn in progress", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Design-session turn #7", status: "completed", conclusion: "skipped" }, { name: "fabrik / Prototype turn #7", status: "in_progress" }] },
+      { id: 2, status: "queued", jobs: [{ name: "fabrik / Prototype turn #9", status: "queued" }] },
+      { id: 3, status: "in_progress", jobs: [{ name: "Prototype turn #4", status: "completed", conclusion: "success" }, { name: "Push", status: "in_progress" }] },
+    ]);
+
+    expect(await designTurnsInProgress(actions, repo)).toEqual([4, 7, 9]);
+  });
+
   it("doesn't read a Design job skipped because its run went another way, or any other job", async () => {
     const actions = actionsWith([
       {
@@ -160,6 +171,13 @@ describe("The Design-session turn job's name", () => {
 
     // Quoted, since an unquoted ` #` starts a YAML comment.
     expect(designJob).toBe(`"${DESIGN_JOB_NAME} #\${{ github.event.issue.number }}"`);
+  });
+
+  it("has a prototype twin: the name loop.yml gives the prototype job, followed by its issue, which a Design queue check reads too", async () => {
+    const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
+    const prototypeJob = /^ {2}prototype:\n {4}name: (.+)$/m.exec(workflow)?.[1];
+
+    expect(prototypeJob).toBe(`"${PROTOTYPE_JOB_NAME} #\${{ github.event.issue.number }}"`);
   });
 });
 
@@ -223,6 +241,49 @@ describe("Gathering a Design queue check's needs-design issues", () => {
 
     expect(queue.designTurnsInProgress).toEqual([4]);
     expect(holding(queue)).toEqual({ 3: true, 4: true, 5: true, 6: false });
+  });
+
+  it("reads a session whose first turn asked for a Prototype as holding its slot until the prototype turn lands, so the cap holds", async () => {
+    const firstTurn = planFor(
+      {
+        kind: "agent-run-finished",
+        role: "design",
+        issue: 3,
+        output: JSON.stringify({ kind: "prototype", route: "/book", variants: 3, brief: "Three layouts.", comment: "Prototyping the booking page." }),
+      },
+      snapshotOf(anIssue({ number: 3, labels: ["needs-design"] })),
+      kitConfig({ ui: UI }),
+    );
+    if (firstTurn.kind !== "act") throw new Error(`expected a plan that acts, got ${JSON.stringify(firstTurn)}`);
+    const request = firstTurn.actions.flatMap((action) => (action.kind === "comment" ? [kit(action.body)] : []));
+    expect(request).toHaveLength(1);
+    const asked = (runs: Parameters<typeof actionsWith>[0]) =>
+      gathered(
+        [
+          issue(3, {
+            comments: { nodes: request },
+            timelineItems: { nodes: [labelled("needs-design", "2026-11-01T09:00:00Z"), unlabelled("agent:design", "2026-11-02T10:00:00Z")] },
+          }),
+          issue(4),
+        ],
+        runs,
+      );
+    const checked = (queue: DesignQueueSnapshot) =>
+      planFor(
+        { kind: "design-queue-check" },
+        designQueueSnapshotOf(queue.issues, { designTurnsInProgress: queue.designTurnsInProgress }),
+        kitConfig({ caps: { ...DEFAULT_KIT_CONFIG.caps, designSessions: 1 } }),
+      );
+
+    for (const queue of [
+      // The prototype turn queued, then running, then done while its push job posts the round.
+      await asked([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Design-session turn #3", status: "completed", conclusion: "skipped" }, { name: "fabrik / Prototype turn #3", status: "queued" }] }]),
+      await asked([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Prototype turn #3", status: "in_progress" }] }]),
+      await asked([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Prototype turn #3", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] }]),
+    ]) {
+      expect(holding(queue)).toEqual({ 3: true, 4: false });
+      expect(checked(queue)).toMatchObject({ kind: "nothing", reason: expect.stringContaining("#3 holds a slot") });
+    }
   });
 
   it("reads an issue that got needs-design again, after its old session was abandoned by hand, as waiting", async () => {
@@ -837,8 +898,9 @@ describe("Gathering a pull request's UI evidence marker", () => {
 
 describe("Gathering an issue's Design session", () => {
   async function gatheredIssue(
-    comments: { body: string; createdAt?: string; author: { __typename: string } }[],
+    comments: { body: string; createdAt?: string; author: { login?: string; __typename: string }; fullDatabaseId?: string }[],
     timeline: unknown[] = [],
+    appLogin: string | null = null,
   ) {
     const github = {
       async graphql(query: string): Promise<unknown> {
@@ -852,7 +914,8 @@ describe("Gathering an issue's Design session", () => {
                 author: { login: "someone" },
                 labels: { nodes: [{ name: "needs-design" }] },
                 parent: null,
-                comments: { nodes: comments.map((comment) => ({ createdAt: "2026-11-02T09:00:00Z", ...comment })) },
+                // GitHub reads a comment's id as a BigInt, which comes back as a string.
+                comments: { nodes: comments.map((comment, i) => ({ createdAt: "2026-11-02T09:00:00Z", fullDatabaseId: String(5000 + i), ...comment })) },
                 timelineItems: { nodes: timeline },
                 closedByPullRequestsReferences: { nodes: [] },
                 blockedBy: { nodes: [] },
@@ -865,7 +928,7 @@ describe("Gathering an issue's Design session", () => {
       },
     } as unknown as GitHub;
     const event = { kind: "issue-comment-created", issue: 6, commenter: "operator", commenterIsBot: false, body: "More context", comment: 9 } as const;
-    return (await gatherSnapshot(github, repo, event, null, null)).issue;
+    return (await gatherSnapshot(github, repo, event, null, appLogin)).issue;
   }
 
   it("reads a Design-session turn's failure notice as a failed turn, so the session keeps its slot", async () => {
@@ -922,6 +985,66 @@ describe("Gathering an issue's Design session", () => {
     expect(planFor(reply, snapshotOf(issue ?? anIssue()), kitConfig())).toMatchObject({
       kind: "act",
       actions: [{ kind: "start-agent-run", role: "design", issue: 6 }],
+    });
+  });
+
+  describe("its pending prototype request", () => {
+    const brief = "- **A**: one long form.\n- **B**: a stepper.\n- **C**: a calendar first.";
+    const app = { login: "fabrik-app", __typename: "Bot" };
+
+    /** The prototype request the core posts for an ordinary turn, started by the Operator's reply 9001, that asked for one. */
+    function requestComment(): string {
+      const output = JSON.stringify({ kind: "prototype", route: "/book", variants: 3, brief, comment: "Prototyping the booking page." });
+      const plan = planFor(
+        { kind: "agent-run-finished", role: "design", issue: 6, output, startedBy: 9001 },
+        snapshotOf(anIssue({ number: 6, labels: ["needs-design"], designRounds: 1 }), { startingComment: { id: 9001, exists: true } }),
+        kitConfig({ ui: UI }),
+      );
+      return plan.kind === "act" && plan.actions[0]?.kind === "comment" ? plan.actions[0].body : "";
+    }
+
+    /** The Operator's reply 9001, which approved the Prototype. */
+    const approval = { body: "Yes, prototype it.", author: { login: "operator", __typename: "User" }, fullDatabaseId: "9001" };
+
+    it("reads the prototype request the core posted as the session's pending request, with the reply that asked for it", async () => {
+      const issue = await gatheredIssue([approval, { body: requestComment(), author: app }]);
+
+      expect(issue?.pendingPrototype).toMatchObject({ request: { route: "/book", variants: 3, brief }, reply: 9001 });
+      expect(issue?.unansweredPrototypes).toEqual([{ request: { route: "/book", variants: 3, brief }, reply: 9001 }]);
+    });
+
+    it("reads a request another turn's failure notice followed as unanswered, though no longer pending, so its prototype turn still lands", async () => {
+      const failed = { body: `${DESIGN_TURN_FAILED_MARKER}\n@operator The Design-session turn run on #6 failed.`, author: app };
+      const issue = await gatheredIssue([approval, { body: requestComment(), author: app }, failed], [], "fabrik-app[bot]");
+
+      expect(issue?.pendingPrototype).toBeNull();
+      expect(issue?.unansweredPrototypes).toEqual([{ request: { route: "/book", variants: 3, brief }, reply: 9001 }]);
+    });
+
+    it("reads a request whose approving reply isn't among the comments it read, deleted or older than them, as not pending", async () => {
+      const issue = await gatheredIssue([{ body: "Earlier.", author: { login: "operator", __typename: "User" }, fullDatabaseId: "9000" }, { body: requestComment(), author: app }]);
+
+      expect(issue?.pendingPrototype).toBeNull();
+    });
+
+    it("counts only a request posted since the issue last got needs-design", async () => {
+      const issue = await gatheredIssue(
+        [{ body: requestComment(), createdAt: "2026-10-02T09:00:00Z", author: app }],
+        [{ __typename: "LabeledEvent", createdAt: "2026-11-01T09:00:00Z", label: { name: "needs-design" } }],
+      );
+
+      expect(issue?.pendingPrototype).toBeNull();
+    });
+
+    // As byAppOf takes them: the Kit job, which only routes, doesn't know the App's login.
+    it("takes only the Fabrik App's request once it knows the App's login, and any bot's while it doesn't, never a person's", async () => {
+      const other = { login: "other-app", __typename: "Bot" };
+      const person = { login: "jrey", __typename: "User" };
+
+      expect((await gatheredIssue([approval, { body: requestComment(), author: app }], [], "fabrik-app[bot]"))?.pendingPrototype).not.toBeNull();
+      expect((await gatheredIssue([approval, { body: requestComment(), author: other }], [], "fabrik-app[bot]"))?.pendingPrototype).toBeNull();
+      expect((await gatheredIssue([approval, { body: requestComment(), author: other }]))?.pendingPrototype).not.toBeNull();
+      expect((await gatheredIssue([approval, { body: requestComment(), author: person }]))?.pendingPrototype).toBeNull();
     });
   });
 });
@@ -1638,6 +1761,39 @@ describe("Gathering a Design-session turn's starting reply", () => {
     const { github, reads } = githubWhere(() => ({ id: 1 }));
 
     const snapshot = await gatherSnapshot(github, repo, turn(), null, null);
+
+    expect(snapshot.startingComment).toBeNull();
+    expect(reads).toEqual([]);
+  });
+
+  // A prototype turn is started by agent:design, so the reply it answers is the one that approved its request (#155).
+  const prototypeTurn = (reply: number | null) =>
+    ({
+      kind: "prototype-run-finished",
+      issue: 7,
+      output: "{}",
+      request: { request: { route: "/book", variants: 3, brief: "Three ways." }, reply },
+      branch: "prototype/7",
+      changes: { net: [], commits: [] },
+      headSha: null,
+      gallery: null,
+      runUrl: "https://github.com/acme/shop/actions/runs/9100/attempts/1",
+      repoUrl: "https://github.com/acme/shop",
+    }) as const;
+
+  it("reads whether a prototype turn's approving reply, which its request names, is still there", async () => {
+    const { github, reads } = githubWhere(() => null);
+
+    const snapshot = await gatherSnapshot(github, repo, prototypeTurn(9001), null, "fabrik-app[bot]");
+
+    expect(snapshot.startingComment).toEqual({ id: 9001, exists: false });
+    expect(reads).toEqual(["GET /repos/acme/shop/issues/comments/9001"]);
+  });
+
+  it("reads no reply for a prototype turn whose request agent:design started, which names none", async () => {
+    const { github, reads } = githubWhere(() => ({ id: 1 }));
+
+    const snapshot = await gatherSnapshot(github, repo, prototypeTurn(null), null, "fabrik-app[bot]");
 
     expect(snapshot.startingComment).toBeNull();
     expect(reads).toEqual([]);

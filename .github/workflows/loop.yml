@@ -7,10 +7,11 @@
 # Each AFK role is an agent job followed by the push job (ADR-0002):
 # - The agent job holds `contents: read` and no GitHub write credential, no
 #   `id-token: write`, and only the agent service account, which loads the
-#   Claude token, or for Implement only the implement service account, which
-#   also loads the repo's test secrets (ADR-0004). It passes its output out as
-#   an artifact, the Implementer's commits and the Researcher's findings
-#   branch as a git bundle.
+#   Claude token, or, for Implement and a Design session's prototype turn,
+#   only the implement service account, which also loads the repo's test
+#   secrets (ADR-0004). It passes its output out as an artifact, the
+#   Implementer's commits, the prototype turn's variants and the Researcher's
+#   findings branch as a git bundle.
 # - The push job runs on a fresh VM, loads the Fabrik App key through the push
 #   service account, mints an App token, and never checks out or runs Product
 #   code. It checks out only Fabrik itself, at the exact commit the caller
@@ -103,6 +104,12 @@ jobs:
       ui-evidence-run: ${{ steps.route.outputs.ui-evidence-run }}
       ui-evidence-artifact: ${{ steps.route.outputs.ui-evidence-artifact }}
       ui-evidence-failure: ${{ steps.route.outputs.ui-evidence-failure }}
+      # "true" when the Design run is a Design session's prototype turn, else "false".
+      prototype: ${{ steps.route.outputs.prototype }}
+      # For a prototype turn, its request as one line of JSON (route, variants, brief, reply); else empty.
+      # The one output that holds agent text, the Design agent's brief, so a job reads it only through
+      # `env:`, never in a `run:` script, where it could inject a command.
+      prototype_request: ${{ steps.route.outputs.prototype_request }}
     steps:
       # No expression context names the commit of a called workflow, so read
       # it from the OIDC token's job_workflow_sha claim.
@@ -258,7 +265,8 @@ jobs:
   design:
     name: "Design-session turn #${{ github.event.issue.number }}"
     needs: kit
-    if: needs.kit.outputs.route == 'design'
+    # A prototype turn of the session runs in the prototype job instead.
+    if: needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.design-timeout-minutes) }}
     # One turn per issue at a time. queue: max keeps every queued Operator reply
@@ -364,13 +372,229 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # A Design session's prototype turn (#155), in the design job's place when
+  # the Kit job's plan made the Design run one: the Design agent, on the
+  # Design model, builds the approved variants of one route on the issue's
+  # prototype branch, which the runner passes out as a git bundle, as an
+  # Implement run's commits. It builds and serves the Product, so, like the
+  # Implement job, it holds the implement service account (the Claude token
+  # and this repo's test secrets, in its agent step's env only), no GitHub
+  # write credential, and the Implement timeouts. Named for its issue, as the
+  # design job is: a Design queue check reads it as the session's turn in
+  # progress (PROTOTYPE_JOB_NAME in src/github/snapshot.ts).
+  prototype:
+    name: "Prototype turn #${{ github.event.issue.number }}"
+    needs: kit
+    if: needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype == 'true'
+    runs-on: ubuntu-latest
+    # Its agent step stops at the Implement role's own timeout; this leaves room
+    # for capture after it (implementJobTimeoutMinutes in src/evidence/capture.ts).
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-job-timeout-minutes) }}
+    # A turn of the Design session, so one at a time with its other turns.
+    concurrency:
+      group: fabrik-design-${{ github.event.issue.number }}
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      # Read by the push job: a failed 1Password step means the agent never started.
+      secrets-step: ${{ steps.op.outcome }}
+      # For its Run record: the model and effort the runner passed, and the commit the run started from.
+      model: ${{ steps.agent.outputs.model }}
+      effort: ${{ steps.agent.outputs.effort }}
+      base-sha: ${{ steps.base.outputs.sha }}
+      # "true" when the agent step's own timeout stopped it, which the push job reads as a timeout (src/kit/pushJob.ts).
+      agent-timed-out: ${{ steps.agent-time.outputs.timed-out }}
+      # The variants' capture, for the push job, under the names the Implement job
+      # passes UI evidence out by: the capture result as one compact JSON line,
+      # empty when nothing was captured, and the numeric id of the unzipped
+      # gallery's artifact, which the push job links from its own run.
+      ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}
+      ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}
+    steps:
+      # A fresh clone, with every branch's history, for the bundle and the guard.
+      - name: Check out the Product repo's default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # A later prototype round builds on the branch an earlier one pushed. A
+      # first one stays on the default branch, and the runner cuts the branch
+      # from it (src/agent/prototype.ts).
+      - name: Check out the issue's prototype branch, if an earlier round pushed it
+        working-directory: product
+        env:
+          BRANCH: prototype/${{ github.event.issue.number }}
+        run: |
+          if git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; then
+            git checkout --quiet -B "$BRANCH" "refs/remotes/origin/$BRANCH"
+          fi
+
+      # Before the secrets load, so a run whose agent never started still names it.
+      - name: Note the commit the run starts from
+        id: base
+        run: echo "sha=$(git -C product rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # A turn of the Design session, so it gets the Design role's Extra skills,
+      # beside the Base skills, which hold the prototype skill.
+      - name: Prepare the agent job
+        uses: ./kit/.github/actions/prepare-agent
+        with:
+          role: design
+          github-token: ${{ github.token }}
+          issue: ${{ github.event.issue.number }}
+
+      # Kit config is read as data; the list of op:// references goes to 1Password as a file.
+      - name: List the test secrets to load
+        run: node kit/src/kit/secrets-main.ts product "$RUNNER_TEMP/fabrik-secrets.env"
+
+      - name: Load the Claude token and the test secrets
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_IMPLEMENT_TOKEN }}
+          OP_ENV_FILE: ${{ runner.temp }}/fabrik-secrets.env
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential
+
+      # So an agent step its timeout stopped can be told from one that failed for any other reason.
+      - name: Note when the prototype turn starts
+        id: started
+        run: echo "at=$(date +%s)" >>"$GITHUB_OUTPUT"
+
+      - name: Run the prototype turn
+        id: agent
+        working-directory: product
+        # The Implement role's own timeout, on the step rather than the job, so capture can run after it.
+        timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
+        env:
+          # Every value the 1Password step resolved, in this step's env only.
+          FABRIK_SECRETS: ${{ toJSON(steps.op.outputs) }}
+          FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          # The approved request, as one line of JSON. It holds the Design agent's brief, so it
+          # reaches the runner through env: only, never in a run: script.
+          FABRIK_PROTOTYPE_REQUEST: ${{ needs.kit.outputs.prototype_request }}
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          FABRIK_MODEL: ${{ needs.kit.outputs.model }}
+          FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
+        run: node ../kit/src/agent/run.ts prototype
+
+      # The agent step's own timeout fails the job, where a job timeout cancels
+      # it: note it, so the push job reads it as a timeout all the same.
+      - name: Note whether the prototype turn ran out of time
+        id: agent-time
+        if: failure() && steps.agent.outcome == 'failure'
+        env:
+          STARTED_AT: ${{ steps.started.outputs.at }}
+          TIMEOUT_MINUTES: ${{ needs.kit.outputs.implement-timeout-minutes }}
+        run: |
+          if [ "$(( $(date +%s) - STARTED_AT ))" -ge "$(( TIMEOUT_MINUTES * 60 ))" ]; then
+            echo "timed-out=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      # The variants, once the agent has ended, with #153's capture: it builds and
+      # serves the branch, then screenshots and films each variant at the
+      # approved route with ?variant= and its letter, at both Kit viewports, and
+      # writes them, the capture result and the prototype gallery under
+      # fabrik-out (src/evidence/capture-main.ts). It records every failure in
+      # the capture result, never the job's: continue-on-error, and its own
+      # timeout, the Kit's CAPTURE_TIMEOUT_MINUTES. No secret reaches it, nor
+      # the build and server it runs.
+      - name: Capture the variants
+        id: capture
+        if: success()
+        continue-on-error: true
+        timeout-minutes: 20
+        working-directory: product
+        env:
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # The approved request, whose route capture serves: agent text, so through env: only.
+          FABRIK_PROTOTYPE_REQUEST: ${{ needs.kit.outputs.prototype_request }}
+        run: node ../kit/src/evidence/capture-main.ts prototype
+
+      # The result and the bundle of the variants' commits (none if it made none).
+      - name: Pass the prototype turn's output and commits to the push job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-result
+          path: |
+            ${{ runner.temp }}/fabrik-out/agent-result.json
+            ${{ runner.temp }}/fabrik-out/agent-branch.bundle
+          if-no-files-found: error
+          retention-days: 7
+
+      # src/agent/run.ts writes this when it catches a failure. A run its
+      # timeout stopped leaves none, and the push job reads that as a timeout.
+      - name: Pass the failure report to the push job
+        if: failure() && steps.agent-time.outputs.timed-out != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # The prototype gallery, unzipped, so it opens in the browser in one click,
+      # kept about 30 days; the prototype round is the lasting record. An
+      # unzipped artifact is one file, named after it; a capture that took no
+      # screenshot leaves none. Not fabrik-agent-*: the push job downloads those
+      # and reads none as a timeout. continue-on-error: keeping it must never
+      # fail a turn that passed.
+      - name: Keep the prototype gallery
+        id: gallery
+        if: steps.capture.outputs.ui-capture-result != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/fabrik-out/fabrik-prototype-gallery.html
+          archive: false
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # The agent's stream-json transcript (src/agent/transcript.ts), written line by
+      # line as it ran, so it's kept when the run passed, failed or timed out. Not
+      # fabrik-agent-*: the push job downloads those and reads none as a timeout.
+      # Named for the design route, which the push job's record step takes it by.
+      # continue-on-error: keeping it must never fail a run that passed.
+      - name: Gzip the agent's transcript
+        if: always()
+        continue-on-error: true
+        run: if [ -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl" ]; then gzip -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl"; fi
+
+      - name: Keep the agent's transcript
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-transcript-design
+          path: ${{ runner.temp }}/fabrik-out/transcript.jsonl.gz
+          if-no-files-found: ignore
+          retention-days: 7
+
   # Takes agent:implement off the Ticket as its Implement run starts, so the
   # label never claims work that isn't running (the open draft PR does that),
   # agent:research off a research Decision as its Research run starts (the
   # running job holds the slot), and agent:design off an issue as its Design
-  # session's first turn starts (the running turn, then its round, hold the
-  # slot). It applies the same plan the Kit job routed on; the run itself is
-  # the agent job's. Like the push job, it never touches Product code.
+  # session's first turn, or a prototype turn, starts (the running turn, then
+  # its round, hold the slot), marking a prototype turn's request started on
+  # the request's own comment (src/loop/design.ts). It applies the same plan
+  # the Kit job routed on; the run itself is the agent job's. Like the push
+  # job, it never touches Product code.
   implement-claim:
     name: Claim the work
     needs: kit
@@ -1131,14 +1355,15 @@ jobs:
   # The push job, after whichever agent job the Kit job routed to, or straight
   # after the Kit job when it routed here. What it applies, src/main.ts decides
   # from how those jobs ended (src/kit/pushJob.ts): the agent job's result (for
-  # an Implement run, after the trust-root guard on its branch; for a Research
-  # run, once its branch changes only its findings file), a Review's red checks
-  # or Verdict, or, when the agent job failed or was cancelled (its
-  # timeout-minutes included), the failure notice. always(), so it still runs
-  # after a cancelled agent job.
+  # an Implement run, after the trust-root guard on its branch; for a prototype
+  # turn, after the trust-root guard, as a fast-forward of prototype/<issue>;
+  # for a Research run, once its branch changes only its findings file), a
+  # Review's red checks or Verdict, or, when the agent job failed or was
+  # cancelled (its timeout-minutes included), the failure notice. always(), so
+  # it still runs after a cancelled agent job.
   push:
     name: Push
-    needs: [kit, triage, design, implement, review-checks, review, audit, retro-evidence, retro, research]
+    needs: [kit, triage, design, prototype, implement, review-checks, review, audit, retro-evidence, retro, research]
     if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1206,6 +1431,23 @@ jobs:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
           url: ${{ steps.loop.outputs.preview-url }}
           pull-request: ${{ steps.loop.outputs.preview-pull-request }}
+
+      # A prototype round's preview (#155), as a UI PR's: when the plan pushed
+      # prototype/<issue> and posted its round, with Kit config declaring a
+      # preview.url that names no PR, polls the route's page it filled in, for
+      # a few minutes at most, and links it beside each variant, or says in the
+      # round it never answered. One plan lands one run, so it and the step
+      # above never both poll. continue-on-error, and a timeout of its own, as
+      # above; its token can edit issues, as the round is an issue comment.
+      - name: Link the prototype's previews
+        if: steps.loop.outputs.prototype-preview-url != ''
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: ./kit/.github/actions/link-prototype-preview
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          url: ${{ steps.loop.outputs.prototype-preview-url }}
+          round: ${{ steps.loop.outputs.prototype-preview-round }}
 
       # The run's Run record and transcript, to the fabrik-runs store (ADR-0009).
       # always(), so a Loop that failed still leaves its record; continue-on-error,

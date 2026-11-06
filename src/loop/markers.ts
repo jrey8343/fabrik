@@ -6,6 +6,7 @@
 // comments back through them into the snapshot (src/github/threads.ts), and
 // the body lines are read from the issues themselves, so the Loop's history
 // lives on GitHub alone.
+import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
 import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
@@ -60,6 +61,113 @@ export const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 
 /** The first line of the Kit's note that a Ticket came back to design from an agent PR. */
 export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
+
+/**
+ * A prototype request's first line (#155), carrying as JSON what the Operator
+ * approved and, when a reply of theirs started the turn, that reply.
+ */
+const PROTOTYPE_REQUEST_MARKER = /^<!-- fabrik:prototype-request (\{.*\}) -->(?:\n|$)/;
+
+/** What a prototype request's marker says. */
+export interface PrototypeRequestMarker {
+  /** What the prototype turn of the session builds. */
+  readonly request: PrototypeRequest;
+  /**
+   * The id of the Operator's reply that started the turn which asked for it,
+   * so the prototype turn posts nothing once the Operator deleted it; null
+   * when agent:design started that turn.
+   */
+  readonly reply: number | null;
+}
+
+/** How a prototype request's marker spells the characters that could end its HTML comment early or mention someone. */
+const ESCAPED: Readonly<Record<string, string>> = { "<": "\\u003c", ">": "\\u003e", "@": "\\u0040" };
+
+/**
+ * A prototype request as one line of JSON: its route, variant count and
+ * brief, and the reply that asked for it, which parsePrototypeRequest reads
+ * back. Its marker holds it (prototypeRequestMarker), and so does the Kit
+ * job's output that carries it to the prototype job (src/kit/jobs.ts), whose
+ * GITHUB_OUTPUT lines can't hold a newline, which JSON escapes.
+ */
+export function prototypeRequestJson({ request: { route, variants, brief }, reply }: PrototypeRequestMarker): string {
+  return JSON.stringify({ route, variants, brief, reply });
+}
+
+/**
+ * A prototype request from its JSON (prototypeRequestJson): null when it
+ * doesn't parse, or holds a request the Design turn output contract wouldn't
+ * take (prototypeRequestOf), or a reply that isn't a comment id.
+ */
+export function parsePrototypeRequest(json: string): PrototypeRequestMarker | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  const request = prototypeRequestOf(value);
+  if (request === null) return null;
+  const { reply = null } = value as Record<string, unknown>;
+  if (reply !== null && !(Number.isSafeInteger(reply) && (reply as number) > 0)) return null;
+  return { request, reply: reply as number | null };
+}
+
+/**
+ * The marker a prototype request opens with, on one line, which
+ * prototypeRequestIn reads back. Its JSON spells `<`, `>` and `@` as escapes,
+ * so a brief can neither end the HTML comment early nor mention anyone.
+ */
+export function prototypeRequestMarker(marker: PrototypeRequestMarker): string {
+  return `<!-- fabrik:prototype-request ${prototypeRequestJson(marker).replace(/[<>@]/g, (c) => ESCAPED[c] ?? c)} -->`;
+}
+
+/**
+ * What a prototype request's marker says, read from the comment's first line,
+ * so quoting one further down doesn't count; null when the comment opens with
+ * no marker, or with one parsePrototypeRequest doesn't take.
+ */
+export function prototypeRequestIn(body: string): PrototypeRequestMarker | null {
+  const json = PROTOTYPE_REQUEST_MARKER.exec(body)?.[1];
+  return json === undefined ? null : parsePrototypeRequest(json);
+}
+
+/**
+ * The line the Kit puts right under a prototype request's marker (#155), by
+ * editing the request's comment, once the request's prototype turn starts,
+ * and takes out again if that turn is refused on its Subscription and held or
+ * re-run, so agent:design starts the prototype turn only while none has
+ * started (src/loop/design.ts). The comment's own second line is its
+ * "**Prototype requested.**" lead-in, so nothing the agent wrote can stand
+ * where this goes.
+ */
+const PROTOTYPE_STARTED_MARKER = "<!-- fabrik:prototype-started -->";
+
+/** Whether a prototype request's comment carries the line its prototype turn's start left on it. */
+export function prototypeStartedIn(body: string): boolean {
+  return body.split("\n", 2)[1] === PROTOTYPE_STARTED_MARKER;
+}
+
+/** A prototype request's comment, marked as its prototype turn having started, or not: the line under its marker put in or taken out. */
+export function withPrototypeStarted(body: string, started: boolean): string {
+  if (prototypeStartedIn(body) === started) return body;
+  const [marker = "", ...rest] = body.split("\n");
+  return [marker, ...(started ? [PROTOTYPE_STARTED_MARKER, ...rest] : rest.slice(1))].join("\n");
+}
+
+/**
+ * The line a prototype round (#155) carries right under its round marker,
+ * the round's first line, so the round still counts as a round. A round
+ * ends its session's pending prototype request (src/github/threads.ts).
+ */
+export const PROTOTYPE_ROUND_MARKER = "<!-- fabrik:prototype-round -->";
+
+/**
+ * The line a prototype failure round (#155) carries in the same place: the
+ * round that says what stopped a prototype turn and asks whether to carry
+ * on without one. It too ends the session's pending prototype request.
+ */
+export const PROTOTYPE_FAILURE_ROUND_MARKER = "<!-- fabrik:prototype-failed -->";
 
 /** The heading of a Map's Decisions so far: one line under it per Decision resolved. */
 export const DECISIONS_SO_FAR_HEADING = "## Decisions so far";

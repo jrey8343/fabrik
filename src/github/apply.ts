@@ -1,7 +1,9 @@
 // The adapter's apply side: carries out the plan the core returns, one action
 // at a time, as the token the job holds. It holds no Loop rules.
-import { previewUrl } from "../kit/config.ts";
+import { prototypePreviewUrl, previewUrl } from "../kit/config.ts";
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
+import { prototypeBranchFor } from "../loop/designOutput.ts";
+import { withPrototypeStarted } from "../loop/markers.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
 import type { GitHub, Repo } from "./client.ts";
 
@@ -33,14 +35,23 @@ export interface PreviewToLink {
   readonly url: string;
 }
 
-/** What the push job hands on from applying a plan: the preview deployment to link, when the plan asked for one. */
+/** A prototype round's preview, which the push job's prototype preview step polls and links beside each variant (src/kit/previewLink.ts). */
+export interface PrototypePreviewToLink {
+  /** The round's comment id. */
+  readonly round: number;
+  /** Kit config's `preview.url`, filled in for the prototype branch as the plan's push left it, at the route its variants render on. */
+  readonly url: string;
+}
+
+/** What the push job hands on from applying a plan: the preview deployment to link, a UI PR's or a prototype round's, when the plan asked for one. */
 export interface AppliedPlan {
-  readonly preview: PreviewToLink | null;
+  readonly preview: PreviewToLink | PrototypePreviewToLink | null;
 }
 
 /**
  * Applies each action in the plan, in order, and returns what the push job
- * hands on from it. Only an Implement run's push job has a branch to push.
+ * hands on from it. Only the push job of an Implement run, a Researcher run or
+ * a prototype turn has a branch to push.
  */
 export async function applyPlan(
   github: GitHubApi,
@@ -59,17 +70,23 @@ export async function applyPlan(
 /** What earlier actions in the plan made, for later ones to refer to. */
 interface Made {
   readonly created: Map<string, CreatedRecord>;
-  /** The URL of each comment the plan has posted under a key, for later comments that link it. */
-  readonly posted: Map<string, string>;
+  /** Each comment the plan has posted under a key, for later comments that link it and a prototype round's preview. */
+  readonly posted: Map<string, PostedRecord>;
   /** The number of the PR the plan opened, for a preview to link on it. */
   opened: number | null;
-  preview: PreviewToLink | null;
+  preview: PreviewToLink | PrototypePreviewToLink | null;
 }
 
-function postedIn(posted: ReadonlyMap<string, string>, { posted: key }: PostedComment): string {
-  const url = posted.get(key);
-  if (url === undefined) throw new Error(`The plan refers to a comment it hasn't posted: ${key}`);
-  return url;
+/** A comment a plan posted: its URL for links in text, its id for an edit. */
+interface PostedRecord {
+  readonly url: string;
+  readonly id: number;
+}
+
+function postedIn(posted: ReadonlyMap<string, PostedRecord>, { posted: key }: PostedComment): PostedRecord {
+  const comment = posted.get(key);
+  if (comment === undefined) throw new Error(`The plan refers to a comment it hasn't posted: ${key}`);
+  return comment;
 }
 
 /** An issue a plan created: its number for links in text, its database id for sub-issue and blocked-by edges. */
@@ -167,6 +184,15 @@ async function apply(
       made.preview = { pullRequest, url: previewUrl(action.template, { number: pullRequest, branch: action.branch, headSha }) };
       return;
     }
+    // Nor this: the push job hands it on to its prototype preview step, filled in for the branch as the push left it.
+    case "link-prototype-preview": {
+      const round = postedIn(made.posted, action.round).id;
+      const branch = prototypeBranchFor(action.issue);
+      const headSha = branches?.head ?? null;
+      if (headSha === null) throw new Error(`This job pushed no ${branch}, so it has no head to link a preview of`);
+      made.preview = { round, url: prototypePreviewUrl(action.template, { branch, headSha, route: action.route }) };
+      return;
+    }
     case "create-issue":
       return createIssue(github, repo, action, made.created);
     case "add-blocked-by":
@@ -188,6 +214,21 @@ async function apply(
       if (branches === null) throw new Error(`This job holds no branch to push (${action.branch})`);
       await branches.push(action.branch);
       return;
+    case "mark-prototype-request": {
+      // Read fresh, so the edit changes only the one line the mark is.
+      const path = `/repos/${repo.owner}/${repo.name}/issues/comments/${action.comment}`;
+      const { body } = (await github.rest("GET", path)) as { body: string };
+      const marked = withPrototypeStarted(body, action.started);
+      if (marked !== body) await github.rest("PATCH", path, { body: marked });
+      return;
+    }
+    case "push-prototype-branch": {
+      // Only ever the issue's own prototype branch, which the branch the push job holds fast-forwards (src/github/branch.ts).
+      const branch = prototypeBranchFor(action.issue);
+      if (branches === null) throw new Error(`This job holds no branch to push (${branch})`);
+      await branches.push(branch);
+      return;
+    }
     case "open-pull-request": {
       const opened = (await github.rest("POST", `/repos/${repo.owner}/${repo.name}/pulls`, {
         title: action.title,
@@ -264,10 +305,12 @@ async function applyToIssue(
         | "check-dispatch"
         | "check-design-queue"
         | "link-preview"
+        | "link-prototype-preview"
         | "create-issue"
         | "add-blocked-by"
         | "open-issue"
         | "push-branch"
+        | "push-prototype-branch"
         | "open-pull-request"
         | "close-pull-request"
         | "convert-to-draft"
@@ -288,15 +331,15 @@ async function applyToIssue(
       });
       return;
     case "comment": {
-      const comment = (await github.rest("POST", `${issue}/comments`, { body: action.body })) as { html_url: string };
-      if (action.key !== undefined) posted.set(action.key, comment.html_url);
+      const comment = (await github.rest("POST", `${issue}/comments`, { body: action.body })) as { html_url: string; id: number };
+      if (action.key !== undefined) posted.set(action.key, { url: comment.html_url, id: comment.id });
       return;
     }
     case "comment-linking": {
       const body = action.body
         .map((part) => {
           if (typeof part === "string") return part;
-          return "posted" in part ? postedIn(posted, part) : `#${createdIn(created, part).number}`;
+          return "posted" in part ? postedIn(posted, part).url : `#${createdIn(created, part).number}`;
         })
         .join("");
       await github.rest("POST", `${issue}/comments`, { body });
@@ -313,7 +356,7 @@ async function applyToIssue(
       return;
     case "append-to-decisions-so-far": {
       // Read right before the write, so what the Operator edited after the plan was made stays.
-      const line = action.line.map((part) => (typeof part === "string" ? part : postedIn(posted, part))).join("");
+      const line = action.line.map((part) => (typeof part === "string" ? part : postedIn(posted, part).url)).join("");
       const map = (await github.rest("GET", issue)) as { body: string | null };
       await github.rest("PATCH", issue, { body: withDecisionLine(map.body ?? "", line) });
       return;

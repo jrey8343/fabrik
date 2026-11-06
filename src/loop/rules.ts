@@ -1,6 +1,6 @@
 import { auditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
-import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom } from "./design.ts";
+import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
 import { failureNotice } from "./failures.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
@@ -29,6 +29,7 @@ import { heldWhileUsedUp } from "./hold.ts";
 import { mapCapOf } from "./mapCap.ts";
 import { startResearcher } from "./research.ts";
 import { landResearch } from "./researchLanding.ts";
+import { applyPrototypeTurn } from "./prototypeLanding.ts";
 import { startAgentRun } from "./runs.ts";
 import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
@@ -95,6 +96,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
               context,
               turnStartFrom(event.startedBy, snapshot.startingComment),
               snapshot.openMaps === null ? null : mapCapOf(snapshot.openMaps, config),
+              whyNoPrototype(config),
               event.operatorComments,
             ),
           );
@@ -135,6 +137,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withIssue(snapshot, (context) => landRetro(event, context, config));
     case "research-run-finished":
       return withIssue(snapshot, (context) => landResearch(event, context));
+    case "prototype-run-finished":
+      return withIssue(snapshot, (context) => applyPrototypeTurn(event, context, snapshot.startingComment, config.preview));
     case "pull-request-changes-requested":
       return requestChanges(event, snapshot, config);
     // Context for the next run that reads the PR, never a trigger (ADR-0007).
@@ -236,10 +240,13 @@ function missingFromSnapshot(what: string): Plan {
 
 /**
  * Adding needs-triage starts Triage; adding needs-design asks for a Design
- * queue check, whose agent:design starts the Design session's first turn;
- * adding agent:implement starts (or resumes) an Implement run; and adding
- * agent:research starts a Researcher run, whether Dispatch added it to
- * release a research Decision or the Operator re-added it by hand.
+ * queue check, whose agent:design starts the Design session's first turn
+ * (agent:design re-added starts a refused turn again, or the prototype turn
+ * a prototype request asks for, which `noPrototype` may rule out: see
+ * startQueuedSession); adding agent:implement starts (or resumes) an
+ * Implement run; and adding agent:research starts a Researcher run, whether
+ * Dispatch added it to release a research Decision or the Operator re-added
+ * it by hand.
  */
 function labelAdded(
   issueNumber: number,

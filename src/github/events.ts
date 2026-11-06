@@ -5,6 +5,7 @@ import type { AgentRunResult } from "../agent/result.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import type { CaptureOutputs } from "../kit/pushJob.ts";
 import { type EvidenceBundle, retroEvidenceOf } from "../kit/retroEvidence.ts";
+import type { PrototypeRequestMarker } from "../loop/markers.ts";
 import type {
   AgentRole,
   BranchChanges,
@@ -190,7 +191,45 @@ function implementEvidence({ result, artifact, galleryArtifact, run, repoUrl }: 
     headSha,
     run,
     artifact,
-    gallery: galleryArtifact === null ? null : `${repoUrl}/actions/runs/${run}/artifacts/${galleryArtifact}`,
+    gallery: galleryOf({ galleryArtifact, run, repoUrl }),
+  };
+}
+
+/** The gallery artifact's web address in the push job's own run, which opens in the browser since it's unzipped; null when the job kept none. */
+function galleryOf({ galleryArtifact, run, repoUrl }: Pick<PushJobEvidence, "galleryArtifact" | "run" | "repoUrl">): string | null {
+  return galleryArtifact === null ? null : `${repoUrl}/actions/runs/${run}/artifacts/${galleryArtifact}`;
+}
+
+/**
+ * Turns a Design session's prototype turn's result (#155) into the Loop event
+ * its push job applies. `request` is the prototype request the Kit job's plan
+ * built the turn on, from its outputs, never from the agent's result; `branch`
+ * is what the push job read rebuilding the result's prototype branch from its
+ * bundle, and the head its push leaves; `evidence` is what the prototype job
+ * passed out about capture, with the push job's own run, which the gallery is
+ * linked from; and `runUrl` is that run's attempt.
+ */
+export function prototypeEventFrom(
+  result: AgentRunResult,
+  request: PrototypeRequestMarker,
+  branch: { readonly changes: BranchChanges; readonly head: string | null },
+  evidence: PushJobEvidence,
+  runUrl: string,
+): LoopEvent {
+  if (result.role !== "design") throw new Error(`A prototype turn's push job was handed a ${result.role} result`);
+  if (result.branch === undefined) throw new Error(`The prototype turn's result for #${result.issue} names no branch it built`);
+  return {
+    kind: "prototype-run-finished",
+    issue: result.issue,
+    output: result.output,
+    request,
+    branch: result.branch.name,
+    changes: branch.changes,
+    headSha: branch.head,
+    ...(evidence.result === null ? {} : { capture: evidence.result }),
+    gallery: galleryOf(evidence),
+    runUrl,
+    repoUrl: evidence.repoUrl,
   };
 }
 
@@ -280,6 +319,8 @@ export interface FailedJob {
   readonly report: FailureReport | null;
   /** The Subscription the run used, from the Kit job's `subscription` output; absent when it passed none. */
   readonly subscription?: string;
+  /** For a Design-session turn: true when it was the session's prototype turn (#155). */
+  readonly prototype?: true;
 }
 
 const SECRETS_OUTCOMES = ["success", "failure", "cancelled", "skipped"] as const;
@@ -296,5 +337,6 @@ export function agentFailureEventFrom(job: FailedJob): LoopEvent {
     secretsStep,
     report: job.report,
     ...(job.subscription === undefined ? {} : { subscription: job.subscription }),
+    ...(job.prototype === true ? { prototype: true } : {}),
   };
 }

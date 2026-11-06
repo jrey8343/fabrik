@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { UI } from "../__fixtures__/uiEvidence.ts";
+import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
 import { applyPlan } from "./apply.ts";
+import { pendingPrototypeIn } from "./threads.ts";
 
 const repo = { owner: "acme", name: "shop" };
 const issues = "/repos/acme/shop/issues";
 
 /**
  * A GitHub that records every REST call. Each existing issue's database id is
- * its number plus 1000; a created issue gets the next number from 100.
+ * its number plus 1000; a created issue gets the next number from 100. A
+ * comment it posts is comment 9300.
  */
 function fakeGitHub() {
   const calls: { method: string; path: string; body: unknown }[] = [];
@@ -22,7 +27,7 @@ function fakeGitHub() {
       }
       const existing = new RegExp(`^${issues}/(\\d+)$`).exec(path);
       if (method === "GET" && existing !== null) return { number: Number(existing[1]), id: Number(existing[1]) + 1000 };
-      if (method === "POST" && path.endsWith("/comments")) return { html_url: "https://github.com/acme/shop/issues/7#c" };
+      if (method === "POST" && path.endsWith("/comments")) return { id: 9300, html_url: "https://github.com/acme/shop/issues/7#issuecomment-9300" };
       if (method === "POST" && path === "/repos/acme/shop/pulls") return { number: 51, id: 5051 };
       return null;
     },
@@ -396,5 +401,139 @@ describe("Applying a plan that appends a line to a Map's Decisions so far", () =
     await applyPlan(github, repo, APPENDING);
 
     expect(github.map.body).toBe(appended);
+  });
+});
+
+describe("Applying a prototype turn's plan (#155)", () => {
+  /** The prototype branch the push job holds from the turn's bundle. */
+  const heldBranch = () => {
+    const pushed: string[] = [];
+    return { pushed, head: "7e3d1c9b5a4f2e0d8c6b4a2f0e9d7c5b3a1f0e2d", push: async (branch: string) => void pushed.push(branch) };
+  };
+
+  it("pushes the issue's prototype branch, then posts the round, and opens no PR", async () => {
+    const github = fakeGitHub();
+    const branch = heldBranch();
+    const plan: Plan = {
+      kind: "act",
+      actions: [
+        { kind: "push-prototype-branch", issue: 7 },
+        { kind: "comment", issue: 7, body: "The prototype round." },
+      ],
+    };
+
+    await applyPlan(github, repo, plan, branch);
+
+    expect(branch.pushed).toEqual(["prototype/7"]);
+    expect(github.calls).toEqual([{ method: "POST", path: `${issues}/7/comments`, body: { body: "The prototype round." } }]);
+  });
+
+  it("fails rather than push when the job holds no branch", async () => {
+    await expect(applyPlan(fakeGitHub(), repo, { kind: "act", actions: [{ kind: "push-prototype-branch", issue: 7 }] })).rejects.toThrow(
+      "This job holds no branch to push (prototype/7)",
+    );
+  });
+
+  describe("that links each variant's preview", () => {
+    const HEAD = "7e3d1c9b5a4f2e0d8c6b4a2f0e9d7c5b3a1f0e2d";
+    const planLinking = (template: string, route = "/book"): Plan => ({
+      kind: "act",
+      actions: [
+        { kind: "push-prototype-branch", issue: 7 },
+        { kind: "comment", issue: 7, body: "The prototype round.", key: "prototype-round" },
+        { kind: "link-prototype-preview", issue: 7, round: { posted: "prototype-round" }, template, route },
+      ],
+    });
+
+    it("hands on the route's page to poll, filled in from the prototype branch's slug and the head its push left, for the round it posted, changing nothing more on GitHub", async () => {
+      const github = fakeGitHub();
+
+      const applied = await applyPlan(github, repo, planLinking("https://{branch_slug}--shop.netlify.app/{sha}"), heldBranch());
+
+      expect(applied).toEqual({ preview: { round: 9300, url: `https://prototype-7--shop.netlify.app/${HEAD}/book` } });
+      expect(github.calls.map(({ method, path }) => `${method} ${path}`)).toEqual([`POST ${issues}/7/comments`]);
+    });
+
+    it.each([
+      ["puts the route on the template's own path, keeping its query", "https://preview.example.dev/shop/?branch={branch_slug}", "/book", "https://preview.example.dev/shop/book?branch=prototype-7"],
+      ["keeps the route's own query too, as capture serves it", "https://{branch_slug}.shop.example.dev", "/book?step=2", "https://prototype-7.shop.example.dev/book?step=2"],
+      ["keeps the route on the preview's host, whatever the route holds", "https://{branch_slug}.shop.example.dev", "/\\evil.example/x", "https://prototype-7.shop.example.dev//evil.example/x"],
+    ])("%s", async (_name, template, route, url) => {
+      const applied = await applyPlan(fakeGitHub(), repo, planLinking(template, route), heldBranch());
+
+      expect(applied.preview).toEqual({ round: 9300, url });
+    });
+
+    it("fails rather than hand on a preview of a round the plan hasn't posted", async () => {
+      const plan: Plan = {
+        kind: "act",
+        actions: [
+          { kind: "push-prototype-branch", issue: 7 },
+          { kind: "link-prototype-preview", issue: 7, round: { posted: "prototype-round" }, template: "https://{branch_slug}.example.dev", route: "/book" },
+        ],
+      };
+
+      await expect(applyPlan(fakeGitHub(), repo, plan, heldBranch())).rejects.toThrow("The plan refers to a comment it hasn't posted: prototype-round");
+    });
+  });
+});
+
+describe("Marking whether a prototype request's prototype turn has started (#155)", () => {
+  /** A GitHub holding the request comment 9010 the core posted on #7, which a GET reads and a PATCH replaces. */
+  function holdingRequest() {
+    const output = JSON.stringify({ kind: "prototype", route: "/book", variants: 3, brief: "- **A**: a form.\n- **B**: a stepper.", comment: "Prototyping it." });
+    const posted = planFor(
+      { kind: "agent-run-finished", role: "design", issue: 7, output },
+      snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: 1 })),
+      kitConfig({ ui: UI }),
+    );
+    const comment = { body: posted.kind === "act" && posted.actions[0]?.kind === "comment" ? posted.actions[0].body : "" };
+    const calls: string[] = [];
+    return {
+      comment,
+      calls,
+      async rest(method: string, path: string, sent?: unknown): Promise<unknown> {
+        calls.push(`${method} ${path}`);
+        expect(path).toBe(`${issues}/comments/9010`);
+        if (method === "GET") return { id: 9010, body: comment.body };
+        if (method === "PATCH") comment.body = (sent as { body: string }).body;
+        return null;
+      },
+      async graphql(): Promise<never> {
+        throw new Error("no GraphQL expected");
+      },
+    };
+  }
+
+  const mark = (started: boolean): Plan => ({ kind: "act", actions: [{ kind: "mark-prototype-request", issue: 7, comment: 9010, started }] });
+  const read = ({ body }: { body: string }) => pendingPrototypeIn([{ id: 9010, body, byApp: true }]);
+
+  it("marks the request's comment started, which the snapshot reads back, leaving the request it holds and its text as they were", async () => {
+    const github = holdingRequest();
+    const before = github.comment.body;
+
+    await applyPlan(github, repo, mark(true));
+
+    expect(read(github.comment)).toEqual({ ...read({ body: before }), started: true });
+    expect(github.comment.body.split("\n").filter((line) => !line.startsWith("<!--"))).toEqual(before.split("\n").filter((line) => !line.startsWith("<!--")));
+  });
+
+  it("marks it waiting for its prototype turn again, as the core posted it", async () => {
+    const github = holdingRequest();
+    const before = github.comment.body;
+    await applyPlan(github, repo, mark(true));
+
+    await applyPlan(github, repo, mark(false));
+
+    expect(github.comment.body).toBe(before);
+    expect(read(github.comment)?.started).toBe(false);
+  });
+
+  it("leaves a comment already marked so as it is", async () => {
+    const github = holdingRequest();
+
+    await applyPlan(github, repo, mark(false));
+
+    expect(github.calls).toEqual([`GET ${issues}/comments/9010`]);
   });
 });

@@ -50,6 +50,8 @@ import {
   countEmptyDiffs,
   designSessionOf,
   designTurnFailedIn,
+  pendingPrototypeIn,
+  unansweredPrototypesIn,
   pushedSinceVerdictIn,
   requestChangesRunIn,
   researchRunFailedIn,
@@ -68,7 +70,7 @@ const ISSUE_QUERY = `
         body
         labels(first: 100) { nodes { name } }
         parent { number state labels(first: 100) { nodes { name } } }
-        comments(last: 100) { nodes { body createdAt author { __typename } } }
+        comments(last: 100) { nodes { fullDatabaseId body createdAt author { login __typename } } }
         timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT], last: 100) {
           nodes {
             __typename
@@ -95,7 +97,8 @@ interface IssueQueryResult {
       body: string;
       labels: { nodes: { name: string }[] };
       parent: ParentNode | null;
-      comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
+      // A comment's id is a BigInt in GraphQL, which comes back as a string: the REST id the Kit's own comments link to.
+      comments: { nodes: { fullDatabaseId: string; body: string; createdAt: string; author: { login: string; __typename: string } | null }[] };
       // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
       timelineItems: { nodes: LabelTimelineItem[] };
       closedByPullRequestsReferences: { nodes: { number: number }[] };
@@ -325,6 +328,14 @@ export const RESEARCH_JOB_NAME = "Research";
  * repo's caller workflow, it shows up as `<caller job> / Design-session turn #7`.
  */
 export const DESIGN_JOB_NAME = "Design-session turn";
+
+/**
+ * The name of the prototype job in .github/workflows/loop.yml, which runs a
+ * Design session's prototype turn in the Design job's place, followed by
+ * ` #<issue>` too (a test holds the two together). A prototype turn is a turn
+ * of its session, so it holds the session's slot as a Design job does (#155).
+ */
+export const PROTOTYPE_JOB_NAME = "Prototype turn";
 
 /**
  * Reads the current GitHub state the event needs, fresh rather than from the
@@ -635,13 +646,14 @@ export async function gatherOpenMaps(github: Pick<GitHub, "graphql">, repo: Repo
 }
 
 /**
- * For a Design-session turn the Operator's reply started: whether that reply
- * is still on the issue. Only a 404 means it was deleted; any other failed
- * read fails the run, as every failed read does, and never counts as deleted.
+ * For a Design-session turn the Operator's reply started, or a prototype turn
+ * whose request their reply approved (#155): whether that reply is still on
+ * the issue. Only a 404 means it was deleted; any other failed read fails the
+ * run, as every failed read does, and never counts as deleted.
  */
 async function gatherStartingComment(github: GitHub, repo: Repo, event: LoopEvent): Promise<StartingComment | null> {
-  if (event.kind !== "agent-run-finished" || event.startedBy === undefined) return null;
-  const id = event.startedBy;
+  const id = event.kind === "agent-run-finished" ? event.startedBy : event.kind === "prototype-run-finished" ? event.request.reply : null;
+  if (id === undefined || id === null) return null;
   const comment = await github.rest("GET", `/repos/${repo.owner}/${repo.name}/issues/comments/${id}`, undefined, {
     allowNotFound: true,
   });
@@ -951,9 +963,11 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
     throw new Error(`Issue #${number} not found in ${repo.owner}/${repo.name}`);
   }
   const comments = issue.comments.nodes.map((comment) => ({
+    id: Number(comment.fullDatabaseId),
     body: comment.body,
     createdAt: comment.createdAt,
     byBot: comment.author?.__typename === "Bot",
+    byApp: byAppOf(comment.author, appLogin),
   }));
   const timeline = issue.timelineItems.nodes;
   const thisSession = commentsSince(lastNeededDesignAt(timeline), comments);
@@ -973,6 +987,9 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       sentBack: designSessionOf(comments).sentBack,
       turnFailed: designTurnFailedIn(thisSession),
       firstTurnClaimed: firstTurnClaimed(timeline),
+      // Every comment read counts for whether the reply that approved the request is still there, not only this session's.
+      pendingPrototype: pendingPrototypeIn(thisSession, new Set(comments.map(({ id }) => id))),
+      unansweredPrototypes: unansweredPrototypesIn(thisSession),
       emptyDiffs: countEmptyDiffs(comments.map((comment) => comment.body)),
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),
@@ -1270,7 +1287,7 @@ export async function countDispatchedRuns(
   return { implement: named(IMPLEMENT_JOB_NAME), research: named(RESEARCH_JOB_NAME) };
 }
 
-const DESIGN_JOB = new RegExp(`^(?:.+ / )?${DESIGN_JOB_NAME} #([1-9][0-9]*)$`);
+const DESIGN_JOB = new RegExp(`^(?:.+ / )?(?:${DESIGN_JOB_NAME}|${PROTOTYPE_JOB_NAME}) #([1-9][0-9]*)$`);
 
 /**
  * The issue of each Design-session turn not yet finished, across every
@@ -1278,8 +1295,10 @@ const DESIGN_JOB = new RegExp(`^(?:.+ / )?${DESIGN_JOB_NAME} #([1-9][0-9]*)$`);
  * turn is in progress until its whole run finishes: running, queued or
  * waiting behind its issue's concurrency group, and also after its job is
  * done while the push job is still posting its round or failure notice, so no
- * slot goes uncounted before the thread shows it. A Design job skipped
- * because the run went another way is no turn.
+ * slot goes uncounted before the thread shows it. A prototype turn counts as
+ * its session's turn, so a session whose first turn only asked for a
+ * Prototype, and so has no round yet, keeps its slot while it builds. A
+ * Design or prototype job skipped because the run went another way is no turn.
  */
 export async function designTurnsInProgress(github: Pick<GitHub, "rest">, repo: Repo): Promise<number[]> {
   const jobs = await jobsOfUnfinishedRuns(github, repo);

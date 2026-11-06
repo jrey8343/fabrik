@@ -4,11 +4,13 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { JUDGE_JOB } from "./judge.ts";
 import { PREVIEW_POLL_MINUTES } from "./previewLink.ts";
-import { RETRO_EVIDENCE_JOB } from "./pushJob.ts";
+import { PROTOTYPE_JOB, RETRO_EVIDENCE_JOB } from "./pushJob.ts";
 import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
-import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE } from "../evidence/capture.ts";
+import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE, PROTOTYPE_GALLERY_FILE } from "../evidence/capture.ts";
 import { MAP_INPUTS_FILE } from "../agent/inputs.ts";
+import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
+import { prototypeBranchFor } from "../loop/designOutput.ts";
 
 const root = new URL("../../", import.meta.url);
 const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml", ".github/workflows/weekly-summary.yml"].map((path) => ({
@@ -93,6 +95,24 @@ describe("The Kit's workflows", () => {
     expect(kit).toContain("request-changes: ${{ steps.route.outputs.request-changes }}");
   });
 
+  // For the prototype job (#155), which runs a prototype turn in the design job's place.
+  it("loop.yml's Kit job passes out whether the Design run is a prototype turn, and its request", () => {
+    const kit = jobIn(loop, "kit");
+
+    expect(kit).toContain("prototype: ${{ steps.route.outputs.prototype }}");
+    expect(kit).toContain("prototype_request: ${{ steps.route.outputs.prototype_request }}");
+  });
+
+  // The request's brief is the Design agent's text: in a run: script it could inject a command.
+  it("loop.yml reads the prototype request only through env:, never in a run: script", () => {
+    const uses = loop.split("\n").filter((line) => line.includes("outputs.prototype_request"));
+
+    expect(uses).toContainEqual("      prototype_request: ${{ steps.route.outputs.prototype_request }}");
+    for (const line of uses.filter((use) => !use.includes("steps.route.outputs"))) {
+      expect(line).toMatch(/^\s+[A-Z][A-Z0-9_]*: \$\{\{ needs\.kit\.outputs\.prototype_request \}\}$/);
+    }
+  });
+
   // The preview link (#153): bounded and never failing, so a slow or broken host costs the push job nothing.
   describe("loop.yml's push job's preview step", () => {
     const push = jobIn(loop, "push");
@@ -120,6 +140,41 @@ describe("The Kit's workflows", () => {
       expect(preview).toContain("url: ${{ steps.loop.outputs.preview-url }}");
       expect(preview).toContain("pull-request: ${{ steps.loop.outputs.preview-pull-request }}");
       expect(preview).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
+    });
+  });
+
+  // A prototype round's preview (#155), linked as a UI PR's is, in a step of its own whose token edits only issues.
+  describe("loop.yml's push job's prototype preview step", () => {
+    const push = jobIn(loop, "push");
+    const steps = stepsOf(push);
+    const at = (text: string) => steps.findIndex((step) => step.includes(text));
+    const preview = steps[at("uses: ./kit/.github/actions/link-prototype-preview")] ?? "";
+
+    it("runs after Run the Loop and before the Run record, only when the Loop's plan asked to link a prototype round's preview", () => {
+      expect(at("uses: ./kit/.github/actions/link-prototype-preview"), "the push job has no prototype preview step").toBeGreaterThan(at("name: Run the Loop"));
+      expect(at("uses: ./kit/.github/actions/link-prototype-preview")).toBeLessThan(at("uses: ./kit/.github/actions/write-run-record"));
+      expect(preview).toContain("if: steps.loop.outputs.prototype-preview-url != ''");
+    });
+
+    it("can't fail the push job: it goes on past any error, and its own timeout outlasts the Kit's poll budget but leaves the job time for the Run record", () => {
+      const stepTimeout = Number(/timeout-minutes: (\d+)\n/.exec(preview)?.[1]);
+      const jobTimeout = Number(/\n    timeout-minutes: (\d+)\n/.exec(push)?.[1]);
+
+      expect(preview).toContain("continue-on-error: true");
+      expect(stepTimeout).toBeGreaterThan(PREVIEW_POLL_MINUTES);
+      expect(stepTimeout).toBeLessThan(jobTimeout);
+    });
+
+    it("polls the URL Run the Loop filled in for the round it posted, as the Fabrik App through the push service account", () => {
+      expect(preview).toContain("url: ${{ steps.loop.outputs.prototype-preview-url }}");
+      expect(preview).toContain("round: ${{ steps.loop.outputs.prototype-preview-round }}");
+      expect(preview).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
+    });
+
+    // One plan lands one run, a UI PR or a prototype turn, so one poll fits in the push job's 10 minutes.
+    it("never runs beside the UI PR's preview step: each waits on its own output of Run the Loop", () => {
+      expect(preview).not.toContain("steps.loop.outputs.preview-url");
+      expect(steps[at("uses: ./kit/.github/actions/link-preview\n")]).not.toContain("prototype-preview");
     });
   });
 
@@ -340,6 +395,11 @@ describe("The run the Loop action", () => {
     expect(action).toMatch(/\n  preview-pull-request:\n.*\n\s+value: \$\{\{ steps\.loop\.outputs\.preview-pull-request \}\}\n/);
   });
 
+  it("passes out the prototype round's preview its plan asked to link, for the push job's prototype preview step", () => {
+    expect(action).toMatch(/\n  prototype-preview-url:\n.*\n\s+value: \$\{\{ steps\.loop\.outputs\.prototype-preview-url \}\}\n/);
+    expect(action).toMatch(/\n  prototype-preview-round:\n.*\n\s+value: \$\{\{ steps\.loop\.outputs\.prototype-preview-round \}\}\n/);
+  });
+
   describe("asked to find the fabrik-runs store, as the scheduled tick asks for the retro gate", () => {
     const find = steps.find((step) => step.includes("id: find-store\n"));
     const store = steps.find((step) => step.includes("id: store-metadata\n"));
@@ -401,6 +461,45 @@ describe("The link-preview action, which the push job's preview step runs", () =
     expect(program).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
     expect(program).toContain("FABRIK_PREVIEW_URL: ${{ inputs.url }}");
     expect(program).toContain("FABRIK_PREVIEW_PULL_REQUEST: ${{ inputs.pull-request }}");
+    expect(/run: (.*)/.exec(program ?? "")?.[1]).toBe("node src/kit/preview-main.ts");
+    expect(steps.indexOf(mint!)).toBeLessThan(steps.indexOf(program!));
+  });
+
+  it("checks nothing out, so it runs no Product code", () => {
+    expect(action).not.toContain("actions/checkout@");
+  });
+});
+
+describe("The link-prototype-preview action, which the push job's prototype preview step runs", () => {
+  const { text: action, steps } = actionNamed("link-prototype-preview");
+  const mint = steps.find((step) => step.includes("uses: actions/create-github-app-token@"));
+  const program = steps.find((step) => step.includes("run: node src/kit/preview-main.ts"));
+
+  it("loads the Fabrik App key through the push service account, and nothing else", () => {
+    const secrets = steps.filter((step) => step.includes("1password/load-secrets-action@"));
+
+    expect(secrets).toHaveLength(1);
+    expect(secrets[0]).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}");
+    expect([...secrets[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual([
+      "op://Fabrik App/Fabrik App/client-id",
+      "op://Fabrik App/Fabrik App/private-key",
+    ]);
+  });
+
+  // The round is an issue comment: editing it takes issues: write, which the UI PR's preview step never holds.
+  it("mints a Fabrik App token for the Product repo alone that can edit an issue's comments and do nothing else", () => {
+    expect(steps.filter((step) => step.includes("uses: actions/create-github-app-token@"))).toHaveLength(1);
+    expect(mint).toContain("id: app");
+    expect(mint).not.toMatch(/owner:|repositories:/);
+    expect(permissionsOf(mint)).toEqual(["issues: write"]);
+  });
+
+  it("polls and edits with the Kit's Node program, given the URL and the round through its env, never in its command line", () => {
+    expect(program, "no step runs src/kit/preview-main.ts").toBeDefined();
+    expect(program).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
+    expect(program).toContain("FABRIK_PREVIEW_URL: ${{ inputs.url }}");
+    expect(program).toContain("FABRIK_PREVIEW_ROUND: ${{ inputs.round }}");
+    expect(program).not.toContain("FABRIK_PREVIEW_PULL_REQUEST");
     expect(/run: (.*)/.exec(program ?? "")?.[1]).toBe("node src/kit/preview-main.ts");
     expect(steps.indexOf(mint!)).toBeLessThan(steps.indexOf(program!));
   });
@@ -536,6 +635,254 @@ describe("loop.yml's Research job", () => {
     const needs = /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ");
 
     expect(needs).toContain("research");
+  });
+});
+
+// A Design session's prototype turn (#155): the Kit job's plan says whether the
+// Design run is one, and the prototype job runs it in the design job's place.
+describe("loop.yml's prototype job", () => {
+  // Keyed as the push job and the Run record pick it by (src/kit/pushJob.ts).
+  const prototype = (): string => job(PROTOTYPE_JOB);
+  // A step's lines past its `- name:` line, without the comments over the next step or job.
+  const unnamed = (step: string | undefined) =>
+    step
+      ?.split("\n")
+      .slice(1)
+      .filter((line) => line.trim() !== "" && !line.trimStart().startsWith("#"))
+      .join("\n");
+
+  it("runs a Design run only when the Kit job's plan made it a prototype turn, and the design job only when it didn't", () => {
+    expect(prototype()).toMatch(/\n    needs: kit\n/);
+    expect(prototype()).toContain("\n    if: needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype == 'true'\n");
+    expect(job("design")).toContain("\n    if: needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype != 'true'\n");
+  });
+
+  it("is named for the issue's prototype turn", () => {
+    expect(prototype()).toMatch(/^ {2}prototype:\n {4}name: "Prototype turn #\$\{\{ github\.event\.issue\.number \}\}"\n/);
+  });
+
+  it("shares the Design session's concurrency group, so one turn of the session runs at a time, queueing the next", () => {
+    const group = /\n    concurrency:\n((?: {6}.*\n)+)/;
+
+    expect(group.exec(prototype())?.[1]).toBe(group.exec(job("design"))?.[1]);
+    expect(prototype()).toMatch(
+      /\n    concurrency:\n {6}group: fabrik-design-\$\{\{ github\.event\.issue\.number \}\}\n {6}cancel-in-progress: false\n {6}queue: max\n/,
+    );
+  });
+
+  it("holds only read permissions, on the Product repo's contents and its issues: no GitHub write access", () => {
+    const permissions = /\n    permissions:\n((?: {6}.*\n)+)/.exec(prototype())?.[1] ?? "";
+
+    expect(permissions.trim().split("\n").map((line) => line.trim())).toEqual(["contents: read", "issues: read"]);
+    expect(prototype()).not.toMatch(/OP_PUSH_TOKEN|id-token|GH_TOKEN|create-github-app-token/);
+  });
+
+  // It builds and serves the Product, as the Implement job does.
+  it("loads the Claude token and the Sandbox's test secrets through the implement service account, exactly as the Implement job does", () => {
+    const listing = (text: string) => stepsOf(text).find((step) => step.includes("secrets-main.ts")) ?? "";
+    const loading = (text: string) => stepsOf(text).find((step) => step.includes("uses: 1password/load-secrets-action@")) ?? "";
+    const agent = stepsOf(prototype()).find((step) => step.includes("id: agent\n")) ?? "";
+
+    expect(listing(prototype())).toBe(listing(job("implement")));
+    expect(loading(prototype())).toBe(loading(job("implement")));
+    expect(loading(prototype())).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_IMPLEMENT_TOKEN }}");
+    expect(prototype()).not.toContain("OP_AGENT_TOKEN");
+    // Every value the 1Password step resolved, in the agent step's env only.
+    expect(agent).toContain("FABRIK_SECRETS: ${{ toJSON(steps.op.outputs) }}");
+    expect(prototype().split("steps.op.outputs")).toHaveLength(2);
+  });
+
+  it("stops its agent step at the Implement role's timeout, and the job at the Implement job's, which leaves capture its time after it", () => {
+    const agent = stepsOf(prototype()).find((step) => step.includes("id: agent\n")) ?? "";
+
+    expect(agent).toContain("timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}\n");
+    expect(prototype()).toMatch(/\n    timeout-minutes: \$\{\{ fromJSON\(needs\.kit\.outputs\.implement-job-timeout-minutes\) \}\}\n/);
+  });
+
+  // The agent step's own timeout fails the job, so the job notes it, as the Implement job does, for the push job to read as a timeout.
+  it("notes an agent step its timeout stopped, and leaves that run no failure report", () => {
+    const steps = stepsOf(prototype());
+    const at = (text: string) => steps.findIndex((step) => step.includes(text));
+    expect(at("id: started\n")).toBeGreaterThan(-1);
+    expect(at("id: started\n")).toBeLessThan(at("id: agent\n"));
+    expect(at("id: agent-time\n")).toBeGreaterThan(at("id: agent\n"));
+    expect(unnamed(steps[at("id: agent-time\n")])).toBe(unnamed(stepsOf(job("implement")).find((step) => step.includes("id: agent-time\n"))));
+    expect(unnamed(steps[at("id: started\n")])).toBe(unnamed(stepsOf(job("implement")).find((step) => step.includes("id: started\n"))));
+    expect(prototype()).toContain("agent-timed-out: ${{ steps.agent-time.outputs.timed-out }}");
+    expect(steps[at("name: fabrik-agent-failure")]).toContain("if: failure() && steps.agent-time.outputs.timed-out != 'true'\n");
+  });
+
+  it("checks out the default branch with every branch's history, for the bundle and the guard, and no credential left behind", () => {
+    const checkout = stepsOf(prototype()).find((step) => step.includes("uses: actions/checkout@") && !step.includes("repository:")) ?? "";
+
+    expect(checkout).toContain("path: product");
+    expect(checkout).toContain("ref: ${{ github.event.repository.default_branch }}");
+    expect(checkout).toContain("fetch-depth: 0");
+    expect(checkout).toContain("persist-credentials: false");
+  });
+
+  // A first round's runner cuts the branch from the default branch (src/agent/prototype.ts).
+  it("builds a later round on the issue's prototype branch when an earlier round pushed it, before it notes the commit the run starts from", () => {
+    const steps = stepsOf(prototype());
+    const at = (text: string) => steps.findIndex((step) => step.includes(text));
+    const branch = steps[at("name: Check out the issue's prototype branch")] ?? "";
+
+    expect(at("name: Check out the issue's prototype branch")).toBeGreaterThan(at("path: product\n"));
+    expect(at("name: Check out the issue's prototype branch")).toBeLessThan(at("id: base\n"));
+    expect(branch).toContain(`BRANCH: ${prototypeBranchFor(7).replace("7", "${{ github.event.issue.number }}")}\n`);
+    expect(branch).toContain('if git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; then');
+    expect(branch).toContain('git checkout --quiet -B "$BRANCH" "refs/remotes/origin/$BRANCH"');
+  });
+
+  it("readies the agent as a Design-session turn on the issue the label went on, with the Design role's skills", () => {
+    const prepare = stepsOf(prototype()).find((step) => step.includes("uses: ./kit/.github/actions/prepare-agent")) ?? "";
+
+    expect(prepare).toContain("role: design\n");
+    expect(prepare).toContain("github-token: ${{ github.token }}");
+    expect(prepare).toContain("issue: ${{ github.event.issue.number }}");
+  });
+
+  // The request's brief is the Design agent's text, so it reaches the runner through env: only.
+  it("runs the prototype turn from the Product checkout on the issue thread and the approved request, on the model and effort the Kit job's plan chose", () => {
+    const agent = stepsOf(prototype()).find((step) => step.includes("id: agent\n")) ?? "";
+
+    expect(agent).toContain("working-directory: product\n");
+    expect(agent).toContain("run: node ../kit/src/agent/run.ts prototype\n");
+    expect(agent).toContain("FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json");
+    expect(agent).toContain("FABRIK_PROTOTYPE_REQUEST: ${{ needs.kit.outputs.prototype_request }}");
+    expect(agent).toContain("FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out");
+    expect(agent).toContain("FABRIK_MODEL: ${{ needs.kit.outputs.model }}");
+    expect(agent).toContain("FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}");
+  });
+
+  it("passes its result and the bundle of the variants' commits to the push job, as the Implement job passes its commits", () => {
+    const upload = stepsOf(prototype()).find((step) => step.includes("name: fabrik-agent-result\n")) ?? "";
+
+    expect(upload).toContain("uses: actions/upload-artifact@");
+    expect(upload).toContain(`\${{ runner.temp }}/fabrik-out/${AGENT_RESULT_FILE}`);
+    expect(upload).toContain(`\${{ runner.temp }}/fabrik-out/${AGENT_BUNDLE_FILE}`);
+    expect(upload).toContain("if-no-files-found: error");
+  });
+
+  it("passes the push job its failure report when it fails, and how its secrets loaded", () => {
+    const failure = stepsOf(prototype()).find((step) => step.includes("name: fabrik-agent-failure\n")) ?? "";
+
+    expect(failure).toContain("${{ runner.temp }}/fabrik-out/agent-failure.json");
+    expect(failure).toContain("if-no-files-found: ignore");
+    expect(prototype()).toContain("secrets-step: ${{ steps.op.outcome }}");
+  });
+
+  // The push job's record step takes the transcript by route, and a prototype turn's route is design.
+  it("keeps its transcript as fabrik-transcript-design, the Design job's, whether it passed, failed or timed out", () => {
+    const keep = stepsOf(prototype()).find((step) => step.includes("name: Keep the agent's transcript")) ?? "";
+
+    expect(unnamed(keep)).toBe(unnamed(stepsOf(job("design")).find((step) => step.includes("name: Keep the agent's transcript"))));
+    expect(keep).toContain("name: fabrik-transcript-design\n");
+    expect(prototype()).toMatch(/if: always\(\)\n\s+continue-on-error: true\n\s+run: .*gzip.*transcript\.jsonl/);
+  });
+
+  describe("capture of the variants", () => {
+    const steps = () => stepsOf(prototype());
+    const stepAt = (pattern: string) => steps().findIndex((step) => step.includes(pattern));
+    const step = (pattern: string) => steps()[stepAt(pattern)] ?? "";
+    const capture = () => step("id: capture\n");
+    const gallery = () => step("id: gallery\n");
+
+    it("captures after the agent step has ended and before its result goes to the push job, from the Kit's program in its prototype mode", () => {
+      expect(stepAt("id: capture\n")).toBeGreaterThan(stepAt("id: agent\n"));
+      expect(stepAt("id: capture\n")).toBeLessThan(stepAt("name: fabrik-agent-result"));
+      expect(capture()).toContain("if: success()\n");
+      expect(capture()).toMatch(/working-directory: product\n(?:.*\n)*?\s+run: node \.\.\/kit\/src\/evidence\/capture-main\.ts prototype\n/);
+    });
+
+    it("can't fail the job: it goes on when capture fails, and stops at the Kit's capture timeout", () => {
+      expect(capture()).toContain("continue-on-error: true");
+      expect(capture()).toContain(`timeout-minutes: ${CAPTURE_TIMEOUT_MINUTES}\n`);
+    });
+
+    it("hands capture the route it captures through env:, and no secret: neither the 1Password step's outputs nor any GitHub token", () => {
+      expect(capture()).toContain("FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out");
+      expect(capture()).toContain("FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}");
+      expect(capture()).toContain("FABRIK_PROTOTYPE_REQUEST: ${{ needs.kit.outputs.prototype_request }}");
+      expect(capture()).not.toMatch(/FABRIK_SECRETS|steps\.op\.|secrets\.|github\.token|GH_TOKEN|GITHUB_TOKEN/);
+    });
+
+    it("keeps the gallery unzipped, so it opens in one click, for 30 days, apart from the push job's artifacts", () => {
+      expect(stepAt("id: gallery\n")).toBeGreaterThan(stepAt("id: capture\n"));
+      expect(gallery()).toContain("uses: actions/upload-artifact@");
+      expect(gallery()).toContain(`path: \${{ runner.temp }}/fabrik-out/${PROTOTYPE_GALLERY_FILE}\n`);
+      expect(gallery()).toContain("archive: false\n");
+      expect(gallery()).toContain("retention-days: 30\n");
+      expect(gallery()).not.toMatch(/name: fabrik-agent-/);
+      expect(PROTOTYPE_GALLERY_FILE).not.toMatch(/^fabrik-agent-/);
+    });
+
+    it("keeps the gallery only when capture recorded a result, never failing the job, and a capture that took no screenshot leaves none", () => {
+      expect(gallery()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
+      expect(gallery()).toContain("continue-on-error: true");
+      expect(gallery()).toContain("if-no-files-found: ignore");
+    });
+
+    // The push job links the gallery from its own run by this id, never from an address the agent's runner passed out (src/github/events.ts).
+    it("passes out the capture result and the gallery's artifact id, under the names the Implement job passes them out by, for the push job", () => {
+      expect(prototype()).toContain("ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}");
+      expect(prototype()).toContain("ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}");
+      expect(job("implement")).toContain("ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}");
+    });
+  });
+
+  it("passes out what its Run record needs: the model and effort the runner passed, and the commit it started from", () => {
+    expect(prototype()).toContain("model: ${{ steps.agent.outputs.model }}");
+    expect(prototype()).toContain("effort: ${{ steps.agent.outputs.effort }}");
+    expect(prototype()).toContain("base-sha: ${{ steps.base.outputs.sha }}");
+  });
+
+  it("is in the push job's needs, so the push job lands the prototype round or posts the failure notice once it has ended", () => {
+    const needs = /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ");
+
+    expect(needs).toContain(PROTOTYPE_JOB);
+  });
+});
+
+// A Design session's prototype turn builds the issue's prototype branch (#155),
+// but only the push job writes it, after the trust-root guard (ADR-0005).
+describe("prototype/<issue>, which only the push job writes", () => {
+  const kitFiles = [...workflows, ...actions.map(({ name, text }) => ({ path: `.github/actions/${name}/action.yml`, text }))];
+  /** Every line of the Kit's workflows and actions that names a prototype branch, past their comments. */
+  const naming = kitFiles.flatMap(({ path, text }) =>
+    text
+      .split("\n")
+      .filter((line) => line.includes("prototype/") && !line.trimStart().startsWith("#"))
+      .map((line) => `${path}: ${line.trim()}`),
+  );
+
+  it("is pushed by no step of the Kit's workflows or actions: they run no git push, leaving every branch to the Loop's push job", () => {
+    for (const { text } of kitFiles) expect(text).not.toMatch(/git push/);
+  });
+
+  it("is named only where the prototype job checks it out, to read an earlier round's branch", () => {
+    const step = stepsOf(job(PROTOTYPE_JOB)).find((text) => text.includes("BRANCH: prototype/")) ?? "";
+
+    expect(naming).toEqual([`.github/workflows/loop.yml: BRANCH: ${prototypeBranchFor(7).replace("7", "${{ github.event.issue.number }}")}`]);
+    expect(step).toContain('git checkout --quiet -B "$BRANCH" "refs/remotes/origin/$BRANCH"');
+  });
+
+  it("is written by the push job alone: the only job that runs the Loop as the Fabrik App on what an agent job left", () => {
+    const loopJobs = loop.split(/\n(?=  [a-z-]+:\n)/).filter((section) => section.includes("uses: ./kit/.github/actions/run-loop"));
+    const onAgentResults = loopJobs.filter((section) => section.includes("FABRIK_NEEDS: ${{ toJSON(needs) }}"));
+
+    expect(onAgentResults.map((section) => /^ {2}([a-z-]+):\n/.exec(section)?.[1])).toEqual(["push"]);
+    expect(schedule).not.toContain("FABRIK_NEEDS");
+  });
+
+  it("can't be written by the prototype job that builds it: read-only permissions, no Fabrik App token, and no credential left in its checkout", () => {
+    const permissions = /\n    permissions:\n((?: {6}.*\n)+)/.exec(job(PROTOTYPE_JOB))?.[1] ?? "";
+    const checkouts = stepsOf(job(PROTOTYPE_JOB)).filter((step) => step.includes("uses: actions/checkout@"));
+
+    expect(permissions).not.toMatch(/write/);
+    expect(job(PROTOTYPE_JOB)).not.toMatch(/OP_PUSH_TOKEN|create-github-app-token|run-loop/);
+    expect(checkouts.length).toBeGreaterThan(0);
+    for (const checkout of checkouts) expect(checkout).toContain("persist-credentials: false");
   });
 });
 
@@ -1493,7 +1840,7 @@ describe("The Subscription each agent job runs on", () => {
     expect(jobIn(loop, "kit")).toContain("subscription: ${{ steps.route.outputs.subscription }}");
   });
 
-  it.each(["triage", "design", "implement", "review", "audit", "research"])(
+  it.each(["triage", "design", "prototype", "implement", "review", "audit", "research"])(
     "loop.yml's %s job loads one Claude token: the Kit job's Subscription's",
     (name) => {
       const job = jobIn(loop, name);

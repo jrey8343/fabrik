@@ -5,6 +5,7 @@ import type { ChangedPath } from "../guard/trust-root.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { Label } from "./labels.ts";
+import type { PrototypeRequestMarker } from "./markers.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
 export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" | "retro" | "research";
@@ -56,6 +57,14 @@ export interface BranchChanges {
    * the run's own changes, as rebased; with one, there's nothing to push.
    */
   readonly rebase?: { readonly onto: string; readonly conflicted: boolean };
+  /**
+   * For a prototype turn's branch (#155) that moved while the turn ran, as a
+   * live Design session's push may move it: the head the turn started on
+   * (null when it cut the branch afresh, there being none) and where the
+   * branch is now (null when it's gone). A prototype branch is only ever
+   * fast-forwarded from the head its turn started on, so there's nothing to push.
+   */
+  readonly moved?: { readonly from: string | null; readonly to: string | null };
 }
 
 /**
@@ -157,6 +166,12 @@ export type LoopEvent =
       /** An agent job failed or was cancelled; the push job carries the news. */
       readonly kind: "agent-run-failed";
       readonly role: AgentRole;
+      /**
+       * For a Design-session turn: whether it was the session's prototype turn
+       * (#155), from the Kit job's `prototype` output, which ran within the
+       * Implement role's timeout. Absent, it was an ordinary turn.
+       */
+      readonly prototype?: boolean;
       /** The Ticket (or issue) the run was for. */
       readonly issue: number;
       /** The Actions run, linked from the failure comment. */
@@ -247,6 +262,38 @@ export type LoopEvent =
       readonly repoUrl: string;
     }
   | {
+      /**
+       * A Design session's prototype turn finished (#155); its push job has the
+       * issue's prototype branch it built, not yet pushed, and what capture
+       * recorded of its variants.
+       */
+      readonly kind: "prototype-run-finished";
+      readonly issue: number;
+      /** The prototype turn's structured output, its prototype-round, unparsed (src/loop/designOutput.ts). */
+      readonly output: string;
+      /**
+       * The prototype request the turn built, as the Kit job's plan passed it
+       * out, never from the agent: what the push job checks is still one of
+       * the session's unanswered requests, and, in it, the Operator's reply
+       * that approved it, which must still exist for the round to post.
+       */
+      readonly request: PrototypeRequestMarker;
+      /** The issue's prototype branch (prototypeBranchFor). */
+      readonly branch: string;
+      /** What this turn's commits change, read from the bundle the prototype job passed out. */
+      readonly changes: BranchChanges;
+      /** The commit the push leaves the branch at, which the round links each variant's component at; null when the turn made no commit. */
+      readonly headSha: string | null;
+      /** What capture recorded, read from the prototype job's outputs; absent when the job passed out none the push job could read. */
+      readonly capture?: CaptureResult;
+      /** The prototype gallery's web address, or null when the job kept none. */
+      readonly gallery: string | null;
+      /** The Actions run, which a failure round links to. */
+      readonly runUrl: string;
+      /** The Product repo's web address, by which the round links the branch and each variant's component. */
+      readonly repoUrl: string;
+    }
+  | {
       /** A review that requests changes was submitted on a PR: at the Merge gate, the Operator's ask for another run. */
       readonly kind: "pull-request-changes-requested";
       readonly pullRequest: number;
@@ -319,6 +366,18 @@ export type PullRequestCommentPlace =
   | { readonly kind: "conversation"; readonly comment: number }
   | { readonly kind: "review"; readonly review: number };
 
+/**
+ * A Design session's pending prototype request (#155), as the snapshot reads
+ * it from the Fabrik App's request comment: what it asks for, the comment it
+ * is, and whether its prototype turn has started, which the Kit marks on that
+ * comment as the turn starts, and clears if the turn is refused on its
+ * Subscription and held or re-run.
+ */
+export interface PendingPrototype extends PrototypeRequestMarker {
+  readonly comment: number;
+  readonly started: boolean;
+}
+
 /** An issue as the core sees it, gathered fresh by the GitHub adapter. */
 export interface IssueSnapshot {
   readonly number: number;
@@ -362,6 +421,23 @@ export interface IssueSnapshot {
    * a Design session slot even before round 1 posts.
    */
   readonly firstTurnClaimed: boolean;
+  /**
+   * Its current Design session's pending prototype request (#155): the
+   * latest prototype request with no prototype round, prototype failure
+   * round or failed turn since, whose approving reply, if one approved it, is
+   * still there, read from the Fabrik App's comments (src/github/threads.ts);
+   * null when there is none. While one is pending, agent:design starts the
+   * session's prototype turn (src/loop/design.ts).
+   */
+  readonly pendingPrototype: PendingPrototype | null;
+  /**
+   * Its current Design session's prototype requests that no prototype round
+   * or prototype failure round has answered (#155), oldest first, read from
+   * the Fabrik App's comments: what a prototype turn's result may still land
+   * on (src/loop/prototypeLanding.ts), though another turn's failure notice
+   * has ended its request as pending.
+   */
+  readonly unansweredPrototypes: readonly PrototypeRequestMarker[];
   /**
    * The agent PR whose Verdict sent this Ticket back to design, read from the
    * Kit's note on it (src/loop/backToDesign.ts), while the Design session that
@@ -797,6 +873,13 @@ export type Action =
        * which the Review job downloads for the Reviewer. A PR with no marker gets none.
        */
       readonly evidence?: EvidenceMarker;
+      /**
+       * For a Design session's prototype turn (#155): the pending prototype
+       * request it builds, and the Operator's reply that started the turn
+       * which asked for it. Its run is role `design`, on the Design role's
+       * model and effort, within the Implement role's timeout.
+       */
+      readonly prototype?: PrototypeRequestMarker;
       readonly model: string;
       readonly effort: string | null;
       readonly timeoutMinutes: number;
@@ -838,6 +921,27 @@ export type Action =
     }
   /** Push the agent branch the Implement run built, which the push job holds from its bundle. */
   | { readonly kind: "push-branch"; readonly branch: string }
+  /**
+   * Push the issue's prototype branch, `prototype/<issue>`, which the push job
+   * holds from a prototype turn's bundle (#155): no other branch, and only as
+   * a fast-forward from the head the turn started on (src/github/branch.ts).
+   * It never opens a PR, and nothing in the Kit deletes the branch.
+   */
+  | { readonly kind: "push-prototype-branch"; readonly issue: number }
+  | {
+      /**
+       * Marks a Design session's prototype request (#155), on the Fabrik App's
+       * own request comment, as building, once its prototype turn starts, or
+       * waiting for it again, once that turn is refused on its Subscription
+       * and held or re-run: what agent:design next starts is read from it
+       * (src/loop/design.ts). An edit, so it notifies nobody.
+       */
+      readonly kind: "mark-prototype-request";
+      readonly issue: number;
+      /** The request's comment. */
+      readonly comment: number;
+      readonly started: boolean;
+    }
   | {
       /** Opens a PR as the Fabrik App, which starts CI on it. */
       readonly kind: "open-pull-request";
@@ -886,6 +990,26 @@ export type Action =
       readonly template: string;
       /** The PR's branch, which this plan pushes. */
       readonly branch: string;
+    }
+  | {
+      /**
+       * Links each variant's preview in a prototype round (#155), as
+       * `link-preview` links a UI PR's. Not a GitHub change itself: once this
+       * plan has pushed the issue's prototype branch and posted the round, the
+       * push job hands it on to its prototype preview step, which fills
+       * `template` in for the branch as the push left it, polls the route's
+       * page there, and edits the round to link it beside each variant, with
+       * `?variant=` and its letter, or to say it never answered. Never a
+       * hosting provider's API.
+       */
+      readonly kind: "link-prototype-preview";
+      readonly issue: number;
+      /** The prototype round this plan posts. */
+      readonly round: PostedComment;
+      /** Kit config's `preview.url`, which uses no `{pr}`: a prototype has no PR. */
+      readonly template: string;
+      /** The route every variant renders on. */
+      readonly route: string;
     };
 
 /**

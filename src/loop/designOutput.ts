@@ -6,10 +6,25 @@
 // Spec. Any Ticket in an outcome may instead be an Operator step. Or the
 // session ends as not planned: the Operator decided the issue won't be built.
 // Or, when the destination is too foggy to design in one session, the issue
-// becomes a Map with its first Decisions.
+// becomes a Map with its first Decisions. Two kinds carry a Prototype (#155)
+// and end nothing: an ordinary turn's `prototype`, the request the Operator
+// approved, and a prototype turn's `prototype-round`, the variants it built.
+import { isRoute } from "../kit/config.ts";
 import { isCommentIdList } from "./considered.ts";
 import { DECISION_TYPES, type DecisionType } from "./labels.ts";
 import type { AgentBrief } from "./triageOutput.ts";
+
+/**
+ * The fewest variants a Prototype builds: with one, there is nothing to
+ * choose between. A Kit constant, not Kit config, like the two below.
+ */
+export const PROTOTYPE_MIN_VARIANTS = 2;
+
+/** How many variants a Prototype builds when the Operator didn't ask for another count, as the `prototype` skill does. */
+export const PROTOTYPE_DEFAULT_VARIANTS = 3;
+
+/** The most variants a Prototype builds: past five they stop being different and the gallery stops being quick to look through. */
+export const PROTOTYPE_VARIANT_CAP = 5;
 
 export interface RoundQuestion {
   readonly question: string;
@@ -82,7 +97,65 @@ type DesignTurnOutcome =
       readonly outOfScope: string;
       /** Each Decision, with the keys of the Decisions that block it. Any order. */
       readonly decisions: readonly MapDecision[];
+    }
+  | ({
+      /**
+       * Not an outcome: the Operator approved a Prototype, so the Kit posts a
+       * prototype request and starts a prototype turn of the same session.
+       */
+      readonly kind: "prototype";
+      /** A one-line lead-in for the prototype request comment. */
+      readonly comment: string;
+    } & PrototypeRequest)
+  | {
+      /**
+       * Not an outcome: a prototype turn built the variants, so the Kit posts a
+       * prototype round. The agent writes no question: the Kit asks "Which variant?".
+       */
+      readonly kind: "prototype-round";
+      /** Markdown: the round's lead-in. */
+      readonly intro: string;
+      /** One per variant, in letter order. */
+      readonly variants: readonly PrototypeVariant[];
+      /** The variant the agent recommends, with any tweak it suggests, so the Operator can reply in a word. */
+      readonly recommendation: string;
     };
+
+/** What the Operator approved a prototype turn to build. */
+export interface PrototypeRequest {
+  /** The one route every variant renders on, starting with `/`. */
+  readonly route: string;
+  /** How many variants to build, from PROTOTYPE_MIN_VARIANTS to PROTOTYPE_VARIANT_CAP. */
+  readonly variants: number;
+  /** Markdown: what each variant explores, and anything the Operator asked for. */
+  readonly brief: string;
+}
+
+/** One variant a prototype turn built, as its prototype round describes it. */
+export interface PrototypeVariant {
+  /** Its letter, from its place in the round (variantLetter): what `?variant=` names it by. */
+  readonly letter: string;
+  /** One line on what it is. */
+  readonly summary: string;
+  /** The repo path, from the root, of the component that renders it. */
+  readonly component: string;
+}
+
+/** What every issue's prototype branch is named under (prototypeBranchFor). loop.yml spells it out too. */
+export const PROTOTYPE_BRANCH_PREFIX = "prototype/";
+
+/**
+ * The issue's prototype branch, which every prototype turn of its Design
+ * sessions builds on and nothing in the Kit merges or deletes.
+ */
+export function prototypeBranchFor(issue: number): string {
+  return `${PROTOTYPE_BRANCH_PREFIX}${issue}`;
+}
+
+/** The letter of the variant at `index`: A for the first, then B, C… */
+export function variantLetter(index: number): string {
+  return String.fromCharCode("A".charCodeAt(0) + index);
+}
 
 /** A Decision as a Design session writes it, before it is a sub-issue of its Map. */
 export interface MapDecision {
@@ -138,6 +211,11 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
+}
+
+/** Non-empty text on one line. */
+function isLine(value: unknown): value is string {
+  return isText(value) && !/[\r\n]/.test(value);
 }
 
 function readQuestions(value: unknown, errors: string[]): RoundQuestion[] {
@@ -259,6 +337,54 @@ function isDecisionType(value: unknown): value is DecisionType {
   return (DECISION_TYPES as readonly unknown[]).includes(value);
 }
 
+/** A prototype round's variants, each lettered from its place in the list. */
+function readVariants(value: unknown, errors: string[]): PrototypeVariant[] {
+  if (!Array.isArray(value) || !isVariantCount(value.length)) {
+    errors.push(`a prototype-round needs from ${PROTOTYPE_MIN_VARIANTS} to ${PROTOTYPE_VARIANT_CAP} variants`);
+    if (!Array.isArray(value)) return [];
+  }
+  const variants: PrototypeVariant[] = [];
+  value.forEach((item: unknown, i: number) => {
+    const letter = variantLetter(i);
+    const { summary, component } = isObject(item) ? item : {};
+    if (!isLine(summary)) errors.push(`variant ${letter} needs a summary, one non-empty line`);
+    if (!isRepoPath(component)) errors.push(`variant ${letter} needs the repo path of its component`);
+    if (isLine(summary) && isRepoPath(component)) variants.push({ letter, summary, component });
+  });
+  return variants;
+}
+
+/** A path from the repo root, on one line: never an absolute path on the runner. */
+function isRepoPath(value: unknown): value is string {
+  return isLine(value) && !value.startsWith("/");
+}
+
+/**
+ * What a `prototype` output asks the prototype turn to build: its route, its
+ * variant count and its brief, as the contract checks them, or null with what
+ * breaks it pushed onto `errors`. The prototype request's marker, and the Kit
+ * job's output that carries it to the prototype job, are read back with the
+ * same checks (src/loop/markers.ts).
+ */
+function readRequest(value: Readonly<Record<string, unknown>>, errors: string[]): PrototypeRequest | null {
+  const { route, variants, brief } = value;
+  const before = errors.length;
+  if (!isRoute(route)) errors.push("a prototype needs a route, a path starting with /");
+  if (!isVariantCount(variants)) errors.push(`a prototype needs variants, a whole number from ${PROTOTYPE_MIN_VARIANTS} to ${PROTOTYPE_VARIANT_CAP}`);
+  if (!isText(brief)) errors.push("a prototype needs non-empty brief text");
+  return errors.length > before ? null : { route: route as string, variants: variants as number, brief: brief as string };
+}
+
+/** A prototype request, from JSON already parsed, as a `prototype` output's contract would take it; null when it breaks it. */
+export function prototypeRequestOf(value: unknown): PrototypeRequest | null {
+  return typeof value === "object" && value !== null ? readRequest(value as Record<string, unknown>, []) : null;
+}
+
+/** A whole number of variants within the Kit's minimum and cap. */
+export function isVariantCount(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= PROTOTYPE_MIN_VARIANTS && (value as number) <= PROTOTYPE_VARIANT_CAP;
+}
+
 /** What the blocked-by edges within an outcome link: its Tickets, or its Decisions. */
 interface Blocked {
   readonly key: string;
@@ -365,21 +491,72 @@ function readTurn(value: unknown): DesignTurnOutputResult {
         },
       };
     }
+    case "prototype": {
+      const request = readRequest(value, errors);
+      if (!isLine(value.comment)) errors.push("a prototype needs a comment, one non-empty line");
+      if (request === null || errors.length > 0) return { ok: false, errors };
+      return { ok: true, output: { kind: "prototype", ...request, comment: value.comment as string } };
+    }
+    case "prototype-round": {
+      if (!isText(value.intro)) errors.push("a prototype-round needs non-empty intro text");
+      const variants = readVariants(value.variants, errors);
+      if (!isText(value.recommendation)) errors.push("a prototype-round needs non-empty recommendation text");
+      if (errors.length > 0) return { ok: false, errors };
+      return {
+        ok: true,
+        output: { kind: "prototype-round", intro: value.intro as string, variants, recommendation: value.recommendation as string },
+      };
+    }
     default:
       return {
         ok: false,
-        errors: [`kind must be round, brief, spec, split, not-planned or map, not ${JSON.stringify(value.kind)}`],
+        errors: [
+          `kind must be round, brief, spec, split, not-planned, map, prototype or prototype-round, not ${JSON.stringify(value.kind)}`,
+        ],
       };
   }
 }
 
 /** Parses the text an agent emitted, then checks it. */
 export function parseDesignTurnOutput(text: string): DesignTurnOutputResult {
-  let value: unknown;
+  const json = jsonOf(text);
+  return json.ok ? readDesignTurnOutput(json.value) : json;
+}
+
+/** What a prototype turn ends in: its prototype round's variants. */
+export type PrototypeRoundOutput = Extract<DesignTurnOutput, { kind: "prototype-round" }>;
+
+export type PrototypeTurnOutputResult =
+  | { readonly ok: true; readonly output: PrototypeRoundOutput }
+  | { readonly ok: false; readonly errors: readonly string[] };
+
+/**
+ * Checks a prototype turn's already-parsed output (#155) against the
+ * contract: the turn was started to build the variants, so it ends only in
+ * a prototype-round, and any other kind breaks its contract however well
+ * formed. Its kind is named before anything else is checked.
+ */
+export function readPrototypeTurnOutput(value: unknown): PrototypeTurnOutputResult {
+  if (isObject(value) && value.kind !== "prototype-round") return notPrototypeRound(value.kind);
+  const result = readDesignTurnOutput(value);
+  if (!result.ok) return result;
+  return result.output.kind === "prototype-round" ? { ok: true, output: result.output } : notPrototypeRound(result.output.kind);
+}
+
+/** Parses the text a prototype turn's agent emitted, then checks it. */
+export function parsePrototypeTurnOutput(text: string): PrototypeTurnOutputResult {
+  const json = jsonOf(text);
+  return json.ok ? readPrototypeTurnOutput(json.value) : json;
+}
+
+function notPrototypeRound(kind: unknown): PrototypeTurnOutputResult {
+  return { ok: false, errors: [`a prototype turn ends only in a prototype-round, not ${JSON.stringify(kind)}`] };
+}
+
+function jsonOf(text: string): { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly errors: readonly string[] } {
   try {
-    value = JSON.parse(text);
+    return { ok: true, value: JSON.parse(text) as unknown };
   } catch (error) {
     return { ok: false, errors: [`Design-session output is not valid JSON: ${(error as Error).message}`] };
   }
-  return readDesignTurnOutput(value);
 }

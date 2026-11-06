@@ -59,6 +59,10 @@ function runner(overrides: Partial<Capturer> = {}) {
       calls.push(`screenshot ${shot.url} at ${shot.viewport.name} as ${shot.image}`);
       return 200;
     },
+    recordVariant: async (take) => {
+      calls.push(`record ${take.url} at ${take.viewport.name}`);
+      return { status: 200, video: true };
+    },
     stop: async () => {
       calls.push("stop");
     },
@@ -367,7 +371,7 @@ describe("Capturing UI evidence", () => {
 
 const book: Capture = { route: "/book", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-1-book.png" };
 const bookWide: Capture = { ...book, viewport: "desktop", image: "after-desktop-1-book.png" };
-const captured: CaptureResult = { outcome: "captured", headSha: HEAD, captures: [book, bookWide] };
+const captured: CaptureResult<Capture> = { outcome: "captured", headSha: HEAD, captures: [book, bookWide] };
 
 describe("What the capture step leaves", () => {
   it("passes the capture result out as one compact JSON line, which reads back as it was", () => {
@@ -400,7 +404,7 @@ describe("What the capture step leaves", () => {
   });
 
   it("writes no gallery for a capture that took no screenshot, only its result", () => {
-    const noRoutes: CaptureResult = { outcome: "failed", reason: "no-routes", headSha: HEAD, captures: [] };
+    const noRoutes: CaptureResult<Capture> = { outcome: "failed", reason: "no-routes", headSha: HEAD, captures: [] };
 
     expect(captureStepFiles(noRoutes, new Map(), 12)).toEqual({ result: `${JSON.stringify(noRoutes, null, 2)}\n`, gallery: null });
   });

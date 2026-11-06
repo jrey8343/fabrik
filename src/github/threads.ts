@@ -9,6 +9,11 @@ import {
   DESIGN_TURN_FAILED_MARKER,
   EMPTY_DIFF_MARKER,
   LIVE_OUTCOME_MARKER,
+  PROTOTYPE_FAILURE_ROUND_MARKER,
+  PROTOTYPE_ROUND_MARKER,
+  type PrototypeRequestMarker,
+  prototypeRequestIn,
+  prototypeStartedIn,
   REQUEST_CHANGES_RUN_MARKER,
   RESEARCH_RUN_FAILED_MARKER,
   RETRY_PUSH_MARKER,
@@ -16,7 +21,7 @@ import {
   UNMARKED_RETRY_PUSH,
   VERDICT_MARKER,
 } from "../loop/markers.ts";
-import type { IssueSnapshot, Verdict, VerdictRecord } from "../loop/types.ts";
+import type { IssueSnapshot, PendingPrototype, Verdict, VerdictRecord } from "../loop/types.ts";
 import { VERDICTS } from "../loop/verdict.ts";
 
 /** The Verdicts recorded in these comments, oldest first. Comments without a valid marker are skipped. */
@@ -127,6 +132,84 @@ export function designTurnFailedIn(comments: readonly { readonly body: string; r
     }
   }
   return failed;
+}
+
+/** A comment as the snapshot reads an issue's thread: its id, its text, and whether the Fabrik App wrote it. */
+export interface ThreadComment {
+  readonly id: number;
+  readonly body: string;
+  readonly byApp: boolean;
+}
+
+/**
+ * An issue's pending prototype request (#155), from its current Design
+ * session's comments oldest first: the latest prototype request with no
+ * prototype round, prototype failure round or failed turn since, and no end
+ * of the session, or return starting a new one. The Operator's replies and
+ * the ordinary rounds in between leave it pending. Only the Fabrik App's
+ * comments count (`byApp`), since the request steers what a prototype turn
+ * builds. A request the Operator's reply approved is pending only while that
+ * reply is among `existing`, the ids of every comment the snapshot read:
+ * once they delete it, its prototype turn would post nothing, so no
+ * agent:design should build it again. The reply is older than its request, so
+ * it can fall outside the last 100 comments the snapshot reads while the
+ * request doesn't; that reads as not pending too, the safe side, since a
+ * request taken for pending builds a Prototype, where one taken for not
+ * pending leaves the Operator's next reply to start an ordinary turn. It
+ * carries its comment's id, and whether the Kit marked its prototype turn
+ * started there.
+ */
+export function pendingPrototypeIn(
+  comments: readonly ThreadComment[],
+  existing: ReadonlySet<number> = new Set(comments.map(({ id }) => id)),
+): PendingPrototype | null {
+  let pending: PendingPrototype | null = null;
+  for (const { id, body, byApp } of comments) {
+    if (!byApp) continue;
+    const request = prototypeRequestIn(body);
+    if (request !== null) pending = { ...request, comment: id, started: prototypeStartedIn(body) };
+    else if (endsPrototypeRequest(body)) pending = null;
+  }
+  return pending !== null && pending.reply !== null && !existing.has(pending.reply) ? null : pending;
+}
+
+/**
+ * The prototype requests a prototype turn's result may still land on (#155),
+ * from an issue's current Design session's comments oldest first: each the
+ * Fabrik App posted that no prototype round or prototype failure round has
+ * answered, oldest first. A session's turns build its requests in turn, so a
+ * round answers the oldest one before it. Unlike the pending request, a failed
+ * turn's notice, or the Map cap's refusal, which opens like one, leaves a
+ * request unanswered: a prototype turn that was already building it still
+ * lands its round. A second landing of a request a round answered is stale,
+ * and the session's end or return answers every one.
+ */
+export function unansweredPrototypesIn(comments: readonly Pick<ThreadComment, "body" | "byApp">[]): PrototypeRequestMarker[] {
+  let unanswered: PrototypeRequestMarker[] = [];
+  for (const { body, byApp } of comments) {
+    if (!byApp) continue;
+    const request = prototypeRequestIn(body);
+    if (request !== null) unanswered = [...unanswered, request];
+    else if (isPrototypeRound(body)) unanswered = unanswered.slice(1);
+    else if (endsDesignSession(body)) unanswered = [];
+  }
+  return unanswered;
+}
+
+/** Whether the App's comment ends a pending prototype request: the round that answers it, a failed turn, or the session's end or return. */
+function endsPrototypeRequest(body: string): boolean {
+  return isPrototypeRound(body) || body.startsWith(DESIGN_TURN_FAILED_MARKER) || endsDesignSession(body);
+}
+
+/** Whether the App's comment is a prototype round or prototype failure round: a round whose marker line has the prototype's right under it. */
+function isPrototypeRound(body: string): boolean {
+  const [first = "", second] = body.split("\n", 2);
+  return DESIGN_ROUND_MARKER.test(first) && (second === PROTOTYPE_ROUND_MARKER || second === PROTOTYPE_FAILURE_ROUND_MARKER);
+}
+
+/** Whether the App's comment ends the Design session, async or live, or notes the return that starts a new one. */
+function endsDesignSession(body: string): boolean {
+  return body.startsWith(SESSION_FINISHED) || LIVE_OUTCOME_MARKER.test(body) || sentBackIn(body) !== null;
 }
 
 /**

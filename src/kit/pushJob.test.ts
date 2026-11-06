@@ -146,6 +146,59 @@ describe("What the push job applies", () => {
     });
   });
 
+  // A Design session's prototype turn (#155), its route design, whose request comes from the Kit job's plan, never from the agent.
+  describe("A prototype turn's result", () => {
+    const HEAD = "7e3d1c9b5a4f2e0d8c6b4a2f0e9d7c5b3a1f0e2d";
+    const REQUEST = { route: "/book", variants: 3, brief: "- **A**: one long form.\n- **B**: a stepper.", reply: 9001 };
+    const captured = {
+      outcome: "captured",
+      headSha: HEAD,
+      captures: [{ route: "/book", variant: "A", viewport: "mobile", status: 200, image: "variant-a-mobile.png", video: "variant-a-mobile.webm" }],
+    };
+    /** The push job's input when the prototype job ran #12's turn and passed out these outputs, the Design job skipped. */
+    const withOutputs = (outputs: Record<string, string>, request = JSON.stringify(REQUEST)) =>
+      pushJobInput(
+        needs("design", { design: { result: "skipped", outputs: {} }, prototype: ok(outputs) }, { prototype: "true", prototype_request: request }),
+        12,
+      );
+
+    it("is the prototype job's, with the request the Kit job built it on, and the capture result and gallery the prototype job passed out", () => {
+      expect(withOutputs({ "ui-capture-result": JSON.stringify(captured), "ui-gallery-artifact": "9201" })).toEqual({
+        kind: "agent-result",
+        role: "design",
+        issue: 12,
+        pullRequest: null,
+        review: null,
+        startedBy: null,
+        prototype: {
+          request: { request: { route: "/book", variants: 3, brief: "- **A**: one long form.\n- **B**: a stepper." }, reply: 9001 },
+          capture: { result: captured, artifact: null, galleryArtifact: 9201 },
+        },
+      });
+    });
+
+    it("has no capture result or gallery when capture recorded nothing, and that's never a failure", () => {
+      expect(withOutputs({ "ui-capture-result": "", "ui-gallery-artifact": "" })).toMatchObject({
+        kind: "agent-result",
+        prototype: { capture: { result: null, artifact: null, galleryArtifact: null } },
+      });
+    });
+
+    it.each([["isn't JSON", "{ route"], ["isn't a request the contract takes", JSON.stringify({ ...REQUEST, variants: 9 })], ["is empty", ""]])(
+      "has no request when the one the Kit job passed out %s, for the push job to refuse",
+      (_name, request) => {
+        expect(withOutputs({}, request)).toMatchObject({ kind: "agent-result", prototype: { request: null } });
+      },
+    );
+
+    it("isn't read for an ordinary Design turn, which the Design job ran", () => {
+      const input = pushJobInput(needs("design", { design: ok({ "ui-capture-result": JSON.stringify(captured) }) }, { prototype: "false" }), 12);
+
+      expect(input).not.toHaveProperty("prototype");
+      expect(input).not.toHaveProperty("capture");
+    });
+  });
+
   it("applies red checks as such: the Reviewer didn't run", () => {
     const input = pushJobInput(
       needs(
@@ -185,6 +238,16 @@ describe("What the push job applies", () => {
     const input = pushJobInput(needs("design", { design: { result, outputs: { "secrets-step": "failure" } } }), 12);
 
     expect(input).toEqual({ kind: "agent-failure", role: "design", issue: 12, jobResult: result, secretsStep: "failure" });
+  });
+
+  // A prototype turn's route stays design (#155), and the Kit job's prototype output says the prototype job ran it, the Design job skipped.
+  it.each(["failure", "cancelled"])("gives a prototype turn's failure as a Design-session turn's when the prototype job's result is %s", (result) => {
+    const input = pushJobInput(
+      needs("design", { design: { result: "skipped", outputs: {} }, prototype: { result, outputs: { "secrets-step": "failure" } } }, { prototype: "true" }),
+      12,
+    );
+
+    expect(input).toEqual({ kind: "agent-failure", role: "design", issue: 12, jobResult: result, secretsStep: "failure", prototype: true });
   });
 
   // A timeout cancels the job: the Audit then fails, rather than staying pending and blocking the next one.

@@ -7,6 +7,7 @@ import { AGENT_FAILURE_FILE, readFailureReport } from "./agent/failure.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult } from "./agent/result.ts";
 import { type AgentBranchGit, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
+import { prototypeBranchFor } from "./loop/designOutput.ts";
 import { applyPlan, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { GitHub, type Repo } from "./github/client.ts";
 import {
@@ -14,6 +15,7 @@ import {
   agentRunEventFrom,
   auditEventFrom,
   loopEventFrom,
+  prototypeEventFrom,
   researchEventFrom,
   retroEventFrom,
   reviewEventFrom,
@@ -94,8 +96,14 @@ function describeAction(action: Action): string {
       return "- run a Design queue check";
     case "link-preview":
       return `- link the preview deployment of ${action.pullRequest === null ? "the PR it opens" : `#${action.pullRequest}`} once it answers, or say it never answered`;
+    case "link-prototype-preview":
+      return `- link each variant's preview in #${action.issue}'s prototype round once it answers, or say it never answered`;
     case "push-branch":
       return `- push ${action.branch}`;
+    case "push-prototype-branch":
+      return `- push ${prototypeBranchFor(action.issue)}, only as a fast-forward`;
+    case "mark-prototype-request":
+      return `- mark #${action.issue}'s prototype request ${action.started ? "as its prototype turn started" : "as waiting for its prototype turn again"}`;
     case "open-pull-request":
       return `- open a draft PR from ${action.head} to ${action.base} that closes #${action.issue}`;
     case "convert-to-draft":
@@ -163,7 +171,8 @@ async function loopEvent(repo: Repo): Promise<EventSource> {
 /**
  * The push job's event: the result an agent job passed out. The agent could
  * have rewritten that artifact, so its issue must be the one this run is for,
- * and an Implement or Researcher run's branch is rebuilt from its bundle and checked here.
+ * and the branch of an Implement or Researcher run, or of a prototype turn, is
+ * rebuilt from its bundle and checked here.
  */
 async function agentResultEvent(
   input: Extract<PushJobInput, { kind: "agent-result" }>,
@@ -192,6 +201,20 @@ async function agentResultEvent(
     }
     const branch = await rebuildAgentBranch(built, bundlePath, remote());
     return { event: researchEventFrom(result, branch.changes, thisRunUrl(), thisRepoUrl()), source, branch };
+  }
+  if (input.prototype !== undefined) {
+    // What the turn built, its request and its capture come from the Kit job's plan and the prototype
+    // job's outputs, which the agent can't rewrite (src/kit/pushJob.ts); the core checks the branch is the issue's.
+    const { request, capture } = input.prototype;
+    if (request === null) throw new Error(`The Kit job passed out no prototype request for #${result.issue} that reads`);
+    const built = result.branch;
+    if (built === undefined || built.name !== prototypeBranchFor(result.issue)) {
+      throw new Error(`The prototype turn on #${result.issue} didn't build ${prototypeBranchFor(result.issue)}`);
+    }
+    // A prototype branch's push only fast-forwards it from the head the turn started on (src/github/branch.ts).
+    const branch = await rebuildAgentBranch(built, bundlePath, remote());
+    const evidence = { ...capture, run: Number(required("GITHUB_RUN_ID")), repoUrl: thisRepoUrl() };
+    return { event: prototypeEventFrom(result, request, branch, evidence, thisRunUrl()), source: `the prototype turn on #${result.issue}`, branch };
   }
   if (result.role !== "implement") {
     return { event: agentRunEventFrom(result, null, null, input.startedBy), source, branch: null };
@@ -234,6 +257,7 @@ async function failedRunEvent(
     secretsStep: input.secretsStep,
     report: reportText === null ? null : readFailureReport(reportText),
     ...(input.subscription === undefined ? {} : { subscription: input.subscription }),
+    ...(input.prototype === undefined ? {} : { prototype: input.prototype }),
   });
   return { event, source: `the failed ${input.role} run on #${input.issue}` };
 }
@@ -340,9 +364,15 @@ async function main(): Promise<void> {
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
   // The Design queue job runs the check likewise, once this plan has landed.
   if (wantsDesignQueueCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "design-queue=true\n");
-  // The push job's preview step polls it and links it, once this plan has pushed (src/kit/previewLink.ts).
+  // The push job's preview step polls it and links it, once this plan has pushed (src/kit/previewLink.ts): a UI
+  // PR's in its evidence section, or a prototype round's beside each variant, each step with a token for its own.
   if (preview !== null) {
-    await appendFile(required("GITHUB_OUTPUT"), `preview-url=${preview.url}\npreview-pull-request=${preview.pullRequest}\n`);
+    await appendFile(
+      required("GITHUB_OUTPUT"),
+      "round" in preview
+        ? `prototype-preview-url=${preview.url}\nprototype-preview-round=${preview.round}\n`
+        : `preview-url=${preview.url}\npreview-pull-request=${preview.pullRequest}\n`,
+    );
   }
   await report(describe(plan));
   if (plan.kind === "fail") {

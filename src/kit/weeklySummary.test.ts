@@ -1420,6 +1420,20 @@ describe("the Weekly summary", () => {
       expect(result).toMatchObject({ kind: "summary", summary: { costPerSpec: { thisWeek: { usd: 1.75 } } } });
     });
 
+    it("counts a prototype turn on the Spec or on a Ticket sent back to design as the Design-session turn it is", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ issue: 3, role: "design", prototype: true, pullRequest: null, endedAt: "2026-11-03T06:00:00Z", totalCostUsd: 4 }),
+            aRunRecord({ issue: 7, role: "design", prototype: true, pullRequest: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 2 }),
+          ],
+          facts: [factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-05T00:00:00Z")], { number: 3, tickets: [7] })] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { cost: { thisWeek: 7 }, costPerSpec: { thisWeek: { usd: 7 } } } });
+    });
+
     it("never counts the record of a judge run that scored a run on one of its Tickets", () => {
       const result = weeklySummary(
         input({
