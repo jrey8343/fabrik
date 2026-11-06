@@ -74,7 +74,7 @@ describe("A Design session splits a Ticket into sibling Tickets", () => {
   });
 
   it("an issue with no Spec above it can't split into siblings: the turn fails, changing nothing", () => {
-    const plan = planFor(finished(split), snapshotOf({ ...ticket, parent: null }), kitConfig());
+    const plan = planFor(finished(split), snapshotOf(anIssue({ ...ticket, parent: null, parentIssue: null })), kitConfig());
 
     expect(plan).toMatchObject({ kind: "fail", failure: "infrastructure" });
   });

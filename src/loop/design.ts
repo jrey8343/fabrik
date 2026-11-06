@@ -13,6 +13,7 @@ import {
 } from "./designOutput.ts";
 import {
   DESIGN_LABEL,
+  decisionLabel,
   isCategoryLabel,
   type Label,
   MAP_LABEL,
@@ -32,7 +33,8 @@ import {
   monitorMarkerLine,
   SESSION_FINISHED,
 } from "./markers.ts";
-import { mapCapFull } from "./mapCap.ts";
+import { spelled } from "./readable.ts";
+import type { MapCap } from "./mapCap.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { AgentBrief } from "./triageOutput.ts";
 import { startAgentRun } from "./runs.ts";
@@ -188,8 +190,8 @@ export function turnStartFrom(comment: number | undefined, found: StartingCommen
 /**
  * A finished turn posts the next round, or ends the session with its outcome.
  * A turn whose starting reply the Operator deleted posts nothing: it answered
- * a reply that is no longer there. A Map is weighed against the Map cap,
- * over the `openMaps` the snapshot holds. Whichever comment it posts ends
+ * a reply that is no longer there. A Map is weighed against `mapCap`, the
+ * Map cap over the open Maps the snapshot holds. Whichever comment it posts ends
  * with the Operator comments it weighed, among those on the PR it came back
  * from that it was `given` (ADR-0007).
  */
@@ -198,8 +200,7 @@ export function applyTurn(
   text: string,
   snapshot: IssueContext,
   start: TurnStart,
-  openMaps: readonly number[] | null,
-  config: KitConfig,
+  mapCap: MapCap | null,
   given: readonly GivenOperatorComment[] = [],
 ): Plan {
   if (start.kind === "unchecked-reply") {
@@ -223,7 +224,7 @@ export function applyTurn(
       reason: `The Design-session turn on #${issueNumber} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
     };
   }
-  const plan = landTurn(issueNumber, parsed.output, snapshot, openMaps, config);
+  const plan = landTurn(issueNumber, parsed.output, snapshot, mapCap);
   if (plan.kind !== "act") return plan;
   const considered = consideredSection(parsed.output.operatorCommentsConsidered ?? [], given);
   return considered.length === 0 ? plan : { ...plan, actions: plan.actions.map((action) => endedWith(action, considered)) };
@@ -238,13 +239,7 @@ function endedWith(action: Action, lines: readonly string[]): Action {
   return action;
 }
 
-function landTurn(
-  issueNumber: number,
-  output: DesignTurnOutput,
-  snapshot: IssueContext,
-  openMaps: readonly number[] | null,
-  config: KitConfig,
-): Plan {
+function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: IssueContext, mapCap: MapCap | null): Plan {
   const notNow = whileInSession(issueNumber, snapshot.issue);
   if (notNow !== null) return notNow;
 
@@ -275,9 +270,9 @@ function landTurn(
   // Every outcome but an Operator brief leaves new ready work, so see whether it can start.
   const checkDispatch: Action = { kind: "check-dispatch" };
   if (output.kind === "map") {
-    if (openMaps === null) return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the open Maps" };
+    if (mapCap === null) return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the open Maps" };
     // The cap holds even when the turn ignored what its inputs said of it.
-    if (mapCapFull(openMaps, config)) return heldByMapCap(issueNumber, openMaps, config.caps.maps);
+    if (mapCap.kind === "full") return heldByMapCap(issueNumber, mapCap);
     // A Map's research Decisions are work the Researcher can start on its own.
     return { kind: "act", actions: [...chartAsMap(issueNumber, output, snapshot.issue), checkDispatch, CHECK_DESIGN_QUEUE] };
   }
@@ -343,18 +338,13 @@ function wrongOutcome(issueNumber: number, why: string): Plan {
  * next move (src/github/threads.ts), and mentions nobody: the cap holds
  * silently (src/loop/mapCap.ts).
  */
-function heldByMapCap(issueNumber: number, openMaps: readonly number[], cap: number): Plan {
+function heldByMapCap(issueNumber: number, { openMaps, cap }: Extract<MapCap, { kind: "full" }>): Plan {
   const maps = openMaps.map((map) => `#${map}`);
   const said =
     cap === 0
       ? `This turn ended in a Map, but \`caps.maps\` is 0, so the Kit charts no new Map in this repo. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way.`
-      : `This turn ended in a Map, but the Map cap is full: ${listed(maps)} ${maps.length === 1 ? "is the open Map" : "are the open Maps"}, and \`caps.maps\` is ${cap}. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way, or close ${maps.length === 1 ? maps[0] : "an open Map"} first and ask for the Map again.`;
+      : `This turn ended in a Map, but the Map cap is full: ${spelled(maps, "and")} ${maps.length === 1 ? "is the open Map" : "are the open Maps"}, and \`caps.maps\` is ${cap}. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way, or close ${maps.length === 1 ? maps[0] : "an open Map"} first and ask for the Map again.`;
   return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body: [DESIGN_TURN_FAILED_MARKER, said].join("\n") }] };
-}
-
-/** `#1`, `#1 and #2`, or `#1, #2 and #3`. */
-function listed(names: readonly string[]): string {
-  return names.length < 2 ? names.join(", ") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 /**
@@ -537,7 +527,7 @@ function chartAsMap(issueNumber: number, output: Extract<DesignTurnOutput, { kin
         key: decisionIssue(decision.key).created,
         title: withoutMentions(decision.title),
         body: withoutMentions(decision.body),
-        labels: [`wayfinder:${decision.type}`],
+        labels: [decisionLabel(decision.type)],
         parent: issueNumber,
         blockedBy: decision.blockedBy.map(decisionIssue),
       }),

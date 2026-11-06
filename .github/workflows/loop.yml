@@ -372,7 +372,7 @@ jobs:
   # slot). It applies the same plan the Kit job routed on; the run itself is
   # the agent job's. Like the push job, it never touches Product code.
   implement-claim:
-    name: Claim the Ticket
+    name: Claim the work
     needs: kit
     if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')
     runs-on: ubuntu-latest

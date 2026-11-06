@@ -260,10 +260,22 @@ describe("The Map question in the Design prompt", () => {
     expect(ordinary).toContain("clear but large ones included");
   });
 
+  it("asks no Map question on a Ticket under a Spec, and says why: the Spec stays the single parent of its Tickets", async () => {
+    const ticket = lineStarting(section(await prompt("design"), "Maps"), "- **Ask no Map question on a Ticket under a Spec.**");
+    expect(ticket).toContain("A Ticket under a Spec never becomes a Map: the Spec stays the single parent of its Tickets");
+    expect(ticket).toContain(`"${MAP_CAP_HEADING}" says so`);
+  });
+
   it("doesn't offer a Map while the cap is full, and says which open Map holds it", async () => {
     const full = lineStarting(section(await prompt("design"), "Maps"), "- **When the cap is full, don't offer a Map.**");
     expect(full).toContain("say in the next round's intro which open Map holds the cap");
     expect(full).toContain("Never end in `map` then");
+  });
+
+  it("treats the Decisions a Spec-to-be filed from a Map rests on as settled, and doesn't ask them again", async () => {
+    const settled = lineStarting(section(await prompt("design"), "Maps"), "- **Treat the Decisions an issue rests on as settled.**");
+    expect(settled).toContain("When the issue says which Decisions it rests on, as a Spec-to-be filed from a Map does");
+    expect(settled).toContain("don't ask their questions again");
   });
 
   it("names the part the Map cap arrives under, after the issue", async () => {

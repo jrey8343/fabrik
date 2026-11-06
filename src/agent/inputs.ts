@@ -80,7 +80,7 @@ export async function readIssue(
   repo: Repo,
   number: number,
   operator: string,
-): Promise<{ issue: unknown; spec: unknown }> {
+): Promise<{ issue: unknown; spec: { number: number; title: string; body: string } | null }> {
   const comments: IssueComment[] = [];
   let after: string | null = null;
   let issue: NonNullable<IssueQueryResult["repository"]["issue"]>;
@@ -335,24 +335,30 @@ export const MAP_INPUTS_FILE = "map.json";
 
 /**
  * What a Design-session turn is told of the Map cap: it may offer a Map; or
- * the cap is full, at `cap` (0 stops new Maps), and these open Maps hold it.
+ * the cap is full, at `cap` (0 stops new Maps), and these open Maps hold it;
+ * or the issue is a Ticket under the Spec `spec`, which never becomes a Map.
  */
 export type MapOffer =
   | { readonly kind: "may-offer" }
-  | { readonly kind: "cap-full"; readonly cap: number; readonly openMaps: readonly OpenMap[] };
+  | { readonly kind: "cap-full"; readonly cap: number; readonly openMaps: readonly OpenMap[] }
+  | { readonly kind: "under-a-spec"; readonly spec: number };
 
 /**
- * Whether this turn may offer a Map, counting the open Maps as the push job's
- * landing does (src/loop/mapCap.ts), so the turn isn't asked a question the
- * Operator can't say yes to.
+ * Whether this turn may offer a Map, refusing as the push job's landing does
+ * (src/loop/design.ts): never on a Ticket under `spec`, its parent; otherwise
+ * while the open Maps leave the cap room (src/loop/mapCap.ts). So the turn
+ * isn't asked a question the Operator can't say yes to.
  */
 export async function readMapOffer(
   github: Pick<Reader, "graphql">,
   repo: Repo,
   config: Pick<KitConfig, "caps">,
+  spec: { readonly number: number } | null,
 ): Promise<MapOffer> {
+  if (spec !== null) return { kind: "under-a-spec", spec: spec.number };
   const openMaps = await gatherOpenMaps(github, repo);
-  return mapCapFull(openMaps, config) ? { kind: "cap-full", cap: config.caps.maps, openMaps } : { kind: "may-offer" };
+  const full = mapCapFull(openMaps.map(({ number }) => number), config);
+  return full ? { kind: "cap-full", cap: config.caps.maps, openMaps } : { kind: "may-offer" };
 }
 
 // --- An Auditor run's inputs (#150) -----------------------------------------
@@ -609,7 +615,7 @@ async function main(outDir: string): Promise<void> {
   await writeFile(join(outDir, "spec.json"), JSON.stringify(spec));
   // A turn on an invalid Kit config fails before its agent starts (src/agent/run.ts), so it's told nothing of Maps.
   if (process.env["FABRIK_ROLE"] === "design" && resolved.ok) {
-    await writeFile(join(outDir, MAP_INPUTS_FILE), JSON.stringify(await readMapOffer(github, repo, resolved.config)));
+    await writeFile(join(outDir, MAP_INPUTS_FILE), JSON.stringify(await readMapOffer(github, repo, resolved.config, spec)));
   }
   if (pullRequest !== null) {
     const withComments = process.env["FABRIK_PULL_REQUEST_COMMENTS"] === "true";

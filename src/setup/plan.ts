@@ -6,6 +6,7 @@ import {
   ALL_LABELS,
   AUDIT_LABEL,
   BUG,
+  decisionLabel,
   DESIGN_LABEL,
   DISPATCH_LABEL,
   ENHANCEMENT,
@@ -528,10 +529,10 @@ const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly
   [RETRO_LABEL]: { color: "c5def5", description: "Fabrik: the week's Retro, proposing changes to how the factory works" },
   [MONITOR_LABEL]: { color: "e99695", description: "Fabrik: filed by the Monitor for a production error or a red main" },
   [MAP_LABEL]: { color: "bfd4f2", description: "Fabrik: a Map charting a foggy destination through its Decisions" },
-  "wayfinder:research": { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by research" },
-  "wayfinder:prototype": { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a prototype" },
-  "wayfinder:grilling": { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a grilling" },
-  "wayfinder:task": { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a task" },
+  [decisionLabel("research")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by research" },
+  [decisionLabel("prototype")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a prototype" },
+  [decisionLabel("grilling")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a grilling" },
+  [decisionLabel("task")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a task" },
 };
 
 /**

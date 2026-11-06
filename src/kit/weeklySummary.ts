@@ -4,10 +4,11 @@
 // model call.
 import { researchRunFailedIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
-import { DECISION_TYPES, type DecisionLabel, MAP_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, RESEARCH_LABEL } from "../loop/labels.ts";
+import { DECISION_TYPES, decisionLabel, type DecisionLabel, MAP_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, RESEARCH_LABEL } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
+import { spelled } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
 import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
@@ -735,7 +736,7 @@ function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: 
       ...openAuditsOf(facts, appLogin, items),
       ...openRetrosOf(facts, appLogin, items),
       ...openMapsOf(facts, items),
-      ...failedResearchOf(facts, items),
+      ...failedResearchOf(facts, appLogin, items),
     ]),
     stuck: stuck(facts, records, items, now),
     held: heldIn(facts, appLogin, now),
@@ -753,9 +754,7 @@ function openRetrosOf({ openRetros }: GitHubFacts, appLogin: string, items: Item
 }
 
 /** The Decision labels whose Decisions the Operator resolves live: all but research, which the Researcher resolves AFK. */
-const OPERATOR_DECISION_LABELS: readonly string[] = DECISION_TYPES.filter((type) => type !== "research").map(
-  (type): DecisionLabel => `wayfinder:${type}`,
-);
+const OPERATOR_DECISION_LABELS: readonly DecisionLabel[] = DECISION_TYPES.filter((type) => type !== "research").map(decisionLabel);
 
 /**
  * Each open Map, read as the Map cap reads them (gatherOpenMaps), aged from
@@ -767,7 +766,7 @@ function openMapsOf({ openIssues, openMaps }: GitHubFacts, items: Items): Waitin
     kind: "map",
     ...items.issue(map, lastAdded(map.labelEvents, MAP_LABEL) ?? map.createdAt),
     decisionsWaiting: openIssues.filter(
-      (issue) => map.subIssues.includes(issue.number) && issue.labels.some((label) => OPERATOR_DECISION_LABELS.includes(label)),
+      (issue) => map.subIssues.includes(issue.number) && OPERATOR_DECISION_LABELS.some((label) => issue.labels.includes(label)),
     ).length,
   }));
 }
@@ -777,15 +776,18 @@ function openMapsOf({ openIssues, openMaps }: GitHubFacts, items: Items): Waitin
  * Kit's failure notice: by the Kit's own rules for which Decisions the
  * Researcher may run on (whyNotResearchable) and whose last run failed
  * (researchRunFailedIn), so the summary lists just the Decisions Dispatch
- * won't run again until the Operator re-adds agent:research.
+ * won't run again until the Operator re-adds agent:research. As Dispatch
+ * does, it reads only the comments of the Fabrik App, whose bot login is
+ * `appLogin`.
  */
-function failedResearchOf({ openIssues }: GitHubFacts, items: Items): WaitingItem[] {
+function failedResearchOf({ openIssues }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
   return openIssues.flatMap((decision): WaitingItem[] => {
     // A closed parent isn't among the open issues, so it reads as none: no open Map either way.
     const parent = openIssues.find((issue) => issue.subIssues.includes(decision.number));
     const parentIssue = parent === undefined ? null : { number: parent.number, open: true, labels: parent.labels };
-    if (whyNotResearchable({ ...decision, open: true, parentIssue }) !== null || !researchRunFailedIn(decision.comments)) return [];
-    const notice = decision.comments.findLast((comment) => comment.byBot);
+    const comments = decision.comments.map((comment) => ({ ...comment, byApp: comment.author === appLogin }));
+    if (whyNotResearchable({ ...decision, open: true, parentIssue }) !== null || !researchRunFailedIn(comments)) return [];
+    const notice = comments.findLast((comment) => comment.byApp);
     const readded = lastAdded(decision.labelEvents, RESEARCH_LABEL);
     // Re-added since, it waits on its run again, not on the Operator.
     if (notice === undefined || (readded !== null && Date.parse(readded) > Date.parse(notice.at))) return [];
@@ -1152,17 +1154,12 @@ function heldLines(repos: readonly RepoSection[]): string[] {
     }
     const maps = held?.maps ?? null;
     if (maps !== null) {
-      const open = andList(maps.open.map((map) => `[#${map}](https://github.com/${repo}/issues/${map})`));
+      const open = spelled(maps.open.map((map) => `[#${map}](https://github.com/${repo}/issues/${map})`), "and");
       shown.push(`- ${repo}: the Map cap is full with ${open} open, so Design sessions offer no new Map`);
     }
     return shown;
   });
   return lines.length === 0 ? [] : ["## Held", "", ...lines, ""];
-}
-
-/** `a`, `a and b`, or `a, b and c`. */
-function andList(names: readonly string[]): string {
-  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 /** How many of a repo's Waiting on you items show before the rest collapse into `<details>`. */

@@ -100,10 +100,14 @@ describe("Landing a research run", () => {
       "#12's Map #3 is closed",
     ],
     ["a Decision taken off its Map", aDecision({ parent: null, parentIssue: null }), "#12 isn't a sub-issue of a Map"],
-  ])("a run that lands on %s pushes nothing, posts nothing, and says why", (_subject, decision, why) => {
+  ])("a run that lands on %s pushes nothing and posts nothing, notes why, and asks for a Dispatch check for the slot it held", (_subject, decision, why) => {
     const plan = planFor(finished(), snapshotOf(decision), kitConfig());
 
-    expect(plan).toEqual({ kind: "nothing", reason: `${why}, so the Researcher's findings aren't landed` });
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [{ kind: "check-dispatch" }],
+      notes: [`${why}, so the Researcher's findings aren't landed`],
+    });
   });
 });
 

@@ -36,7 +36,7 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
 
   it("counts an Implement job still queued or waiting after its claim took agent:implement off the Ticket", async () => {
     const actions = actionsWith([
-      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Claim the Ticket", status: "completed" }, { name: "fabrik / Implement", status: "queued" }] },
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Claim the work", status: "completed" }, { name: "fabrik / Implement", status: "queued" }] },
       { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "waiting" }] },
       { id: 3, status: "queued", jobs: [{ name: "fabrik / Implement", status: "queued" }] },
       { id: 4, status: "waiting", jobs: [{ name: "fabrik / Implement", status: "pending" }] },
@@ -1031,7 +1031,7 @@ function aResearchNode(
     assignees?: string[];
     blockedBy?: { number: number; state: "OPEN" | "CLOSED" }[];
     parent?: GitHubParent | null;
-    comments?: { body: string; author: { __typename: string } | null }[];
+    comments?: { body: string; author: { login: string; __typename: string } | null }[];
   } = {},
 ) {
   return {
@@ -1055,6 +1055,8 @@ describe("Gathering a Dispatch check's research Decisions", () => {
         }
         if (query.includes("labels: [$research]")) {
           expect(variables.research).toBe("wayfinder:research");
+          // Each comment's author by login, so the Fabrik App's comments are told apart from another bot's.
+          expect(query).toContain("nodes { body author { login __typename } }");
           const page = variables.after === null ? 0 : Number(variables.after);
           const hasNextPage = page + 1 < pages.length;
           return {
@@ -1069,7 +1071,7 @@ describe("Gathering a Dispatch check's research Decisions", () => {
   }
 
   async function gathered(pages: ReturnType<typeof aResearchNode>[][]) {
-    const snapshot = await gatherSnapshot(researchGitHub(pages), repo, { kind: "dispatch-check" }, null, null, actionsWith([]) as unknown as GitHub);
+    const snapshot = await gatherSnapshot(researchGitHub(pages), repo, { kind: "dispatch-check" }, null, APP_LOGIN, actionsWith([]) as unknown as GitHub);
     return snapshot.dispatch?.researchDecisions;
   }
 
@@ -1117,15 +1119,17 @@ describe("Gathering a Dispatch check's research Decisions", () => {
     expect(snapshot.dispatch).toMatchObject({ implementRunsInProgress: 1, researchRunsInProgress: 2 });
   });
 
-  const BOT = { __typename: "Bot" };
-  const PERSON = { __typename: "User" };
+  const PERSON = { login: "operator", __typename: "User" };
+  const OTHER_BOT = { login: "dependabot", __typename: "Bot" };
   const NOTICE = `${RESEARCH_RUN_FAILED_MARKER}\n@operator The Research run on #12 failed: it crashed.`;
 
   it.each([
-    ["the Kit's failure notice is its last comment", [{ body: NOTICE, author: BOT }], true],
-    ["the Operator has only replied since the Kit's failure notice", [{ body: NOTICE, author: BOT }, { body: "Looking into it", author: PERSON }], true],
-    ["the Kit has commented since its failure notice, as a later run's resolution does", [{ body: NOTICE, author: BOT }, { body: "**Resolved.** The gist.", author: BOT }], false],
+    ["the Kit's failure notice is its last comment", [{ body: NOTICE, author: APP_BOT }], true],
+    ["the Operator has only replied since the Kit's failure notice", [{ body: NOTICE, author: APP_BOT }, { body: "Looking into it", author: PERSON }], true],
+    ["another bot has commented since the Kit's failure notice", [{ body: NOTICE, author: APP_BOT }, { body: "Bumped a dependency.", author: OTHER_BOT }], true],
+    ["the Kit has commented since its failure notice, as a later run's resolution does", [{ body: NOTICE, author: APP_BOT }, { body: "**Resolved.** The gist.", author: APP_BOT }], false],
     ["a person quoted the failure notice", [{ body: NOTICE, author: PERSON }], false],
+    ["another bot posted a look-alike failure notice", [{ body: NOTICE, author: OTHER_BOT }], false],
     ["it has no comments", [], false],
   ])("reads its last run as failed only when the Kit's failure notice is its latest run's word: %s", async (_case, comments, failed) => {
     const decisions = await gathered([[aResearchNode(12, { comments })]]);

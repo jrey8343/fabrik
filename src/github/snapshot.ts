@@ -229,7 +229,7 @@ const RESEARCH_DECISIONS_QUERY = `
           assignees(first: 10) { nodes { login } }
           blockedBy(first: 50) { nodes { number state } }
           parent { number state labels(first: 100) { nodes { name } } }
-          comments(last: 100) { nodes { body author { __typename } } }
+          comments(last: 100) { nodes { body author { login __typename } } }
         }
       }
     }
@@ -247,7 +247,7 @@ interface ResearchDecisionsQueryResult {
         assignees: { nodes: { login: string }[] };
         blockedBy: { nodes: { number: number; state: "OPEN" | "CLOSED" }[] };
         parent: ParentNode | null;
-        comments: { nodes: { body: string; author: { __typename: string } | null }[] };
+        comments: { nodes: { body: string; author: { login: string; __typename: string } | null }[] };
       }[];
     };
   };
@@ -725,7 +725,7 @@ async function gatherEventPart(
       return gatherPullRequest(github, repo, event.pullRequest, operator, appLogin);
     case "dispatch-check":
       if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");
-      return gatherDispatch(github, actions, repo, operator);
+      return gatherDispatch(github, actions, repo, operator, appLogin);
     case "design-queue-check":
       return gatherDesignQueue(github, actions, repo, operator);
     case "kit-config-changed":
@@ -1048,6 +1048,7 @@ async function gatherDispatch(
   actions: GitHub,
   repo: Repo,
   operator: string | null,
+  appLogin: string | null,
 ): Promise<EventPart> {
   const tickets: TicketSnapshot[] = [];
   let after: string | null = null;
@@ -1083,7 +1084,7 @@ async function gatherDispatch(
 
   const [runs, researchDecisions] = await Promise.all([
     countDispatchedRuns(actions, repo),
-    gatherResearchDecisions(github, repo),
+    gatherResearchDecisions(github, repo, appLogin),
   ]);
   return {
     issue: null,
@@ -1100,8 +1101,12 @@ async function gatherDispatch(
   };
 }
 
-/** Every open wayfinder:research issue, with what says whether the Researcher may run on it (#154). */
-async function gatherResearchDecisions(github: GitHub, repo: Repo): Promise<ResearchDecisionSnapshot[]> {
+/**
+ * Every open wayfinder:research issue, with what says whether the Researcher
+ * may run on it (#154), its last run's word read from the comments of the
+ * Fabrik App, whose bot login is `appLogin` (see byAppOf).
+ */
+async function gatherResearchDecisions(github: GitHub, repo: Repo, appLogin: string | null): Promise<ResearchDecisionSnapshot[]> {
   const decisions: ResearchDecisionSnapshot[] = [];
   let after: string | null = null;
   do {
@@ -1119,9 +1124,9 @@ async function gatherResearchDecisions(github: GitHub, repo: Repo): Promise<Rese
         assignees: issue.assignees.nodes.map((assignee) => assignee.login),
         openBlockers: issue.blockedBy.nodes.filter((b) => b.state === "OPEN").map((b) => b.number),
         parentIssue: parentIssueOf(issue.parent),
-        // Only a bot's notice counts, so nobody can fake a failure by quoting one.
+        // Only the App's own notice counts, so nobody, another bot included, can fake a failure or clear one.
         lastRunFailed: researchRunFailedIn(
-          issue.comments.nodes.map((comment) => ({ body: comment.body, byBot: comment.author?.__typename === "Bot" })),
+          issue.comments.nodes.map((comment) => ({ body: comment.body, byApp: byAppOf(comment.author, appLogin) })),
         ),
       });
     }
