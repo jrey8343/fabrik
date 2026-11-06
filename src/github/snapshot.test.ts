@@ -492,6 +492,36 @@ const APP_LOGIN = "fabrik-app[bot]";
 /** The Fabrik App's bot, as GraphQL names it: without its [bot] suffix. */
 const APP_BOT = { login: "fabrik-app", __typename: "Bot" };
 
+/** An open needs-design issue with nothing else on it, as the issue query answers for it. */
+const issueData = (number: number) => ({
+  repository: {
+    owner: { login: "acme" },
+    issue: {
+      number,
+      state: "OPEN",
+      author: { login: "someone" },
+      labels: { nodes: [{ name: "needs-design" }] },
+      parent: null,
+      comments: { nodes: [] },
+      timelineItems: { nodes: [] },
+      closedByPullRequestsReferences: { nodes: [] },
+      blockedBy: { nodes: [] },
+      blocking: { nodes: [] },
+    },
+  },
+});
+
+/** A Design-session turn's map outcome, with one research Decision. */
+const aMap = {
+  kind: "map",
+  comment: "Too foggy for one session.",
+  destination: "Patients book group classes online.",
+  notes: "",
+  notYetSpecified: "",
+  outOfScope: "",
+  decisions: [{ key: "provider", title: "Which provider?", body: "Which one?", type: "research", blockedBy: [] }],
+};
+
 describe("Gathering an issue's body", () => {
   it("holds the body as it stands, so a Design session's rewrite can keep its Monitor marker and carry its marker lines forward", async () => {
     const body = "<!-- fabrik:monitor sentry:4504 -->\n## Production error\n\nFrom audit #40\n<!-- fabrik:escape strong #31 -->";
@@ -827,6 +857,73 @@ describe("Gathering an issue's Design session", () => {
     );
 
     expect(issue).toMatchObject({ designRounds: 0, turnFailed: false });
+  });
+
+  it("reads the Kit's refusal of a Map past the Map cap as the Operator's move, so the session keeps its slot and their reply starts its next turn", async () => {
+    const refused = planFor(
+      { kind: "agent-run-finished", role: "design", issue: 6, output: JSON.stringify(aMap) },
+      snapshotOf(anIssue({ number: 6, labels: ["needs-design"] }), { openMaps: [12] }),
+      kitConfig(),
+    );
+    const refusal = refused.kind === "act" && refused.actions[0]?.kind === "comment" ? refused.actions[0].body : "";
+
+    const issue = await gatheredIssue([{ body: refusal, author: { __typename: "Bot" } }]);
+
+    expect(issue).toMatchObject({ designRounds: 0, turnFailed: true });
+    const reply = { kind: "issue-comment-created", issue: 6, commenter: "operator", commenterIsBot: false, body: "Make it a Spec then", comment: 9 } as const;
+    expect(planFor(reply, snapshotOf(issue ?? anIssue()), kitConfig())).toMatchObject({
+      kind: "act",
+      actions: [{ kind: "start-agent-run", role: "design", issue: 6 }],
+    });
+  });
+});
+
+describe("Gathering the open Maps a Design-session turn's Map is weighed against", () => {
+  /** GitHub holding these open wayfinder:map issues, oldest first; the open Maps query is answered from them alone. */
+  function githubWithMaps(maps: { number: number; title: string; author: { login: string; __typename: string } }[]) {
+    const asked: Record<string, unknown>[] = [];
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("labels: [$map]")) {
+          asked.push(variables);
+          expect(query).toContain("states: OPEN");
+          return { repository: { issues: { nodes: maps } } };
+        }
+        if (query.includes("issue(number: $number)")) return issueData(7);
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+    return { github, asked };
+  }
+
+  const designTurn = { kind: "agent-run-finished", role: "design", issue: 7, output: "{}" } as const;
+
+  it("holds every open wayfinder:map issue, whoever made it, the Kit or the Operator by hand", async () => {
+    const { github, asked } = githubWithMaps([
+      { number: 12, title: "Group classes", author: { login: "jrey", __typename: "User" } },
+      { number: 14, title: "Online intake", author: { login: "fabrik-app", __typename: "Bot" } },
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, designTurn, null, APP_LOGIN);
+
+    expect(snapshot.openMaps).toEqual([12, 14]);
+    expect(asked).toEqual([expect.objectContaining({ owner: "acme", name: "shop", map: "wayfinder:map" })]);
+  });
+
+  it("holds none when no Map is open", async () => {
+    const { github } = githubWithMaps([]);
+
+    expect((await gatherSnapshot(github, repo, designTurn, null, APP_LOGIN)).openMaps).toEqual([]);
+  });
+
+  it.each([
+    ["a Triage run finishing", { kind: "agent-run-finished", role: "triage", issue: 7, output: "{}" }],
+    ["a reply in a Design session", { kind: "issue-comment-created", issue: 7, commenter: "operator", commenterIsBot: false, body: "Yes", comment: 9 }],
+  ] as const)("isn't gathered for %s", async (_, event) => {
+    const { github, asked } = githubWithMaps([{ number: 12, title: "Group classes", author: { login: "jrey", __typename: "User" } }]);
+
+    expect((await gatherSnapshot(github, repo, event, null, APP_LOGIN)).openMaps).toBeNull();
+    expect(asked).toEqual([]);
   });
 });
 
