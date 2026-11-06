@@ -1975,7 +1975,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
     return store;
   }
 
-  it("isn't gathered while Replay is switched off, so the tick passes no store", async () => {
+  it("isn't gathered without the store's records, which only the Loop's own run passes, never the Kit job", async () => {
     const snapshot = await gatherSnapshot(githubWith([]).github, repo, tick, "jrey8343", "fabrik-app[bot]");
 
     expect(snapshot.replay).toBeNull();

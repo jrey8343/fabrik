@@ -35,7 +35,7 @@ import { startAgentRun } from "./runs.ts";
 import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
-import { REPLAY_SWITCHED_ON, replayGate } from "./replayGate.ts";
+import { replayGate } from "./replayGate.ts";
 import { landReplayRun, startReplay } from "./replayRun.ts";
 import { retroGate } from "./retroGate.ts";
 import { landRetro } from "./retroLanding.ts";
@@ -53,24 +53,11 @@ import type {
   Snapshot,
 } from "./types.ts";
 
-export interface PlanOptions {
-  /**
-   * Overrides REPLAY_SWITCHED_ON; only tests pass it. The switch-on Ticket
-   * (#295) deletes the switch and this option.
-   */
-  readonly replay?: boolean;
-}
-
 /** The Loop rules core: decides what the Kit does about one Loop event. Pure, no I/O. */
-export function planFor(
-  event: LoopEvent,
-  snapshot: Snapshot,
-  config: KitConfig,
-  { replay = REPLAY_SWITCHED_ON }: PlanOptions = {},
-): Plan {
+export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
   // Every run the Plan starts is given its Subscription here, whichever role it is,
   // or held, with rotation on, while every Subscription is used up.
-  const planned = planOnAnySubscription(event, snapshot, config, replay);
+  const planned = planOnAnySubscription(event, snapshot, config);
   // A Kit-owned issue the Plan closes, as the scheduled tick closes a weekly-limit
   // issue at its reset, no longer stands in the way of the runs it starts.
   const kitIssues = snapshot.kitIssues.filter((issue) => !closes(planned, issue.number));
@@ -82,7 +69,7 @@ function closes(plan: Plan, issue: number): boolean {
 }
 
 /** What the Kit does about one Loop event, before the runs it starts are given a Subscription. */
-function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: KitConfig, replay: boolean): Plan {
+function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
   switch (event.kind) {
     case "issue-opened":
       // The App opens a pending Audit for the Auditor to fill in, and a pending
@@ -190,10 +177,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // runs held until then, and opens the week's pending Audit and pending
       // Retro when each is due. It also catches a Design session slot freed by
       // an event the Loop doesn't watch, such as needs-design coming off by hand.
-      // Once Replay is switched on, it also takes the Replays' next step.
-      return thenCheckDesignQueue(
-        scheduledTickWith(replay ? [auditGate, retroGate, replayGate] : [auditGate, retroGate], event.now, snapshot, config),
-      );
+      // It also takes the Replays' next step.
+      return thenCheckDesignQueue(scheduledTickWith([auditGate, retroGate, replayGate], event.now, snapshot, config));
   }
 }
 

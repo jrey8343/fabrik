@@ -9,7 +9,9 @@
 #   - uses: ./kit/.github/actions/run-loop
 # The job's own env carries whatever src/main.ts reads for it (FABRIK_NEEDS,
 # FABRIK_DISPATCH_CHECK, FABRIK_DESIGN_QUEUE_CHECK). The scheduled tick also
-# asks it to find the fabrik-runs store, which the retro gate weighs (#151).
+# asks it to find the fabrik-runs store, which the retro gate weighs (#151),
+# and hands it the store's checkout the replay step reads, when it made one
+# (.github/actions/replay-store, #156).
 name: Run the Loop
 description: Mints a Fabrik App token and runs the Loop rules core on this run's event.
 
@@ -41,6 +43,9 @@ outputs:
   design-queue:
     description: '"true" when the plan asked for a Design queue check.'
     value: ${{ steps.loop.outputs.design-queue }}
+  replay-ticket:
+    description: For loop.yml's claim job on a replay, the replay Ticket the plan marked in progress in this run (#156); empty when it marked none.
+    value: ${{ steps.loop.outputs.replay-ticket }}
   preview-url:
     description: For a UI PR whose Kit config declares preview.url, the preview deployment the plan asked to link, filled in for the PR as its push left it; empty otherwise.
     value: ${{ steps.loop.outputs.preview-url }}

@@ -348,6 +348,7 @@ describe("Labels", () => {
     "wayfinder:grilling",
     "wayfinder:task",
     "agent:research",
+    "agent:replay",
   ];
 
   function createdLabels(state: ProductState): string[] {

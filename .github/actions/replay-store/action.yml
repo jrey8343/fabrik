@@ -1,0 +1,119 @@
+# Checks out the fabrik-runs store for the scheduled tick's replay step
+# (#156), read-only, and only while this repo has an open replay issue, so a
+# repo with no experiment reads nothing new and spends nothing. It loads the
+# Fabrik App key through the push service account, looks for an open
+# `fabrik:replay` issue with a token that only reads this repo's issues
+# (src/kit/replay-store-main.ts), and only then asks as the App itself whether
+# it's on fabrik-runs and mints a token for the store alone with Contents
+# read. Its checkout holds only the Run records the replay step reads
+# (replayStorePaths in src/kit/replayFacts.ts): every Product repo's from the
+# store's last two months, for the newest weekly-limit reading on each
+# Subscription, and every one of this repo's, for a waiting request's
+# candidate Tickets. No score file, transcript or Replay patch.
+#
+# Like the tick itself it runs no agent and no Product code, and holds no
+# write credential. A store setup hasn't made yet, or one that can't be read,
+# fails no step: the checkout comes out empty, and the replay step then reads
+# the store as one it can't, and starts no replay Ticket. The tick runs it
+# before run-loop, after checking out the Kit alone into kit/:
+#   - id: replay-store
+#     continue-on-error: true
+#     uses: ./kit/.github/actions/replay-store
+#     with:
+#       op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+# and hands run-loop `store-dir: ${{ steps.replay-store.outputs.store-dir }}`.
+name: Check out the store for the replay step
+description: While a replay issue is open, checks out the Run records the scheduled tick's replay step reads from the fabrik-runs store, read-only.
+
+inputs:
+  op-push-token:
+    description: The push service account's token (secrets.OP_PUSH_TOKEN), which reads the Fabrik App vault.
+    required: true
+
+outputs:
+  store-dir:
+    description: The store's checkout, for run-loop's store-dir; empty while no replay issue is open, or when the store couldn't be read.
+    value: ${{ steps.checked-out.outputs.store-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24
+
+    - name: Load the Fabrik App key
+      id: op
+      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+      with:
+        export-env: false
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}
+        FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+        FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+    # This repo alone, and only its issues, to look for an open replay issue.
+    - name: Mint a Fabrik App token that reads this repo's issues
+      id: product
+      continue-on-error: true
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+        permission-issues: read
+
+    - name: Look for an open replay issue
+      id: open
+      if: steps.product.outputs.token != ''
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        GH_TOKEN: ${{ steps.product.outputs.token }}
+      run: node src/kit/replay-store-main.ts
+
+    # Asks as the App itself whether it's installed on fabrik-runs, so a store
+    # setup hasn't made yet fails no step. Its key never leaves this step.
+    - name: Find the fabrik-runs store
+      id: find-store
+      if: steps.open.outputs.open == 'true'
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        FABRIK_APP_CLIENT_ID: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        FABRIK_APP_PRIVATE_KEY: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+      run: node src/kit/find-store-main.ts
+
+    - name: Mint a read-only Fabrik App token for the fabrik-runs store
+      id: store
+      if: steps.find-store.outputs.installed == 'true'
+      continue-on-error: true
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+        owner: jrey8343
+        repositories: fabrik-runs
+        permission-contents: read
+
+    # Non-cone patterns: each Product repo's last two months, and every month of this repo's.
+    - name: Check out the Run records the replay step reads
+      id: checkout
+      if: steps.store.outputs.token != ''
+      continue-on-error: true
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: jrey8343/fabrik-runs
+        token: ${{ steps.store.outputs.token }}
+        path: store
+        sparse-checkout: ${{ steps.open.outputs.paths }}
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
+
+    - name: Pass out the store's checkout
+      id: checked-out
+      if: steps.checkout.outcome == 'success'
+      shell: bash
+      run: echo "store-dir=$GITHUB_WORKSPACE/store" >>"$GITHUB_OUTPUT"

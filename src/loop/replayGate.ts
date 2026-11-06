@@ -13,17 +13,11 @@ import { chosenSubscription } from "./subscriptions.ts";
 import type { Action, KitConfig, KitIssueSnapshot, Plan, ReplaySnapshot, Snapshot } from "./types.ts";
 
 /**
- * Whether the scheduled tick runs the replay step. Off until Replay is
- * switched on (#295), which deletes this switch and planFor's `replay`
- * option, which only tests pass.
- */
-export const REPLAY_SWITCHED_ON = false;
-
-/**
  * The replay step: what the tick does next for the Replays, or why nothing.
- * The scheduled-tick rule runs it on every tick once Replay is switched on,
- * beside the audit gate and the retro gate, after closing each weekly-limit
- * issue past its reset (scheduledTickWith in src/loop/rules.ts).
+ * The scheduled-tick rule runs it on every tick, beside the audit gate and
+ * the retro gate, after closing each weekly-limit issue past its reset
+ * (scheduledTickWith in src/loop/rules.ts). With no replay issue open, its
+ * slice holds none, and it does nothing.
  */
 export function replayGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   const slice = snapshot.replay;

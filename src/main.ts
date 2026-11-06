@@ -29,7 +29,6 @@ import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts"
 import { readReplayRunEnded } from "./kit/replayRecord.ts";
 import { readStoreReplayGates, readStoreRunRecords, readStoreScoreFiles } from "./kit/storeCheckout.ts";
 import type { ReplayStore } from "./github/replaySlice.ts";
-import { REPLAY_SWITCHED_ON } from "./loop/replayGate.ts";
 import { planFor } from "./loop/rules.ts";
 import type { Action, KitConfig, LoopEvent, Plan } from "./loop/types.ts";
 
@@ -410,9 +409,10 @@ async function main(): Promise<void> {
   // that reads only the store's metadata, so the retro gate weighs whether the store is private.
   const storeToken = process.env["FABRIK_STORE_METADATA_TOKEN"];
   const store = storeToken === undefined || storeToken === "" ? null : new GitHub(storeToken, process.env["GITHUB_API_URL"]);
-  // Once Replay is switched on (#295), the scheduled tick reads the store's Run records from its checkout,
-  // FABRIK_STORE_DIR, as the Weekly summary does, and only while a replay issue the Operator filed is open.
-  const replayStore = REPLAY_SWITCHED_ON ? storeCheckoutAt(process.env["FABRIK_STORE_DIR"], config) : null;
+  // The scheduled tick reads the store's Run records from its checkout, FABRIK_STORE_DIR, as the Weekly
+  // summary does, and only while a replay issue the Operator filed is open (gatherReplaySlice). The tick
+  // job checks the store out only while a replay issue is open (.github/actions/replay-store).
+  const replayStore = storeCheckoutAt(process.env["FABRIK_STORE_DIR"], config);
   const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
   const plan = planFor(event, snapshot, config);
   // A replay Ticket's claim marks it in progress in this run, and fails when another run claimed it first.

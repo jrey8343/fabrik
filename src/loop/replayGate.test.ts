@@ -10,9 +10,9 @@ import type { Action, KitConfig, KitIssueSnapshot, Plan, ReplayCapacitySnapshot,
 /** Wednesday 2026-11-11 04:00 UTC: neither the Audit's day nor the Retro's, so neither gate opens anything. */
 const WEDNESDAY = "2026-11-11T04:00:00.000Z";
 
-/** The scheduled tick's plan, with this replay slice and these open Kit-owned issues, with Replay switched on, as only tests can before switch-on (#295). */
+/** The scheduled tick's plan, with this replay slice and these open Kit-owned issues. */
 function tick(replay: ReplaySnapshot, kitIssues: readonly KitIssueSnapshot[] = [], config: KitConfig = kitConfig(), now = WEDNESDAY): Plan {
-  return planFor({ kind: "scheduled-tick", now }, tickSnapshot({ replay, kitIssues }), config, { replay: true });
+  return planFor({ kind: "scheduled-tick", now }, tickSnapshot({ replay, kitIssues }), config);
 }
 
 /** Before and after WEDNESDAY. */
@@ -193,10 +193,10 @@ describe("The scheduled tick's replay step, beside its gates", () => {
     });
   });
 
-  it("takes no step at all while Replay is switched off, whatever the slice holds", () => {
-    const snapshot = tickSnapshot({ replay: replaySlice() });
-
-    expect(planFor({ kind: "scheduled-tick", now: WEDNESDAY }, snapshot, kitConfig())).toEqual(STARTS_NOTHING);
+  // Replay is on from the release that ships it, and a repo with no experiment pays nothing for it.
+  it("takes its step on every tick, and with no replay issue open it starts, accepts and posts nothing", () => {
+    expect(tick({ issues: [], capacity: null, acceptance: null })).toEqual(STARTS_NOTHING);
+    expect(tick(replaySlice())).toEqual(STARTS_140);
   });
 });
 
