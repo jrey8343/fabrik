@@ -2182,7 +2182,10 @@ describe("The replay-store action, which checks out the store for the tick's rep
     expect(checkout()).toContain("sparse-checkout: ${{ steps.open.outputs.paths }}");
     expect(checkout()).toContain("sparse-checkout-cone-mode: false");
     expect(checkout()).toContain("persist-credentials: false");
-    expect(text).toMatch(/\n  store-dir:\n\s+description: .*\n\s+value: \$\{\{ steps\.checkout\.outcome == 'success' && format\('\{0\}\/store', github\.workspace\) \|\| '' \}\}\n/);
+    expect(text).toMatch(/\n  store-dir:\n\s+description: .*\n\s+value: \$\{\{ steps\.checked-out\.outputs\.store-dir \}\}\n/);
+    expect(steps[at("id: checked-out\n")]).toContain("if: steps.checkout.outcome == 'success'");
+    expect(steps[at("id: checked-out\n")]).toContain('run: echo "store-dir=$GITHUB_WORKSPACE/store" >>"$GITHUB_OUTPUT"');
+    expect(at("id: checked-out\n")).toBeGreaterThan(at("uses: actions/checkout@"));
   });
 
   it("never fails the tick on a store that isn't there or can't be read: each step past the key goes on", () => {

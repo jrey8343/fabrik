@@ -33,7 +33,7 @@ inputs:
 outputs:
   store-dir:
     description: The store's checkout, for run-loop's store-dir; empty while no replay issue is open, or when the store couldn't be read.
-    value: ${{ steps.checkout.outcome == 'success' && format('{0}/store', github.workspace) || '' }}
+    value: ${{ steps.checked-out.outputs.store-dir }}
 
 runs:
   using: composite
@@ -111,3 +111,9 @@ runs:
         sparse-checkout: ${{ steps.open.outputs.paths }}
         sparse-checkout-cone-mode: false
         persist-credentials: false
+
+    - name: Pass out the store's checkout
+      id: checked-out
+      if: steps.checkout.outcome == 'success'
+      shell: bash
+      run: echo "store-dir=$GITHUB_WORKSPACE/store" >>"$GITHUB_OUTPUT"
