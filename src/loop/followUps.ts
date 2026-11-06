@@ -2,7 +2,9 @@
 // but lies outside the Ticket's scope. The Kit never files one. Each gets an
 // Open as issue link to the Product repo's new-issue form, prefilled, so the
 // Operator can open it and it goes through Intake and Triage as normal. An
-// Audit's candidates get the same link (src/loop/auditLanding.ts). Pure.
+// Audit's candidates get the same link (src/loop/auditLanding.ts), and so do
+// a Retro's proposals, each on the form its target files it through
+// (src/loop/retroLanding.ts). Pure.
 import { fromPullRequestLine } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { FollowUp } from "./verdict.ts";
@@ -63,14 +65,16 @@ export function followUpsIn(comment: string): FollowUp[] {
 }
 
 /**
- * The Product repo's new-issue form, prefilled: the body, then a blank line
- * and `trailer`, which says where the issue came from. If the URL would be
- * too long, the body is cut short and the trailer is kept whole.
+ * The new-issue form of the repo at `repoUrl`, prefilled: the title, the
+ * body, then a blank line and `trailer`, which says where the issue came
+ * from, and any `labels`. If the URL would be too long, the body is cut short
+ * and the trailer is kept whole.
  */
-export function newIssueUrl(repoUrl: string, title: string, body: string, trailer: string): string {
+export function newIssueUrl(repoUrl: string, title: string, body: string, trailer: string, labels: readonly string[] = []): string {
   const titled = Array.from(title).length <= MAX_TITLE_LENGTH ? title : cut(title, MAX_TITLE_LENGTH);
+  const labelled: Record<string, string> = labels.length === 0 ? {} : { labels: labels.join(",") };
   const url = (text: string) =>
-    `${repoUrl}/issues/new?${new URLSearchParams({ title: titled, body: text === "" ? trailer : `${text}\n\n${trailer}` })}`;
+    `${repoUrl}/issues/new?${new URLSearchParams({ title: titled, body: text === "" ? trailer : `${text}\n\n${trailer}`, ...labelled })}`;
   if (url(body).length <= MAX_ISSUE_URL_LENGTH) return url(body);
   // The longest cut of the body, by code point, that fits.
   let [fits, tooLong] = [0, Array.from(body).length];

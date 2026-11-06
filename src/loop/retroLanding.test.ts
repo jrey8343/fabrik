@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { kitConfig, notificationsOf, RETRO_WINDOW_END, retroBody, retroRunSnapshotOf } from "../__fixtures__/snapshots.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
-import { linesOutsideCode, retroMarksIn } from "./markers.ts";
+import { MAX_ISSUE_URL_LENGTH } from "./followUps.ts";
+import { fromAuditIn, fromPullRequestIn, fromRetroIn, linesOutsideCode, retroMarksIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent, Plan, RetroEvidence } from "./types.ts";
 
@@ -96,8 +97,13 @@ function aLoosening(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** The Open as issue link to this new-issue form, prefilled with this title, this body and, when given, these labels. */
+function openAsIssue(form: string, title: string, body: readonly string[], labels?: string): string {
+  return `[Open as issue](${form}?${new URLSearchParams({ title, body: body.join("\n"), ...(labels === undefined ? {} : { labels }) })})`;
+}
+
 describe("Landing a Retro: a full Retro", () => {
-  it("rewrites the pending Retro into a card per proposal, with its badges, problem, evidence as links and change, and a loosening's streak and what it undoes", () => {
+  it("rewrites the pending Retro into a card per proposal, with its badges, problem, evidence as links and change, a loosening's streak and what it undoes, and its Open as issue link", () => {
     const plan = planFor(retroFinished({ proposals: [aTightening(), aLoosening()] }), retroRunSnapshotOf(), kitConfig());
 
     expect(plan).toEqual({
@@ -127,6 +133,24 @@ describe("Landing a Retro: a full Retro", () => {
             "",
             "In `eslint.config.js`, add a `no-restricted-imports` rule to the `src/routes/**` block that forbids `pg`.",
             "",
+            openAsIssue("https://github.com/acme/shop/issues/new", "Fail the lint when a route handler imports the database client", [
+              "**Problem**",
+              "",
+              "Escape #212 traced a route handler querying the database directly to #140. No check forbids it.",
+              "",
+              "**Change**",
+              "",
+              "In `eslint.config.js`, add a `no-restricted-imports` rule to the `src/routes/**` block that forbids `pg`.",
+              "",
+              "**Evidence**",
+              "",
+              "- [#212](https://github.com/acme/shop/issues/212)",
+              "- [#140](https://github.com/acme/shop/pull/140)",
+              `- [\`${REVIEW_RECORD}\`](${STORE}/${REVIEW_RECORD}), with its [transcript](${STORE}/${REVIEW_TRANSCRIPT})`,
+              "",
+              "From retro #120",
+            ]),
+            "",
             "## Let docs-only Tickets skip the end-to-end suite",
             "",
             "`Judgement` `Loosen`",
@@ -147,6 +171,34 @@ describe("Landing a Retro: a full Retro", () => {
             `**Streak:** 20 merged agent PRs (agent PRs that change only Markdown under docs/), none of them named in an escape, reverted or sent back with Request changes: ${DOCS_STREAK.map((n) => `[#${n}](https://github.com/acme/shop/pull/${n})`).join(", ")}`,
             "",
             "**Undoes:** #97",
+            "",
+            openAsIssue(
+              "https://github.com/acme/shop/issues/new",
+              "Let docs-only Tickets skip the end-to-end suite",
+              [
+                "## Operator brief",
+                "",
+                "**Problem**",
+                "",
+                "#97 had the Implementer run `npm run e2e` before every PR, and docs-only PRs spent most of their run on it.",
+                "",
+                "**Change**",
+                "",
+                'In `.fabrik/implement.md`, replace "Run `npm run e2e`." with "Run `npm run e2e`, unless the PR changes only `docs/`."',
+                "",
+                "**Evidence**",
+                "",
+                "- [#141](https://github.com/acme/shop/pull/141)",
+                "- [#142](https://github.com/acme/shop/pull/142)",
+                "",
+                "## Steps",
+                "",
+                "- [ ] Make the change above",
+                "",
+                "From retro #120",
+              ],
+              "ready-for-human",
+            ),
             "",
             `<!-- fabrik:retro ${RETRO_WINDOW_END} -->`,
           ].join("\n"),
@@ -211,6 +263,248 @@ describe("Landing a Retro: the evidence", () => {
         "",
       ].join("\n"),
     );
+  });
+});
+
+describe("Landing a Retro: the Open as issue link", () => {
+  /** Each Open as issue link in a Retro's body, read back as the new-issue form it opens. */
+  function issueLinks(body: string): URL[] {
+    return [...body.matchAll(/\[Open as issue\]\(([^)\s]+)\)/g)].map((match) => new URL(match[1]!));
+  }
+
+  /** The new-issue form each card's link opens, from the filled Retro these proposals land as. */
+  function linksFrom(proposals: Record<string, unknown>[], config = kitConfig()): URL[] {
+    return issueLinks(rewrittenBodyOf(planFor(retroFinished({ proposals }), retroRunSnapshotOf(), config)));
+  }
+
+  /** The form a link opens, its query left out. */
+  const formOf = (link: URL | undefined) => (link === undefined ? undefined : `${link.origin}${link.pathname}`);
+
+  it("ends a product-code proposal's card with a link to the Product repo's new-issue form, with no label so it goes through Intake and Triage, prefilled with its title, problem, change and evidence, then the Retro it came from", () => {
+    const [link, ...others] = linksFrom([aTightening()]);
+
+    expect(others).toEqual([]);
+    expect(formOf(link)).toBe("https://github.com/acme/shop/issues/new");
+    expect(link?.searchParams.has("labels")).toBe(false);
+    expect(link?.searchParams.get("title")).toBe("Fail the lint when a route handler imports the database client");
+    expect(link?.searchParams.get("body")).toBe(
+      [
+        "**Problem**",
+        "",
+        "Escape #212 traced a route handler querying the database directly to #140. No check forbids it.",
+        "",
+        "**Change**",
+        "",
+        "In `eslint.config.js`, add a `no-restricted-imports` rule to the `src/routes/**` block that forbids `pg`.",
+        "",
+        "**Evidence**",
+        "",
+        "- [#212](https://github.com/acme/shop/issues/212)",
+        "- [#140](https://github.com/acme/shop/pull/140)",
+        `- [\`${REVIEW_RECORD}\`](${STORE}/${REVIEW_RECORD}), with its [transcript](${STORE}/${REVIEW_TRANSCRIPT})`,
+        "",
+        "From retro #120",
+      ].join("\n"),
+    );
+  });
+
+  it("links a product-trust-root proposal to the Product repo's form with ready-for-human, as an Operator brief carrying the exact edit, so it skips Triage for a Pairing session", () => {
+    const change = "In `AGENTS.md`, under `## Routes`, add:\n\n```md\n- A route handler never imports `pg`; it calls a module in `src/db/`.\n```";
+
+    const [link] = linksFrom([aTightening({ kind: "judgement", target: "product-trust-root", change })]);
+
+    expect(formOf(link)).toBe("https://github.com/acme/shop/issues/new");
+    expect(link?.searchParams.get("labels")).toBe("ready-for-human");
+    expect(link?.searchParams.get("title")).toBe("Fail the lint when a route handler imports the database client");
+    expect(link?.searchParams.get("body")).toBe(
+      [
+        "## Operator brief",
+        "",
+        "**Problem**",
+        "",
+        "Escape #212 traced a route handler querying the database directly to #140. No check forbids it.",
+        "",
+        "**Change**",
+        "",
+        "In `AGENTS.md`, under `## Routes`, add:",
+        "",
+        "```md",
+        "- A route handler never imports `pg`; it calls a module in `src/db/`.",
+        "```",
+        "",
+        "**Evidence**",
+        "",
+        "- [#212](https://github.com/acme/shop/issues/212)",
+        "- [#140](https://github.com/acme/shop/pull/140)",
+        `- [\`${REVIEW_RECORD}\`](${STORE}/${REVIEW_RECORD}), with its [transcript](${STORE}/${REVIEW_TRANSCRIPT})`,
+        "",
+        "## Steps",
+        "",
+        "- [ ] Make the change above",
+        "",
+        "From retro #120",
+      ].join("\n"),
+    );
+  });
+
+  it("links a kit proposal to the Kit's own repo's new-issue form, with no label, prefilled with its title, problem, change and evidence, then the Retro it came from", () => {
+    const change = "In `prompts/review.md`, add to the checks: a route handler that imports `pg` is an Execution flaw.";
+
+    const [link] = linksFrom([aTightening({ kind: "judgement", target: "kit", change })]);
+
+    expect(formOf(link)).toBe("https://github.com/jrey8343/fabrik/issues/new");
+    expect(link?.searchParams.has("labels")).toBe(false);
+    expect(link?.searchParams.get("title")).toBe("Fail the lint when a route handler imports the database client");
+    expect(link?.searchParams.get("body")).toBe(
+      [
+        "**Problem**",
+        "",
+        "Escape #212 traced a route handler querying the database directly to #140. No check forbids it.",
+        "",
+        "**Change**",
+        "",
+        change,
+        "",
+        "**Evidence**",
+        "",
+        "- [#212](https://github.com/acme/shop/issues/212)",
+        "- [#140](https://github.com/acme/shop/pull/140)",
+        `- [\`${REVIEW_RECORD}\`](${STORE}/${REVIEW_RECORD}), with its [transcript](${STORE}/${REVIEW_TRANSCRIPT})`,
+        "",
+        "From retro #120",
+      ].join("\n"),
+    );
+  });
+
+  it("files issues that end with the Retro they came from, whatever their target, so the next Retro reads each back as filed from this one", () => {
+    const config = kitConfig({
+      skillsSources: [{ repository: "operator/skills", sha: "c".repeat(40) }],
+      extraSkills: { triage: [], design: [], implement: [{ source: "operator/skills", name: "route-handlers" }], review: [] },
+    });
+    const links = [
+      ...linksFrom([aTightening(), aTightening({ kind: "judgement", target: "product-trust-root" }), aTightening({ kind: "judgement", target: "kit" })]),
+      ...linksFrom([aTightening({ kind: "judgement", target: "extra-skill", skill: "route-handlers" })], config),
+    ];
+
+    const bodies = links.map((link) => link.searchParams.get("body") ?? "");
+
+    expect(bodies.map((body) => body.split("\n").slice(-2))).toEqual(Array(4).fill(["", "From retro #120"]));
+    expect(bodies.map(fromRetroIn)).toEqual([120, 120, 120, 120]);
+  });
+
+  it("drops any From retro, From audit or From PR line from the Retro's problem and change, so the issue it files reads as filed from this Retro alone", () => {
+    const problem = "Escape #212 traced it to #140.\nFrom retro #80\n  From audit #97";
+    const change = "From PR #140\n\nForbid `pg` in `src/routes/**`.\n\n```\nFrom retro #81\n```";
+
+    const plan = planFor(retroFinished({ proposals: [aTightening({ problem, change })] }), retroRunSnapshotOf(), kitConfig());
+
+    const body = issueLinks(rewrittenBodyOf(plan))[0]?.searchParams.get("body") ?? "";
+    expect([fromRetroIn(body), fromAuditIn(body), fromPullRequestIn(body)]).toEqual([120, null, null]);
+    expect(body).toContain("Escape #212 traced it to #140.\n\n**Change**\n\n\nForbid `pg` in `src/routes/**`.\n\n```\n```\n\n**Evidence**");
+    expect([fromRetroIn(rewrittenBodyOf(plan)), fromAuditIn(rewrittenBodyOf(plan)), fromPullRequestIn(rewrittenBodyOf(plan))]).toEqual([null, null, null]);
+  });
+
+  it("cuts a long proposal short to fit GitHub's URL limit, keeping its label and its whole trailer, while the Retro shows all of it", () => {
+    const long = "word ".repeat(3000).trim();
+
+    const body = rewrittenBodyOf(
+      planFor(retroFinished({ proposals: [aTightening({ kind: "judgement", target: "product-trust-root", problem: long, change: long })] }), retroRunSnapshotOf(), kitConfig()),
+    );
+
+    const [link] = issueLinks(body);
+    expect(link?.href.length).toBeLessThanOrEqual(MAX_ISSUE_URL_LENGTH);
+    expect(link?.searchParams.get("labels")).toBe("ready-for-human");
+    expect(link?.searchParams.get("body")).toMatch(/^## Operator brief\n\n\*\*Problem\*\*\n\nword word .*…\n\nFrom retro #120$/s);
+    expect(body).toContain(`**Problem**\n\n${long}\n`);
+    expect(body).toContain(`**Change**\n\n${long}\n`);
+  });
+
+  describe("an extra-skill proposal", () => {
+    /** The Kit config of a repo whose implement role picks `route-handlers` from `source`, which it pins. */
+    const pinning = (source: string) =>
+      kitConfig({
+        skillsSources: [{ repository: source, sha: "c".repeat(40) }],
+        extraSkills: { triage: [], design: [], implement: [{ source, name: "route-handlers" }], review: [] },
+      });
+    const change = "In `route-handlers/SKILL.md`, add: a handler calls a module in `src/db/`, never `pg` itself.";
+    const extraSkill = (skill = "route-handlers") => aTightening({ kind: "judgement", target: "extra-skill", skill, change });
+
+    it("links to its Skills source's new-issue form, with no label, when the repo pins the skill from a source the Operator owns", () => {
+      const [link] = linksFrom([extraSkill()], pinning("operator/skills"));
+
+      expect(formOf(link)).toBe("https://github.com/operator/skills/issues/new");
+      expect(link?.searchParams.has("labels")).toBe(false);
+      expect(link?.searchParams.get("title")).toBe("Fail the lint when a route handler imports the database client");
+      expect(link?.searchParams.get("body")).toBe(
+        [
+          "**Problem**",
+          "",
+          "Escape #212 traced a route handler querying the database directly to #140. No check forbids it.",
+          "",
+          "**Change**",
+          "",
+          change,
+          "",
+          "**Evidence**",
+          "",
+          "- [#212](https://github.com/acme/shop/issues/212)",
+          "- [#140](https://github.com/acme/shop/pull/140)",
+          `- [\`${REVIEW_RECORD}\`](${STORE}/${REVIEW_RECORD}), with its [transcript](${STORE}/${REVIEW_TRANSCRIPT})`,
+          "",
+          "From retro #120",
+        ].join("\n"),
+      );
+    });
+
+    it.each([
+      ["the Product repo's owner, as an organization's repo pins its own skills", "acme/skills", "https://github.com/acme/skills/issues/new"],
+      ["the Operator, whatever case the lockfile spells their login in", "Operator/skills", "https://github.com/Operator/skills/issues/new"],
+    ])("links to a Skills source owned by %s", (_, source, form) => {
+      expect(linksFrom([extraSkill()], pinning(source)).map(formOf)).toEqual([form]);
+    });
+
+    it("finds the skill by its pick, owner/name/skill, as the Kit config writes it, as well as by its name", () => {
+      expect(linksFrom([extraSkill("operator/skills/route-handlers")], pinning("operator/skills")).map(formOf)).toEqual([
+        "https://github.com/operator/skills/issues/new",
+      ]);
+    });
+
+    /** The filled Retro's body for this extra-skill proposal, given this Kit config. */
+    const filed = (proposal: Record<string, unknown>, config: ReturnType<typeof kitConfig>) =>
+      rewrittenBodyOf(planFor(retroFinished({ proposals: [proposal] }), retroRunSnapshotOf(), config));
+
+    it("gives no link when the skill comes from a Skills source the Operator doesn't own, and says to unpin or replace the skill instead", () => {
+      const body = filed(extraSkill(), pinning("someone/skills"));
+
+      expect(issueLinks(body)).toEqual([]);
+      expect(body.split("\n").slice(-3)).toEqual([
+        "**No Open as issue link:** this repo pins `route-handlers` from someone/skills, a Skills source the Operator doesn't own. Unpin or replace the skill.",
+        "",
+        `<!-- fabrik:retro ${RETRO_WINDOW_END} -->`,
+      ]);
+    });
+
+    it("gives no link to a skill the repo doesn't pin, and says to unpin or replace the skill instead", () => {
+      const body = filed(extraSkill("booking-rules"), pinning("operator/skills"));
+
+      expect(issueLinks(body)).toEqual([]);
+      expect(body).toContain(
+        '**Change**\n\n' + change + '\n\n**No Open as issue link:** this repo pins no Extra skill named "booking-rules". Unpin or replace the skill.\n',
+      );
+    });
+
+    it("lists each proposal left with no link in the run's step summary", () => {
+      const plan = planFor(
+        retroFinished({ proposals: [extraSkill(), aTightening(), extraSkill("booking-rules")] }),
+        retroRunSnapshotOf(),
+        pinning("someone/skills"),
+      );
+
+      expect(plan.kind === "act" ? plan.notes : undefined).toEqual([
+        'No Open as issue link for "Fail the lint when a route handler imports the database client": this repo pins `route-handlers` from someone/skills, a Skills source the Operator doesn\'t own',
+        'No Open as issue link for "Fail the lint when a route handler imports the database client": this repo pins no Extra skill named "booking-rules"',
+      ]);
+    });
   });
 });
 
@@ -445,7 +739,8 @@ describe("Landing a Retro: silent", () => {
   it("closes a fence the Retro leaves open, so it can't swallow the rest of the Retro, and mentions nobody after it", () => {
     const body = filled(aTightening({ title: "Lint floating promises", change: "Add this:\n\n````\nrule @alice" }), aTightening({ title: "Third" }));
 
-    expect(body).toContain("Add this:\n\n````\nrule @​alice\n````\n\n## Third");
+    expect(body).toContain("Add this:\n\n````\nrule @​alice\n````\n\n[Open as issue](");
+    expect(linesOutsideCode(body)).toContain("## Third");
   });
 
   it("leaves a mention only in code that's code where it lands: a fence one text leaves open never pairs with the next text's", () => {
