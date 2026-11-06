@@ -127,6 +127,26 @@ describe("Landing a captured prototype turn", () => {
     );
   });
 
+  it("strips the agent's text of mentions, and links a component whose path could end its link early", () => {
+    const round = {
+      ...ROUND,
+      intro: "As @jrey asked, three ways.",
+      variants: [
+        { summary: "The form @design-team sketched.", component: "src/pages/book/Long Form (wide).tsx" },
+        ...ROUND.variants.slice(1),
+      ],
+      recommendation: "B, as @jrey said.",
+    };
+
+    const plan = planFor(finished({ output: JSON.stringify(round) }), inSession(), kitConfig());
+
+    expect(notificationsOf(plan, "jrey")).toEqual(["mention on #7"]);
+    expect(commentsOf(plan)[0]).not.toMatch(/@design-team/);
+    expect(commentsOf(plan)[0]).toContain(
+      `- **A.** The form @\u200bdesign-team sketched. [\`src/pages/book/Long Form (wide).tsx\`](${blob("src/pages/book/Long%20Form%20%28wide%29.tsx")})`,
+    );
+  });
+
   it("notifies the Operator once, by the round's one @-mention, and never ends the Design session", () => {
     const plan = planFor(finished(), inSession(), kitConfig());
 
