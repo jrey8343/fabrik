@@ -24,7 +24,7 @@ const DEFAULTS = {
   audit: { day: "sunday" },
   retro: { day: "saturday" },
   operator: null,
-  instructions: { triage: null, design: null, implement: null, review: null, audit: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
 };
@@ -215,6 +215,7 @@ describe("Kit config", () => {
       implement: "Use the repo's money helpers.\n",
       review: "Check the booking flow.\n",
       audit: null,
+      retro: null,
     });
   });
 
@@ -222,6 +223,13 @@ describe("Kit config", () => {
     const result = resolveKitConfig({ config: null, instructions: { audit: "Look at the booking module first.\n" } });
 
     expect(result.ok && result.config.instructions.audit).toBe("Look at the booking module first.\n");
+    expect(result.ok && Object.keys(result.config.extraSkills)).toEqual(["triage", "design", "implement", "review"]);
+  });
+
+  it("carries the Retro's instructions from .fabrik/retro.md, though the Retro picks no Extra skills", () => {
+    const result = resolveKitConfig({ config: null, instructions: { retro: "Weigh the billing escapes first.\n" } });
+
+    expect(result.ok && result.config.instructions.retro).toBe("Weigh the billing escapes first.\n");
     expect(result.ok && Object.keys(result.config.extraSkills)).toEqual(["triage", "design", "implement", "review"]);
   });
 

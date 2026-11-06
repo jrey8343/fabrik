@@ -57,7 +57,7 @@ export interface KitConfig {
   };
   /** The Operator's GitHub login; null means the Product repo's owner. */
   readonly operator: string | null;
-  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's included. */
+  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's and the Retro's included. */
   readonly instructions: Readonly<Record<InstructedRole, string | null>>;
   /** The Product repo's own Skills sources, from .fabrik/skills.lock.json. */
   readonly skillsSources: readonly SkillsSource[];
@@ -107,10 +107,15 @@ export type Phase = "triage" | "design" | "implement" | "review";
 
 export const PHASES: readonly Phase[] = ["triage", "design", "implement", "review"];
 
+/** Whether an AFK role is a Phase, and so takes Extra skills: the Auditor and the Retro take none (ADR-0008). */
+export function isPhase(role: AgentRoleName): role is Phase {
+  return (PHASES as readonly AgentRoleName[]).includes(role);
+}
+
 /**
  * The roles a Product repo can give its own instructions in .fabrik/<role>.md:
- * every AFK role, so every Phase and the Auditor, which takes no Extra skills
- * (ADR-0008) and so is no Phase.
+ * every AFK role, so every Phase, the Auditor and the Retro, which take no
+ * Extra skills (ADR-0008) and so are no Phase.
  */
 export type InstructedRole = AgentRoleName;
 
@@ -168,7 +173,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   // hour and both are open by Monday's Weekly summary.
   retro: { day: "saturday" },
   operator: null,
-  instructions: { triage: null, design: null, implement: null, review: null, audit: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
 };

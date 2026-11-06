@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { readIfPresent, readKitConfigFromCheckout } from "../kit/checkout.ts";
-import { asksForExtraSkills, KIT_CONFIG_PATH, type Phase, PHASES, picksIn, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
+import { asksForExtraSkills, isPhase, KIT_CONFIG_PATH, type Phase, PHASES, picksIn, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
 import { AGENT_ROLES, type AgentRole } from "../loop/types.ts";
 import { checkExtraSkills } from "./extra.ts";
 import { INSTALL_RECORD, type InstallRecord, parseInstallRecord } from "./installRecord.ts";
@@ -25,15 +25,15 @@ const OLD_SKILLS_MARKER = ".fabrik-skills-sha";
 
 /**
  * Which Extra skill picks a fetch installs: one role's, or every role's (a
- * session at the wheel). The Auditor takes none, so an Auditor run gets the
- * Base skills alone (ADR-0008).
+ * session at the wheel). The Auditor and the Retro take none, so their runs
+ * get the Base skills alone (ADR-0008).
  */
 export type SkillsToInstall = AgentRole | "every";
 
 /** The roles a fetch installs the picks of. */
 function pickingRoles(install: SkillsToInstall): readonly Phase[] {
   if (install === "every") return PHASES;
-  return install === "audit" ? [] : [install];
+  return isPhase(install) ? [install] : [];
 }
 
 export interface FetchOptions {

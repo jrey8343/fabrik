@@ -54,6 +54,17 @@ describe("What the push job applies", () => {
     });
   });
 
+  it("applies a Retro run's result for the event's issue, the pending Retro, once the Retro job succeeded", () => {
+    expect(pushJobInput(needs("retro", { retro: ok() }), 120)).toEqual({
+      kind: "agent-result",
+      role: "retro",
+      issue: 120,
+      pullRequest: null,
+      review: null,
+      startedBy: null,
+    });
+  });
+
   it("applies an Implement run's result for the Ticket the Kit job's plan named, with a retry's PR and a Request-changes run's review", () => {
     const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", review: "900" }), 50);
 
@@ -106,6 +117,12 @@ describe("What the push job applies", () => {
     const input = pushJobInput(needs("audit", { audit: { result, outputs: { "secrets-step": "success" } } }), 98);
 
     expect(input).toEqual({ kind: "agent-failure", role: "audit", issue: 98, jobResult: result, secretsStep: "success" });
+  });
+
+  it.each(["failure", "cancelled"])("gives a Retro run's failure on the pending Retro when the Retro job's result is %s", (result) => {
+    const input = pushJobInput(needs("retro", { retro: { result, outputs: { "secrets-step": "success" } } }), 120);
+
+    expect(input).toEqual({ kind: "agent-failure", role: "retro", issue: 120, jobResult: result, secretsStep: "success" });
   });
 
   it("names the Ticket for a failed Implement or Review run, where the core finds its PR", () => {
