@@ -8,7 +8,8 @@
 // another Subscription is free: only the one opened, or refused on, once none
 // is free @-mentions the Operator. While none is free, each run due is held
 // instead of started, and the buzzing weekly-limit issue names it with a held
-// marker (src/loop/heldRun.ts).
+// marker (src/loop/heldRun.ts), which the scheduled tick resumes at the reset
+// (src/loop/resume.ts).
 import { type HeldRun, heldMarker, heldRunOf, holding, RUN_NAMES } from "./heldRun.ts";
 import { READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { freeSubscriptions, rotationIsOn, subscriptionMarker, weeklyLimitSubscriptionOf } from "./subscriptions.ts";
@@ -269,7 +270,7 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
         earliest === null
           ? "- [ ] Wait until agent runs work again: when the first limit resets isn't known."
           : `- [ ] Wait for the first limit to reset at ${readable(earliest)}.`,
-        "- [ ] Re-add the trigger label named in each stalled Ticket's failure comment, to run it again. The Kit doesn't restart them.",
+        "- [ ] Nothing to re-add: at the reset the Kit resumes each held run itself, in the order they were held.",
         "",
         "Run `/fabrik-pair` on this issue to work through these steps with an agent.",
         "",

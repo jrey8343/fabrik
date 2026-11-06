@@ -54,6 +54,62 @@ export function heldRunOf(start: Extract<Action, { kind: "start-agent-run" }>): 
   return { role: start.role, issue: start.issue, label: RESUME_LABELS[start.role] };
 }
 
+/** The held runs a weekly-limit issue's body or comment names, in the order its held markers come. */
+export function heldRunsIn(text: string): HeldRun[] {
+  return markersIn(text, HELD_MARKER).flatMap((value): HeldRun[] => {
+    const role = roleOf(value["role"]);
+    const { issue } = value;
+    return role === null || typeof issue !== "number" ? [] : [{ role, issue, label: RESUME_LABELS[role] }];
+  });
+}
+
+/**
+ * Where a weekly-limit issue's comment says the scheduled tick resumed, or
+ * dropped, a held run: how many of that issue's held markers for it the tick
+ * has dealt with, so that only a later held marker holds it again (src/loop/resume.ts).
+ */
+export const RESUMED_MARKER = "<!-- fabrik:resumed";
+
+/** A held run the tick resumed or dropped, and how many of its issue's held markers for it that covers. */
+export interface ResumedRun {
+  readonly role: AgentRole;
+  readonly issue: number;
+  readonly held: number;
+}
+
+/** The resumed marker for a run, such as `<!-- fabrik:resumed {"issue":7,"role":"triage","held":1} -->`. */
+export function resumedMarker({ issue, role, held }: ResumedRun): string {
+  return `${RESUMED_MARKER} ${JSON.stringify({ issue, role, held })} -->`;
+}
+
+/** The resumed runs a weekly-limit issue's body or comment names. */
+export function resumedRunsIn(text: string): ResumedRun[] {
+  return markersIn(text, RESUMED_MARKER).flatMap((value): ResumedRun[] => {
+    const role = roleOf(value["role"]);
+    const { issue, held } = value;
+    return role === null || typeof issue !== "number" || typeof held !== "number" ? [] : [{ role, issue, held }];
+  });
+}
+
+function roleOf(value: unknown): AgentRole | null {
+  return typeof value === "string" && Object.hasOwn(RESUME_LABELS, value) ? (value as AgentRole) : null;
+}
+
+/** The JSON object each `<marker> {…} -->` line in the text holds, in order, skipping any that doesn't parse. */
+function markersIn(text: string, marker: string): Record<string, unknown>[] {
+  return text.split("\n").flatMap((line) => {
+    const start = line.indexOf(marker);
+    const end = start === -1 ? -1 : line.indexOf("-->", start);
+    if (end === -1) return [];
+    try {
+      const value: unknown = JSON.parse(line.slice(start + marker.length, end));
+      return typeof value === "object" && value !== null ? [value as Record<string, unknown>] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
 /**
  * The Plan's actions that hold a run: its trigger label off, so that adding it
  * back is a fresh label event, and the hold itself, which changes nothing on GitHub.

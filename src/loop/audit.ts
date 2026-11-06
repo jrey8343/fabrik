@@ -66,7 +66,7 @@ export function isPendingAudit(issue: IssueSnapshot): boolean {
  * commit, which its job checks out. One whose body has lost its audit marker
  * names nothing to read, so it starts nothing.
  */
-export function startAuditorRun(audit: IssueSnapshot, config: KitConfig): Plan {
+export function startAuditorRun(audit: Pick<IssueSnapshot, "number" | "body">, config: KitConfig): Plan {
   const { commit } = auditMarksIn(audit.body);
   if (commit === null) {
     return { kind: "nothing", reason: `#${audit.number} is a pending Audit with no audit marker, so it names no commit to read` };
