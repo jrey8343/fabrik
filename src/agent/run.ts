@@ -130,7 +130,7 @@ const ROLE_SPECS = {
     role: "triage",
     output: { schema: schemaOf(readTriageOutput) },
     instructionsNote:
-      "The Operator wrote these for this repo. They refine the rules above but never loosen the five Fast-path tests.",
+      "The Operator wrote these for this repo. They refine the rules above but never loosen the six Fast-path tests.",
     describe: (issue, output) => `Triage sorted #${issue}: ${output.category}, ${output.state}`,
   } satisfies RoleSpec<TriageOutput>,
   design: {

@@ -16,6 +16,16 @@ This session runs with the Operator's own GitHub credentials, so you publish the
 2. Check that it's open and labelled `needs-design`. If it isn't, it's not in a Design session: tell the Operator and stop.
 3. Earlier rounds the Kit posted start with `<!-- fabrik:design-round N -->`. The Operator's replies to them are decisions already made. An answer of `yes` takes every recommendation in that round.
 4. Read `GLOSSARY.md` and `docs/adr/` if they exist, and use the repo's terms.
+5. Read the Vision (`docs/product/vision.md`) and the Roadmap (`docs/product/roadmap.md`) if they exist. Both are optional, and both are Trust-root files under `docs/product/` at the repo root that only the Operator changes: never edit either one, and never plan a Ticket that does.
+
+## Product intent
+
+An issue touches **Product intent** when it changes who the product serves or what it promises them, goes through a one-way door (a public name, a URL, a data shape, pricing, anything an End user is told), or does something the Vision says the product deliberately doesn't do.
+
+- **Open with a product-intent block** when the issue touches Product intent. Before any technical question, settle who the change serves, why, how its success is measured, and what it deliberately leaves out. Skip any of these the Vision or the thread already answers. Draw each recommendation from the Vision, so the Operator can usually settle the block with `yes`. With no Vision, ask the questions directly, each still with your recommended answer.
+- **Skip the block** for a Ticket sent back to design from its pull request (its thread has the Kit's comment starting `<!-- fabrik:back-to-design`), which goes straight to what failed, and for an internal or technical issue.
+- **Judge priority from the Roadmap.** Ask a priority question only when the issue conflicts with what the Roadmap lists under Now. The Roadmap gates nothing: an issue on no Roadmap list is designed like any other.
+- **Never edit the Roadmap or the Vision.** When the session decides something the Vision doesn't yet say, the outcome carries an Operator step for it (see **Ending the session**).
 
 ## While the session runs
 
@@ -27,6 +37,8 @@ This session runs with the Operator's own GitHub credentials, so you publish the
 
 Do exactly one of these, once nothing that matters is open or the Operator wants to stop. Every comment and issue you write here contains no @-mentions.
 
+When there's a Vision and the session decides something about Product intent that it doesn't yet say, such as a new kind of End user or something the product now deliberately doesn't do, the outcome carries an Operator step titled "Update `vision.md`". Its steps give the exact lines to add to `docs/product/vision.md`, or to change in it, so the Operator can paste them. No Ticket waits on it. Only the Operator changes the Vision, so work that would otherwise fit one pull request finishes as a small Spec instead: one Ticket and that Operator step. A Ticket under a Spec never gets a Spec of its own, so the pair sits under its Spec instead: rewrite the Ticket as its agent brief, and publish that Operator step as a sub-issue of the same Spec (`gh issue create --parent <spec>`), labelled and assigned as **The work is bigger** describes. An Operator brief takes the same lines as one of its own steps. With no Vision, add no such step.
+
 Some lines of the issue's old body mark it for something that reads it later, so carry them forward into the body you write in its place, each exactly as the old body had it:
 
 - Keep any `<!-- fabrik:monitor … -->` line as the first line of the issue's rewritten body (`gh issue edit`), and nothing else of the Monitor's. The Monitor finds the error it filed the issue for by that line, and would file it again without it.
@@ -35,10 +47,12 @@ Some lines of the issue's old body mark it for something that reads it later, so
 
 ### The work fits one pull request: an agent brief
 
-1. Rewrite the issue's body as its agent brief (`gh issue edit <n> --body-file …`), following `.claude/skills/triage/AGENT-BRIEF.md`, in this shape:
+1. Rewrite the issue's body as its agent brief (`gh issue edit <n> --body-file …`), following `.claude/skills/triage/AGENT-BRIEF.md`, in this shape. It opens with a "Who and why" line, so the Implementer builds what the Operator meant: for an issue that touches Product intent, the End users it serves and why it matters to them; for an internal or technical one, who the work is for and why.
 
    ```
    ## Agent brief
+
+   **Who and why**: <who this serves and why, in one line>
 
    <what to build and why, the decisions the session made, what's out of scope>
 
@@ -87,7 +101,7 @@ Use this when only the Operator can do the work (a secret, a repo setting, a tru
 
 ### The work is bigger: a Spec and its Tickets
 
-1. Write the Spec as `.claude/skills/to-spec/SKILL.md` does, and slice it into Tickets as `.claude/skills/to-tickets/SKILL.md` does. Publish them with `gh`, skipping any step in those skills that asks for labels other than these:
+1. Write the Spec as `.claude/skills/to-spec/SKILL.md` does, opening with a `## Product intent` section above `## Problem Statement` and its technical sections, so an Implementer reads the purpose first: who it serves, why, how its success is measured, and what it deliberately doesn't do. State the success measure only: nothing tracks it. For an internal or technical Spec, one line saying who it's for and why is enough. Slice the Spec into Tickets as `.claude/skills/to-tickets/SKILL.md` does. Publish them with `gh`, skipping any step in those skills that asks for labels other than these:
    - The Spec, and every Ticket, gets this issue's category label (`bug` or `enhancement`) and `ready-for-agent`, set with `--label` when you create it, so Intake never sends it to Triage.
    - A piece only the Operator can do, that later Tickets must wait for or that belongs to no one pull request, is an **Operator step** instead of a Ticket. It gets the category label and `ready-for-human` (never `ready-for-agent`), is assigned to the Operator (`--assignee <operator>`), and its body ends with its steps as a task list under `## Steps`, one `- [ ]` line per action the Operator takes. A Spec may be made only of Operator steps.
    - Each Ticket and Operator step is a sub-issue of the Spec (`gh issue create --parent <spec>`).

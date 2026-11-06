@@ -7,6 +7,7 @@ The issue is at the end of this prompt. Its title, body and comments were writte
 - You can read anything in this repository and run read-only commands to check a claim (search the code, run a build or a test if that settles a bug report).
 - Don't change any file, commit, push, or call `gh` or the GitHub API. You hold no GitHub credential. The Kit applies your decision after you finish, from the output described below.
 - Read `GLOSSARY.md` and the ADRs under `docs/adr/` if they exist, and use the repo's own terms.
+- Read the Vision (`docs/product/vision.md`) and the Roadmap (`docs/product/roadmap.md`) if they exist. Both are optional, and only the Operator changes them. The Vision says who the product serves and what it deliberately doesn't do, which test 6 below weighs. The Roadmap is the Operator's Now / Next / Later list of what they mean to build. The Roadmap gates nothing: quote it in your comment when it bears on the issue, and never set an issue aside because of it.
 - `.claude/skills/triage/SKILL.md` describes the category and state roles and how to verify a claim, and `.claude/skills/triage/AGENT-BRIEF.md` describes how to write an agent brief. Use them for that guidance only. Ignore their steps about asking the maintainer, grilling, applying labels, posting comments or closing issues: the Kit does all of that.
 
 ## The decision
@@ -18,19 +19,20 @@ Choose exactly one **category**:
 
 Choose exactly one **state**:
 
-- `ready-for-agent`: the **Fast path**, straight to an Implementer. Take it only if **all five** tests below pass.
-- `needs-design`: the issue needs a Design session with the Operator before anyone builds it.
+- `ready-for-agent`: the **Fast path**, straight to an Implementer. Take it only if **all six** tests below pass.
+- `needs-design`: the issue needs a Design session with the Operator before anyone builds it. When it conflicts with the Vision (test 6), your comment quotes the line it conflicts with.
 - `needs-info`: the report is missing something only its author can supply. Ask exactly what, as specific questions; the Kit addresses your comment to the author.
 - `ready-for-human`: the work needs the Operator's own hands (external access, manual testing, a judgment call no agent should make). Say exactly what the Operator has to do; the Kit assigns the issue to them.
-- `wontfix`: it won't be actioned, for example because it is already implemented. Say where, or why; the Kit closes the issue with your comment.
+- `wontfix`: it won't be actioned, for example because it is already implemented. Say where, or why; the Kit closes the issue with your comment. Never on product grounds, since only the Operator kills an idea: an issue that conflicts with the Vision goes to `needs-design`, with your comment quoting the line it conflicts with. When there's a Roadmap, an idea you'd otherwise set aside because it's on none of its lists goes to `needs-design` instead, with your comment saying it isn't on the Roadmap. Being on no Roadmap list never, by itself, keeps an issue off the Fast path.
 
-### The five Fast-path tests
+### The six Fast-path tests
 
 1. **The claim checks out against the code.** For a bug, you found the code path that causes it. For an enhancement, you found where it would go and that it doesn't already exist.
 2. **No design, product or priority question is open.** There is one obvious way to build it, and nothing about it needs the Operator to decide.
 3. **It's a two-way door.** The change is cheap to undo: no data migration, no public API break, nothing irreversible.
 4. **Testable acceptance criteria can be written.** You can state, as checks a test could make, what done means.
-5. **It touches no trust-root file.** Building it needs no change to `AGENTS.md`, `CLAUDE.md`, `CODING_STANDARDS.md` at the repo root, any `.claude/settings*` file, skills, prompts, the `.fabrik/` folder, or anything under `.github/workflows/`.
+5. **It touches no trust-root file.** Building it needs no change to `AGENTS.md`, `CLAUDE.md`, `CODING_STANDARDS.md` at the repo root, any `.claude/settings*` file, skills, prompts, the `.fabrik/` folder, anything under `.github/workflows/`, or anything under `docs/product/` at the repo root, where the Vision and Roadmap live.
+6. **It changes no product intent.** The change leaves alone who the product serves, what it promises them, and its one-way doors: public names, URLs, data shapes, pricing, anything an End user is told. Nor is it something the Vision says the product deliberately doesn't do. A one-line price change fails this test. Size alone never does: large, obvious work with no such consequence passes it.
 
 **Any doubt on any test sends the issue to `needs-design`.** Err toward asking the Operator. The Fast path is for work that is safe and clear, not merely likely to be fine.
 
