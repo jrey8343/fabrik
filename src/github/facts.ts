@@ -83,6 +83,42 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
   };
 }
 
+/**
+ * The GitHub facts a Retro reads of one Product repo, as of `now`: the
+ * Weekly summary's, with the patch of each commit on an agent PR that the
+ * Fabrik App didn't make, read one commit at a time.
+ */
+export async function gatherRetroFacts(github: Pick<GitHub, "graphql" | "rest">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
+  const facts = await gatherGitHubFacts(github, repo, now, operator);
+  const patches = new Map<string, Promise<string>>();
+  const withPatch = async (commit: CommitFacts): Promise<CommitFacts> => {
+    if (commit.byApp) return commit;
+    const patch = patches.get(commit.sha) ?? patchOf(github, repo, commit.sha);
+    patches.set(commit.sha, patch);
+    return { ...commit, patch: await patch };
+  };
+  const [pullRequests, openPullRequests] = await Promise.all([
+    Promise.all(facts.pullRequests.map(async (pullRequest) => ({ ...pullRequest, commits: await Promise.all(pullRequest.commits.map(withPatch)) }))),
+    Promise.all(facts.openPullRequests.map(async (pullRequest) => ({ ...pullRequest, commits: await Promise.all(pullRequest.commits.map(withPatch)) }))),
+  ]);
+  return { ...facts, pullRequests, openPullRequests };
+}
+
+/** What a commit changed, as a diff file by file; a file GitHub shows no patch for is named with a note. */
+async function patchOf(github: Pick<GitHub, "rest">, repo: Repo, sha: string): Promise<string> {
+  const { files } = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/commits/${sha}`)) as {
+    files: { filename: string; previous_filename?: string; patch?: string }[];
+  };
+  return files
+    .map((file) =>
+      [
+        `diff --git a/${file.previous_filename ?? file.filename} b/${file.filename}`,
+        file.patch ?? "(No textual diff: a binary file, or too large for GitHub to show.)",
+      ].join("\n"),
+    )
+    .join("\n");
+}
+
 // --- The queries --------------------------------------------------------------
 
 const ACTOR = "{ login __typename }";

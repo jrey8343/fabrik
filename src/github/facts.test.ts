@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gatherGitHubFacts, productReposOf } from "./facts.ts";
+import { gatherGitHubFacts, gatherRetroFacts, productReposOf } from "./facts.ts";
 
 const CALLER = "jobs:\n  fabrik:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v1.2.0\n";
 
@@ -568,3 +568,81 @@ function aRawIssue(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+describe("Gathering a Product repo's GitHub facts for a Retro", () => {
+  const OPERATOR_COMMIT = { email: "jared@example.com", user: { login: "jrey8343" } };
+  const IMPLEMENTER = { email: "fabrik-implementer@users.noreply.github.com", user: null };
+
+  /** The facts queries over `raw`, and the REST API's commits, each with these changed files; any other call fails. */
+  function retroRepoWith(raw: RawRepo, files: Record<string, unknown[]>) {
+    const read: string[] = [];
+    return {
+      read,
+      github: {
+        ...repoWith(raw),
+        async rest(method: string, path: string): Promise<unknown> {
+          expect(method).toBe("GET");
+          const sha = /^\/repos\/jrey8343\/shop\/commits\/([0-9a-f]{40})$/.exec(path)?.[1];
+          if (sha === undefined || files[sha] === undefined) throw new Error(`Unexpected call: ${path}`);
+          read.push(sha);
+          return { sha, files: files[sha] };
+        },
+      },
+    };
+  }
+
+  it("reads the patch of each commit on an agent PR that the Fabrik App didn't make, file by file, and only those", async () => {
+    const { github, read } = retroRepoWith(
+      {
+        closedPullRequests: [
+          aRawPullRequest({
+            commits: {
+              nodes: [aRawCommit("1", "2026-11-02T00:00:00Z", "Build the thing", IMPLEMENTER), aRawCommit("2", "2026-11-03T00:00:00Z", "Move pricing out", OPERATOR_COMMIT)],
+            },
+          }),
+        ],
+        openPullRequests: [
+          {
+            number: 52,
+            title: "Build the till",
+            isDraft: true,
+            headRefOid: "h".repeat(40),
+            headRefName: "fabrik/ticket-9",
+            createdAt: "2026-11-01T00:00:00Z",
+            author: APP,
+            commits: { nodes: [aRawCommit("3", "2026-11-04T00:00:00Z", "Add the logo", OPERATOR_COMMIT)] },
+            reviews: { nodes: [] },
+            comments: { nodes: [] },
+            timelineItems: { nodes: [] },
+          },
+        ],
+      },
+      {
+        ["2".repeat(40)]: [
+          { filename: "src/pricing.ts", status: "added", patch: "@@ -0,0 +1 @@\n+export const price = 1;" },
+          { filename: "src/cart.ts", previous_filename: "src/basket.ts", status: "renamed", patch: "@@ -1 +1 @@\n-old\n+new" },
+        ],
+        ["3".repeat(40)]: [{ filename: "logo.png", status: "added" }],
+      },
+    );
+
+    const facts = await gatherRetroFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(facts.pullRequests[0]?.commits.map((commit) => commit.patch)).toEqual([
+      null,
+      [
+        "diff --git a/src/pricing.ts b/src/pricing.ts",
+        "@@ -0,0 +1 @@",
+        "+export const price = 1;",
+        "diff --git a/src/basket.ts b/src/cart.ts",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+      ].join("\n"),
+    ]);
+    expect(facts.openPullRequests[0]?.commits.map((commit) => commit.patch)).toEqual([
+      "diff --git a/logo.png b/logo.png\n(No textual diff: a binary file, or too large for GitHub to show.)",
+    ]);
+    expect(read).toEqual(["2".repeat(40), "3".repeat(40)]);
+  });
+});
