@@ -707,6 +707,11 @@ export function variantPage(page: string, letter: string): string {
   return url.href;
 }
 
+/** The URL text with each `(` and `)` percent-encoded, which a URL leaves as they are, but which could end a Markdown link. */
+export function withParensEscaped(url: string): string {
+  return url.replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
 export function code(text: string): string {
   const oneLine = text.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, "\uFFFD");
   const longest = Math.max(0, ...[...oneLine.matchAll(/`+/g)].map(([run]) => run.length));

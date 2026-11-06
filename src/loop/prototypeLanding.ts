@@ -3,14 +3,13 @@
 // prototype round, whose one question, "Which variant?", the Kit writes. A
 // prototype round is a round of the same session: it never ends it, and the
 // Operator's reply to it starts an ordinary turn.
-import { type CaptureFailure, code, failureWords, type PreviewLink, variantPage } from "../evidence/uiEvidence.ts";
+import { type CaptureFailure, code, failureWords, withParensEscaped } from "../evidence/uiEvidence.ts";
 import { type PreviewConfig, previewNamesPullRequest } from "../kit/config.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { replyNotThere, turnStartFrom, whileInSession } from "./design.ts";
 import { prototypeTurnRefused } from "./failures.ts";
 import { parsePrototypeTurnOutput, prototypeBranchFor, type PrototypeRoundOutput } from "./designOutput.ts";
 import {
-  DESIGN_ROUND_MARKER,
   designRoundMarker,
   PROTOTYPE_FAILURE_ROUND_MARKER,
   PROTOTYPE_ROUND_MARKER,
@@ -179,64 +178,19 @@ function prototypeRound(
     "",
     ...(preview.kind === "none" ? [] : [previewLine(preview), ""]),
     WHICH_VARIANT,
-    // On one line, so the round ends where the preview step looks (withVariantPreviews).
+    // On one line, so the round ends where the preview step looks (withVariantPreviews, src/kit/previewLink.ts).
     `➡️ Recommended: ${withoutMentions(output.recommendation.trim().replace(/\s*[\r\n]+\s*/g, " "))}`,
   ].join("\n");
 }
 
 /** The prototype round's one question, which the Kit writes. */
-const WHICH_VARIANT = "**1. Which variant?**";
+export const WHICH_VARIANT = "**1. Which variant?**";
 
-/** What the round says of its preview until the push job has polled it. */
-const PREVIEW_PENDING = "Each variant's preview is linked beside it once the preview deployment answers.";
+/** What the round says of its preview until the push job has polled it and linked it (src/kit/previewLink.ts). */
+export const PREVIEW_PENDING = "Each variant's preview is linked beside it once the preview deployment answers.";
 
-/** A variant's line in the round, as the Kit writes it, with the variant's letter. */
-const VARIANT_LINE = /^- \*\*([A-Z])\.\*\* /;
-
-/**
- * The prototype round with what came of its preview, once the push job has
- * polled it (src/kit/previewLink.ts): each variant's line links the route's
- * page with `?variant=` and the variant's letter, and the line saying the
- * previews are linked once it answers goes; or that line says it never
- * answered. Null when the body isn't a prototype round still waiting on its
- * preview. Every URL is the Kit's, from Kit config and the approved route,
- * never the agent's, and it goes only where the Kit's own lines are, which
- * nothing the agent wrote can stand in for.
- */
-export function withVariantPreviews(body: string, preview: Extract<PreviewLink, { kind: "linked" | "never-answered" }>): string | null {
-  // An Operator's edit on GitHub may end its lines in \r\n.
-  const lines = body.split("\n").map((line) => (line.endsWith("\r") ? { text: line.slice(0, -1), end: "\r" } : { text: line, end: "" }));
-  if (!DESIGN_ROUND_MARKER.test(body) || lines[1]?.text.trim() !== PROTOTYPE_ROUND_MARKER) return null;
-  // Only where the Kit writes it: the round's fourth line from the end, over its question and the one line of
-  // its recommendation, and under the variants, a blank line between each. The agent's intro is above the
-  // variants and its recommendation below them, so a copy of this line, or of a variant's, in either is never taken.
-  const at = lines.length - 4;
-  const kitWroteIt =
-    lines[at]?.text.trim() === PREVIEW_PENDING &&
-    lines[at + 1]?.text.trim() === "" &&
-    lines[at + 2]?.text.trim() === WHICH_VARIANT &&
-    lines[at - 1]?.text.trim() === "" &&
-    VARIANT_LINE.test(lines[at - 2]?.text ?? "");
-  if (!kitWroteIt) return null;
-  if (preview.kind === "never-answered") {
-    lines[at] = { ...lines[at]!, text: `No preview links: the preview at ${code(preview.url)} never answered.` };
-  } else {
-    for (let i = at - 2; i >= 0; i--) {
-      const line = lines[i]!;
-      const letter = VARIANT_LINE.exec(line.text)?.[1];
-      if (letter === undefined) break;
-      lines[i] = { ...line, text: `${line.text} · [Preview](${variantPreviewUrl(preview.url, letter)})` };
-    }
-    // The pending line, and the blank line above it.
-    lines.splice(at - 1, 2);
-  }
-  return lines.map(({ text, end }) => `${text}${end}`).join("\n");
-}
-
-/** The route's page showing one variant (variantPage), with a `(` or `)` escaped, so it can't end the link early. */
-function variantPreviewUrl(page: string, letter: string): string {
-  return withParensEscaped(variantPage(page, letter));
-}
+/** A variant's line in the round, as the Kit writes it (variantLines), with the variant's letter. */
+export const VARIANT_LINE = /^- \*\*([A-Z])\.\*\* /;
 
 /** What the round says of the preview Kit config declares. */
 function previewLine(preview: Exclude<RoundPreview, { kind: "none" }>): string {
@@ -285,9 +239,4 @@ function pathInUrl(path: string): string {
     .split("/")
     .map((segment) => withParensEscaped(encodeURIComponent(segment)))
     .join("/");
-}
-
-/** The URL text with each `(` and `)` percent-encoded, which a URL leaves as they are, but which could end a Markdown link. */
-function withParensEscaped(url: string): string {
-  return url.replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
