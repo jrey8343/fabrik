@@ -193,6 +193,18 @@ describe("agent:design on an issue whose Design session has a pending prototype 
     expect(plan.kind === "act" ? plan.actions.find(({ kind }) => kind === "start-agent-run") : null).not.toHaveProperty("prototype");
   });
 
+  // It waits behind the prototype turn in the session's concurrency group, and reads its round once it's posted.
+  it("leaves the Operator's reply to start an ordinary turn, as any reply does, while the request is pending", () => {
+    const replied = { kind: "issue-comment-created", issue: 7, commenter: "jrey", commenterIsBot: false, body: "Also try a dark one", comment: 9002 } as const;
+
+    const plan = planFor(replied, issue({ labels: ["enhancement", "needs-design"] }), kitConfig({ ui: UI, roles }), switchedOn);
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [{ kind: "start-agent-run", role: "design", issue: 7, model: "claude-designer", effort: "high", timeoutMinutes: 30, subscription: "Claude token" }],
+    });
+  });
+
   it("only takes agent:design off an issue that has left its Design session, starting nothing", () => {
     const plan = planFor(added, issue({ labels: ["ready-for-agent", "agent:design"] }), kitConfig({ ui: UI, roles }), switchedOn);
 
