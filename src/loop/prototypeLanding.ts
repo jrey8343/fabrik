@@ -50,13 +50,18 @@ export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operato
     };
   }
   const own = prototypeBranchFor(event.issue);
-  if (event.branch !== own) return { kind: "fail", failure: "infrastructure", reason: `\`${event.branch}\` isn't #${event.issue}'s prototype branch, ${own}` };
+  if (event.branch !== own) {
+    return { kind: "fail", failure: "infrastructure", reason: `\`${event.branch}\` isn't #${event.issue}'s prototype branch, ${own}` };
+  }
   const notNow = whileInSession(event.issue, issue);
   if (notNow !== null) return notNow;
   // The push job reads only the Fabrik App's own requests, so a look-alike another bot posted, which
   // the Kit job took for the App's, isn't pending here; nor is one a round has answered since.
   if (issue.pendingPrototype === null || !sameRequest(issue.pendingPrototype, event.request)) {
-    return { kind: "nothing", reason: `#${event.issue}'s Design session isn't waiting on the prototype request this turn built, so its result is stale` };
+    return {
+      kind: "nothing",
+      reason: `#${event.issue}'s Design session isn't waiting on the prototype request this turn built, so its result is stale`,
+    };
   }
   const round = issue.designRounds + 1;
   const comment = (body: string): Action => ({ kind: "comment", issue: event.issue, body });
