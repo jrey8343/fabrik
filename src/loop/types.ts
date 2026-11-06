@@ -1,6 +1,7 @@
 // The Loop rules core's interface: a Loop event, a snapshot of GitHub state and
 // the resolved Kit config go in; a plan comes out.
 import type { ChangedPath } from "../guard/trust-root.ts";
+import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { Label } from "./labels.ts";
 
@@ -84,8 +85,8 @@ export type LoopEvent =
   | {
       readonly kind: "agent-run-finished";
       /**
-       * Implement, Review and Auditor runs finish through their own events, which
-       * carry what their push jobs hold. A Retro run's result has no event yet.
+       * Implement, Review, Auditor and Retro runs finish through their own
+       * events, which carry what their push jobs hold.
        */
       readonly role: Exclude<AgentRole, "implement" | "review" | "audit" | "retro">;
       readonly issue: number;
@@ -187,6 +188,20 @@ export type LoopEvent =
       readonly repoUrl: string;
     }
   | {
+      /** A Retro run finished on a pending Retro; its push job holds the reply, not yet landed (#151). */
+      readonly kind: "retro-run-finished";
+      /** The Retro. */
+      readonly issue: number;
+      /** The Retro's structured output, the `<retro>` tag's JSON, unparsed (src/loop/retroOutput.ts). */
+      readonly output: string;
+      /** What the Retro was given, which the push job re-reads from the evidence job's artifact, never from the agent. */
+      readonly evidence: RetroEvidence;
+      /** The Actions run, which a failed Retro links to. */
+      readonly runUrl: string;
+      /** The Product repo's web address, which a Retro's evidence links to. */
+      readonly repoUrl: string;
+    }
+  | {
       /** A review that requests changes was submitted on a PR: at the Merge gate, the Operator's ask for another run. */
       readonly kind: "pull-request-changes-requested";
       readonly pullRequest: number;
@@ -235,6 +250,22 @@ export type AuditWindow =
   | { readonly kind: "last-days"; readonly days: number };
 
 /**
+ * What a Retro run was given, out of its evidence bundle (src/kit/retroEvidence.ts):
+ * what landing the Retro checks its proposals against and links their
+ * evidence by (src/loop/retroLanding.ts).
+ */
+export interface RetroEvidence {
+  /** The span the evidence covers, from `start` (inclusive) to `end` (exclusive), ISO 8601. */
+  readonly window: { readonly start: string; readonly end: string };
+  /** Every ref the bundle holds, once each, as refsOf gives them: the only refs a proposal's evidence keeps. */
+  readonly refs: readonly EvidenceRef[];
+  /** Every agent PR merged in the 90 days to the window's end, with what breaks a streak: what a loosening's streak is counted against. */
+  readonly streakTable: readonly StreakRow[];
+  /** The store path of each Run record's transcript, by the record's ref; a record whose transcript didn't survive its run has none. */
+  readonly transcripts: Readonly<Record<string, string>>;
+}
+
+/**
  * Where a PR comment was made: a conversation comment, by its id, or a
  * submitted review, by its id. GitHub takes reactions on a review's inline
  * comments but not on the review itself.
@@ -254,8 +285,8 @@ export interface IssueSnapshot {
    * (src/loop/audit.ts, src/loop/retro.ts), and
    * only then does a Design session keep its body's Monitor marker (src/loop/design.ts).
    * The Kit job, which only routes and doesn't know the App's login, takes any
-   * bot for the App, so another bot's look-alike pending Audit costs one
-   * Auditor run, whose result the push job, which knows the login, drops
+   * bot for the App, so another bot's look-alike pending Audit or Retro costs
+   * one run, whose result the push job, which knows the login, drops
    * (src/github/snapshot.ts's byAppOf).
    */
   readonly byApp: boolean;
@@ -669,6 +700,11 @@ export type Action =
  * that the run failed, which changes nothing and fails the job.
  */
 export type Plan =
-  | { readonly kind: "act"; readonly actions: readonly Action[] }
+  | {
+      readonly kind: "act";
+      readonly actions: readonly Action[];
+      /** What the run's step summary notes beside its actions, which changes nothing on GitHub: what a Retro's landing dropped, say. */
+      readonly notes?: readonly string[];
+    }
   | { readonly kind: "nothing"; readonly reason: string }
   | { readonly kind: "fail"; readonly failure: "infrastructure"; readonly reason: string };

@@ -3,6 +3,7 @@
 // It holds no Loop rules; those all live in src/loop/rules.ts.
 import type { AgentRunResult } from "../agent/result.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
+import { type EvidenceBundle, retroEvidenceOf } from "../kit/retroEvidence.ts";
 import type {
   AgentRole,
   BranchChanges,
@@ -127,7 +128,7 @@ export function agentRunEventFrom(
 ): LoopEvent {
   if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
   if (result.role === "audit") throw new Error("An Auditor's result is applied through auditEventFrom");
-  if (result.role === "retro") throw new Error("The Kit doesn't land a Retro's result yet");
+  if (result.role === "retro") throw new Error("A Retro's result is applied through retroEventFrom");
   if (result.role !== "implement") {
     const finished = {
       kind: "agent-run-finished",
@@ -202,6 +203,18 @@ export function auditEventFrom(result: AgentRunResult, runUrl: string, repoUrl: 
   if (result.role !== "audit") throw new Error(`An Audit's push job was handed a ${result.role} result`);
   if (result.window === undefined) throw new Error(`The Auditor's result for #${result.issue} names no window it was given`);
   return { kind: "audit-run-finished", issue: result.issue, output: result.output, window: result.window, runUrl, repoUrl };
+}
+
+/**
+ * Turns a Retro's result into the Loop event its push job applies, which
+ * fills its Retro. `bundle` is the evidence the Retro was given, which the
+ * push job reads from the evidence job's artifact, never from the agent's
+ * result; `runUrl` is that push job's run, and `repoUrl` the Product repo
+ * the Retro's evidence links to.
+ */
+export function retroEventFrom(result: AgentRunResult, bundle: EvidenceBundle, runUrl: string, repoUrl: string): LoopEvent {
+  if (result.role !== "retro") throw new Error(`A Retro's push job was handed a ${result.role} result`);
+  return { kind: "retro-run-finished", issue: result.issue, output: result.output, evidence: retroEvidenceOf(bundle), runUrl, repoUrl };
 }
 
 /** The Operator comments a run was given, for its event to carry; nothing when its result has none. */

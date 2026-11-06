@@ -84,8 +84,8 @@ async function main(productDir: string): Promise<void> {
   } else {
     const github = new GitHub(required("GH_TOKEN"), process.env["GITHUB_API_URL"]);
     // This job only routes, with no Fabrik App token, so it doesn't know the App's login and takes any bot's
-    // issue for the App's, so the App's pending Audit routes to its Auditor run: the push job's plan is the one applied.
-    // Another bot's look-alike pending Audit so costs one Auditor run, whose result the push job drops (byAppOf).
+    // issue for the App's, so the App's pending Audit or Retro routes to its run: the push job's plan is the one applied.
+    // Another bot's look-alike pending Audit or Retro so costs one run, whose result the push job drops (byAppOf).
     const snapshot = await gatherSnapshot(github, repo, event, config.operator, null);
     const plan = planFor(event, snapshot, config);
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);

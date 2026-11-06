@@ -233,6 +233,11 @@ export function auditRunSnapshotOf(
   return snapshotOf(issue, { namedPullRequests });
 }
 
+/** A Retro run's snapshot: by default the App's pending Retro #120, its window ending at RETRO_WINDOW_END. */
+export function retroRunSnapshotOf(retro: Partial<IssueSnapshot> = {}): Snapshot {
+  return snapshotOf(anIssue({ number: 120, byApp: true, labels: ["fabrik:retro"], body: retroBody(RETRO_WINDOW_END, "pending"), ...retro }));
+}
+
 /**
  * Every way a plan would buzz the Operator's phone: an assignment, a review request, an issue
  * opened or created assigned to them, or an @-mention of them in a comment or new issue.
