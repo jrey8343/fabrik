@@ -10,7 +10,7 @@ import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
-import { countDispatchedRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, readKitConfigSources, RESEARCH_JOB_NAME } from "./snapshot.ts";
+import { countDispatchedRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, PROTOTYPE_JOB_NAME, readKitConfigSources, RESEARCH_JOB_NAME } from "./snapshot.ts";
 
 const repo = { owner: "acme", name: "shop" };
 
@@ -137,6 +137,16 @@ describe("Reading the Design-session turns a Design queue check sees in progress
     expect(await designTurnsInProgress(actions, repo)).toEqual([7]);
   });
 
+  it("reads a session's prototype turn running, queued or waiting as its Design-session turn in progress", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Design-session turn #7", status: "completed", conclusion: "skipped" }, { name: "fabrik / Prototype turn #7", status: "in_progress" }] },
+      { id: 2, status: "queued", jobs: [{ name: "fabrik / Prototype turn #9", status: "queued" }] },
+      { id: 3, status: "in_progress", jobs: [{ name: "Prototype turn #4", status: "completed", conclusion: "success" }, { name: "Push", status: "in_progress" }] },
+    ]);
+
+    expect(await designTurnsInProgress(actions, repo)).toEqual([4, 7, 9]);
+  });
+
   it("doesn't read a Design job skipped because its run went another way, or any other job", async () => {
     const actions = actionsWith([
       {
@@ -161,6 +171,13 @@ describe("The Design-session turn job's name", () => {
 
     // Quoted, since an unquoted ` #` starts a YAML comment.
     expect(designJob).toBe(`"${DESIGN_JOB_NAME} #\${{ github.event.issue.number }}"`);
+  });
+
+  it("has a prototype twin: the name loop.yml gives the prototype job, followed by its issue, which a Design queue check reads too", async () => {
+    const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
+    const prototypeJob = /^ {2}prototype:\n {4}name: (.+)$/m.exec(workflow)?.[1];
+
+    expect(prototypeJob).toBe(`"${PROTOTYPE_JOB_NAME} #\${{ github.event.issue.number }}"`);
   });
 });
 
@@ -224,6 +241,49 @@ describe("Gathering a Design queue check's needs-design issues", () => {
 
     expect(queue.designTurnsInProgress).toEqual([4]);
     expect(holding(queue)).toEqual({ 3: true, 4: true, 5: true, 6: false });
+  });
+
+  it("reads a session whose first turn asked for a Prototype as holding its slot until the prototype turn lands, so the cap holds", async () => {
+    const firstTurn = planFor(
+      {
+        kind: "agent-run-finished",
+        role: "design",
+        issue: 3,
+        output: JSON.stringify({ kind: "prototype", route: "/book", variants: 3, brief: "Three layouts.", comment: "Prototyping the booking page." }),
+      },
+      snapshotOf(anIssue({ number: 3, labels: ["needs-design"] })),
+      kitConfig({ ui: UI }),
+    );
+    if (firstTurn.kind !== "act") throw new Error(`expected a plan that acts, got ${JSON.stringify(firstTurn)}`);
+    const request = firstTurn.actions.flatMap((action) => (action.kind === "comment" ? [kit(action.body)] : []));
+    expect(request).toHaveLength(1);
+    const asked = (runs: Parameters<typeof actionsWith>[0]) =>
+      gathered(
+        [
+          issue(3, {
+            comments: { nodes: request },
+            timelineItems: { nodes: [labelled("needs-design", "2026-11-01T09:00:00Z"), unlabelled("agent:design", "2026-11-02T10:00:00Z")] },
+          }),
+          issue(4),
+        ],
+        runs,
+      );
+    const checked = (queue: DesignQueueSnapshot) =>
+      planFor(
+        { kind: "design-queue-check" },
+        designQueueSnapshotOf(queue.issues, { designTurnsInProgress: queue.designTurnsInProgress }),
+        kitConfig({ caps: { ...DEFAULT_KIT_CONFIG.caps, designSessions: 1 } }),
+      );
+
+    for (const queue of [
+      // The prototype turn waits behind its claim, then runs, then its push job posts the round.
+      await asked([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Design-session turn #3", status: "completed", conclusion: "skipped" }, { name: "fabrik / Prototype turn #3", status: "queued" }] }]),
+      await asked([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Prototype turn #3", status: "in_progress" }] }]),
+      await asked([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Prototype turn #3", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] }]),
+    ]) {
+      expect(holding(queue)).toEqual({ 3: true, 4: false });
+      expect(checked(queue)).toMatchObject({ kind: "nothing", reason: expect.stringContaining("#3 holds a slot") });
+    }
   });
 
   it("reads an issue that got needs-design again, after its old session was abandoned by hand, as waiting", async () => {

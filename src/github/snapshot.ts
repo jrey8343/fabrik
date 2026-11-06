@@ -328,6 +328,14 @@ export const RESEARCH_JOB_NAME = "Research";
 export const DESIGN_JOB_NAME = "Design-session turn";
 
 /**
+ * The name of the prototype job in .github/workflows/loop.yml, which runs a
+ * Design session's prototype turn in the Design job's place, followed by
+ * ` #<issue>` too (a test holds the two together). A prototype turn is a turn
+ * of its session, so it holds the session's slot as a Design job does (#155).
+ */
+export const PROTOTYPE_JOB_NAME = "Prototype turn";
+
+/**
  * Reads the current GitHub state the event needs, fresh rather than from the
  * event payload. The Operator is the Kit config's `operator`, or else the
  * repo's owner. `appLogin` is the Fabrik App's bot login, its slug with
@@ -1274,7 +1282,7 @@ export async function countDispatchedRuns(
   return { implement: named(IMPLEMENT_JOB_NAME), research: named(RESEARCH_JOB_NAME) };
 }
 
-const DESIGN_JOB = new RegExp(`^(?:.+ / )?${DESIGN_JOB_NAME} #([1-9][0-9]*)$`);
+const DESIGN_JOB = new RegExp(`^(?:.+ / )?(?:${DESIGN_JOB_NAME}|${PROTOTYPE_JOB_NAME}) #([1-9][0-9]*)$`);
 
 /**
  * The issue of each Design-session turn not yet finished, across every
@@ -1282,8 +1290,10 @@ const DESIGN_JOB = new RegExp(`^(?:.+ / )?${DESIGN_JOB_NAME} #([1-9][0-9]*)$`);
  * turn is in progress until its whole run finishes: running, queued or
  * waiting behind its issue's concurrency group, and also after its job is
  * done while the push job is still posting its round or failure notice, so no
- * slot goes uncounted before the thread shows it. A Design job skipped
- * because the run went another way is no turn.
+ * slot goes uncounted before the thread shows it. A prototype turn counts as
+ * its session's turn, so a session whose first turn only asked for a
+ * Prototype, and so has no round yet, keeps its slot while it builds. A
+ * Design or prototype job skipped because the run went another way is no turn.
  */
 export async function designTurnsInProgress(github: Pick<GitHub, "rest">, repo: Repo): Promise<number[]> {
   const jobs = await jobsOfUnfinishedRuns(github, repo);
