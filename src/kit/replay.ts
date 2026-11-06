@@ -501,14 +501,61 @@ export type ReplayStep =
 
 /** The tick's next step for the Replays. */
 export function nextReplayStep(tick: ReplayTick): ReplayStep {
-  const [issue] = tick.issues;
-  if (issue === undefined || tick.acceptance === null) return { kind: "nothing", reason: "No replay issue is open" };
+  const issues = operatorsOpenIssues(tick);
+  if (issues.length === 0) return { kind: "nothing", reason: "No open replay issue is the Operator's" };
+  for (const issue of issues) {
+    const step = requestStep(issue, tick.acceptance);
+    if (step !== null) return step;
+  }
+  return { kind: "nothing", reason: "No replay request is waiting" };
+}
+
+/** The open replay issues the Operator filed, oldest first: no one else's count, nor a closed one. */
+function operatorsOpenIssues({ operator, issues }: Pick<ReplayTick, "operator" | "issues">): ReplayIssue[] {
+  return issues.filter((issue) => issue.open && issue.author === operator).toSorted((a, b) => a.number - b.number);
+}
+
+/** What to do with a waiting request: reject it, accept it, or nothing, when it was rejected already for the same problem. */
+function requestStep(issue: ReplayIssue, acceptance: ReplayAcceptance | null): ReplayStep | null {
   const read = readReplayRequest(issue.body);
-  if (!read.ok) return { kind: "nothing", reason: "" };
-  const plan = planOf(read.request, tick.acceptance);
+  if (!read.ok) return rejection(issue, rejectedRequest(read.errors));
+  if (acceptance === null) return { kind: "nothing", reason: "" };
+  const plan = planOf(read.request, acceptance);
+  if (plan.tickets.length === 0) return rejection(issue, noEligibleTicket(plan));
   const progress = plan.tickets.map(({ ticket }): TicketProgress => ({ ticket, state: "pending" }));
   return { kind: "accept", issue: issue.number, body: replayBody(issue.body, { plan, progress }) };
 }
+
+/** The comment rejecting a request whose plan has no Ticket: each listed Ticket left out, or what the default pick looks for. */
+function noEligibleTicket({ leftOut }: ReplayPlan): string {
+  const why =
+    leftOut.length === 0
+      ? [
+          "This replay has no Ticket to run, so nothing runs: no merged Ticket here can be replayed. A Ticket can be once its PR merged, was never reverted and changed no Trust-root file, built from a first Implement run whose Run record has a baseSha.",
+        ]
+      : ["This replay has no Ticket to run, so nothing runs: none of the Tickets it lists can be replayed.", "", ...leftOut.map(leftOutLine)];
+  return [...why, "", EDIT_TO_FIX].join("\n");
+}
+
+/** A Ticket left out, as a list item. */
+function leftOutLine({ ticket, reason }: LeftOutTicket): string {
+  return `- #${ticket}: ${withoutMentions(reason)}`;
+}
+
+/** A reject step commenting `comment` on the issue, or null when the Kit has said that there already. */
+function rejection(issue: ReplayIssue, comment: string): ReplayStep | null {
+  const said = issue.comments.some((each) => each.replaceAll("\r\n", "\n").trim() === comment.trim());
+  return said ? null : { kind: "reject", issue: issue.number, comment };
+}
+
+/** The comment rejecting a request for these errors. */
+function rejectedRequest(errors: readonly string[]): string {
+  const problems = errors.length === 1 ? "a problem" : "problems";
+  return [`This replay can't run: its request has ${problems}.`, "", ...errors.map((error) => `- ${withoutMentions(error)}`), "", EDIT_TO_FIX].join("\n");
+}
+
+/** How a rejection comment ends. */
+const EDIT_TO_FIX = "Edit the request in the issue body, and the Kit reads it again on its next hourly tick.";
 
 /** The request's plan, from the Tickets it picks and each one's Kit config at its baseSha. */
 function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): ReplayPlan {
@@ -607,7 +654,7 @@ function planLines({ plan, progress }: ReplayMarks): string[] {
       const state = progress.find(({ ticket }) => ticket === planned.ticket) ?? { state: "pending" };
       return `- #${planned.ticket}, merged in #${planned.pullRequest} from \`${shortSha(planned.baseSha)}\`: ${PROGRESS_WORDS[state.state]}.${baselineWords(planned.arms.baseline, variable)}${flags}`;
     }),
-    ...(plan.leftOut.length === 0 ? [] : ["", "Left out:", "", ...plan.leftOut.map(({ ticket, reason }) => `- #${ticket}: ${withoutMentions(reason)}`)]),
+    ...(plan.leftOut.length === 0 ? [] : ["", "Left out:", "", ...plan.leftOut.map(leftOutLine)]),
     "",
   ];
 }

@@ -567,6 +567,74 @@ describe("A Replay's next step on the tick", () => {
       expect(readReplayRequest(accepted)).toEqual(readReplayRequest(body));
     });
   });
+
+  describe("rejects an invalid request", () => {
+    const invalid = aReplayIssue(140, { body: bodyWith("review.effort: highest", "implement.model: sonnet") });
+
+    it("with one comment saying everything wrong with it", () => {
+      const step = nextReplayStep(aTick([invalid]));
+
+      expect(step).toMatchObject({ kind: "reject", issue: 140 });
+      const { comment } = step as Extract<ReplayStep, { kind: "reject" }>;
+      expect(comment).toContain('review.effort is "highest": effort must be one of low, medium, high, xhigh, max');
+      expect(comment).toContain('implement.model is "sonnet": a replay runs only a Claude model, named in full');
+    });
+
+    it("and never comments on it twice for the same problem", () => {
+      const { comment } = nextReplayStep(aTick([invalid])) as Extract<ReplayStep, { kind: "reject" }>;
+
+      expect(nextReplayStep(aTick([{ ...invalid, comments: [comment] }]))).toMatchObject({ kind: "nothing" });
+    });
+
+    it("but comments again on a new problem once the Operator edits the body", () => {
+      const { comment } = nextReplayStep(aTick([invalid])) as Extract<ReplayStep, { kind: "reject" }>;
+      const edited = { ...invalid, body: bodyWith("review.effort: highest"), comments: [comment] };
+
+      expect(nextReplayStep(aTick([edited]))).toMatchObject({ kind: "reject", issue: 140 });
+    });
+
+    it("and reads the body again on the next tick, accepting it once an edit fixes it", () => {
+      const { comment } = nextReplayStep(aTick([invalid])) as Extract<ReplayStep, { kind: "reject" }>;
+      const fixed = { ...invalid, body: bodyWith("review.effort: high", "tickets: 12"), comments: [comment] };
+
+      expect(nextReplayStep(aTick([fixed]))).toMatchObject({ kind: "accept", issue: 140 });
+    });
+  });
+
+  describe("rejects a request with no eligible Ticket, with one comment, and runs nothing", () => {
+    it("naming each listed Ticket left out, with why", () => {
+      const reverted = aCandidate(4, { merged: { ...aCandidate(4).merged!, reverted: true } });
+      const issue = aReplayIssue(140, { body: bodyWith("review.effort: high", "tickets: 4, 30") });
+
+      const step = nextReplayStep(aTick([issue], { acceptance: acceptanceOf([reverted]) }));
+
+      expect(step).toMatchObject({ kind: "reject", issue: 140 });
+      const { comment } = step as Extract<ReplayStep, { kind: "reject" }>;
+      expect(comment).toContain("- #4: its merged PR #104 was reverted");
+      expect(comment).toContain("- #30: no merged PR closed it");
+      expect(nextReplayStep(aTick([{ ...issue, comments: [comment] }], { acceptance: acceptanceOf([reverted]) }))).toMatchObject({ kind: "nothing" });
+    });
+
+    it("saying what makes a Ticket eligible when the default pick finds none", () => {
+      const issue = aReplayIssue(140, { body: bodyWith("review.effort: high") });
+
+      const step = nextReplayStep(aTick([issue], { acceptance: acceptanceOf([aCandidate(4, { merged: null })]) }));
+
+      expect(step).toMatchObject({ kind: "reject", issue: 140 });
+      expect((step as Extract<ReplayStep, { kind: "reject" }>).comment).toContain("no merged Ticket here can be replayed");
+    });
+  });
+
+  describe("weighs only the Operator's open replay issues", () => {
+    it.each<[string, Partial<ReplayIssue>]>([
+      ["a valid request filed by someone else", { author: "someone-else" }],
+      ["an invalid request filed by someone else", { author: "someone-else", body: bodyWith("review.effort: highest") }],
+      ["a closed issue's valid request", { open: false }],
+      ["a closed issue's invalid request", { open: false, body: bodyWith("review.effort: highest") }],
+    ])("gives %s nothing, not even a comment", (_, overrides) => {
+      expect(nextReplayStep(aTick([aReplayIssue(140, overrides)]))).toMatchObject({ kind: "nothing" });
+    });
+  });
 });
 
 /** The lines of a body the Operator sees: none of its hidden marker lines. */
