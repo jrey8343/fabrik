@@ -1,0 +1,109 @@
+# Gathers a Retro run's evidence (#151): the Retro evidence job, the first of
+# the run's two jobs. Like the push job it runs no agent and no Product code,
+# and it holds no write credential (ADR-0009's addendum). It loads the Fabrik
+# App key through the push service account and mints two App tokens, one with
+# Contents read on fabrik-runs alone and one read-only on this Product repo
+# (contents, issues and pull requests). It checks out only this repo's paths
+# under the store's runs/, scores/ and transcripts/, and runs
+# src/kit/retro-evidence-main.ts. That program refuses a store that isn't
+# private, gathers the repo's GitHub facts and its Retros' history, builds the
+# pending Retro's evidence bundle (src/kit/retroEvidence.ts) and writes it.
+# The action uploads that file as fabrik-retro-evidence, for the Retro job and
+# the push job.
+#
+# Any failure fails the job, a store gone missing or no longer private
+# included, and the push job fails the Retro as an Infrastructure failure
+# (src/kit/pushJob.ts, RETRO_EVIDENCE_JOB). It writes no Run record: it's no
+# agent run. The job keyed `retro-evidence` runs it on the Kit job's `retro`
+# route, with `permissions: {}`, after checking out the Kit alone into kit/:
+#   - id: evidence
+#     uses: ./kit/.github/actions/gather-retro-evidence
+#     with:
+#       op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+# and passes out `secrets-step: ${{ steps.evidence.outputs.secrets-step }}`.
+name: Gather the Retro's evidence
+description: Builds a pending Retro's evidence bundle from this repo's Run records, score files and transcripts in fabrik-runs and its GitHub facts, with read-only tokens.
+
+inputs:
+  op-push-token:
+    description: The push service account's token (secrets.OP_PUSH_TOKEN), which reads the Fabrik App vault.
+    required: true
+
+outputs:
+  secrets-step:
+    description: How loading the Fabrik App key went; "failure" means the evidence was never gathered.
+    value: ${{ steps.op.outcome }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24
+
+    - name: Load the Fabrik App key
+      id: op
+      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+      with:
+        export-env: false
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}
+        FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+        FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+    # Reads the store's files, and whether it's private. A store the App isn't on fails here.
+    - name: Mint a read-only Fabrik App token for the fabrik-runs store
+      id: store
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+        owner: jrey8343
+        repositories: fabrik-runs
+        permission-contents: read
+
+    # This repo alone, to read its GitHub facts, its Retros and its Kit config.
+    - name: Mint a read-only Fabrik App token for the Product repo
+      id: product
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+        permission-contents: read
+        permission-issues: read
+        permission-pull-requests: read
+
+    # Only this repo's paths; the program refuses the store before reading any of it if it isn't private.
+    - name: Check out this repo's Run records, score files and transcripts from the store
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: jrey8343/fabrik-runs
+        token: ${{ steps.store.outputs.token }}
+        path: store
+        sparse-checkout: |
+          runs/${{ github.repository }}
+          scores/${{ github.repository }}
+          transcripts/${{ github.repository }}
+        sparse-checkout-cone-mode: true
+        persist-credentials: false
+
+    - name: Gather the evidence
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        FABRIK_STORE_TOKEN: ${{ steps.store.outputs.token }}
+        FABRIK_PRODUCT_TOKEN: ${{ steps.product.outputs.token }}
+        FABRIK_APP_SLUG: ${{ steps.product.outputs.app-slug }}
+        FABRIK_STORE_DIR: ${{ github.workspace }}/store
+        FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-retro-evidence
+      run: node src/kit/retro-evidence-main.ts
+
+    # The Retro job and the push job each download it into $RUNNER_TEMP/retro-evidence.
+    - name: Pass the evidence to the Retro job and the push job
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: fabrik-retro-evidence
+        path: ${{ runner.temp }}/fabrik-retro-evidence/evidence.json
+        if-no-files-found: error
+        retention-days: 7
