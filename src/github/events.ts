@@ -143,6 +143,7 @@ export function agentRunEventFrom(
   if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
   if (result.role === "audit") throw new Error("An Auditor's result is applied through auditEventFrom");
   if (result.role === "retro") throw new Error("A Retro's result is applied through retroEventFrom");
+  if (result.role === "research") throw new Error("The Kit doesn't land a Researcher's result yet");
   if (result.role !== "implement") {
     const finished = {
       kind: "agent-run-finished",

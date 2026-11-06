@@ -25,6 +25,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     body: "",
     labels: [],
     parent: null,
+    parentIssue: null,
     openPullRequests: [],
     designRounds: 0,
     turnFailed: false,
@@ -94,7 +95,7 @@ export function dispatchSnapshotOf(
   return {
     issue: null,
     pullRequest: null,
-    dispatch: { tickets, openAgentDraftPullRequests: 0, implementRunsInProgress: 0, ...inFlight },
+    dispatch: { tickets, openAgentDraftPullRequests: 0, implementRunsInProgress: 0, researchDecisions: [], ...inFlight },
     designQueue: null,
     spec: null,
     operator: "operator",

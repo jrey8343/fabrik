@@ -67,7 +67,7 @@ export interface KitConfig {
    * the name of a `Fabrik` vault item holding that Subscription's token.
    */
   readonly subscriptions: readonly string[];
-  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's and the Retro's included. */
+  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's, the Retro's and the Researcher's included. */
   readonly instructions: Readonly<Record<InstructedRole, string | null>>;
   /** The Product repo's own Skills sources, from .fabrik/skills.lock.json. */
   readonly skillsSources: readonly SkillsSource[];
@@ -233,8 +233,8 @@ export function isPhase(role: AgentRoleName): role is Phase {
 
 /**
  * The roles a Product repo can give its own instructions in .fabrik/<role>.md:
- * every AFK role, so every Phase, the Auditor and the Retro, which take no
- * Extra skills (ADR-0008) and so are no Phase.
+ * every AFK role, so every Phase, the Auditor, the Retro and the Researcher,
+ * which take no Extra skills (ADR-0008) and so are no Phase.
  */
 export type InstructedRole = AgentRoleName;
 
@@ -295,7 +295,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   operator: null,
   // The V1 vault item, so a repo that lists none keeps the one Subscription it always ran on.
   subscriptions: ["Claude token"],
-  instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null, research: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
   // Visual evidence is off until a Product repo turns it on with /fabrik-setup.

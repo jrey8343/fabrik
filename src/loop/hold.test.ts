@@ -105,6 +105,24 @@ const STARTS: readonly (readonly [
     98,
     null,
   ],
+  [
+    "research",
+    "Research",
+    (kitIssues) => [
+      { kind: "label-added", issue: 12, label: "agent:research" },
+      snapshotOf(
+        anIssue({
+          number: 12,
+          labels: ["wayfinder:research", "agent:research"],
+          parent: 3,
+          parentIssue: { number: 3, open: true, labels: ["wayfinder:map"] },
+        }),
+        { kitIssues },
+      ),
+    ],
+    12,
+    "agent:research",
+  ],
 ];
 
 function actionsOf(plan: Plan): readonly Action[] {

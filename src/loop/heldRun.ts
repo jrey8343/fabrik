@@ -3,7 +3,15 @@
 // marker on a Kit-owned weekly-limit issue: the issue or PR it's on, its role,
 // the trigger label that resumes it and its place in the order held runs
 // resume in. No new issue kind, label or shared state. Pure, no I/O.
-import { DESIGN_LABEL, DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
+import {
+  DESIGN_LABEL,
+  DISPATCH_LABEL,
+  type Label,
+  NEEDS_TRIAGE,
+  RESEARCH_LABEL,
+  REVIEW_LABEL,
+  WEEKLY_LIMIT_LABEL,
+} from "./labels.ts";
 import type { Action, AgentRole, KitIssueSnapshot } from "./types.ts";
 
 /** A run the Kit holds. */
@@ -43,6 +51,7 @@ export const RESUME_LABELS = {
   review: REVIEW_LABEL,
   audit: null,
   retro: null,
+  research: RESEARCH_LABEL,
 } as const satisfies Readonly<Record<AgentRole, Label | null>>;
 
 /** How the Kit names each role's run, as in "The Triage run on #7", in its comments and step summaries alike. */
@@ -53,6 +62,7 @@ export const RUN_NAMES: Readonly<Record<AgentRole, string>> = {
   review: "Review",
   audit: "Audit",
   retro: "Retro",
+  research: "Research",
 };
 
 /**
