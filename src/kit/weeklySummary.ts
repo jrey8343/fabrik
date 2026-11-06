@@ -8,6 +8,7 @@ import { DECISION_TYPES, decisionLabel, type DecisionLabel, MAP_LABEL, NEEDS_DES
 import { holdsSlot } from "../loop/designQueue.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
+import { spelled } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
 import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
@@ -1153,17 +1154,12 @@ function heldLines(repos: readonly RepoSection[]): string[] {
     }
     const maps = held?.maps ?? null;
     if (maps !== null) {
-      const open = andList(maps.open.map((map) => `[#${map}](https://github.com/${repo}/issues/${map})`));
+      const open = spelled(maps.open.map((map) => `[#${map}](https://github.com/${repo}/issues/${map})`), "and");
       shown.push(`- ${repo}: the Map cap is full with ${open} open, so Design sessions offer no new Map`);
     }
     return shown;
   });
   return lines.length === 0 ? [] : ["## Held", "", ...lines, ""];
-}
-
-/** `a`, `a and b`, or `a, b and c`. */
-function andList(names: readonly string[]): string {
-  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 /** How many of a repo's Waiting on you items show before the rest collapse into `<details>`. */

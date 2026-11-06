@@ -3,6 +3,7 @@
 // read it into the issue's `sentBack`, set out as Markdown, and the Operator
 // comments on that PR it gives the run, which the run's result passes out;
 // and what the inputs say of the Map cap.
+import { spelled } from "../loop/readable.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 import { MAP_INPUTS_FILE, type MapOffer } from "./inputs.ts";
 import { givenOperatorComments, operatorCommentsSection } from "./operatorComments.ts";
@@ -31,8 +32,8 @@ function mapCapSaid(offer: MapOffer): string {
       if (offer.cap === 0) {
         return `\`caps.maps\` is 0, so this repo charts no new Map. ${refuse} If the Operator asks for one, say in your next round's intro that the Kit config stops new Maps.`;
       }
-      const named = listed(offer.openMaps.map((map) => `#${map.number} (${map.title})`));
-      const numbers = listed(offer.openMaps.map((map) => `#${map.number}`));
+      const named = spelled(offer.openMaps.map((map) => `#${map.number} (${map.title})`), "and");
+      const numbers = spelled(offer.openMaps.map((map) => `#${map.number}`), "and");
       const one = offer.openMaps.length === 1;
       return [
         `The Map cap is full: \`caps.maps\` is ${offer.cap}, and ${named} ${one ? "is the open Map" : "are the open Maps"}.`,
@@ -53,11 +54,6 @@ function readOffer(value: unknown): MapOffer {
     return { kind: "cap-full", cap, openMaps: openMaps.map((map: { number?: unknown; title?: unknown }) => ({ number: Number(map.number), title: text(map.title) })) };
   }
   throw new Error(`${MAP_INPUTS_FILE} doesn't say whether this turn may offer a Map`);
-}
-
-/** `#1`, `#1 and #2`, or `#1, #2 and #3`. */
-function listed(names: readonly string[]): string {
-  return names.length < 2 ? names.join(", ") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 interface SentBackInput {

@@ -33,6 +33,7 @@ import {
   monitorMarkerLine,
   SESSION_FINISHED,
 } from "./markers.ts";
+import { spelled } from "./readable.ts";
 import type { MapCap } from "./mapCap.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { AgentBrief } from "./triageOutput.ts";
@@ -342,13 +343,8 @@ function heldByMapCap(issueNumber: number, { openMaps, cap }: Extract<MapCap, { 
   const said =
     cap === 0
       ? `This turn ended in a Map, but \`caps.maps\` is 0, so the Kit charts no new Map in this repo. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way.`
-      : `This turn ended in a Map, but the Map cap is full: ${listed(maps)} ${maps.length === 1 ? "is the open Map" : "are the open Maps"}, and \`caps.maps\` is ${cap}. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way, or close ${maps.length === 1 ? maps[0] : "an open Map"} first and ask for the Map again.`;
+      : `This turn ended in a Map, but the Map cap is full: ${spelled(maps, "and")} ${maps.length === 1 ? "is the open Map" : "are the open Maps"}, and \`caps.maps\` is ${cap}. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way, or close ${maps.length === 1 ? maps[0] : "an open Map"} first and ask for the Map again.`;
   return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body: [DESIGN_TURN_FAILED_MARKER, said].join("\n") }] };
-}
-
-/** `#1`, `#1 and #2`, or `#1, #2 and #3`. */
-function listed(names: readonly string[]): string {
-  return names.length < 2 ? names.join(", ") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 /**
