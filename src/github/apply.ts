@@ -1,6 +1,7 @@
 // The adapter's apply side: carries out the plan the core returns, one action
 // at a time, as the token the job holds. It holds no Loop rules.
 import { prototypePreviewUrl, previewUrl } from "../kit/config.ts";
+import { withTicketStarted } from "../kit/replay.ts";
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { withPrototypeStarted } from "../loop/markers.ts";
@@ -17,6 +18,12 @@ export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run
   );
 }
 
+
+/** The replay Ticket's two arms a plan starts, which the workflow carries out by routing to `replay`. */
+export function replayRunIn(plan: Plan): Extract<Action, { kind: "start-replay" }> | null {
+  if (plan.kind !== "act") return null;
+  return plan.actions.find((action): action is Extract<Action, { kind: "start-replay" }> => action.kind === "start-replay") ?? null;
+}
 
 /** The calls applying a plan makes, which a test can fake. */
 type GitHubApi = Pick<GitHub, "rest" | "graphql">;
@@ -51,16 +58,18 @@ export interface AppliedPlan {
 /**
  * Applies each action in the plan, in order, and returns what the push job
  * hands on from it. Only the push job of an Implement run, a Researcher run or
- * a prototype turn has a branch to push.
+ * a prototype turn has a branch to push. `run` is the Actions run applying
+ * it, which a replay Ticket's claim marks it in progress in.
  */
 export async function applyPlan(
   github: GitHubApi,
   repo: Repo,
   plan: Plan,
   branches: BranchPusher | null = null,
+  run: number | null = null,
 ): Promise<AppliedPlan> {
   if (plan.kind !== "act") return { preview: null };
-  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null };
+  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run };
   for (const action of plan.actions) {
     await apply(github, repo, action, made, branches);
   }
@@ -75,6 +84,8 @@ interface Made {
   /** The number of the PR the plan opened, for a preview to link on it. */
   opened: number | null;
   preview: PreviewToLink | PrototypePreviewToLink | null;
+  /** The Actions run applying the plan, or null when the job names none. */
+  readonly run: number | null;
 }
 
 /** A comment a plan posted: its URL for links in text, its id for an edit. */
@@ -154,6 +165,12 @@ async function addBlockedBy(
 /** Whether the plan asks for a Dispatch check, which the Dispatch job then runs. */
 export function wantsDispatchCheck(plan: Plan): boolean {
   return plan.kind === "act" && plan.actions.some((action) => action.kind === "check-dispatch");
+}
+
+/** The replay Ticket the plan's claim marks in progress, which the replay jobs then run, or null when it claims none. */
+export function replayClaimIn(plan: Plan): number | null {
+  const mark = plan.kind === "act" ? plan.actions.find((action) => action.kind === "mark-replay-started") : undefined;
+  return mark?.kind === "mark-replay-started" ? mark.ticket : null;
 }
 
 /** Whether the plan asks for a Design queue check, which the Design queue job then runs. */
@@ -319,8 +336,9 @@ async function applyToIssue(
         | "react";
     }
   >,
-  { created, posted }: Made,
+  made: Made,
 ): Promise<void> {
+  const { created, posted } = made;
   switch (action.kind) {
     case "add-labels":
       if (action.labels.length > 0) await github.rest("POST", `${issue}/labels`, { labels: action.labels });
@@ -370,8 +388,20 @@ async function applyToIssue(
       return;
     }
     case "start-agent-run":
-      // The workflow starts agent runs by routing to the role's agent job (src/kit/jobs.ts).
+    case "start-replay":
+      // The workflow starts agent runs, and a Replay Ticket's arms, by routing to their jobs (src/kit/jobs.ts).
       return;
+    case "mark-replay-started": {
+      if (made.run === null) throw new Error(`This job names no Actions run to mark #${action.ticket} in progress in`);
+      // Read fresh, so a run that claimed the Ticket since the plan was made keeps it.
+      const { body } = (await github.rest("GET", issue)) as { body: string | null };
+      const marked = withTicketStarted(body ?? "", action.ticket, made.run);
+      if (marked === null) {
+        throw new Error(`#${action.ticket} isn't waiting to run on replay #${action.issue}, so run ${made.run} doesn't claim it`);
+      }
+      await github.rest("PATCH", issue, { body: marked });
+      return;
+    }
     case "hold-agent-run":
       // Nor is a hold a GitHub change: the Plan's label and comment actions carry it out.
       return;
