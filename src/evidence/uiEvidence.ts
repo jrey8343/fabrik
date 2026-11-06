@@ -273,10 +273,28 @@ export function evidenceSection(evidence: UiEvidence): string {
     "",
     "Captured routes:",
     "",
-    ...capturedRoutes(captures).map(({ route, reason }) => `- ${code(route)}, ${ROUTE_REASON_WORDS[reason]}`),
+    ...capturedRoutes(captures).map((chosen) => routeLine(chosen, captures)),
     evidenceMarker(evidence),
   ].join("\n");
 }
+
+/** A captured route, why it was chosen, and every screenshot of it that shows a server's error page rather than the design. */
+function routeLine({ route, reason }: ChosenRoute, captures: readonly Capture[]): string {
+  const line = `- ${code(route)}, ${ROUTE_REASON_WORDS[reason]}`;
+  const errors = captures.filter((capture) => capture.route === route && isServerError(capture.status));
+  if (errors.length === 0) return line;
+  const answered = errors.map(({ status, side, viewport }) => `${status} for ${SIDE_WORDS[side]} at ${viewport}`);
+  const shows = errors.length === 1 ? "that screenshot shows" : "those screenshots show";
+  return `${line}. **Server error:** it answered ${spelled(answered, "and")}, so ${shows} an error page, not the design.`;
+}
+
+/** Whether a page answered with a server error, so its screenshot is of an error page. */
+export function isServerError(status: number): boolean {
+  return status >= 500 && status <= 599;
+}
+
+/** How the evidence names each side. */
+export const SIDE_WORDS: Readonly<Record<CaptureSide, string>> = { before: "Before", after: "After" };
 
 function galleryLine(url: string, { headSha, captures }: CaptureResult): string {
   const besideProduction = captures.some(({ side }) => side === "before") ? " beside the production site" : "";

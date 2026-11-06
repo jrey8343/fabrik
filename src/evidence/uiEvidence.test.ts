@@ -333,3 +333,48 @@ describe("The evidence section's preview line", () => {
     expect(linesOf({ preview: { kind: "none" } })).toContain("No preview link: Kit config declares no `preview.url`.");
   });
 });
+
+describe("The evidence section's routes", () => {
+  /** The section's route lines. */
+  const routeLines = (result: CaptureResult) =>
+    evidenceSection(evidence(result))
+      .split("\n")
+      .filter((line) => line.startsWith("- "));
+
+  it("flag a route that answered a server error, naming each screenshot that shows the error page", () => {
+    const result: CaptureResult = {
+      ...allCaptured,
+      captures: allCaptured.captures.map((capture) =>
+        capture.route === "/book/waitlist" && capture.viewport === "mobile" ? { ...capture, status: 503 } : capture,
+      ),
+    };
+
+    expect(routeLines(result)).toEqual([
+      "- `/book`, named by the Ticket",
+      "- `/book/waitlist`, named by the Implementer. **Server error:** it answered 503 for After at mobile, so that screenshot shows an error page, not the design.",
+    ]);
+  });
+
+  it("flag every screenshot of a route that answered a server error, Before or After", () => {
+    const result: CaptureResult = {
+      ...allCaptured,
+      captures: allCaptured.captures.map((capture) =>
+        capture.route !== "/book" ? capture : { ...capture, status: capture.side === "after" ? 500 : 502 },
+      ),
+    };
+
+    expect(routeLines(result)).toEqual([
+      "- `/book`, named by the Ticket. **Server error:** it answered 500 for After at mobile, 500 for After at desktop, 502 for Before at mobile and 502 for Before at desktop, so those screenshots show an error page, not the design.",
+      "- `/book/waitlist`, named by the Implementer",
+    ]);
+  });
+
+  it("don't flag a page that answered other than with a server error", () => {
+    const result: CaptureResult = {
+      ...allCaptured,
+      captures: allCaptured.captures.map((capture) => (capture.route === "/book/waitlist" ? { ...capture, status: 404 } : capture)),
+    };
+
+    expect(routeLines(result)).toEqual(["- `/book`, named by the Ticket", "- `/book/waitlist`, named by the Implementer"]);
+  });
+});
