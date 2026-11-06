@@ -187,7 +187,7 @@ export function readCaptureResult(value: unknown): CaptureResultRead {
   const read = Array.isArray(captures) ? captures.map((capture, at) => readCapture(capture, `captures[${at}]`, errors)) : [];
   errors.push(...repeatedCaptures(read));
   if (errors.length > 0) return { ok: false, errors };
-  const checked = read as Capture[];
+  const checked = read as (Capture | VariantCapture)[];
   const result: CaptureResult =
     outcome === "captured"
       ? { outcome, headSha: headSha as string, captures: checked }
@@ -200,28 +200,50 @@ const VIEWPORT_NAMES = UI_VIEWPORTS.map(({ name }) => name);
 /** A plain file name in the capture's folder: never a path, `..`, or a hidden file. */
 const IMAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** One capture, or null after naming its problems in `errors`. */
-function readCapture(value: unknown, at: string, errors: string[]): Capture | null {
+function isFileName(value: unknown): value is string {
+  return typeof value === "string" && IMAGE_NAME.test(value) && !value.includes("..");
+}
+
+/** One capture, or null after naming its problems in `errors`: a variant's when it names a variant, else a side's. */
+function readCapture(value: unknown, at: string, errors: string[]): Capture | VariantCapture | null {
   if (!isObject(value)) {
     errors.push(`${at} must be an object`);
     return null;
   }
-  const { route, reason, viewport, side, status, image } = value;
+  const { route, reason, viewport, side, variant, status, image, video } = value;
+  const ofVariant = variant !== undefined;
   const before = errors.length;
   // As the Implementer output reads a route, so a route it named never makes its capture unreadable.
   if (!isRoute(route)) {
     errors.push(`${at}.route must be a path starting with one /, such as /book`);
   }
-  if (!isOneOf(ROUTE_REASONS, reason)) errors.push(`${at}.reason must be ${spelled(ROUTE_REASONS)}`);
+  if (!ofVariant && !isOneOf(ROUTE_REASONS, reason)) errors.push(`${at}.reason must be ${spelled(ROUTE_REASONS)}`);
   if (!isOneOf(VIEWPORT_NAMES, viewport)) errors.push(`${at}.viewport must be ${spelled(VIEWPORT_NAMES)}`);
-  if (!isOneOf(CAPTURE_SIDES, side)) errors.push(`${at}.side must be ${spelled(CAPTURE_SIDES)}`);
+  if (!ofVariant && !isOneOf(CAPTURE_SIDES, side)) errors.push(`${at}.side must be ${spelled(CAPTURE_SIDES)}`);
+  if (ofVariant && !isOneOf(VARIANT_LETTERS, variant)) errors.push(`${at}.variant must be ${spelled(VARIANT_LETTERS)}`);
   if (!Number.isInteger(status) || (status as number) < 100 || (status as number) > 599) {
     errors.push(`${at}.status must be an HTTP status from 100 to 599`);
   }
-  if (typeof image !== "string" || !IMAGE_NAME.test(image) || image.includes("..")) {
-    errors.push(`${at}.image must be a plain file name, such as after-mobile-book.png, with no / or ..`);
+  if (!isFileName(image)) {
+    const example = ofVariant ? "variant-a-mobile.png" : "after-mobile-book.png";
+    errors.push(`${at}.image must be a plain file name, such as ${example}, with no / or ..`);
   }
+  if (ofVariant && video !== undefined && !isFileName(video)) {
+    errors.push(`${at}.video must be a plain file name, such as variant-a-mobile.webm, with no / or ..`);
+  }
+  // Whether it's a side's or a variant's decides how every reader shows it.
+  if (ofVariant && side !== undefined) errors.push(`${at} must have a side or a variant, not both`);
   if (errors.length > before) return null;
+  if (ofVariant) {
+    return {
+      route: route as string,
+      variant: variant as VariantLetter,
+      viewport: viewport as Viewport["name"],
+      status: status as number,
+      image: image as string,
+      ...(video === undefined ? {} : { video: video as string }),
+    };
+  }
   return {
     route: route as string,
     reason: reason as RouteReason,
@@ -232,22 +254,39 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | nu
   };
 }
 
+/** Which shot of its route and viewport a capture is: its side, or its variant. */
+function shotOf(capture: Capture | VariantCapture): string {
+  return isVariantCapture(capture) ? `variant ${capture.variant}` : capture.side;
+}
+
+/** A capture's files, each by the field that names it: its image, then its video when it has one. */
+function filesOf(capture: Capture | VariantCapture): ["image" | "video", string][] {
+  const video = isVariantCapture(capture) ? capture.video : undefined;
+  return [["image", capture.image], ...(video === undefined ? [] : [["video", video] as ["video", string]])];
+}
+
 /**
- * Each image file and each route, viewport and side is one capture's alone,
- * since the gallery pairs Before and After by them and opens each file by name.
+ * Each image or video file and each route, viewport and side or variant is
+ * one capture's alone, since the galleries pair captures by them and open
+ * each file by name.
  */
-function repeatedCaptures(captures: readonly (Capture | null)[]): string[] {
+function repeatedCaptures(captures: readonly (Capture | VariantCapture | null)[]): string[] {
   const problems: string[] = [];
+  /** Every file named so far, with the capture that named it. */
+  const named: { readonly name: string; readonly at: number }[] = [];
   captures.forEach((capture, at) => {
     if (capture === null) return;
     const earlier = captures.slice(0, at);
-    const sameFile = earlier.findIndex((other) => other?.image === capture.image);
+    for (const [field, name] of filesOf(capture)) {
+      const owner = named.find((file) => file.name === name);
+      if (owner !== undefined) problems.push(`captures[${at}].${field} ${name} is captures[${owner.at}]'s too`);
+      named.push({ name, at });
+    }
     const sameShot = earlier.findIndex(
-      (other) => other?.route === capture.route && other.viewport === capture.viewport && other.side === capture.side,
+      (other) => other !== null && other.route === capture.route && other.viewport === capture.viewport && shotOf(other) === shotOf(capture),
     );
-    if (sameFile !== -1) problems.push(`captures[${at}].image ${capture.image} is captures[${sameFile}]'s too`);
     if (sameShot !== -1) {
-      problems.push(`captures[${at}] is ${capture.route} at ${capture.viewport}, ${capture.side}, which captures[${sameShot}] already is`);
+      problems.push(`captures[${at}] is ${capture.route} at ${capture.viewport}, ${shotOf(capture)}, which captures[${sameShot}] already is`);
     }
   });
   return problems;

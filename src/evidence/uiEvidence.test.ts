@@ -205,6 +205,12 @@ describe("The capture result", () => {
     expect(parseCaptureResult(JSON.stringify(failed))).toEqual({ ok: true, result: failed });
   });
 
+  it("reads back a prototype turn's capture of its variants exactly as written, each with its video where it recorded one", () => {
+    const prototype: CaptureResult = { outcome: "captured", headSha: HEAD, captures: variantCaptures };
+
+    expect(parseCaptureResult(JSON.stringify(prototype))).toStrictEqual({ ok: true, result: prototype });
+  });
+
   /** The captured result with these fields changed; undefined leaves a field out. */
   const withResult = (changes: Record<string, unknown>) => JSON.stringify({ ...captured, ...changes });
   /** The captured result with its first capture's fields changed. */
@@ -285,6 +291,36 @@ describe("The capture result", () => {
         "captures[1].status must be an HTTP status from 100 to 599",
       ],
     });
+  });
+});
+
+describe("A prototype turn's capture result", () => {
+  const prototype: CaptureResult = { outcome: "captured", headSha: HEAD, captures: variantCaptures };
+  /** The prototype's result with its first two captures' fields changed; undefined leaves a field out. */
+  const withVariants = (first: Record<string, unknown>, second: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      ...prototype,
+      captures: [{ ...variantCaptures[0], ...first }, { ...variantCaptures[1], ...second }, ...variantCaptures.slice(2)],
+    });
+
+  it("reads back a capture that ran out of time with the variants it took first", () => {
+    const failed: CaptureResult = { outcome: "failed", reason: "timeout", headSha: HEAD, captures: variantCaptures.slice(0, 3) };
+
+    expect(parseCaptureResult(JSON.stringify(failed))).toEqual({ ok: true, result: failed });
+  });
+
+  it.each([
+    ["a letter past the cap", withVariants({ variant: "F" }), "captures[0].variant must be A, B, C, D or E"],
+    ["a lowercase letter", withVariants({ variant: "a" }), "captures[0].variant must be A, B, C, D or E"],
+    ["a variant's capture that has a side too", withVariants({ side: "after" }), "captures[0] must have a side or a variant, not both"],
+    ["an image name that isn't a plain file name", withVariants({ image: "../a.png" }), "captures[0].image must be a plain file name, such as variant-a-mobile.png, with no / or .."],
+    ["a video name that isn't a plain file name", withVariants({ video: "videos/a.webm" }), "captures[0].video must be a plain file name, such as variant-a-mobile.webm, with no / or .."],
+    ["a video name that isn't a string", withVariants({ video: null }), "captures[0].video must be a plain file name, such as variant-a-mobile.webm, with no / or .."],
+    ["two captures of the same variant at the same viewport", withVariants({}, { viewport: "mobile" }), "captures[1] is /book at mobile, variant A, which captures[0] already is"],
+    ["a video in another capture's video file", withVariants({}, { video: "variant-a-mobile.webm" }), "captures[1].video variant-a-mobile.webm is captures[0]'s too"],
+    ["a video in another capture's image file", withVariants({}, { video: "variant-a-mobile.png" }), "captures[1].video variant-a-mobile.png is captures[0]'s too"],
+  ])("refuses %s, naming the problem", (_, text, error) => {
+    expect(parseCaptureResult(text)).toEqual({ ok: false, errors: [error] });
   });
 });
 
