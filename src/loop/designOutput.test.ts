@@ -85,4 +85,66 @@ describe("A prototype turn's prototype-round output: the variants it built", () 
 
     expect(turn(checked.output)).toEqual(checked);
   });
+
+  const [a, b, c] = built.variants;
+  const variant = (summary: string, i: number) => ({ summary, component: `src/routes/book/Variant${i}.tsx` });
+
+  it("reads 5 variants, lettered A to E", () => {
+    const five = { ...built, variants: ["One", "Two", "Three", "Four", "Five"].map(variant) };
+
+    const checked = turn(five);
+
+    expect(checked.ok && checked.output.kind === "prototype-round" && checked.output.variants.map(({ letter }) => letter)).toEqual([
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+    ]);
+  });
+
+  it.each([
+    ["no intro", { ...built, intro: undefined }, "a prototype-round needs non-empty intro text"],
+    ["an empty intro", { ...built, intro: " " }, "a prototype-round needs non-empty intro text"],
+    ["no recommendation", { ...built, recommendation: undefined }, "a prototype-round needs non-empty recommendation text"],
+    ["an empty recommendation", { ...built, recommendation: "" }, "a prototype-round needs non-empty recommendation text"],
+    ["a variant with no summary", { ...built, variants: [a, { component: b?.component }, c] }, "variant B needs a summary, one non-empty line"],
+    [
+      "a variant whose summary runs over two lines",
+      { ...built, variants: [a, b, { ...c, summary: "Calendar first.\nDetails after." }] },
+      "variant C needs a summary, one non-empty line",
+    ],
+    ["a variant with no component", { ...built, variants: [{ summary: a?.summary }, b, c] }, "variant A needs the repo path of its component"],
+    ["a variant with an empty component", { ...built, variants: [a, { ...b, component: " " }, c] }, "variant B needs the repo path of its component"],
+    [
+      "a variant whose component is an absolute path",
+      { ...built, variants: [a, b, { ...c, component: "/home/runner/work/app/src/routes/book/VariantC.tsx" }] },
+      "variant C needs the repo path of its component",
+    ],
+    ["one variant", { ...built, variants: [a] }, "a prototype-round needs from 2 to 5 variants"],
+    ["no variants", { ...built, variants: [] }, "a prototype-round needs from 2 to 5 variants"],
+    ["variants left out", { ...built, variants: undefined }, "a prototype-round needs from 2 to 5 variants"],
+    ["six variants", { ...built, variants: ["1", "2", "3", "4", "5", "6"].map(variant) }, "a prototype-round needs from 2 to 5 variants"],
+  ])("refuses %s, naming it", (_, output, error) => {
+    expect(turn(output)).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("refuses a variant that isn't an object, naming both fields it lacks", () => {
+    expect(turn({ ...built, variants: [a, "A stepper", c] })).toEqual({
+      ok: false,
+      errors: ["variant B needs a summary, one non-empty line", "variant B needs the repo path of its component"],
+    });
+  });
+
+  it("names every problem at once", () => {
+    expect(turn({ kind: "prototype-round", variants: [{ component: "src/A.tsx" }, { summary: "A stepper." }] })).toEqual({
+      ok: false,
+      errors: [
+        "a prototype-round needs non-empty intro text",
+        "variant A needs a summary, one non-empty line",
+        "variant B needs the repo path of its component",
+        "a prototype-round needs non-empty recommendation text",
+      ],
+    });
+  });
 });

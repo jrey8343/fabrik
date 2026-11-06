@@ -324,6 +324,28 @@ function isDecisionType(value: unknown): value is DecisionType {
   return (DECISION_TYPES as readonly unknown[]).includes(value);
 }
 
+/** A prototype round's variants, each lettered from its place in the list. */
+function readVariants(value: unknown, errors: string[]): PrototypeVariant[] {
+  if (!Array.isArray(value) || !isVariantCount(value.length)) {
+    errors.push(`a prototype-round needs from ${PROTOTYPE_MIN_VARIANTS} to ${PROTOTYPE_VARIANT_CAP} variants`);
+    if (!Array.isArray(value)) return [];
+  }
+  const variants: PrototypeVariant[] = [];
+  value.forEach((item: unknown, i: number) => {
+    const letter = variantLetter(i);
+    const { summary, component } = isObject(item) ? item : {};
+    if (!isLine(summary)) errors.push(`variant ${letter} needs a summary, one non-empty line`);
+    if (!isRepoPath(component)) errors.push(`variant ${letter} needs the repo path of its component`);
+    if (isLine(summary) && isRepoPath(component)) variants.push({ letter, summary, component });
+  });
+  return variants;
+}
+
+/** A path from the repo root, on one line: never an absolute path on the runner. */
+function isRepoPath(value: unknown): value is string {
+  return isLine(value) && !value.startsWith("/");
+}
+
 /** A whole number of variants within the Kit's minimum and cap. */
 function isVariantCount(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= PROTOTYPE_MIN_VARIANTS && (value as number) <= PROTOTYPE_VARIANT_CAP;
@@ -455,11 +477,10 @@ function readTurn(value: unknown): DesignTurnOutputResult {
       };
     }
     case "prototype-round": {
-      const variants = (value.variants as Record<string, string>[]).map((variant, i) => ({
-        letter: variantLetter(i),
-        summary: variant.summary as string,
-        component: variant.component as string,
-      }));
+      if (!isText(value.intro)) errors.push("a prototype-round needs non-empty intro text");
+      const variants = readVariants(value.variants, errors);
+      if (!isText(value.recommendation)) errors.push("a prototype-round needs non-empty recommendation text");
+      if (errors.length > 0) return { ok: false, errors };
       return {
         ok: true,
         output: { kind: "prototype-round", intro: value.intro as string, variants, recommendation: value.recommendation as string },
