@@ -187,6 +187,16 @@ describe("What the push job applies", () => {
     expect(input).toEqual({ kind: "agent-failure", role: "design", issue: 12, jobResult: result, secretsStep: "failure" });
   });
 
+  // A prototype turn's route stays design (#155), and the Kit job's prototype output says the prototype job ran it, the Design job skipped.
+  it.each(["failure", "cancelled"])("gives a prototype turn's failure as a Design-session turn's when the prototype job's result is %s", (result) => {
+    const input = pushJobInput(
+      needs("design", { design: { result: "skipped", outputs: {} }, prototype: { result, outputs: { "secrets-step": "failure" } } }, { prototype: "true" }),
+      12,
+    );
+
+    expect(input).toEqual({ kind: "agent-failure", role: "design", issue: 12, jobResult: result, secretsStep: "failure" });
+  });
+
   // A timeout cancels the job: the Audit then fails, rather than staying pending and blocking the next one.
   it.each(["failure", "cancelled"])("gives an Auditor run's failure on the pending Audit when the Audit job's result is %s", (result) => {
     const input = pushJobInput(needs("audit", { audit: { result, outputs: { "secrets-step": "success" } } }), 98);
