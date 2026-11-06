@@ -1,0 +1,154 @@
+# Runs one arm of a replay Ticket's Implement run (#156): the Implementer on
+# the Ticket as a first Implement run would see it, rebuilt from the Ticket
+# and its Spec as GitHub holds them now, in a checkout of the Ticket's
+# baseSha, so Kit config and Extra skills come from there too. It has the
+# Implement job's shape and credentials (ADR-0002, ADR-0004): only the
+# read-only GITHUB_TOKEN, which prepare-agent reads the Ticket with, and the
+# implement service account, which loads the Claude token of the Subscription
+# the Kit job chose and the test secrets Kit config at baseSha declares. It
+# holds no write credential, and nothing it builds is pushed: it passes its
+# commits out as a patch, its diff from baseSha (src/agent/replay.ts). For a
+# `kit` variant, prepare-agent lays the candidate sha's prompts and Base
+# skills pin over the Kit first, and nothing else (src/kit/overlay.ts).
+#
+# Both arms run in one workflow run, as a matrix, so every artifact it leaves
+# carries its arm (src/kit/replayRecord.ts), and its outputs go out in its
+# account of the run (arm-job.json) rather than as job outputs, which the
+# matrix's legs overwrite: fabrik-implement-replay-<arm> holds the result,
+# the patch, a failure report and that account, and
+# fabrik-transcript-implement-replay-<arm> its transcript, whether it passed,
+# failed or was cancelled. The arm's gates, Review and judge jobs and the
+# replay-record job read them. Its job, never named `Implement`, so Dispatch's
+# count of Implement runs in flight passes it by, runs it with contents and
+# issues read, within the Implement timeout, after checking out the Kit alone
+# into kit/:
+#   - uses: ./kit/.github/actions/replay-implement
+#     with:
+#       arm: ${{ matrix.arm }}
+#       op-implement-token: ${{ secrets.OP_IMPLEMENT_TOKEN }}
+#       github-token: ${{ github.token }}
+#       ticket: ${{ needs.kit.outputs.ticket }}
+#       base-sha: ${{ needs.kit.outputs.base-sha }}
+#       replay-arms: ${{ needs.kit.outputs.replay-arms }}
+#       subscription: ${{ needs.kit.outputs.subscription }}
+name: Run a replay arm's Implementer
+description: Runs the Implementer on a replayed Ticket from its baseSha with one arm's settings, passing its diff out as a patch, with no write credential.
+
+inputs:
+  arm:
+    description: The arm, baseline or variant (matrix.arm).
+    required: true
+  op-implement-token:
+    description: The implement service account's token (secrets.OP_IMPLEMENT_TOKEN), which reads the Claude token and the repo's test secrets.
+    required: true
+  github-token:
+    description: The job's read-only GITHUB_TOKEN, to read the Ticket and its Spec, and a `kit` variant's candidate sha.
+    required: true
+  ticket:
+    description: The replayed Ticket (needs.kit.outputs.ticket).
+    required: true
+  base-sha:
+    description: The Ticket's baseSha, its first Implement run's base (needs.kit.outputs.base-sha).
+    required: true
+  replay-arms:
+    description: Each arm's settings as one line of JSON (needs.kit.outputs.replay-arms). Its model names come from the replay issue's body, so it's read only through `with:` and `env:`.
+    required: true
+  subscription:
+    description: The Subscription whose Claude token the arm runs on, the Fabrik vault item name the Kit job chose (needs.kit.outputs.subscription).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # A fresh clone at baseSha, detached, which the runner refuses any other commit for.
+    - name: Check out the Product repo at the Ticket's baseSha
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        path: product
+        ref: ${{ inputs.base-sha }}
+        fetch-depth: 0
+        persist-credentials: false
+
+    # The Ticket and its Spec, as a first Implement run reads them; for a `kit` variant, its candidate's prompts and Base skills.
+    - name: Prepare the agent job
+      uses: ./kit/.github/actions/prepare-agent
+      with:
+        role: implement
+        github-token: ${{ inputs.github-token }}
+        issue: ${{ inputs.ticket }}
+        kit-candidate: ${{ fromJSON(inputs.replay-arms)[inputs.arm].candidateSha }}
+
+    # Kit config at baseSha is read as data; the list of op:// references goes to 1Password as a file.
+    - name: List the test secrets to load
+      shell: bash
+      run: node kit/src/kit/secrets-main.ts product "$RUNNER_TEMP/fabrik-secrets.env"
+
+    - name: Load the Claude token and the test secrets
+      id: op
+      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+      with:
+        export-env: false
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-implement-token }}
+        OP_ENV_FILE: ${{ runner.temp }}/fabrik-secrets.env
+        CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ inputs.subscription }}/credential
+
+    - name: Run the replay arm's Implementer
+      id: agent
+      shell: bash
+      working-directory: product
+      env:
+        # Every value the 1Password step resolved, in this step's env only.
+        FABRIK_SECRETS: ${{ toJSON(steps.op.outputs) }}
+        FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+        FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
+        FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+        FABRIK_BASE_SHA: ${{ inputs.base-sha }}
+        FABRIK_MODEL: ${{ fromJSON(inputs.replay-arms)[inputs.arm].implement.model }}
+        FABRIK_EFFORT: ${{ fromJSON(inputs.replay-arms)[inputs.arm].implement.effort }}
+      run: node ../kit/src/agent/run.ts replay-implement
+
+    # How the run went, for its Run record: the matrix's legs overwrite each other's job outputs.
+    - name: Note how the arm's Implement run went
+      if: always()
+      continue-on-error: true
+      shell: bash
+      env:
+        FABRIK_AGENT_STEP: ${{ steps.agent.outcome }}
+        FABRIK_SECRETS_STEP: ${{ steps.op.outcome }}
+        FABRIK_JOB_STATUS: ${{ job.status }}
+        FABRIK_RAN_MODEL: ${{ steps.agent.outputs.model }}
+        FABRIK_RAN_EFFORT: ${{ steps.agent.outputs.effort }}
+      run: node kit/src/kit/replay-arm-main.ts "$RUNNER_TEMP/fabrik-out/arm-job.json"
+
+    # The result and the patch (empty when it committed nothing), or the failure report, and the account.
+    - name: Pass the arm's result and patch on
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: fabrik-implement-replay-${{ inputs.arm }}
+        path: |
+          ${{ runner.temp }}/fabrik-out/agent-result.json
+          ${{ runner.temp }}/fabrik-out/replay.patch
+          ${{ runner.temp }}/fabrik-out/agent-failure.json
+          ${{ runner.temp }}/fabrik-out/arm-job.json
+        if-no-files-found: ignore
+        retention-days: 7
+
+    # Its stream-json transcript, for its Run record and the judge, kept whether it passed, failed or was cancelled.
+    - name: Gzip the arm's transcript
+      if: always()
+      continue-on-error: true
+      shell: bash
+      run: if [ -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl" ]; then gzip -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl"; fi
+
+    - name: Keep the arm's transcript
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: fabrik-transcript-implement-replay-${{ inputs.arm }}
+        path: ${{ runner.temp }}/fabrik-out/transcript.jsonl.gz
+        if-no-files-found: ignore
+        retention-days: 7

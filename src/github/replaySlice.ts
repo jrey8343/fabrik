@@ -84,8 +84,12 @@ async function gatherCandidates(
   return replayCandidatesOf({ repo: `${repo.owner}/${repo.name}`, records, merged, files, lastEdited });
 }
 
-/** Every file each PR changed, as its diff names it: a removed file, and a rename's old path, included. */
-async function filesOf(github: GitHub, repo: Repo, pullRequests: readonly number[]): Promise<Record<number, MergedFile[]>> {
+/**
+ * Every file each PR changed, as its diff names it: a removed file, and a
+ * rename's old path, included. A replay arm's gates job reads its merged PR's
+ * hidden tests through it too (src/kit/replay-hidden-tests-main.ts).
+ */
+export async function filesOf(github: GitHub, repo: Repo, pullRequests: readonly number[]): Promise<Record<number, MergedFile[]>> {
   const each = await Promise.all(
     pullRequests.map(async (number): Promise<[number, MergedFile[]]> => {
       const files = await allPages<{ filename: string; status: string; previous_filename?: string }>(

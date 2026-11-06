@@ -511,6 +511,15 @@ export function replayPatchPath(repo: string, { issue, ticket, arm }: Pick<Repla
 }
 
 /**
+ * Where a Replay arm's gates sit in the store, beside its patch: how the
+ * Sandbox's setup, build and tests, and the merged PR's tests, went on its
+ * diff, which the results read back for every Ticket done (src/kit/replay.ts).
+ */
+export function replayGatesPath(repo: string, at: Pick<ReplayRun, "issue" | "ticket" | "arm">): string {
+  return replayPatchPath(repo, at).replace(/\.patch$/, ".gates.json");
+}
+
+/**
  * A run in one role, as the store tells it from every other: its repo, its
  * workflow run and attempt, the role, and for a Replay's run its arm, since
  * both arms run in one workflow run. Its record, transcript and score files,

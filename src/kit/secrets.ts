@@ -19,13 +19,24 @@ export function secretsTemplate(config: KitConfig): string {
  * declared test secret. Anything declared but unresolved fails the run.
  */
 export function sandboxEnv(config: KitConfig, resolvedJson: string): Record<string, string> {
-  const resolved = JSON.parse(resolvedJson) as Record<string, unknown>;
-  const take = (name: string): string => {
-    const value = resolved[name];
-    if (typeof value !== "string" || value === "") throw new Error(`1Password didn't resolve ${name}`);
-    return value;
-  };
-  const env: Record<string, string> = { [CLAUDE_TOKEN_ENV]: take(CLAUDE_TOKEN_ENV), ...config.sandbox.env };
-  for (const name of Object.keys(config.sandbox.secrets)) env[name] = take(name);
+  return { [CLAUDE_TOKEN_ENV]: resolvedValue(resolvedJson, CLAUDE_TOKEN_ENV), ...testEnv(config, resolvedJson) };
+}
+
+/**
+ * The env a Replay arm's gates run the Sandbox's commands with (#156), from
+ * the same outputs: the Sandbox's values and each declared test secret, and
+ * never the Claude token, since no agent runs there. Anything declared but
+ * unresolved fails the run.
+ */
+export function testEnv(config: KitConfig, resolvedJson: string): Record<string, string> {
+  const env: Record<string, string> = { ...config.sandbox.env };
+  for (const name of Object.keys(config.sandbox.secrets)) env[name] = resolvedValue(resolvedJson, name);
   return env;
+}
+
+/** One value 1Password resolved, or a throw when it didn't. */
+function resolvedValue(resolvedJson: string, name: string): string {
+  const value = (JSON.parse(resolvedJson) as Record<string, unknown>)[name];
+  if (typeof value !== "string" || value === "") throw new Error(`1Password didn't resolve ${name}`);
+  return value;
 }

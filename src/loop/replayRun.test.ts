@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { acceptedBody } from "../__fixtures__/replay.ts";
 import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
 import { replayMarksIn, type ReplayTicketEnd } from "../kit/replay.ts";
 import { planFor } from "./rules.ts";
 import type { IssueSnapshot, KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
@@ -83,8 +84,18 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
   /** Replay #140 with Ticket 12 in progress in run 9001. */
   const running = aReplay({ labels: ["fabrik:replay"], body: acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null }]) });
 
-  function ended(end: ReplayTicketEnd, subscription = "Claude token"): LoopEvent {
-    return { kind: "replay-run-finished", issue: 140, ticket: 12, run: 9001, end, runUrl: RUN, subscription, ...(end.kind === "weekly-limit" ? { resetsAt: RESETS_AT } : {}) };
+  function ended(end: ReplayTicketEnd, subscription = "Claude token"): Extract<LoopEvent, { kind: "replay-run-finished" }> {
+    return {
+      kind: "replay-run-finished",
+      issue: 140,
+      ticket: 12,
+      run: 9001,
+      end,
+      runUrl: RUN,
+      subscription,
+      ...(end.kind === "weekly-limit" ? { resetsAt: RESETS_AT } : {}),
+      outcomes: null,
+    };
   }
 
   /** Ticket 12's progress in the body the plan writes. */
@@ -143,6 +154,68 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
     expect(planFor(ended({ kind: "done" }), snapshotOf(aReplay()), kitConfig())).toEqual({
       kind: "nothing",
       reason: "#12 isn't in progress in run 9001 on replay #140, so its run's end changes nothing there",
+    });
+  });
+
+  describe("with what the store holds of the Replay, as the replay-record job read it back", () => {
+    /** Both arms' Implement and Review runs of Ticket `ticket` in run `run`. */
+    const armsOf = (ticket: number, run: number) =>
+      (["baseline", "variant"] as const).flatMap((arm) =>
+        (["implement", "review"] as const).map((role) =>
+          aRunRecord({ repo: "acme/shop", runId: run, role, issue: ticket, verdict: role === "review" ? "pass" : null, replay: { issue: 140, arm, ticket, candidateSha: null } }),
+        ),
+      );
+    const outcomes = (records = armsOf(12, 9001)) => ({ records, scoreFiles: [], gates: [] });
+    const finished = (body: string, end: ReplayTicketEnd = { kind: "done" }, store: ReturnType<typeof outcomes> | null = outcomes()) =>
+      planFor({ ...ended(end), outcomes: store }, snapshotOf({ ...running, body }), kitConfig());
+    const bodyOf = (plan: Plan) => {
+      const edit = actionsOf(plan).find((action) => action.kind === "edit-issue-body");
+      return edit?.kind === "edit-issue-body" ? edit.body : "";
+    };
+    const commentsOf = (plan: Plan) => actionsOf(plan).filter((action) => action.kind === "comment");
+
+    it("shows the Ticket's results as it finishes, each arm's linking its patch, and posts nothing while another Ticket waits", () => {
+      const plan = finished(running.body);
+
+      expect(bodyOf(plan)).toContain("replays/acme/shop/140/12-baseline.patch");
+      expect(bodyOf(plan)).toContain("replays/acme/shop/140/12-variant.patch");
+      expect(commentsOf(plan)).toEqual([]);
+    });
+
+    describe("once the last Ticket finishes", () => {
+      const lastRunning = acceptedBody([12, 7], [{ ticket: 7, state: "done", run: 8001 }, { ticket: 12, state: "in-progress", run: 9001, retrying: null }]);
+
+      it("posts one comment saying the results are in, mentioning the Operator once", () => {
+        const plan = finished(lastRunning, { kind: "done" }, outcomes([...armsOf(7, 8001), ...armsOf(12, 9001)]));
+
+        expect(commentsOf(plan)).toEqual([{ kind: "comment", issue: 140, body: expect.stringContaining("@operator") }]);
+        expect(notificationsOf(plan)).toEqual(["mention on #140"]);
+        expect(bodyOf(plan)).toContain("replays/acme/shop/140/7-variant.patch");
+      });
+
+      it("posts it when the last Ticket fails a second time too, since every Ticket is then done or failed", () => {
+        const retrying = acceptedBody([12, 7], [{ ticket: 7, state: "done", run: 8001 }, { ticket: 12, state: "in-progress", run: 9001, retrying: "it crashed" }]);
+
+        expect(notificationsOf(finished(retrying, { kind: "infrastructure", reason: "it crashed again" }))).toEqual(["mention on #140"]);
+      });
+
+      it("posts none when it goes back to waiting, refused on the weekly limit", () => {
+        expect(commentsOf(finished(lastRunning, { kind: "weekly-limit" }))).toEqual([]);
+      });
+
+      it("still posts it when the store couldn't be read, showing the progress without rewriting the results", () => {
+        const plan = finished(lastRunning, { kind: "done" }, null);
+
+        expect(progressIn(plan)).toEqual({ ticket: 12, state: "done", run: 9001 });
+        expect(notificationsOf(plan)).toEqual(["mention on #140"]);
+      });
+    });
+
+    it("rewrites nothing and posts nothing on a closed replay issue, which cancelled it", () => {
+      const lastRunning = acceptedBody([12], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null }]);
+      const plan = planFor({ ...ended({ kind: "done" }), outcomes: outcomes() }, snapshotOf({ ...running, open: false, body: lastRunning }), kitConfig());
+
+      expect(plan).toMatchObject({ kind: "nothing" });
     });
   });
 });

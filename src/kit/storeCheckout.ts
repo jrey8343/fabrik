@@ -9,6 +9,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readTranscriptGzip } from "../agent/transcript.ts";
 import type { KitConfig } from "./config.ts";
+import { readReplayArmGates, type ReplayArmGates } from "./replay.ts";
 import { readRunRecord, type RunRecord } from "./runRecord.ts";
 import { readScoreFile, type ScoreFile } from "./scorer.ts";
 
@@ -62,6 +63,25 @@ export async function readStoreScoreFiles(storeDir: string): Promise<Record<stri
       return score === null ? [] : [[path, score]];
     }),
   );
+}
+
+/**
+ * Every Replay arm's gates under `replays/`, beside its patch (replayGatesPath),
+ * whatever repo or replay issue: a file that doesn't read as an arm's gates is
+ * left out.
+ */
+export async function readStoreReplayGates(storeDir: string): Promise<ReplayArmGates[]> {
+  const paths = await pathsIn(storeDir, "replays", ".gates.json");
+  const files = await Promise.all(
+    paths.map(async (path) => {
+      try {
+        return readReplayArmGates(JSON.parse(await readFile(join(storeDir, path), "utf8")));
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return files.filter((gates) => gates !== null);
 }
 
 /**

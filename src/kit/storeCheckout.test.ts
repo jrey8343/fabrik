@@ -5,8 +5,8 @@ import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { aRecordWithTranscript } from "../__fixtures__/retroEvidence.ts";
 import { aScoreFile } from "../__fixtures__/weeklySummary.ts";
-import { recordPathOf } from "./runRecord.ts";
-import { readStoreRunRecords, readStoreScoreFiles, readStoreTranscripts } from "./storeCheckout.ts";
+import { recordPathOf, replayGatesPath } from "./runRecord.ts";
+import { readStoreReplayGates, readStoreRunRecords, readStoreScoreFiles, readStoreTranscripts } from "./storeCheckout.ts";
 
 /** A checkout of the store holding these files, by their paths in it. */
 async function aCheckoutWith(files: Readonly<Record<string, string | Uint8Array>>): Promise<string> {
@@ -66,5 +66,18 @@ describe("Reading the store's checkout", () => {
     expect(await readStoreRunRecords(store, ["Claude token"])).toEqual({});
     expect(await readStoreScoreFiles(store)).toEqual({});
     expect((await readStoreTranscripts(store))(record.transcript!)).toBeNull();
+  });
+
+  // Beside each arm's patch, which a Replay's results read back for every Ticket done (#156).
+  it("reads each Replay arm's gates, leaving out a file that doesn't read as one, and none when there are none", async () => {
+    const gates = { ticket: 12, arm: "variant", run: 9001, gates: "tests-failed", hiddenTests: "passed" };
+    const store = await aCheckoutWith({
+      [replayGatesPath("owner/product", { issue: 140, ticket: 12, arm: "variant" })]: JSON.stringify(gates),
+      [replayGatesPath("owner/product", { issue: 140, ticket: 12, arm: "baseline" })]: JSON.stringify({ ...gates, arm: "baseline", gates: "green" }),
+      "replays/owner/product/140/12-variant.patch": "diff --git a/x b/x\n",
+    });
+
+    expect(await readStoreReplayGates(store)).toEqual([gates]);
+    expect(await readStoreReplayGates(await aCheckoutWith({}))).toEqual([]);
   });
 });

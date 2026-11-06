@@ -2,7 +2,7 @@
 // the resolved Kit config go in; a plan comes out.
 import type { CaptureResult, EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
-import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayTicketEnd } from "../kit/replay.ts";
+import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, ReplayTicketEnd } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { SentBack } from "./backToDesign.ts";
@@ -339,6 +339,13 @@ export type LoopEvent =
       readonly subscription?: string;
       /** For a weekly-limit refusal, when the limit resets (an ISO 8601 time), if the stream said. */
       readonly resetsAt?: string;
+      /**
+       * What the store holds of the Replay once the job wrote this run's files,
+       * which its results are rewritten from (withReplayResults): this repo's
+       * Run records and score files, and each arm's gates. Null when the store
+       * couldn't be read, so the results the body shows stay as they are.
+       */
+      readonly outcomes: Omit<ReplayOutcomes, "open"> | null;
     }
   | { readonly kind: "pull-request-left-draft"; readonly pullRequest: number }
   | { readonly kind: "pull-request-closed"; readonly pullRequest: number }

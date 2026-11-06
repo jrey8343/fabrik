@@ -1,0 +1,100 @@
+# Writes a replay Ticket's run (#156) to the fabrik-runs store and lands it
+# on the replay issue: the replay-record job, the replay's own push job, with
+# ADR-0009's shape. It runs no agent and no Product code, and checks out no
+# Product repo. Through the push service account it gets the store's token,
+# for fabrik-runs alone with Contents write, from the store-token action, and
+# the Fabrik App's token, for the replay issue, from run-loop.
+#
+# From both arms' artifacts, src/kit/replay-record-main.ts writes each arm's
+# Implement and Review runs' Run records and transcripts, its patch at
+# replays/<owner>/<repo>/<replay-issue>/<ticket>-<arm>.patch and its gates
+# beside it, and the judge's record and score file, every one create-only
+# with the record writer's conflict retry. Before it touches the store it
+# leaves how the run ended in a file. Then it checks out this repo's paths in
+# the store, with that token and no credential left behind, and run-loop lands
+# the run through the Loop (src/loop/replayRun.ts): the Ticket's progress and
+# the results, rewritten from what the store now holds, unless the Operator
+# closed the issue; one "results are ready" comment once the last Ticket is
+# in; and for a weekly-limit refusal, the weekly-limit issue. A store that
+# isn't there, or isn't private, gets nothing, and the run still lands.
+#
+# Its job runs it once both arms' jobs have ended, whatever they came to and
+# even when the workflow run was cancelled, so no Ticket stays in progress for
+# good: an arm that left no account of its run lands as an Infrastructure
+# failure, which the Ticket is retried once for. With permissions: {} and
+# continue-on-error, after checking out the Kit alone into kit/ at the Kit
+# job's sha:
+#   - uses: ./kit/.github/actions/replay-record
+#     with:
+#       op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+#       kit-outputs: ${{ toJSON(needs.kit.outputs) }}
+name: Write the replay record
+description: Writes a replay Ticket's arms' records, patches, gates and scores to the fabrik-runs store, and lands the run on the replay issue.
+
+inputs:
+  op-push-token:
+    description: The push service account's token (secrets.OP_PUSH_TOKEN), which reads the Fabrik App vault.
+    required: true
+  kit-outputs:
+    description: The Kit job's outputs as one line of JSON (toJSON(needs.kit.outputs)), which name the replay Ticket's run.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24
+
+    # Kept for 7 days by the arms' jobs, each into a folder named after it; a run that left none is an arm with no account of it.
+    - name: Take both arms' artifacts
+      continue-on-error: true
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        pattern: fabrik-*-replay-*
+        path: ${{ runner.temp }}/replay
+
+    # The store's token alone; empty for a store the App isn't on, and the program says nothing was written.
+    - name: Mint the Fabrik App's token for the fabrik-runs store
+      id: tokens
+      uses: ./kit/.github/actions/store-token
+      with:
+        op-push-token: ${{ inputs.op-push-token }}
+
+    # continue-on-error: it leaves how the run ended before it writes, so a store problem never keeps the run from landing.
+    - name: Write the replay's records
+      id: record
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        FABRIK_KIT_OUTPUTS: ${{ inputs.kit-outputs }}
+        FABRIK_STORE_TOKEN: ${{ steps.tokens.outputs.store-token }}
+        FABRIK_REPLAY_DIR: ${{ runner.temp }}/replay
+      run: node src/kit/replay-record-main.ts
+
+    # After the writes, so the results read back what this run wrote too; this repo's paths alone.
+    - name: Check out this repo's Run records, score files and Replays from the store
+      id: store
+      if: steps.tokens.outputs.store-token != ''
+      continue-on-error: true
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: jrey8343/fabrik-runs
+        token: ${{ steps.tokens.outputs.store-token }}
+        path: store
+        sparse-checkout: |
+          runs/${{ github.repository }}
+          scores/${{ github.repository }}
+          replays/${{ github.repository }}
+        sparse-checkout-cone-mode: true
+        persist-credentials: false
+
+    - name: Land the run on the replay issue
+      if: always() && steps.record.outputs.ended != ''
+      uses: ./kit/.github/actions/run-loop
+      with:
+        op-push-token: ${{ inputs.op-push-token }}
+        replay-run-ended: ${{ steps.record.outputs.ended }}
+        store-dir: ${{ steps.store.outcome == 'success' && format('{0}/store', github.workspace) || '' }}
