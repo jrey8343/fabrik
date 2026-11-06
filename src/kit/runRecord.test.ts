@@ -3,7 +3,17 @@ import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { agentRunIn } from "../github/apply.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Needs } from "./pushJob.ts";
-import { agentRunEnded, type JudgeRunEnd, judgeRunRecordFor, readRunRecord, type RunEnd, runRecordFor } from "./runRecord.ts";
+import {
+  agentRunEnded,
+  type JudgeRunEnd,
+  judgeRunRecordFor,
+  type ReplayRunEnd,
+  type ReplayRun,
+  readRunRecord,
+  replayRunRecordFor,
+  type RunEnd,
+  runRecordFor,
+} from "./runRecord.ts";
 
 const KIT_SHA = "f".repeat(40);
 const BASE_SHA = "b".repeat(40);
@@ -97,7 +107,7 @@ function runEnd(overrides: Partial<RunEnd> = {}): RunEnd {
 describe("The Run record a run's end yields", () => {
   it("a passing Triage run gets a record with its identity, what ran, its outcome, effort spent and cost", () => {
     expect(runRecordFor(runEnd())?.record).toEqual({
-      schema: 3,
+      schema: 4,
       kitSha: KIT_SHA,
       repo: "acme/widgets",
       runId: 9001,
@@ -113,6 +123,7 @@ describe("The Run record a run's end yields", () => {
       stepUp: false,
       requestChanges: false,
       prototype: false,
+      replay: null,
       baseSha: BASE_SHA,
       jobResult: "success",
       subtype: "success",
@@ -354,7 +365,7 @@ describe("The Run record a run's end yields", () => {
       expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-retro.json");
     });
 
-    it("a Retro run names the Subscription the Kit job gave it, at schema 3, its evidence job's failure included", () => {
+    it("a Retro run names the Subscription the Kit job gave it, at schema 4, its evidence job's failure included", () => {
       const subscriptions = ["Claude token", "Claude token 2"];
       const passed = retro("success", {
         needs: needs("retro", { retro: job("success", { "base-sha": DEFAULT_BRANCH_SHA }) }, { subscription: "Claude token 2" }),
@@ -370,8 +381,8 @@ describe("The Run record a run's end yields", () => {
         transcript: null,
       });
 
-      expect(passed?.record).toMatchObject({ schema: 3, role: "retro", subscription: "Claude token 2" });
-      expect(evidenceFailed?.record).toMatchObject({ schema: 3, role: "retro", infrastructureFailure: "crash", subscription: "Claude token 2" });
+      expect(passed?.record).toMatchObject({ schema: 4, role: "retro", subscription: "Claude token 2" });
+      expect(evidenceFailed?.record).toMatchObject({ schema: 4, role: "retro", infrastructureFailure: "crash", subscription: "Claude token 2" });
     });
 
     it("a failed Retro run is recorded as the Infrastructure failure its report names", () => {
@@ -420,7 +431,7 @@ describe("The Run record a run's end yields", () => {
       const files = research("success");
 
       expect(files?.record).toMatchObject({
-        schema: 3,
+        schema: 4,
         role: "research",
         issue: 42,
         pullRequest: null,
@@ -861,8 +872,20 @@ describe("The Run record a run's end yields", () => {
     expect(files?.record).toMatchObject({ runAttempt: 2, transcript: files?.transcriptPath });
   });
 
-  it("carries schema 3 and the Kit sha that wrote it", () => {
-    expect(runRecordFor(runEnd({ kitSha: "c".repeat(40) }))?.record).toMatchObject({ schema: 3, kitSha: "c".repeat(40) });
+  it("carries schema 4 and the Kit sha that wrote it", () => {
+    expect(runRecordFor(runEnd({ kitSha: "c".repeat(40) }))?.record).toMatchObject({ schema: 4, kitSha: "c".repeat(40) });
+  });
+
+  it.each([
+    ["triage", needs("triage", { triage: job("success") }), 12],
+    ["implement", needs("implement", { implement: job("success") }, { ticket: "7" }), 7],
+    ["review", needs("review", { "review-checks": { result: "success", outputs: { checks: "green", "head-sha": HEAD_SHA, failed: "[]" } }, review: job("success") }, { ticket: "7", "pull-request": "50" }), 50],
+  ])("a live %s run is no replay's, and its record and transcript paths name no arm", (role, ended, eventIssue) => {
+    const files = runRecordFor(runEnd({ needs: ended, eventIssue }));
+
+    expect(files?.record).toMatchObject({ schema: 4, replay: null });
+    expect(files?.recordPath).toBe(`runs/acme/widgets/2026-11/9001-1-${role}.json`);
+    expect(files?.transcriptPath).toBe(`transcripts/acme/widgets/2026-11/9001-1-${role}.jsonl.gz`);
   });
 
   describe("names the Subscription the run used", () => {
@@ -874,7 +897,7 @@ describe("The Run record a run's end yields", () => {
         subscriptions: TWO_SUBSCRIPTIONS,
       });
 
-      expect(runRecordFor(end)?.record).toMatchObject({ schema: 3, subscription: "Claude token 2" });
+      expect(runRecordFor(end)?.record).toMatchObject({ schema: 4, subscription: "Claude token 2" });
     });
 
     it("the first listed Subscription when the Kit job gave the run none", () => {
@@ -930,23 +953,247 @@ describe("A Run record read back from the store", () => {
     expect(readRunRecord(JSON.parse(JSON.stringify(written)), ["Claude token", "Claude token 2"])).toEqual(written);
   });
 
-  it("of schema 2, written before prototype turns, reads as no prototype turn, at the current schema", () => {
-    const { prototype: _, ...rest } = written ?? { prototype: false };
-    const older = { ...rest, schema: 2 };
+  it("of schema 3, written before Replays, reads as no replay's, at the current schema", () => {
+    const { replay: _, ...rest } = written ?? { replay: null };
+    const older = { ...rest, schema: 3 };
 
-    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 3, prototype: false });
+    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 4, replay: null });
   });
 
-  it("of schema 1, which names no Subscription, reads as being on the first listed one and no prototype turn, at the current schema", () => {
-    const { subscription: _, prototype: __, ...rest } = written ?? { subscription: "", prototype: false };
+  it("of schema 2, written before prototype turns, reads as no prototype turn and no replay's, at the current schema", () => {
+    const { prototype: _, replay: __, ...rest } = written ?? { prototype: false, replay: null };
+    const older = { ...rest, schema: 2 };
+
+    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 4, prototype: false, replay: null });
+  });
+
+  it("of schema 1, which names no Subscription, reads as being on the first listed one, no prototype turn and no replay's, at the current schema", () => {
+    const { subscription: _, prototype: __, replay: ___, ...rest } = written ?? { subscription: "", prototype: false, replay: null };
     const older = { ...rest, schema: 1 };
 
-    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 3, subscription: "Work token", prototype: false });
+    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({
+      ...written,
+      schema: 4,
+      subscription: "Work token",
+      prototype: false,
+      replay: null,
+    });
   });
 
   it("of a schema the Kit doesn't know reads as no record", () => {
-    expect(readRunRecord({ ...written, schema: 4 }, ["Claude token"])).toBeNull();
+    expect(readRunRecord({ ...written, schema: 5 }, ["Claude token"])).toBeNull();
     expect(readRunRecord("not a record", ["Claude token"])).toBeNull();
+  });
+});
+
+describe("A Replay arm's record", () => {
+  const REPLAY_ISSUE = 300;
+  const TICKET = 7;
+  const MERGED_PR = 50;
+
+  /** What the replay-record job knows when the baseline arm's passing Implement run, replaying Ticket 7, ends, with whatever the case changes. */
+  function replayRunEnd(overrides: Partial<ReplayRunEnd> = {}): ReplayRunEnd {
+    return {
+      replay: { issue: REPLAY_ISSUE, arm: "baseline", ticket: TICKET, candidateSha: null },
+      role: "implement",
+      pullRequest: MERGED_PR,
+      baseSha: BASE_SHA,
+      repo: "acme/widgets",
+      runId: 9001,
+      runAttempt: 1,
+      kitSha: KIT_SHA,
+      endedAt: "2026-11-05T10:00:00Z",
+      job: job("success", { "base-sha": "" }),
+      settings: { model: "claude-opus-5-5", effort: "high" },
+      subscription: "Claude token 2",
+      agentResult: agentResult("implement", TICKET),
+      failureReport: null,
+      transcript: [init, result()],
+      ...overrides,
+    };
+  }
+
+  it("is a first Implement run on the replayed Ticket and its merged PR, from the Ticket's base, at the pinned Kit, naming its Replay", () => {
+    expect(replayRunRecordFor(replayRunEnd()).record).toMatchObject({
+      schema: 4,
+      kitSha: KIT_SHA,
+      repo: "acme/widgets",
+      runId: 9001,
+      runAttempt: 1,
+      role: "implement",
+      issue: TICKET,
+      pullRequest: MERGED_PR,
+      model: "claude-opus-5-5",
+      subscription: "Claude token 2",
+      retry: 0,
+      stepUp: false,
+      requestChanges: false,
+      prototype: false,
+      replay: { issue: REPLAY_ISSUE, arm: "baseline", ticket: TICKET },
+      baseSha: BASE_SHA,
+      jobResult: "success",
+      infrastructureFailure: null,
+      verdict: null,
+      turns: 12,
+      totalCostUsd: 1.25,
+    });
+  });
+
+  it("sits at its arm's paths, beside the usual pattern", () => {
+    const files = replayRunRecordFor(replayRunEnd());
+
+    expect(files.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-implement-replay-baseline.json");
+    expect(files.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-1-implement-replay-baseline.jsonl.gz");
+    expect(files.record.transcript).toBe(files.transcriptPath);
+  });
+
+  describe("names the candidate Kit sha only for a `kit` variant", () => {
+    const CANDIDATE_SHA = "e".repeat(40);
+
+    it("a `kit` variant's names the candidate whose prompts and Base skills it loaded, while its kitSha stays the pinned release", () => {
+      const record = replayRunRecordFor(replayRunEnd({ replay: { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: CANDIDATE_SHA } })).record;
+
+      expect(record.kitSha).toBe(KIT_SHA);
+      expect(record.replay).toEqual({ issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: CANDIDATE_SHA });
+    });
+
+    it("a baseline's, and a model or effort variant's, names none", () => {
+      const baseline = replayRunRecordFor(replayRunEnd()).record;
+      const variant = replayRunRecordFor(
+        replayRunEnd({
+          replay: { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: null },
+          job: job("success", { model: "claude-sonnet-5-5" }),
+          settings: { model: "claude-sonnet-5-5", effort: "high" },
+        }),
+      ).record;
+
+      expect(baseline.replay).toEqual({ issue: REPLAY_ISSUE, arm: "baseline", ticket: TICKET, candidateSha: null });
+      expect(variant).toMatchObject({ model: "claude-sonnet-5-5", replay: { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: null } });
+    });
+  });
+
+  it("the baseline's and the variant's Implement and Review runs, all in one workflow run, each get their own record and transcript paths", () => {
+    const variant = { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: null } as const;
+    const runs = [
+      replayRunRecordFor(replayRunEnd()),
+      replayRunRecordFor(replayRunEnd({ replay: variant })),
+      replayRunRecordFor(replayRunEnd({ role: "review", agentResult: agentResult("review", TICKET, "verdict: pass\n\nFine.") })),
+      replayRunRecordFor(replayRunEnd({ role: "review", replay: variant, agentResult: agentResult("review", TICKET, "verdict: pass\n\nFine.") })),
+    ];
+
+    expect(runs.map((files) => files.recordPath)).toEqual([
+      "runs/acme/widgets/2026-11/9001-1-implement-replay-baseline.json",
+      "runs/acme/widgets/2026-11/9001-1-implement-replay-variant.json",
+      "runs/acme/widgets/2026-11/9001-1-review-replay-baseline.json",
+      "runs/acme/widgets/2026-11/9001-1-review-replay-variant.json",
+    ]);
+    expect(runs.map((files) => files.transcriptPath)).toEqual([
+      "transcripts/acme/widgets/2026-11/9001-1-implement-replay-baseline.jsonl.gz",
+      "transcripts/acme/widgets/2026-11/9001-1-implement-replay-variant.jsonl.gz",
+      "transcripts/acme/widgets/2026-11/9001-1-review-replay-baseline.jsonl.gz",
+      "transcripts/acme/widgets/2026-11/9001-1-review-replay-variant.jsonl.gz",
+    ]);
+  });
+
+  describe("a Review arm's run reviews the arm's diff against the Ticket, with no PR of its own", () => {
+    const review = (verdict: string) =>
+      replayRunRecordFor(replayRunEnd({ role: "review", agentResult: agentResult("review", TICKET, `verdict: ${verdict}\n\nFindings.`) })).record;
+
+    it.each(["pass", "execution-flaw", "design-flaw"])("carries its %s Verdict, on the Ticket and its merged PR, from the Ticket's base", (verdict) => {
+      expect(review(verdict)).toMatchObject({
+        role: "review",
+        issue: TICKET,
+        pullRequest: MERGED_PR,
+        baseSha: BASE_SHA,
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        verdict,
+      });
+    });
+
+    it("an Implement arm's carries no Verdict, whatever its output says", () => {
+      const record = replayRunRecordFor(replayRunEnd({ agentResult: agentResult("implement", TICKET, "verdict: pass") })).record;
+
+      expect(record.verdict).toBeNull();
+    });
+  });
+
+  describe("an arm's run that failed is recorded as its Infrastructure failure", () => {
+    it("a failed 1Password load is recorded on the arm's model and effort, the agent never having started", () => {
+      const files = replayRunRecordFor(
+        replayRunEnd({
+          job: job("failure", { "secrets-step": "failure", "base-sha": "", model: "", effort: "" }),
+          settings: { model: "claude-sonnet-5-5", effort: "low" },
+          agentResult: null,
+          transcript: null,
+        }),
+      );
+
+      expect(files.record).toMatchObject({
+        role: "implement",
+        model: "claude-sonnet-5-5",
+        effort: "low",
+        jobResult: "failure",
+        infrastructureFailure: "unreachable-1password",
+        turns: null,
+        totalCostUsd: null,
+        transcript: null,
+      });
+      expect(files.transcriptPath).toBeNull();
+      expect(files.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-implement-replay-baseline.json");
+    });
+
+    it("a run refused on its weekly limit shows that failure and the Subscription it was refused on", () => {
+      const record = replayRunRecordFor(
+        replayRunEnd({
+          job: job("failure"),
+          agentResult: null,
+          failureReport: JSON.stringify({ failure: "weekly-limit", detail: "", resetsAt: "2026-11-09T04:00:00.000Z" }),
+          transcript: [init],
+        }),
+      ).record;
+
+      expect(record).toMatchObject({ jobResult: "failure", infrastructureFailure: "weekly-limit", subscription: "Claude token 2" });
+    });
+
+    it("a Review timed out by its timeout-minutes gets a record with no Verdict and no result fields", () => {
+      const record = replayRunRecordFor(replayRunEnd({ role: "review", job: job("cancelled"), agentResult: null, transcript: [init] })).record;
+
+      expect(record).toMatchObject({ role: "review", jobResult: "cancelled", infrastructureFailure: "timeout", verdict: null, durationMs: null, turns: null });
+    });
+  });
+
+  it("reads back from the store as written, its Replay included", () => {
+    const written = replayRunRecordFor(replayRunEnd({ replay: { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: "e".repeat(40) } })).record;
+
+    expect(readRunRecord(JSON.parse(JSON.stringify(written)), ["Claude token"])).toEqual(written);
+  });
+
+  it("a judge run scoring an arm's Implement run is that arm's too: its record names the Replay and sits at the arm's paths", () => {
+    const variant = { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: null } as const;
+    const judged = (replay: ReplayRun) =>
+      judgeRunRecordFor({
+        scored: replayRunRecordFor(replayRunEnd({ replay })).record,
+        judge: { result: "success", outputs: { "secrets-step": "success", model: "claude-sonnet-5-5", effort: "" } },
+        judgeModel: "claude-sonnet-5-5",
+        kitSha: KIT_SHA,
+        endedAt: "2026-11-05T10:04:00Z",
+        failureReport: null,
+        transcript: [init, result()],
+      });
+    const baseline = judged({ ...variant, arm: "baseline" });
+    const variantJudge = judged(variant);
+
+    expect(variantJudge.record).toMatchObject({ role: "score", issue: TICKET, pullRequest: MERGED_PR, replay: variant });
+    expect([baseline.recordPath, variantJudge.recordPath]).toEqual([
+      "runs/acme/widgets/2026-11/9001-1-score-replay-baseline.json",
+      "runs/acme/widgets/2026-11/9001-1-score-replay-variant.json",
+    ]);
+    expect([baseline.transcriptPath, variantJudge.transcriptPath]).toEqual([
+      "transcripts/acme/widgets/2026-11/9001-1-score-replay-baseline.jsonl.gz",
+      "transcripts/acme/widgets/2026-11/9001-1-score-replay-variant.jsonl.gz",
+    ]);
   });
 });
 
@@ -1001,7 +1248,7 @@ describe("A judge run's record", () => {
 
   it("is for the scored run's subject, in role score, with its own model, outcome, effort spent and cost", () => {
     expect(judgeRunRecordFor(judgeRunEnd()).record).toEqual({
-      schema: 3,
+      schema: 4,
       kitSha: KIT_SHA,
       repo: "acme/widgets",
       runId: 9001,
@@ -1017,6 +1264,7 @@ describe("A judge run's record", () => {
       stepUp: false,
       requestChanges: false,
       prototype: false,
+      replay: null,
       baseSha: null,
       jobResult: "success",
       subtype: "success",
