@@ -15,6 +15,7 @@
 // each arm of each Ticket in a row from what the store holds of it, totals
 // per arm, the baseline's gap from the original runs, and a headline line
 // computed from the totals. Pure, no I/O.
+import { isObject, parsedJson } from "../agent/stream.ts";
 import { type ChangedPath, checkTrustRoot } from "../guard/trust-root.ts";
 import { newIssueUrl } from "../loop/followUps.ts";
 import { REPLAY_LABEL } from "../loop/labels.ts";
@@ -880,25 +881,16 @@ export function replayMarksIn(body: string): ReplayMarks | null {
     .split("\n")
     .map((line) => line.trim());
   const planJson = lines.map((line) => PLAN_MARKER.exec(line)?.[1]).find((json) => json !== undefined);
-  const plan = planJson === undefined ? null : readPlan(parsed(planJson));
+  const plan = planJson === undefined ? null : readPlan(parsedJson(planJson));
   if (plan === null) return null;
   const marked = lines.flatMap((line) => {
     const json = PROGRESS_MARKER.exec(line)?.[1];
-    const progress = json === undefined ? null : readProgress(parsed(json));
+    const progress = json === undefined ? null : readProgress(parsedJson(json));
     return progress === null ? [] : [progress];
   });
   // A Ticket with no progress marker of its own hasn't started.
   const progress = plan.tickets.map(({ ticket }): TicketProgress => marked.find((each) => each.ticket === ticket) ?? { ticket, state: "pending" });
   return { plan, progress };
-}
-
-/** A marker's JSON, or undefined when it doesn't parse. */
-function parsed(json: string): unknown {
-  try {
-    return JSON.parse(json);
-  } catch {
-    return undefined;
-  }
 }
 
 /** The plan as its marker holds it: each Ticket's baseline only, since its variant is the baseline with the variable changed. */
@@ -946,11 +938,33 @@ function readPlannedTicket(value: unknown, variable: ReplayVariable): PlannedTic
   const { ticket, pullRequest, baseSha, flags } = value;
   if (typeof baseSha !== "string" || !FULL_SHA.test(baseSha)) return null;
   if (!flags.every((flag) => REPLAY_FLAGS.includes(flag)) || new Set(flags).size !== flags.length) return null;
-  const implement = readRoleSettings(value.baseline.implement);
-  const review = readRoleSettings(value.baseline.review);
-  if (implement === null || review === null) return null;
-  const baseline: ReplayArmSettings = { implement, review, candidateSha: null };
+  const baseline = readArmSettings({ ...value.baseline, candidateSha: null });
+  if (baseline === null) return null;
   return { ticket, pullRequest, baseSha, flags: REPLAY_FLAGS.filter((flag) => flags.includes(flag)), arms: { baseline, variant: varied(baseline, variable) } };
+}
+
+/**
+ * Each arm's settings as the Kit writes them, the Kit job's `replay-arms`
+ * output among them (src/kit/jobs.ts), or null for anything else: each
+ * role's model and effort as Kit config could give them, and a candidate Kit
+ * sha a request could name, or none.
+ */
+export function readReplayArms(value: unknown): ReplayArms | null {
+  if (!isObject(value)) return null;
+  const baseline = readArmSettings(value["baseline"]);
+  const variant = readArmSettings(value["variant"]);
+  return baseline === null || variant === null ? null : { baseline, variant };
+}
+
+/** One arm's settings, as readReplayArms reads them, or null. */
+function readArmSettings(value: unknown): ReplayArmSettings | null {
+  if (!isObject(value)) return null;
+  const implement = readRoleSettings(value["implement"]);
+  const review = readRoleSettings(value["review"]);
+  const { candidateSha } = value;
+  if (implement === null || review === null) return null;
+  if (!(candidateSha === null || (typeof candidateSha === "string" && checkCandidateKit(candidateSha) === null))) return null;
+  return { implement, review, candidateSha };
 }
 
 /** A role's model and effort as Kit config could give them, or null. */
@@ -980,10 +994,6 @@ function readProgress(value: unknown): TicketProgress | null {
 
 /** Every flag, in the order a picked Ticket carries them. */
 const REPLAY_FLAGS: readonly ReplayFlag[] = ["human-touches", "edited-input", "no-hidden-tests"];
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** A Ticket, PR or run number: a whole number above zero. */
 function isId(value: unknown): value is number {
@@ -1200,7 +1210,7 @@ function shownResultsIn(body: string): TicketResult[] {
     .split("\n")
     .map((line) => RESULTS_MARKER.exec(line.trim())?.[1])
     .find((each) => each !== undefined);
-  const stored = json === undefined ? undefined : parsed(json);
+  const stored = json === undefined ? undefined : parsedJson(json);
   return Array.isArray(stored) ? stored.flatMap((each) => readTicketResult(each) ?? []) : [];
 }
 

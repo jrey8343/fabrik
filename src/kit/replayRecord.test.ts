@@ -246,8 +246,12 @@ describe("A replay Ticket's run, read from the Kit job's outputs", () => {
     expect(() => replayRunContextOf({ ticket: "12", sha: KIT_SHA }, { repo: "acme/shop", runId: 9001, runAttempt: 1 })).toThrow(/isn't a replay Ticket's run/);
   });
 
-  it("refuses arms' settings that don't read as each arm's", () => {
-    const outputs = { "replay-issue": "140", ticket: "12", "pull-request": "112", "base-sha": BASE_SHA, "replay-arms": '{"baseline":{}}', subscription: "Claude token", sha: KIT_SHA };
+  it.each([
+    ["don't read as each arm's", '{"baseline":{}}'],
+    ["name a model Kit config refuses", JSON.stringify({ ...replayArms(DEFAULT_KIT_CONFIG, REVIEW_HIGH), variant: { ...replayArms(DEFAULT_KIT_CONFIG, REVIEW_HIGH).variant, review: { model: "best", effort: null } } })],
+    ["name a candidate Kit that isn't a full sha", JSON.stringify({ ...replayArms(DEFAULT_KIT_CONFIG, REVIEW_HIGH), variant: { ...replayArms(DEFAULT_KIT_CONFIG, REVIEW_HIGH).variant, candidateSha: "abc1234" } })],
+  ])("refuses arms' settings that %s, as the replay issue's plan does", (_, arms) => {
+    const outputs = { "replay-issue": "140", ticket: "12", "pull-request": "112", "base-sha": BASE_SHA, "replay-arms": arms, subscription: "Claude token", sha: KIT_SHA };
 
     expect(() => replayRunContextOf(outputs, { repo: "acme/shop", runId: 9001, runAttempt: 1 })).toThrow(/replay-arms/);
   });

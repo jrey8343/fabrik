@@ -9,9 +9,9 @@
 // issue (src/loop/replayRun.ts). Pure but for writeReplayRun, which writes
 // through the record writer (src/kit/recordWriter.ts).
 import { readFailureReport } from "../agent/failure.ts";
-import { isObject } from "../agent/stream.ts";
+import { isObject, parsedJson } from "../agent/stream.ts";
 import type { NeededJob } from "./pushJob.ts";
-import { readReplayArmGates, type ReplayArms, type ReplayArmSettings, type ReplayTicketEnd } from "./replay.ts";
+import { readReplayArmGates, readReplayArms, type ReplayArms, type ReplayTicketEnd } from "./replay.ts";
 import { type StoreApi, type StoreFile, type StoreWrite, storeCommitMessage, storeJson, writeStoreFiles } from "./recordWriter.ts";
 import { RUN_NAMES } from "../loop/heldRun.ts";
 import { judgeRunRecordFor, REPLAY_ARMS, REPLAY_ROLES, type ReplayArm, replayGatesPath, replayPatchPath, type ReplayRole, replayRunRecordFor, type RunRecordFiles } from "./runRecord.ts";
@@ -120,7 +120,7 @@ export function replayRunContextOf(
     if (!Number.isSafeInteger(value) || value < 1) throw new Error(`The Kit job's ${name} isn't an issue number: ${output(name)}`);
     return value;
   };
-  const arms = readReplayArms(output("replay-arms"));
+  const arms = readReplayArms(parsedJson(output("replay-arms")));
   if (arms === null) throw new Error("The Kit job's replay-arms don't read as each arm's settings");
   return {
     ...run,
@@ -132,30 +132,6 @@ export function replayRunContextOf(
     arms,
     subscription: output("subscription"),
   };
-}
-
-/** Each arm's settings, as the Kit job passes them out in `replay-arms`, or null for anything else. */
-function readReplayArms(text: string): ReplayArms | null {
-  const value = parsed(text);
-  if (!isObject(value)) return null;
-  const baseline = readArmSettings(value["baseline"]);
-  const variant = readArmSettings(value["variant"]);
-  return baseline === null || variant === null ? null : { baseline, variant };
-}
-
-function readArmSettings(value: unknown): ReplayArmSettings | null {
-  if (!isObject(value)) return null;
-  const implement = readRoleSettings(value["implement"]);
-  const review = readRoleSettings(value["review"]);
-  const candidateSha = value["candidateSha"];
-  if (implement === null || review === null || !(candidateSha === null || typeof candidateSha === "string")) return null;
-  return { implement, review, candidateSha };
-}
-
-function readRoleSettings(value: unknown): ReplayArmSettings["implement"] | null {
-  if (!isObject(value)) return null;
-  const { model, effort } = value;
-  return typeof model === "string" && model !== "" && (effort === null || typeof effort === "string") ? { model, effort } : null;
 }
 
 /** What one of an arm's runs left: how its job went (ARM_JOB_FILE), its result, its failure report and its transcript; null for each it left none of. */
@@ -201,7 +177,7 @@ export const REPLAY_RUN_ENDED_FILE = "replay-run-ended.json";
 
 /** How a replay Ticket's run ended, from the file the replay-record job left, or a throw for one that doesn't read as it writes one. */
 export function readReplayRunEnded(text: string): ReplayRunEnded {
-  const value = parsed(text);
+  const value = parsedJson(text);
   const ended = isObject(value) ? value : {};
   const { issue, ticket, run, end, subscription, resetsAt } = ended;
   const ids = [issue, ticket, run].every((id) => Number.isSafeInteger(id) && (id as number) > 0);
@@ -323,7 +299,7 @@ function endOf(runs: ArmRuns): ReplayTicketEnd {
 
 /** The arm's gates file, at its path beside the patch, when its gates job left one for this run. */
 function gatesFile(context: ReplayRunContext, arm: ReplayArm, text: string | null): StoreFile[] {
-  const gates = text === null ? null : readReplayArmGates(parsed(text));
+  const gates = text === null ? null : readReplayArmGates(parsedJson(text));
   if (gates === null || gates.ticket !== context.ticket || gates.arm !== arm || gates.run !== context.runId) return [];
   return [{ path: replayGatesPath(context.repo, { issue: context.issue, ticket: context.ticket, arm }), content: storeJson(gates) }];
 }
@@ -415,7 +391,7 @@ function armRunRecord(context: ReplayRunContext, arm: ReplayArm, role: ReplayRol
 
 /** An arm's job's account of its run (ARM_JOB_FILE), or null when it left none that reads. */
 export function readArmJob(text: string | null): ArmJob | null {
-  const value = text === null ? null : parsed(text);
+  const value = text === null ? null : parsedJson(text);
   if (!isObject(value)) return null;
   if (value["ran"] === false) return typeof value["why"] === "string" ? { ran: false, why: value["why"] } : null;
   const job = value["job"];
@@ -439,12 +415,4 @@ export async function writeReplayRun(store: StoreApi, files: ReplayRunFiles, wai
     existing.push(...write.existing);
   }
   return { kind: "written", written, existing };
-}
-
-function parsed(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }
