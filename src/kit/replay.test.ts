@@ -222,8 +222,8 @@ describe("The Replay this link", () => {
   });
 });
 
-/** The commit Ticket `ticket`'s first Implement run started from. */
-const baseOf = (ticket: number) => ticket.toString(16).padStart(40, "0");
+/** The commit Ticket `ticket`'s first Implement run started from, whose short sha is the Ticket's number in hex, such as 000000c for 12. */
+const baseOf = (ticket: number) => `${ticket.toString(16).padStart(7, "0")}${"0".repeat(33)}`;
 
 /**
  * Ticket `ticket`, merged in PR `ticket + 100` on day `ticket` of November
@@ -559,6 +559,65 @@ describe("A Replay's next step on the tick", () => {
 
       expect(shown.find((line) => line.includes("#12"))).toContain("Human touches");
       expect(shown.find((line) => line.includes("#7"))).toContain("no hidden tests");
+    });
+
+    describe("leaving out a Ticket its arms can't compare", () => {
+      /** BASE, but with Review already at effort high, as the request's variant would run it. */
+      const reviewHigh = { ok: true, config: { roles: { ...BASE.roles, review: { ...BASE.roles.review, effort: "high" } } } } as const;
+      const invalid = { ok: false, errors: [".fabrik/config.json: roles.implement.turns is not a field"] } as const;
+
+      it("naming a listed one whose Kit config at its base doesn't resolve, or already runs the variant, with why", () => {
+        const acceptance = acceptanceOf([aCandidate(7), aCandidate(12), aCandidate(20)]);
+        const baseConfigs = { ...acceptance.baseConfigs, [baseOf(12)]: invalid, [baseOf(20)]: reviewHigh };
+        const issue = aReplayIssue(140, { body: bodyWith("review.effort: high", "tickets: 12, 7, 20") });
+
+        const plan = replayMarksIn(acceptedBody(nextReplayStep(aTick([issue], { acceptance: { ...acceptance, baseConfigs } }))))?.plan;
+
+        expect(plan?.tickets.map(({ ticket }) => ticket)).toEqual([7]);
+        expect(plan?.leftOut).toEqual([
+          { ticket: 12, reason: "its Kit config at 000000c doesn't resolve under this Kit release: .fabrik/config.json: roles.implement.turns is not a field" },
+          { ticket: 20, reason: "its Kit config at 0000014 already runs Review at effort high, so its two arms would be the same" },
+        ]);
+      });
+
+      it("taking another eligible Ticket in its place in the default pick", () => {
+        const candidates = [1, 2, 3, 4, 5, 6].map((ticket) => aCandidate(ticket));
+        const acceptance = acceptanceOf(candidates);
+        const baseConfigs = { ...acceptance.baseConfigs, [baseOf(6)]: reviewHigh, [baseOf(5)]: invalid };
+        const issue = aReplayIssue(140, { body: bodyWith("review.effort: high") });
+
+        const plan = replayMarksIn(acceptedBody(nextReplayStep(aTick([issue], { acceptance: { ...acceptance, baseConfigs } }))))?.plan;
+
+        expect(plan?.tickets.map(({ ticket }) => ticket).toSorted((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+        expect(plan?.leftOut).toEqual([]);
+      });
+
+      it("rejecting a default pick left with none, naming each Ticket left out", () => {
+        const acceptance = acceptanceOf([aCandidate(7), aCandidate(12)]);
+        const baseConfigs = { [baseOf(7)]: reviewHigh, [baseOf(12)]: reviewHigh };
+        const issue = aReplayIssue(140, { body: bodyWith("review.effort: high") });
+
+        const step = nextReplayStep(aTick([issue], { acceptance: { ...acceptance, baseConfigs } }));
+
+        expect(step).toMatchObject({ kind: "reject", issue: 140 });
+        expect((step as Extract<ReplayStep, { kind: "reject" }>).comment).toContain(
+          "- #12: its Kit config at 000000c already runs Review at effort high, so its two arms would be the same",
+        );
+      });
+
+      it.each([
+        ["Implement's model", "implement.model: claude-sonnet-5-5", "Implement on claude-sonnet-5-5"],
+        ["Review's model", "review.model: claude-opus-5-5", "Review on claude-opus-5-5"],
+        ["Implement's effort", "implement.effort: medium", "Implement at effort medium"],
+      ])("whose base already runs the variant's %s", (_, line, runs) => {
+        const issue = aReplayIssue(140, { body: bodyWith(line, "tickets: 12") });
+
+        const step = nextReplayStep(aTick([issue]));
+
+        expect((step as Extract<ReplayStep, { kind: "reject" }>).comment).toContain(
+          `- #12: its Kit config at 000000c already runs ${runs}, so its two arms would be the same`,
+        );
+      });
     });
 
     it("keeping the Operator's text above the Kit's part as it was, so the request still reads the same", () => {

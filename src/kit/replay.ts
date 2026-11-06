@@ -287,21 +287,48 @@ export const DEFAULT_PICK_SIZE = 5;
  * thirds, and takes the most recent from each third in turn until it has 5.
  */
 export function pickReplayTickets(request: Pick<ReplayRequest, "tickets">, candidates: readonly ReplayCandidate[]): ReplayPick {
+  const { picked, leftOut } = pickWith(request, candidates, () => null);
+  return { picked, leftOut };
+}
+
+/**
+ * The pick, with `rule` saying why it leaves out a Ticket that is otherwise
+ * eligible, or null when it doesn't. The default pick takes another in its
+ * place, and names each one it leaves out by the rule in `ruledOut`.
+ */
+function pickWith(
+  request: Pick<ReplayRequest, "tickets">,
+  candidates: readonly ReplayCandidate[],
+  rule: (picked: PickedTicket) => string | null,
+): ReplayPick & { readonly ruledOut: readonly LeftOutTicket[] } {
   if (request.tickets === null) {
-    const eligible = candidates.flatMap((candidate) => {
-      const eligibility = eligibilityOf(candidate);
-      return typeof eligibility === "string" ? [] : [eligibility];
+    const ruledOut: LeftOutTicket[] = [];
+    const eligible = eligibleOf(request, candidates).flatMap((each) => {
+      const reason = rule(each.picked);
+      if (reason !== null) ruledOut.push({ ticket: each.picked.ticket, reason });
+      return reason === null ? [each] : [];
     });
-    return { picked: spreadAcrossCost(eligible).map(({ picked }) => picked), leftOut: [] };
+    return { picked: spreadAcrossCost(eligible).map(({ picked }) => picked), leftOut: [], ruledOut };
   }
   const picked: PickedTicket[] = [];
   const leftOut: LeftOutTicket[] = [];
   for (const ticket of request.tickets) {
     const eligibility = eligibilityOf(candidates.find((candidate) => candidate.ticket === ticket));
-    if (typeof eligibility === "string") leftOut.push({ ticket, reason: eligibility });
-    else picked.push(eligibility.picked);
+    const reason = typeof eligibility === "string" ? eligibility : rule(eligibility.picked);
+    if (reason !== null) leftOut.push({ ticket, reason });
+    else if (typeof eligibility !== "string") picked.push(eligibility.picked);
   }
-  return { picked, leftOut };
+  return { picked, leftOut, ruledOut: [] };
+}
+
+/** The eligible Tickets the pick chooses from: every eligible candidate for the default pick, or the listed ones. */
+function eligibleOf(request: Pick<ReplayRequest, "tickets">, candidates: readonly ReplayCandidate[]): Eligible[] {
+  const { tickets } = request;
+  const considered = tickets === null ? candidates : candidates.filter(({ ticket }) => tickets.includes(ticket));
+  return considered.flatMap((candidate) => {
+    const eligibility = eligibilityOf(candidate);
+    return typeof eligibility === "string" ? [] : [eligibility];
+  });
 }
 
 /** An eligible Ticket, with what the default pick ranks it by. */
@@ -547,18 +574,23 @@ function requestStep(issue: ReplayIssue, acceptance: ReplayAcceptance | null): R
   const read = readReplayRequest(issue.body);
   if (!read.ok) return rejection(issue, rejectedRequest(read.errors));
   if (acceptance === null) return { kind: "nothing", reason: "" };
-  const plan = planOf(read.request, acceptance);
-  if (plan.tickets.length === 0) return rejection(issue, noEligibleTicket(plan));
+  const { plan, ruledOut } = planOf(read.request, acceptance);
+  if (plan.tickets.length === 0) return rejection(issue, noEligibleTicket(plan, ruledOut));
   const progress = plan.tickets.map(({ ticket }): TicketProgress => ({ ticket, state: "pending" }));
   return { kind: "accept", issue: issue.number, body: replayBody(issue.body, { plan, progress }) };
 }
 
-/** The comment rejecting a request whose plan has no Ticket: each listed Ticket left out, or what the default pick looks for. */
-function noEligibleTicket({ leftOut }: ReplayPlan): string {
+/**
+ * The comment rejecting a request whose plan has no Ticket: each listed
+ * Ticket left out, or what the default pick looks for, with each eligible
+ * Ticket it left out for what its arms would run.
+ */
+function noEligibleTicket({ leftOut }: ReplayPlan, ruledOut: readonly LeftOutTicket[]): string {
   const why =
     leftOut.length === 0
       ? [
           "This replay has no Ticket to run, so nothing runs: no merged Ticket here can be replayed. A Ticket can be once its PR merged, was never reverted and changed no Trust-root file, built from a first Implement run whose Run record has a baseSha.",
+          ...(ruledOut.length === 0 ? [] : ["", "These were, but were left out:", "", ...ruledOut.map(leftOutLine)]),
         ]
       : ["This replay has no Ticket to run, so nothing runs: none of the Tickets it lists can be replayed.", "", ...leftOut.map(leftOutLine)];
   return [...why, "", EDIT_TO_FIX].join("\n");
@@ -584,14 +616,39 @@ function rejectedRequest(errors: readonly string[]): string {
 /** How a rejection comment ends. */
 const EDIT_TO_FIX = "Edit the request in the issue body, and the Kit reads it again on its next hourly tick.";
 
-/** The request's plan, from the Tickets it picks and each one's Kit config at its baseSha. */
-function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): ReplayPlan {
-  const { picked, leftOut } = pickReplayTickets(request, acceptance.candidates);
+/**
+ * The request's plan, from the Tickets it picks and each one's Kit config at
+ * its baseSha, which its baseline runs: a Ticket whose Kit config there no
+ * longer resolves, or already runs the variable as the variant would, so that
+ * its two arms would be the same, is left out with why.
+ */
+function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): { readonly plan: ReplayPlan; readonly ruledOut: readonly LeftOutTicket[] } {
+  const { variable } = request;
+  const { picked, leftOut, ruledOut } = pickWith(request, acceptance.candidates, ({ baseSha }) => {
+    const base = acceptance.baseConfigs[baseSha];
+    if (base === undefined) return null;
+    if (!base.ok) return `its Kit config at ${shortSha(baseSha)} doesn't resolve under this Kit release: ${base.errors.join("; ")}`;
+    const runs = alreadyRuns(base.config, variable);
+    return runs === null ? null : `its Kit config at ${shortSha(baseSha)} already runs ${runs}, so its two arms would be the same`;
+  });
   const tickets = picked.flatMap((ticket) => {
     const base = acceptance.baseConfigs[ticket.baseSha];
-    return base?.ok === true ? [{ ...ticket, arms: replayArms(base.config, request.variable) }] : [];
+    return base?.ok === true ? [{ ...ticket, arms: replayArms(base.config, variable) }] : [];
   });
-  return { variable: request.variable, tickets, leftOut };
+  return { plan: { variable, tickets, leftOut }, ruledOut };
+}
+
+/** What the base Kit config already runs as the variable's variant would, in words; null when the variant changes it. */
+function alreadyRuns(base: Pick<KitConfig, "roles">, variable: ReplayVariable): string | null {
+  switch (variable.kind) {
+    case "model":
+      return base.roles[variable.role].model === variable.model ? `${ROLE_WORDS[variable.role]} on ${variable.model}` : null;
+    case "effort":
+      return base.roles[variable.role].effort === variable.effort ? `${ROLE_WORDS[variable.role]} at effort ${variable.effort}` : null;
+    case "kit":
+      // The baseline loads the pinned release's prompts, never a candidate's.
+      return null;
+  }
 }
 
 // The Kit's part of a replay issue's body: below the Operator's request, from
