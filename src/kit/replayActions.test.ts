@@ -68,6 +68,21 @@ describe("The Replay's composite actions", () => {
     expect(actionNamed(name).text).toMatch(/\n  arm:\n\s+description: .*baseline.*variant.*\n\s+required: true\n/);
   });
 
+  it.each(["replay-implement", "replay-review"])(
+    "%s fetches the Ticket's baseSha alone, one commit and no branch or tag, so its agent can never reach the merged result in the checkout",
+    (name) => {
+      const { text, steps } = actionNamed(name);
+      const checkouts = steps.filter((step) => step.includes("uses: actions/checkout@"));
+
+      expect(checkouts).toHaveLength(1);
+      expect(checkouts[0]).toContain("ref: ${{ inputs.base-sha }}\n");
+      expect(checkouts[0]).toContain("fetch-depth: 1\n");
+      expect(checkouts[0]).not.toContain("fetch-tags: true");
+      // Nothing fetches more once it's checked out: no default branch, no PR head, no other ref.
+      expect(text).not.toMatch(/git (?:-C \S+ )?(?:fetch|pull|remote)|fetch-depth: 0|origin\/|default_branch|refs\//);
+    },
+  );
+
   it.each(["replay-implement", "replay-review"])("%s always leaves its job's account of its run, whether the run passed, failed or was cancelled", (name) => {
     const { steps } = actionNamed(name);
     const account = stepWith(steps, "replay-arm-main.ts");

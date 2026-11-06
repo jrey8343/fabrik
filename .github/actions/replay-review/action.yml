@@ -60,12 +60,14 @@ runs:
       with:
         node-version: 24
 
+    # baseSha alone, one commit and no branch or tag, which the arm's patch is laid on: nothing that came
+    # after it, the merged PR included, is there for the Reviewer to read.
     - name: Check out the Product repo at the Ticket's baseSha
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         path: product
         ref: ${{ inputs.base-sha }}
-        fetch-depth: 0
+        fetch-depth: 1
         persist-credentials: false
 
     - name: Take the arm's patch

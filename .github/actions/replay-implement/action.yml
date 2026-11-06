@@ -60,13 +60,14 @@ inputs:
 runs:
   using: composite
   steps:
-    # A fresh clone at baseSha, detached, which the runner refuses any other commit for.
+    # A fresh clone of baseSha alone, detached, which the runner refuses any other commit for: one
+    # commit and no branch or tag, so nothing that came after it, the merged PR included, is there to read.
     - name: Check out the Product repo at the Ticket's baseSha
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         path: product
         ref: ${{ inputs.base-sha }}
-        fetch-depth: 0
+        fetch-depth: 1
         persist-credentials: false
 
     # The Ticket and its Spec, as a first Implement run reads them; for a `kit` variant, its candidate's prompts and Base skills.
