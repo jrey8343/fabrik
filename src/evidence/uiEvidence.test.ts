@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { type Capture, type CaptureFailure, type CaptureResult, evidenceSection, isUi, parseCaptureResult, reviewerImages, routesFor, type UiEvidence, withoutEvidence, withPreviewLink } from "./uiEvidence.ts";
+import {
+  type Capture,
+  type CaptureFailure,
+  type CaptureResult,
+  evidenceSection,
+  isUi,
+  parseCaptureResult,
+  reviewerImages,
+  routesFor,
+  type UiEvidence,
+  type VariantCapture,
+  withoutEvidence,
+  withPreviewLink,
+} from "./uiEvidence.ts";
 
 /** The Pilot's ui block: an Astro site served from its build. */
 const ui: UiConfig = {
@@ -154,6 +167,16 @@ describe("The routes UI evidence captures", () => {
 });
 
 const HEAD = "4f2b9c0d1e3a5b7c9d0e1f2a3b4c5d6e7f8a9b0c";
+
+/** A Prototype of /book in three variants, each captured at both viewports, as a prototype turn's capture writes it: C's desktop video wasn't recorded. */
+const variantCaptures: VariantCapture[] = [
+  { route: "/book", variant: "A", viewport: "mobile", status: 200, image: "variant-a-mobile.png", video: "variant-a-mobile.webm" },
+  { route: "/book", variant: "A", viewport: "desktop", status: 200, image: "variant-a-desktop.png", video: "variant-a-desktop.webm" },
+  { route: "/book", variant: "B", viewport: "mobile", status: 200, image: "variant-b-mobile.png", video: "variant-b-mobile.webm" },
+  { route: "/book", variant: "B", viewport: "desktop", status: 200, image: "variant-b-desktop.png", video: "variant-b-desktop.webm" },
+  { route: "/book", variant: "C", viewport: "mobile", status: 200, image: "variant-c-mobile.png", video: "variant-c-mobile.webm" },
+  { route: "/book", variant: "C", viewport: "desktop", status: 200, image: "variant-c-desktop.png" },
+];
 
 /** A capture result as the capture step writes it, for the Ticket's /book and a default /. */
 const captured: CaptureResult = {
@@ -568,6 +591,14 @@ describe("The images a Reviewer gets", () => {
   it("are every capture when there are eight or fewer, and none when there are none", () => {
     expect(reviewerImages([shot("/book", "ticket", "desktop", "before")])).toEqual([shot("/book", "ticket", "desktop", "before")]);
     expect(reviewerImages([])).toEqual([]);
+  });
+
+  // The Reviewer gets nothing from a Prototype.
+  it("leave out every capture of a Prototype's variant", () => {
+    const captures = [variantCaptures[0]!, shot("/book", "ticket", "desktop", "after"), variantCaptures[3]!, shot("/book", "ticket", "mobile", "after")];
+
+    expect(reviewerImages(captures).map(({ image }) => image)).toEqual(["after-mobile-book.png", "after-desktop-book.png"]);
+    expect(reviewerImages(variantCaptures)).toEqual([]);
   });
 });
 

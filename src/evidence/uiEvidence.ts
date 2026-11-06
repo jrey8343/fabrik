@@ -95,7 +95,7 @@ export const CAPTURE_FAILURES = ["build-failed", "server-did-not-start", "timeou
 
 export type CaptureFailure = (typeof CAPTURE_FAILURES)[number];
 
-/** One screenshot: of which route and why, at which viewport, of which side, and what the page answered. */
+/** One screenshot of a pull request: of which route and why, at which viewport, of which side, and what the page answered. */
 export interface Capture {
   readonly route: string;
   readonly reason: RouteReason;
@@ -105,6 +105,34 @@ export interface Capture {
   readonly status: number;
   /** The image's file name: a plain name, in the same folder as the capture result. */
   readonly image: string;
+}
+
+/** The letters a Prototype's variants go by, in order, one for each up to the Kit's cap of five: A is the first. */
+export const VARIANT_LETTERS = ["A", "B", "C", "D", "E"] as const;
+
+export type VariantLetter = (typeof VARIANT_LETTERS)[number];
+
+/**
+ * One capture of a Prototype's variant, served at `route?variant=<letter>`:
+ * a capture like a pull request's, but of a variant rather than a side, and
+ * with the short load-and-scroll video capture recorded beside its screenshot,
+ * when it recorded one. Its route is the one the Prototype was approved for,
+ * so it has no reason.
+ */
+export interface VariantCapture extends Omit<Capture, "reason" | "side"> {
+  readonly variant: VariantLetter;
+  /** The video's file name, a plain name beside the image. */
+  readonly video?: string;
+}
+
+/** Whether a capture is of a Prototype's variant rather than a pull request's side. */
+export function isVariantCapture(capture: Capture | VariantCapture): capture is VariantCapture {
+  return "variant" in capture;
+}
+
+/** The captures of a pull request's sides, leaving out any of a Prototype's variants. */
+function sideCaptures(captures: readonly (Capture | VariantCapture)[]): Capture[] {
+  return captures.filter((capture): capture is Capture => !isVariantCapture(capture));
 }
 
 /**
@@ -239,17 +267,19 @@ function isOneOf<T extends string>(options: readonly T[], value: unknown): value
  * its context, the ones that matter most first: After before Before, mobile
  * before desktop, then routes in reason order (the Ticket's, the
  * Implementer's, the defaults), each reason's routes in the order they were
- * captured. The Operator's gallery has them all.
+ * captured. The Operator's gallery has them all. None is ever of a
+ * Prototype's variant: the Reviewer gets nothing from a Prototype.
  */
-export function reviewerImages(captures: readonly Capture[]): readonly Capture[] {
-  const routes = captures.map(({ route }) => route);
+export function reviewerImages(captures: readonly (Capture | VariantCapture)[]): readonly Capture[] {
+  const sides = sideCaptures(captures);
+  const routes = sides.map(({ route }) => route);
   const rank = ({ side, viewport, reason, route }: Capture): number[] => [
     side === "after" ? 0 : 1,
     UI_VIEWPORTS.findIndex(({ name }) => name === viewport),
     ROUTE_REASONS.indexOf(reason),
     routes.indexOf(route),
   ];
-  return captures
+  return sides
     .toSorted((a, b) => {
       const [ranked, other] = [rank(a), rank(b)];
       return ranked.reduce((order, value, at) => order || value - (other[at] ?? 0), 0);
