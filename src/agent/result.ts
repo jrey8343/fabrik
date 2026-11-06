@@ -1,12 +1,12 @@
 // What an agent job passes to its push job (ADR-0002): the role, the issue it
 // ran for, and the structured output it emitted. The push job applies it
 // through the Loop rules core, which checks the output against its contract.
-// An Implement run and a Researcher run also pass the branch they built, as a
-// git bundle beside it.
+// An Implement run, a Researcher run and a Design session's prototype turn
+// also pass the branch they built, as a git bundle beside it.
 import { isGivenOperatorComment } from "../loop/considered.ts";
 import { AGENT_ROLES, type AgentRole, type AuditWindow, type GivenOperatorComment } from "../loop/types.ts";
 
-/** The branch an Implement or Researcher run built, which the push job reads back from the bundle. */
+/** The branch an Implement or Researcher run, or a prototype turn, built, which the push job reads back from the bundle. */
 export interface BuiltBranch {
   /** The agent branch's name, or the research Decision's throwaway branch's. */
   readonly name: string;
@@ -21,7 +21,7 @@ export interface AgentRunResult {
   readonly issue: number;
   /** The agent's structured output, as text, unchecked. */
   readonly output: string;
-  /** For an Implement or Researcher run only. */
+  /** For an Implement or Researcher run, and a Design session's prototype turn. */
   readonly branch?: BuiltBranch;
   /**
    * For a run that read an agent PR (a Review, a retry or a Request-changes
@@ -40,11 +40,18 @@ export interface AgentRunResult {
 /** The artifact's file name, the same in both jobs. */
 export const AGENT_RESULT_FILE = "agent-result.json";
 
-/** The Implementer's commits, or the Researcher's findings, beside the result, when the run made any. */
+/** The Implementer's commits, the Researcher's findings, or a prototype turn's variants, beside the result, when the run made any. */
 export const AGENT_BUNDLE_FILE = "agent-branch.bundle";
 
 /** The roles whose run passes out a branch: the Implementer's, and the Researcher's throwaway one. */
 const BUILDS_BRANCH: readonly AgentRole[] = ["implement", "research"];
+
+/**
+ * The role a run of which may pass out a branch: a Design session's
+ * prototype turn (#155) does, the issue's prototype branch, and its other
+ * turns don't.
+ */
+const MAY_BUILD_BRANCH: readonly AgentRole[] = ["design"];
 
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -66,7 +73,8 @@ export function readAgentRunResult(text: string): AgentRunResult {
     ...(operatorComments === undefined ? {} : { operatorComments: readGiven(operatorComments) }),
     ...(window === undefined ? {} : { window: readWindow(window) }),
   };
-  if (!BUILDS_BRANCH.includes(role as AgentRole)) return { role: role as AgentRole, issue, output, ...given };
+  const builds = BUILDS_BRANCH.includes(role as AgentRole) || (MAY_BUILD_BRANCH.includes(role as AgentRole) && branch !== undefined);
+  if (!builds) return { role: role as AgentRole, issue, output, ...given };
   return { role: role as AgentRole, issue, output, branch: readBranch(branch, role), ...given };
 }
 

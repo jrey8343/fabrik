@@ -8,11 +8,17 @@
 // which the job checked out when an earlier round pushed it, and which the
 // runner cuts from the default branch otherwise, then passes out as a git
 // bundle, as an Implement run's commits.
-import type { KitConfig } from "../kit/config.ts";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import type { AgentRole, KitConfig } from "../kit/config.ts";
 import { prototypeBranchFor, variantLetter } from "../loop/designOutput.ts";
 import { type PrototypeRequestMarker, readPrototypeRequest } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import { fenced } from "./design.ts";
+import { cutBranch, setSandboxEnv } from "./implement.ts";
+import type { BuiltBranch } from "./result.ts";
+
+const run = promisify(execFile);
 
 /** The env var the prototype job passes the Kit job's prototype_request output in. */
 export const PROTOTYPE_REQUEST_ENV = "FABRIK_PROTOTYPE_REQUEST";
@@ -55,6 +61,45 @@ export function prototypeTurnContext(
       `Once you finish, the Kit builds the branch, serves it, and captures each variant at mobile and desktop widths, at \`${served}?variant=${letters[0] ?? "A"}\` and so on, so each variant must render there from its letter alone.`,
     ],
   };
+}
+
+/**
+ * The role a prototype turn runs as: the Design role's model and effort,
+ * since it is a turn of the Design session, within the Implement role's
+ * timeout, since it builds and serves the Product, as the prototype job's
+ * agent step's timeout is.
+ */
+export function prototypeRole(roles: Pick<KitConfig["roles"], "design" | "implement">): AgentRole {
+  return { model: roles.design.model, effort: roles.design.effort, timeoutMinutes: roles.implement.timeoutMinutes };
+}
+
+/**
+ * Who commits a prototype turn's variants: the agent, under the Kit's name
+ * for a Prototype, so the commits on a prototype branch read as throwaway
+ * code, never the Implementer's.
+ */
+export const PROTOTYPE_AUTHOR = { name: "Fabrik Prototype", email: "fabrik-prototype@users.noreply.github.com" } as const;
+
+/**
+ * Sets a prototype turn's env, which the agent inherits: the Claude token
+ * and the Sandbox's values and test secrets, as the Implementer's, and the
+ * Fabrik Prototype's commit identity.
+ */
+export function setPrototypeEnv(config: KitConfig): void {
+  setSandboxEnv(config, PROTOTYPE_AUTHOR);
+}
+
+/**
+ * Starts the issue's prototype branch: a later round carries on from the head
+ * an earlier round pushed, which the prototype job checked out, so the bundle
+ * holds only this round's commits and the push job fast-forwards the branch;
+ * a first round cuts it from the default branch the checkout is on.
+ */
+export async function startPrototypeBranch(productDir: string, issue: number): Promise<BuiltBranch> {
+  const name = prototypeBranchFor(issue);
+  const git = async (...args: string[]) => (await run("git", args, { cwd: productDir })).stdout.trim();
+  if ((await git("rev-parse", "--abbrev-ref", "HEAD")) !== name) return cutBranch(productDir, name);
+  return { name, base: { ref: name, sha: await git("rev-parse", "HEAD") }, head: null };
 }
 
 function jsonOrNull(text: string): unknown {

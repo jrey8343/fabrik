@@ -5,10 +5,9 @@
 // no GitHub credential and runs none of the code.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { kitPromptPath } from "../guard/trust-root.ts";
+import { KIT_PROMPT_NAMES, kitPromptPath } from "../guard/trust-root.ts";
 import { readEvidenceBundle } from "../kit/retroEvidence.ts";
 import { RUBRICS_DIR, SCORERS } from "../kit/rubrics.ts";
-import { AGENT_ROLES } from "../loop/types.ts";
 
 /** The heading over the pending Retro's own issue in the Retro's prompt. */
 export const RETRO_ISSUE_HEADING = "The pending Retro";
@@ -53,7 +52,7 @@ function quoted(text: string): string[] {
  */
 export async function retroContext(evidenceFile: string, kitDir: string): Promise<string[]> {
   const bundle = readEvidenceBundle(await readFile(evidenceFile, "utf8"));
-  const kitPaths = [...AGENT_ROLES.map(kitPromptPath), ...SCORERS.map((name) => `${RUBRICS_DIR}/${name}.md`)];
+  const kitPaths = [...KIT_PROMPT_NAMES.map(kitPromptPath), ...SCORERS.map((name) => `${RUBRICS_DIR}/${name}.md`)];
   const kitFiles = await Promise.all(kitPaths.map(async (path) => [path, await readFile(join(kitDir, path), "utf8")] as const));
   return [
     `## ${RETRO_SECTIONS.window}`,
