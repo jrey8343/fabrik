@@ -377,6 +377,29 @@ export function evidenceMarkerIn(body: string): EvidenceMarker | null {
   return markers.at(-1) ?? null;
 }
 
+/**
+ * The body with what came of its preview deployment, once the push job has
+ * polled it (src/kit/previewLink.ts): the evidence section run `run` wrote
+ * links the preview, or says it never answered, where it said the preview is
+ * linked once it answers. The rest of the body stays as it was, whatever the
+ * Operator changed. Null when there is nothing to change: the body's marker,
+ * the last, isn't that run's, as when a later run has replaced the section,
+ * or its section no longer waits on the preview.
+ */
+export function withPreviewLink(body: string, run: number, preview: PreviewLink): string | null {
+  const lines = body.split("\n");
+  const markers = lines.map((line) => markerOf(EVIDENCE_MARKER.exec(line.trim())?.[1]));
+  const markerAt = markers.findLastIndex((marker) => marker !== null);
+  if (markerAt === -1 || markers[markerAt]?.run !== run) return null;
+  const startAt = lines.findLastIndex((line, at) => at < markerAt && SECTION_START_LINE.test(line.trim()));
+  const waiting = previewLine({ kind: "pending" });
+  const at = lines.findIndex((line, i) => startAt !== -1 && i > startAt && i < markerAt && line.trim() === waiting);
+  if (at === -1) return null;
+  // A body the Operator edited on GitHub may end its lines in \r\n.
+  lines[at] = `${previewLine(preview)}${lines[at]!.endsWith("\r") ? "\r" : ""}`;
+  return lines.join("\n");
+}
+
 function markerOf(json: string | undefined): EvidenceMarker | null {
   if (json === undefined) return null;
   let value: unknown;
