@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { resolveKitConfig } from "./config.ts";
+import { REVIEWER_IMAGE_CAP, resolveKitConfig, UI_VIEWPORTS } from "./config.ts";
 
 const root = new URL("../../", import.meta.url);
 const template = readFileSync(new URL("templates/fabrik-config.json", root), "utf8");
@@ -1063,5 +1063,26 @@ describe("The ui and preview blocks, which Visual evidence reads", () => {
     });
 
     expect(!result.ok && result.errors).toEqual(["max_in_flight must be a whole number of at least 0", "ui.paths is missing"]);
+  });
+});
+
+describe("Visual evidence's Kit constants, which no Kit config can change", () => {
+  it("captures at one mobile and one desktop viewport, mobile first", () => {
+    expect(UI_VIEWPORTS).toEqual([
+      { name: "mobile", width: 390, height: 844 },
+      { name: "desktop", width: 1440, height: 900 },
+    ]);
+  });
+
+  it("gives the Reviewer at most 8 images", () => {
+    expect(REVIEWER_IMAGE_CAP).toBe(8);
+  });
+
+  it.each(["viewports", "max_images", "reviewer_images"])("refuses ui.%s as an unknown field", (key) => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", [key]: 4 } }),
+    });
+
+    expect(result).toEqual({ ok: false, errors: [`ui.${key} is not a Kit config field`] });
   });
 });

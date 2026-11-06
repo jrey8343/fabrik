@@ -82,6 +82,28 @@ export interface UiConfig {
   readonly defaultRoutes: readonly string[];
 }
 
+/** A browser viewport UI evidence is captured at. */
+export interface Viewport {
+  readonly name: "mobile" | "desktop";
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The viewports UI evidence is captured at, mobile first: a Kit constant, not
+ * Kit config, so every Product repo's evidence covers phones and desktops alike.
+ */
+export const UI_VIEWPORTS: readonly Viewport[] = [
+  { name: "mobile", width: 390, height: 844 },
+  { name: "desktop", width: 1440, height: 900 },
+];
+
+/**
+ * The most UI evidence images a Reviewer gets, so the ones that matter most fit
+ * in its context: a Kit constant, not Kit config. The Operator's gallery is uncapped.
+ */
+export const REVIEWER_IMAGE_CAP = 8;
+
 /** The `preview` block: a URL template the Kit fills in and polls, never calling a host's API. */
 export interface PreviewConfig {
   /** An http(s) URL that may use only the PREVIEW_PLACEHOLDERS, such as `https://pr-{pr}.example.dev`. */
