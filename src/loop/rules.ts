@@ -91,7 +91,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     case "implement-run-finished":
       // A retry lands on the PR it fixes; a first run opens one.
       return event.fixes === undefined
-        ? withIssue(snapshot, (context) => applyImplementation(event, context))
+        ? withIssue(snapshot, (context) => applyImplementation(event, context, config))
         : applyRetryImplementation(event, snapshot);
     case "agent-run-failed":
       return withIssue(snapshot, (context) => failureNotice(event, context, config));

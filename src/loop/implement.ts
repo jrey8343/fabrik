@@ -1,5 +1,6 @@
 // Implementation rules: when an Implementer starts on a Ticket, and how the
 // branch it built lands as one draft PR, or doesn't.
+import { evidenceSection, isUi, withoutEvidence } from "../evidence/uiEvidence.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { consideredSection } from "./considered.ts";
 import { parseImplementOutput } from "./implementOutput.ts";
@@ -78,7 +79,7 @@ export function startImplementer(
  * branch that touches a trust root goes to the Operator unpushed, one that
  * changes nothing is an Execution flaw, and any other opens one draft PR.
  */
-export function applyImplementation(event: ImplementRunFinished, { issue, operator }: IssueContext): Plan {
+export function applyImplementation(event: ImplementRunFinished, { issue, operator }: IssueContext, config: KitConfig): Plan {
   const { issue: issueNumber, changes, branch, base } = event;
   const parsed = parseImplementOutput(event.output);
   if (!parsed.ok) {
@@ -108,8 +109,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
         head: branch,
         base,
         title: withoutMentions(title),
-        // Closes, so merging the PR closes the Ticket and starts the next Dispatch check.
-        body: `${withoutMentions(summary)}\n\nCloses #${issueNumber}`,
+        body: pullRequestBody(summary, issueNumber, evidenceFor(event, config, false)),
         draft: true,
       },
     ],
@@ -192,6 +192,37 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       { kind: "push-branch", branch },
     ],
   };
+}
+
+/**
+ * An agent PR's body: the Implementer's summary, then the evidence section
+ * when the run was UI, then the Closes line, so merging the PR closes the
+ * Ticket and starts the next Dispatch check. The summary is agent text, so it
+ * keeps no evidence section or marker of its own: only the Kit's says where
+ * the evidence is kept.
+ */
+function pullRequestBody(summary: string, issueNumber: number, evidence: string | null): string {
+  return [withoutEvidence(withoutMentions(summary)), ...(evidence === null ? [] : [evidence]), `Closes #${issueNumber}`].join("\n\n");
+}
+
+/**
+ * The evidence section for the run's PR, or null when the run isn't UI. The
+ * push job decides that, never the agent job, whose runner the agent could
+ * have changed: the run is UI when its changes match `ui.paths`, or when its
+ * PR is `marked` UI already, a retry's changes holding only its own commits.
+ */
+function evidenceFor(event: ImplementRunFinished, config: KitConfig, marked: boolean): string | null {
+  const { evidence } = event;
+  if (evidence === undefined) return null;
+  if (!marked && !isUi(event.changes.net.map(({ path }) => path), config.ui)) return null;
+  const { result, headSha, run, artifact, gallery } = evidence;
+  return evidenceSection({
+    result: result ?? { outcome: "failed", reason: "no-result", headSha, captures: [] },
+    run,
+    artifact,
+    gallery,
+    preview: { kind: "none" },
+  });
 }
 
 /** Why a retry's branch can't land on this PR now, or null when it can. */
