@@ -5,11 +5,14 @@
 // Operator's reply to it starts an ordinary turn.
 import { type CaptureFailure, code } from "../evidence/uiEvidence.ts";
 import { parsePrototypeTurnOutput, type PrototypeRoundOutput } from "./designOutput.ts";
-import { designRoundMarker, PROTOTYPE_ROUND_MARKER } from "./markers.ts";
+import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
-import type { IssueContext, LoopEvent, Plan } from "./types.ts";
+import type { Action, IssueContext, LoopEvent, Plan } from "./types.ts";
 
 type PrototypeRunFinished = Extract<LoopEvent, { kind: "prototype-run-finished" }>;
+
+/** The capture failures that leave nothing to look at: the variants were never served. */
+const NOT_SERVED: readonly CaptureFailure[] = ["build-failed", "server-did-not-start"];
 
 /** The push job's decision on a prototype turn's branch and round. */
 export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operator }: IssueContext): Plan {
@@ -22,13 +25,36 @@ export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operato
     };
   }
   const round = issue.designRounds + 1;
+  const push: Action = { kind: "push-prototype-branch", issue: event.issue };
+  const { capture } = event;
+  if (capture?.outcome === "failed" && NOT_SERVED.includes(capture.reason)) {
+    // The branch is still worth a look: it holds what the agent wrote.
+    const said = `The Kit pushed the variants the prototype turn wrote to [\`${event.branch}\`](${branchUrl(event)}), but ${captureFailed(capture.reason, event.runUrl)}, and nothing to look at. [The run](${event.runUrl}) has the log.`;
+    return { kind: "act", actions: [push, { kind: "comment", issue: event.issue, body: failureRound(round, operator, said) }] };
+  }
   return {
     kind: "act",
-    actions: [
-      { kind: "push-prototype-branch", issue: event.issue },
-      { kind: "comment", issue: event.issue, body: prototypeRound(round, parsed.output, event, operator) },
-    ],
+    actions: [push, { kind: "comment", issue: event.issue, body: prototypeRound(round, parsed.output, event, operator) }],
   };
+}
+
+/**
+ * A prototype failure round: a round too, with the next round's marker, the
+ * failure marker under it and the one @-mention, saying what stopped the
+ * prototype. Its one question is the Kit's, and it recommends carrying on, so
+ * that \`yes\` never spends another prototype turn's Sandbox time.
+ */
+function failureRound(round: number, operator: string, said: string): string {
+  return [
+    designRoundMarker(round),
+    PROTOTYPE_FAILURE_ROUND_MARKER,
+    `@${operator} **Design session, round ${round}: the prototype failed.** Reply with how you'd go on, or \`yes\` to take the recommendation.`,
+    "",
+    said,
+    "",
+    "**1. Carry on without a prototype, or try again?**",
+    "➡️ Recommended: Carry on without a prototype. Trying again spends another prototype turn's Sandbox time, and may fail the same way.",
+  ].join("\n");
 }
 
 /**

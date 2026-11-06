@@ -159,3 +159,42 @@ describe("Landing a prototype turn whose capture failed after it built", () => {
     expect(round).toContain("**1. Which variant?**");
   });
 });
+
+describe("Landing a prototype turn whose build or dev server failed", () => {
+  const failed = (reason: "build-failed" | "server-did-not-start"): CaptureResult => ({ outcome: "failed", reason, headSha: HEAD, captures: [] });
+
+  it("pushes the branch, then posts a prototype failure round numbered after the last, saying what failed, linking the branch, and asking whether to carry on without a prototype, recommending it", () => {
+    const plan = planFor(finished({ capture: failed("build-failed"), gallery: null }), inSession(), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "push-prototype-branch", issue: 7 },
+        {
+          kind: "comment",
+          issue: 7,
+          body: [
+            "<!-- fabrik:design-round 3 -->",
+            "<!-- fabrik:prototype-failed -->",
+            "@jrey **Design session, round 3: the prototype failed.** Reply with how you'd go on, or `yes` to take the recommendation.",
+            "",
+            `The Kit pushed the variants the prototype turn wrote to [\`prototype/7\`](${REPO}/tree/prototype/7), but \`sandbox.build\` failed, so there was no build to serve, and nothing to look at. [The run](${RUN}) has the log.`,
+            "",
+            "**1. Carry on without a prototype, or try again?**",
+            "➡️ Recommended: Carry on without a prototype. Trying again spends another prototype turn's Sandbox time, and may fail the same way.",
+          ].join("\n"),
+        },
+      ],
+    });
+    expect(notificationsOf(plan, "jrey")).toEqual(["mention on #7"]);
+  });
+
+  it("says the dev server didn't start when it never answered", () => {
+    const [round] = commentsOf(planFor(finished({ capture: failed("server-did-not-start"), gallery: null }), inSession(), kitConfig()));
+
+    expect(round).toContain(
+      "but the dev server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran, and nothing to look at.",
+    );
+    expect(round).toContain("**1. Carry on without a prototype, or try again?**");
+  });
+});
