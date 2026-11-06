@@ -6,7 +6,10 @@
 // last passing Verdict and whether it was reverted; the Verdicts on a PR; and
 // the Architectural escapes opened in a window, with what let each PR through.
 // Then the evidence bundle a Retro reads for its window (evidenceBundle), each
-// of its items carrying the ref the Retro cites it by (refsOf). Pure, no I/O.
+// of its items carrying the ref the Retro cites it by (refsOf): its runs'
+// transcripts read through the transcript digest (src/kit/transcriptDigest.ts),
+// as the judge reads them, and the whole held to one budget, cut least
+// important first. Pure, no I/O.
 import { verdictsIn } from "../github/threads.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { followUpsIn } from "../loop/followUps.ts";
@@ -15,7 +18,7 @@ import { retrosIn, retroWindowStart } from "../loop/retro.ts";
 import { type RetroIssueSnapshot, STRENGTHS, type Strength, type Verdict, type VerdictRecord } from "../loop/types.ts";
 import { recordPathOf, type RunRecord, runKey } from "./runRecord.ts";
 import { inSample, type ScoreFile } from "./scorer.ts";
-import { digestOf, type TranscriptDigest } from "./transcriptDigest.ts";
+import { cutMarker, cutTo, digestOf, largestCap, type TranscriptDigest } from "./transcriptDigest.ts";
 
 // The GitHub facts the metrics read of one Product repo.
 
@@ -460,6 +463,8 @@ export interface EvidenceBundle {
   readonly streakTable: readonly StreakRow[];
   /** What the Operator made of earlier Retros: what not to propose again without new evidence. */
   readonly history: RetroHistory;
+  /** Whether the budget cut anything to make the bundle fit: each cut is marked in place. */
+  readonly trimmed: boolean;
 }
 
 /** A Run record, by its path in the store. */
@@ -662,8 +667,9 @@ export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
   // Only this repo's records, whatever the store gave.
   const records = input.records.filter((record) => record.repo === input.facts.repo);
   const metrics: MetricsInput = { records, facts: [input.facts], operator: input.operator };
-  const digested = digestedBy(input.transcripts);
-  return {
+  const digests = digestsOf(input.transcripts);
+  const digested: Digested = (record) => ({ ...recordEvidenceOf(record), digest: digests(record, Infinity) });
+  const whole: EvidenceBundle = {
     window: { start: new Date(window.start).toISOString(), end: new Date(window.end).toISOString() },
     escapes: escapesOf(window, metrics, digested),
     feedback: feedbackOf(window, input),
@@ -672,7 +678,9 @@ export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
     sample: sampleOf(window, metrics, digested),
     streakTable: streakTableOf({ start: window.end - STREAK_WINDOW_MS, end: window.end }, metrics),
     history: historyOf(earlier, input),
+    trimmed: false,
   };
+  return heldToBudget(whole, digests);
 }
 
 /** A ref the Retro may cite, and what it cites. */
@@ -717,21 +725,24 @@ export function refsOf(bundle: EvidenceBundle): EvidenceRef[] {
   return [...once.values()];
 }
 
-/** A Run record with its transcript's digest, from the store's transcripts. */
-type Digested = (record: RunRecord) => DigestedRecordEvidence;
+/** A run's transcript's digest held to a budget, or null when the store holds no transcript of it. */
+type Digests = (record: RunRecord, budget: number) => string | null;
 
-/** How a record gets its digest from the store's transcripts: each transcript read once, however often it's digested. */
-function digestedBy(transcripts: RetroEvidenceInput["transcripts"]): Digested {
+/** The store's transcripts as digests, each transcript read once however often it's digested. */
+function digestsOf(transcripts: RetroEvidenceInput["transcripts"]): Digests {
   const read = new Map<string, (budget: number) => TranscriptDigest>();
-  return (record) => {
+  return (record, budget) => {
     const path = record.transcript;
     const lines = path === null ? undefined : transcripts[path];
-    if (path === null || lines === undefined) return { ...recordEvidenceOf(record), digest: null };
+    if (path === null || lines === undefined) return null;
     const digest = read.get(path) ?? digestOf(lines);
     read.set(path, digest);
-    return { ...recordEvidenceOf(record), digest: digest(Infinity).digest };
+    return digest(budget).digest;
   };
 }
+
+/** A Run record with its transcript's whole digest. */
+type Digested = (record: RunRecord) => DigestedRecordEvidence;
 
 /** The escapes opened in the window, each counted against the agent PRs merged in the 90 days to its end. */
 function escapesOf(window: Window, metrics: MetricsInput, digested: Digested): EscapeEvidence[] {
@@ -843,7 +854,7 @@ function lowScoresOf(window: Window, records: readonly RunRecord[], { facts, sco
       const scores = entries.map(({ scorer, score, pass, label, rationale }) => ({ scorer, score, pass, label, rationale }));
       return [{ endedAt, evidence: { ref, run: record === undefined ? null : digested(record), entries: scores } }];
     })
-    .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
+    .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt) || a.evidence.ref.localeCompare(b.evidence.ref))
     .map(({ evidence }) => evidence);
 }
 
@@ -908,6 +919,106 @@ function historyOf(retros: readonly RetroIssueFacts[], { operator, fromRetroIssu
     return retro === null ? [] : [{ ref: `#${number}`, number, title, body, retro }];
   });
   return { retros: closed, filed };
+}
+
+// The budget.
+
+/**
+ * How many characters a Retro's evidence bundle may take, as JSON: about
+ * 85,000 tokens, as the judge's digest may, which leaves the Retro's context
+ * room for its prompt, the Kit's prompts and rubrics, and the files it reads.
+ * A bigger bundle is cut to fit, in CUT_ORDER.
+ */
+export const EVIDENCE_BUDGET = 300_000;
+
+/**
+ * What the budget may cut, least important first: the sample's transcripts,
+ * then the low-scoring runs', then the patches of the Operator's pushes, then
+ * the escapes' passing Review runs' transcripts. Nothing else is ever cut:
+ * not a ref, a Verdict, a review comment or the streak table.
+ */
+const CUT_ORDER = ["sample", "lowScores", "patches", "escapes"] as const;
+
+type Cut = (typeof CUT_ORDER)[number];
+
+/** How long each kind of cut text may be; Infinity leaves that kind whole. */
+type Caps = Readonly<Record<Cut, number>>;
+
+const UNCUT: Caps = { sample: Infinity, lowScores: Infinity, patches: Infinity, escapes: Infinity };
+
+/** A text the budget may cut: whole, and cut to a cap with the cut marked in place. */
+interface Cuttable {
+  readonly cut: Cut;
+  readonly whole: string;
+  readonly to: (cap: number) => string;
+}
+
+/**
+ * The bundle held to the budget, as JSON: whole if it fits, else with the
+ * longest texts of the least important kind cut to one shared cap, and only
+ * when even cutting all of those whole can't make it fit, the next kind too,
+ * and so on. A transcript's digest is cut as the digest cuts itself, keeping
+ * its tool calls, until even those don't fit, when it's cut whole. Held as
+ * far as cutting can: what's never cut can leave it over the budget.
+ */
+function heldToBudget(bundle: EvidenceBundle, digests: Digests): EvidenceBundle {
+  const cuttable: Cuttable[] = [];
+  withCuts(bundle, digests, (text) => {
+    cuttable.push(text);
+    return text.whole;
+  });
+  // A text's share of the bundle's JSON is its own JSON, so cutting it changes the bundle's length by that much.
+  const json = (text: string) => JSON.stringify(text).length;
+  const whole = JSON.stringify(bundle).length;
+  const length = (caps: Caps) =>
+    cuttable.reduce((sum, text) => (caps[text.cut] === Infinity ? sum : sum + json(text.to(caps[text.cut])) - json(text.whole)), whole);
+  const fits = (caps: Caps) => length(caps) <= EVIDENCE_BUDGET;
+
+  let caps = UNCUT;
+  for (const cut of CUT_ORDER) {
+    if (fits(caps)) break;
+    const longest = cuttable.reduce((max, text) => (text.cut === cut ? Math.max(max, text.whole.length) : max), 0);
+    const others = caps;
+    caps = { ...others, [cut]: largestCap((cap) => fits({ ...others, [cut]: cap }), longest) ?? 0 };
+  }
+  const trimmed = cuttable.some((text) => text.to(caps[text.cut]) !== text.whole);
+  return { ...withCuts(bundle, digests, (text) => text.to(caps[text.cut])), trimmed };
+}
+
+/** The bundle with each text the budget may cut replaced by what `cutting` makes of it. */
+function withCuts(bundle: EvidenceBundle, digests: Digests, cutting: (text: Cuttable) => string): EvidenceBundle {
+  const digest =
+    (cut: Cut) =>
+    (evidence: DigestedRecordEvidence): DigestedRecordEvidence => {
+      const whole = evidence.digest;
+      if (whole === null) return evidence;
+      return { ...evidence, digest: cutting({ cut, whole, to: (cap) => digestCutTo(evidence.record, whole, cap, digests) }) };
+    };
+  return {
+    ...bundle,
+    escapes: bundle.escapes.map((escape) => ({
+      ...escape,
+      pullRequests: escape.pullRequests.map((escaped) => ({
+        ...escaped,
+        lastPassingReview: escaped.lastPassingReview === null ? null : digest("escapes")(escaped.lastPassingReview),
+      })),
+    })),
+    feedback: bundle.feedback.map((on) => ({
+      ...on,
+      items: on.items.map((item) =>
+        item.kind === "push" ? { ...item, patch: cutting({ cut: "patches", whole: item.patch, to: (cap) => cutTo(item.patch, cap) }) } : item,
+      ),
+    })),
+    lowScores: bundle.lowScores.map((low) => ({ ...low, run: low.run === null ? null : digest("lowScores")(low.run) })),
+    sample: bundle.sample.map((sampled) => ({ ...sampled, records: sampled.records.map(digest("sample")) })),
+  };
+}
+
+/** A run's whole digest cut to `cap` as the digest cuts itself, or cut whole, its marker in its place, when even its tool calls are longer. */
+function digestCutTo(record: RunRecord, whole: string, cap: number, digests: Digests): string {
+  if (cap >= whole.length) return whole;
+  const least = digests(record, 0) ?? whole;
+  return cap < least.length ? cutMarker(whole.length) : (digests(record, cap) ?? whole);
 }
 
 function recordEvidenceOf(record: RunRecord): RecordEvidence {

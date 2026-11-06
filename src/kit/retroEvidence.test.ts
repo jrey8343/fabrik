@@ -31,6 +31,8 @@ import type { Verdict } from "../loop/types.ts";
 import {
   type AgentPullRequestFacts,
   type CommentFacts,
+  EVIDENCE_BUDGET,
+  type EvidenceBundle,
   escapesIn,
   evidenceBundle,
   mergedAgentPullRequestsIn,
@@ -866,6 +868,111 @@ describe("the evidence bundle", () => {
         }),
       );
       expect(history.filed).toEqual([{ ref: "#130", number: 130, title: "Lint floating promises", body: filed, retro: 100 }]);
+    });
+  });
+
+  describe("the budget", () => {
+    // Four things the budget may cut, each 60,000 characters long: a sampled PR's run's transcript, a low-scoring run's,
+    // an Operator push's patch and an escape's passing Review run's. A Request changes body, which it never cuts, makes the rest.
+    const bulk = (char: string) => char.repeat(60_000);
+    const sampled = aRecordWithTranscript({ runId: 1000, issue: 7, pullRequest: 12, endedAt: "2026-11-01T00:00:00Z" });
+    const lowScoring = aRecordWithTranscript({ runId: 2000, issue: 9, pullRequest: 13, endedAt: "2026-11-01T00:00:00Z" });
+    const passingReview = aRecordWithTranscript({ runId: 3000, role: "review", issue: 10, pullRequest: 14, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
+    const patch = `diff --git a/src/cart.ts b/src/cart.ts\n${bulk("p")}`;
+    const inline = [{ path: "src/cart.ts", line: 12, body: "This belongs in the pricing module." }];
+    const verdict = aVerdictComment("pass", "a".repeat(40), "2026-11-02T00:00:00Z");
+
+    function evidenceWith(requestChanges: string): EvidenceBundle {
+      return evidenceBundle(
+        aRetroEvidenceInput({
+          records: [sampled, lowScoring, passingReview],
+          transcripts: transcriptsOf(
+            [sampled, aTranscript({ "src/sampled.ts": bulk("s") })],
+            [lowScoring, aTranscript({ "src/low.ts": bulk("l") })],
+            [passingReview, aTranscript({ "src/escaped.ts": bulk("e") })],
+          ),
+          scoreFiles: { "scores/owner/product/2026-11/2000-1-implement-a1b2c3.json": aScoreFile({ runId: 2000, entries: [aScoreEntry({ score: 0.2, pass: false })] }) },
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-03T00:00:00Z", { number: 12, ticket: 7, comments: [verdict] }), // in the sample
+              aMergedPullRequest("2026-11-03T00:00:00Z", {
+                number: 13,
+                ticket: 9,
+                commits: [aCommit("2026-11-02T00:00:00Z", { message: "Move pricing out of the cart", patch })],
+                reviews: [aReview("2026-11-02T01:00:00Z", { body: requestChanges, comments: inline })],
+              }),
+              aMergedPullRequest("2026-11-03T00:00:00Z", { number: 14, ticket: 10 }),
+            ],
+            escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #14 -->", { number: 81 })],
+          }),
+        }),
+      );
+    }
+
+    // The bundle whole, as JSON, `over` characters over the budget.
+    const whole = evidenceWith("");
+    const overBy = (over: number) => evidenceWith("r".repeat(EVIDENCE_BUDGET - JSON.stringify(whole).length + over));
+
+    const CUT = /\[… \d+ characters cut …\]/;
+    const GONE = /^\[… \d+ characters cut …\]$/;
+    type Left = "whole" | "cut" | "gone" | "missing";
+    const leftOfDigest = (digest: string | null | undefined): Left =>
+      digest == null ? "missing" : GONE.test(digest) ? "gone" : CUT.test(digest) ? (digest.includes('#1 Read {"file_path":') ? "cut" : "gone") : "whole";
+    const leftOfPatch = (cut: string | undefined): Left => (cut === patch ? "whole" : cut !== undefined && GONE.test(cut) ? "gone" : "cut");
+    function leftIn(bundle: EvidenceBundle) {
+      const push = bundle.feedback.flatMap(({ items }) => items).find((item) => item.kind === "push");
+      return {
+        sample: leftOfDigest(bundle.sample[0]?.records[0]?.digest),
+        lowScores: leftOfDigest(bundle.lowScores[0]?.run?.digest),
+        patches: leftOfPatch(push?.kind === "push" ? push.patch : undefined),
+        escapes: leftOfDigest(bundle.escapes[0]?.pullRequests[0]?.lastPassingReview?.digest),
+      };
+    }
+
+    it("gives the bundle whole when it's within the budget, and says it wasn't trimmed", () => {
+      const bundle = overBy(0);
+      expect(JSON.stringify(bundle).length).toBe(EVIDENCE_BUDGET);
+      expect(leftIn(bundle)).toEqual({ sample: "whole", lowScores: "whole", patches: "whole", escapes: "whole" });
+      expect(bundle.trimmed).toBe(false);
+    });
+
+    it.each([
+      { over: 30_000, left: { sample: "cut", lowScores: "whole", patches: "whole", escapes: "whole" } },
+      { over: 90_000, left: { sample: "gone", lowScores: "cut", patches: "whole", escapes: "whole" } },
+      { over: 150_000, left: { sample: "gone", lowScores: "gone", patches: "cut", escapes: "whole" } },
+      { over: 210_000, left: { sample: "gone", lowScores: "gone", patches: "gone", escapes: "cut" } },
+    ])("$over characters over, cuts the sample's transcripts first and escapes' last, each cut marked in place, until it fits", ({ over, left }) => {
+      const bundle = overBy(over);
+      expect(leftIn(bundle)).toEqual(left);
+      expect(JSON.stringify(bundle).length).toBeLessThanOrEqual(EVIDENCE_BUDGET);
+      expect(bundle.trimmed).toBe(true);
+    });
+
+    it("keeps a cut transcript's tool calls, as the judge's digest does, until it has to cut the transcript whole", () => {
+      const digest = overBy(30_000).sample[0]?.records[0]?.digest ?? "";
+      expect(digest).toMatch(/^#1 Read \{"file_path":"src\/sampled.ts"\}\n#1 result: s+\[… \d+ characters cut …\]s+$/m);
+    });
+
+    it("never cuts refs, Verdicts, review comments or the streak table, however far over it is", () => {
+      const requestChanges = "r".repeat(EVIDENCE_BUDGET);
+      const bundle = evidenceWith(requestChanges);
+      expect(leftIn(bundle)).toEqual({ sample: "gone", lowScores: "gone", patches: "gone", escapes: "gone" });
+      expect(bundle.trimmed).toBe(true);
+      expect(refsOf(bundle)).toEqual(refsOf(whole));
+      expect(bundle.sample[0]?.verdicts).toEqual([{ verdict: "pass", source: "reviewer", at: "2026-11-02T00:00:00Z", body: verdict.body }]);
+      expect(bundle.feedback[0]?.items).toContainEqual({ kind: "request-changes", at: "2026-11-02T01:00:00Z", body: requestChanges, inline });
+      expect(bundle.streakTable).toEqual(whole.streakTable);
+      expect(bundle.streakTable.map(({ number }) => number)).toEqual([12, 13, 14]);
+    });
+
+    it("says it was trimmed only when it cut something: over the budget with nothing it may cut, it isn't", () => {
+      const requestChanges = "r".repeat(EVIDENCE_BUDGET);
+      const bundle = evidenceBundle(
+        aRetroEvidenceInput({ facts: factsOf({ pullRequests: [aMergedPullRequest("2026-11-03T00:00:00Z", { number: 13, reviews: [aReview("2026-11-02T01:00:00Z", { body: requestChanges })] })] }) }),
+      );
+      expect(JSON.stringify(bundle).length).toBeGreaterThan(EVIDENCE_BUDGET);
+      expect(bundle.feedback[0]?.items[0]).toMatchObject({ body: requestChanges });
+      expect(bundle.trimmed).toBe(false);
     });
   });
 
