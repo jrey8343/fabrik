@@ -692,6 +692,20 @@ export type Action =
       readonly body: readonly (string | PostedComment)[];
     }
   | { readonly kind: "edit-issue-body"; readonly issue: number; readonly body: string }
+  | {
+      /**
+       * Appends one line to a Map's Decisions so far. The core never sends the
+       * Map's body: the adapter reads it as it stands right before it writes,
+       * and inserts the line at the end of that section, or under the heading
+       * it adds at the end of the body when the section is missing. Every other
+       * byte stays, so what the Operator edited after the plan was made survives.
+       */
+      readonly kind: "append-to-decisions-so-far";
+      /** The Map. */
+      readonly issue: number;
+      /** The line's Markdown, one line, with each posted comment written as its URL: a resolution posted earlier in the plan, say. */
+      readonly line: readonly (string | PostedComment)[];
+    }
   | { readonly kind: "assign"; readonly issue: number; readonly assignee: string }
   | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" | "completed" }
   | {
