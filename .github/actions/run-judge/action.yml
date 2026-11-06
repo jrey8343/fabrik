@@ -19,7 +19,9 @@
 # It leaves the judge's answer (fabrik-judge-result) or its failure report
 # (fabrik-judge-failure), and its transcript (fabrik-transcript-score), for the
 # score-record job (.github/actions/write-score-record). Its outputs are for
-# the judge job to pass out, as an agent job does for its Run record.
+# the judge job to pass out, as an agent job does for its Run record. A Replay
+# arm's judge (.github/actions/replay-score) gives it an artifact-suffix, which
+# every artifact it takes and leaves is named with.
 name: Run the judge
 description: Scores a finished Implementer run from its transcript and Ticket, with no tools and no write credential.
 
@@ -39,6 +41,10 @@ inputs:
   rotation:
     description: '"true" when Subscription rotation is on (needs.kit.outputs.rotation), so the judge is killed on overage, as an agent run is.'
     required: true
+  artifact-suffix:
+    description: For a Replay arm's judge (.github/actions/replay-score), `-replay-<arm>`, which the artifacts it takes and leaves are named with, so the arms of one workflow run never collide; empty for a live run's.
+    required: false
+    default: ""
 
 outputs:
   secrets-step:
@@ -70,7 +76,7 @@ runs:
       continue-on-error: true
       uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
-        name: fabrik-transcript-implement
+        name: fabrik-transcript-implement${{ inputs.artifact-suffix }}
         path: ${{ runner.temp }}/scored-transcript
 
     # Before the Claude token loads, and in a step of its own, so the token stays
@@ -108,7 +114,7 @@ runs:
     - name: Pass the judge's answer to the score-record job
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        name: fabrik-judge-result
+        name: fabrik-judge-result${{ inputs.artifact-suffix }}
         path: ${{ runner.temp }}/fabrik-judge/judge-result.json
         if-no-files-found: error
         retention-days: 7
@@ -120,7 +126,7 @@ runs:
       if: failure()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        name: fabrik-judge-failure
+        name: fabrik-judge-failure${{ inputs.artifact-suffix }}
         path: ${{ runner.temp }}/fabrik-judge/judge-failure.json
         if-no-files-found: ignore
         retention-days: 7
@@ -139,7 +145,7 @@ runs:
       continue-on-error: true
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        name: fabrik-transcript-score
+        name: fabrik-transcript-score${{ inputs.artifact-suffix }}
         path: ${{ runner.temp }}/fabrik-judge/transcript.jsonl.gz
         if-no-files-found: ignore
         retention-days: 7
