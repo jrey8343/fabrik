@@ -9,8 +9,9 @@
 import { verdictsIn } from "../github/threads.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { followUpsIn } from "../loop/followUps.ts";
-import { escapeMarkerIn, fromPullRequestIn } from "../loop/markers.ts";
-import { STRENGTHS, type Strength, type VerdictRecord } from "../loop/types.ts";
+import { escapeMarkerIn, fromPullRequestIn, fromRetroIn } from "../loop/markers.ts";
+import { retrosIn, retroWindowStart } from "../loop/retro.ts";
+import { type RetroIssueSnapshot, STRENGTHS, type Strength, type VerdictRecord } from "../loop/types.ts";
 import { recordPathOf, type RunRecord } from "./runRecord.ts";
 
 // The GitHub facts the metrics read of one Product repo.
@@ -376,14 +377,19 @@ function mergedIn(window: Window, { pullRequests }: MetricFacts): AgentPullReque
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** How far back a first Retro's window reaches, with no last Retro to start from. */
-export const FIRST_RUN_WINDOW_MS = 7 * DAY_MS;
-
 /** How far back an escape's PRs may have merged to count, as for the Weekly summary's escape rate: slow decay takes time to show. */
 export const ESCAPE_WINDOW_MS = 90 * DAY_MS;
 
 /** How far back the streak table reaches: long enough to count a streak a loosening can rest on. */
 export const STREAK_WINDOW_MS = 90 * DAY_MS;
+
+/** How many closed Retros a Retro reads the Operator's verdicts on its proposals from. */
+export const HISTORY_DEPTH = 3;
+
+/** A `fabrik:retro` issue, as the tick's snapshot reads it, with its comments, oldest first. */
+export interface RetroIssueFacts extends RetroIssueSnapshot {
+  readonly comments: readonly CommentFacts[];
+}
 
 /** What a Retro reads of one Product repo, as the Retro evidence job gathers it. */
 export interface RetroEvidenceInput {
@@ -393,10 +399,27 @@ export interface RetroEvidenceInput {
   readonly facts: MetricFacts;
   /** The Operator's GitHub login. */
   readonly operator: string;
-  /** When the last Retro's window ended, as its marker says, ISO 8601; null on a first run. */
-  readonly lastWindowEnd: string | null;
-  /** When this Retro's window ends, as its marker says, ISO 8601: the tick that opened it. */
+  /** The Retro being filled: the pending `fabrik:retro` issue this evidence is for. */
+  readonly retro: number;
+  /** When its window ends, as its retro marker says, ISO 8601: the time of the tick that opened it. */
   readonly windowEnd: string;
+  /**
+   * The repo's `fabrik:retro` issues, open and closed, the Retro being filled
+   * among them or not. Its window starts where the last Retro's ended, as the
+   * retro gate reads it (src/loop/retro.ts), with the Retro being filled left
+   * out: the gate takes a pending Retro for the last one, so it would
+   * otherwise be its own last Retro, and its window would come out empty.
+   */
+  readonly retros: readonly RetroIssueFacts[];
+  /** The repo's open issues whose body says `From retro #n`: any other open issue given is left out. */
+  readonly fromRetroIssues: readonly FromRetroIssueFacts[];
+}
+
+/** An open issue, as the Retro's history reads it. */
+export interface FromRetroIssueFacts {
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
 }
 
 /**
@@ -414,6 +437,8 @@ export interface EvidenceBundle {
   readonly followUps: readonly FollowUpEvidence[];
   /** Every agent PR merged in the 90 days to the window's end, oldest first: the counts a loosening's streak rests on. */
   readonly streakTable: readonly StreakRow[];
+  /** What the Operator made of earlier Retros: what not to propose again without new evidence. */
+  readonly history: RetroHistory;
 }
 
 /** A Run record, by its path in the store. */
@@ -520,18 +545,90 @@ export interface StreakRow {
   readonly requestChanges: boolean;
 }
 
+/** The earlier Retros, and what the Operator filed from them. */
+export interface RetroHistory {
+  /** The last 3 closed Retros the Fabrik App opened whose run didn't fail, newest first. */
+  readonly retros: readonly ClosedRetroEvidence[];
+  /** The open issues filed from a Retro's proposal: the Retro skips a proposal while its issue is open. */
+  readonly filed: readonly FiledProposalEvidence[];
+}
+
+/** A closed Retro: its proposals, and the Operator's comments on them, context never a trigger (ADR-0007). */
+export interface ClosedRetroEvidence {
+  /** `#<issue>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  /** How the Operator closed it: completed when they filed something, not planned otherwise. */
+  readonly closedAs: RetroIssueSnapshot["stateReason"];
+  /** The filled Retro, its proposals' cards included. */
+  readonly body: string;
+  /** What the Operator wrote on it, oldest first, each at an ISO 8601 time. */
+  readonly operatorComments: readonly { readonly at: string; readonly body: string }[];
+}
+
+/** An open issue filed from a Retro's proposal, by its `From retro #n` line. */
+export interface FiledProposalEvidence {
+  /** `#<issue>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
+  /** The Retro it was filed from. */
+  readonly retro: number;
+}
+
 /** The evidence bundle for one Retro: what it reads of one Product repo for its window. Pure, no I/O. */
 export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
-  const end = Date.parse(input.windowEnd);
-  const window = { start: input.lastWindowEnd === null ? end - FIRST_RUN_WINDOW_MS : Date.parse(input.lastWindowEnd), end };
-  const metrics: MetricsInput = { records: input.records, facts: [input.facts], operator: input.operator };
+  const earlier = input.retros.filter((retro) => retro.number !== input.retro);
+  const window = { start: Date.parse(retroWindowStart(input.windowEnd, earlier)), end: Date.parse(input.windowEnd) };
+  // Only this repo's records, whatever the store gave.
+  const records = input.records.filter((record) => record.repo === input.facts.repo);
+  const metrics: MetricsInput = { records, facts: [input.facts], operator: input.operator };
   return {
     window: { start: new Date(window.start).toISOString(), end: new Date(window.end).toISOString() },
     escapes: escapesOf(window, metrics),
     feedback: feedbackOf(window, input),
     followUps: followUpsOf(window, input),
     streakTable: streakTableOf({ start: window.end - STREAK_WINDOW_MS, end: window.end }, metrics),
+    history: historyOf(earlier, input),
   };
+}
+
+/** A ref the Retro may cite, and what it cites. */
+export interface EvidenceRef {
+  readonly ref: string;
+  /** An escape's issue, an agent PR, any other issue, or a Run record. */
+  readonly kind: "escape" | "pull-request" | "issue" | "record";
+}
+
+/**
+ * Every ref in the bundle, once each, in the order the bundle first gives
+ * it: the refs a Retro's proposal may cite as its evidence.
+ */
+export function refsOf(bundle: EvidenceBundle): EvidenceRef[] {
+  const pullRequest = (ref: string): EvidenceRef => ({ ref, kind: "pull-request" });
+  const issue = (number: number): EvidenceRef => ({ ref: `#${number}`, kind: "issue" });
+  const record = ({ ref }: RecordEvidence): EvidenceRef => ({ ref, kind: "record" });
+  const refs: EvidenceRef[] = [
+    ...bundle.escapes.flatMap((escape) => [
+      { ref: escape.ref, kind: "escape" as const },
+      ...escape.pullRequests.flatMap((escaped) => [
+        pullRequest(escaped.ref),
+        ...(escaped.ticket === null ? [] : [issue(escaped.ticket)]),
+        ...escaped.records.map(record),
+        ...(escaped.lastPassingReview === null ? [] : [record(escaped.lastPassingReview)]),
+      ]),
+    ]),
+    ...bundle.feedback.map(({ ref }) => pullRequest(ref)),
+    ...bundle.followUps.flatMap((followUp) => [pullRequest(followUp.ref), ...(followUp.openedAs === null ? [] : [issue(followUp.openedAs)])]),
+    ...bundle.streakTable.map(({ ref }) => pullRequest(ref)),
+    ...bundle.history.retros.map(({ number }) => issue(number)),
+    ...bundle.history.filed.map(({ number }) => issue(number)),
+  ];
+  const once = new Map<string, EvidenceRef>();
+  for (const each of refs) if (!once.has(each.ref)) once.set(each.ref, each);
+  return [...once.values()];
 }
 
 /** The escapes opened in the window, each counted against the agent PRs merged in the 90 days to its end. */
@@ -639,6 +736,27 @@ function streakTableOf(window: Window, metrics: MetricsInput): StreakRow[] {
       reverted,
       requestChanges: reviews.some((review) => review.author === metrics.operator && review.state === "changes-requested"),
     }));
+}
+
+/** The last closed Retros whose run didn't fail, with the Operator's comments, and the open issues filed from one. */
+function historyOf(retros: readonly RetroIssueFacts[], { operator, fromRetroIssues }: RetroEvidenceInput): RetroHistory {
+  const closed = retrosIn(retros)
+    .filter((retro) => !retro.open && !retro.failed)
+    .slice(0, HISTORY_DEPTH)
+    .flatMap(({ number }) => retros.filter((issue) => issue.number === number))
+    .map(({ number, title, stateReason, body, comments }) => ({
+      ref: `#${number}`,
+      number,
+      title,
+      closedAs: stateReason,
+      body,
+      operatorComments: comments.filter((comment) => !comment.byBot && comment.author === operator).map(({ at, body }) => ({ at, body })),
+    }));
+  const filed = fromRetroIssues.flatMap(({ number, title, body }) => {
+    const retro = fromRetroIn(body);
+    return retro === null ? [] : [{ ref: `#${number}`, number, title, body, retro }];
+  });
+  return { retros: closed, filed };
 }
 
 function recordEvidenceOf(record: RunRecord): RecordEvidence {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { aRetroEvidenceInput, aVerdictWithFollowUps } from "../__fixtures__/retroEvidence.ts";
+import { aPastRetro, aRetroEvidenceInput, aVerdictWithFollowUps, theRetroBeingFilled } from "../__fixtures__/retroEvidence.ts";
+import { retroBody } from "../__fixtures__/snapshots.ts";
 import {
   aComment,
   aCommit,
@@ -14,8 +15,18 @@ import {
   aVerdictComment,
   factsOf,
 } from "../__fixtures__/weeklySummary.ts";
+import { fromRetroLine } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
-import { type AgentPullRequestFacts, type CommentFacts, escapesIn, evidenceBundle, mergedAgentPullRequestsIn, verdictsOn } from "./retroEvidence.ts";
+import {
+  type AgentPullRequestFacts,
+  type CommentFacts,
+  escapesIn,
+  evidenceBundle,
+  mergedAgentPullRequestsIn,
+  refsOf,
+  type RetroIssueFacts,
+  verdictsOn,
+} from "./retroEvidence.ts";
 
 // A week in UTC: Monday 2 November 2026 00:00 to Monday 9 November 00:00.
 const WINDOW = { start: Date.parse("2026-11-02T00:00:00Z"), end: Date.parse("2026-11-09T00:00:00Z") };
@@ -242,12 +253,30 @@ describe("the metrics", () => {
 describe("the evidence bundle", () => {
   describe("the window", () => {
     it("runs from the last Retro's window end to this one's", () => {
-      const { window } = evidenceBundle(aRetroEvidenceInput({ lastWindowEnd: "2026-11-01T09:30:00Z", windowEnd: "2026-11-07T10:00:00Z" }));
+      const { window } = evidenceBundle(
+        aRetroEvidenceInput({
+          windowEnd: "2026-11-07T10:00:00Z",
+          retros: [aPastRetro({ number: 100, body: retroBody("2026-11-01T09:30:00.000Z") }), theRetroBeingFilled("2026-11-07T10:00:00.000Z")],
+        }),
+      );
       expect(window).toEqual({ start: "2026-11-01T09:30:00.000Z", end: "2026-11-07T10:00:00.000Z" });
     });
 
+    it("never takes the Retro being filled, or a failed one, for the last Retro", () => {
+      const { window } = evidenceBundle(
+        aRetroEvidenceInput({
+          retros: [
+            aPastRetro({ number: 99, createdAt: "2026-10-24T00:00:04Z", body: retroBody("2026-10-24T00:00:00.000Z") }),
+            aPastRetro({ number: 100, createdAt: "2026-10-31T00:00:04Z", stateReason: "not_planned", body: retroBody("2026-10-31T00:00:00.000Z", "failed") }),
+            theRetroBeingFilled("2026-11-07T00:00:00.000Z"),
+          ],
+        }),
+      );
+      expect(window.start).toBe("2026-10-24T00:00:00.000Z");
+    });
+
     it("covers the 7 days before this one's end on a first run", () => {
-      const { window } = evidenceBundle(aRetroEvidenceInput({ lastWindowEnd: null, windowEnd: "2026-11-07T10:00:00Z" }));
+      const { window } = evidenceBundle(aRetroEvidenceInput({ windowEnd: "2026-11-07T10:00:00Z", retros: [theRetroBeingFilled("2026-11-07T10:00:00.000Z")] }));
       expect(window).toEqual({ start: "2026-10-31T10:00:00.000Z", end: "2026-11-07T10:00:00.000Z" });
     });
   });
@@ -337,6 +366,25 @@ describe("the evidence bundle", () => {
         },
         { ref: "#51", number: 51, title: "Build the thing", ticket: null, records: [], lastPassingReview: null },
       ]);
+    });
+
+    it("never holds another repo's Run records, though they name the same Ticket and PR", () => {
+      const ours = aRunRecord({ runId: 1001, role: "review", verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
+      const theirs = (runId: number, role: "implement" | "review") =>
+        aRunRecord({ repo: "owner/other", runId, role, verdict: role === "review" ? "pass" : null, endedAt: "2026-11-01T06:00:00Z" });
+      const { escapes } = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [ours, theirs(2000, "implement"), theirs(2001, "review")],
+          facts: factsOf({
+            pullRequests: [aMergedPullRequest("2026-11-02T00:00:00Z", { number: 50, ticket: 7 })],
+            escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->")],
+          }),
+        }),
+      );
+      expect(escapes[0]?.pullRequests[0]).toMatchObject({
+        records: [{ ref: "runs/owner/product/2026-11/1001-1-review.json", record: ours }],
+        lastPassingReview: { ref: "runs/owner/product/2026-11/1001-1-review.json", record: ours },
+      });
     });
   });
 
@@ -586,6 +634,99 @@ describe("the evidence bundle", () => {
         [54, { escaped: false, reverted: false, requestChanges: true }],
         [55, { escaped: false, reverted: false, requestChanges: false }],
         [56, { escaped: false, reverted: false, requestChanges: false }],
+      ]);
+    });
+  });
+
+  describe("history", () => {
+    it("holds the last 3 closed Retros whose run didn't fail, newest first, with the Operator's comments on them", () => {
+      const retro = (number: number, windowEnd: string, overrides: Partial<RetroIssueFacts> = {}) =>
+        aPastRetro({ number, title: `Retro ${number}`, createdAt: windowEnd, body: retroBody(windowEnd), ...overrides });
+      const { history } = evidenceBundle(
+        aRetroEvidenceInput({
+          retros: [
+            retro(95, "2026-10-03T00:00:00.000Z"),
+            retro(96, "2026-10-10T00:00:00.000Z", {
+              stateReason: "not_planned",
+              comments: [
+                aComment("No: we lint that already.", "2026-10-11T00:00:00Z", { author: "operator", byBot: false }),
+                aComment("Agreed.", "2026-10-11T01:00:00Z", { author: "someone", byBot: false }),
+                aComment("A bot's note.", "2026-10-11T02:00:00Z"),
+              ],
+            }),
+            retro(97, "2026-10-17T00:00:00.000Z", { stateReason: "not_planned", body: retroBody("2026-10-17T00:00:00.000Z", "failed") }),
+            retro(98, "2026-10-24T00:00:00.000Z"),
+            retro(99, "2026-10-26T00:00:00.000Z", { byApp: false }), // a person's
+            retro(100, "2026-10-31T00:00:00.000Z"),
+            theRetroBeingFilled("2026-11-07T00:00:00.000Z"),
+          ],
+        }),
+      );
+      expect(history.retros).toEqual([
+        { ref: "#100", number: 100, title: "Retro 100", closedAs: "completed", body: retroBody("2026-10-31T00:00:00.000Z"), operatorComments: [] },
+        { ref: "#98", number: 98, title: "Retro 98", closedAs: "completed", body: retroBody("2026-10-24T00:00:00.000Z"), operatorComments: [] },
+        {
+          ref: "#96",
+          number: 96,
+          title: "Retro 96",
+          closedAs: "not_planned",
+          body: retroBody("2026-10-10T00:00:00.000Z"),
+          operatorComments: [{ at: "2026-10-11T00:00:00Z", body: "No: we lint that already." }],
+        },
+      ]);
+    });
+
+    it("leaves out a Retro the Operator hasn't closed yet", () => {
+      const { history } = evidenceBundle(aRetroEvidenceInput({ retros: [aPastRetro({ number: 100, open: true, stateReason: null }), theRetroBeingFilled("2026-11-07T00:00:00.000Z")] }));
+      expect(history.retros).toEqual([]);
+    });
+
+    it("holds the open issues filed from a Retro's proposal, by their From retro #n line, with their titles and bodies", () => {
+      const filed = `Add a lint rule for floating promises.\n\n${fromRetroLine(100)}`;
+      const { history } = evidenceBundle(
+        aRetroEvidenceInput({
+          fromRetroIssues: [
+            { number: 130, title: "Lint floating promises", body: filed },
+            { number: 131, title: "Quoted", body: `\`\`\`\n${fromRetroLine(100)}\n\`\`\`` },
+            { number: 132, title: "Unrelated", body: "From the Operator's own list." },
+          ],
+        }),
+      );
+      expect(history.filed).toEqual([{ ref: "#130", number: 130, title: "Lint floating promises", body: filed, retro: 100 }]);
+    });
+  });
+
+  describe("refs", () => {
+    it("lists every ref the bundle's items carry, once each, by what it cites", () => {
+      const review = aRunRecord({ runId: 1001, role: "review", verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
+      const bundle = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [review],
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-02T00:00:00Z", {
+                number: 50,
+                ticket: 7,
+                comments: [aVerdictWithFollowUps("pass", [{ title: "Extract the money type", body: "" }], "2026-11-01T00:00:00Z", 50)],
+              }),
+              aMergedPullRequest("2026-11-03T00:00:00Z", { number: 51, mergedAt: null, mergeSha: null, reviews: [aReview("2026-11-02T00:00:00Z")] }),
+            ],
+            escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 80 })],
+            followUpIssues: [aFollowUpIssue(50, "Extract the money type", { number: 90 })],
+          }),
+          retros: [aPastRetro({ number: 100, body: retroBody("2026-10-31T00:00:00.000Z") }), theRetroBeingFilled("2026-11-07T00:00:00.000Z")],
+          fromRetroIssues: [{ number: 130, title: "Lint floating promises", body: fromRetroLine(100) }],
+        }),
+      );
+      expect(refsOf(bundle)).toEqual([
+        { ref: "#80", kind: "escape" },
+        { ref: "#50", kind: "pull-request" },
+        { ref: "#7", kind: "issue" },
+        { ref: "runs/owner/product/2026-11/1001-1-review.json", kind: "record" },
+        { ref: "#51", kind: "pull-request" },
+        { ref: "#90", kind: "issue" },
+        { ref: "#100", kind: "issue" },
+        { ref: "#130", kind: "issue" },
       ]);
     });
   });

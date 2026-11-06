@@ -162,6 +162,23 @@ export function fromPullRequestIn(body: string): number | null {
   return numberOnFirstLineIn(body, FROM_PULL_REQUEST_LINE);
 }
 
+/**
+ * The line an issue filed from a Retro's proposal ends with, naming the Retro
+ * it came from (#151), matched against a whole line with its outer whitespace
+ * trimmed. The next Retro skips a proposal while its issue is open.
+ */
+export const FROM_RETRO_LINE = /^From retro #([1-9][0-9]*)$/;
+
+/** The `From retro #n` line for a proposal filed from Retro #`retro`, which fromRetroIn reads back. */
+export function fromRetroLine(retro: number): string {
+  return `From retro #${retro}`;
+}
+
+/** The Retro the first `From retro #n` line in `body` names, or null if it has none. A line quoted as code isn't one. */
+export function fromRetroIn(body: string): number | null {
+  return numberOnFirstLineIn(body, FROM_RETRO_LINE);
+}
+
 /** The number `line` captures from the first line outside code in `body` it matches, its outer whitespace trimmed, or null. */
 function numberOnFirstLineIn(body: string, line: RegExp): number | null {
   const match = linesOutsideCode(body)
