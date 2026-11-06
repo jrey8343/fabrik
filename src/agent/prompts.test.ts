@@ -272,6 +272,12 @@ describe("The Map question in the Design prompt", () => {
     expect(full).toContain("Never end in `map` then");
   });
 
+  it("treats the Decisions a Spec-to-be filed from a Map rests on as settled, and doesn't ask them again", async () => {
+    const settled = lineStarting(section(await prompt("design"), "Maps"), "- **Treat the Decisions an issue rests on as settled.**");
+    expect(settled).toContain("When the issue says which Decisions it rests on, as a Spec-to-be filed from a Map does");
+    expect(settled).toContain("don't ask their questions again");
+  });
+
   it("names the part the Map cap arrives under, after the issue", async () => {
     expect(section(await prompt("design"), "Maps")).toContain(`"${MAP_CAP_HEADING}", which follows the issue at the end of this prompt`);
   });
