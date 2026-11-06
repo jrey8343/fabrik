@@ -52,7 +52,7 @@ Then ask whether they want Visual evidence on this repo: on a pull request whose
 - `ui.url`: the local base URL that command serves on, such as `http://localhost:4321`. Pass `--ui-url=<url>`.
 - `ui.before_url`, optional: the production site's base URL, which Before screenshots of the same routes are taken from. Without it Before is skipped. Pass `--ui-before-url=<url>`.
 - `ui.default_routes`, optional: the routes captured when neither the Ticket nor the Implementer names any, each a path starting with `/`, such as `/`. Pass one `--ui-default-route=<route>` for each.
-- `preview.url`, optional: where the repo's preview deployment for a PR appears, as a template that may use only `{pr}`, `{branch_slug}` and `{sha}`, such as `https://deploy-preview-{pr}--<site>.netlify.app`. Without it no preview is linked. Pass `--preview-url=<template>`.
+- `preview.url`, optional: where the repo's preview deployment for a PR appears, as a template that may use only `{pr}`, the PR's number, `{sha}`, its full head commit, and `{branch_slug}`, its branch in lower case with each run of characters other than `a` to `z` and `0` to `9` made one `-`, and no `-` at either end, so `fabrik/ticket-12` is `fabrik-ticket-12`. For example `https://deploy-preview-{pr}--<site>.netlify.app`. Before using `{branch_slug}`, check the host slugs a branch the same way: the Kit never shortens it, though a host may shorten a long one. Without it no preview is linked. Pass `--preview-url=<template>`.
 
 Add those flags, each value in single quotes, to both setup commands below.
 

@@ -6,8 +6,9 @@
 // shot headless, and writes the screenshots, the capture result and the
 // gallery into the agent's output directory, passing the result out as the
 // step output `ui-evidence`. No model turns, no MCP, no video. Capture's own
-// failures are in the capture result, never this step's exit code. Not
-// unit-tested: the Pilot exercises it at switch-on.
+// failures are in the capture result, never this step's exit code. Its tests
+// run it in a repo without a ui block, where it must do nothing; the Pilot
+// exercises the Playwright path.
 //   node <kit>/src/evidence/capture-main.ts
 //
 // Run from the Product checkout, after prepare-agent's npm ci (the only Kit

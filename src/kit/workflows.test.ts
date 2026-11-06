@@ -601,7 +601,7 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
   // The push job downloads fabrik-agent-* and reads an empty download as a timeout.
   it("keeps the evidence only when capture recorded a result, apart from the push job's artifacts, never failing the job", () => {
     for (const upload of [evidence(), gallery()]) {
-      expect(upload).toMatch(/if: (?:false && )?steps\.capture\.outputs\.ui-evidence != ''\n/);
+      expect(upload).toContain("if: steps.capture.outputs.ui-evidence != ''\n");
       expect(upload).toContain("continue-on-error: true");
       expect(upload).toContain("if-no-files-found: ignore");
       expect(upload).not.toMatch(/name: fabrik-agent-/);
@@ -617,12 +617,12 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
     expect(implement()).toContain("ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}");
   });
 
-  // Gated off until Visual evidence's switch-on Ticket, which drops each `false && `: main stays as V1.
-  it("is gated off until switch-on, capture and both uploads alike, so V1 runs are unchanged", () => {
-    expect(capture()).toContain("if: false && success()\n");
-    expect(evidence()).toContain("if: false && steps.capture.outputs.ui-evidence != ''\n");
-    expect(gallery()).toContain("if: false && steps.capture.outputs.ui-evidence != ''\n");
-    expect(implement().match(/if: false && /g)).toHaveLength(3);
+  // Switched on (#239): no gate is left, so every UI PR in a repo with a ui block captures evidence.
+  it("is active: capture runs on every Implement run whose agent ended well, and both uploads whenever it recorded a result", () => {
+    expect(capture()).toContain("if: success()\n");
+    expect(evidence()).toContain("if: steps.capture.outputs.ui-evidence != ''\n");
+    expect(gallery()).toContain("if: steps.capture.outputs.ui-evidence != ''\n");
+    expect(implement()).not.toMatch(/if: false\b/);
   });
 
   it("stops the job at the Kit job's Implement job timeout, and its agent step at the Implement role's own", () => {

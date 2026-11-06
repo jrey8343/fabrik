@@ -177,7 +177,7 @@ describe("A finished Implement run's UI evidence", () => {
     });
   });
 
-  it("carries no capture result while capture is gated off, the Implement job having passed out none", () => {
+  it("carries no capture result when capture recorded nothing, as in a repo without a ui block, the Implement job having passed out none", () => {
     const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: null, artifact: null, galleryArtifact: null }));
 
     expect(event).toMatchObject({ evidence: { headSha: HEAD, run: 9100, artifact: null, gallery: null } });
