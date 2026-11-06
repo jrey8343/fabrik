@@ -7,7 +7,7 @@ import { PREVIEW_POLL_MINUTES } from "./previewLink.ts";
 import { RETRO_EVIDENCE_JOB } from "./pushJob.ts";
 import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
-import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE } from "../evidence/capture.ts";
+import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE, PROTOTYPE_GALLERY_FILE } from "../evidence/capture.ts";
 import { MAP_INPUTS_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
@@ -699,6 +699,56 @@ describe("loop.yml's prototype job", () => {
     expect(unnamed(keep)).toBe(unnamed(stepsOf(job("design")).find((step) => step.includes("name: Keep the agent's transcript"))));
     expect(keep).toContain("name: fabrik-transcript-design\n");
     expect(prototype()).toMatch(/if: always\(\)\n\s+continue-on-error: true\n\s+run: .*gzip.*transcript\.jsonl/);
+  });
+
+  describe("capture of the variants", () => {
+    const steps = () => stepsOf(prototype());
+    const stepAt = (pattern: string) => steps().findIndex((step) => step.includes(pattern));
+    const step = (pattern: string) => steps()[stepAt(pattern)] ?? "";
+    const capture = () => step("id: capture\n");
+    const gallery = () => step("id: gallery\n");
+
+    it("captures after the agent step has ended and before its result goes to the push job, from the Kit's program in its prototype mode", () => {
+      expect(stepAt("id: capture\n")).toBeGreaterThan(stepAt("id: agent\n"));
+      expect(stepAt("id: capture\n")).toBeLessThan(stepAt("name: fabrik-agent-result"));
+      expect(capture()).toContain("if: success()\n");
+      expect(capture()).toMatch(/working-directory: product\n(?:.*\n)*?\s+run: node \.\.\/kit\/src\/evidence\/capture-main\.ts prototype\n/);
+    });
+
+    it("can't fail the job: it goes on when capture fails, and stops at the Kit's capture timeout", () => {
+      expect(capture()).toContain("continue-on-error: true");
+      expect(capture()).toContain(`timeout-minutes: ${CAPTURE_TIMEOUT_MINUTES}\n`);
+    });
+
+    it("hands capture the route it captures through env:, and no secret: neither the 1Password step's outputs nor any GitHub token", () => {
+      expect(capture()).toContain("FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out");
+      expect(capture()).toContain("FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}");
+      expect(capture()).toContain("FABRIK_PROTOTYPE_REQUEST: ${{ needs.kit.outputs.prototype_request }}");
+      expect(capture()).not.toMatch(/FABRIK_SECRETS|steps\.op\.|secrets\.|github\.token|GH_TOKEN|GITHUB_TOKEN/);
+    });
+
+    it("keeps the gallery unzipped, so it opens in one click, for 30 days, apart from the push job's artifacts", () => {
+      expect(stepAt("id: gallery\n")).toBeGreaterThan(stepAt("id: capture\n"));
+      expect(gallery()).toContain("uses: actions/upload-artifact@");
+      expect(gallery()).toContain(`path: \${{ runner.temp }}/fabrik-out/${PROTOTYPE_GALLERY_FILE}\n`);
+      expect(gallery()).toContain("archive: false\n");
+      expect(gallery()).toContain("retention-days: 30\n");
+      expect(gallery()).not.toMatch(/name: fabrik-agent-/);
+      expect(PROTOTYPE_GALLERY_FILE).not.toMatch(/^fabrik-agent-/);
+    });
+
+    it("keeps the gallery only when capture recorded a result, never failing the job, and a capture that took no screenshot leaves none", () => {
+      expect(gallery()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
+      expect(gallery()).toContain("continue-on-error: true");
+      expect(gallery()).toContain("if-no-files-found: ignore");
+    });
+
+    // The push job links the gallery from its own run by this id, never from an address the agent's runner passed out (src/github/events.ts).
+    it("passes out the capture result and the gallery's artifact id, under the names the Implement job passes them out by, for the push job", () => {
+      expect(prototype()).toContain("ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}");
+      expect(prototype()).toContain("ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}");
+      expect(job("implement")).toContain("ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}");
+    });
   });
 
   it("passes out what its Run record needs: the model and effort the runner passed, and the commit it started from", () => {
