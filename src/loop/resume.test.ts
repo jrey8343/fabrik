@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  anAuditIssue,
   anIssue,
+  aRetroIssue,
   AUDITED_SHA,
   auditBody,
+  HEAD_SHA,
   kitConfig,
   notificationsOf,
   RETRO_WINDOW_END,
@@ -10,8 +13,12 @@ import {
   snapshotOf,
   tickSnapshot,
 } from "../__fixtures__/snapshots.ts";
+import { auditGate } from "./auditGate.ts";
+import { auditMarksIn, retroMarksIn } from "./markers.ts";
+import { retroGate } from "./retroGate.ts";
 import { planFor } from "./rules.ts";
-import type { Action, AgentRole, HeldTargetSnapshot, KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
+import type { Action, AgentRole, HeldTargetSnapshot, KitIssueSnapshot, LoopEvent, Plan, Snapshot } from "./types.ts";
+import { scheduledTickWith } from "./weeklyGate.ts";
 
 const TWO_SUBSCRIPTIONS = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
 const EARLIER = "2026-11-08T10:00:00.000Z";
@@ -20,9 +27,10 @@ const tick = (now: string): LoopEvent => ({ kind: "scheduled-tick", now });
 /** Past the earlier reset, before the later one. */
 const PAST_EARLIER = tick("2026-11-08T11:00:00.000Z");
 
-/** The held marker a weekly-limit issue's comment carries for a held run, as the hold leaves it. */
-function held(issue: number, role: AgentRole, label: string | null): string {
-  return `The run is held.\n\n<!-- fabrik:held ${JSON.stringify({ issue, role, label })} -->`;
+/** The held marker a weekly-limit issue's comment carries for a held run, as the hold leaves it, with its place if it has one. */
+function held(issue: number, role: AgentRole, label: string | null, order?: number): string {
+  const run = order === undefined ? { issue, role, label } : { issue, role, label, order };
+  return `The run is held.\n\n<!-- fabrik:held ${JSON.stringify(run)} -->`;
 }
 
 /** An open weekly-limit issue for `subscription`, with these comments. */
@@ -361,8 +369,129 @@ describe("A held Retro run, at the reset, with rotation on", () => {
       expect.objectContaining({ role: "audit", issue: 98 }),
     ]);
     expect(actionsOf(plan).filter((action) => action.kind === "drop-held-run")).toEqual([]);
-    const resumed = actionsOf(plan).find((action) => action.kind === "comment" && action.issue === 41);
-    expect(resumed).toEqual(expect.objectContaining({ body: expect.stringContaining('"role":"audit"') }));
-    expect(resumed).not.toEqual(expect.objectContaining({ body: expect.stringContaining('"role":"retro"') }));
+    const on41 = actionsOf(plan).flatMap((action) => (action.kind === "comment" && action.issue === 41 ? [action.body] : []));
+    expect(on41).toEqual([expect.stringContaining('"role":"audit"')]);
+    // Its held marker there still holds it, so it isn't held again.
+    expect(on41.join("\n")).not.toContain('"role":"retro"');
+  });
+});
+
+describe("A held Auditor run and a held Retro run, at the same reset, with rotation on", () => {
+  const audit = anIssueHeld(98, ["fabrik:audit"], { byApp: true, body: auditBody(AUDITED_SHA, "pending") });
+  const retro = anIssueHeld(120, ["fabrik:retro"], { byApp: true, body: retroBody(RETRO_WINDOW_END, "pending") });
+  // This week's pending Audit and Retro, as the gates read them.
+  const pendingAudit = anAuditIssue({ number: 98, title: "Audit: week of 2026-11-02", open: true, stateReason: null, createdAt: "2026-11-08T00:05:00Z", body: audit.body });
+  const pendingRetro = aRetroIssue({ number: 120, title: "Retro: week of 2026-11-02", open: true, stateReason: null, createdAt: "2026-11-07T00:05:00Z", body: retro.body });
+
+  /** The tick's snapshot, with this week's pending Audit and Retro as each gate reads them, edited and closed as `plan` leaves them. */
+  function weeklySnapshot(kitIssues: readonly KitIssueSnapshot[], plan: Plan | null = null): Snapshot {
+    const after = <Issue extends { number: number; body: string; open: boolean }>(issue: Issue): Issue => {
+      const actions = plan === null ? [] : actionsOf(plan);
+      const edit = actions.find((action) => action.kind === "edit-issue-body" && action.issue === issue.number);
+      const closed = actions.some((action) => action.kind === "close" && action.issue === issue.number);
+      return { ...issue, body: edit?.kind === "edit-issue-body" ? edit.body : issue.body, open: issue.open && !closed };
+    };
+    return tickSnapshot({
+      kitIssues,
+      held: [audit, retro],
+      audit: { head: HEAD_SHA, issues: [after(pendingAudit)] },
+      retro: { storeReady: true, agentPullRequestClosed: true, escapeFiled: false, issues: [after(pendingRetro)] },
+    });
+  }
+  type Held = { readonly role: "audit" | "retro"; readonly issue: number };
+  const BOTH: readonly (readonly [string, Held, Held])[] = [
+    ["the Auditor run held first", { role: "audit", issue: 98 }, { role: "retro", issue: 120 }],
+    ["the Retro run held first", { role: "retro", issue: 120 }, { role: "audit", issue: 98 }],
+  ];
+
+  function startsIn(plan: Plan): readonly Action[] {
+    return actionsOf(plan).filter((action) => action.kind === "start-agent-run");
+  }
+
+  /** The issue with the comments this plan leaves on it. */
+  function commentedOn(issue: KitIssueSnapshot, plan: Plan): KitIssueSnapshot {
+    const added = actionsOf(plan).flatMap((action) => (action.kind === "comment" && action.issue === issue.number ? [action.body] : []));
+    return { ...issue, comments: [...issue.comments, ...added] };
+  }
+
+  it.each(BOTH)(
+    "with %s, both on the weekly-limit issue the tick closes, holds the second again in its place on the one that stays open, for its reset to start it",
+    (_, first, second) => {
+      // #40 buzzed and resets first, so both held markers are on the issue the tick closes.
+      const closing = weeklyLimitIssue(40, "Claude token 2", EARLIER, [held(first.issue, first.role, null, 1), held(second.issue, second.role, null, 2)], true);
+      const staying = weeklyLimitIssue(41, "Claude token", LATER);
+
+      const reset = planFor(PAST_EARLIER, weeklySnapshot([closing, staying]), TWO_SUBSCRIPTIONS);
+
+      expect(actionsOf(reset)).toContainEqual({ kind: "close", issue: 40, reason: "completed" });
+      expect(startsIn(reset)).toEqual([expect.objectContaining({ role: first.role, issue: first.issue })]);
+      expect(actionsOf(reset)).toContainEqual({
+        kind: "comment",
+        issue: 41,
+        body: expect.stringContaining(`<!-- fabrik:held {"issue":${second.issue},"role":"${second.role}","label":null,"order":2} -->`),
+      });
+      expect(actionsOf(reset).filter((action) => action.kind === "drop-held-run" || action.kind === "edit-issue-body")).toEqual([]);
+      expect(actionsOf(reset)).not.toContainEqual(expect.objectContaining({ kind: "close", issue: second.issue }));
+
+      const next = planFor(tick("2026-11-09T05:00:00.000Z"), weeklySnapshot([commentedOn(staying, reset)]), TWO_SUBSCRIPTIONS);
+
+      expect(actionsOf(next)).toContainEqual({ kind: "close", issue: 41, reason: "completed" });
+      expect(startsIn(next)).toEqual([expect.objectContaining({ role: second.role, issue: second.issue })]);
+    },
+  );
+
+  it.each(BOTH)(
+    "with %s, and no weekly-limit issue left open, fails the second's pending issue as not planned, for the tick to open the next one",
+    (_, first, second) => {
+      // Claude token's usage-credits issue keeps it unusable, so #40 is the only weekly-limit issue.
+      const only = weeklyLimitIssue(40, "Claude token 2", EARLIER, [held(first.issue, first.role, null, 1), held(second.issue, second.role, null, 2)], true);
+      const usageCredits: KitIssueSnapshot = {
+        number: 60,
+        labels: ["ready-for-human", "fabrik:usage-credits"],
+        body: "Usage credits are on for the `Claude token` Subscription.\n\n<!-- fabrik:subscription Claude token -->",
+        comments: [],
+      };
+
+      const plan = planFor(PAST_EARLIER, weeklySnapshot([only, usageCredits]), TWO_SUBSCRIPTIONS);
+
+      expect(actionsOf(plan)).toContainEqual({ kind: "close", issue: 40, reason: "completed" });
+      expect(startsIn(plan)).toEqual([
+        expect.objectContaining({ role: first.role, issue: first.issue, subscription: "Claude token 2" }),
+      ]);
+      expect(actionsOf(plan)).toContainEqual({
+        kind: "drop-held-run",
+        role: second.role,
+        issue: second.issue,
+        reason: expect.stringContaining("no weekly-limit issue stays open"),
+      });
+      expect(actionsOf(plan)).toContainEqual({ kind: "close", issue: second.issue, reason: "not_planned" });
+      const edit = actionsOf(plan).find((action) => action.kind === "edit-issue-body" && action.issue === second.issue);
+      if (edit?.kind !== "edit-issue-body") throw new Error(`expected #${second.issue}'s body rewritten: ${JSON.stringify(plan)}`);
+      // Failed, with its marker kept, as a failed run leaves it, so the gate opens the next one.
+      if (second.role === "audit") expect(auditMarksIn(edit.body)).toEqual({ commit: AUDITED_SHA, pending: false, failed: true });
+      else expect(retroMarksIn(edit.body)).toEqual({ windowEnd: RETRO_WINDOW_END, pending: false, failed: true });
+      expect(edit.body).toContain("held at a weekly limit");
+      expect(notificationsOf(plan)).toEqual([]);
+
+      // An hour later, with both gates on, its gate opens the next one, whose opening starts its run.
+      const next = scheduledTickWith([auditGate, retroGate], "2026-11-08T12:00:00.000Z", weeklySnapshot([usageCredits], plan), TWO_SUBSCRIPTIONS);
+      expect(actionsOf(next).filter((action) => action.kind === "open-issue")).toEqual([
+        expect.objectContaining({ labels: [second.role === "audit" ? "fabrik:audit" : "fabrik:retro"] }),
+      ]);
+    },
+  );
+
+  it("starts the Retro run when the held Auditor run before it starts nothing", () => {
+    const kitIssues = [
+      weeklyLimitIssue(41, "Claude token", LATER, [held(98, "audit", null, 1), held(120, "retro", null, 2)], true),
+      weeklyLimitIssue(40, "Claude token 2", EARLIER),
+    ];
+    // Its body has lost its audit marker, so it names no commit to read.
+    const markerless = anIssueHeld(98, ["fabrik:audit"], { byApp: true, body: "The Auditor is reading.\n\n<!-- fabrik:audit-pending -->" });
+
+    const plan = planFor(PAST_EARLIER, { ...weeklySnapshot(kitIssues), held: [markerless, retro] }, TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "drop-held-run", role: "audit", issue: 98 }));
+    expect(startsIn(plan)).toEqual([expect.objectContaining({ role: "retro", issue: 120 })]);
   });
 });

@@ -2,14 +2,16 @@
 // pending Audit or pending Retro the scheduled tick opened, closed as not
 // planned, with one line on how it failed. The tick tries it again, so unlike
 // a Ticket's failure there's no trigger label to re-add and nobody to tell,
-// unless the failure stalls the whole repo.
+// unless the failure stalls the whole repo. A held run the tick can't start at
+// the reset, with no weekly-limit issue left open to hold it again, leaves its
+// issue the same way (src/loop/resume.ts).
 import { isPendingAudit } from "./audit.ts";
 import { RUN_NAMES } from "./heldRun.ts";
 import { repoWideNotice } from "./kitIssues.ts";
 import { AUDIT_FAILED_MARKER, auditMarker, auditMarksIn, RETRO_FAILED_MARKER, retroMarker, retroMarksIn } from "./markers.ts";
 import { isPendingRetro } from "./retro.ts";
 import type { RanOn } from "./subscriptions.ts";
-import type { InfrastructureFailure, IssueContext, Plan } from "./types.ts";
+import type { Action, AgentRole, InfrastructureFailure, IssueContext, IssueSnapshot, Plan } from "./types.ts";
 
 /** How an Auditor run or a Retro run failed. */
 export interface WeeklyRunFailure {
@@ -36,13 +38,12 @@ export interface WeeklyRunFailure {
  * Operator closed it, say) changes nothing.
  */
 export function failAudit(context: IssueContext, run: WeeklyRunFailure): Plan {
-  const { commit } = auditMarksIn(context.issue.body);
   return failPending(context, run, {
     pending: isPendingAudit(context.issue),
     name: "Audit",
-    run: "The Auditor's run",
+    run: RUNS.audit,
     stalled: `The ${RUN_NAMES.audit} run`,
-    markers: [...(commit === null ? [] : [auditMarker(commit)]), AUDIT_FAILED_MARKER],
+    markers: failedMarkers("audit", context.issue.body),
   });
 }
 
@@ -56,14 +57,49 @@ export function failAudit(context: IssueContext, run: WeeklyRunFailure): Plan {
  * longer pending (the Operator closed it, say) changes nothing.
  */
 export function failRetro(context: IssueContext, run: WeeklyRunFailure): Plan {
-  const { windowEnd } = retroMarksIn(context.issue.body);
   return failPending(context, run, {
     pending: isPendingRetro(context.issue),
     name: "Retro",
-    run: "The Retro's run",
+    run: RUNS.retro,
     stalled: `The ${RUN_NAMES.retro} run`,
-    markers: [...(windowEnd === null ? [] : [retroMarker(windowEnd)]), RETRO_FAILED_MARKER],
+    markers: failedMarkers("retro", context.issue.body),
   });
+}
+
+/**
+ * The actions failing a pending Audit or Retro whose held run the scheduled
+ * tick couldn't start at the reset, nor hold again, because it started the
+ * other held run with no trigger label and no weekly-limit issue stays open
+ * (src/loop/resume.ts): its body becomes one line on why, keeping its marker,
+ * with the failed marker in place of the pending one, and it closes as not
+ * planned, mentioning nobody, as a failed run leaves it, so the tick opens
+ * the next one.
+ */
+export function failUnstarted(role: WeeklyRole, pending: Pick<IssueSnapshot, "number" | "body">, why: string): Action[] {
+  return [
+    {
+      kind: "edit-issue-body",
+      issue: pending.number,
+      body: [`${RUNS[role]} failed: ${why}.`, "", ...failedMarkers(role, pending.body)].join("\n"),
+    },
+    { kind: "close", issue: pending.number, reason: "not_planned" },
+  ];
+}
+
+/** The roles whose run is for a pending issue the scheduled tick opened, and which have no trigger label. */
+type WeeklyRole = Extract<AgentRole, "audit" | "retro">;
+
+/** Each weekly run as its issue's failed line names it. */
+const RUNS: Readonly<Record<WeeklyRole, string>> = { audit: "The Auditor's run", retro: "The Retro's run" };
+
+/** The marker lines a failed Audit's or Retro's body ends with: its own marker, kept when it has one, then its failed marker. */
+function failedMarkers(role: WeeklyRole, body: string): string[] {
+  if (role === "audit") {
+    const { commit } = auditMarksIn(body);
+    return [...(commit === null ? [] : [auditMarker(commit)]), AUDIT_FAILED_MARKER];
+  }
+  const { windowEnd } = retroMarksIn(body);
+  return [...(windowEnd === null ? [] : [retroMarker(windowEnd)]), RETRO_FAILED_MARKER];
 }
 
 /** The issue a failed weekly run was for, as its failure rewrites it. */

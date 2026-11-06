@@ -66,9 +66,11 @@ export function heldWhileUsedUp(
 /**
  * Where a run held while no Subscription is free is named: the weekly-limit
  * issue that buzzed the Operator, else the first to reset, else the first
- * open; and when it is held until, the earliest reset across them.
+ * open; and when it is held until, the earliest reset across them. A held
+ * Auditor or Retro run the scheduled tick can't start at a reset is held
+ * again on whichever of these stays open (src/loop/resume.ts).
  */
-function holdingOn(kitIssues: readonly KitIssueSnapshot[]): { until: string | null; on: KitIssueSnapshot | undefined } {
+export function holdingOn(kitIssues: readonly KitIssueSnapshot[]): { until: string | null; on: KitIssueSnapshot | undefined } {
   const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
   const until = earliestOf(limits.map(resetsAtOf));
   const on = limits.find(notified) ?? limits.find((issue) => until !== null && resetsAtOf(issue) === until) ?? limits[0];
