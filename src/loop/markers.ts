@@ -6,6 +6,7 @@
 // comments back through them into the snapshot (src/github/threads.ts), and
 // the body lines are read from the issues themselves, so the Loop's history
 // lives on GitHub alone.
+import type { PrototypeRequest } from "./designOutput.ts";
 import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
@@ -60,6 +61,14 @@ export const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 
 /** The first line of the Kit's note that a Ticket came back to design from an agent PR. */
 export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
+
+/**
+ * The first line of the Kit's prototype request (#155), carrying what the
+ * Operator approved as JSON: the request a prototype turn of the session builds.
+ */
+export function prototypeRequestMarker({ route, variants, brief }: PrototypeRequest): string {
+  return `<!-- fabrik:prototype-request ${JSON.stringify({ route, variants, brief })} -->`;
+}
 
 /** The heading of a Map's Decisions so far: one line under it per Decision resolved. */
 export const DECISIONS_SO_FAR_HEADING = "## Decisions so far";

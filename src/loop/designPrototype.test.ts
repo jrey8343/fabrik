@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "./rules.ts";
 
 const turnFinished = (output: unknown) =>
   ({ kind: "agent-run-finished", role: "design", issue: 7, output: JSON.stringify(output) }) as const;
 
-const inSession = snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"] }), { operator: "jrey" });
+const inSession = snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"], designRounds: 1 }), { operator: "jrey" });
 
 const requested = {
   kind: "prototype",
@@ -14,6 +15,33 @@ const requested = {
   brief: "- **A**: one long form.\n- **B**: a stepper.\n- **C**: a calendar first.",
   comment: "Prototyping the booking page as you approved.",
 };
+
+/** Prototypes as they will be once switched on (#282); only these tests pass it. */
+const switchedOn = { prototypes: true } as const;
+
+describe("An ordinary Design turn that asks for the Prototype the Operator approved", () => {
+  it("posts the prototype request with its marker, mentioning nobody, then adds agent:design to start the prototype turn", () => {
+    const plan = planFor(turnFinished(requested), inSession, kitConfig({ ui: UI }), switchedOn);
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: 7,
+          body: [
+            String.raw`<!-- fabrik:prototype-request {"route":"/book","variants":3,"brief":"- **A**: one long form.\n- **B**: a stepper.\n- **C**: a calendar first."} -->`,
+            "**Prototype requested.** Prototyping the booking page as you approved.",
+            "",
+            "The Kit is building 3 variants of `/book`. The prototype round follows when they're ready.",
+          ].join("\n"),
+        },
+        { kind: "add-labels", issue: 7, labels: ["agent:design"] },
+      ],
+    });
+    expect(notificationsOf(plan, "jrey")).toEqual([]);
+  });
+});
 
 describe("A Design turn that asks for a Prototype while Prototypes are off", () => {
   it("fails as a broken contract and posts nothing", () => {
