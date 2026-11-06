@@ -1,8 +1,10 @@
 // The replay step (#156): on the hourly scheduled tick, the Replays' next
 // step, which the Replay module decides (src/kit/replay.ts): accept or reject
-// a waiting request, or start the next pending Ticket, which only spare
-// capacity allows. Starting one adds agent:replay to its replay issue
-// (ADR-0001), whose claim takes it off as the run starts (src/loop/replayRun.ts).
+// a waiting request, start the next pending Ticket, which only spare
+// capacity allows, or release one in progress past the longest its run can
+// last, whose run never landed. Starting one adds agent:replay to its replay
+// issue (ADR-0001), whose claim takes it off as the run starts
+// (src/loop/replayRun.ts).
 import { type ReplayCapacity, type ReplayStep, nextReplayStep, resultsReady } from "../kit/replay.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "../kit/runStore.ts";
 import { atOrOver } from "../kit/scorer.ts";
