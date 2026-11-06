@@ -1070,7 +1070,8 @@ function ticketResultOf(ticket: number, run: number, outcomes: ReplayOutcomes): 
       hiddenTests: gates?.hiddenTests ?? null,
       verdict: review === undefined ? null : (review.verdict ?? "none"),
       scores: SCORERS.map((scorer) => scored?.entries?.find((entry) => entry.scorer === scorer)?.score ?? null),
-      ...spentBy([implement, review]),
+      // A done Ticket's arm with no Review record had none to spend: its patch wasn't laid (endOf in src/kit/replayRecord.ts).
+      ...spentBy(review === undefined ? [implement] : [implement, review]),
       patch: implement?.replay == null ? null : replayPatchPath(implement.repo, implement.replay),
     };
   };

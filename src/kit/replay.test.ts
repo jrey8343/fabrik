@@ -1151,6 +1151,19 @@ describe("A Replay's results", () => {
     expect(totalsIn(body).at(-1)).toBe("Baseline vs original: pass Verdicts 2/2 vs 2/2; duration 0%.");
   });
 
+  it("adds nothing for an arm's Review that never ran, as on a patch that changes a Trust-root file, so the arm's figures, totals and headline stay its Implement run's", () => {
+    const refused = anArm(12, "variant", 9001);
+    // The patch was never laid, so the arm has no gates and no Review.
+    const neverReviewed = { ...refused, records: refused.records.filter(({ role }) => role !== "review"), gates: [] };
+    const outcomes = outcomesOf(anArm(12, "baseline", 9001), neverReviewed, anArm(7, "baseline", 9002), anArm(7, "variant", 9002));
+
+    const body = resultsIn(aFinishedReplay().body, outcomes);
+
+    expect(rowsOf(body)[1]).toBe(`| #12 (merged in #112) | variant, effort high | – | – | – | 0.80 | 0.90 | 0.75 | $1.00 | 12 | 2 min | ${patchOf(12, "variant")} | – |`);
+    expect(totalsIn(body)).toContain("| variant | 1/1 | 1/1 | 1/1 | 0.80 | 0.90 | 0.75 | $3.00 | 36 | 5 min |");
+    expect(visible(body)).toContain("**variant: gates 1/1 vs 2/2; pass Verdicts 1/1 vs 2/2; hidden tests 1/1 vs 2/2; cost −25%; turns −25%; duration −25%**");
+  });
+
   it("heads the results with one line of the variant's totals against the baseline's", () => {
     expect(visible(aMixedReplay())).toContain("**variant: gates 1/1 vs 1/2; pass Verdicts 1/2 vs 2/2; hidden tests 0/1 vs 1/2; cost −15%; turns +40%; duration 0%**");
   });
