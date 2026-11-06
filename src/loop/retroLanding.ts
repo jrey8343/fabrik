@@ -12,12 +12,14 @@ import { readable } from "./readable.ts";
 import { isPendingRetro } from "./retro.ts";
 import { LOOSENING_STREAK_MINIMUM, type LooseningProposal, parseRetroOutput, type ProposalDirection, type ProposalKind, type RetroProposal, type Streak } from "./retroOutput.ts";
 import type { Action, IssueContext, LoopEvent, Plan, RetroEvidence } from "./types.ts";
-import { failRetro } from "./weeklyFailure.ts";
+import { failWeekly } from "./weeklyRuns.ts";
 
 type RetroFinished = Extract<LoopEvent, { kind: "retro-run-finished" }>;
 
-/** The Kit's own repo, where a proposal to change the Kit is filed. A Kit constant, like the run store. */
-const KIT_REPO_URL = "https://github.com/jrey8343/fabrik";
+/** The Kit's own repo, as owner/name, where a proposal to change the Kit is filed. A Kit constant, like the run store. */
+export const KIT_REPO = "jrey8343/fabrik";
+
+const KIT_REPO_URL = `https://github.com/${KIT_REPO}`;
 
 /**
  * The Retro's reply, checked against the evidence it was given and rendered
@@ -34,7 +36,7 @@ export function landRetro(event: RetroFinished, context: IssueContext, config: K
     // The failed Retro's one line may quote the reply, so it mentions nobody and stays one line.
     const errors = withoutMentions(parsed.errors.join("; ").replace(/\s+/g, " "));
     const how = `its reply broke the Retro output contract (${errors})`;
-    return failRetro(context, { failure: "missing-output", how, runUrl: event.runUrl, resetsAt: null });
+    return failWeekly("retro", context, { failure: "missing-output", how, runUrl: event.runUrl, resetsAt: null });
   }
   const windowEnd = retroMarksIn(issue.body).windowEnd ?? event.evidence.window.end;
   const checks = parsed.output.proposals.map((proposal) => checked(silenced(proposal), event.evidence));
@@ -240,13 +242,35 @@ function filedOn(proposal: RetroProposal, event: RetroFinished, operator: string
       const skill = proposal.skill ?? "";
       const pick = picksIn(config).find(({ source, name }) => name === skill || `${source}/${name}`.toLowerCase() === skill.toLowerCase());
       if (pick === undefined) return { unlinked: `this repo pins no Extra skill named "${skill}"` };
-      const owners = [operator, event.repoUrl.split("/").at(-2) ?? ""].map((login) => login.toLowerCase());
-      if (!owners.includes(pick.source.split("/")[0]!.toLowerCase())) {
+      if (!operatorOwns(pick.source, operator, repoOf(event.repoUrl))) {
         return { unlinked: `this repo pins \`${pick.name}\` from ${pick.source}, a Skills source the Operator doesn't own` };
       }
       return { repoUrl: `https://github.com/${pick.source}` };
     }
   }
+}
+
+/** Whether the Operator owns a repo, as owner/name: as their login, or as the Product repo's owner, as an organization's repo pins its own skills. */
+function operatorOwns(source: string, operator: string, productRepo: string): boolean {
+  const owners = [operator, productRepo.split("/")[0] ?? ""].map((login) => login.toLowerCase());
+  return owners.includes(source.split("/")[0]!.toLowerCase());
+}
+
+/**
+ * The repos other than the Product repo, `repo` as owner/name, that its
+ * Retros' proposals may be filed on, each as owner/name: the Kit's own, and
+ * each Skills source the repo pins that the Operator owns. The next Retro
+ * reads the issues open there that say they came from this repo's Retros.
+ */
+export function proposalReposBeside(repo: string, operator: string, config: Pick<KitConfig, "skillsSources">): string[] {
+  const owned = config.skillsSources.map(({ repository }) => repository).filter((source) => operatorOwns(source, operator, repo));
+  // The Product repo's own issues are read with it, the Kit's own when the Kit is the Product repo.
+  return [KIT_REPO, ...owned].filter((each) => each.toLowerCase() !== repo.toLowerCase());
+}
+
+/** The repo a GitHub web address is, as owner/name. */
+function repoOf(repoUrl: string): string {
+  return repoUrl.split("/").slice(-2).join("/");
 }
 
 /**
@@ -255,8 +279,13 @@ function filedOn(proposal: RetroProposal, event: RetroFinished, operator: string
  * skips the filed issue while it's open. An edit to a Trust-root file is
  * Operator work, so it opens as an Operator brief, `ready-for-human`, and goes
  * straight to a Pairing session; anything else goes through Intake and Triage.
+ * Filed on another repo, the Kit's or a Skills source, where a bare #n links
+ * to that repo's own issue, every #n in it outside code, the trailer's
+ * included, names the Product repo.
  */
 function openAsIssue(proposal: RetroProposal, repoUrl: string, event: RetroFinished): string {
+  const elsewhere = repoUrl.toLowerCase() === event.repoUrl.toLowerCase() ? null : repoOf(event.repoUrl);
+  const refsTo = (text: string) => (elsewhere === null ? text : qualified(text, elsewhere));
   const described = [
     "**Problem**",
     "",
@@ -270,12 +299,33 @@ function openAsIssue(proposal: RetroProposal, repoUrl: string, event: RetroFinis
     "",
     ...proposal.evidence.map((ref) => `- ${evidenceLink(ref, event)}`),
   ];
-  const trailer = fromRetroLine(event.issue);
+  const trailer = fromRetroLine(event.issue, elsewhere);
   if (proposal.target === "product-trust-root") {
     const brief = ["## Operator brief", "", ...described, "", "## Steps", "", "- [ ] Make the change above"];
-    return newIssueUrl(repoUrl, proposal.title, brief.join("\n"), trailer, [READY_FOR_HUMAN]);
+    return newIssueUrl(repoUrl, proposal.title, refsTo(brief.join("\n")), trailer, [READY_FOR_HUMAN]);
   }
-  return newIssueUrl(repoUrl, proposal.title, described.join("\n"), trailer);
+  return newIssueUrl(repoUrl, proposal.title, refsTo(described.join("\n")), trailer);
+}
+
+/**
+ * Markdown with each bare `#n` reference outside code qualified to `repo`,
+ * owner/name, as `owner/name#n`: GitHub links nothing in a code span or a
+ * fenced block, so those are left as written.
+ */
+function qualified(markdown: string, repo: string): string {
+  const { runs } = fencedRunsOf(markdown);
+  return runs
+    .flatMap(({ code, lines }) =>
+      code
+        ? lines
+        : lines.map((line) =>
+            line
+              .split(/(`+[^`]*`+)/)
+              .map((part, at) => (at % 2 === 1 ? part : part.replace(/(^|[^\w/&#])#([1-9][0-9]*)\b/g, `$1${repo}#$2`)))
+              .join(""),
+          ),
+    )
+    .join("\n");
 }
 
 /** A loosening's streak, each PR linked, and the tightening it undoes. */
@@ -291,13 +341,17 @@ function loosened({ streak, undoes }: LooseningProposal, { repoUrl }: RetroFinis
 
 /**
  * A ref from the evidence as a link: a PR or an issue to itself in the
- * Product repo, and anything else, a Run record say, to its file in the
- * fabrik-runs store, with its transcript beside it when it has one.
+ * Product repo, an issue on another repo, `owner/name#n` (one filed from an
+ * earlier Retro on the Kit's repo, say), to itself there, and anything else,
+ * a Run record say, to its file in the fabrik-runs store, with its transcript
+ * beside it when it has one.
  */
 function evidenceLink(ref: string, { evidence, repoUrl }: RetroFinished): string {
   const kind = evidence.refs.find((each) => each.ref === ref)?.kind;
   const number = /^#([1-9][0-9]*)$/.exec(ref)?.[1];
   if (number !== undefined) return `[${ref}](${repoUrl}/${kind === "pull-request" ? "pull" : "issues"}/${number})`;
+  const elsewhere = /^([^\s/#]+\/[^\s/#]+)#([1-9][0-9]*)$/.exec(ref);
+  if (elsewhere !== null) return `[${ref}](https://github.com/${elsewhere[1]}/issues/${elsewhere[2]})`;
   const transcript = evidence.transcripts[ref];
   return `[\`${ref}\`](${storeFile(ref)})${transcript === undefined ? "" : `, with its [transcript](${storeFile(transcript)})`}`;
 }

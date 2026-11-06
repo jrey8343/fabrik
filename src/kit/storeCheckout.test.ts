@@ -47,10 +47,10 @@ describe("Reading the store's checkout", () => {
     const lines = ['{"type":"system","subtype":"init"}', '{"type":"result","subtype":"success"}'];
     const store = await aCheckoutWith({ [record.transcript!]: gzipSync(lines.map((line) => `${line}\n`).join("")) });
 
-    const transcripts = await readStoreTranscripts(store);
+    const readTranscript = await readStoreTranscripts(store);
 
-    expect(Object.keys(transcripts)).toEqual([record.transcript]);
-    expect(transcripts[record.transcript!]).toEqual(lines);
+    expect(readTranscript(record.transcript!)).toEqual(lines);
+    expect(readTranscript(record.transcript!.replace("1001", "1002"))).toBeNull();
   });
 
   it("reads nothing from a part of the store the checkout doesn't hold", async () => {
@@ -58,6 +58,6 @@ describe("Reading the store's checkout", () => {
 
     expect(await readStoreRunRecords(store, ["Claude token"])).toEqual({});
     expect(await readStoreScoreFiles(store)).toEqual({});
-    expect(await readStoreTranscripts(store)).toEqual({});
+    expect((await readStoreTranscripts(store))(record.transcript!)).toBeNull();
   });
 });

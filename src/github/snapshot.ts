@@ -25,7 +25,6 @@ import { escapeMarkerIn } from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
-  AuditIssueSnapshot,
   AuditSnapshot,
   DesignQueueIssue,
   DesignQueueSnapshot,
@@ -39,6 +38,7 @@ import type {
   SpecSnapshot,
   StartingComment,
   TicketSnapshot,
+  WeeklyIssueSnapshot,
 } from "../loop/types.ts";
 import { type GitHub, pagesOf, type Repo } from "./client.ts";
 import { countEmptyDiffs, designSessionOf, designTurnFailedIn, pushedSinceVerdictIn, requestChangesRunIn, verdictsIn } from "./threads.ts";
@@ -291,35 +291,46 @@ export async function gatherSnapshot(
     : { ...part, spec, kitIssues, startingComment, audit, retro, namedPullRequests, held };
 }
 
-// The newest issues with a weekly gate's label (src/loop/weeklyGate.ts),
-// Audits or Retros, open and closed: enough to hold this week's, any open
-// one, the last one and the last closed Audits the Auditor reads, since a
-// week opens at most three.
-const WEEKLY_ISSUES_QUERY = `
+/**
+ * The newest issues with a weekly gate's label (src/loop/weeklyGate.ts),
+ * Audits or Retros, open and closed: enough to hold this week's, any open
+ * one, the last one and the last closed ones an Auditor or Retro run reads,
+ * since a week opens at most three. `fields` are read on each issue beside a
+ * WeeklyIssueSnapshot's own (weeklyIssueOf), as a Retro's history reads its
+ * comments (src/github/facts.ts), so the tick, an Auditor run's inputs and a
+ * Retro's evidence read the same issues.
+ */
+export function weeklyIssuesQuery(fields = ""): string {
+  return `
   query ($owner: String!, $name: String!, $label: String!) {
     repository(owner: $owner, name: $name) {
       defaultBranchRef { target { oid } }
       issues(labels: [$label], states: [OPEN, CLOSED], first: 50, orderBy: { field: CREATED_AT, direction: DESC }) {
-        nodes { number title state stateReason createdAt body author { login __typename } }
+        nodes { number title state stateReason createdAt body author { login __typename } ${fields} }
       }
     }
   }
 `;
+}
 
-interface WeeklyIssuesQueryResult {
+const WEEKLY_ISSUES_QUERY = weeklyIssuesQuery();
+
+/** A weekly gate's issue as weeklyIssuesQuery reads it, before any `fields` of its own. */
+export interface RawWeeklyIssue {
+  number: number;
+  title: string;
+  state: "OPEN" | "CLOSED";
+  stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
+  createdAt: string;
+  body: string;
+  author: { login: string; __typename: string } | null;
+}
+
+/** What weeklyIssuesQuery reads, with each issue as `Issue`, which its `fields` add to. */
+export interface WeeklyIssuesQueryResult<Issue extends RawWeeklyIssue = RawWeeklyIssue> {
   repository: {
     defaultBranchRef: { target: { oid: string } } | null;
-    issues: {
-      nodes: {
-        number: number;
-        title: string;
-        state: "OPEN" | "CLOSED";
-        stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
-        createdAt: string;
-        body: string;
-        author: { login: string; __typename: string } | null;
-      }[];
-    };
+    issues: { nodes: Issue[] };
   };
 }
 
@@ -357,16 +368,21 @@ function auditSliceOf(data: WeeklyIssuesQueryResult, appLogin: string | null): A
 }
 
 /** Each issue the query read, with whether the Fabrik App, whose bot login is `appLogin`, opened it (see byAppOf). */
-function weeklyIssuesOf(data: WeeklyIssuesQueryResult, appLogin: string | null): AuditIssueSnapshot[] {
-  return data.repository.issues.nodes.map((issue) => ({
+function weeklyIssuesOf(data: WeeklyIssuesQueryResult, appLogin: string | null): WeeklyIssueSnapshot[] {
+  return data.repository.issues.nodes.map((issue) => weeklyIssueOf(issue, appLogin));
+}
+
+/** One issue weeklyIssuesQuery read, with whether the Fabrik App, whose bot login is `appLogin`, opened it (see byAppOf). */
+export function weeklyIssueOf(issue: RawWeeklyIssue, appLogin: string | null): WeeklyIssueSnapshot {
+  return {
     number: issue.number,
     title: issue.title,
     open: issue.state === "OPEN",
-    stateReason: issue.stateReason === null ? null : (issue.stateReason.toLowerCase() as AuditIssueSnapshot["stateReason"]),
+    stateReason: issue.stateReason === null ? null : (issue.stateReason.toLowerCase() as WeeklyIssueSnapshot["stateReason"]),
     createdAt: issue.createdAt,
     byApp: byAppOf(issue.author, appLogin),
     body: issue.body,
-  }));
+  };
 }
 
 /**

@@ -19,13 +19,14 @@ export function aRetroEvidenceInput(overrides: Partial<RetroEvidenceInput> = {})
   return {
     records: [],
     scoreFiles: {},
-    transcripts: {},
+    readTranscript: () => null,
     facts: factsOf(),
     operator: "operator",
     retro: 120,
     windowEnd: "2026-11-07T00:00:00Z",
     retros: [aPastRetro({ body: retroBody("2026-10-31T00:00:00.000Z") }), theRetroBeingFilled("2026-11-07T00:00:00.000Z")],
     fromRetroIssues: [],
+    tickets: [],
     ...overrides,
   };
 }
@@ -68,14 +69,15 @@ export function aRecordWithTranscript(overrides: Partial<RunRecord> = {}): RunRe
   return { ...record, transcript: `transcripts/${runStoreName(record)}.jsonl.gz` };
 }
 
-/** The store's transcripts of these runs, each by the path its record gives. */
-export function transcriptsOf(...runs: readonly (readonly [RunRecord, readonly string[]])[]): Record<string, readonly string[]> {
-  return Object.fromEntries(
+/** A reader of the store's transcripts of these runs, each by the path its record gives; null for any other path. */
+export function transcriptsOf(...runs: readonly (readonly [RunRecord, readonly string[]])[]): (path: string) => readonly string[] | null {
+  const transcripts = new Map(
     runs.map(([record, lines]) => {
       if (record.transcript === null) throw new Error("This run's record names no transcript");
       return [record.transcript, lines];
     }),
   );
+  return (path) => transcripts.get(path) ?? null;
 }
 
 /** A run's transcript, as stream-json lines: its init, then a Read of each file, answered with its contents, then its result. */

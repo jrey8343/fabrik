@@ -32,6 +32,17 @@ function stepsOf(job: string): readonly string[] {
   return job.split(/\n(?=      - )/).slice(1);
 }
 
+/** A composite action's text and its steps, each from its `- ` line to the next one's. */
+function actionNamed(name: string): { readonly text: string; readonly steps: readonly string[] } {
+  const text = readFileSync(new URL(`.github/actions/${name}/action.yml`, root), "utf8");
+  return { text, steps: text.split(/\n(?=    - )/).slice(1) };
+}
+
+/** Each `permission-<name>: <level>` a token step asks for, in name order. */
+function permissionsOf(step: string | undefined): string[] {
+  return [...(step ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`).sort();
+}
+
 describe("The Kit's workflows", () => {
   it.each(workflows)("$path checks the Kit out at kit/ in every job", ({ text }) => {
     const kitCheckouts = [...text.matchAll(/repository: jrey8343\/fabrik\n(?:.*\n){1,2}?\s+path: (\S+)/g)].map((match) => match[1]);
@@ -297,7 +308,7 @@ describe("The run the Loop action", () => {
       expect(store).toContain("if: steps.find-store.outputs.installed == 'true'");
       expect(store).toMatch(/owner: jrey8343\n/);
       expect(store).toMatch(/repositories: fabrik-runs\n/);
-      expect([...(store ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`)).toEqual(["metadata: read"]);
+      expect(permissionsOf(store)).toEqual(["metadata: read"]);
       expect(store).toContain("continue-on-error: true");
       expect(steps.indexOf(find!)).toBeLessThan(steps.indexOf(store!));
     });
@@ -510,7 +521,6 @@ describe("The store-token action, which the record actions share", () => {
   const steps = action.split(/\n(?=    - )/);
   const storeToken = steps.find((step) => step.includes("id: store\n"));
   const kitConfigToken = steps.find((step) => step.includes("id: kit-config\n"));
-  const permissionsOf = (step: string | undefined) => [...(step ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`);
 
   it("loads the Fabrik App key through the push service account, and nothing else", () => {
     const secrets = steps.filter((step) => step.includes("1password/load-secrets-action@"));
@@ -609,8 +619,6 @@ describe("The weekly summary workflow", () => {
   const action = readFileSync(new URL(".github/actions/file-weekly-summary/action.yml", root), "utf8");
   const steps = action.split(/\n(?=    - )/);
   const tokens = steps.filter((step) => step.includes("uses: actions/create-github-app-token@"));
-  const permissionsOf = (step: string | undefined) =>
-    [...(step ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`).sort();
 
   it("is called from the fabrik-runs caller with its push service account, and runs the Kit's composite action", () => {
     expect(weekly).toMatch(/on:\n {2}workflow_call:\n {4}secrets:\n {6}OP_PUSH_TOKEN:/);
@@ -807,15 +815,6 @@ describe("The score-record action", () => {
     expect(write).toContain("FABRIK_SCORED_RECORD: ${{ inputs.record }}");
   });
 });
-
-/** A composite action's text and its steps, each from its `- ` line to the next one's. */
-function actionNamed(name: string): { readonly text: string; readonly steps: readonly string[] } {
-  const text = readFileSync(new URL(`.github/actions/${name}/action.yml`, root), "utf8");
-  return { text, steps: text.split(/\n(?=    - )/).slice(1) };
-}
-
-/** Each `permission-<name>: <level>` a token step asks for. */
-const permissionsOf = (step: string | undefined) => [...(step ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`).sort();
 
 // The Retro evidence job's (#151), the first of a Retro run. Kit-only like the push job, and read-only: ADR-0009's addendum.
 describe("The Retro evidence action", () => {
@@ -1171,7 +1170,7 @@ describe("The Subscription each agent job runs on", () => {
 
   // The Retro job loads its token in its action, so the job's own text names none.
   it("a Retro run loads one Claude token: the Kit job's Subscription's, which its Retro job passes in, and its evidence job none", () => {
-    const runRetro = readFileSync(new URL(".github/actions/run-retro/action.yml", root), "utf8");
+    const { text: runRetro } = actionNamed("run-retro");
     const retro = jobIn(loop, "retro");
 
     expect(stepsOf(retro).find((step) => step.includes("uses: ./kit/.github/actions/run-retro"))).toContain(

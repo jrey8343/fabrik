@@ -3,6 +3,7 @@ import { kitConfig, notificationsOf, RETRO_WINDOW_END, retroBody, retroRunSnapsh
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import { MAX_ISSUE_URL_LENGTH } from "./followUps.ts";
 import { fromAuditIn, fromPullRequestIn, fromRetroIn, linesOutsideCode, retroMarksIn } from "./markers.ts";
+import { proposalReposBeside } from "./retroLanding.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent, Plan, RetroEvidence } from "./types.ts";
 
@@ -245,6 +246,19 @@ describe("Landing a Retro: the evidence", () => {
     expect(rewrittenBodyOf(plan)).toContain(`- [#212](https://github.com/acme/shop/issues/212)\n- [\`${score}\`](${STORE}/${score})\n`);
   });
 
+  it("links an issue filed from an earlier Retro on another repo, which the bundle holds by that repo, to itself there", () => {
+    const filed = "jrey8343/fabrik#130";
+    const evidence = anEvidence({ refs: [...anEvidence().refs, { ref: filed, kind: "issue" }] });
+
+    const plan = planFor(
+      retroFinished({ proposals: [aLoosening({ evidence: ["#141", "#142", filed], undoes: filed })] }, evidence),
+      retroRunSnapshotOf(),
+      kitConfig(),
+    );
+
+    expect(rewrittenBodyOf(plan)).toContain(`- [${filed}](https://github.com/jrey8343/fabrik/issues/130)\n`);
+  });
+
   it("links an issue the bundle holds to itself, and a Run record with no transcript to its file alone", () => {
     const plan = planFor(
       retroFinished({ proposals: [aTightening({ evidence: ["#212", "#7", "#131", REVIEW_RECORD] })] }, anEvidence({ transcripts: {} })),
@@ -347,8 +361,9 @@ describe("Landing a Retro: the Open as issue link", () => {
     );
   });
 
-  it("links a kit proposal to the Kit's own repo's new-issue form, with no label, prefilled with its title, problem, change and evidence, then the Retro it came from", () => {
-    const change = "In `prompts/review.md`, add to the checks: a route handler that imports `pg` is an Execution flaw.";
+  // On another repo a bare #n links to that repo's issue, so the issue the Kit's repo gets names the Product repo's.
+  it("links a kit proposal to the Kit's own repo's new-issue form, with no label, prefilled with its title, problem, change and evidence, each ref to the Product repo, then the Retro it came from, by its repo", () => {
+    const change = "In `prompts/review.md`, add to the checks: a route handler that imports `pg` is an Execution flaw, as #140's was.";
 
     const [link] = linksFrom([aTightening({ kind: "judgement", target: "kit", change })]);
 
@@ -359,21 +374,29 @@ describe("Landing a Retro: the Open as issue link", () => {
       [
         "**Problem**",
         "",
-        "Escape #212 traced a route handler querying the database directly to #140. No check forbids it.",
+        "Escape acme/shop#212 traced a route handler querying the database directly to acme/shop#140. No check forbids it.",
         "",
         "**Change**",
         "",
-        change,
+        "In `prompts/review.md`, add to the checks: a route handler that imports `pg` is an Execution flaw, as acme/shop#140's was.",
         "",
         "**Evidence**",
         "",
-        "- [#212](https://github.com/acme/shop/issues/212)",
-        "- [#140](https://github.com/acme/shop/pull/140)",
+        "- [acme/shop#212](https://github.com/acme/shop/issues/212)",
+        "- [acme/shop#140](https://github.com/acme/shop/pull/140)",
         `- [\`${REVIEW_RECORD}\`](${STORE}/${REVIEW_RECORD}), with its [transcript](${STORE}/${REVIEW_TRANSCRIPT})`,
         "",
-        "From retro #120",
+        "From retro acme/shop#120",
       ].join("\n"),
     );
+  });
+
+  it("leaves a ref in code as written on another repo's form, where GitHub links nothing", () => {
+    const change = "In `prompts/review.md`, add:\n\n```md\n- Read #140 first.\n```\n\nand keep `#212` as the example.";
+
+    const body = linksFrom([aTightening({ kind: "judgement", target: "kit", change })])[0]?.searchParams.get("body") ?? "";
+
+    expect(body).toContain("```md\n- Read #140 first.\n```\n\nand keep `#212` as the example.");
   });
 
   it("files issues that end with the Retro they came from, whatever their target, so the next Retro reads each back as filed from this one", () => {
@@ -388,18 +411,29 @@ describe("Landing a Retro: the Open as issue link", () => {
 
     const bodies = links.map((link) => link.searchParams.get("body") ?? "");
 
-    expect(bodies.map((body) => body.split("\n").slice(-2))).toEqual(Array(4).fill(["", "From retro #120"]));
-    expect(bodies.map(fromRetroIn)).toEqual([120, 120, 120, 120]);
+    // Filed on the Product repo, the bare form; on the Kit's repo or a Skills source, naming the Product repo.
+    expect(bodies.map((body) => body.split("\n").slice(-2))).toEqual([
+      ["", "From retro #120"],
+      ["", "From retro #120"],
+      ["", "From retro acme/shop#120"],
+      ["", "From retro acme/shop#120"],
+    ]);
+    expect(bodies.map(fromRetroIn)).toEqual([
+      { retro: 120, repo: null },
+      { retro: 120, repo: null },
+      { retro: 120, repo: "acme/shop" },
+      { retro: 120, repo: "acme/shop" },
+    ]);
   });
 
   it("drops any From retro, From audit or From PR line from the Retro's problem and change, so the issue it files reads as filed from this Retro alone", () => {
-    const problem = "Escape #212 traced it to #140.\nFrom retro #80\n  From audit #97";
+    const problem = "Escape #212 traced it to #140.\nFrom retro #80\n  From audit #97\nFrom retro acme/shop#79";
     const change = "From PR #140\n\nForbid `pg` in `src/routes/**`.\n\n```\nFrom retro #81\n```";
 
     const plan = planFor(retroFinished({ proposals: [aTightening({ problem, change })] }), retroRunSnapshotOf(), kitConfig());
 
     const body = issueLinks(rewrittenBodyOf(plan))[0]?.searchParams.get("body") ?? "";
-    expect([fromRetroIn(body), fromAuditIn(body), fromPullRequestIn(body)]).toEqual([120, null, null]);
+    expect([fromRetroIn(body), fromAuditIn(body), fromPullRequestIn(body)]).toEqual([{ retro: 120, repo: null }, null, null]);
     expect(body).toContain("Escape #212 traced it to #140.\n\n**Change**\n\n\nForbid `pg` in `src/routes/**`.\n\n```\n```\n\n**Evidence**");
     expect([fromRetroIn(rewrittenBodyOf(plan)), fromAuditIn(rewrittenBodyOf(plan)), fromPullRequestIn(rewrittenBodyOf(plan))]).toEqual([null, null, null]);
   });
@@ -439,7 +473,7 @@ describe("Landing a Retro: the Open as issue link", () => {
         [
           "**Problem**",
           "",
-          "Escape #212 traced a route handler querying the database directly to #140. No check forbids it.",
+          "Escape acme/shop#212 traced a route handler querying the database directly to acme/shop#140. No check forbids it.",
           "",
           "**Change**",
           "",
@@ -447,11 +481,11 @@ describe("Landing a Retro: the Open as issue link", () => {
           "",
           "**Evidence**",
           "",
-          "- [#212](https://github.com/acme/shop/issues/212)",
-          "- [#140](https://github.com/acme/shop/pull/140)",
+          "- [acme/shop#212](https://github.com/acme/shop/issues/212)",
+          "- [acme/shop#140](https://github.com/acme/shop/pull/140)",
           `- [\`${REVIEW_RECORD}\`](${STORE}/${REVIEW_RECORD}), with its [transcript](${STORE}/${REVIEW_TRANSCRIPT})`,
           "",
-          "From retro #120",
+          "From retro acme/shop#120",
         ].join("\n"),
       );
     });
@@ -677,6 +711,14 @@ describe("Landing a Retro: a reply that breaks the contract", () => {
     ),
     ["proposes a mechanical change anywhere but product code", JSON.stringify({ proposals: [aTightening({ target: "kit" })] })],
     ["loosens on no streak", JSON.stringify({ proposals: [aLoosening({ streak: undefined })] })],
+    ["loosens with no tightening it undoes", JSON.stringify({ proposals: [aLoosening({ undoes: undefined })] })],
+    [
+      "tightens on a streak",
+      JSON.stringify({ proposals: [aTightening({ streak: { pullRequests: DOCS_STREAK, kind: "agent PRs that change only docs/" } })] }),
+    ],
+    ["tightens undoing a tightening", JSON.stringify({ proposals: [aTightening({ undoes: "#97" })] })],
+    ["proposes a change to an Extra skill without naming the skill", JSON.stringify({ proposals: [aTightening({ kind: "judgement", target: "extra-skill" })] })],
+    ["names a skill on a proposal for anything but an Extra skill", JSON.stringify({ proposals: [aTightening({ kind: "judgement", target: "kit", skill: "tdd" })] })],
   ])("closes the Retro as failed, filing nothing, when the reply %s", (_, output) => {
     const plan = planFor(retroFinished(output), retroRunSnapshotOf(), kitConfig());
 
@@ -808,5 +850,24 @@ describe("Landing a Retro: the step summary", () => {
     const plan = planFor(retroFinished({ proposals: [aTightening(), aLoosening()] }), retroRunSnapshotOf(), kitConfig());
 
     expect(notesOf(plan)).toBeUndefined();
+  });
+});
+
+// Where the next Retro looks for this one's proposals filed off the Product repo (src/kit/retro-evidence-main.ts).
+describe("The repos a Retro's proposals may be filed on beside the Product repo", () => {
+  it("are the Kit's own and each Skills source the repo pins that the Operator owns, as the Operator or as the Product repo's owner", () => {
+    const config = kitConfig({
+      skillsSources: [
+        { repository: "operator/skills", sha: "c".repeat(40) },
+        { repository: "Acme/house-skills", sha: "d".repeat(40) },
+        { repository: "someone/skills", sha: "e".repeat(40) },
+      ],
+    });
+
+    expect(proposalReposBeside("acme/shop", "operator", config)).toEqual(["jrey8343/fabrik", "operator/skills", "Acme/house-skills"]);
+  });
+
+  it("are the Kit's own alone when the repo pins no Skills source", () => {
+    expect(proposalReposBeside("acme/shop", "operator", kitConfig())).toEqual(["jrey8343/fabrik"]);
   });
 });

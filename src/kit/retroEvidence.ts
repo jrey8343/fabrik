@@ -396,7 +396,7 @@ export const STREAK_WINDOW_MS = 90 * DAY_MS;
  */
 export const SAMPLE_SHARE = 1 / 10;
 
-/** How many closed Retros a Retro reads the Operator's verdicts on its proposals from. */
+/** How many closed Retros a Retro reads the Operator's comments on its proposals from. */
 export const HISTORY_DEPTH = 3;
 
 /** A `fabrik:retro` issue, as the tick's snapshot reads it, with its comments, oldest first. */
@@ -409,10 +409,13 @@ export interface RetroEvidenceInput {
   /** The store's Run records. */
   readonly records: readonly RunRecord[];
   /**
-   * The store's transcripts, each by its path in the store, as a Run record's
-   * `transcript` names it: every stdout line of the run's stream-json.
+   * Reads one of the store's transcripts by its path in the store, as a Run
+   * record's `transcript` names it: every stdout line of the run's
+   * stream-json, or null when the store holds none there. The store keeps
+   * every transcript and the bundle digests only a few, so the module asks
+   * for each it digests, once, however often the budget digests it again.
    */
-  readonly transcripts: Readonly<Record<string, readonly string[]>>;
+  readonly readTranscript: (path: string) => readonly string[] | null;
   /** The store's score files, each by its path in the store. */
   readonly scoreFiles: Readonly<Record<string, ScoreFile>>;
   /** The Product repo's GitHub facts, as the facts adapter gathers them for a Retro (gatherRetroFacts, src/github/facts.ts). */
@@ -431,12 +434,32 @@ export interface RetroEvidenceInput {
    * otherwise be its own last Retro, and its window would come out empty.
    */
   readonly retros: readonly RetroIssueFacts[];
-  /** The repo's open issues whose body says `From retro #n`: any other open issue given is left out. */
+  /**
+   * The open issues whose body says it was filed from a Retro: the repo's own
+   * that say `From retro #n`, and those on the Kit's repo or a Skills source
+   * the Operator owns that say `From retro <this repo>#n`. Any other open
+   * issue given is left out.
+   */
   readonly fromRetroIssues: readonly FromRetroIssueFacts[];
+  /**
+   * The Tickets evidenceTicketsOf names, each with its title and body, as the
+   * evidence job read them: the facts hold a Ticket's number alone. One
+   * GitHub no longer has is left out, and its PRs carry its number alone.
+   */
+  readonly tickets: readonly TicketTextFacts[];
+}
+
+/** A Ticket's title and body, as GitHub has them now. */
+export interface TicketTextFacts {
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
 }
 
 /** An open issue, as the Retro's history reads it. */
 export interface FromRetroIssueFacts {
+  /** The repo it's open on, owner/name, when that isn't the Product repo. */
+  readonly repo?: string;
   readonly number: number;
   readonly title: string;
   readonly body: string;
@@ -502,7 +525,7 @@ export interface EscapedPullRequestEvidence {
   readonly number: number;
   readonly title: string;
   /** The Ticket its `Closes #n` names, or null. */
-  readonly ticket: number | null;
+  readonly ticket: TicketEvidence | null;
   /** Every Run record on its Ticket, oldest first. */
   readonly records: readonly RecordEvidence[];
   /** The last Review record on the PR with a pass Verdict, the gate that missed the escape, with its transcript's digest, or null when the store holds none. */
@@ -591,11 +614,25 @@ export interface SampledPullRequestEvidence {
   /** ISO 8601. */
   readonly mergedAt: string;
   /** The Ticket its `Closes #n` names, or null. */
-  readonly ticket: number | null;
+  readonly ticket: TicketEvidence | null;
   /** Its Verdicts, oldest first. */
   readonly verdicts: readonly VerdictEvidence[];
   /** The Run record of every agent run on its Ticket, oldest first, each with its transcript's digest. */
   readonly records: readonly DigestedRecordEvidence[];
+}
+
+/**
+ * An agent PR's Ticket: what it was asked to build, which a Retro traces an
+ * escape or a pattern to when the Ticket asked for it or left it open. Never
+ * cut to the budget, as a Verdict isn't.
+ */
+export interface TicketEvidence {
+  /** `#<issue>`. */
+  readonly ref: string;
+  readonly number: number;
+  /** Its title and body as GitHub has them now, or null for a Ticket it no longer has. */
+  readonly title: string | null;
+  readonly body: string | null;
 }
 
 /** A Verdict, in the comment the Fabrik App posted it in. */
@@ -649,9 +686,9 @@ export interface ClosedRetroEvidence {
   readonly operatorComments: readonly { readonly at: string; readonly body: string }[];
 }
 
-/** An open issue filed from a Retro's proposal, by its `From retro #n` line. */
+/** An open issue filed from a Retro's proposal, by its `From retro` line. */
 export interface FiledProposalEvidence {
-  /** `#<issue>`. */
+  /** `#<issue>`, or `<owner>/<repo>#<issue>` for one open on another repo, the Kit's or a Skills source. */
   readonly ref: string;
   readonly number: number;
   readonly title: string;
@@ -662,25 +699,74 @@ export interface FiledProposalEvidence {
 
 /** The evidence bundle for one Retro: what it reads of one Product repo for its window. Pure, no I/O. */
 export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
-  const earlier = input.retros.filter((retro) => retro.number !== input.retro);
-  const window = { start: Date.parse(retroWindowStart(input.windowEnd, earlier)), end: Date.parse(input.windowEnd) };
-  // Only this repo's records, whatever the store gave.
-  const records = input.records.filter((record) => record.repo === input.facts.repo);
-  const metrics: MetricsInput = { records, facts: [input.facts], operator: input.operator };
-  const digests = digestsOf(input.transcripts);
+  const earlier = earlierRetrosOf(input);
+  const window = windowOf(input);
+  const metrics = metricsOf(input);
+  const digests = digestsOf(input.readTranscript);
   const digested: Digested = (record) => ({ ...recordEvidenceOf(record), digest: digests(record, Infinity) });
+  const tickets = new Map(input.tickets.map((ticket) => [ticket.number, ticket]));
+  const ticketOf: TicketOf = (number) => {
+    if (number === null) return null;
+    const { title = null, body = null } = tickets.get(number) ?? {};
+    return { ref: `#${number}`, number, title, body };
+  };
   const whole: EvidenceBundle = {
     window: { start: new Date(window.start).toISOString(), end: new Date(window.end).toISOString() },
-    escapes: escapesOf(window, metrics, digested),
+    escapes: escapesOf(window, metrics, digested, ticketOf),
     feedback: feedbackOf(window, input),
     followUps: followUpsOf(window, input),
-    lowScores: lowScoresOf(window, records, input, digested),
-    sample: sampleOf(window, metrics, digested),
+    lowScores: lowScoresOf(window, metrics.records, input, digested),
+    sample: sampleOf(window, metrics, digested, ticketOf),
     streakTable: streakTableOf({ start: window.end - STREAK_WINDOW_MS, end: window.end }, metrics),
     history: historyOf(earlier, input),
     trimmed: false,
   };
   return heldToBudget(whole, digests);
+}
+
+/**
+ * The Tickets a Retro's evidence carries, each once: the Ticket of each PR an
+ * escape counts against and of each sampled PR. The facts hold a Ticket's
+ * number alone, so the evidence job reads each one's title and body and
+ * gives them to evidenceBundle as `tickets`.
+ */
+export function evidenceTicketsOf(input: Omit<RetroEvidenceInput, "tickets">): number[] {
+  const window = windowOf(input);
+  const metrics = metricsOf(input);
+  // Which PRs they are needs no transcript.
+  const undigested: Digested = (record) => ({ ...recordEvidenceOf(record), digest: null });
+  const numberOnly: TicketOf = (number) => (number === null ? null : { ref: `#${number}`, number, title: null, body: null });
+  const numbers = [
+    ...escapesOf(window, metrics, undigested, numberOnly).flatMap(({ pullRequests }) => pullRequests.map(({ ticket }) => ticket)),
+    ...sampleOf(window, metrics, undigested, numberOnly).map(({ ticket }) => ticket),
+  ].flatMap((ticket) => (ticket === null ? [] : [ticket.number]));
+  return [...new Set(numbers)];
+}
+
+/** What the metrics read of the input: only this repo's records, whatever the store gave. */
+function metricsOf({ records, facts, operator }: Pick<RetroEvidenceInput, "records" | "facts" | "operator">): MetricsInput {
+  return { records: records.filter((record) => record.repo === facts.repo), facts: [facts], operator };
+}
+
+/**
+ * The earliest time a Retro's evidence reads, in milliseconds: 90 days before
+ * its window starts, so an escape opened at the start is counted against
+ * every agent PR it may name. A Retro held back for weeks starts its window
+ * long ago, so the facts it's given must reach back this far
+ * (gatherRetroFacts, src/github/facts.ts) for its window to be read whole.
+ */
+export function evidenceReachOf(input: Pick<RetroEvidenceInput, "retro" | "windowEnd" | "retros">): number {
+  return windowOf(input).start - ESCAPE_WINDOW_MS;
+}
+
+/** The Retros before the one being filled, which is left out: the gate takes a pending Retro for the last one. */
+function earlierRetrosOf({ retro, retros }: Pick<RetroEvidenceInput, "retro" | "retros">): readonly RetroIssueFacts[] {
+  return retros.filter(({ number }) => number !== retro);
+}
+
+/** The Retro's window: from the last Retro's window end, as the gate reads it (src/loop/retro.ts), to its own. */
+function windowOf(input: Pick<RetroEvidenceInput, "retro" | "windowEnd" | "retros">): Window {
+  return { start: Date.parse(retroWindowStart(input.windowEnd, earlierRetrosOf(input))), end: Date.parse(input.windowEnd) };
 }
 
 /** A ref the Retro may cite, and what it cites. */
@@ -703,7 +789,7 @@ export function refsOf(bundle: EvidenceBundle): EvidenceRef[] {
       { ref: escape.ref, kind: "escape" as const },
       ...escape.pullRequests.flatMap((escaped) => [
         pullRequest(escaped.ref),
-        ...(escaped.ticket === null ? [] : [issue(escaped.ticket)]),
+        ...(escaped.ticket === null ? [] : [issue(escaped.ticket.number)]),
         ...escaped.records.map(record),
         ...(escaped.lastPassingReview === null ? [] : [record(escaped.lastPassingReview)]),
       ]),
@@ -713,12 +799,12 @@ export function refsOf(bundle: EvidenceBundle): EvidenceRef[] {
     ...bundle.lowScores.flatMap((low) => [{ ref: low.ref, kind: "score" as const }, ...(low.run === null ? [] : [record(low.run)])]),
     ...bundle.sample.flatMap((sampled) => [
       pullRequest(sampled.ref),
-      ...(sampled.ticket === null ? [] : [issue(sampled.ticket)]),
+      ...(sampled.ticket === null ? [] : [issue(sampled.ticket.number)]),
       ...sampled.records.map(record),
     ]),
     ...bundle.streakTable.map(({ ref }) => pullRequest(ref)),
     ...bundle.history.retros.map(({ number }) => issue(number)),
-    ...bundle.history.filed.map(({ number }) => issue(number)),
+    ...bundle.history.filed.map(({ ref }): EvidenceRef => ({ ref, kind: "issue" })),
   ];
   const once = new Map<string, EvidenceRef>();
   for (const each of refs) if (!once.has(each.ref)) once.set(each.ref, each);
@@ -794,25 +880,44 @@ function isStreakRow(value: unknown): boolean {
 type Digests = (record: RunRecord, budget: number) => string | null;
 
 /** The store's transcripts as digests, each transcript read once however often it's digested. */
-function digestsOf(transcripts: RetroEvidenceInput["transcripts"]): Digests {
-  const read = new Map<string, (budget: number) => TranscriptDigest>();
+function digestsOf(readTranscript: RetroEvidenceInput["readTranscript"]): Digests {
+  // Each path read, by its digest, or null when the store holds no transcript there.
+  const read = new Map<string, ((budget: number) => TranscriptDigest) | null>();
   return (record, budget) => {
     const path = record.transcript;
-    const lines = path === null ? undefined : transcripts[path];
-    if (path === null || lines === undefined) return null;
-    const digest = read.get(path) ?? digestOf(lines);
-    read.set(path, digest);
-    return digest(budget).digest;
+    if (path === null) return null;
+    if (!read.has(path)) {
+      const lines = readTranscript(path);
+      read.set(path, lines === null ? null : digestOf(lines));
+    }
+    return read.get(path)?.(budget).digest ?? null;
   };
 }
 
 /** A Run record with its transcript's whole digest. */
 type Digested = (record: RunRecord) => DigestedRecordEvidence;
 
-/** The escapes opened in the window, each counted against the agent PRs merged in the 90 days to its end. */
-function escapesOf(window: Window, metrics: MetricsInput, digested: Digested): EscapeEvidence[] {
-  return escapesIn({ start: window.end - ESCAPE_WINDOW_MS, end: window.end }, metrics)
-    .filter(({ issue }) => within(window, issue.createdAt))
+/** The Ticket a PR's `Closes #n` names, as the evidence carries it, or null for none. */
+type TicketOf = (number: number | null) => TicketEvidence | null;
+
+/**
+ * Every escape the Operator opened in the window, each counted, by the Weekly
+ * summary's rule, against the agent PRs its marker names that merged in the
+ * 90 days to it. Counting each from itself rather than from the window's end
+ * keeps every escape's PRs however long a held-back Retro's window runs.
+ */
+function escapesOf(window: Window, metrics: MetricsInput, digested: Digested, ticketOf: TicketOf): EscapeEvidence[] {
+  return metrics.facts
+    .flatMap((repo) =>
+      repo.escapeMarkerIssues
+        .filter((issue) => within(window, issue.createdAt))
+        .flatMap((issue) => {
+          const at = Date.parse(issue.createdAt);
+          // A window holds its start but not its end, so the 90 days to an escape end just after it.
+          const counted = { start: at + 1 - ESCAPE_WINDOW_MS, end: at + 1 };
+          return escapesIn(counted, { ...metrics, facts: [{ ...repo, escapeMarkerIssues: [issue] }] });
+        }),
+    )
     .map(({ issue, strength, pullRequests }) => ({
       ref: `#${issue.number}`,
       number: issue.number,
@@ -823,7 +928,7 @@ function escapesOf(window: Window, metrics: MetricsInput, digested: Digested): E
         ref: `#${pullRequest.number}`,
         number: pullRequest.number,
         title: pullRequest.title,
-        ticket: pullRequest.ticket,
+        ticket: ticketOf(pullRequest.ticket),
         records: records.map(recordEvidenceOf),
         lastPassingReview: lastPassingReview === null ? null : digested(lastPassingReview),
       })),
@@ -928,7 +1033,7 @@ function lowScoresOf(window: Window, records: readonly RunRecord[], { facts, sco
  * with the agent runs on each one's Ticket: a judge's run scoring one of
  * them is left out, as the low scores give what it found.
  */
-function sampleOf(window: Window, metrics: MetricsInput, digested: Digested): SampledPullRequestEvidence[] {
+function sampleOf(window: Window, metrics: MetricsInput, digested: Digested, ticketOf: TicketOf): SampledPullRequestEvidence[] {
   return mergedAgentPullRequestsIn(window, metrics)
     .filter(({ repo, pullRequest }) => inSample(`${repo}#${pullRequest.number}`, SAMPLE_SHARE))
     .toSorted((a, b) => Date.parse(a.mergedAt) - Date.parse(b.mergedAt) || a.pullRequest.number - b.pullRequest.number)
@@ -937,7 +1042,7 @@ function sampleOf(window: Window, metrics: MetricsInput, digested: Digested): Sa
       number,
       title,
       mergedAt,
-      ticket,
+      ticket: ticketOf(ticket),
       verdicts: comments.flatMap((comment) =>
         verdictsOn([comment]).map(({ record: { verdict, source }, at }) => ({ verdict, source, at, body: comment.body })),
       ),
@@ -966,7 +1071,7 @@ function streakTableOf(window: Window, metrics: MetricsInput): StreakRow[] {
 }
 
 /** The last closed Retros whose run didn't fail, with the Operator's comments, and the open issues filed from one. */
-function historyOf(retros: readonly RetroIssueFacts[], { operator, fromRetroIssues }: RetroEvidenceInput): RetroHistory {
+function historyOf(retros: readonly RetroIssueFacts[], { operator, fromRetroIssues, facts }: RetroEvidenceInput): RetroHistory {
   const closed = retrosIn(retros)
     .filter((retro) => !retro.open && !retro.failed)
     .slice(0, HISTORY_DEPTH)
@@ -979,9 +1084,13 @@ function historyOf(retros: readonly RetroIssueFacts[], { operator, fromRetroIssu
       body,
       operatorComments: comments.filter((comment) => !comment.byBot && comment.author === operator).map(({ at, body }) => ({ at, body })),
     }));
-  const filed = fromRetroIssues.flatMap(({ number, title, body }) => {
-    const retro = fromRetroIn(body);
-    return retro === null ? [] : [{ ref: `#${number}`, number, title, body, retro }];
+  // A bare `From retro #n` names a Retro of the repo the issue is open on, so only one of this repo's counts.
+  const isThisRepo = (repo: string | null | undefined) => repo == null || repo.toLowerCase() === facts.repo.toLowerCase();
+  const filed = fromRetroIssues.flatMap(({ repo, number, title, body }) => {
+    const from = fromRetroIn(body);
+    if (from === null || !isThisRepo(from.repo ?? repo)) return [];
+    const ref = isThisRepo(repo) ? `#${number}` : `${repo}#${number}`;
+    return [{ ref, number, title, body, retro: from.retro }];
   });
   return { retros: closed, filed };
 }
@@ -1000,7 +1109,7 @@ export const EVIDENCE_BUDGET = 300_000;
  * What the budget may cut, least important first: the sample's transcripts,
  * then the low-scoring runs', then the patches of the Operator's pushes, then
  * the escapes' passing Review runs' transcripts. Nothing else is ever cut:
- * not a ref, a Verdict, a review comment or the streak table.
+ * not a ref, a Verdict, a Ticket, a review comment or the streak table.
  */
 const CUT_ORDER = ["sample", "lowScores", "patches", "escapes"] as const;
 

@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, kitConfig, notificationsOf, RETRO_WINDOW_END, retroBody, snapshotOf } from "../__fixtures__/snapshots.ts";
+import {
+  anIssue,
+  aRetroIssue,
+  kitConfig,
+  notificationsOf,
+  RETRO_WINDOW_END,
+  retroBody,
+  snapshotOf,
+  tickSnapshot,
+} from "../__fixtures__/snapshots.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { planFor } from "./rules.ts";
-import type { IssueSnapshot, LoopEvent, Plan } from "./types.ts";
+import type { IssueSnapshot, KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
@@ -211,5 +220,72 @@ describe("A failed Retro run on a Retro that's no longer pending", () => {
         reason: expect.stringContaining("#120"),
       });
     }
+  });
+});
+
+// With rotation on (#152), a run of another role refused on its weekly limit,
+// or killed for spending usage credits, is re-run on a free Subscription or
+// held until a reset. A Retro run is neither: it has no trigger label to re-run
+// it through, and the scheduled tick can't start one, so its Retro fails and a
+// later tick opens the next one.
+describe("A Retro that couldn't run on its Subscription, with rotation on", () => {
+  const TWO_SUBSCRIPTIONS = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
+  /** Saturday, the default retro.day, in the week of Monday 2026-11-02. */
+  const SATURDAY = "2026-11-07T04:00:00.000Z";
+  const pending = aRetro({ body: retroBody(SATURDAY, "pending") });
+  /** An open weekly-limit issue for `subscription`, resetting at 05:00 UTC. */
+  const limitOf = (number: number, subscription: string): KitIssueSnapshot => ({
+    number,
+    labels: ["fabrik:weekly-limit"],
+    body: `The weekly usage limit of the \`${subscription}\` Subscription is reached.\n\n<!-- fabrik:notified -->\n<!-- fabrik:subscription ${subscription} -->\n<!-- fabrik:resets-at 2026-11-07T05:00:00.000Z -->`,
+    comments: [],
+  });
+
+  /** The Retro as `plan` leaves it, as the next tick's retro slice reads it. */
+  function after(plan: Plan): ReturnType<typeof aRetroIssue> {
+    const edit = actionsOf(plan).find((action) => action.kind === "edit-issue-body" && action.issue === 120);
+    if (edit?.kind !== "edit-issue-body") throw new Error(`expected #120's body rewritten: ${JSON.stringify(plan)}`);
+    const closed = actionsOf(plan).some((action) => action.kind === "close" && action.issue === 120);
+    return aRetroIssue({ number: 120, open: !closed, stateReason: closed ? "not_planned" : null, createdAt: "2026-11-07T04:00:04Z", body: edit.body });
+  }
+
+  /** The tick at `now`, with last week's Retro and these, and no weekly-limit issue open. */
+  function tickAt(now: string, retros: readonly ReturnType<typeof aRetroIssue>[]): Plan {
+    const retro = { storeReady: true, issues: [aRetroIssue(), ...retros], agentPullRequestClosed: true, escapeFiled: false };
+    return planFor({ kind: "scheduled-tick", now }, tickSnapshot({ retro }), TWO_SUBSCRIPTIONS);
+  }
+
+  const opened = (plan: Plan) => actionsOf(plan).filter((action) => action.kind === "open-issue");
+
+  it.each([
+    [
+      "opened while every Subscription is used up",
+      { kind: "issue-opened", issue: 120 } as LoopEvent,
+      [limitOf(40, "Claude token"), limitOf(41, "Claude token 2")],
+    ],
+    ["refused on its weekly limit", retroFailed({ ...report("weekly-limit"), subscription: "Claude token" }), []],
+    [
+      "killed for spending usage credits",
+      retroFailed({ report: { failure: "usage-credits", detail: "isUsingOverage was true" }, subscription: "Claude token" }),
+      [limitOf(41, "Claude token 2")],
+    ],
+  ])("%s, fails, closed as not planned, and a later tick that week opens the next one", (_, event, kitIssues) => {
+    const plan = planFor(event, snapshotOf(pending, { kitIssues }), TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(plan).filter((action) => action.kind === "hold-agent-run" || action.kind === "start-agent-run")).toEqual([]);
+    expect(JSON.stringify(plan)).not.toContain("fabrik:held");
+    const failed = after(plan);
+    expect(failed).toEqual(expect.objectContaining({ open: false, body: expect.stringContaining("<!-- fabrik:retro-failed -->") }));
+
+    expect(opened(tickAt("2026-11-07T06:00:00.000Z", [failed]))).toEqual([
+      expect.objectContaining({ labels: ["fabrik:retro"], body: expect.stringContaining(`since 2026-10-31 06:00 UTC`) }),
+    ]);
+  });
+
+  it("after two such failures in a week, the next Retro waits for next week", () => {
+    const first = after(planFor(retroFailed(report("weekly-limit")), snapshotOf(pending), TWO_SUBSCRIPTIONS));
+    const second = { ...first, number: 121, createdAt: "2026-11-07T06:00:04Z" };
+
+    expect(opened(tickAt("2026-11-07T07:00:00.000Z", [first, second]))).toEqual([]);
   });
 });

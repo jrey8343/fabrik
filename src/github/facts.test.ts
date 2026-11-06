@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { gatherGitHubFacts, gatherRetroFacts, productReposOf } from "./facts.ts";
+import { GitHubError } from "./client.ts";
+import { gatherGitHubFacts, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
 
 const CALLER = "jobs:\n  fabrik:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v1.2.0\n";
 
@@ -626,7 +627,7 @@ describe("Gathering a Product repo's GitHub facts for a Retro", () => {
       },
     );
 
-    const facts = await gatherRetroFacts(github, repo, NOW, OPERATOR.login);
+    const facts = await gatherRetroFacts(github, repo, NOW, OPERATOR.login, NOW);
 
     expect(facts.pullRequests[0]?.commits.map((commit) => commit.patch)).toEqual([
       null,
@@ -643,6 +644,122 @@ describe("Gathering a Product repo's GitHub facts for a Retro", () => {
     expect(facts.openPullRequests[0]?.commits.map((commit) => commit.patch)).toEqual([
       "diff --git a/logo.png b/logo.png\n(No textual diff: a binary file, or too large for GitHub to show.)",
     ]);
-    expect(read).toEqual(["2".repeat(40), "3".repeat(40)]);
+    // Each once, in whatever order the reads went out.
+    expect(read.toSorted()).toEqual(["2".repeat(40), "3".repeat(40)]);
+  });
+
+  // A Retro held back for weeks reads a window that starts more than 97 days before now.
+  it("reaches back to `from` when its evidence starts before the 97 days, for its PRs, the Operator's issues and the default branch's commits", async () => {
+    const from = Date.parse("2026-06-01T00:00:00Z");
+    const asked: unknown[] = [];
+    const { github } = retroRepoWith(
+      {
+        closedPullRequests: [aRawPullRequest({ number: 40, mergedAt: "2026-06-02T00:00:00Z", closedAt: "2026-06-02T00:00:00Z", updatedAt: "2026-06-02T00:00:00Z" })],
+        operatorIssues: [aRawOperatorIssue(60, "2026-06-03T00:00:00Z", "<!-- fabrik:escape strong #40 -->")],
+      },
+      {},
+    );
+    const watched = {
+      ...github,
+      graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        if (query.includes("history(")) asked.push(variables["since"]);
+        return github.graphql<T>(query, variables);
+      },
+    };
+
+    const facts = await gatherRetroFacts(watched, repo, NOW, OPERATOR.login, from);
+
+    expect(facts.pullRequests.map((pr) => pr.number)).toEqual([40]);
+    expect(facts.escapeMarkerIssues.map((issue) => issue.number)).toEqual([60]);
+    expect(asked).toEqual(["2026-06-01T00:00:00.000Z"]);
+  });
+
+  it("still reaches back the 97 days when its evidence starts later", async () => {
+    const asked: unknown[] = [];
+    const { github } = retroRepoWith({}, {});
+    const watched = {
+      ...github,
+      graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        if (query.includes("history(")) asked.push(variables["since"]);
+        return github.graphql<T>(query, variables);
+      },
+    };
+
+    await gatherRetroFacts(watched, repo, NOW, OPERATOR.login, Date.parse("2026-10-01T00:00:00Z"));
+
+    expect(asked).toEqual(["2026-08-03T20:00:00.000Z"]);
+  });
+});
+
+describe("Reading the Tickets a Retro's evidence carries", () => {
+  /** A REST API holding these issues by number; GitHub has no other, and any other call fails. */
+  function issuesWith(issues: Record<number, { title: string; body: string | null }>) {
+    const read: number[] = [];
+    return {
+      read,
+      github: {
+        async rest(method: string, path: string): Promise<unknown> {
+          expect(method).toBe("GET");
+          const number = Number(/^\/repos\/jrey8343\/shop\/issues\/(\d+)$/.exec(path)?.[1]);
+          if (Number.isNaN(number)) throw new Error(`Unexpected call: ${path}`);
+          read.push(number);
+          const issue = issues[number];
+          if (issue === undefined) throw new GitHubError(`GitHub GET ${path} failed: 404`, 404);
+          return { number, ...issue };
+        },
+      },
+    };
+  }
+
+  it("reads each one's title and body, once each, and leaves out one GitHub no longer has", async () => {
+    const { github, read } = issuesWith({ 7: { title: "Build the cart", body: "A cart that totals its lines." }, 9: { title: "Build the till", body: null } });
+
+    const tickets = await gatherTickets(github, repo, [7, 9, 7, 11]);
+
+    expect(tickets).toEqual([
+      { number: 7, title: "Build the cart", body: "A cart that totals its lines." },
+      { number: 9, title: "Build the till", body: "" },
+    ]);
+    expect(read.toSorted((a, b) => a - b)).toEqual([7, 9, 11]);
+  });
+
+  it("fails on any other error, rather than give the Retro a Ticket it couldn't read", async () => {
+    const github = {
+      async rest(): Promise<unknown> {
+        throw new GitHubError("GitHub GET failed: 502", 502);
+      },
+    };
+
+    await expect(gatherTickets(github, repo, [7])).rejects.toThrow("502");
+  });
+});
+
+// Proposals a Retro filed on the Kit's repo or a Skills source: the next Retro reads them there.
+describe("Reading the open issues on other repos a Retro's proposals may be filed on", () => {
+  /** A read-only GraphQL API over these repos' open issues, by owner/name; reading any other repo fails, as for a private one. */
+  function reposWith(open: Record<string, { number: number; title: string; body: string }[]>) {
+    return {
+      async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        expect(query).toContain("issues(states: OPEN");
+        const issues = open[`${String(variables["owner"])}/${String(variables["name"])}`];
+        if (issues === undefined) throw new Error("GitHub GraphQL error: Could not resolve to a Repository");
+        return { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: issues } } } as T;
+      },
+    };
+  }
+
+  it("reads each one's open issues with their bodies, each by the repo it's on, and names each repo it couldn't read rather than fail", async () => {
+    const github = reposWith({
+      "jrey8343/fabrik": [{ number: 230, title: "Check route imports in review", body: "From retro jrey8343/shop#100" }],
+      "jrey8343/skills": [{ number: 12, title: "Route handlers skill", body: "From retro jrey8343/shop#99" }],
+    });
+
+    const { issues, unread } = await gatherOpenIssuesOn(github, ["jrey8343/fabrik", "jrey8343/private-skills", "jrey8343/skills"]);
+
+    expect(issues).toEqual([
+      { repo: "jrey8343/fabrik", number: 230, title: "Check route imports in review", body: "From retro jrey8343/shop#100" },
+      { repo: "jrey8343/skills", number: 12, title: "Route handlers skill", body: "From retro jrey8343/shop#99" },
+    ]);
+    expect(unread).toEqual([{ repo: "jrey8343/private-skills", why: "GitHub GraphQL error: Could not resolve to a Repository" }]);
   });
 });

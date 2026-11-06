@@ -10,7 +10,7 @@ import { dateOf, heldBack, weekStart } from "./weeklyGate.ts";
 /**
  * The retro gate: a pending Retro to open, or why there's none this tick. The
  * scheduled-tick rule runs it on every tick, after the audit gate
- * (scheduledTickWith).
+ * (scheduledTickWith in src/loop/rules.ts).
  */
 export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   const { day } = config.retro;
@@ -19,7 +19,9 @@ export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): P
   if (slice === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the retro slice the retro gate weighs" };
   }
-  const held = heldBack("Retro", day, retrosIn(slice.issues), now, snapshot.kitIssues, config);
+  // Any open weekly-limit issue holds it back, rotation on or off, so that a
+  // Retro never competes with Tickets for what's left of the weekly limits.
+  const held = heldBack("Retro", day, retrosIn(slice.issues), now, snapshot.kitIssues, true);
   if (held !== null) return { kind: "nothing", reason: held };
   // The store's opt-in step isn't done: a Retro would have nothing to read, and isn't worth a notice (#139).
   if (!slice.storeReady) return { kind: "nothing", reason: "The fabrik-runs store isn't ready: the Fabrik App isn't on it, or it isn't private" };

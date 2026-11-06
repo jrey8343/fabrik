@@ -165,26 +165,48 @@ export function fromPullRequestIn(body: string): number | null {
 /**
  * The line an issue filed from a Retro's proposal ends with, naming the Retro
  * it came from (#151), matched against a whole line with its outer whitespace
- * trimmed. The next Retro skips a proposal while its issue is open.
+ * trimmed: `From retro #n` on an issue in the Retro's own Product repo, and
+ * `From retro <owner>/<repo>#n`, naming that repo, on one filed anywhere else,
+ * the Kit's repo or a Skills source, where a bare #n would link to that repo's
+ * own issue. The next Retro skips a proposal while its issue is open.
  */
-export const FROM_RETRO_LINE = /^From retro #([1-9][0-9]*)$/;
+export const FROM_RETRO_LINE = /^From retro (?:([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+))?#([1-9][0-9]*)$/;
 
-/** The `From retro #n` line for a proposal filed from Retro #`retro`, which fromRetroIn reads back. */
-export function fromRetroLine(retro: number): string {
-  return `From retro #${retro}`;
+/**
+ * The `From retro` line for a proposal filed from Retro #`retro`, which
+ * fromRetroIn reads back: bare on an issue in the Retro's own Product repo,
+ * and naming that repo, `repo` as owner/name, on one filed anywhere else.
+ */
+export function fromRetroLine(retro: number, repo: string | null = null): string {
+  return `From retro ${repo ?? ""}#${retro}`;
 }
 
-/** The Retro the first `From retro #n` line in `body` names, or null if it has none. A line quoted as code isn't one. */
-export function fromRetroIn(body: string): number | null {
-  return numberOnFirstLineIn(body, FROM_RETRO_LINE);
+/** The Retro a `From retro` line names: its number, and its Product repo, as owner/name, when the line names one. */
+export interface FromRetro {
+  readonly retro: number;
+  /** Null for the bare `From retro #n`, which names a Retro in the repo the issue is on. */
+  readonly repo: string | null;
+}
+
+/** The Retro the first `From retro` line in `body` names, in either form, or null if it has none. A line quoted as code isn't one. */
+export function fromRetroIn(body: string): FromRetro | null {
+  const match = firstLineIn(body, FROM_RETRO_LINE);
+  return match === null ? null : { retro: Number(match[2]), repo: match[1] ?? null };
 }
 
 /** The number `line` captures from the first line outside code in `body` it matches, its outer whitespace trimmed, or null. */
 function numberOnFirstLineIn(body: string, line: RegExp): number | null {
-  const match = linesOutsideCode(body)
-    .map((each) => line.exec(each.trim()))
-    .find((each) => each !== null);
-  return match === undefined || match === null ? null : Number(match[1]);
+  const match = firstLineIn(body, line);
+  return match === null ? null : Number(match[1]);
+}
+
+/** What `line` matches on the first line outside code in `body` it matches, its outer whitespace trimmed, or null. */
+function firstLineIn(body: string, line: RegExp): RegExpExecArray | null {
+  return (
+    linesOutsideCode(body)
+      .map((each) => line.exec(each.trim()))
+      .find((each) => each !== null) ?? null
+  );
 }
 
 /**

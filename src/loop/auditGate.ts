@@ -4,6 +4,7 @@ import { shortSha } from "../skills/lock.ts";
 import { auditsIn, lastAudit } from "./audit.ts";
 import { AUDIT_LABEL } from "./labels.ts";
 import { AUDIT_PENDING_MARKER, auditMarker } from "./markers.ts";
+import { rotationIsOn } from "./subscriptions.ts";
 import type { Action, KitConfig, Plan, Snapshot } from "./types.ts";
 import { dateOf, heldBack, weekStart } from "./weeklyGate.ts";
 
@@ -11,7 +12,7 @@ import { dateOf, heldBack, weekStart } from "./weeklyGate.ts";
  * The audit gate: a pending Audit to open, or why there's none this tick. The
  * scheduled-tick rule runs it on every tick, beside the retro gate, after
  * closing each weekly-limit issue past its reset and resuming held runs then
- * (scheduledTickWith).
+ * (scheduledTickWith in src/loop/rules.ts).
  */
 export function auditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   const { day } = config.audit;
@@ -20,7 +21,9 @@ export function auditGate(now: string, snapshot: Snapshot, config: KitConfig): P
   if (slice === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the audit slice the audit gate weighs" };
   }
-  const held = heldBack("Audit", day, auditsIn(slice.issues), now, snapshot.kitIssues, config);
+  // With rotation on the Audit opens anyway: its Auditor run starts on a free
+  // Subscription, or is held on the pending Audit while none is.
+  const held = heldBack("Audit", day, auditsIn(slice.issues), now, snapshot.kitIssues, !rotationIsOn(config));
   if (held !== null) return { kind: "nothing", reason: held };
 
   const { head } = slice;

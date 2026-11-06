@@ -199,6 +199,13 @@ describe("A Design session's rewrite keeps the issue's From retro line, so the n
     expect(rewrittenBody(plan)?.split("\n").slice(-3)).toEqual(["From retro #120", "From audit #40", "<!-- fabrik:escape strong #31 -->"]);
   });
 
+  // On the Kit's repo or a Skills source, the line names the Product repo whose Retro it came from.
+  it("ends the rewrite with one naming the Product repo, as an issue filed from a Retro on another repo has it", () => {
+    const elsewhere = filedProposal.replace("From retro #120", "From retro acme/shop#120");
+
+    expect(rewrittenBody(planFor(turnFinished(operatorBrief), inSession(elsewhere), kitConfig()))?.split("\n").at(-1)).toBe("From retro acme/shop#120");
+  });
+
   it("carries no From retro line quoted in a code block", () => {
     const quoting = ["The log said:", "", "```", "From retro #120", "```", "", "Split it."].join("\n");
 

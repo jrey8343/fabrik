@@ -1,25 +1,25 @@
 // Failure notices: an agent run that fails for a reason outside the work is an
 // Infrastructure failure. It's never retried and never counts against a
 // Ticket's retries; the Operator gets one comment saying how to resume it. A
-// failed Auditor or Retro run goes to failAudit or failRetro instead, which
-// fails its Audit or Retro with no trigger to re-add, since the scheduled
-// tick opens the next one (src/loop/weeklyFailure.ts). With rotation on, a
+// failed Auditor or Retro run fails its Audit or Retro instead, with no
+// trigger to re-add, since the scheduled tick opens the next one
+// (src/loop/weeklyRuns.ts). With rotation on, a
 // run refused on its Subscription's weekly limit is re-run once, quietly,
 // through its trigger label while another Subscription is free, so the
 // Operator hears nothing. Once none is free it is held instead, with no
-// failure comment, and so is a refused Auditor or Retro run, whose Audit or
-// Retro stays pending (src/loop/heldRun.ts). A run killed for spending usage
-// credits is re-run or held the same way, while its Subscription's
-// usage-credits issue keeps the Kit off that Subscription.
+// failure comment, and so is a refused Auditor run, whose Audit stays pending
+// (src/loop/heldRun.ts). A run killed for spending usage credits is re-run or
+// held the same way, while its Subscription's usage-credits issue keeps the
+// Kit off that Subscription. A Retro run is never re-run or held: the tick
+// can't start one at a reset, so its Retro fails, for the tick to try again.
 import { isPendingAudit } from "./audit.ts";
 import { type HeldRun, heldInOrder, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
 import { canHold, heldAfterKill } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
-import { isPendingRetro } from "./retro.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
 import type { InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
-import { failAudit, failRetro } from "./weeklyFailure.ts";
+import { failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
@@ -74,9 +74,9 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
 /**
  * With rotation on, the run a weekly-limit refusal holds rather than fails, or
  * null: a run of any role while no other Subscription is free, and an Auditor
- * or Retro run whatever is free, since it has no trigger label to re-run it
- * through and is resumed on its pending Audit or Retro. An Audit or Retro
- * that's no longer pending holds nothing.
+ * run whatever is free, since it has no trigger label to re-run it through
+ * and is resumed on its pending Audit. An Audit that's no longer pending holds
+ * nothing, and a Retro run is never held.
  */
 function heldOnRefusal(
   run: FailedRun,
@@ -85,14 +85,13 @@ function heldOnRefusal(
   ranOn: RanOn,
 ): HeldRun | null {
   if (!ranOn.rotation || !RERUN_FAILURES.includes(failure)) return null;
+  // The tick can't start a Retro run at the reset, so its Retro fails, and the tick opens the next one.
+  if (run.role === "retro") return null;
   // A kill opens no weekly-limit issue, and only one can hold the run: with none open it fails as usual.
   if (failure === "usage-credits" && !canHold(kitIssues)) return null;
-  // A killed Auditor or Retro run is held only while none is free: else its Audit or Retro fails, for the tick to try again.
-  const pendingHeld = failure === "weekly-limit" || !anotherSubscriptionFree(kitIssues, ranOn);
-  if (run.role === "audit" || run.role === "retro") {
-    const pending = run.role === "audit" ? isPendingAudit(issue) : isPendingRetro(issue);
-    return pendingHeld && pending ? { role: run.role, issue: run.issue, label: null } : null;
-  }
+  // A killed Auditor run is held only while none is free: else its Audit fails, for the tick to try again.
+  const auditHeld = failure === "weekly-limit" || !anotherSubscriptionFree(kitIssues, ranOn);
+  if (run.role === "audit") return auditHeld && isPendingAudit(issue) ? { role: "audit", issue: run.issue, label: null } : null;
   if (anotherSubscriptionFree(kitIssues, ranOn)) return null;
   // The review trigger lives on the PR; every other role's on the issue.
   const labelled = run.role === "review" ? (issue.openPullRequests[0] ?? run.issue) : run.issue;
@@ -126,10 +125,9 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     return { kind: "act", actions: [...holds, ...(repoWide?.actions ?? [])] };
   }
   // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.
-  if (run.role === "audit" || run.role === "retro") {
-    const fail = run.role === "audit" ? failAudit : failRetro;
+  if (isWeeklyRole(run.role)) {
     const how = howItFailed(failure, run, config);
-    return fail(context, {
+    return failWeekly(run.role, context, {
       failure,
       how,
       runUrl: run.runUrl,

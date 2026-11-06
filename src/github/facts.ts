@@ -6,7 +6,7 @@
 // the open issues with their bodies. Read-only. It holds no summary, metric or evidence rules;
 // those all live in those two modules.
 import { fabrikRefsIn } from "../kit/caller.ts";
-import type { FromRetroIssueFacts, RetroIssueFacts } from "../kit/retroEvidence.ts";
+import type { FromRetroIssueFacts, RetroIssueFacts, TicketTextFacts } from "../kit/retroEvidence.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import type {
   AgentPullRequestFacts,
@@ -28,8 +28,15 @@ import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest
 import { AUDIT_LABEL, MONITOR_LABEL, RETRO_LABEL } from "../loop/labels.ts";
 import { escapeMarkerIn, fromPullRequestIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
-import { type GitHub, pagesOf, type Repo } from "./client.ts";
-import { byAppOf, gatherDesignQueueSlice, loginOf } from "./snapshot.ts";
+import { type GitHub, GitHubError, pagesOf, type Repo } from "./client.ts";
+import {
+  gatherDesignQueueSlice,
+  loginOf,
+  type RawWeeklyIssue,
+  weeklyIssueOf,
+  weeklyIssuesQuery,
+  type WeeklyIssuesQueryResult,
+} from "./snapshot.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -48,9 +55,14 @@ const WINDOW_MS = 37 * DAY_MS;
 const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 
 /** The GitHub facts the Weekly summary reads of one Product repo, as of `now`, with the Operator's login. */
-export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
+export function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
+  return gatherFacts(github, repo, now, operator, now - ESCAPE_WINDOWS_REACH_MS);
+}
+
+/** The GitHub facts of one Product repo, as of `now`, with its PRs, default-branch commits and the Operator's issues from `reach` on. */
+async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
-  const escapeSince = new Date(now - ESCAPE_WINDOWS_REACH_MS).toISOString();
+  const escapeSince = new Date(reach).toISOString();
   const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
@@ -89,10 +101,20 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
 /**
  * The GitHub facts a Retro reads of one Product repo, as of `now`: the
  * Weekly summary's, with the patch of each commit on an agent PR that the
- * Fabrik App didn't make, read one commit at a time.
+ * Fabrik App didn't make, read one commit at a time. Its PRs, default-branch
+ * commits and the Operator's issues reach back the summary's 97 days, or to
+ * `from`, the earliest time its evidence reads (evidenceReachOf,
+ * src/kit/retroEvidence.ts), when that's earlier, as for a Retro held back
+ * for weeks, so its window is read whole.
  */
-export async function gatherRetroFacts(github: Pick<GitHub, "graphql" | "rest">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
-  const facts = await gatherGitHubFacts(github, repo, now, operator);
+export async function gatherRetroFacts(
+  github: Pick<GitHub, "graphql" | "rest">,
+  repo: Repo,
+  now: number,
+  operator: string,
+  from: number,
+): Promise<GitHubFacts> {
+  const facts = await gatherFacts(github, repo, now, operator, Math.min(now - ESCAPE_WINDOWS_REACH_MS, from));
   const patches = new Map<string, Promise<string>>();
   const withPatch = async (commit: CommitFacts): Promise<CommitFacts> => {
     if (commit.byApp) return commit;
@@ -116,29 +138,78 @@ export interface RetroHistoryFacts {
 }
 
 /**
- * A Retro's history in one Product repo: the newest `fabrik:retro` issues, as
- * many as the tick's retro slice reads, with whether the Fabrik App, whose bot
- * login is `appLogin`, opened each (byAppOf) and their last 100 comments, and
- * every open issue with its body.
+ * A Retro's history in one Product repo: the newest `fabrik:retro` issues,
+ * read as the tick's retro slice reads them (weeklyIssuesQuery), with whether
+ * the Fabrik App, whose bot login is `appLogin`, opened each (byAppOf) and,
+ * on top, their last 100 comments; and every open issue with its body.
  */
 export async function gatherRetroHistory(github: Pick<GitHub, "graphql">, repo: Repo, appLogin: string): Promise<RetroHistoryFacts> {
   const [retros, openIssues] = await Promise.all([
-    github.graphql<RetroIssuesQueryResult>(RETRO_ISSUES_QUERY, { owner: repo.owner, name: repo.name, label: RETRO_LABEL }),
+    github.graphql<WeeklyIssuesQueryResult<RawRetroIssue>>(weeklyIssuesQuery(COMMENTS), {
+      owner: repo.owner,
+      name: repo.name,
+      label: RETRO_LABEL,
+    }),
     pagesOf<FromRetroIssueFacts>(github, OPEN_ISSUE_BODIES_QUERY, repo, {}, (data) => data.repository.issues),
   ]);
   return {
     retros: retros.repository.issues.nodes.map((issue) => ({
-      number: issue.number,
-      title: issue.title,
-      open: issue.state === "OPEN",
-      stateReason: issue.stateReason === null ? null : (issue.stateReason.toLowerCase() as RetroIssueFacts["stateReason"]),
-      createdAt: issue.createdAt,
-      byApp: byAppOf(issue.author, appLogin),
-      body: issue.body,
+      ...weeklyIssueOf(issue, appLogin),
       comments: issue.comments.nodes.map(commentOf),
     })),
     openIssues: openIssues.map(({ number, title, body }) => ({ number, title, body })),
   };
+}
+
+/**
+ * Every open issue, with its body, on each of these repos, owner/name, each
+ * by the repo it's on: what a Retro reads of the proposals its Product repo's
+ * Retros filed on the Kit's repo or a Skills source (the Retro evidence module
+ * keeps those whose `From retro` line names the Product repo). A repo it can't
+ * read, private to the token say, is named in `unread`, with why, and the rest
+ * are read as usual, so one unreadable repo costs the Retro only its issues.
+ */
+export async function gatherOpenIssuesOn(
+  github: Pick<GitHub, "graphql">,
+  repos: readonly string[],
+): Promise<{ issues: FromRetroIssueFacts[]; unread: { repo: string; why: string }[] }> {
+  const read = await Promise.all(
+    repos.map(async (repo) => {
+      const [owner = "", name = ""] = repo.split("/");
+      try {
+        const issues = await pagesOf<FromRetroIssueFacts>(github, OPEN_ISSUE_BODIES_QUERY, { owner, name }, {}, (data) => data.repository.issues);
+        return { repo, issues: issues.map(({ number, title, body }) => ({ repo, number, title, body })), why: null };
+      } catch (error) {
+        return { repo, issues: [], why: error instanceof Error ? error.message : String(error) };
+      }
+    }),
+  );
+  return {
+    issues: read.flatMap(({ issues }) => issues),
+    unread: read.flatMap(({ repo, why }) => (why === null ? [] : [{ repo, why }])),
+  };
+}
+
+/**
+ * The title and body of each of these Tickets, as GitHub has them now, one
+ * call per Ticket, as the judge reads the Ticket it scores against
+ * (src/kit/judge-ticket-main.ts): what a Retro's evidence carries for each
+ * escaped and sampled PR (evidenceTicketsOf, src/kit/retroEvidence.ts). One
+ * GitHub no longer has, deleted or gone, is left out; any other failure fails.
+ */
+export async function gatherTickets(github: Pick<GitHub, "rest">, repo: Repo, numbers: readonly number[]): Promise<TicketTextFacts[]> {
+  const tickets = await Promise.all(
+    [...new Set(numbers)].map(async (number): Promise<TicketTextFacts | null> => {
+      try {
+        const issue = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/issues/${number}`)) as { title?: unknown; body?: unknown };
+        return { number, title: typeof issue.title === "string" ? issue.title : "", body: typeof issue.body === "string" ? issue.body : "" };
+      } catch (error) {
+        if (error instanceof GitHubError && (error.status === 404 || error.status === 410)) return null;
+        throw error;
+      }
+    }),
+  );
+  return tickets.filter((ticket) => ticket !== null);
 }
 
 /** What a commit changed, as a diff file by file; a file GitHub shows no patch for is named with a note. */
@@ -172,17 +243,6 @@ const COMMENTS = `comments(last: 100) { nodes { body createdAt author ${ACTOR} }
 const COMMIT = "commit { oid message committedDate author { email user { login } } }";
 const REVIEWS = `reviews(first: 100) { nodes { author ${ACTOR} state submittedAt body comments(first: 50) { nodes { path line body } } } }`;
 const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
-
-// The newest 50, as the tick's retro slice reads them (src/github/snapshot.ts).
-const RETRO_ISSUES_QUERY = `
-  query ($owner: String!, $name: String!, $label: String!) {
-    repository(owner: $owner, name: $name) {
-      issues(labels: [$label], states: [OPEN, CLOSED], first: 50, orderBy: { field: CREATED_AT, direction: DESC }) {
-        nodes { number title state stateReason createdAt body author ${ACTOR} ${COMMENTS} }
-      }
-    }
-  }
-`;
 
 const OPEN_ISSUE_BODIES_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
@@ -396,22 +456,8 @@ interface RawIssue {
   subIssues: { nodes: { number: number }[] };
 }
 
-interface RetroIssuesQueryResult {
-  repository: {
-    issues: {
-      nodes: {
-        number: number;
-        title: string;
-        state: "OPEN" | "CLOSED";
-        stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
-        createdAt: string;
-        body: string;
-        author: RawActor | null;
-        comments: { nodes: RawComment[] };
-      }[];
-    };
-  };
-}
+/** A `fabrik:retro` issue as a Retro's history reads it: as the tick does, with its comments on top. */
+type RawRetroIssue = RawWeeklyIssue & { comments: { nodes: RawComment[] } };
 
 interface RawMonitorIssue {
   number: number;
