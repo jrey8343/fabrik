@@ -88,6 +88,14 @@ describe("The scheduled tick past a reset, with runs held and rotation on", () =
     expect(notificationsOf(plan)).toEqual([]);
   });
 
+  it("gives a held Researcher run's research Decision agent:research back", () => {
+    const kitIssues = [buzzed([held(12, "research", "agent:research")]), freed];
+
+    const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: [anIssueHeld(12, ["wayfinder:research"])] }), TWO_SUBSCRIPTIONS);
+
+    expect(labelsAdded(plan)).toEqual([{ kind: "add-labels", issue: 12, labels: ["agent:research"] }]);
+  });
+
   it("resumes the runs held on the issue it closes, too", () => {
     const kitIssues = [weeklyLimitIssue(40, "Claude token 2", EARLIER, [held(7, "triage", "needs-triage")], true)];
 
@@ -127,6 +135,8 @@ describe("A held run whose issue or PR has closed, or moved on in the Loop, at t
     ["an agent PR out of draft", "review", "agent:review", aDraftHeld(7, { draft: false }), "#7 is no longer a draft"],
     ["a closed agent PR", "review", "agent:review", aDraftHeld(7, { open: false }), "#7 is closed"],
     ["an Audit no longer pending", "audit", null, anIssueHeld(7, ["fabrik:audit"], { byApp: true, body: auditBody(AUDITED_SHA, "failed") }), "#7 is no longer a pending Audit"],
+    ["a closed Decision", "research", "agent:research", anIssueHeld(7, ["wayfinder:research"], { open: false }), "#7 is closed"],
+    ["a Decision no longer a research one", "research", "agent:research", anIssueHeld(7, ["wayfinder:grilling"]), "#7 is no longer a research Decision"],
   ];
 
   it.each(STALE)("on %s is dropped, and named in the step summary", (_, role, label, on, why) => {

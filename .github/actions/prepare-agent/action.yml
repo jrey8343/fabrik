@@ -16,7 +16,7 @@ description: Installs the Kit, fetches the pinned skills and reads the agent's i
 
 inputs:
   role:
-    description: The agent's role (triage, design, implement, review, audit or retro), whose Extra skills it gets beside the Base skills; the Auditor and the Retro get the Base skills alone. A Step-up run is an implement run.
+    description: The agent's role (triage, design, implement, review, audit, retro or research), whose Extra skills it gets beside the Base skills; the Auditor, the Retro and the Researcher get the Base skills alone. A Step-up run is an implement run.
     required: true
   github-token:
     description: The job's read-only GITHUB_TOKEN.

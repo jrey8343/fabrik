@@ -79,6 +79,21 @@ export const MONITOR_LABEL = "fabrik:monitor";
  */
 export const MAP_LABEL = "wayfinder:map";
 
+/** How a Decision under a Map gets resolved, which its `wayfinder:<type>` label says (#154). */
+export const DECISION_TYPES = ["research", "prototype", "grilling", "task"] as const;
+export type DecisionType = (typeof DECISION_TYPES)[number];
+export type DecisionLabel = `wayfinder:${DecisionType}`;
+
+/** The label on a research Decision: one the Researcher resolves AFK, under an open Map (#154). */
+export const RESEARCH_DECISION_LABEL = "wayfinder:research" satisfies DecisionLabel;
+
+/**
+ * The trigger label that starts a Researcher run on a research Decision
+ * (ADR-0001), as Dispatch adds agent:implement to a Ticket. The label comes
+ * off as the run starts, so re-adding it runs the Decision again (#154).
+ */
+export const RESEARCH_LABEL = "agent:research";
+
 /** A label the Kit itself adds or removes. Labels read from GitHub stay plain strings: anyone can add any label. */
 export type Label =
   | StateLabel
@@ -88,7 +103,8 @@ export type Label =
   | typeof REVIEW_LABEL
   | KitIssueLabel
   | typeof MONITOR_LABEL
-  | typeof MAP_LABEL;
+  | typeof MAP_LABEL
+  | typeof RESEARCH_LABEL;
 
 /** Every label the Kit uses, so the setup skill can create each one. */
 export const ALL_LABELS: readonly Label[] = [
