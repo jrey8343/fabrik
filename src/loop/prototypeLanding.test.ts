@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { UI } from "../__fixtures__/uiEvidence.ts";
+import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import type { CaptureResult } from "../evidence/uiEvidence.ts";
+import { designSessionOf, designTurnFailedIn, pendingPrototypeIn } from "../github/threads.ts";
 import type { PrototypeRequestMarker } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { IssueSnapshot, LoopEvent, Plan, Snapshot } from "./types.ts";
@@ -79,6 +82,8 @@ function commentsOf(plan: Plan): string[] {
   if (plan.kind !== "act") throw new Error(`expected a plan that acts, got ${JSON.stringify(plan)}`);
   return plan.actions.flatMap((action) => (action.kind === "comment" ? [action.body] : []));
 }
+
+const DESIGN = DEFAULT_KIT_CONFIG.roles.design;
 
 const blob = (path: string) => `${REPO}/blob/${HEAD}/${path}`;
 
@@ -339,6 +344,52 @@ describe("A prototype turn's result the session no longer waits on", () => {
     expect(planFor(finished(), inSession({ pendingPrototype }), kitConfig())).toEqual({
       kind: "nothing",
       reason: "#7's Design session isn't waiting on the prototype request this turn built, so its result is stale",
+    });
+  });
+});
+
+describe("The Design session after a prototype round", () => {
+  /** The session's comments, oldest first, as the push job reads them: rounds 1 and 2, the request, then what the landing posted. */
+  const threadAfter = (plan: Plan) => [
+    { body: "<!-- fabrik:design-round 1 -->\n@jrey **Design session, round 1.** …", byBot: true, byApp: true },
+    { body: "<!-- fabrik:design-round 2 -->\n@jrey **Design session, round 2.** …", byBot: true, byApp: true },
+    { body: `<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`, byBot: true, byApp: true },
+    { body: "Yes, prototype it.", byBot: false, byApp: false },
+    ...commentsOf(plan).map((body) => ({ body, byBot: true, byApp: true })),
+  ];
+
+  it.each([
+    ["a prototype round", finished()],
+    ["a capture-failed prototype round", finished({ capture: { ...CAPTURED, outcome: "failed", reason: "timeout", captures: [] }, gallery: null })],
+    ["a build-failed prototype failure round", finished({ capture: { ...CAPTURED, outcome: "failed", reason: "build-failed", captures: [] }, gallery: null })],
+    ["a trust-root refusal", finished({ changes: { net: [{ path: "AGENTS.md" }], commits: [{ path: "AGENTS.md" }] } })],
+    ["an empty branch's failure round", finished({ changes: { net: [], commits: [] }, headSha: null })],
+  ])("counts %s as its round 3, ending the pending request without failing the turn", (_name, event) => {
+    const thread = threadAfter(planFor(event, inSession(), kitConfig()));
+
+    expect(designSessionOf(thread).designRounds).toBe(3);
+    expect(pendingPrototypeIn(thread)).toBeNull();
+    expect(designTurnFailedIn(thread)).toBe(false);
+  });
+
+  it.each([
+    ["prototype round", finished()],
+    ["prototype failure round", finished({ capture: { ...CAPTURED, outcome: "failed", reason: "server-did-not-start", captures: [] }, gallery: null })],
+  ])("starts an ordinary turn on the Operator's reply to its %s, as on any round's", (_name, event) => {
+    const thread = threadAfter(planFor(event, inSession(), kitConfig()));
+    const after = anIssue({
+      number: 7,
+      labels: ["enhancement", "needs-design"],
+      ...designSessionOf(thread),
+      pendingPrototype: pendingPrototypeIn(thread),
+    });
+    const reply = { kind: "issue-comment-created", issue: 7, commenter: "jrey", commenterIsBot: false, body: "B, with C's calendar.", comment: 9100 } as const;
+
+    expect(planFor(reply, snapshotOf(after, { operator: "jrey" }), kitConfig({ ui: UI }), { prototypes: true })).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "start-agent-run", role: "design", issue: 7, model: DESIGN.model, effort: DESIGN.effort, timeoutMinutes: DESIGN.timeoutMinutes, subscription: DEFAULT_KIT_CONFIG.subscriptions[0] },
+      ],
     });
   });
 });
