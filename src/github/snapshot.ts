@@ -2,20 +2,24 @@
 // needs, fresh rather than from the event payload, into the snapshot the core
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
 import {
+  INSTRUCTED_ROLES,
   instructionsPath,
   KIT_CONFIG_PATH,
   type KitConfigSources,
-  PHASES,
   SKILLS_SOURCES_LOCK_PATH,
 } from "../kit/config.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
-import { DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
+import { parseAuditOutput } from "../loop/auditOutput.ts";
+import { AUDIT_LABEL, DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
+  AuditIssueSnapshot,
+  AuditSnapshot,
   DesignQueueIssue,
   DesignQueueSnapshot,
   KitIssueSnapshot,
   LoopEvent,
+  NamedPullRequestSnapshot,
   PullRequestSnapshot,
   Snapshot,
   SpecSnapshot,
@@ -32,7 +36,8 @@ const ISSUE_QUERY = `
       issue(number: $number) {
         number
         state
-        author { login }
+        author { login __typename }
+        body
         labels(first: 100) { nodes { name } }
         parent { number }
         comments(last: 100) { nodes { body createdAt author { __typename } } }
@@ -57,7 +62,8 @@ interface IssueQueryResult {
     issue: {
       number: number;
       state: "OPEN" | "CLOSED";
-      author: { login: string } | null;
+      author: { login: string; __typename: string } | null;
+      body: string;
       labels: { nodes: { name: string }[] };
       parent: { number: number } | null;
       comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
@@ -234,29 +240,147 @@ export const DESIGN_JOB_NAME = "Design-session turn";
 /**
  * Reads the current GitHub state the event needs, fresh rather than from the
  * event payload. The Operator is the Kit config's `operator`, or else the
- * repo's owner. A Dispatch check also reads workflow runs, through `actions`:
- * the Fabrik App has no Actions permission (ADR-0002), so that is the Dispatch
- * job's own read-only GITHUB_TOKEN.
+ * repo's owner. `appLogin` is the Fabrik App's bot login, its slug with
+ * `[bot]`, which tells the App's issues apart from any other bot's; null when
+ * the run doesn't know it, as the Kit job, which only routes, doesn't, so any
+ * bot's issue is taken for the App's (see byAppOf). A
+ * Dispatch check also reads workflow runs, through `actions`: the Fabrik App
+ * has no Actions permission (ADR-0002), so that is the Dispatch job's own
+ * read-only GITHUB_TOKEN.
  */
 export async function gatherSnapshot(
   github: GitHub,
   repo: Repo,
   event: LoopEvent,
   operator: string | null,
+  appLogin: string | null,
   actions: GitHub | null = null,
 ): Promise<Snapshot> {
-  const [{ owner, kitIssues }, part, startingComment] = await Promise.all([
+  const [{ owner, kitIssues }, part, startingComment, audit, namedPullRequests] = await Promise.all([
     gatherKitIssues(github, repo),
-    gatherEventPart(github, repo, event, operator, actions),
+    gatherEventPart(github, repo, event, operator, appLogin, actions),
     gatherStartingComment(github, repo, event),
+    event.kind === "scheduled-tick" ? gatherAuditSlice(github, repo, appLogin) : null,
+    event.kind === "audit-run-finished" ? gatherNamedPullRequests(github, repo, event.output) : null,
   ]);
   // A closed Ticket may be its Spec's last.
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
   // By default the Operator owns the Product repos they run Fabrik in.
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment }
-    : { ...part, spec, kitIssues, startingComment };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment, audit, namedPullRequests }
+    : { ...part, spec, kitIssues, startingComment, audit, namedPullRequests };
+}
+
+// The newest Audit issues, open and closed: enough to hold this week's, any
+// open one, the last Audit and the last closed Audits the Auditor reads, since
+// a week opens at most three.
+const AUDIT_QUERY = `
+  query ($owner: String!, $name: String!, $label: String!) {
+    repository(owner: $owner, name: $name) {
+      defaultBranchRef { target { oid } }
+      issues(labels: [$label], states: [OPEN, CLOSED], first: 50, orderBy: { field: CREATED_AT, direction: DESC }) {
+        nodes { number title state stateReason createdAt body author { login __typename } }
+      }
+    }
+  }
+`;
+
+interface AuditQueryResult {
+  repository: {
+    defaultBranchRef: { target: { oid: string } } | null;
+    issues: {
+      nodes: {
+        number: number;
+        title: string;
+        state: "OPEN" | "CLOSED";
+        stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
+        createdAt: string;
+        body: string;
+        author: { login: string; __typename: string } | null;
+      }[];
+    };
+  };
+}
+
+/**
+ * The default branch's head, and the newest `fabrik:audit` issues with
+ * whether the Fabrik App, whose bot login is `appLogin`, opened each (see
+ * byAppOf): what the audit gate weighs on a scheduled tick.
+ */
+async function gatherAuditSlice(github: Pick<GitHub, "graphql">, repo: Repo, appLogin: string | null): Promise<AuditSnapshot> {
+  return auditSliceOf(await queryAuditIssues(github, repo), appLogin);
+}
+
+/**
+ * The audit slice an Auditor run's inputs read the Audits from
+ * (src/agent/inputs.ts), for its pending Audit, numbered `pending`. The run
+ * holds no Fabrik App token, so it doesn't know the App's login: it takes the
+ * bot that opened the pending Audit for the App. The push job lands the run's
+ * result only when that bot is the App (src/loop/auditLanding.ts), so in
+ * every run whose result counts, the Auditor reads the Audits the audit gate
+ * weighs, and never another bot's. A pending Audit a person opened is no
+ * Audit here.
+ */
+export async function gatherAuditSliceFor(github: Pick<GitHub, "graphql">, repo: Repo, pending: number): Promise<AuditSnapshot> {
+  const data = await queryAuditIssues(github, repo);
+  const opener = data.repository.issues.nodes.find((issue) => issue.number === pending)?.author ?? null;
+  return auditSliceOf(data, opener?.__typename === "Bot" ? loginOf(opener) : null);
+}
+
+function queryAuditIssues(github: Pick<GitHub, "graphql">, repo: Repo): Promise<AuditQueryResult> {
+  return github.graphql<AuditQueryResult>(AUDIT_QUERY, { owner: repo.owner, name: repo.name, label: AUDIT_LABEL });
+}
+
+function auditSliceOf(data: AuditQueryResult, appLogin: string | null): AuditSnapshot {
+  return {
+    head: data.repository.defaultBranchRef?.target.oid ?? null,
+    issues: data.repository.issues.nodes.map((issue) => ({
+      number: issue.number,
+      title: issue.title,
+      open: issue.state === "OPEN",
+      stateReason: issue.stateReason === null ? null : (issue.stateReason.toLowerCase() as AuditIssueSnapshot["stateReason"]),
+      createdAt: issue.createdAt,
+      byApp: byAppOf(issue.author, appLogin),
+      body: issue.body,
+    })),
+  };
+}
+
+/** A PR as the REST API returns it: the fields an Auditor's named PRs are read from. */
+interface RestPullRequest {
+  number: number;
+  merged: boolean;
+  head: { ref: string };
+  user: { type: string } | null;
+}
+
+/**
+ * For an Audit run finishing: each PR its reply names under "Introduced by",
+ * once. A number GitHub has no PR for is left out, and a reply that breaks
+ * its contract names none, since the core fails its Audit.
+ */
+async function gatherNamedPullRequests(github: GitHub, repo: Repo, output: string): Promise<NamedPullRequestSnapshot[]> {
+  const parsed = parseAuditOutput(output);
+  const named = parsed.ok ? [...new Set(parsed.output.candidates.flatMap((candidate) => candidate.introducedBy))] : [];
+  const pulls = await Promise.all(
+    named.map(
+      (number) =>
+        github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`, undefined, { allowNotFound: true }) as Promise<RestPullRequest | null>,
+    ),
+  );
+  return pulls.flatMap((pull) =>
+    pull === null
+      ? []
+      : [
+          {
+            number: pull.number,
+            merged: pull.merged,
+            headRef: pull.head.ref,
+            isAgent: isAgentPullRequest({ headRef: pull.head.ref, authorIsBot: pull.user?.type === "Bot" }),
+          },
+        ],
+  );
 }
 
 /**
@@ -335,6 +459,7 @@ async function gatherEventPart(
   repo: Repo,
   event: LoopEvent,
   operator: string | null,
+  appLogin: string | null,
   actions: GitHub | null,
 ): Promise<EventPart | null> {
   switch (event.kind) {
@@ -356,7 +481,7 @@ async function gatherEventPart(
     case "scheduled-tick":
       return null;
     case "implement-run-finished": {
-      const ticket = await gatherIssue(github, repo, event.issue, operator);
+      const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
       if (event.fixes === undefined) return ticket;
       // A retry's push job weighs the Ticket and the PR it fixes.
       const { pullRequest } = await gatherPullRequest(github, repo, event.fixes.pullRequest, operator);
@@ -364,18 +489,18 @@ async function gatherEventPart(
     }
     case "label-added": {
       // agent:implement on a Ticket with an open PR resumes that PR's run, so the core weighs the PR too.
-      const ticket = await gatherIssue(github, repo, event.issue, operator);
+      const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
       const open = ticket.issue?.openPullRequests[0];
       if (open === undefined) return ticket;
       const { pullRequest } = await gatherPullRequest(github, repo, open, operator);
       return { ...ticket, pullRequest };
     }
     default:
-      return gatherIssue(github, repo, event.issue, operator);
+      return gatherIssue(github, repo, event.issue, operator, appLogin);
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "namedPullRequests">;
 
 const KIT_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $labels: [String!]!) {
@@ -420,7 +545,34 @@ async function gatherKitIssues(github: GitHub, repo: Repo): Promise<{ owner: str
   };
 }
 
-async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null): Promise<EventPart> {
+/**
+ * A GraphQL actor's login as REST and label events give it: a bot's with
+ * `[bot]`, which GraphQL leaves off, and a deleted account's as `ghost`.
+ */
+export function loginOf(actor: { readonly login: string; readonly __typename: string } | null): string {
+  if (actor === null) return "ghost";
+  return actor.__typename === "Bot" && !actor.login.endsWith("[bot]") ? `${actor.login}[bot]` : actor.login;
+}
+
+/**
+ * Whether this author is the Fabrik App, whose bot login is `appLogin`: its
+ * slug with `[bot]`. A run that doesn't know the login (null), as the Kit
+ * job, which only routes, doesn't, takes any bot for the App, which is how
+ * the App's pending Audit routes to its Auditor run. Every run that writes
+ * knows the login, so there only the App's own issues count as its. So
+ * another bot's look-alike pending Audit still costs one Auditor run, whose
+ * result the push job drops as stale (src/loop/auditLanding.ts), or whose
+ * failure changes nothing. Telling the Kit job the App's slug would take a
+ * setup step, which #150 rules out. An Auditor run's inputs, which don't know
+ * the login either, take the bot that opened their pending Audit for the App
+ * (gatherAuditSliceFor).
+ */
+export function byAppOf(author: { readonly login: string; readonly __typename: string } | null, appLogin: string | null): boolean {
+  if (author === null) return false;
+  return appLogin === null ? author.__typename === "Bot" : loginOf(author) === appLogin;
+}
+
+async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null, appLogin: string | null): Promise<EventPart> {
   const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, { owner: repo.owner, name: repo.name, number });
   const issue = data.repository.issue;
   if (issue === null) {
@@ -438,6 +590,8 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       number: issue.number,
       open: issue.state === "OPEN",
       author: issue.author?.login ?? "ghost",
+      byApp: byAppOf(issue.author, appLogin),
+      body: issue.body,
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
@@ -746,11 +900,11 @@ export async function readKitConfigSources(
   const [config, skillsLock, ...instructions] = await Promise.all([
     github.fileText(repo, KIT_CONFIG_PATH, ref),
     github.fileText(repo, SKILLS_SOURCES_LOCK_PATH, ref),
-    ...PHASES.map((phase) => github.fileText(repo, instructionsPath(phase), ref)),
+    ...INSTRUCTED_ROLES.map((role) => github.fileText(repo, instructionsPath(role), ref)),
   ]);
   return {
     config: config ?? null,
     skillsLock: skillsLock ?? null,
-    instructions: Object.fromEntries(PHASES.map((phase, i) => [phase, instructions[i] ?? null])),
+    instructions: Object.fromEntries(INSTRUCTED_ROLES.map((role, i) => [role, instructions[i] ?? null])),
   };
 }

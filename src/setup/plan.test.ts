@@ -2,6 +2,7 @@
 // Fabrik release being set up, it returns every step that would leave the repo
 // ready to run the Loop. A working install plans nothing, so re-running the
 // skill only repairs what's missing.
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { checkCallerWorkflow } from "../kit/caller.ts";
@@ -336,6 +337,8 @@ describe("Labels", () => {
     "enhancement",
     "fabrik:token-rotation",
     "fabrik:weekly-limit",
+    "fabrik:audit",
+    "fabrik:monitor",
   ];
 
   function createdLabels(state: ProductState): string[] {
@@ -350,6 +353,14 @@ describe("Labels", () => {
     const labels = LOOP_LABELS.filter((l) => l !== "agent:review").map((l) => (l === "bug" ? "Bug" : l));
 
     expect(createdLabels(aCleanProduct({ labels }))).toEqual(["agent:review"]);
+  });
+
+  it("are each named in the README's list of the labels setup creates", () => {
+    const readme = readFileSync(resolve(KIT_DIR, "README.md"), "utf8");
+    const line = readme.split("\n").find((l) => l.startsWith("- **Labels**:")) ?? "";
+    const named = [...line.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+
+    expect(named.sort()).toEqual(createdLabels(aCleanProduct()).sort());
   });
 });
 
@@ -490,11 +501,14 @@ describe("The starters the Product repo then owns", () => {
         design: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
         implement: { model: "claude-sonnet-5-5", effort: null, timeout_minutes: 60 },
         review: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
+        audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
         dispatch: { timeout_minutes: 10 },
         step_up: { model: "claude-opus-5-5", effort: null },
       },
       max_in_flight: 2,
-      caps: { design_sessions: 2 },
+      caps: { design_sessions: 2, monitor_issues: 5 },
+      monitor: { errors: null, red_main: true },
+      audit: { day: "sunday" },
       operator: null,
     });
     expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({

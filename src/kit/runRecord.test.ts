@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import type { Needs } from "./pushJob.ts";
-import { agentRunEnded, type RunEnd, runRecordFor } from "./runRecord.ts";
+import { agentRunEnded, type JudgeRunEnd, judgeRunRecordFor, type RunEnd, runRecordFor } from "./runRecord.ts";
 
 const KIT_SHA = "f".repeat(40);
 const BASE_SHA = "b".repeat(40);
 const HEAD_SHA = "a".repeat(40);
+const MARKED_SHA = "c".repeat(40);
 const roles = kitConfig().roles;
 
 const line = (message: unknown) => JSON.stringify(message);
@@ -168,6 +169,88 @@ describe("The Run record a run's end yields", () => {
     )?.record;
 
     expect(record).toMatchObject({ role: "review", issue: 7, pullRequest: 50, baseSha: HEAD_SHA, jobResult: "success", durationMs: 90_000 });
+  });
+
+  describe("an Auditor run's record is for the pending Audit, starting from its marked commit", () => {
+    /** The Audit job on the pending Audit #98 ended `result`; its base-sha is the marked commit it checked out. */
+    const audit = (result: string, overrides: Partial<RunEnd> = {}) =>
+      runRecordFor(
+        runEnd({
+          needs: needs("audit", { audit: job(result, { "base-sha": MARKED_SHA }) }),
+          eventIssue: 98,
+          agentResult: result === "success" ? agentResult("audit", 98) : null,
+          ...overrides,
+        }),
+      );
+
+    it("a passing Audit run is for the Audit, with no PR, Retry, Step-up, Request changes or Verdict", () => {
+      const files = audit("success");
+
+      expect(files?.record).toMatchObject({
+        role: "audit",
+        issue: 98,
+        pullRequest: null,
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: MARKED_SHA,
+        verdict: null,
+        jobResult: "success",
+        infrastructureFailure: null,
+        totalCostUsd: 1.25,
+      });
+      expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-audit.json");
+      expect(files?.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-1-audit.jsonl.gz");
+    });
+
+    it("a failed Audit run whose 1Password load failed is recorded on roles.audit's model, the agent never having started", () => {
+      const files = audit("failure", {
+        needs: needs("audit", { audit: job("failure", { "secrets-step": "failure", "base-sha": MARKED_SHA, model: "", effort: "" }) }, { model: "", effort: "" }),
+        transcript: null,
+      });
+
+      expect(files?.record).toMatchObject({
+        role: "audit",
+        issue: 98,
+        pullRequest: null,
+        baseSha: MARKED_SHA,
+        jobResult: "failure",
+        infrastructureFailure: "unreachable-1password",
+        model: roles.audit.model,
+        verdict: null,
+        turns: null,
+        transcript: null,
+      });
+    });
+
+    it("a failed Audit run is recorded as the Infrastructure failure its report names", () => {
+      const files = audit("failure", { failureReport: JSON.stringify({ failure: "missing-output", detail: "no <audit> tag" }), transcript: [init] });
+
+      expect(files?.record).toMatchObject({ role: "audit", issue: 98, pullRequest: null, jobResult: "failure", infrastructureFailure: "missing-output" });
+    });
+
+    it("an Audit run timed out by its timeout-minutes, with its transcript, gets a record with no result fields", () => {
+      const files = audit("cancelled", { transcript: [init] });
+
+      expect(files?.record).toMatchObject({
+        role: "audit",
+        issue: 98,
+        pullRequest: null,
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: MARKED_SHA,
+        verdict: null,
+        jobResult: "cancelled",
+        infrastructureFailure: "timeout",
+        subtype: null,
+        durationMs: null,
+        turns: null,
+        totalCostUsd: null,
+        modelUsage: {},
+        transcript: "transcripts/acme/widgets/2026-11/9001-1-audit.jsonl.gz",
+      });
+    });
   });
 
   describe("an Implement run says which run it was", () => {
@@ -425,5 +508,131 @@ describe("The Run record a run's end yields", () => {
 
   it("carries schema 1 and the Kit sha that wrote it", () => {
     expect(runRecordFor(runEnd({ kitSha: "c".repeat(40) }))?.record).toMatchObject({ schema: 1, kitSha: "c".repeat(40) });
+  });
+});
+
+describe("A judge run's record", () => {
+  const JUDGE_MODEL = "claude-sonnet-5-5";
+  const limit = (utilization: number) =>
+    line({ type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day", utilization, resetsAt: 1_800_500_000 } });
+
+  /** The record the push job wrote for a first Retry of Ticket 7 on PR 50, the run the judge scored. */
+  function scoredRun(overrides: Partial<RunEnd> = {}) {
+    const files = runRecordFor(
+      runEnd({
+        needs: needs("implement", { implement: job("success") }, { ticket: "7", "pull-request": "50", retry: "1" }),
+        eventIssue: 7,
+        agentResult: agentResult("implement", 7),
+        transcript: [init, limit(0.4), result()],
+        ...overrides,
+      }),
+    );
+    if (files === null) throw new Error("expected the scored run's record");
+    return files;
+  }
+
+  /** The judge's stream: one turn on Sonnet, cheap, with its own weekly-limit reading. */
+  const judgeStream = [
+    init,
+    limit(0.52),
+    result({
+      duration_ms: 20_000,
+      duration_api_ms: 18_000,
+      num_turns: 1,
+      total_cost_usd: 0.04,
+      modelUsage: {
+        [JUDGE_MODEL]: { inputTokens: 30_000, outputTokens: 900, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, costUSD: 0.04, costBasis: "list" },
+      },
+    }),
+  ];
+
+  /** What the score-record job knows when a passing judge run on the scored Retry ends, with whatever the case changes. */
+  function judgeRunEnd(overrides: Partial<JudgeRunEnd> = {}): JudgeRunEnd {
+    return {
+      scored: scoredRun().record,
+      judge: { result: "success", outputs: { "secrets-step": "success", model: JUDGE_MODEL, effort: "" } },
+      judgeModel: JUDGE_MODEL,
+      kitSha: KIT_SHA,
+      endedAt: "2026-11-05T10:04:00Z",
+      failureReport: null,
+      transcript: judgeStream,
+      ...overrides,
+    };
+  }
+
+  it("is for the scored run's subject, in role score, with its own model, outcome, effort spent and cost", () => {
+    expect(judgeRunRecordFor(judgeRunEnd()).record).toEqual({
+      schema: 1,
+      kitSha: KIT_SHA,
+      repo: "acme/widgets",
+      runId: 9001,
+      runAttempt: 1,
+      role: "score",
+      issue: 7,
+      pullRequest: 50,
+      endedAt: "2026-11-05T10:04:00Z",
+      model: JUDGE_MODEL,
+      effort: null,
+      retry: 0,
+      stepUp: false,
+      requestChanges: false,
+      baseSha: null,
+      jobResult: "success",
+      subtype: "success",
+      isError: false,
+      terminalReason: "completed",
+      infrastructureFailure: null,
+      verdict: null,
+      durationMs: 20_000,
+      apiDurationMs: 18_000,
+      turns: 1,
+      permissionDenials: 0,
+      apiRetries: 0,
+      totalCostUsd: 0.04,
+      modelUsage: {
+        [JUDGE_MODEL]: { inputTokens: 30_000, outputTokens: 900, cacheWriteTokens: 0, cacheReadTokens: 0, costUsd: 0.04, costBasis: "list" },
+      },
+      rateLimit: { status: "allowed", rateLimitType: "seven_day", utilization: 0.52, resetsAt: 1_800_500_000 },
+      transcript: "transcripts/acme/widgets/2026-11/9001-1-score.jsonl.gz",
+    });
+  });
+
+  it("sits beside the scored run's record and transcript, sharing its run id and attempt, even when the judge ends the next month", () => {
+    const scored = scoredRun({ runAttempt: 2, endedAt: "2026-11-30T23:58:00Z" });
+    const files = judgeRunRecordFor(judgeRunEnd({ scored: scored.record, endedAt: "2026-12-01T00:03:00Z" }));
+
+    expect(scored.recordPath).toBe("runs/acme/widgets/2026-11/9001-2-implement.json");
+    expect(files.recordPath).toBe("runs/acme/widgets/2026-11/9001-2-score.json");
+    expect(scored.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-2-implement.jsonl.gz");
+    expect(files.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-2-score.jsonl.gz");
+    expect(files.record).toMatchObject({ runId: 9001, runAttempt: 2, endedAt: "2026-12-01T00:03:00Z", transcript: files.transcriptPath });
+  });
+
+  it("a judge timed out with no transcript, its job passing out no model, gets a record on the Kit's judge model with no transcript", () => {
+    const files = judgeRunRecordFor(judgeRunEnd({ judge: { result: "cancelled", outputs: {} }, transcript: null }));
+
+    expect(files.record).toMatchObject({
+      role: "score",
+      issue: 7,
+      pullRequest: 50,
+      model: JUDGE_MODEL,
+      effort: null,
+      jobResult: "cancelled",
+      infrastructureFailure: "timeout",
+      subtype: null,
+      isError: null,
+      terminalReason: null,
+      durationMs: null,
+      apiDurationMs: null,
+      turns: null,
+      permissionDenials: null,
+      apiRetries: null,
+      totalCostUsd: null,
+      modelUsage: {},
+      rateLimit: null,
+      transcript: null,
+    });
+    expect(files.transcriptPath).toBeNull();
+    expect(files.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-score.json");
   });
 });

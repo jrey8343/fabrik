@@ -5,9 +5,9 @@ import type { SentBack } from "./backToDesign.ts";
 import type { Label } from "./labels.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
-export type AgentRole = "triage" | "design" | "implement" | "review";
+export type AgentRole = "triage" | "design" | "implement" | "review" | "audit";
 
-export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review"];
+export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit"];
 
 /** How an agent job says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
 export type ReportedFailure =
@@ -83,8 +83,8 @@ export type LoopEvent =
     }
   | {
       readonly kind: "agent-run-finished";
-      /** Implement and Review runs finish through their own events, which carry what their push jobs hold. */
-      readonly role: Exclude<AgentRole, "implement" | "review">;
+      /** Implement, Review and Auditor runs finish through their own events, which carry what their push jobs hold. */
+      readonly role: Exclude<AgentRole, "implement" | "review" | "audit">;
       readonly issue: number;
       /** The text the agent emitted as its structured output, unparsed. */
       readonly output: string;
@@ -170,6 +170,20 @@ export type LoopEvent =
       readonly operatorComments?: readonly GivenOperatorComment[];
     }
   | {
+      /** The Auditor finished on a pending Audit; its push job holds the reply, not yet landed (#150). */
+      readonly kind: "audit-run-finished";
+      /** The Audit. */
+      readonly issue: number;
+      /** The Auditor's structured output, the `<audit>` tag's JSON, unparsed (src/loop/auditOutput.ts). */
+      readonly output: string;
+      /** The hot-spot window the Auditor was given, as its agent job recorded it from the input the Kit wrote, never from the agent. */
+      readonly window: AuditWindow;
+      /** The Actions run, which a failed Audit links to. */
+      readonly runUrl: string;
+      /** The Product repo's web address, which an Audit's candidates open issues on. */
+      readonly repoUrl: string;
+    }
+  | {
       /** A review that requests changes was submitted on a PR: at the Merge gate, the Operator's ask for another run. */
       readonly kind: "pull-request-changes-requested";
       readonly pullRequest: number;
@@ -209,6 +223,15 @@ export type LoopEvent =
     };
 
 /**
+ * The stretch of history an Auditor looks at first (#150): what changed since
+ * the last Audit's commit, or the last 30 days on a first run or when that
+ * commit isn't an ancestor of the Audit's own (a force-push).
+ */
+export type AuditWindow =
+  | { readonly kind: "since-audit"; readonly audit: number; readonly commit: string }
+  | { readonly kind: "last-days"; readonly days: number };
+
+/**
  * Where a PR comment was made: a conversation comment, by its id, or a
  * submitted review, by its id. GitHub takes reactions on a review's inline
  * comments but not on the review itself.
@@ -222,6 +245,21 @@ export interface IssueSnapshot {
   readonly number: number;
   readonly open: boolean;
   readonly author: string;
+  /**
+   * Whether the Fabrik App itself opened it, not a person or any other bot:
+   * only then is its body read for an Audit's markers (src/loop/audit.ts), and
+   * only then does a Design session keep its body's Monitor marker (src/loop/design.ts).
+   * The Kit job, which only routes and doesn't know the App's login, takes any
+   * bot for the App, so another bot's look-alike pending Audit costs one
+   * Auditor run, whose result the push job, which knows the login, drops
+   * (src/github/snapshot.ts's byAppOf).
+   */
+  readonly byApp: boolean;
+  /**
+   * Its Markdown body as it stands, whose marker lines a Design session's
+   * rewrite carries forward (src/loop/carriedLines.ts, src/loop/design.ts).
+   */
+  readonly body: string;
   readonly labels: readonly string[];
   /** The parent issue's number, or null if it isn't a sub-issue. */
   readonly parent: number | null;
@@ -288,6 +326,18 @@ export interface ChangesRequestedReview {
 
 /** The Reviewer's judgment on a PR (GLOSSARY.md). */
 export type Verdict = "pass" | "execution-flaw" | "design-flaw";
+
+/** How sure the Auditor is of an Audit candidate: its badge, which the escape marker carries (#150). */
+export type Strength = "strong" | "worth-exploring" | "speculative";
+
+export const STRENGTHS: readonly Strength[] = ["strong", "worth-exploring", "speculative"];
+
+/** Each Strength as people read it: an Audit card's badge, and its name in the Weekly summary. */
+export const STRENGTH_LABELS: Readonly<Record<Strength, string>> = {
+  strong: "Strong",
+  "worth-exploring": "Worth exploring",
+  speculative: "Speculative",
+};
 
 /** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
 export interface VerdictRecord {
@@ -376,6 +426,50 @@ export interface Snapshot {
    * whether it is still on the issue. Null when the event names no such comment.
    */
   readonly startingComment: StartingComment | null;
+  /** Gathered for a scheduled tick only: what the audit gate weighs. */
+  readonly audit: AuditSnapshot | null;
+  /**
+   * Gathered for an Audit run finishing only, whose Audit is `issue`: each PR
+   * its reply names under "Introduced by" that GitHub has, in any order. A
+   * number naming no PR isn't here.
+   */
+  readonly namedPullRequests: readonly NamedPullRequestSnapshot[] | null;
+}
+
+/** A PR an Auditor named, as GitHub has it (src/loop/auditLanding.ts). */
+export interface NamedPullRequestSnapshot {
+  readonly number: number;
+  readonly merged: boolean;
+  /** Its head branch. */
+  readonly headRef: string;
+  /** Whether it's an agent PR: one the Fabrik App opened from an agent branch (src/loop/agentPullRequest.ts). */
+  readonly isAgent: boolean;
+}
+
+/** What the audit gate weighs on a scheduled tick (src/loop/auditGate.ts). */
+export interface AuditSnapshot {
+  /** The default branch's head commit, or null when it has none. */
+  readonly head: string | null;
+  /** The newest `fabrik:audit` issues, open and closed, in any order. */
+  readonly issues: readonly AuditIssueSnapshot[];
+}
+
+/** A `fabrik:audit` issue, open or closed, as the adapter read it (src/loop/audit.ts). */
+export interface AuditIssueSnapshot {
+  readonly number: number;
+  /** Its title, which an Auditor run's inputs name each closed Audit by (src/agent/inputs.ts). */
+  readonly title: string;
+  readonly open: boolean;
+  /** Why it was last closed, or reopened, as GitHub records it; null when it never was. */
+  readonly stateReason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+  /** When it was opened, as an ISO 8601 time. */
+  readonly createdAt: string;
+  /**
+   * Whether the Fabrik App itself opened it, not a person or any other bot, as
+   * IssueSnapshot.byApp says. Only the App's body is read for markers.
+   */
+  readonly byApp: boolean;
+  readonly body: string;
 }
 
 /** The Operator's reply that started a Design-session turn, as the adapter found it when the turn finished. */
@@ -497,6 +591,8 @@ export type Action =
       /** For an Implement run that is a Retry: its Retry number, and whether it Steps up. */
       readonly retry?: number;
       readonly stepUp?: boolean;
+      /** For an Auditor run: the pending Audit's marked commit, which its job checks out and reads up to. */
+      readonly commit?: string;
       readonly model: string;
       readonly effort: string | null;
       readonly timeoutMinutes: number;

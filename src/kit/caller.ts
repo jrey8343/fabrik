@@ -14,6 +14,13 @@ const FABRIK_USES = /^\s*(?:-\s+)?uses:\s*["']?jrey8343\/fabrik(?:\/[^@\s"']*)?@
 /** An exact semver release tag, such as v1.2.3 or v1.2.3-pre.1. */
 const EXACT_RELEASE = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
+/**
+ * The caller workflow's job keys (templates/fabrik.yml). Each Kit job they
+ * start reports a check run on the commit it ran for, named after its key:
+ * `loop` or `loop / <job>`, `tick` or `tick / <job>`.
+ */
+export const CALLER_JOBS = ["loop", "tick"] as const;
+
 /** The refs of every `uses:` line in the workflow that names Fabrik, in order. */
 export function fabrikRefsIn(text: string): string[] {
   return text.split("\n").flatMap((line) => {

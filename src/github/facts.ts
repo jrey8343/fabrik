@@ -7,8 +7,11 @@ import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import type {
   AgentPullRequestFacts,
   CommentFacts,
+  EscapeMarkerIssueFacts,
   GitHubFacts,
   LabelEvent,
+  MonitorIssueFacts,
+  OpenAuditFacts,
   OpenIssueFacts,
   OpenPullRequestFacts,
   ReviewFacts,
@@ -16,21 +19,33 @@ import type {
   TicketFacts,
 } from "../kit/weeklySummary.ts";
 import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest.ts";
+import { AUDIT_LABEL, MONITOR_LABEL } from "../loop/labels.ts";
+import { escapeMarkerIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
-import type { GitHub, Repo } from "./client.ts";
-import { gatherDesignQueueSlice } from "./snapshot.ts";
+import { type GitHub, pagesOf, type Repo } from "./client.ts";
+import { gatherDesignQueueSlice, loginOf } from "./snapshot.ts";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * How far back the facts reach: 30 days of agent PRs, plus the week before,
- * so last week's 30-day revert window is as whole as this week's.
+ * How far back the issue and default-branch facts reach: 30 days, plus the
+ * week before, so last week's 30-day revert window is as whole as this week's.
  */
-const WINDOW_MS = 37 * 24 * 60 * 60 * 1000;
+const WINDOW_MS = 37 * DAY_MS;
 
-/** The GitHub facts the Weekly summary reads of one Product repo, as of `now`. */
-export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number): Promise<GitHubFacts> {
+/**
+ * How far back the PRs and the escape-marked issues reach: 90 days, plus the
+ * week before, so last week's 90-day escape window is as whole as this week's.
+ * Revert rate reads its own 30 days of them.
+ */
+const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
+
+/** The GitHub facts the Weekly summary reads of one Product repo, as of `now`, with the Operator's login. */
+export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }] = await Promise.all([
-    gatherClosedPullRequests(github, repo, since),
+  const escapeSince = new Date(now - ESCAPE_WINDOWS_REACH_MS).toISOString();
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, escapeMarkerIssues, openAudits] = await Promise.all([
+    gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
     pagesOf<RawIssue>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues),
@@ -38,6 +53,9 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     // The Design queue check's own slice, so Held and the check can't disagree. Its token can't read
     // workflow runs, so it reads Design turns in progress from the issues, as the scheduled tick does.
     gatherDesignQueueSlice(github, null, repo),
+    pagesOf<RawMonitorIssue>(github, MONITOR_ISSUES_QUERY, repo, { monitor: MONITOR_LABEL }, (data) => data.repository.issues),
+    gatherEscapeMarkerIssues(github, repo, operator, escapeSince),
+    pagesOf<RawAudit>(github, OPEN_AUDITS_QUERY, repo, { audit: AUDIT_LABEL }, (data) => data.repository.issues),
   ]);
   const issues = [...new Map([...updatedIssues, ...openIssues].map((issue) => [issue.number, issue])).values()];
   return {
@@ -50,6 +68,9 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     openIssues: openIssues.map(openIssueOf),
     openPullRequests: open.filter(isAgent).map(openPullRequestOf),
     designQueue,
+    monitorIssues: monitorIssues.map(monitorIssueOf),
+    escapeMarkerIssues,
+    openAudits: openAudits.map(openAuditOf),
   };
 }
 
@@ -139,6 +160,42 @@ const OPEN_ISSUES_QUERY = `
   }
 `;
 
+// The open Monitor issues, with their bodies: Held reads the Monitor's held count from their stats blocks.
+const MONITOR_ISSUES_QUERY = `
+  query ($owner: String!, $name: String!, $after: String, $monitor: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, labels: [$monitor], first: 25, after: $after) {
+        ${PAGE_INFO}
+        nodes { number body author ${ACTOR} }
+      }
+    }
+  }
+`;
+
+// The issues one person opened, newest first, so paging stops at the first page older than the window.
+const ISSUES_OPENED_BY_QUERY = `
+  query ($owner: String!, $name: String!, $after: String, $operator: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(first: 25, after: $after, filterBy: { createdBy: $operator }, orderBy: { field: CREATED_AT, direction: DESC }) {
+        ${PAGE_INFO}
+        nodes { number title createdAt state body author ${ACTOR} }
+      }
+    }
+  }
+`;
+
+// The open Audits, whoever opened them: the summary keeps the Fabrik App's.
+const OPEN_AUDITS_QUERY = `
+  query ($owner: String!, $name: String!, $after: String, $audit: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, labels: [$audit], first: 25, after: $after) {
+        ${PAGE_INFO}
+        nodes { number title createdAt author ${ACTOR} }
+      }
+    }
+  }
+`;
+
 const DEFAULT_BRANCH_QUERY = `
   query ($owner: String!, $name: String!, $after: String, $since: GitTimestamp!) {
     repository(owner: $owner, name: $name) {
@@ -217,34 +274,31 @@ interface RawIssue {
   subIssues: { nodes: { number: number }[] };
 }
 
+interface RawMonitorIssue {
+  number: number;
+  body: string;
+  author: RawActor | null;
+}
+
+interface RawOpenedIssue {
+  number: number;
+  title: string;
+  createdAt: string;
+  state: "OPEN" | "CLOSED";
+  body: string;
+  author: RawActor | null;
+}
+
+interface RawAudit {
+  number: number;
+  title: string;
+  createdAt: string;
+  author: RawActor | null;
+}
+
 interface RawCommit {
   message: string;
   committedDate: string;
-}
-
-interface Page<T> {
-  pageInfo: { hasNextPage: boolean; endCursor: string | null };
-  nodes: T[];
-}
-
-/** Every node of a paged connection, or only until `enough` says the rest are too old. */
-async function pagesOf<T>(
-  github: Pick<GitHub, "graphql">,
-  query: string,
-  repo: Repo,
-  variables: Record<string, unknown>,
-  connection: (data: any) => Page<T> | null,
-  enough: (page: readonly T[]) => boolean = () => false,
-): Promise<T[]> {
-  const nodes: T[] = [];
-  let after: string | null = null;
-  do {
-    const page = connection(await github.graphql(query, { owner: repo.owner, name: repo.name, after, ...variables }));
-    if (page === null) break;
-    nodes.push(...page.nodes);
-    after = page.pageInfo.hasNextPage && !enough(page.nodes) ? page.pageInfo.endCursor : null;
-  } while (after !== null);
-  return nodes;
 }
 
 /** The PRs merged or closed in the window, agent or not. */
@@ -262,6 +316,34 @@ async function gatherClosedPullRequests(github: Pick<GitHub, "graphql">, repo: R
     const at = pr.mergedAt ?? pr.closedAt;
     return at !== null && Date.parse(at) >= sinceMs;
   });
+}
+
+/** The issues the Operator opened in the window whose body has an escape marker, such as filed Audit candidates. */
+async function gatherEscapeMarkerIssues(
+  github: Pick<GitHub, "graphql">,
+  repo: Repo,
+  operator: string,
+  since: string,
+): Promise<EscapeMarkerIssueFacts[]> {
+  const sinceMs = Date.parse(since);
+  const issues = await pagesOf<RawOpenedIssue>(
+    github,
+    ISSUES_OPENED_BY_QUERY,
+    repo,
+    { operator },
+    (data) => data.repository.issues,
+    (page) => page.some((issue) => Date.parse(issue.createdAt) < sinceMs),
+  );
+  return issues
+    .filter((issue) => Date.parse(issue.createdAt) >= sinceMs && escapeMarkerIn(issue.body) !== null)
+    .map((issue) => ({
+      number: issue.number,
+      title: issue.title,
+      author: loginOf(issue.author),
+      createdAt: issue.createdAt,
+      state: issue.state === "CLOSED" ? "closed" : "open",
+      body: issue.body,
+    }));
 }
 
 // --- Into the summary's facts -------------------------------------------------
@@ -342,6 +424,14 @@ function openIssueOf(issue: RawIssue): OpenIssueFacts {
   };
 }
 
+function monitorIssueOf(issue: RawMonitorIssue): MonitorIssueFacts {
+  return { number: issue.number, author: loginOf(issue.author), body: issue.body };
+}
+
+function openAuditOf(audit: RawAudit): OpenAuditFacts {
+  return { number: audit.number, title: audit.title, author: loginOf(audit.author), createdAt: audit.createdAt };
+}
+
 function commentOf(comment: RawComment): CommentFacts {
   return { author: loginOf(comment.author), byBot: comment.author?.__typename === "Bot", body: comment.body, at: comment.createdAt };
 }
@@ -353,15 +443,6 @@ function labelEventsOf(nodes: readonly RawLabelEvent[]): LabelEvent[] {
     actor: loginOf(event.actor),
     at: event.createdAt,
   }));
-}
-
-/**
- * A login as REST and the summary spell it. GraphQL gives a GitHub App's bot
- * user without its `[bot]` suffix; a deleted account is `ghost`.
- */
-function loginOf(actor: RawActor | null): string {
-  if (actor === null) return "ghost";
-  return actor.__typename === "Bot" && !actor.login.endsWith("[bot]") ? `${actor.login}[bot]` : actor.login;
 }
 
 interface InstallationRepositories {

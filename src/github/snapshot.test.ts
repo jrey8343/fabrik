@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
-import { anIssue, aPullRequest, designQueueSnapshotOf, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
-import { resolveKitConfig } from "../kit/config.ts";
+import { anIssue, aPullRequest, AUDITED_SHA, auditBody, designQueueSnapshotOf, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
+import { JUDGE_JOB } from "../kit/judge.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
@@ -59,6 +60,22 @@ describe("The Implement job's name", () => {
     const implementJob = /^ {2}implement:\n {4}name: (.+)$/m.exec(workflow)?.[1];
 
     expect(implementJob).toBe(IMPLEMENT_JOB_NAME);
+  });
+});
+
+describe("The judge job's name", () => {
+  // #149: scoring never takes a Dispatch slot, nor a Design session slot.
+  it("is never counted as an Implement run or a Design-session turn in flight while it scores a run", async () => {
+    const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
+    const judgeJob = new RegExp(`^ {2}${JUDGE_JOB}:\n {4}name: (.+)$`, "m").exec(workflow)?.[1];
+    expect(judgeJob).toBeDefined();
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "completed" }, { name: `fabrik / ${judgeJob}`, status: "in_progress" }] },
+      { id: 2, status: "queued", jobs: [{ name: `fabrik / ${judgeJob}`, status: "queued" }] },
+    ]);
+
+    expect(await countImplementRuns(actions, repo)).toBe(0);
+    expect(await designTurnsInProgress(actions, repo)).toEqual([]);
   });
 });
 
@@ -153,7 +170,7 @@ describe("Gathering a Design queue check's needs-design issues", () => {
       },
     } as unknown as GitHub;
     const actions = runs === null ? null : (actionsWith(runs) as unknown as GitHub);
-    const snapshot = await gatherSnapshot(github, repo, { kind: "design-queue-check" }, null, actions);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "design-queue-check" }, null, null, actions);
     if (snapshot.designQueue === null) throw new Error("no Design queue slice");
     return snapshot.designQueue;
   }
@@ -304,7 +321,7 @@ describe("Gathering a Design queue check's needs-design issues", () => {
         { number: 4, redesign: false },
         { number: 7, redesign: true },
       ]);
-      expect(planFor({ kind: "design-queue-check" }, designQueueSnapshotOf(queue.issues, { designTurnsInProgress: queue.designTurnsInProgress }), kitConfig({ caps: { designSessions: 1 } }))).toEqual({
+      expect(planFor({ kind: "design-queue-check" }, designQueueSnapshotOf(queue.issues, { designTurnsInProgress: queue.designTurnsInProgress }), kitConfig({ caps: { ...DEFAULT_KIT_CONFIG.caps, designSessions: 1 } }))).toEqual({
         kind: "act",
         actions: [{ kind: "add-labels", issue: 7, labels: ["agent:design"] }],
       });
@@ -412,9 +429,148 @@ describe("Gathering an issue's blocked-by edges", () => {
       },
     } as unknown as GitHub;
 
-    const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 6, label: "needs-design" }, null);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 6, label: "needs-design" }, null, null);
 
     expect(snapshot.issue).toMatchObject({ openBlockers: [10], openBlocking: [7] });
+  });
+});
+
+/** The issue a Loop event is about, as GitHub holds it: opened by `author`, with this body and these labels. */
+function issueGitHub({
+  author = { login: "someone", __typename: "User" },
+  body = "",
+  labels = ["needs-design"],
+}: { author?: { login: string; __typename: string } | null; body?: string; labels?: string[] } = {}): GitHub {
+  return {
+    async graphql(query: string): Promise<unknown> {
+      if (!query.includes("issue(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      // GitHub answers only the fields the query selects.
+      const issueQuery = query.slice(query.indexOf("issue(number: $number)"));
+      const selectsType = /^\s*author \{[^}]*__typename/m.test(issueQuery);
+      return {
+        repository: {
+          owner: { login: "acme" },
+          issue: {
+            number: 98,
+            state: "OPEN",
+            author: author === null || selectsType ? author : { login: author.login },
+            ...(/^\s*body$/m.test(issueQuery) ? { body } : {}),
+            labels: { nodes: labels.map((name) => ({ name })) },
+            parent: null,
+            comments: { nodes: [] },
+            timelineItems: { nodes: [] },
+            closedByPullRequestsReferences: { nodes: [] },
+            blockedBy: { nodes: [] },
+            blocking: { nodes: [] },
+          },
+        },
+      };
+    },
+  } as unknown as GitHub;
+}
+
+/** The Fabrik App's bot login, its slug with `[bot]`, as a run that knows it has it. */
+const APP_LOGIN = "fabrik-app[bot]";
+
+/** The Fabrik App's bot, as GraphQL names it: without its [bot] suffix. */
+const APP_BOT = { login: "fabrik-app", __typename: "Bot" };
+
+describe("Gathering an issue's body", () => {
+  it("holds the body as it stands, so a Design session's rewrite can keep its Monitor marker and carry its marker lines forward", async () => {
+    const body = "<!-- fabrik:monitor sentry:4504 -->\n## Production error\n\nFrom audit #40\n<!-- fabrik:escape strong #31 -->";
+    const event = { kind: "label-added", issue: 98, label: "needs-design" } as const;
+
+    const snapshot = await gatherSnapshot(issueGitHub({ author: APP_BOT, body }), repo, event, null, APP_LOGIN);
+
+    expect(snapshot.issue?.body).toBe(body);
+  });
+});
+
+describe("Gathering who opened an issue", () => {
+  const opened = { kind: "issue-opened", issue: 98 } as const;
+
+  /** The issue as gathered, opened by this account, by a run that knows the App's login, or that doesn't (null). */
+  async function openedBy(author: { login: string; __typename: string } | null, appLogin: string | null = APP_LOGIN) {
+    return (await gatherSnapshot(issueGitHub({ author, labels: ["fabrik:audit"] }), repo, opened, null, appLogin)).issue;
+  }
+
+  it("says the Fabrik App opened it when its bot did, so its Audit markers are read and a Design session keeps its Monitor marker", async () => {
+    expect(await openedBy(APP_BOT)).toMatchObject({ author: "fabrik-app", byApp: true });
+  });
+
+  it("says the App didn't when a person did, whatever their login", async () => {
+    expect(await openedBy({ login: "fabrik-app", __typename: "User" })).toMatchObject({ author: "fabrik-app", byApp: false });
+  });
+
+  it.each([
+    ["another bot", { login: "other-app", __typename: "Bot" }],
+    ["a deleted account", null],
+  ])("says the App didn't when %s did, so its issue is never read for Audit markers", async (_, author) => {
+    expect(await openedBy(author)).toMatchObject({ byApp: false });
+  });
+
+  it("keeps no Monitor marker in the Spec a Design session writes from an issue another bot opened", async () => {
+    const finished = {
+      kind: "agent-run-finished",
+      role: "design",
+      issue: 98,
+      output: JSON.stringify({
+        kind: "spec",
+        comment: "Too big for one PR.",
+        spec: { title: "Spec: Booking form errors", body: "## Problem Statement\n\nThe booking form throws." },
+        tickets: [{ key: "fix", title: "Fix the form", body: "## What to build\n\nThe fix.", blockedBy: [] }],
+      }),
+    } as const;
+    const github = issueGitHub({
+      author: { login: "dependabot", __typename: "Bot" },
+      body: "<!-- fabrik:monitor sentry:4504 -->\n## Production error",
+      labels: ["fabrik:monitor", "needs-design"],
+    });
+
+    const plan = planFor(finished, await gatherSnapshot(github, repo, finished, null, APP_LOGIN), kitConfig());
+
+    const spec = plan.kind === "act" ? plan.actions.find((action) => action.kind === "create-issue" && action.key === "spec") : undefined;
+    expect(spec?.kind).toBe("create-issue");
+    expect(spec?.kind === "create-issue" ? spec.body : "").not.toContain("fabrik:monitor");
+    expect(spec?.kind === "create-issue" ? spec.labels : []).not.toContain("fabrik:monitor");
+  });
+
+  // The Kit job routes the App's pending Audit to its Auditor run, which it couldn't if no issue were the App's.
+  it("takes any bot, but never a person, for the Fabrik App when the run doesn't know the App's login, as the Kit job, which only routes, doesn't", async () => {
+    expect(await openedBy(APP_BOT, null)).toMatchObject({ byApp: true });
+    expect(await openedBy({ login: "fabrik-app", __typename: "User" }, null)).toMatchObject({ byApp: false });
+  });
+
+  // The Kit job routes the event with no Fabrik App token, so it gathers with no App login.
+  it("lets the Kit job, which doesn't know the App's login, route the App's pending Audit to its Auditor run", async () => {
+    const github = issueGitHub({ author: APP_BOT, body: auditBody(AUDITED_SHA, "pending"), labels: ["fabrik:audit"] });
+
+    const plan = planFor(opened, await gatherSnapshot(github, repo, opened, null, null), kitConfig());
+
+    expect(plan).toMatchObject({ kind: "act", actions: [{ kind: "start-agent-run", role: "audit", issue: 98, commit: AUDITED_SHA }] });
+  });
+
+  // The Kit job can't tell the App's bot from another, and telling it would take a setup step (#150 rules one out).
+  it("takes another bot's pending Audit for the App's only where the login isn't known: the Kit job starts its Auditor run, whose result the push job drops", async () => {
+    const github = issueGitHub({ author: { login: "other-app", __typename: "Bot" }, body: auditBody(AUDITED_SHA, "pending"), labels: ["fabrik:audit"] });
+    const finished = {
+      kind: "audit-run-finished",
+      issue: 98,
+      output: JSON.stringify({ candidates: [], topRecommendation: null }),
+      window: { kind: "last-days", days: 30 },
+      runUrl: "https://github.com/acme/shop/actions/runs/1",
+      repoUrl: "https://github.com/acme/shop",
+    } as const;
+
+    const kitJob = await gatherSnapshot(github, repo, opened, null, null);
+    const pushJob = await gatherSnapshot(github, repo, finished, null, APP_LOGIN);
+
+    expect([kitJob.issue?.byApp, pushJob.issue?.byApp]).toEqual([true, false]);
+    expect(planFor(opened, kitJob, kitConfig())).toMatchObject({ kind: "act", actions: [{ kind: "start-agent-run", role: "audit", issue: 98 }] });
+    expect(planFor(finished, pushJob, kitConfig())).toEqual({
+      kind: "nothing",
+      reason: "#98 is no longer a pending Audit, so its Auditor's result is stale",
+    });
   });
 });
 
@@ -448,7 +604,7 @@ describe("Gathering an issue's Design session", () => {
       },
     } as unknown as GitHub;
     const event = { kind: "issue-comment-created", issue: 6, commenter: "operator", commenterIsBot: false, body: "More context", comment: 9 } as const;
-    return (await gatherSnapshot(github, repo, event, null)).issue;
+    return (await gatherSnapshot(github, repo, event, null, null)).issue;
   }
 
   it("reads a Design-session turn's failure notice as a failed turn, so the session keeps its slot", async () => {
@@ -527,9 +683,167 @@ describe("Gathering a Dispatch check's Tickets", () => {
       },
     } as unknown as GitHub;
 
-    const snapshot = await gatherSnapshot(github, repo, { kind: "dispatch-check" }, null, actionsWith([]) as unknown as GitHub);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "dispatch-check" }, null, null, actionsWith([]) as unknown as GitHub);
 
     expect(snapshot.dispatch?.tickets).toMatchObject([{ number: 6, openBlockers: [10], notPlannedBlockers: [9] }]);
+  });
+});
+
+describe("Gathering a scheduled tick's audit slice", () => {
+  const HEAD = "c".repeat(40);
+
+  /** The read-only API, holding this default branch head and these `fabrik:audit` issues, newest first. */
+  function githubWith(defaultBranchRef: { target: { oid: string } } | null, nodes: unknown[]) {
+    return {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("defaultBranchRef")) {
+          expect(variables["label"]).toBe("fabrik:audit");
+          return { repository: { defaultBranchRef, issues: { nodes } } };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+  }
+
+  const tick = { kind: "scheduled-tick", now: "2026-11-08T04:00:00.000Z" } as const;
+
+  it("holds the default branch's head and each Audit issue, open or closed, with its title, telling the Fabrik App's from a person's or another bot's", async () => {
+    const github = githubWith({ target: { oid: HEAD } }, [
+      { number: 97, title: "My audit", state: "OPEN", stateReason: null, createdAt: "2026-11-08T00:05:00Z", body: "Quoting <!-- fabrik:audit-pending -->", author: { login: "jrey8343", __typename: "User" } },
+      { number: 96, title: "Audit: week of 2026-11-02", state: "OPEN", stateReason: null, createdAt: "2026-11-08T00:04:30Z", body: "<!-- fabrik:audit-pending -->", author: { login: "other-app", __typename: "Bot" } },
+      { number: 95, title: "Audit: week of 2026-11-02", state: "CLOSED", stateReason: "NOT_PLANNED", createdAt: "2026-11-08T00:04:00Z", body: "failed", author: { login: "fabrik-app", __typename: "Bot" } },
+      { number: 90, title: "Audit: week of 2026-10-26", state: "CLOSED", stateReason: "COMPLETED", createdAt: "2026-11-01T00:05:00Z", body: "filled", author: { login: "fabrik-app", __typename: "Bot" } },
+      { number: 85, title: "Audit: week of 2026-10-19", state: "OPEN", stateReason: "REOPENED", createdAt: "2026-10-25T00:05:00Z", body: "", author: null },
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, "fabrik-app[bot]");
+
+    expect(snapshot.audit).toEqual({
+      head: HEAD,
+      issues: [
+        { number: 97, title: "My audit", open: true, stateReason: null, createdAt: "2026-11-08T00:05:00Z", byApp: false, body: "Quoting <!-- fabrik:audit-pending -->" },
+        { number: 96, title: "Audit: week of 2026-11-02", open: true, stateReason: null, createdAt: "2026-11-08T00:04:30Z", byApp: false, body: "<!-- fabrik:audit-pending -->" },
+        { number: 95, title: "Audit: week of 2026-11-02", open: false, stateReason: "not_planned", createdAt: "2026-11-08T00:04:00Z", byApp: true, body: "failed" },
+        { number: 90, title: "Audit: week of 2026-10-26", open: false, stateReason: "completed", createdAt: "2026-11-01T00:05:00Z", byApp: true, body: "filled" },
+        { number: 85, title: "Audit: week of 2026-10-19", open: true, stateReason: "reopened", createdAt: "2026-10-25T00:05:00Z", byApp: false, body: "" },
+      ],
+    });
+  });
+
+  it("holds no head for a repo whose default branch has no commits", async () => {
+    const snapshot = await gatherSnapshot(githubWith(null, []), repo, tick, null, "fabrik-app[bot]");
+
+    expect(snapshot.audit).toEqual({ head: null, issues: [] });
+  });
+
+  it("isn't gathered for any other event", async () => {
+    const snapshot = await gatherSnapshot(githubWith({ target: { oid: HEAD } }, []), repo, { kind: "kit-config-changed" }, null, "fabrik-app[bot]");
+
+    expect(snapshot.audit).toBeNull();
+  });
+});
+
+describe("Gathering the PRs an Auditor named", () => {
+  /** The read-only API, holding Audit #97 and these PRs by number; any other number is no PR, which GitHub answers with a 404. */
+  function githubWith(pulls: Record<number, unknown>) {
+    return {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          return {
+            repository: {
+              owner: { login: "acme" },
+              issue: {
+                number: 97,
+                state: "OPEN",
+                author: { login: "fabrik-app", __typename: "Bot" },
+                body: "Reading.\n\n<!-- fabrik:audit-pending -->",
+                labels: { nodes: [{ name: "fabrik:audit" }] },
+                parent: null,
+                comments: { nodes: [] },
+                timelineItems: { nodes: [] },
+                closedByPullRequestsReferences: { nodes: [] },
+                blockedBy: { nodes: [] },
+                blocking: { nodes: [] },
+              },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+      async rest(method: string, path: string, _body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<unknown> {
+        const pull = /^\/repos\/acme\/shop\/pulls\/(\d+)$/.exec(path);
+        if (method !== "GET" || pull === null) throw new Error(`Unexpected call: ${method} ${path}`);
+        const found = pulls[Number(pull[1])];
+        if (found !== undefined) return found;
+        // As the real client does: a 404 is null only when the call allows it.
+        if (options.allowNotFound === true) return null;
+        throw new Error(`GitHub GET ${path} failed: 404`);
+      },
+    } as unknown as GitHub;
+  }
+
+  const pull = (number: number, merged: boolean, ref: string, type: string) => ({ number, merged, head: { ref }, user: { type } });
+
+  function finished(output: unknown): LoopEvent {
+    return {
+      kind: "audit-run-finished",
+      issue: 97,
+      output: typeof output === "string" ? output : JSON.stringify(output),
+      window: { kind: "last-days", days: 30 },
+      runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+      repoUrl: "https://github.com/acme/shop",
+    };
+  }
+
+  const candidate = (introducedBy: number[]) => ({
+    title: "Make the cart module deeper",
+    files: ["src/cart.ts"],
+    problem: "p",
+    solution: "s",
+    benefits: "b",
+    before: "flowchart LR\n  a",
+    after: "flowchart LR\n  b",
+    strength: "strong",
+    introducedBy,
+  });
+
+  it("holds each PR the reply names once, telling a merged agent PR from the rest and leaving out a number that's no PR, beside the Audit", async () => {
+    const github = githubWith({
+      31: pull(31, true, "fabrik/ticket-7", "Bot"),
+      40: pull(40, false, "fabrik/ticket-8", "Bot"),
+      41: pull(41, true, "feature/cart", "User"),
+      42: pull(42, true, "fabrik/ticket-9", "User"),
+    });
+
+    const snapshot = await gatherSnapshot(
+      github,
+      repo,
+      finished({ candidates: [candidate([31, 40, 404]), candidate([41, 42, 31])], topRecommendation: "Make the cart module deeper" }),
+      null,
+      "fabrik-app[bot]",
+    );
+
+    expect(snapshot.namedPullRequests).toEqual([
+      { number: 31, merged: true, headRef: "fabrik/ticket-7", isAgent: true },
+      { number: 40, merged: false, headRef: "fabrik/ticket-8", isAgent: true },
+      { number: 41, merged: true, headRef: "feature/cart", isAgent: false },
+      { number: 42, merged: true, headRef: "fabrik/ticket-9", isAgent: false },
+    ]);
+    expect(snapshot.issue).toMatchObject({ number: 97, byApp: true, labels: ["fabrik:audit"] });
+  });
+
+  it("holds no PRs for a reply that breaks its contract, whose Audit the core then fails", async () => {
+    const github = githubWith({ 31: pull(31, true, "fabrik/ticket-7", "Bot") });
+
+    const snapshot = await gatherSnapshot(github, repo, finished("not JSON, though it names #31"), null, "fabrik-app[bot]");
+
+    expect(snapshot.namedPullRequests).toEqual([]);
+  });
+
+  it("isn't gathered for any other event", async () => {
+    const snapshot = await gatherSnapshot(githubWith({}), repo, { kind: "kit-config-changed" }, null, "fabrik-app[bot]");
+
+    expect(snapshot.namedPullRequests).toBeNull();
   });
 });
 
@@ -573,7 +887,7 @@ describe("Gathering a Design-session turn's starting reply", () => {
   it("finds the reply still there", async () => {
     const { github, reads } = githubWhere(() => ({ id: 7003 }));
 
-    const snapshot = await gatherSnapshot(github, repo, turn(7003), null);
+    const snapshot = await gatherSnapshot(github, repo, turn(7003), null, null);
 
     expect(snapshot.startingComment).toEqual({ id: 7003, exists: true });
     expect(reads).toEqual(["GET /repos/acme/shop/issues/comments/7003"]);
@@ -585,7 +899,7 @@ describe("Gathering a Design-session turn's starting reply", () => {
       return null;
     });
 
-    const snapshot = await gatherSnapshot(github, repo, turn(7003), null);
+    const snapshot = await gatherSnapshot(github, repo, turn(7003), null, null);
 
     expect(snapshot.startingComment).toEqual({ id: 7003, exists: false });
   });
@@ -595,13 +909,13 @@ describe("Gathering a Design-session turn's starting reply", () => {
       throw new Error("GitHub GET /repos/acme/shop/issues/comments/7003 failed: 502");
     });
 
-    await expect(gatherSnapshot(github, repo, turn(7003), null)).rejects.toThrow("502");
+    await expect(gatherSnapshot(github, repo, turn(7003), null, null)).rejects.toThrow("502");
   });
 
   it("reads no reply for a turn adding needs-design started", async () => {
     const { github, reads } = githubWhere(() => ({ id: 1 }));
 
-    const snapshot = await gatherSnapshot(github, repo, turn(), null);
+    const snapshot = await gatherSnapshot(github, repo, turn(), null, null);
 
     expect(snapshot.startingComment).toBeNull();
     expect(reads).toEqual([]);
@@ -609,11 +923,12 @@ describe("Gathering a Design-session turn's starting reply", () => {
 });
 
 describe("Reading the Kit config folder through the API", () => {
-  it("reads the Skills sources lockfile beside config.json and the phase instructions, at the ref", async () => {
+  it("reads the Skills sources lockfile beside config.json and each role's instructions, the Auditor's too, at the ref", async () => {
     const files: Record<string, string> = {
       ".fabrik/config.json": `{ "roles": { "review": { "skills": ["jrey8343/skills/event-storming"] } } }`,
       ".fabrik/skills.lock.json": `[{ "repository": "jrey8343/skills", "sha": "${"a".repeat(40)}" }]`,
       ".fabrik/review.md": "Check the deciders.\n",
+      ".fabrik/audit.md": "Booking first.\n",
     };
     const github = {
       async fileText(at: typeof repo, path: string, ref: string): Promise<string | null> {
@@ -628,6 +943,7 @@ describe("Reading the Kit config folder through the API", () => {
     const result = resolveKitConfig(sources);
     expect(result.ok && result.config.extraSkills.review).toEqual([{ source: "jrey8343/skills", name: "event-storming" }]);
     expect(result.ok && result.config.instructions.review).toBe("Check the deciders.\n");
+    expect(result.ok && result.config.instructions.audit).toBe("Booking first.\n");
   });
 
   it("gives no lockfile when the Product repo has none", async () => {

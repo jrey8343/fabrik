@@ -2,6 +2,10 @@
 // builds the Run record of the agent run that just ended (src/kit/runRecord.ts)
 // and writes it, its transcript first, to the store (src/kit/recordWriter.ts).
 // It writes one step-summary line saying what it did, or why it wrote nothing.
+// Then, for a record now in the store, it runs the scoring plan on it
+// (src/kit/scoreRecord.ts, #149): a skip's score file it writes itself; a
+// score it asks of the judge job through the step outputs `score` ("true")
+// and `record` (the scored record's store path), with a step-summary line.
 //   node src/kit/record-main.ts
 // Reads FABRIK_NEEDS and the agent job's artifacts as src/main.ts does, the
 // transcript from FABRIK_TRANSCRIPT_DIR, and two Fabrik App tokens:
@@ -17,9 +21,11 @@ import { GitHub, type Repo } from "../github/client.ts";
 import { readKitConfigSources } from "../github/snapshot.ts";
 import { readBytesIfPresent, readIfPresent } from "./checkout.ts";
 import { resolveKitConfig } from "./config.ts";
+import { loadRubrics } from "./kitFiles.ts";
 import type { Needs } from "./pushJob.ts";
-import { type RecordOutcome, recordWriteSummary, writeRunRecord } from "./recordWriter.ts";
-import { agentRunEnded, runRecordFor } from "./runRecord.ts";
+import { type RecordOutcome, type RecordWrite, recordWriteSummary, writeRunRecord } from "./recordWriter.ts";
+import { agentRunEnded, runRecordFor, type RunRecordFiles } from "./runRecord.ts";
+import { recordedRunScoringSummary, scoreRecordedRun } from "./scoreRecord.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -27,13 +33,19 @@ function required(name: string): string {
   return value;
 }
 
-async function report(line: string): Promise<void> {
+async function report(heading: string, line: string): Promise<void> {
   console.log(line);
   const summary = process.env["GITHUB_STEP_SUMMARY"];
-  if (summary !== undefined && summary !== "") await appendFile(summary, `### Run record\n\n${line}\n`);
+  if (summary !== undefined && summary !== "") await appendFile(summary, `### ${heading}\n\n${line}\n`);
 }
 
-async function outcome(): Promise<RecordOutcome> {
+/** How writing the record went, and, once a store token was in hand, the store and what was written to it, for scoring. */
+interface Recorded {
+  readonly outcome: RecordOutcome;
+  readonly written: { readonly store: GitHub; readonly files: RunRecordFiles | null; readonly write: RecordWrite } | null;
+}
+
+async function recordRun(): Promise<Recorded> {
   const [owner, name] = required("GITHUB_REPOSITORY").split("/");
   if (owner === undefined || name === undefined) throw new Error("GITHUB_REPOSITORY is not owner/name");
   const repo: Repo = { owner, name };
@@ -44,10 +56,10 @@ async function outcome(): Promise<RecordOutcome> {
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
   const issue = (payload["issue"] as { number?: unknown } | undefined)?.number;
   const eventIssue = typeof issue === "number" ? issue : null;
-  if (!agentRunEnded(needs, eventIssue)) return { kind: "no-record" };
+  if (!agentRunEnded(needs, eventIssue)) return { outcome: { kind: "no-record" }, written: null };
   // No store, or the Fabrik App not installed on it: setup hasn't got that far, which never fails the run.
   const storeToken = process.env["FABRIK_STORE_TOKEN"] ?? "";
-  if (storeToken === "") return { kind: "no-store-token" };
+  if (storeToken === "") return { outcome: { kind: "no-store-token" }, written: null };
   // Every record names the Kit commit that wrote it: without one, write none.
   const kitSha = needs["kit"]?.outputs["sha"] ?? "";
   if (kitSha === "") throw new Error("The Kit job passed out no sha, so the Run record can't name its Kit commit");
@@ -76,12 +88,24 @@ async function outcome(): Promise<RecordOutcome> {
     failureReport: await readIfPresent(join(agentDir, AGENT_FAILURE_FILE)),
     transcript: transcript?.lines ?? null,
   });
-  return writeRunRecord(new GitHub(storeToken, apiUrl), files, transcript?.gzip ?? null, (ms) => sleep(ms));
+  const store = new GitHub(storeToken, apiUrl);
+  const write = await writeRunRecord(store, files, transcript?.gzip ?? null, (ms) => sleep(ms));
+  return { outcome: write, written: { store, files, write } };
 }
 
-outcome()
-  .then((result) => report(recordWriteSummary(result)))
-  .catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
+async function main(): Promise<void> {
+  const { outcome, written } = await recordRun();
+  // Before scoring, so a scoring problem never hides what happened to the record.
+  await report("Run record", recordWriteSummary(outcome));
+  if (written === null) return;
+  const scoring = await scoreRecordedRun(written.store, written, await loadRubrics(), new Date().toISOString(), (ms) => sleep(ms));
+  // The judge job runs on these, and the score-record job reads the scored record back from the store by its path.
+  if (scoring.kind === "score") await appendFile(required("GITHUB_OUTPUT"), `score=true\nrecord=${scoring.record}\n`);
+  const line = recordedRunScoringSummary(scoring);
+  if (line !== null) await report("Scores", line);
+}
+
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exitCode = 1;
+});

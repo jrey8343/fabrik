@@ -1,13 +1,17 @@
-// The Weekly summary (ADR-0009): from the store's Run records, a GitHub facts
-// snapshot per Product repo, the Operator and now, the one issue filed for the
-// week that just ended, or skip in a quiet week. Pure, no I/O, no model call.
+// The Weekly summary (ADR-0009): from the store's Run records and score files,
+// a GitHub facts snapshot per Product repo, the Operator and now, the one issue
+// filed for the week that just ended, or skip in a quiet week. Pure, no I/O, no
+// model call.
 import { verdictsIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
-import type { DesignQueueSnapshot, InfrastructureFailure } from "../loop/types.ts";
-import { type RateLimitReading, type RunRecord, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
+import { DESIGN_ROUND_MARKER, escapeMarkerIn } from "../loop/markers.ts";
+import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
+import { rubricId, SCORERS } from "./rubrics.ts";
+import { type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
+import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
 
 /** A label added to or removed from an issue, by whom and when. */
 export interface LabelEvent {
@@ -67,7 +71,7 @@ export interface SpecFacts {
   readonly tickets: readonly number[];
 }
 
-/** An agent PR merged or closed in the last 30 days. */
+/** An agent PR merged or closed in the last 97 days. */
 export interface AgentPullRequestFacts {
   readonly number: number;
   /** The Ticket its `Closes #n` names, or null. */
@@ -91,7 +95,7 @@ export interface DefaultBranchCommitFacts {
   readonly at: string;
 }
 
-/** Any PR merged in the last 30 days, agent or not, by its title. */
+/** Any PR merged in the last 97 days, agent or not, by its title. */
 export interface MergedTitleFacts {
   readonly title: string;
   /** ISO 8601. */
@@ -125,6 +129,39 @@ export interface OpenPullRequestFacts {
   readonly labelEvents: readonly LabelEvent[];
 }
 
+/** An open `fabrik:monitor` issue, as Held reads the Monitor's held count from it. */
+export interface MonitorIssueFacts {
+  readonly number: number;
+  /** Who opened it: only the Fabrik App's issues count, so quoting a held line fakes nothing. */
+  readonly author: string;
+  readonly body: string;
+}
+
+/**
+ * An issue the Operator opened whose body has a `fabrik:escape` marker, such
+ * as an Audit candidate filed through its Open as issue link.
+ */
+export interface EscapeMarkerIssueFacts {
+  readonly number: number;
+  readonly title: string;
+  /** Who opened it: only the Operator's issues count. */
+  readonly author: string;
+  /** ISO 8601. */
+  readonly createdAt: string;
+  readonly state: "open" | "closed";
+  readonly body: string;
+}
+
+/** An open `fabrik:audit` issue, as Waiting on you reads it. */
+export interface OpenAuditFacts {
+  readonly number: number;
+  readonly title: string;
+  /** Who opened it: only the Fabrik App's Audits count. */
+  readonly author: string;
+  /** ISO 8601. */
+  readonly createdAt: string;
+}
+
 /** What the summary reads of one Product repo on GitHub. */
 export interface GitHubFacts {
   /** The Product repo, as `owner/name`. */
@@ -144,10 +181,21 @@ export interface GitHubFacts {
    * the Design queue check reads them: Held counts the ones waiting for a slot.
    */
   readonly designQueue: DesignQueueSnapshot;
+  /**
+   * The repo's open `fabrik:monitor` issues: Held counts the error groups the
+   * Monitor holds from the newest error issue among them that has a stats block.
+   */
+  readonly monitorIssues: readonly MonitorIssueFacts[];
+  /** The issues the Operator opened in the last 97 days whose body has an escape marker. */
+  readonly escapeMarkerIssues: readonly EscapeMarkerIssueFacts[];
+  /** The repo's open `fabrik:audit` issues, whoever opened them. */
+  readonly openAudits: readonly OpenAuditFacts[];
 }
 
 export interface WeeklySummaryInput {
   readonly records: readonly RunRecord[];
+  /** The store's score files: a picked run's scores, or why it has none (src/kit/scorer.ts). */
+  readonly scoreFiles: readonly ScoreFile[];
   readonly facts: readonly GitHubFacts[];
   /** The Operator's GitHub login, the owner of the store. */
   readonly operator: string;
@@ -176,7 +224,7 @@ export interface CostFigure {
 export interface WeeklySummary {
   /** The Monday the week began on, in the Operator's time zone, as `yyyy-mm-dd`. */
   readonly week: string;
-  /** The API-equivalent cost of every record that ended in the week, in USD. */
+  /** The API-equivalent cost of every record that ended in the week, in USD, judge runs' included. */
   readonly cost: WeekOverWeek<number>;
   /** How many of the week's records the cost leaves out, their cost basis being unknown. */
   readonly unknownCost: WeekOverWeek<number>;
@@ -209,6 +257,12 @@ export interface WeeklySummary {
   readonly operatorWaitMs: WeekOverWeek<number | null>;
   /** Of the agent PRs merged in the 30 days to the week's end, how many were reverted in that window. */
   readonly revertRate: WeekOverWeek<RevertRate>;
+  /** Of the agent PRs merged in the 90 days to the week's end, how many at least one Architectural escape names. */
+  readonly escapeRate: WeekOverWeek<EscapeRate>;
+  /** The Architectural escapes opened in the 90 days to the week's end, by Strength. */
+  readonly escapesByStrength: WeekOverWeek<EscapesByStrength>;
+  /** The Architectural escapes opened in the week, with the evidence against each PR: what the Retro reads. */
+  readonly escapesThisWeek: readonly EscapeThisWeek[];
   readonly counts: {
     /** Agent PRs merged in the week, across every Product repo. */
     readonly mergedPullRequests: WeekOverWeek<number>;
@@ -219,8 +273,41 @@ export interface WeeklySummary {
     /** Records of a Step-up. */
     readonly stepUps: WeekOverWeek<number>;
   };
+  /** What the score files of the week's runs say. */
+  readonly scores: WeekOverWeek<WeekScores>;
+  /** What scoring cost: the week's judge runs (role `score`), which the cost includes. */
+  readonly scoringCost: WeekOverWeek<ScoringCost>;
   /** One section per Product repo, in the order the facts came. */
   readonly repos: readonly RepoSection[];
+}
+
+/** The summed cost of a week's judge runs, in USD, and its share of the week's cost. */
+export interface ScoringCost {
+  readonly usd: number;
+  /** From 0 to 1, or null in a week that cost nothing. */
+  readonly share: number | null;
+  /** How many judge runs it leaves out, their cost basis being unknown. */
+  readonly unknownCost: number;
+}
+
+/** What the score files of the runs that ended in a week say. */
+export interface WeekScores {
+  /** How many score files the week's runs have, scores and skips alike. */
+  readonly scoreFiles: number;
+  /** Each rubric version the week's runs were scored under, in the Kit's order of Scorers. */
+  readonly rubrics: readonly RubricScores[];
+  /** How many of the week's runs picked for scoring were skipped, by reason. */
+  readonly skips: Readonly<Record<ScoreSkip["reason"], number>>;
+}
+
+/** How the week's runs scored under one rubric version. */
+export interface RubricScores {
+  readonly scorer: string;
+  readonly version: number;
+  readonly runsScored: number;
+  readonly medianScore: number;
+  /** The share of the runs scored that passed, from 0 to 1. */
+  readonly passing: number;
 }
 
 /** What one Product repo has waiting on the Operator, as of the filing. */
@@ -239,6 +326,8 @@ export interface RepoSection {
 export interface Held {
   /** The `needs-design` issues waiting for a Design session slot (caps.design_sessions). */
   readonly designSessions: HeldDesignSessions | null;
+  /** The Sentry error groups waiting for a slot under the Monitor's cap of open error issues (caps.monitor_issues). */
+  readonly monitor: HeldMonitor | null;
 }
 
 export interface HeldDesignSessions {
@@ -248,6 +337,13 @@ export interface HeldDesignSessions {
   readonly oldestSince: string;
   /** How long the oldest has waited at the filing, in milliseconds. */
   readonly oldestAge: number;
+}
+
+export interface HeldMonitor {
+  /** How many error groups the Monitor holds. */
+  readonly groups: number;
+  /** The open error issue whose stats block shows that count: the newest with a stats block. */
+  readonly issue: number;
 }
 
 interface ItemBase {
@@ -266,6 +362,8 @@ export type WaitingItem =
   | (ItemBase & { readonly kind: "design-round" })
   /** An open `ready-for-human` issue, waiting since it got the label. */
   | (ItemBase & { readonly kind: "ready-for-human" })
+  /** The Fabrik App's open Audit, filled or still pending, waiting since it was opened. */
+  | (ItemBase & { readonly kind: "audit" })
   /** An agent PR out of draft with a passing Verdict at its head, waiting since that Verdict. */
   | (ItemBase & {
       readonly kind: "merge-gate";
@@ -287,6 +385,54 @@ export interface RevertRate {
   readonly merged: number;
 }
 
+export interface EscapeRate {
+  /** The agent PRs merged in the window that at least one escape names, each counted once. */
+  readonly escaped: number;
+  /** Every agent PR merged in the window. */
+  readonly merged: number;
+}
+
+/** A count of escapes per Strength, with `none` for a marker whose Strength isn't one the Auditor gives, or is missing. */
+export type EscapesByStrength = Readonly<Record<Strength | "none", number>>;
+
+/** An Architectural escape opened in the week, and the PRs it counts against. */
+export interface EscapeThisWeek {
+  /** `owner/name`. */
+  readonly repo: string;
+  /** The escape's issue. */
+  readonly number: number;
+  readonly url: string;
+  /** The issue's title and body as they stand: the candidate the Operator filed, or what a Design session rewrote it into. */
+  readonly title: string;
+  readonly body: string;
+  /** Its marker's Strength, or null when it isn't one the Auditor gives. */
+  readonly strength: Strength | null;
+  /** The agent PRs merged in the 90 days to the week's end that its marker names. */
+  readonly pullRequests: readonly EscapedPullRequest[];
+}
+
+/** An agent PR an escape counts against, and the evidence of how it got through. */
+export interface EscapedPullRequest {
+  readonly number: number;
+  readonly url: string;
+  /** The Ticket its `Closes #n` names, or null. */
+  readonly ticket: number | null;
+  /** Every Run record on its Ticket, whatever week it ran in, oldest first. */
+  readonly records: readonly RunRecord[];
+  /** The last Review record on the PR with a pass Verdict, the gate that missed the escape, or null when the store holds none. */
+  readonly lastPassingReview: PassingReview | null;
+  /** Whether anyone but the Fabrik App pushed to it, read from the commits Human touches count. */
+  readonly operatorPushes: boolean;
+}
+
+export interface PassingReview {
+  readonly record: RunRecord;
+  /** Its transcript's store path, or null when no transcript survived the run. */
+  readonly transcript: string | null;
+  /** The Review's Actions run attempt. */
+  readonly url: string;
+}
+
 export type WeeklySummaryResult =
   | { readonly kind: "skip" }
   | {
@@ -302,10 +448,10 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
-  const repos = input.facts.map((facts) => repoSectionOf(facts, input.records, Date.parse(input.now)));
+  const repos = input.facts.map((facts) => repoSectionOf(facts, input));
   // Held work counts too, so a queue never sits unseen through a week nothing ran.
   const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null);
-  if (thisWeek.records === 0 && quiet) return { kind: "skip" };
+  if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && quiet) return { kind: "skip" };
   const change = <K extends keyof WeekMetrics>(metric: K): WeekOverWeek<WeekMetrics[K]> => ({
     thisWeek: thisWeek[metric],
     lastWeek: lastWeek[metric],
@@ -322,12 +468,17 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     cycleTimeMs: change("cycleTimeMs"),
     operatorWaitMs: change("operatorWaitMs"),
     revertRate: change("revertRate"),
+    escapeRate: change("escapeRate"),
+    escapesByStrength: change("escapesByStrength"),
+    escapesThisWeek: escapesThisWeekOf(weeks.thisWeek, input),
     counts: {
       mergedPullRequests: change("mergedPullRequests"),
       ticketsDispatched: change("ticketsDispatched"),
       retries: change("retries"),
       stepUps: change("stepUps"),
     },
+    scores: change("scores"),
+    scoringCost: change("scoringCost"),
     repos,
   };
   return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
@@ -347,10 +498,14 @@ interface WeekMetrics {
   readonly cycleTimeMs: number | null;
   readonly operatorWaitMs: number | null;
   readonly revertRate: RevertRate;
+  readonly escapeRate: EscapeRate;
+  readonly escapesByStrength: EscapesByStrength;
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
   readonly retries: number;
   readonly stepUps: number;
+  readonly scores: WeekScores;
+  readonly scoringCost: ScoringCost;
 }
 
 function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
@@ -364,6 +519,9 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     ),
   );
   const { usd: cost, unknownCost } = costOf(records);
+  const scoring = costOf(records.filter((record) => record.role === "score"));
+  const escapeWindow = escapeWindowOf(week);
+  const escapes = escapesIn(escapeWindow, input.facts, input.operator);
   return {
     records: records.length,
     cost,
@@ -381,6 +539,8 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
       }),
     ),
     revertRate: revertRateOf(week, input.facts),
+    escapeRate: escapeRateOf(escapeWindow, escapes, input.facts),
+    escapesByStrength: escapesByStrengthOf(escapes),
     mergedPullRequests: merged.length,
     ticketsDispatched: tickets.filter((ticket) => {
       const dispatch = dispatchOf(ticket);
@@ -388,7 +548,51 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     }).length,
     retries: records.filter((record) => record.role === "implement" && record.retry > 0).length,
     stepUps: records.filter((record) => record.stepUp).length,
+    scores: scoresOf(week, input),
+    scoringCost: { usd: scoring.usd, share: cost === 0 ? null : scoring.usd / cost, unknownCost: scoring.unknownCost },
   };
+}
+
+/** What the score files of the week's runs say: per rubric version, how the runs scored. */
+function scoresOf(week: Week, input: WeeklySummaryInput): WeekScores {
+  const endedAt = new Map(input.records.map((record) => [runKey(record), record.endedAt]));
+  // A score file whose record isn't in the store goes by when it was scored: minutes after its run ended.
+  const files = input.scoreFiles.filter((file) => within(week, endedAt.get(runKey(file)) ?? file.scoredAt));
+  const byRubric = new Map<string, { readonly scorer: string; readonly version: number; readonly entries: ScoreEntry[] }>();
+  for (const entry of files.flatMap((file) => file.entries ?? [])) {
+    const id = rubricId({ name: entry.scorer, version: entry.version });
+    const rubric = byRubric.get(id) ?? { scorer: entry.scorer, version: entry.version, entries: [] };
+    rubric.entries.push(entry);
+    byRubric.set(id, rubric);
+  }
+  const rubrics = [...byRubric.values()].map(
+    ({ scorer, version, entries }): RubricScores => ({
+      scorer,
+      version,
+      runsScored: entries.length,
+      medianScore: median(entries.map((entry) => entry.score)) ?? 0,
+      passing: entries.filter((entry) => entry.pass).length / entries.length,
+    }),
+  );
+  // The scoring plan's reasons, then the judge's: the order the section lists them in.
+  const skips: Record<ScoreSkip["reason"], number> = {
+    "weekly-limit": 0,
+    "no-transcript": 0,
+    "infrastructure-failure": 0,
+    "judge-failed": 0,
+    "judge-output-invalid": 0,
+  };
+  for (const { skip } of files) if (skip !== null) skips[skip.reason] += 1;
+  return { scoreFiles: files.length, rubrics: rubrics.toSorted(inKitOrder), skips };
+}
+
+/** The Kit's order of Scorers (a Scorer it no longer has goes after them, by name), each Scorer's versions oldest first. */
+function inKitOrder(a: RubricScores, b: RubricScores): number {
+  const rank = (scorer: string) => {
+    const index = (SCORERS as readonly string[]).indexOf(scorer);
+    return index === -1 ? SCORERS.length : index;
+  };
+  return rank(a.scorer) - rank(b.scorer) || a.scorer.localeCompare(b.scorer) || a.version - b.version;
 }
 
 /** An agent PR merged in the week, with its repo, its Ticket and when that was dispatched. */
@@ -452,6 +656,94 @@ function revertRateOf(week: Week, facts: readonly GitHubFacts[]): RevertRate {
     reverted: counts.reduce((sum, count) => sum + count.reverted, 0),
     merged: counts.reduce((sum, count) => sum + count.merged, 0),
   };
+}
+
+/** The 90 days to the week's end: slow decay needs longer than revert rate's 30 to show. */
+function escapeWindowOf(week: Week): Window {
+  return { start: week.end - ESCAPE_WINDOW_MS, end: week.end };
+}
+
+/**
+ * An Architectural escape: an issue whose escape marker names at least one
+ * agent PR merged in the window. It counts against those PRs alone.
+ */
+interface ArchitecturalEscape {
+  readonly repo: string;
+  readonly issue: EscapeMarkerIssueFacts;
+  /** The marker's Strength as written, or null when it isn't one the Auditor gives. */
+  readonly strength: Strength | null;
+  /** The marker's PRs that are agent PRs merged in the window. */
+  readonly pullRequests: readonly AgentPullRequestFacts[];
+}
+
+/**
+ * The Architectural escapes opened in the window, repo by repo. Only the
+ * Operator's issues count, so someone else's issue body can't move the metric.
+ */
+function escapesIn(window: Window, facts: readonly GitHubFacts[], operator: string): ArchitecturalEscape[] {
+  return facts.flatMap((repo) => {
+    const merged = mergedIn(window, repo);
+    return repo.escapeMarkerIssues.flatMap((issue) => {
+      const marker = escapeMarkerIn(issue.body);
+      if (marker === null || issue.author !== operator || !within(window, issue.createdAt)) return [];
+      const pullRequests = merged.filter((pullRequest) => marker.pullRequests.includes(pullRequest.number));
+      const strength = STRENGTHS.find((known) => known === marker.strength) ?? null;
+      return pullRequests.length === 0 ? [] : [{ repo: repo.repo, issue, strength, pullRequests }];
+    });
+  });
+}
+
+/** Of the agent PRs merged in the window, how many at least one escape names, each counted once however many do. */
+function escapeRateOf(window: Window, escapes: readonly ArchitecturalEscape[], facts: readonly GitHubFacts[]): EscapeRate {
+  const escaped = new Set(escapes.flatMap(({ repo, pullRequests }) => pullRequests.map((pullRequest) => `${repo}#${pullRequest.number}`)));
+  return { escaped: escaped.size, merged: facts.reduce((sum, repo) => sum + mergedIn(window, repo).length, 0) };
+}
+
+function escapesByStrengthOf(escapes: readonly ArchitecturalEscape[]): EscapesByStrength {
+  const count = (strength: Strength | null) => escapes.filter((escape) => escape.strength === strength).length;
+  return { strong: count("strong"), "worth-exploring": count("worth-exploring"), speculative: count("speculative"), none: count(null) };
+}
+
+/**
+ * The escapes opened in the week, counted against the PRs the escape rate
+ * counts them against, each with its Ticket's records, the Review that passed
+ * it last and whether anyone but the App pushed to it.
+ */
+function escapesThisWeekOf(week: Week, { facts, records, operator }: WeeklySummaryInput): EscapeThisWeek[] {
+  return escapesIn(escapeWindowOf(week), facts, operator)
+    .filter(({ issue }) => within(week, issue.createdAt))
+    .map(({ repo, issue, strength, pullRequests }) => {
+      const onRepo = records.filter((record) => record.repo === repo).toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
+      return {
+        repo,
+        number: issue.number,
+        url: `https://github.com/${repo}/issues/${issue.number}`,
+        title: issue.title,
+        body: issue.body,
+        strength,
+        pullRequests: pullRequests.map((pullRequest) => {
+          const passed = onRepo.findLast((record) => record.role === "review" && record.pullRequest === pullRequest.number && record.verdict === "pass");
+          return {
+            number: pullRequest.number,
+            url: `https://github.com/${repo}/pull/${pullRequest.number}`,
+            ticket: pullRequest.ticket,
+            records: onRepo.filter((record) => pullRequest.ticket !== null && record.issue === pullRequest.ticket),
+            lastPassingReview: passed === undefined ? null : { record: passed, transcript: passed.transcript, url: runUrlOf(passed) },
+            operatorPushes: pullRequest.commits.some((commit) => !commit.byApp),
+          };
+        }),
+      };
+    });
+}
+
+/** The Actions run attempt a record came from, in its Product repo. */
+function runUrlOf({ repo, runId, runAttempt }: RunRecord): string {
+  return `https://github.com/${repo}/actions/runs/${runId}/attempts/${runAttempt}`;
+}
+
+/** The repo's agent PRs merged in the window. */
+function mergedIn(window: Window, { pullRequests }: GitHubFacts): AgentPullRequestFacts[] {
+  return pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(window, pullRequest.mergedAt));
 }
 
 /** When the PR's last passing Verdict before its merge was given, read through the Verdict marker on the App's comments, or null. */
@@ -572,15 +864,28 @@ function dispatchOf(ticket: TicketFacts): string | null {
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
-function repoSectionOf(facts: GitHubFacts, records: readonly RunRecord[], now: number): RepoSection {
+function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: WeeklySummaryInput): RepoSection {
+  const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
-  return { repo: facts.repo, waitingOnYou: waitingOnYou(facts, items), stuck: stuck(facts, records, items, now), held: heldIn(facts, now) };
+  return {
+    repo: facts.repo,
+    // An open Audit waits on the Operator, so it also keeps a quiet week from being skipped.
+    waitingOnYou: oldestFirst([...waitingOnYou(facts, items), ...openAuditsOf(facts, appLogin, items)]),
+    stuck: stuck(facts, records, items, now),
+    held: heldIn(facts, appLogin, now),
+  };
+}
+
+/** The Fabrik App's open Audits, aged from when each was opened: a person's `fabrik:audit` issue is no Audit. */
+function openAuditsOf({ openAudits }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
+  return openAudits.filter((audit) => audit.author === appLogin).map((audit) => ({ kind: "audit", ...items.issue(audit, audit.createdAt) }));
 }
 
 /** What a cap holds in the repo, or null when nothing is held. */
-function heldIn({ designQueue }: GitHubFacts, now: number): Held | null {
+function heldIn({ designQueue, monitorIssues }: GitHubFacts, appLogin: string, now: number): Held | null {
   const designSessions = heldDesignSessionsOf(designQueue, now);
-  return designSessions === null ? null : { designSessions };
+  const monitor = heldMonitorOf(monitorIssues, appLogin);
+  return designSessions === null && monitor === null ? null : { designSessions, monitor };
 }
 
 /**
@@ -592,6 +897,20 @@ function heldDesignSessionsOf(queue: DesignQueueSnapshot, now: number): HeldDesi
   const oldestSince = waiting.map((issue) => issue.neededDesignAt).toSorted((a, b) => Date.parse(a) - Date.parse(b))[0];
   if (oldestSince === undefined) return null;
   return { waiting: waiting.length, oldestSince, oldestAge: now - Date.parse(oldestSince) };
+}
+
+/**
+ * The error groups the Monitor holds, from the held line in the stats block
+ * of the open error issue the Monitor shows it in, found and read by the
+ * Monitor's own rule (heldCountHolder) and parser (heldCountIn), so the
+ * summary and the Monitor can't disagree. Null when that block has no held line.
+ */
+function heldMonitorOf(issues: readonly MonitorIssueFacts[], appLogin: string): HeldMonitor | null {
+  const holder = heldCountHolder(
+    issues.map((issue) => ({ number: issue.number, open: true, byApp: issue.author === appLogin, body: issue.body })),
+  );
+  const groups = holder === null ? 0 : (heldCountIn(holder.body) ?? 0);
+  return holder === null || groups === 0 ? null : { groups, issue: holder.number };
 }
 
 /** Builds a repo's items, aged as of the filing. */
@@ -661,14 +980,19 @@ function answerOf(issue: OpenIssueFacts): string | null {
   return issue.comments.find((comment) => !comment.byBot && Date.parse(comment.at) > asked)?.at ?? null;
 }
 
-/** An open Ticket's latest record, if it ended in an Infrastructure failure: the run nothing has picked up again. */
+/**
+ * An open Ticket's latest record, if it ended in an Infrastructure failure:
+ * the run nothing has picked up again. A judge run's record (role `score`) is
+ * left out: scoring a run never picks its Ticket up, and a judge's own failure
+ * never leaves the Ticket stuck.
+ */
 function failedLastRunOf(
   issue: OpenIssueFacts,
   repo: string,
   records: readonly RunRecord[],
 ): { readonly endedAt: string; readonly failure: InfrastructureFailure } | null {
   const latest = records
-    .filter((record) => record.repo === repo && record.issue === issue.number)
+    .filter((record) => record.repo === repo && record.issue === issue.number && record.role !== "score")
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
     .at(-1);
   if (latest === undefined || latest.infrastructureFailure === null) return null;
@@ -715,9 +1039,13 @@ interface Week {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REVERT_WINDOW_MS = 30 * DAY_MS;
+const ESCAPE_WINDOW_MS = 90 * DAY_MS;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-function within({ start, end }: Pick<Week, "start" | "end">, at: string): boolean {
+/** A span of time, from `start` (inclusive) to `end` (exclusive). */
+type Window = Pick<Week, "start" | "end">;
+
+function within({ start, end }: Window, at: string): boolean {
   const time = Date.parse(at);
   return time >= start && time < end;
 }
@@ -775,26 +1103,23 @@ function localTime(time: number, timeZone: string): string {
   return new Date(wallClock(time, timeZone).asUtc).toISOString().slice(0, 16).replace("T", " ");
 }
 
-// Rendering. Only shipped features get a section: the Retro, Audit, Map and
-// Monitor issues, the architectural escape rate and scores add theirs when
-// their Specs ship. Held shows only what the Design-session cap holds, until
-// the Monitor and Ideas and Maps caps add their lines.
+// Rendering. Only shipped features get a section: the Retro, Map and Monitor
+// issues add theirs when their Specs ship. Scores shows only in a week with
+// score files, and never a run's own scores. Held shows what the
+// Design-session and Monitor caps hold, until the Ideas and Maps caps add
+// their lines.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
-  const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, counts } = summary;
-  const row = (name: string, { thisWeek, lastWeek }: WeekOverWeek<number | null>, format: (value: number) => string) =>
-    `| ${name} | ${orNone(thisWeek, format)} | ${orNone(lastWeek, format)} | ${
-      thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, format)
-    } |`;
-  const count = (value: number) => String(value);
+  const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
   const share = ({ reverted, merged }: RevertRate) => (merged === 0 ? null : reverted / merged);
-  const percent = (value: number) => `${Math.round(value * 100)}%`;
-  const reverts = { thisWeek: share(revertRate.thisWeek), lastWeek: share(revertRate.lastWeek) };
   const revertCell = (rate: RevertRate) => orNone(share(rate), (value) => `${percent(value)} (${rate.reverted} of ${rate.merged})`);
-  const revertChange =
-    reverts.thisWeek === null || reverts.lastWeek === null
-      ? NONE
-      : signed(Math.round(reverts.thisWeek * 100) - Math.round(reverts.lastWeek * 100), (points) => `${points} pts`);
+  const revertChange = pointsChange({ thisWeek: share(revertRate.thisWeek), lastWeek: share(revertRate.lastWeek) });
+  const escapeShare = ({ escaped, merged }: EscapeRate) => (merged === 0 ? null : escaped / merged);
+  const escapeCell = (rate: EscapeRate) => {
+    const value = escapeShare(rate);
+    return value === null ? "no merged agent PRs" : `${rate.escaped} of ${rate.merged} (${percent(value)})`;
+  };
+  const escapeChange = pointsChange({ thisWeek: escapeShare(escapeRate.thisWeek), lastWeek: escapeShare(escapeRate.lastWeek) });
   const costRow = (name: string, figure: WeekOverWeek<CostFigure>) => {
     const thisWeek = figure.thisWeek.usd;
     const lastWeek = figure.lastWeek.usd;
@@ -824,6 +1149,9 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     row("Cycle time (median)", cycleTimeMs, hours),
     row("Operator wait (median)", operatorWaitMs, hours),
     `| Revert rate (30 days) | ${revertCell(revertRate.thisWeek)} | ${revertCell(revertRate.lastWeek)} | ${revertChange} |`,
+    `| Architectural escape rate (90 days) | ${escapeCell(escapeRate.thisWeek)} | ${escapeCell(escapeRate.lastWeek)} | ${escapeChange} |`,
+    "",
+    escapesByStrengthLine(summary.escapesByStrength.thisWeek),
     "",
   ];
   if (unknownCost.thisWeek > 0) {
@@ -837,21 +1165,81 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     if (leftOut > 0) lines.push(`${runsWithUnknownCost(leftOut)} left out of ${name}.`, "");
   }
   lines.push(subscriptionUsage(weeklyLimit, timeZone), "");
+  lines.push(...scoresLines(summary.scores, summary.scoringCost));
   lines.push(...heldLines(summary.repos));
-  for (const repo of summary.repos) lines.push(...repoLines(repo));
+  for (const repo of summary.repos) {
+    lines.push(...repoLines(repo, summary.escapesThisWeek.filter((escape) => escape.repo === repo.repo)));
+  }
   // The Operator's one mention, last: the week's only scheduled push.
   lines.push(`@${operator}`);
   return `${lines.join("\n")}\n`;
 }
 
+/** The escapes opened in the 90 days by Strength, naming those with no known Strength only when there are some. */
+function escapesByStrengthLine(counts: EscapesByStrength): string {
+  const known = STRENGTHS.map((strength) => `${counts[strength]} ${STRENGTH_LABELS[strength]}`);
+  const all = counts.none === 0 ? known : [...known, `${counts.none} with no known Strength`];
+  return `Architectural escapes by Strength (90 days): ${all.join(", ")}.`;
+}
+
+/**
+ * The Scores section: each rubric version the week's runs were scored under,
+ * against the same version last week, and what scoring cost, or nothing at
+ * all in a week with no score files.
+ */
+function scoresLines({ thisWeek, lastWeek }: WeekOverWeek<WeekScores>, scoringCost: WeekOverWeek<ScoringCost>): string[] {
+  if (thisWeek.scoreFiles === 0) return [];
+  const rows = thisWeek.rubrics.flatMap((rubric) => {
+    const before = lastWeek.rubrics.find(({ scorer, version }) => scorer === rubric.scorer && version === rubric.version);
+    const name = `${scorerName(rubric.scorer)} v${rubric.version}`;
+    return [
+      row(`${name}: runs scored`, { thisWeek: rubric.runsScored, lastWeek: before?.runsScored ?? 0 }, count),
+      row(`${name}: median score`, { thisWeek: rubric.medianScore, lastWeek: before?.medianScore ?? null }, (score) => score.toFixed(2)),
+      shareRow(`${name}: passing`, { thisWeek: rubric.passing, lastWeek: before?.passing ?? null }),
+    ];
+  });
+  const lines = [
+    "## Scores",
+    "",
+    "| | This week | Last week | Change |",
+    "| --- | ---: | ---: | ---: |",
+    ...rows,
+    row("Scoring cost", { thisWeek: scoringCost.thisWeek.usd, lastWeek: scoringCost.lastWeek.usd }, dollars),
+    shareRow("Scoring's share of the cost", { thisWeek: scoringCost.thisWeek.share, lastWeek: scoringCost.lastWeek.share }),
+    "",
+  ];
+  const skips = Object.entries(thisWeek.skips).filter(([, runs]) => runs > 0);
+  const skipped = skips.reduce((sum, [, runs]) => sum + runs, 0);
+  if (skipped > 0) {
+    const picked = skipped === 1 ? "1 run picked for scoring was" : `${skipped} runs picked for scoring were`;
+    lines.push(`${picked} skipped: ${skips.map(([reason, runs]) => `${runs} ${reason}`).join(", ")}.`, "");
+  }
+  const leftOut = scoringCost.thisWeek.unknownCost;
+  if (leftOut > 0) lines.push(`${runsWithUnknownCost(leftOut)} left out of the scoring cost.`, "");
+  return lines;
+}
+
+/** A Scorer as the summary names it: `ticket-compliance` is Ticket compliance. */
+function scorerName(scorer: string): string {
+  return `${scorer.charAt(0).toUpperCase()}${scorer.slice(1).replaceAll("-", " ")}`;
+}
+
 /** The Held section: a line per repo and source with work held, or nothing at all when no repo has any. */
 function heldLines(repos: readonly RepoSection[]): string[] {
   const lines = repos.flatMap(({ repo, held }) => {
+    const shown: string[] = [];
     const design = held?.designSessions ?? null;
-    if (design === null) return [];
-    const issues = design.waiting === 1 ? "1 needs-design issue" : `${design.waiting} needs-design issues`;
-    const oldest = design.waiting === 1 ? `for ${duration(design.oldestAge)}` : `the oldest for ${duration(design.oldestAge)}`;
-    return [`- ${repo}: ${issues} waiting for a Design session slot, ${oldest}`];
+    if (design !== null) {
+      const issues = design.waiting === 1 ? "1 needs-design issue" : `${design.waiting} needs-design issues`;
+      const oldest = design.waiting === 1 ? `for ${duration(design.oldestAge)}` : `the oldest for ${duration(design.oldestAge)}`;
+      shown.push(`- ${repo}: ${issues} waiting for a Design session slot, ${oldest}`);
+    }
+    const monitor = held?.monitor ?? null;
+    if (monitor !== null) {
+      const groups = monitor.groups === 1 ? "1 error group" : `${monitor.groups} error groups`;
+      shown.push(`- ${repo}: ${groups} waiting for a Monitor issue slot, counted in [#${monitor.issue}](https://github.com/${repo}/issues/${monitor.issue})`);
+    }
+    return shown;
   });
   return lines.length === 0 ? [] : ["## Held", "", ...lines, ""];
 }
@@ -859,7 +1247,7 @@ function heldLines(repos: readonly RepoSection[]): string[] {
 /** How many of a repo's Waiting on you items show before the rest collapse into `<details>`. */
 const SHOWN_ITEMS = 10;
 
-function repoLines({ repo, waitingOnYou, stuck }: RepoSection): string[] {
+function repoLines({ repo, waitingOnYou, stuck }: RepoSection, escapes: readonly EscapeThisWeek[]): string[] {
   const lines = [`## ${repo}`, "", "### Waiting on you", ""];
   if (waitingOnYou.length === 0) lines.push("Nothing waiting on you.", "");
   else {
@@ -868,8 +1256,20 @@ function repoLines({ repo, waitingOnYou, stuck }: RepoSection): string[] {
     if (rest.length > 0) lines.push(`<details><summary>${rest.length} more</summary>`, "", ...rest.map(waitingLine), "", "</details>", "");
   }
   if (stuck.length > 0) lines.push("### Stuck", "", ...stuck.map(stuckLine), "");
+  if (escapes.length > 0) lines.push("### Architectural escapes this week", "", ...escapes.flatMap(escapeLines), "");
   lines.push(liveLinks(repo), "");
   return lines;
+}
+
+/** An escape's issue, then a line per PR it counts against: the Review run that missed it, and any Operator pushes. */
+function escapeLines({ number, url, pullRequests }: EscapeThisWeek): string[] {
+  return [
+    `- [#${number}](${url})`,
+    ...pullRequests.map(({ number, url, lastPassingReview, operatorPushes }) => {
+      const review = lastPassingReview === null ? "no passing Review run on record" : `missed by [Review run](${lastPassingReview.url})`;
+      return `  - [#${number}](${url}): ${review}${operatorPushes ? ", with Operator pushes" : ""}`;
+    }),
+  ];
 }
 
 function waitingLine(item: WaitingItem): string {
@@ -878,6 +1278,8 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `Design round unanswered for ${duration(item.age)}`);
     case "ready-for-human":
       return itemLine(item, `ready-for-human for ${duration(item.age)}`);
+    case "audit":
+      return itemLine(item, `Audit open for ${duration(item.age)}`);
     case "merge-gate":
       return itemLine(item, `at the Merge gate, Operator wait ${duration(item.operatorWait)}`);
   }
@@ -935,6 +1337,31 @@ function subscriptionUsage({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading
   const usage =
     now === null ? "Subscription usage: no weekly-limit reading this week." : `Subscription usage: ${now} of the weekly limit${resets}.`;
   return before === null ? usage : `${usage} Last week: ${before}.`;
+}
+
+/** A table row: the figure this week and last week, and the change, with a dash where either has nothing to show. */
+function row(name: string, { thisWeek, lastWeek }: WeekOverWeek<number | null>, format: (value: number) => string): string {
+  const change = thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, format);
+  return `| ${name} | ${orNone(thisWeek, format)} | ${orNone(lastWeek, format)} | ${change} |`;
+}
+
+/** A table row for a share, from 0 to 1: as a percentage, with the change in percentage points. */
+function shareRow(name: string, shares: WeekOverWeek<number | null>): string {
+  return `| ${name} | ${orNone(shares.thisWeek, percent)} | ${orNone(shares.lastWeek, percent)} | ${pointsChange(shares)} |`;
+}
+
+/** The change in a share, in points between the percentages shown, or a dash where either week has none. */
+function pointsChange({ thisWeek, lastWeek }: WeekOverWeek<number | null>): string {
+  if (thisWeek === null || lastWeek === null) return NONE;
+  return signed(Math.round(thisWeek * 100) - Math.round(lastWeek * 100), (points) => `${points} pts`);
+}
+
+function count(value: number): string {
+  return String(value);
+}
+
+function percent(share: number): string {
+  return `${Math.round(share * 100)}%`;
 }
 
 /** What the table shows for a figure with nothing to average over. */

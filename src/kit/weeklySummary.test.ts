@@ -5,16 +5,24 @@ import {
   aDesignRound,
   aLabelAdded,
   aMergedPullRequest,
+  anEscapeMarkerIssue,
+  anOpenAudit,
   anOpenIssue,
+  anOpenMonitorIssue,
   anOpenPullRequest,
+  anAuditRunRecord,
   aReview,
   aRunRecord,
+  aScoreEntry,
+  aScoreFile,
+  aSkippedScoreFile,
   aSpec,
   aTicketTimeline,
   aVerdictComment,
   factsOf,
   UNKNOWN_COST_BASIS,
 } from "../__fixtures__/weeklySummary.ts";
+import { aMonitorIssueBody, AGROUP_STATS } from "../__fixtures__/monitor.ts";
 import { aDesignQueueIssue } from "../__fixtures__/snapshots.ts";
 import type { Verdict } from "../loop/types.ts";
 import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
@@ -25,7 +33,7 @@ import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type T
 const NOW = "2026-11-08T20:00:00Z";
 
 function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput {
-  return { records: [], facts: [factsOf()], operator: "operator", appLogin: "fabrik-app[bot]", timeZone: "Australia/Sydney", now: NOW, ...overrides };
+  return { records: [], scoreFiles: [], facts: [factsOf()], operator: "operator", appLogin: "fabrik-app[bot]", timeZone: "Australia/Sydney", now: NOW, ...overrides };
 }
 
 describe("the Weekly summary", () => {
@@ -38,6 +46,11 @@ describe("the Weekly summary", () => {
     ["something stuck", factsOf({ openPullRequests: [anOpenPullRequest()] })],
   ])("isn't skipped in a week with no records but %s", (_, facts) => {
     expect(weeklySummary(input({ facts: [factsOf({ repo: "owner/quiet" }), facts] })).kind).toBe("summary");
+  });
+
+  it("isn't skipped in a week with no records but an open Audit", () => {
+    const facts = [factsOf({ repo: "owner/quiet" }), factsOf({ openAudits: [anOpenAudit()] })];
+    expect(weeklySummary(input({ facts })).kind).toBe("summary");
   });
 
   it("covers Monday to Monday in the Operator's time zone, with last week beside it", () => {
@@ -266,6 +279,39 @@ describe("the Weekly summary", () => {
         },
       ]);
     });
+
+    describe("with an open Audit", () => {
+      const waitingIn = (facts: Parameters<typeof factsOf>[0]) => {
+        const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result.summary.repos[0]?.waitingOnYou;
+      };
+
+      it("lists the Fabrik App's open Audit, filled or still pending, aged from when it was opened", () => {
+        const waiting = waitingIn({
+          openIssues: [anOpenIssue({ number: 13, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-06T20:00:00Z")] })],
+          openAudits: [anOpenAudit({ number: 90, title: "Audit: week of 2026-11-02", createdAt: "2026-11-02T20:00:00Z" })],
+        });
+        expect(waiting).toEqual([
+          {
+            kind: "audit",
+            number: 90,
+            title: "Audit: week of 2026-11-02",
+            url: "https://github.com/owner/product/issues/90",
+            since: "2026-11-02T20:00:00Z",
+            age: 6 * 24 * HOUR,
+          },
+          expect.objectContaining({ kind: "ready-for-human", number: 13 }),
+        ]);
+      });
+
+      it("never lists a fabrik:audit issue someone other than the Fabrik App opened", () => {
+        const waiting = waitingIn({
+          openAudits: [anOpenAudit({ author: "operator" }), anOpenAudit({ number: 91, author: "other-app[bot]" })],
+        });
+        expect(waiting).toEqual([]);
+      });
+    });
   });
 
   describe("Stuck", () => {
@@ -371,6 +417,26 @@ describe("the Weekly summary", () => {
         aRunRecord({ role: "design", issue: 14, pullRequest: null, endedAt: hoursAgo(40), infrastructureFailure: "timeout" }),
       ];
       expect(stuckIn({ openIssues: [anOpenIssue({ number: 13 }), anOpenIssue({ number: 14 })] }, records)).toEqual([]);
+    });
+
+    it("a judge run's record neither hides the failed run it scored nor is listed for failing itself", () => {
+      const records = [
+        aRunRecord({ endedAt: hoursAgo(30), jobResult: "cancelled", infrastructureFailure: "timeout" }),
+        aRunRecord({ role: "score", endedAt: hoursAgo(29), baseSha: null }), // scored the timed-out run, after it
+        aRunRecord({ issue: 9, endedAt: hoursAgo(40) }),
+        aRunRecord({ role: "score", issue: 9, endedAt: hoursAgo(39), baseSha: null, jobResult: "failure", infrastructureFailure: "crash" }),
+      ];
+      expect(stuckIn({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" }), anOpenIssue({ number: 9 })] }, records)).toEqual([
+        {
+          kind: "infrastructure-failure",
+          number: 7,
+          title: "Build the thing",
+          url: "https://github.com/owner/product/issues/7",
+          since: hoursAgo(30),
+          age: 30 * HOUR,
+          failure: "timeout",
+        },
+      ]);
     });
   });
 
@@ -600,6 +666,359 @@ describe("the Weekly summary", () => {
     });
   });
 
+  describe("architectural escape rate", () => {
+    // This week's 90-day window runs from 2026-08-10T13:00Z to the week's end,
+    // 2026-11-08T13:00Z; last week's from 2026-08-03T13:00Z to 2026-11-01T13:00Z.
+    const DAY = 24 * 60 * 60 * 1000;
+    const daysBeforeTheWeekEnds = (days: number) => new Date(Date.parse("2026-11-08T13:00:00Z") - days * DAY).toISOString();
+    const merged = (number: number, days: number) => aMergedPullRequest(daysBeforeTheWeekEnds(days), { number, ticket: number });
+    const summaryOf = (...facts: Partial<GitHubFacts>[]) => {
+      const result = weeklySummary(input({ records: [aRunRecord()], facts: facts.map(factsOf) }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary;
+    };
+
+    it("counts the agent PRs merged in the 90 days to the week's end that an escape names, out of every agent PR merged in them", () => {
+      const summary = summaryOf({
+        pullRequests: [merged(50, 89), merged(51, 91), merged(52, 10)],
+        escapeMarkerIssues: [anEscapeMarkerIssue("Split the parser.\n\nFrom audit #70\n<!-- fabrik:escape strong #50 #51 -->")],
+      });
+      expect(summary.escapeRate.thisWeek).toEqual({ escaped: 1, merged: 2 });
+    });
+
+    it("counts a PR named in two escapes once", () => {
+      const summary = summaryOf({
+        pullRequests: [merged(50, 20), merged(51, 20), merged(52, 20)],
+        escapeMarkerIssues: [
+          anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #51 -->", { number: 80 }),
+          anEscapeMarkerIssue("<!-- fabrik:escape speculative #50 -->", { number: 81 }),
+        ],
+      });
+      expect(summary.escapeRate.thisWeek).toEqual({ escaped: 2, merged: 3 });
+    });
+
+    it("counts each repo's escapes against its own PRs", () => {
+      const summary = summaryOf(
+        { pullRequests: [merged(50, 20), merged(51, 20)], escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->")] },
+        { repo: "owner/other", pullRequests: [merged(50, 20)], escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #51 -->")] },
+      );
+      expect(summary.escapeRate.thisWeek).toEqual({ escaped: 2, merged: 3 });
+    });
+
+    it("breaks the escapes opened in the 90 days down by Strength, one with an unknown Strength under none but still an escape", () => {
+      const summary = summaryOf({
+        pullRequests: [merged(50, 20), merged(51, 20), merged(52, 20), merged(53, 20), merged(54, 20)],
+        escapeMarkerIssues: [
+          anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 80 }),
+          anEscapeMarkerIssue("<!-- fabrik:escape strong #51 -->", { number: 81 }),
+          anEscapeMarkerIssue("<!-- fabrik:escape worth-exploring #52 -->", { number: 82 }),
+          anEscapeMarkerIssue("<!-- fabrik:escape critical #53 -->", { number: 83 }),
+          anEscapeMarkerIssue("<!-- fabrik:escape #54 -->", { number: 84 }),
+          anEscapeMarkerIssue("<!-- fabrik:escape speculative #50 -->", { number: 85, createdAt: daysBeforeTheWeekEnds(91) }), // before the window
+        ],
+      });
+      expect(summary.escapesByStrength.thisWeek).toEqual({ strong: 2, "worth-exploring": 1, speculative: 0, none: 2 });
+      expect(summary.escapeRate.thisWeek).toEqual({ escaped: 5, merged: 5 });
+    });
+
+    const NO_ESCAPES = { strong: 0, "worth-exploring": 0, speculative: 0, none: 0 };
+
+    it.each([
+      // The facts hold agent PRs alone, so a person's PR is never among them.
+      ["a human PR", "<!-- fabrik:escape strong #60 -->"],
+      ["an unmerged PR", "<!-- fabrik:escape strong #51 -->"],
+      ["no PR", "<!-- fabrik:escape strong -->"],
+    ])("counts no escape for a marker naming %s", (_, body) => {
+      const summary = summaryOf({
+        pullRequests: [merged(50, 20), aMergedPullRequest(daysBeforeTheWeekEnds(20), { number: 51, mergedAt: null, mergeSha: null })],
+        escapeMarkerIssues: [anEscapeMarkerIssue(body)],
+      });
+      expect(summary.escapesByStrength.thisWeek).toEqual(NO_ESCAPES);
+      expect(summary.escapeRate.thisWeek).toEqual({ escaped: 0, merged: 1 });
+    });
+
+    it("counts no escape for an issue someone other than the Operator opened", () => {
+      const summary = summaryOf({
+        pullRequests: [merged(50, 20)],
+        escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { author: "someone" })],
+      });
+      expect(summary.escapesByStrength.thisWeek).toEqual(NO_ESCAPES);
+      expect(summary.escapeRate.thisWeek).toEqual({ escaped: 0, merged: 1 });
+    });
+
+    it("counts an escape against only the PRs its marker still names, not one the Operator took out", () => {
+      // The Audit traced it to #50 and #51; the Operator kept only #50 when filing it.
+      const summary = summaryOf({
+        pullRequests: [merged(50, 20), merged(51, 20)],
+        escapeMarkerIssues: [anEscapeMarkerIssue("From audit #70\n<!-- fabrik:escape strong #50 -->")],
+      });
+      expect(summary.escapeRate.thisWeek).toEqual({ escaped: 1, merged: 2 });
+    });
+
+    it("computes last week's rate and breakdown the same way from the same inputs, as of last week's end", () => {
+      const summary = summaryOf({
+        // #50 is in last week's window alone, #52 and #53 in this week's alone.
+        pullRequests: [merged(50, 95), merged(51, 30), merged(52, 3), merged(53, 4)],
+        escapeMarkerIssues: [
+          anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 80, createdAt: daysBeforeTheWeekEnds(10) }),
+          anEscapeMarkerIssue("<!-- fabrik:escape speculative #51 -->", { number: 81, createdAt: daysBeforeTheWeekEnds(2) }), // opened this week
+        ],
+      });
+      expect(summary.escapeRate).toEqual({ thisWeek: { escaped: 1, merged: 3 }, lastWeek: { escaped: 1, merged: 2 } });
+      expect(summary.escapesByStrength).toEqual({
+        thisWeek: { ...NO_ESCAPES, speculative: 1 },
+        lastWeek: { ...NO_ESCAPES, strong: 1 },
+      });
+    });
+
+    it("still reads revert rate over its own 30 days", () => {
+      const summary = summaryOf({
+        pullRequests: [
+          aMergedPullRequest(daysBeforeTheWeekEnds(60), { number: 50, mergeSha: "5".repeat(40) }),
+          aMergedPullRequest(daysBeforeTheWeekEnds(20), { number: 51, mergeSha: "6".repeat(40) }),
+        ],
+        defaultBranchCommits: [{ message: `This reverts commit ${"5".repeat(40)}.`, at: daysBeforeTheWeekEnds(2) }],
+      });
+      expect(summary.revertRate.thisWeek).toEqual({ reverted: 0, merged: 1 });
+      expect(summary.escapeRate.thisWeek).toEqual({ escaped: 0, merged: 2 });
+    });
+
+    describe("this week's escapes, with what let each PR through", () => {
+      const transcript = (runId: number) => `transcripts/owner/product/2026-11/${runId}-1-review.jsonl.gz`;
+      const review = (runId: number, endedAt: string, verdict: Verdict) =>
+        aRunRecord({ runId, role: "review", endedAt, verdict, transcript: transcript(runId) });
+      const escapesOf = (records: ReturnType<typeof aRunRecord>[], ...facts: Partial<GitHubFacts>[]) => {
+        const result = weeklySummary(input({ records, facts: facts.map(factsOf) }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result.summary.escapesThisWeek;
+      };
+
+      it("names each PR's Ticket, the Run records on it, its last passing Review record with the transcript, and the Operator's pushes", () => {
+        const implement = aRunRecord({ runId: 1000, endedAt: "2026-11-02T00:00:00Z" });
+        const firstPass = review(1001, "2026-11-02T06:00:00Z", "pass");
+        const retry = aRunRecord({ runId: 1002, endedAt: "2026-11-02T12:00:00Z", retry: 1 });
+        const lastPass = review(1003, "2026-11-02T18:00:00Z", "pass");
+        const flaw = review(1004, "2026-11-02T20:00:00Z", "execution-flaw"); // after the Operator pushed; merged anyway
+        const escapes = escapesOf(
+          [
+            lastPass,
+            implement,
+            flaw,
+            firstPass,
+            retry,
+            aRunRecord({ runId: 1005, issue: 8, pullRequest: 51, role: "review", verdict: "pass", endedAt: "2026-11-02T21:00:00Z" }), // another PR's
+            aRunRecord({ runId: 1006, repo: "owner/other", role: "review", verdict: "pass", endedAt: "2026-11-02T22:00:00Z" }), // another repo's #50
+          ],
+          {
+            pullRequests: [
+              aMergedPullRequest("2026-11-03T00:00:00Z", {
+                number: 50,
+                ticket: 7,
+                commits: [aCommit("2026-11-02T00:00:00Z", { byApp: true }), aCommit("2026-11-02T19:00:00Z")],
+              }),
+            ],
+            escapeMarkerIssues: [anEscapeMarkerIssue("From audit #70\n<!-- fabrik:escape strong #50 -->", { number: 80, createdAt: "2026-11-05T00:00:00Z" })],
+          },
+        );
+        expect(escapes).toEqual([
+          {
+            repo: "owner/product",
+            number: 80,
+            url: "https://github.com/owner/product/issues/80",
+            title: "Make the cart module deeper",
+            body: "From audit #70\n<!-- fabrik:escape strong #50 -->",
+            strength: "strong",
+            pullRequests: [
+              {
+                number: 50,
+                url: "https://github.com/owner/product/pull/50",
+                ticket: 7,
+                records: [implement, firstPass, retry, lastPass, flaw],
+                lastPassingReview: {
+                  record: lastPass,
+                  transcript: transcript(1003),
+                  url: "https://github.com/owner/product/actions/runs/1003/attempts/1",
+                },
+                operatorPushes: true,
+              },
+            ],
+          },
+        ]);
+      });
+
+      it("carries each escape's candidate, as the Operator filed it: its issue's title and body", () => {
+        const body = "**Files:** `src/parser.ts`\n\n**Problem:** The parser leaks.\n\nFrom audit #70\n<!-- fabrik:escape strong #50 -->";
+        const escapes = escapesOf([aRunRecord()], {
+          pullRequests: [merged(50, 3)],
+          escapeMarkerIssues: [anEscapeMarkerIssue(body, { title: "Split the parser", createdAt: daysBeforeTheWeekEnds(2) })],
+        });
+        expect(escapes).toMatchObject([{ number: 80, title: "Split the parser", body }]);
+      });
+
+      it("flags no Operator pushes on a PR only the Fabrik App pushed to, and names no Review when the store holds no passing one", () => {
+        const escapes = escapesOf([review(1001, "2026-11-02T06:00:00Z", "design-flaw")], {
+          pullRequests: [aMergedPullRequest("2026-11-03T00:00:00Z", { commits: [aCommit("2026-11-02T00:00:00Z", { byApp: true })] })],
+          escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape speculative #50 -->")],
+        });
+        expect(escapes).toMatchObject([{ number: 80, pullRequests: [{ number: 50, lastPassingReview: null, operatorPushes: false }] }]);
+      });
+
+      it("holds only the escapes opened this week, each against only the PRs it counts against", () => {
+        const escapes = escapesOf(
+          [aRunRecord()],
+          {
+            pullRequests: [merged(50, 20), merged(51, 95)], // #51 merged before the 90 days
+            escapeMarkerIssues: [
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #51 #60 -->", { number: 80, createdAt: daysBeforeTheWeekEnds(3) }),
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 81, createdAt: daysBeforeTheWeekEnds(8) }), // last week
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 82, createdAt: daysBeforeTheWeekEnds(1), author: "someone" }),
+            ],
+          },
+          { repo: "owner/other", pullRequests: [merged(50, 20)], escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape #50 -->", { number: 83 })] },
+        );
+        expect(escapes.map(({ repo, number, strength, pullRequests }) => [repo, number, strength, pullRequests.map((pr) => pr.number)])).toEqual([
+          ["owner/product", 80, "strong", [50]],
+          ["owner/other", 83, null, [50]],
+        ]);
+      });
+    });
+
+    describe("rendered", () => {
+      const bodyOf = (facts: Partial<GitHubFacts>) => {
+        const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result.body;
+      };
+
+      it("shows the rate this week and last week as n of m with its share, and the change in points", () => {
+        const body = bodyOf({
+          // Last week's window holds #51, #52 and #53.
+          pullRequests: [merged(50, 3), merged(51, 20), merged(52, 30), merged(53, 40)],
+          escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #51 -->", { createdAt: daysBeforeTheWeekEnds(2) })],
+        });
+        const rows = body.split("\n");
+        expect(rows[rows.findIndex((row) => row.startsWith("| Revert rate")) + 1]).toBe(
+          "| Architectural escape rate (90 days) | 1 of 4 (25%) | 0 of 3 (0%) | +25 pts |",
+        );
+      });
+
+      it("says there were no merged agent PRs in a window with none, rather than 0%, and shows no change", () => {
+        const body = bodyOf({ pullRequests: [merged(50, 3)], escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->")] });
+        expect(body).toContain("| Architectural escape rate (90 days) | 1 of 1 (100%) | no merged agent PRs | – |");
+      });
+
+      it("breaks this week's escapes down by Strength under the table, an unknown Strength's apart", () => {
+        const body = bodyOf({
+          pullRequests: [merged(50, 3), merged(51, 3), merged(52, 3), merged(53, 3)],
+          escapeMarkerIssues: [
+            anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 80 }),
+            anEscapeMarkerIssue("<!-- fabrik:escape strong #51 -->", { number: 81 }),
+            anEscapeMarkerIssue("<!-- fabrik:escape worth-exploring #52 -->", { number: 82 }),
+            anEscapeMarkerIssue("<!-- fabrik:escape critical #53 -->", { number: 83 }),
+          ],
+        });
+        expect(body).toContain(
+          [
+            "| Architectural escape rate (90 days) | 4 of 4 (100%) | no merged agent PRs | – |",
+            "",
+            "Architectural escapes by Strength (90 days): 2 Strong, 1 Worth exploring, 0 Speculative, 1 with no known Strength.",
+            "",
+          ].join("\n"),
+        );
+      });
+
+      it("lists each repo's escapes opened this week after its Stuck work, with the PRs, the Review run that missed each and the Operator's pushes", () => {
+        const result = weeklySummary(
+          input({
+            records: [aRunRecord({ runId: 1003, role: "review", verdict: "pass", endedAt: "2026-11-02T18:00:00Z" })],
+            facts: [
+              factsOf({
+                pullRequests: [
+                  aMergedPullRequest(daysBeforeTheWeekEnds(5), { number: 50, ticket: 7, commits: [aCommit(daysBeforeTheWeekEnds(6))] }),
+                  aMergedPullRequest(daysBeforeTheWeekEnds(5), { number: 51, ticket: 8, commits: [aCommit(daysBeforeTheWeekEnds(6), { byApp: true })] }),
+                ],
+                openPullRequests: [anOpenPullRequest({ number: 52, title: "Build it", createdAt: daysBeforeTheWeekEnds(2) })],
+                escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #51 -->")],
+              }),
+              factsOf({ repo: "owner/other" }),
+            ],
+          }),
+        );
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        expect(result.body).toContain(
+          [
+            "- [#52](https://github.com/owner/product/pull/52) Build it: a draft with no activity for 2 days",
+            "",
+            "### Architectural escapes this week",
+            "",
+            "- [#80](https://github.com/owner/product/issues/80)",
+            "  - [#50](https://github.com/owner/product/pull/50): missed by [Review run](https://github.com/owner/product/actions/runs/1003/attempts/1), with Operator pushes",
+            "  - [#51](https://github.com/owner/product/pull/51): no passing Review run on record",
+            "",
+            "Live: ",
+          ].join("\n"),
+        );
+        expect(result.body.match(/### Architectural escapes this week/g)).toHaveLength(1);
+      });
+
+      it("leaves the escapes list out of a repo with none opened this week", () => {
+        const body = bodyOf({
+          pullRequests: [merged(50, 20)],
+          escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { createdAt: daysBeforeTheWeekEnds(10) })], // last week's
+        });
+        expect(body).toContain("Architectural escape rate");
+        expect(body).not.toContain("Architectural escapes this week");
+      });
+
+      it("leaves the unknown Strength out of the breakdown when every escape has a known one", () => {
+        const body = bodyOf({ pullRequests: [merged(50, 3)], escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape speculative #50 -->")] });
+        expect(body).toContain("Architectural escapes by Strength (90 days): 0 Strong, 0 Worth exploring, 1 Speculative.\n");
+      });
+    });
+
+    it("shows the open Audit beside the rate and the escapes list in the rendered summary", () => {
+      const records = [aRunRecord({ role: "review", verdict: "pass", endedAt: "2026-11-02T18:00:00Z" })];
+      const pullRequests = [aMergedPullRequest(daysBeforeTheWeekEnds(5), { commits: [aCommit(daysBeforeTheWeekEnds(6))] })];
+      const result = weeklySummary(
+        input({
+          records,
+          facts: [factsOf({ pullRequests, openAudits: [anOpenAudit()], escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->")] })],
+        }),
+      );
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      expect(result.body).toContain("| Architectural escape rate (90 days) | 1 of 1 (100%) |");
+      expect(result.body).toContain("Architectural escapes by Strength (90 days): 1 Strong, 0 Worth exploring, 0 Speculative.");
+      expect(result.body).toContain("- [#90](https://github.com/owner/product/issues/90) Audit: week of 2026-10-26: Audit open for ");
+      expect(result.body).toContain("### Architectural escapes this week\n\n- [#80](https://github.com/owner/product/issues/80)\n");
+    });
+  });
+
+  it("counts an Audit run in the week's total cost, but in neither cost per merged PR nor cost per Spec", () => {
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+          aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T06:00:00Z", totalCostUsd: 0.5 }),
+          anAuditRunRecord({ issue: 90, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 4 }),
+        ],
+        facts: [
+          factsOf({
+            pullRequests: [aMergedPullRequest("2026-11-05T00:00:00Z")],
+            specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-05T00:00:00Z")], { number: 3 })],
+          }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "summary",
+      summary: {
+        cost: { thisWeek: 5.5 },
+        costPerMergedPullRequest: { thisWeek: { usd: 1 } },
+        costPerSpec: { thisWeek: { usd: 0.5 } },
+      },
+    });
+  });
+
   describe("cost per merged PR", () => {
     it("averages, over the week's merged agent PRs, every Implement, Retry, Step-up and Review record on each Ticket", () => {
       const result = weeklySummary(
@@ -655,6 +1074,19 @@ describe("the Weekly summary", () => {
         }),
       );
       expect(result).toMatchObject({ kind: "summary", summary: { costPerMergedPullRequest: { thisWeek: { usd: 1 } } } });
+    });
+
+    it("never counts the record of a judge run that scored a run on the Ticket", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ endedAt: "2026-11-03T00:05:00Z", totalCostUsd: 0.25, role: "score", baseSha: null }),
+          ],
+          facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-03T06:00:00Z")] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { cost: { thisWeek: 1.25 }, costPerMergedPullRequest: { thisWeek: { usd: 1 } } } });
     });
 
     it("leaves a run whose cost basis is unknown out of the sum, and counts it", () => {
@@ -715,6 +1147,19 @@ describe("the Weekly summary", () => {
         }),
       );
       expect(result).toMatchObject({ kind: "summary", summary: { costPerSpec: { thisWeek: { usd: 1.75 } } } });
+    });
+
+    it("never counts the record of a judge run that scored a run on one of its Tickets", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ issue: 7, role: "score", baseSha: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 0.25 }),
+          ],
+          facts: [factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-05T00:00:00Z")], { number: 3, tickets: [7] })] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { cost: { thisWeek: 1.25 }, costPerSpec: { thisWeek: { usd: 1 } } } });
     });
 
     it("counts only a Spec the App moved out of design, not one the Operator labelled", () => {
@@ -800,6 +1245,19 @@ describe("the Weekly summary", () => {
         }),
       );
       expect(result).toMatchObject({ kind: "summary", summary: { spendNeverMerged: { thisWeek: { usd: 1, unknownCost: 1 } } } });
+    });
+
+    it("never counts the record of a judge run that scored a run on the Ticket", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+            aRunRecord({ endedAt: "2026-11-03T00:05:00Z", totalCostUsd: 0.25, role: "score", baseSha: null }),
+          ],
+          facts: [factsOf({ tickets: [aTicketTimeline([], { closedAt: "2026-11-04T00:00:00Z" })] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { cost: { thisWeek: 1.25 }, spendNeverMerged: { thisWeek: { usd: 1 } } } });
     });
   });
 
@@ -908,7 +1366,14 @@ describe("the Weekly summary", () => {
     it("has no section for a feature that hasn't shipped, not even an empty one", () => {
       const { body } = rendered();
       expect(body.match(/^#+ .*$/gm)).toEqual(["## Metrics", "## owner/product", "### Waiting on you"]);
-      expect(body).not.toMatch(/Held|Retro|Audit|Map|Monitor|escape|score/i);
+      expect(body).not.toMatch(/Held|Retro|Map|Monitor/i);
+    });
+
+    it("shows the architectural escape rate and its Strengths in a week with no escapes, and no escapes list", () => {
+      const { body } = rendered();
+      expect(body).toContain("| Architectural escape rate (90 days) | 0 of 2 (0%) | 0 of 1 (0%) | 0 pts |");
+      expect(body).toContain("Architectural escapes by Strength (90 days): 0 Strong, 0 Worth exploring, 0 Speculative.");
+      expect(body).not.toMatch(/Audit|escapes this week/);
     });
   });
 
@@ -956,6 +1421,22 @@ describe("the Weekly summary", () => {
         ].join("\n"),
       );
       expect(body).toContain(["## owner/other", "", "### Waiting on you", "", "Nothing waiting on you.", ""].join("\n"));
+    });
+
+    it("lists an open Audit with how long it has been open", () => {
+      const facts = factsOf({ openIssues: [readyForHuman(13, 30)], openAudits: [anOpenAudit({ title: "Audit: week of 2026-11-02", createdAt: hoursAgo(50) })] });
+      const summary = weeklySummary(input({ records: [aRunRecord()], facts: [facts] }));
+      expect(summary).toMatchObject({
+        body: expect.stringContaining(
+          [
+            "### Waiting on you",
+            "",
+            "- [#90](https://github.com/owner/product/issues/90) Audit: week of 2026-11-02: Audit open for 2 days",
+            "- [#13](https://github.com/owner/product/issues/13) Operator work 13: ready-for-human for 30 hours",
+            "",
+          ].join("\n"),
+        ),
+      });
     });
 
     it("collapses the 11th item onward in a repo into details", () => {
@@ -1048,7 +1529,7 @@ describe("the Weekly summary", () => {
           },
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR } });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR }, monitor: null });
       expect(result.body).toContain(["## Held", "", "- owner/product: 2 needs-design issues waiting for a Design session slot, the oldest for 3 days", ""].join("\n"));
     });
 
@@ -1067,7 +1548,7 @@ describe("the Weekly summary", () => {
           },
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR } });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR }, monitor: null });
       expect(result.body).toContain("- owner/product: 1 needs-design issue waiting for a Design session slot, for 5 hours");
     });
 
@@ -1078,7 +1559,7 @@ describe("the Weekly summary", () => {
       );
       expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
         ["owner/quiet", null],
-        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR } }],
+        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR }, monitor: null }],
       ]);
       expect(result.body).toContain(["## Held", "", "- owner/busy: 1 needs-design issue waiting for a Design session slot, for 30 hours", ""].join("\n"));
       expect(result.body).not.toContain("- owner/quiet:");
@@ -1098,9 +1579,321 @@ describe("the Weekly summary", () => {
       expect(body.indexOf("Subscription usage")).toBeLessThan(body.indexOf("## Held"));
     });
 
-    it("keeps a week with no records but held work from being skipped", () => {
-      const result = weeklySummary(input({ facts: [factsOf({ designQueue: { issues: [aDesignQueueIssue()], designTurnsInProgress: [] } })] }));
+    /** A Monitor error issue's body whose stats block ends with this held line, as the Monitor writes one. */
+    const heldBody = (heldLine: string) => aMonitorIssueBody([...AGROUP_STATS, heldLine]);
+    const HELD_3 = "- Held: 3 error groups waiting for a slot under the cap of 5 open error issues";
+
+    it("counts the error groups the Monitor holds from the held line in its newest open error issue's stats block, linking that issue", () => {
+      const result = summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) })] }));
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 } });
+      expect(result.body).toContain(
+        ["## Held", "", "- owner/product: 3 error groups waiting for a Monitor issue slot, counted in [#41](https://github.com/owner/product/issues/41)", ""].join("\n"),
+      );
+    });
+
+    it.each([
+      ["whose newest open error issue's stats block has no held line", [anOpenMonitorIssue()]],
+      ["with no open Monitor issue", []],
+    ])("gives a repo %s no Monitor line", (_, monitorIssues) => {
+      const result = summaryOf(
+        factsOf({ repo: "owner/quiet", monitorIssues }),
+        factsOf({ repo: "owner/busy", monitorIssues: [anOpenMonitorIssue({ body: heldBody(HELD_3) })] }),
+      );
+      expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
+        ["owner/quiet", null],
+        ["owner/busy", { designSessions: null, monitor: { groups: 3, issue: 41 } }],
+      ]);
+      expect(result.body).not.toContain("- owner/quiet:");
+    });
+
+    it("ignores a held line in an issue the Fabrik App didn't file, however new, so quoting one fakes nothing", () => {
+      const quoted = anOpenMonitorIssue({ number: 50, author: "someone", body: heldBody("- Held: 9 error groups waiting for a slot under the cap of 5 open error issues") });
+      expect(summaryOf(factsOf({ monitorIssues: [quoted] })).summary.repos[0]?.held).toBeNull();
+      expect(summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), quoted] })).summary.repos[0]?.held).toEqual({
+        designSessions: null,
+        monitor: { groups: 3, issue: 41 },
+      });
+    });
+
+    it("reads only the newest open error issue, so an older one's stale held line counts for nothing", () => {
+      const result = summaryOf(
+        factsOf({
+          monitorIssues: [
+            anOpenMonitorIssue({ number: 45, body: heldBody("- Held: 2 error groups waiting for a slot under the cap of 5 open error issues") }),
+            anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }),
+          ],
+        }),
+      );
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 2, issue: 45 } });
+      expect(summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), anOpenMonitorIssue({ number: 45 })] })).summary.repos[0]?.held).toBeNull();
+    });
+
+    it("passes over an open issue with no stats block, such as a Spec that kept its marker, as the Monitor does", () => {
+      const spec = anOpenMonitorIssue({ number: 60, body: "<!-- fabrik:monitor sentry:4504 -->\n## Problem Statement\n\nBookings fail." });
+      const result = summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), spec] }));
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 } });
+    });
+
+    it("never reads red main's issue, which takes no slot under the cap", () => {
+      const redMain = anOpenMonitorIssue({ number: 60, body: heldBody(HELD_3).replace("<!-- fabrik:monitor sentry:4504 -->", "<!-- fabrik:monitor red-main -->") });
+      expect(summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41 }), redMain] })).summary.repos[0]?.held).toBeNull();
+    });
+
+    it("says 1 error group for one held", () => {
+      const { body } = summaryOf(
+        factsOf({ monitorIssues: [anOpenMonitorIssue({ body: heldBody("- Held: 1 error group waiting for a slot under the cap of 5 open error issues") })] }),
+      );
+      expect(body).toContain("- owner/product: 1 error group waiting for a Monitor issue slot, counted in [#41](https://github.com/owner/product/issues/41)");
+    });
+
+    it("gives a repo holding both Design work and error groups a line for each", () => {
+      const { body } = summaryOf(
+        factsOf({
+          designQueue: { issues: [aDesignQueueIssue({ neededDesignAt: hoursAgo(30) })], designTurnsInProgress: [] },
+          monitorIssues: [anOpenMonitorIssue({ body: heldBody(HELD_3) })],
+        }),
+      );
+      expect(body).toContain(
+        [
+          "## Held",
+          "",
+          "- owner/product: 1 needs-design issue waiting for a Design session slot, for 30 hours",
+          "- owner/product: 3 error groups waiting for a Monitor issue slot, counted in [#41](https://github.com/owner/product/issues/41)",
+          "",
+        ].join("\n"),
+      );
+    });
+
+    it.each([
+      ["Design work", factsOf({ designQueue: { issues: [aDesignQueueIssue()], designTurnsInProgress: [] } })],
+      ["error groups", factsOf({ monitorIssues: [anOpenMonitorIssue({ body: heldBody(HELD_3) })] })],
+    ])("keeps a week with no records but held %s from being skipped", (_, facts) => {
+      const result = weeklySummary(input({ facts: [facts] }));
       expect(result.kind).toBe("summary");
+    });
+  });
+
+  describe("Scores", () => {
+    it("gives each rubric its runs scored, median score and share passing, from the score files of the week's runs", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ runId: 1, endedAt: "2026-11-03T00:00:00Z" }),
+            aRunRecord({ runId: 2, endedAt: "2026-11-04T00:00:00Z" }),
+            aRunRecord({ runId: 3, endedAt: "2026-11-05T00:00:00Z" }),
+          ],
+          scoreFiles: [
+            aScoreFile({ runId: 1, entries: [aScoreEntry({ score: 0.9 })] }),
+            aScoreFile({ runId: 2, entries: [aScoreEntry({ score: 0.6, pass: false })] }),
+            aScoreFile({ runId: 3, entries: [aScoreEntry({ score: 0.75 })] }),
+          ],
+        }),
+      );
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { scores: { thisWeek: { rubrics: [{ scorer: "efficiency", version: 1, runsScored: 3, medianScore: 0.75, passing: 2 / 3 }] } } },
+      });
+    });
+
+    it("keeps each rubric version apart, so scores from different versions never mix, listing them in the Kit's order", () => {
+      const result = weeklySummary(
+        input({
+          records: [aRunRecord({ runId: 1 }), aRunRecord({ runId: 2 })],
+          scoreFiles: [
+            aScoreFile({
+              runId: 1,
+              entries: [
+                aScoreEntry({ scorer: "skill-use", score: 0.5, pass: false }),
+                aScoreEntry({ scorer: "efficiency", version: 2, score: 0.9 }),
+              ],
+            }),
+            aScoreFile({
+              runId: 2,
+              entries: [aScoreEntry({ scorer: "efficiency", score: 0.4, pass: false }), aScoreEntry({ scorer: "ticket-compliance", score: 1 })],
+            }),
+          ],
+        }),
+      );
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      expect(result.summary.scores.thisWeek.rubrics).toEqual([
+        { scorer: "efficiency", version: 1, runsScored: 1, medianScore: 0.4, passing: 0 },
+        { scorer: "efficiency", version: 2, runsScored: 1, medianScore: 0.9, passing: 1 },
+        { scorer: "ticket-compliance", version: 1, runsScored: 1, medianScore: 1, passing: 1 },
+        { scorer: "skill-use", version: 1, runsScored: 1, medianScore: 0.5, passing: 0 },
+      ]);
+    });
+
+    it("counts the runs picked for scoring that were skipped, by reason", () => {
+      const nearLimit = { status: "allowed", rateLimitType: "seven_day", utilization: 0.8, resetsAt: 1_794_000_000 };
+      const result = weeklySummary(
+        input({
+          records: [1, 2, 3, 4].map((runId) => aRunRecord({ runId })).concat(aRunRecord({ runId: 5, endedAt: "2026-10-28T00:00:00Z" })),
+          scoreFiles: [
+            aSkippedScoreFile({ reason: "weekly-limit", rateLimit: nearLimit }, { runId: 1 }),
+            aSkippedScoreFile({ reason: "weekly-limit", rateLimit: nearLimit }, { runId: 2 }),
+            aSkippedScoreFile({ reason: "judge-output-invalid" }, { runId: 3 }),
+            aScoreFile({ runId: 4 }),
+            aSkippedScoreFile({ reason: "no-transcript" }, { runId: 5 }), // last week's
+          ],
+        }),
+      );
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      expect(result.summary.scores.thisWeek.skips).toEqual({
+        "weekly-limit": 2,
+        "no-transcript": 0,
+        "infrastructure-failure": 0,
+        "judge-failed": 0,
+        "judge-output-invalid": 1,
+      });
+      expect(result.summary.scores.lastWeek.skips).toMatchObject({ "no-transcript": 1, "weekly-limit": 0 });
+    });
+
+    it("gives scoring's cost, the judge runs' summed cost, as a share of the week's, leaving out and counting a judge run of unknown cost", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ totalCostUsd: 9.5 }),
+            aRunRecord({ role: "score", baseSha: null, totalCostUsd: 0.25 }),
+            aRunRecord({ role: "score", baseSha: null, totalCostUsd: 0.25 }),
+            aRunRecord({ role: "score", baseSha: null, ...UNKNOWN_COST_BASIS }),
+            aRunRecord({ role: "score", baseSha: null, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 0.4 }), // last week's
+          ],
+          scoreFiles: [aScoreFile()],
+        }),
+      );
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: {
+          cost: { thisWeek: 10, lastWeek: 0.4 },
+          scoringCost: { thisWeek: { usd: 0.5, share: 0.05, unknownCost: 1 }, lastWeek: { usd: 0.4, share: 1, unknownCost: 0 } },
+        },
+      });
+    });
+
+    it("gives scoring no share of the cost in a week that cost nothing", () => {
+      const result = weeklySummary(input({ records: [aRunRecord({ totalCostUsd: 0 })], scoreFiles: [aScoreFile()] }));
+      expect(result).toMatchObject({ kind: "summary", summary: { scoringCost: { thisWeek: { usd: 0, share: null }, lastWeek: { usd: 0, share: null } } } });
+    });
+
+    describe("rendered", () => {
+      const judgeRun = (overrides: Parameters<typeof aRunRecord>[0]) => aRunRecord({ role: "score", baseSha: null, ...overrides });
+      const scoredWeek = input({
+        records: [
+          aRunRecord({ runId: 1, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 9.5 }),
+          ...[2, 4, 5, 6].map((runId) => aRunRecord({ runId, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 0 })),
+          judgeRun({ runId: 1, endedAt: "2026-11-03T00:05:00Z", totalCostUsd: 0.25 }),
+          judgeRun({ runId: 2, endedAt: "2026-11-04T00:05:00Z", totalCostUsd: 0.25 }),
+          judgeRun({ runId: 5, endedAt: "2026-11-04T00:05:00Z", ...UNKNOWN_COST_BASIS }),
+          aRunRecord({ runId: 3, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2.25 }),
+          judgeRun({ runId: 3, endedAt: "2026-10-28T00:05:00Z", totalCostUsd: 0.25 }),
+        ],
+        scoreFiles: [
+          aScoreFile({
+            runId: 1,
+            entries: [aScoreEntry({ score: 0.9 }), aScoreEntry({ scorer: "ticket-compliance", threshold: 0.8, score: 0.6, pass: false })],
+          }),
+          aScoreFile({
+            runId: 2,
+            entries: [aScoreEntry({ score: 0.6, pass: false }), aScoreEntry({ scorer: "ticket-compliance", threshold: 0.8, score: 0.8 })],
+          }),
+          aSkippedScoreFile({ reason: "weekly-limit", rateLimit: { status: "rejected", rateLimitType: "seven_day", utilization: 1, resetsAt: null } }, { runId: 4 }),
+          aSkippedScoreFile({ reason: "judge-failed" }, { runId: 5 }),
+          aSkippedScoreFile({ reason: "no-transcript" }, { runId: 6 }),
+          aScoreFile({ runId: 3, entries: [aScoreEntry({ score: 0.5, pass: false })] }),
+        ],
+      });
+      const bodyOf = (week: WeeklySummaryInput) => {
+        const result = weeklySummary(week);
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result.body;
+      };
+
+      it("shows each rubric version's runs scored, median score and share passing, this week and last week, with the change", () => {
+        expect(bodyOf(scoredWeek)).toContain(
+          [
+            "## Scores",
+            "",
+            "| | This week | Last week | Change |",
+            "| --- | ---: | ---: | ---: |",
+            "| Efficiency v1: runs scored | 2 | 1 | +1 |",
+            "| Efficiency v1: median score | 0.75 | 0.50 | +0.25 |",
+            "| Efficiency v1: passing | 50% | 0% | +50 pts |",
+            "| Ticket compliance v1: runs scored | 2 | 0 | +2 |",
+            "| Ticket compliance v1: median score | 0.70 | – | – |",
+            "| Ticket compliance v1: passing | 50% | – | – |",
+          ].join("\n"),
+        );
+      });
+
+      it("shows what scoring cost and its share of the cost, this week and last week, and how many judge runs it leaves out", () => {
+        const body = bodyOf(scoredWeek);
+        // This week $0.50 of $10.00, last week $0.25 of $2.50.
+        expect(body).toContain(["| Scoring cost | $0.50 | $0.25 | +$0.25 |", "| Scoring's share of the cost | 5% | 10% | -5 pts |", ""].join("\n"));
+        expect(body).toContain("1 run with an unknown cost basis is left out of the scoring cost.");
+        expect(body).toContain("| API-equivalent cost | $10.00 | $2.50 | +$7.50 |");
+      });
+
+      it("says how many runs picked for scoring were skipped this week, and why, and says nothing of skips in a week with none", () => {
+        expect(bodyOf(scoredWeek)).toContain("3 runs picked for scoring were skipped: 1 weekly-limit, 1 no-transcript, 1 judge-failed.");
+        const oneSkip = bodyOf(input({ records: [aRunRecord()], scoreFiles: [aSkippedScoreFile({ reason: "infrastructure-failure" })] }));
+        expect(oneSkip).toContain("1 run picked for scoring was skipped: 1 infrastructure-failure.");
+        expect(bodyOf(input({ records: [aRunRecord()], scoreFiles: [aScoreFile()] }))).not.toContain("skipped");
+      });
+
+      it("sits after the Subscription usage, before Held and the first repo's section", () => {
+        const body = bodyOf({ ...scoredWeek, facts: [factsOf({ designQueue: { issues: [aDesignQueueIssue()], designTurnsInProgress: [] } })] });
+        expect(body.match(/^#+ .*$/gm)).toEqual(["## Metrics", "## Scores", "## Held", "## owner/product", "### Waiting on you"]);
+        expect(body.indexOf("Subscription usage")).toBeLessThan(body.indexOf("## Scores"));
+      });
+
+      it("is left out of a week with no score files, even one with judge runs or with score files last week", () => {
+        const body = bodyOf(
+          input({
+            records: [aRunRecord(), judgeRun({ totalCostUsd: 0.25 }), aRunRecord({ runId: 3, endedAt: "2026-10-28T00:00:00Z" })],
+            scoreFiles: [aScoreFile({ runId: 3 })],
+          }),
+        );
+        expect(body).not.toMatch(/Scor/);
+      });
+
+      it("never shows a run's own scores, and never puts a low score or a skip in Waiting on you or Stuck", () => {
+        const HOUR = 60 * 60 * 1000;
+        const longAgo = new Date(Date.parse(NOW) - 30 * HOUR).toISOString();
+        const result = weeklySummary(
+          input({
+            records: [aRunRecord({ runId: 1, endedAt: longAgo }), aRunRecord({ runId: 2, endedAt: longAgo })],
+            scoreFiles: [
+              aScoreFile({ runId: 1, entries: [aScoreEntry({ score: 0.1, pass: false, label: "dead-end-loop", rationale: "Looped on one failing test." })] }),
+              aSkippedScoreFile({ reason: "judge-output-invalid" }, { runId: 2 }),
+            ],
+            facts: [factsOf({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" })] })],
+          }),
+        );
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        expect(result.summary.repos).toMatchObject([{ waitingOnYou: [], stuck: [] }]);
+        expect(result.body).not.toMatch(/dead-end-loop|Looped|runs\/|scores\/|#7\b|\b[12]-1-implement\b/);
+      });
+    });
+
+    it("places a score file in the week its scored run ended, even when scoring ended after the week turned", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ runId: 1, endedAt: "2026-11-01T12:58:00Z" }), // Sunday 23:58 in Sydney: last week
+            aRunRecord({ runId: 1, role: "score", baseSha: null, endedAt: "2026-11-01T13:03:00Z" }), // its judge run, this week
+          ],
+          scoreFiles: [aScoreFile({ runId: 1, scoredAt: "2026-11-01T13:04:00Z", entries: [aScoreEntry()] })],
+        }),
+      );
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { scores: { thisWeek: { rubrics: [] }, lastWeek: { rubrics: [{ scorer: "efficiency", runsScored: 1 }] } } },
+      });
+    });
+
+    it("keeps a week with only score files from being skipped, placing one whose record isn't in the store by when it was scored", () => {
+      const result = weeklySummary(input({ scoreFiles: [aScoreFile({ scoredAt: "2026-11-04T12:05:00Z", entries: [aScoreEntry()] })] }));
+      expect(result).toMatchObject({ kind: "summary", summary: { scores: { thisWeek: { rubrics: [{ scorer: "efficiency", runsScored: 1 }] } } } });
     });
   });
 

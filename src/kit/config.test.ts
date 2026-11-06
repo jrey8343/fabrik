@@ -13,13 +13,16 @@ const DEFAULTS = {
     design: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
     implement: { model: "claude-sonnet-5-5", effort: null, timeoutMinutes: 60 },
     review: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
+    audit: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 45 },
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: "claude-opus-5-5", effort: null },
   },
   maxInFlight: 2,
-  caps: { designSessions: 2 },
+  caps: { designSessions: 2, monitorIssues: 5 },
+  monitor: { errors: null, redMain: true },
+  audit: { day: "sunday" },
   operator: null,
-  instructions: { triage: null, design: null, implement: null, review: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
 };
@@ -123,6 +126,8 @@ describe("Kit config", () => {
     [`{ "caps": { "design_sessions": 1.5 } }`, "caps.design_sessions must be a whole number of at least 0"],
     [`{ "caps": { "design_sessions": "1" } }`, "caps.design_sessions must be a whole number of at least 0"],
     [`{ "caps": { "design_sessions": null } }`, "caps.design_sessions must be a whole number of at least 0"],
+    [`{ "caps": { "monitor_issues": -1 } }`, "caps.monitor_issues must be a whole number of at least 0"],
+    [`{ "caps": { "monitor_issues": "2" } }`, "caps.monitor_issues must be a whole number of at least 0"],
     [`{ "roles": { "review": { "effort": "extreme" } } }`, `roles.review.effort is "extreme": effort must be one of low, medium, high, xhigh, max`],
     [`[]`, ".fabrik/config.json must be an object"],
   ])("fails a mistyped field, naming it: %s", (text, error) => {
@@ -207,7 +212,15 @@ describe("Kit config", () => {
       design: null,
       implement: "Use the repo's money helpers.\n",
       review: "Check the booking flow.\n",
+      audit: null,
     });
+  });
+
+  it("carries the Auditor's instructions from .fabrik/audit.md, though the Auditor picks no Extra skills", () => {
+    const result = resolveKitConfig({ config: null, instructions: { audit: "Look at the booking module first.\n" } });
+
+    expect(result.ok && result.config.instructions.audit).toBe("Look at the booking module first.\n");
+    expect(result.ok && Object.keys(result.config.extraSkills)).toEqual(["triage", "design", "implement", "review"]);
   });
 
   it("treats a blank instruction file as absent", () => {
@@ -224,11 +237,14 @@ describe("Kit config", () => {
         design: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
         implement: { model: "claude-sonnet-5-5", effort: null, timeout_minutes: 60 },
         review: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
+        audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
         dispatch: { timeout_minutes: 10 },
         step_up: { model: "claude-opus-5-5", effort: null },
       },
       max_in_flight: 2,
-      caps: { design_sessions: 2 },
+      caps: { design_sessions: 2, monitor_issues: 5 },
+      monitor: { errors: null, red_main: true },
+      audit: { day: "sunday" },
       operator: null,
     };
 
@@ -260,16 +276,16 @@ describe("Kit config", () => {
     expect(result.ok && result.config.maxInFlight).toBe(0);
   });
 
-  it("gives a Product repo whose config never sets caps the Kit default of 2 Design sessions", () => {
+  it("gives a Product repo whose config never sets caps the Kit defaults: 2 Design sessions and 5 open Monitor error issues", () => {
     const result = resolveKitConfig({ config: `{ "max_in_flight": 1, "operator": "jrey8343" }` });
 
-    expect(result.ok && result.config.caps).toEqual({ designSessions: 2 });
+    expect(result.ok && result.config.caps).toEqual({ designSessions: 2, monitorIssues: 5 });
   });
 
   it.each([1, 0])("honours lowering caps.design_sessions to %i", (cap) => {
     const result = resolveKitConfig({ config: `{ "caps": { "design_sessions": ${cap} } }` });
 
-    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, caps: { designSessions: cap } } });
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, caps: { ...DEFAULTS.caps, designSessions: cap } } });
   });
 
   it("keeps the Kit default when caps.design_sessions is set to it", () => {
@@ -284,6 +300,21 @@ describe("Kit config", () => {
     expect(result).toEqual({
       ok: false,
       errors: [`caps.design_sessions is ${cap}, but a cap can only be lowered: the Kit default is 2`],
+    });
+  });
+
+  it.each([2, 0])("honours lowering caps.monitor_issues to %i, 0 pausing new error filings", (cap) => {
+    const result = resolveKitConfig({ config: `{ "caps": { "monitor_issues": ${cap} } }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, caps: { ...DEFAULTS.caps, monitorIssues: cap } } });
+  });
+
+  it.each([6, 99])("refuses raising caps.monitor_issues to %i, naming the field, the value and the Kit default", (cap) => {
+    const result = resolveKitConfig({ config: `{ "caps": { "monitor_issues": ${cap} } }` });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [`caps.monitor_issues is ${cap}, but a cap can only be lowered: the Kit default is 5`],
     });
   });
 
@@ -304,9 +335,235 @@ describe("Kit config", () => {
   );
 });
 
+describe("The monitor block", () => {
+  it("leaves production errors off and red main on when the Kit config has no monitor block", () => {
+    const result = resolveKitConfig({ config: `{ "max_in_flight": 1, "operator": "jrey8343" }` });
+
+    expect(result.ok && result.config.monitor).toEqual({ errors: null, redMain: true });
+  });
+
+  it("reads the Sentry project, defaulting url to sentry.io and min_events to 3", () => {
+    const result = resolveKitConfig({
+      config: `{ "monitor": { "errors": { "provider": "sentry", "org": "acme-health", "project": "booking-web" } } }`,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        monitor: {
+          errors: { provider: "sentry", org: "acme-health", project: "booking-web", url: "https://sentry.io", minEvents: 3 },
+          redMain: true,
+        },
+      },
+    });
+  });
+
+  it("honours a Sentry-compatible url, a min_events and turning red main off", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        monitor: {
+          errors: {
+            provider: "sentry",
+            org: "acme-health",
+            project: "booking-web",
+            url: "https://de.sentry.io",
+            min_events: 10,
+          },
+          red_main: false,
+        },
+      }),
+    });
+
+    expect(result.ok && result.config.monitor).toEqual({
+      errors: { provider: "sentry", org: "acme-health", project: "booking-web", url: "https://de.sentry.io", minEvents: 10 },
+      redMain: false,
+    });
+  });
+
+  it("lets null leave production errors off, as the template spells it", () => {
+    const result = resolveKitConfig({ config: `{ "monitor": { "errors": null, "red_main": true } }` });
+
+    expect(result).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  /** A Kit config whose monitor.errors is a valid Sentry project, with these fields changed. */
+  function withErrors(changes: Record<string, unknown>): string {
+    return JSON.stringify({
+      monitor: { errors: { provider: "sentry", org: "acme-health", project: "booking-web", ...changes } },
+    });
+  }
+
+  it.each([
+    [
+      { provider: "glitchtip" },
+      `monitor.errors.provider is "glitchtip": the only provider is sentry; point url at a Sentry-compatible host`,
+    ],
+    [{ provider: "Sentry" }, `monitor.errors.provider is "Sentry": the only provider is sentry; point url at a Sentry-compatible host`],
+    [{ provider: 1 }, "monitor.errors.provider must be a string"],
+    [{ provider: undefined }, "monitor.errors.provider is missing"],
+  ])("refuses a provider other than sentry, naming the field: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withErrors(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [{ org: undefined }, "monitor.errors.org is missing"],
+    [{ project: undefined }, "monitor.errors.project is missing"],
+    [{ org: null }, "monitor.errors.org must be a string"],
+    [{ project: 7 }, "monitor.errors.project must be a string"],
+    [{ org: "" }, `monitor.errors.org is "": a Sentry slug is lowercase letters, digits, hyphens and underscores`],
+    [
+      { project: "https://acme-health.sentry.io/projects/booking-web/" },
+      `monitor.errors.project is "https://acme-health.sentry.io/projects/booking-web/": a Sentry slug is lowercase letters, digits, hyphens and underscores`,
+    ],
+    [{ org: "Acme Health" }, `monitor.errors.org is "Acme Health": a Sentry slug is lowercase letters, digits, hyphens and underscores`],
+  ])("refuses a missing or malformed org or project, naming the field: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withErrors(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([0, -3, 2.5, "3", null])("refuses a min_events of %j, naming the field", (minEvents) => {
+    expect(resolveKitConfig({ config: withErrors({ min_events: minEvents }) })).toEqual({
+      ok: false,
+      errors: ["monitor.errors.min_events must be a whole number of at least 1"],
+    });
+  });
+
+  it.each([
+    [{ url: "http://glitchtip.example" }, `monitor.errors.url is "http://glitchtip.example": the Sentry token is sent there, so it must be an https:// URL`],
+    [{ url: "sentry.io" }, `monitor.errors.url is "sentry.io": the Sentry token is sent there, so it must be an https:// URL`],
+    [{ url: 443 }, "monitor.errors.url must be a string"],
+  ])("refuses a url that isn't https, naming the field: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withErrors(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([0, null, "false"])("refuses a red_main of %j, naming the field", (redMain) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ monitor: { red_main: redMain } }) })).toEqual({
+      ok: false,
+      errors: ["monitor.red_main must be true or false"],
+    });
+  });
+
+  it.each([
+    [{ monitor: { red_mian: false } }, "monitor.red_mian is not a Kit config field"],
+    [{ monitor: { caps: 5 } }, "monitor.caps is not a Kit config field"],
+    [
+      { monitor: { errors: { provider: "sentry", org: "acme-health", project: "booking-web", token: "sntrys_x" } } },
+      "monitor.errors.token is not a Kit config field",
+    ],
+    [
+      { monitor: { errors: { provider: "sentry", org: "acme-health", project: "booking-web", minEvents: 5 } } },
+      "monitor.errors.minEvents is not a Kit config field",
+    ],
+  ])("fails an unknown field under monitor, naming it: %j", (config, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify(config) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [{ monitor: [] }, "monitor must be an object"],
+    [{ monitor: true }, "monitor must be an object"],
+    [{ monitor: { errors: true } }, "monitor.errors must be an object or null"],
+    [{ monitor: { errors: "sentry" } }, "monitor.errors must be an object or null"],
+  ])("fails a monitor block that isn't an object, naming it: %j", (config, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify(config) })).toEqual({ ok: false, errors: [error] });
+  });
+});
+
+describe("The Audit's Kit config", () => {
+  it("gives a repo that sets nothing a Sunday Audit on the Reviewer's model with a 45-minute timeout", () => {
+    const result = resolveKitConfig({ config: `{ "max_in_flight": 1 }` });
+
+    expect(result.ok && result.config.audit).toEqual({ day: "sunday" });
+    expect(result.ok && result.config.roles.audit).toEqual({
+      model: "claude-opus-5-5",
+      effort: null,
+      timeoutMinutes: 45,
+    });
+  });
+
+  it.each(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", null])(
+    "reads audit.day %j as written",
+    (day) => {
+      const result = resolveKitConfig({ config: JSON.stringify({ audit: { day } }) });
+
+      expect(result).toEqual({ ok: true, config: { ...DEFAULTS, audit: { day } } });
+    },
+  );
+
+  it.each(["Sunday", "sun", "everyday", ""])("refuses %j as audit.day, naming the field and the days it takes", (day) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ audit: { day } }) });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        `audit.day is ${JSON.stringify(day)}: the Audit day must be one of monday, tuesday, wednesday, thursday, friday, saturday, sunday, or null to turn the Audit off`,
+      ],
+    });
+  });
+
+  it.each([
+    [`{ "audit": { "day": 0 } }`, "audit.day must be a string"],
+    [`{ "audit": { "day": false } }`, "audit.day must be a string"],
+    [`{ "audit": "sunday" }`, "audit must be an object"],
+    [`{ "audit": null }`, "audit must be an object"],
+  ])("fails a mistyped audit field, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [`{ "audit": { "days": "monday" } }`, "audit.days is not a Kit config field"],
+    [`{ "audit": { "day": "monday", "candidates": 5 } }`, "audit.candidates is not a Kit config field"],
+    [`{ "audit": { "focus": "src/billing" } }`, "audit.focus is not a Kit config field"],
+  ])("fails an unknown field under audit, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("honours overrides of the Auditor's model, effort and timeout", () => {
+    const result = resolveKitConfig({
+      config: `{ "roles": { "audit": { "model": "claude-sonnet-5-5", "effort": "high", "timeout_minutes": 20 } } }`,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        roles: { ...DEFAULTS.roles, audit: { model: "claude-sonnet-5-5", effort: "high", timeoutMinutes: 20 } },
+      },
+    });
+  });
+
+  it.each([
+    [`{ "roles": { "audit": { "model": "fable" } } }`, `roles.audit.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role`],
+    [`{ "roles": { "audit": { "effort": "extreme" } } }`, `roles.audit.effort is "extreme": effort must be one of low, medium, high, xhigh, max`],
+    [`{ "roles": { "audit": { "timeout_minutes": 0 } } }`, "roles.audit.timeout_minutes must be a whole number of at least 1"],
+    [`{ "roles": { "audit": { "focus": "src/billing" } } }`, "roles.audit.focus is not a Kit config field"],
+  ])("fails a bad roles.audit field, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("refuses roles.audit.skills, naming the field, because only triage, design, implement and review take Extra skills", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ roles: { audit: { skills: ["jrey8343/skills/event-storming"] } } }),
+      skillsLock: null,
+    });
+
+    expect(result).toEqual({ ok: false, errors: ["roles.audit.skills is not a Kit config field"] });
+  });
+});
+
 describe("The Kit config template", () => {
   it("spells out caps.design_sessions at its Kit default", () => {
     expect(JSON.parse(template)).toMatchObject({ caps: { design_sessions: 2 } });
+  });
+
+  it("spells out caps.monitor_issues and the monitor block at their Kit defaults: production errors off, red main on", () => {
+    expect(JSON.parse(template)).toMatchObject({ caps: { monitor_issues: 5 }, monitor: { errors: null, red_main: true } });
+  });
+
+  it("spells out audit.day and roles.audit at their Kit defaults", () => {
+    expect(JSON.parse(template)).toMatchObject({
+      audit: { day: "sunday" },
+      roles: { audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 } },
+    });
   });
 
   it("resolves to every Kit default", () => {

@@ -1,5 +1,6 @@
 // The Kit config: loaded from a Product repo's .fabrik/ folder, with every v1
 // default filled in, and validated at the start of every run. Pure, no I/O.
+import { AGENT_ROLES, type AgentRole as AgentRoleName } from "../loop/types.ts";
 import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
 
 export interface AgentRole {
@@ -23,6 +24,8 @@ export interface KitConfig {
     readonly design: AgentRole;
     readonly implement: AgentRole;
     readonly review: AgentRole;
+    /** The Auditor; it takes no Extra skills (ADR-0008). */
+    readonly audit: AgentRole;
     readonly dispatch: { readonly timeoutMinutes: number };
     readonly stepUp: { readonly model: string; readonly effort: string | null };
   };
@@ -32,14 +35,41 @@ export interface KitConfig {
   readonly caps: {
     /** How many Design sessions may hold a slot at once; 0 pauses new ones. */
     readonly designSessions: number;
+    /** How many open error issues the Monitor keeps at once; 0 pauses new error filings (#148). */
+    readonly monitorIssues: number;
+  };
+  /** What the Monitor watches in this Product repo (#148). */
+  readonly monitor: {
+    /** Where the Monitor reads production errors; null leaves them off. */
+    readonly errors: MonitorErrors | null;
+    /** Whether the Monitor files an issue while the default branch's CI is red. */
+    readonly redMain: boolean;
+  };
+  readonly audit: {
+    /** The UTC day of the week the Audit runs; null turns the Audit off. */
+    readonly day: AuditDay | null;
   };
   /** The Operator's GitHub login; null means the Product repo's owner. */
   readonly operator: string | null;
-  readonly instructions: Readonly<Record<Phase, string | null>>;
+  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's included. */
+  readonly instructions: Readonly<Record<InstructedRole, string | null>>;
   /** The Product repo's own Skills sources, from .fabrik/skills.lock.json. */
   readonly skillsSources: readonly SkillsSource[];
   /** Each role's Extra skills, picked from those sources; a Step-up run uses implement's. */
   readonly extraSkills: Readonly<Record<Phase, readonly ExtraSkill[]>>;
+}
+
+/** The Sentry project the Monitor reads a Product repo's production errors from. */
+export interface MonitorErrors {
+  readonly provider: "sentry";
+  /** The Sentry organization's slug. */
+  readonly org: string;
+  /** The Sentry project's slug. */
+  readonly project: string;
+  /** The Sentry host: sentry.io, another Sentry region, or a Sentry-compatible host. */
+  readonly url: string;
+  /** How many events in 24 hours an `error` group needs before it's filed; a `fatal` one needs none. */
+  readonly minEvents: number;
 }
 
 /** A Skills source a Product repo pins: a public repository at one commit. */
@@ -58,9 +88,22 @@ export interface ExtraSkill {
   readonly name: string;
 }
 
+export const AUDIT_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
+
+export type AuditDay = (typeof AUDIT_DAYS)[number];
+
 export type Phase = "triage" | "design" | "implement" | "review";
 
 export const PHASES: readonly Phase[] = ["triage", "design", "implement", "review"];
+
+/**
+ * The roles a Product repo can give its own instructions in .fabrik/<role>.md:
+ * every AFK role, so every Phase and the Auditor, which takes no Extra skills
+ * (ADR-0008) and so is no Phase.
+ */
+export type InstructedRole = AgentRoleName;
+
+export const INSTRUCTED_ROLES: readonly InstructedRole[] = AGENT_ROLES;
 
 /** Every Extra skill the given roles pick, each once however many of them pick it. */
 export function picksIn(config: KitConfig, roles: readonly Phase[] = PHASES): readonly ExtraSkill[] {
@@ -75,15 +118,15 @@ export function picksIn(config: KitConfig, roles: readonly Phase[] = PHASES): re
 export interface KitConfigSources {
   /** The text of .fabrik/config.json. */
   readonly config: string | null;
-  /** The text of each .fabrik/<phase>.md the Product repo provides. */
-  readonly instructions?: Readonly<Partial<Record<Phase, string | null>>>;
+  /** The text of each .fabrik/<role>.md the Product repo provides. */
+  readonly instructions?: Readonly<Partial<Record<InstructedRole, string | null>>>;
   /** The text of .fabrik/skills.lock.json. */
   readonly skillsLock?: string | null;
 }
 
-/** Where each optional per-phase instruction file lives in a Product repo. */
-export function instructionsPath(phase: Phase): string {
-  return `.fabrik/${phase}.md`;
+/** Where each optional per-role instruction file lives in a Product repo. */
+export function instructionsPath(role: InstructedRole): string {
+  return `.fabrik/${role}.md`;
 }
 
 export type KitConfigResult =
@@ -100,13 +143,17 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     design: { model: OPUS, effort: null, timeoutMinutes: 30 },
     implement: { model: SONNET, effort: null, timeoutMinutes: 60 },
     review: { model: OPUS, effort: null, timeoutMinutes: 30 },
+    audit: { model: OPUS, effort: null, timeoutMinutes: 45 },
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: OPUS, effort: null },
   },
   maxInFlight: 2,
-  caps: { designSessions: 2 },
+  caps: { designSessions: 2, monitorIssues: 5 },
+  monitor: { errors: null, redMain: true },
+  // Sunday, so a fresh Audit is open by Monday's Weekly summary and misses the Monday skills bump.
+  audit: { day: "sunday" },
   operator: null,
-  instructions: { triage: null, design: null, implement: null, review: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
 };
@@ -271,10 +318,10 @@ function checkSha(sha: string): string | null {
 }
 
 function readInstructions(files: NonNullable<KitConfigSources["instructions"]>): KitConfig["instructions"] {
-  const instructions: Record<Phase, string | null> = { ...DEFAULT_KIT_CONFIG.instructions };
-  for (const phase of PHASES) {
-    const text = files[phase];
-    if (text !== undefined && text !== null && text.trim() !== "") instructions[phase] = text;
+  const instructions: Record<InstructedRole, string | null> = { ...DEFAULT_KIT_CONFIG.instructions };
+  for (const role of INSTRUCTED_ROLES) {
+    const text = files[role];
+    if (text !== undefined && text !== null && text.trim() !== "") instructions[role] = text;
   }
   return instructions;
 }
@@ -295,15 +342,18 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
       secrets: sandbox.envMap("secrets", requireOpReference) ?? defaults.sandbox.secrets,
     },
     roles: {
-      triage: readAgentRole(roles.object("triage"), defaults.roles.triage, picks, "triage"),
-      design: readAgentRole(roles.object("design"), defaults.roles.design, picks, "design"),
-      implement: readAgentRole(roles.object("implement"), defaults.roles.implement, picks, "implement"),
-      review: readAgentRole(roles.object("review"), defaults.roles.review, picks, "review"),
+      triage: readPickingRole(roles.object("triage"), defaults.roles.triage, picks, "triage"),
+      design: readPickingRole(roles.object("design"), defaults.roles.design, picks, "design"),
+      implement: readPickingRole(roles.object("implement"), defaults.roles.implement, picks, "implement"),
+      review: readPickingRole(roles.object("review"), defaults.roles.review, picks, "review"),
+      audit: readAgentRole(roles.object("audit"), defaults.roles.audit),
       dispatch: readDispatch(roles.object("dispatch"), defaults.roles.dispatch),
       stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp),
     },
     maxInFlight: file.wholeNumber("max_in_flight", 0) ?? defaults.maxInFlight,
     caps: readCaps(file.object("caps"), defaults.caps),
+    monitor: readMonitor(file.object("monitor"), defaults.monitor),
+    audit: readAudit(file.object("audit"), defaults.audit),
     operator: orDefault(file.nullableString("operator", checkLogin), defaults.operator),
   };
 }
@@ -313,10 +363,16 @@ function orDefault<T>(value: T | null | undefined, fallback: T | null): T | null
   return value === undefined ? fallback : value;
 }
 
-function readAgentRole(role: Reader, defaults: AgentRole, picks: Picks, phase: Phase): AgentRole {
+/** A role that takes Extra skill picks (ADR-0008), collecting its `skills` into `picks`. */
+function readPickingRole(role: Reader, defaults: AgentRole, picks: Picks, phase: Phase): AgentRole {
   const skills = role.stringList("skills");
   if (skills !== undefined) picks[phase] = skills;
   else if (role.has("skills")) picks[phase] = null;
+  return readAgentRole(role, defaults);
+}
+
+/** An AFK role's model, effort and timeout. A role that doesn't read `skills` refuses it as unknown. */
+function readAgentRole(role: Reader, defaults: AgentRole): AgentRole {
   return {
     model: role.string("model", refuseFable) ?? defaults.model,
     effort: orDefault(role.nullableString("effort", checkEffort), defaults.effort),
@@ -334,7 +390,58 @@ function readDispatch(role: Reader, defaults: KitConfig["roles"]["dispatch"]): K
  * Specs register their caps here.
  */
 function readCaps(caps: Reader, defaults: KitConfig["caps"]): KitConfig["caps"] {
-  return { designSessions: caps.cap("design_sessions", defaults.designSessions) ?? defaults.designSessions };
+  return {
+    designSessions: caps.cap("design_sessions", defaults.designSessions) ?? defaults.designSessions,
+    monitorIssues: caps.cap("monitor_issues", defaults.monitorIssues) ?? defaults.monitorIssues,
+  };
+}
+
+function readMonitor(monitor: Reader, defaults: KitConfig["monitor"]): KitConfig["monitor"] {
+  const errors = monitor.nullableObject("errors");
+  return {
+    errors: errors === undefined ? defaults.errors : errors === null ? null : readMonitorErrors(errors),
+    redMain: monitor.boolean("red_main") ?? defaults.redMain,
+  };
+}
+
+/** Where `monitor.errors` points when it leaves these out. */
+const MONITOR_ERRORS_DEFAULTS = { url: "https://sentry.io", minEvents: 3 } as const;
+
+function readMonitorErrors(errors: Reader): MonitorErrors | null {
+  const provider = errors.requiredString("provider", checkErrorProvider);
+  const org = errors.requiredString("org", checkSentrySlug);
+  const project = errors.requiredString("project", checkSentrySlug);
+  const url = errors.string("url", checkHttpsUrl) ?? MONITOR_ERRORS_DEFAULTS.url;
+  const minEvents = errors.positiveInteger("min_events") ?? MONITOR_ERRORS_DEFAULTS.minEvents;
+  if (provider === undefined || org === undefined || project === undefined) return null;
+  return { provider: "sentry", org, project, url, minEvents };
+}
+
+/** GlitchTip and other Sentry-compatible hosts are reached through `url`, not a provider of their own. */
+function checkErrorProvider(provider: string): string | null {
+  return provider === "sentry" ? null : "the only provider is sentry; point url at a Sentry-compatible host";
+}
+
+/** A Sentry organization or project slug, as it appears in the Sentry URL; it goes into API paths as it is. */
+const SENTRY_SLUG = /^[a-z0-9_-]+$/;
+
+function checkSentrySlug(slug: string): string | null {
+  return SENTRY_SLUG.test(slug) ? null : "a Sentry slug is lowercase letters, digits, hyphens and underscores";
+}
+
+function checkHttpsUrl(url: string): string | null {
+  return URL.parse(url)?.protocol === "https:" ? null : "the Sentry token is sent there, so it must be an https:// URL";
+}
+
+function readAudit(audit: Reader, defaults: KitConfig["audit"]): KitConfig["audit"] {
+  // checkAuditDay refuses anything but a day, so the string is an AuditDay.
+  const day = audit.nullableString("day", checkAuditDay) as AuditDay | null | undefined;
+  return { day: orDefault(day, defaults.day) };
+}
+
+function checkAuditDay(day: string): string | null {
+  if ((AUDIT_DAYS as readonly string[]).includes(day)) return null;
+  return `the Audit day must be one of ${AUDIT_DAYS.join(", ")}, or null to turn the Audit off`;
 }
 
 function readStepUp(role: Reader, defaults: KitConfig["roles"]["stepUp"]): KitConfig["roles"]["stepUp"] {
@@ -464,6 +571,24 @@ class Reader {
     const value = this.wholeNumber(key, 0);
     if (value === undefined || value <= kitDefault) return value;
     this.#fail(`${this.#field(key)} is ${value}, but a cap can only be lowered: the Kit default is ${kitDefault}`);
+    return undefined;
+  }
+
+  /** An object, or null to say "none"; undefined when left out or not an object. */
+  nullableObject(key: string): Reader | null | undefined {
+    const value = this.#take(key);
+    if (value === undefined || value === null) return value;
+    if (typeof value !== "object" || Array.isArray(value)) {
+      this.#fail(`${this.#field(key)} must be an object or null`);
+      return undefined;
+    }
+    return new Reader(value, this.#field(key), this.#context);
+  }
+
+  boolean(key: string): boolean | undefined {
+    const value = this.#take(key);
+    if (value === undefined || typeof value === "boolean") return value;
+    this.#fail(`${this.#field(key)} must be true or false`);
     return undefined;
   }
 

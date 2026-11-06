@@ -2,14 +2,14 @@
 # addendum): loads the Fabrik App key through the store's push service account,
 # mints two App tokens, one with Issues write and Contents read on fabrik-runs
 # alone and one read-only on the Product repos, checks out only the store's
-# runs/ (its Run records, never the transcripts), and runs
-# src/kit/weekly-main.ts, which gathers the GitHub facts, builds the summary
-# (src/kit/weeklySummary.ts) and files it (src/kit/weeklyFiling.ts).
+# runs/ and scores/ (its Run records and score files, never the transcripts),
+# and runs src/kit/weekly-main.ts, which gathers the GitHub facts, builds the
+# summary (src/kit/weeklySummary.ts) and files it (src/kit/weeklyFiling.ts).
 #
 # Use it after checking out the Kit at the pinned commit into `kit/`:
 #   - uses: ./kit/.github/actions/file-weekly-summary
 name: File the Weekly summary
-description: Builds the week's Weekly summary from the store's Run records and every Product repo, and files it in fabrik-runs.
+description: Builds the week's Weekly summary from the store's Run records and score files and every Product repo, and files it in fabrik-runs.
 
 inputs:
   op-push-token:
@@ -34,7 +34,7 @@ runs:
         FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
         FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
 
-    # Reads the records and the caller's time zone, and files the summary.
+    # Reads the records, the score files and the caller's time zone, and files the summary.
     - name: Mint a Fabrik App token for the fabrik-runs store
       id: store
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -58,13 +58,15 @@ runs:
         permission-issues: read
         permission-pull-requests: read
 
-    - name: Check out the store's Run records
+    - name: Check out the store's Run records and score files
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: jrey8343/fabrik-runs
         token: ${{ steps.store.outputs.token }}
         path: store
-        sparse-checkout: runs
+        sparse-checkout: |
+          runs
+          scores
         sparse-checkout-cone-mode: true
         persist-credentials: false
 

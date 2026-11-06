@@ -9,11 +9,49 @@ export interface Repo {
 /** A failed GitHub REST call, with the status it failed with. */
 export class GitHubError extends Error {
   readonly status: number;
+  /** The body GitHub answered with, such as its JSON `message`. */
+  readonly body: string;
+  /** GitHub's `x-ratelimit-remaining` header, or null when it gave none. */
+  readonly rateLimitRemaining: string | null;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, answer: { readonly body?: string; readonly rateLimitRemaining?: string | null } = {}) {
     super(message);
     this.name = "GitHubError";
     this.status = status;
+    this.body = answer.body ?? "";
+    this.rateLimitRemaining = answer.rateLimitRemaining ?? null;
+  }
+}
+
+/**
+ * Why GitHub refused a call, when it's one of the refusals a caller can act
+ * on: a rate limit (a 429, or a 403 with no requests left or a message naming
+ * a rate limit), or a permission the token lacks (a 403 GitHub answers with
+ * "Resource not accessible by integration"). Null for any other failure.
+ */
+export function refusalOf(error: GitHubError): "rate-limited" | "missing-permission" | null {
+  if (error.status === 429) return "rate-limited";
+  if (error.status !== 403) return null;
+  if (error.rateLimitRemaining === "0" || /rate limit/i.test(error.body)) return "rate-limited";
+  return error.body.includes("Resource not accessible by integration") ? "missing-permission" : null;
+}
+
+/**
+ * Every item of a paginated REST list, 100 to a page, whatever query `path`
+ * already has. `itemsOf` picks the list out of a page that wraps it, as
+ * GitHub's check runs do; a page that is the list needs none.
+ */
+export async function allPages<T>(
+  github: Pick<GitHub, "rest">,
+  path: string,
+  itemsOf: (page: unknown) => readonly T[] = (page) => page as T[],
+): Promise<T[]> {
+  const query = path.includes("?") ? "&" : "?";
+  const items: T[] = [];
+  for (let page = 1; ; page++) {
+    const batch = itemsOf(await github.rest("GET", `${path}${query}per_page=100&page=${page}`));
+    items.push(...batch);
+    if (batch.length < 100) return items;
   }
 }
 
@@ -36,7 +74,11 @@ export class GitHub {
     });
     if (response.status === 404 && options.allowNotFound === true) return null;
     if (!response.ok) {
-      throw new GitHubError(`GitHub ${method} ${path} failed: ${response.status} ${await response.text()}`, response.status);
+      const text = await response.text();
+      throw new GitHubError(`GitHub ${method} ${path} failed: ${response.status} ${text}`, response.status, {
+        body: text,
+        rateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
+      });
     }
     return response.status === 204 ? null : response.json();
   }
@@ -71,4 +113,34 @@ export class GitHub {
       "x-github-api-version": "2022-11-28",
     };
   }
+}
+
+/** One page of a GraphQL connection, as a query selecting its `pageInfo { hasNextPage endCursor }` and `nodes` gets it. */
+export interface Page<T> {
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+  nodes: T[];
+}
+
+/**
+ * Every node of a paged GraphQL connection, which `query` reads a page of
+ * from the cursor `$after` in the repo `$owner/$name`, with `variables`; or
+ * only until `enough` says the rest are too old. A null connection has none.
+ */
+export async function pagesOf<T>(
+  github: Pick<GitHub, "graphql">,
+  query: string,
+  repo: Repo,
+  variables: Record<string, unknown>,
+  connection: (data: any) => Page<T> | null,
+  enough: (page: readonly T[]) => boolean = () => false,
+): Promise<T[]> {
+  const nodes: T[] = [];
+  let after: string | null = null;
+  do {
+    const page = connection(await github.graphql(query, { owner: repo.owner, name: repo.name, after, ...variables }));
+    if (page === null) break;
+    nodes.push(...page.nodes);
+    after = page.pageInfo.hasNextPage && !enough(page.nodes) ? page.pageInfo.endCursor : null;
+  } while (after !== null);
+  return nodes;
 }

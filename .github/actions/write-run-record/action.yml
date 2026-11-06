@@ -1,19 +1,26 @@
 # Writes the Run record (ADR-0009) of the agent run that just ended, and its
-# transcript, to the fabrik-runs store (src/kit/runStore.ts): loads the Fabrik
-# App key through the push service account, mints a token that reads the
-# Product's Kit config and a second one scoped to fabrik-runs with Contents
-# write only, and runs src/kit/record-main.ts, which builds the record
-# (src/kit/runRecord.ts) and writes it (src/kit/recordWriter.ts).
+# transcript, to the fabrik-runs store (src/kit/runStore.ts): gets a token that
+# reads the Product's Kit config and a second one scoped to fabrik-runs with
+# Contents write only from the store-token action, which loads the Fabrik App
+# key through the push service account, and runs src/kit/record-main.ts, which
+# builds the record (src/kit/runRecord.ts) and writes it
+# (src/kit/recordWriter.ts).
 #
-# When fabrik-runs doesn't exist or the Fabrik App isn't installed on it,
-# src/kit/find-store-main.ts finds no store, the store's token isn't minted,
-# and no step fails: the program writes one step-summary line naming the setup
-# step, and the action ends successfully. A non-private store
+# When fabrik-runs doesn't exist or the Fabrik App isn't installed on it, the
+# store-token action finds no store, the store's token isn't minted, and no
+# step fails: the program writes one step-summary line naming the setup step,
+# and the action ends successfully. A non-private store
 # gets nothing written. The push job runs it after Run the Loop, with
 # `if: always()` and `continue-on-error: true`, so it never fails the job:
 #   - uses: ./kit/.github/actions/write-run-record
 # The job's env carries FABRIK_NEEDS, and the agent job's artifacts are in
 # $RUNNER_TEMP/agent, as for Run the Loop.
+#
+# For a record it wrote, or found already in the store, the program then runs
+# the scoring plan (#149). A skip's score file it writes itself, with the same
+# store token; a score it passes out as `score` and `record`, which the push
+# job passes on to the judge job and the score-record job. With no store, or
+# one that isn't private, nothing is scored.
 name: Write the Run record
 description: Writes the run's transcript and Run record to the fabrik-runs store.
 
@@ -24,6 +31,14 @@ inputs:
   role:
     description: The agent role the Kit job routed to (needs.kit.outputs.route), whose transcript the agent job kept.
     required: true
+
+outputs:
+  score:
+    description: '"true" when the scoring plan picked the run for the judge job to score.'
+    value: ${{ steps.record.outputs.score }}
+  record:
+    description: The scored run's Run record's path in the store, for the score-record job.
+    value: ${{ steps.record.outputs.record }}
 
 runs:
   using: composite
@@ -41,55 +56,22 @@ runs:
         name: fabrik-transcript-${{ inputs.role }}
         path: ${{ runner.temp }}/transcript
 
-    - name: Load the Fabrik App key
-      id: op
-      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+    # The store's token, and one that reads the Product's Kit config, the role
+    # defaults a record falls back on. The store's is empty for a store the App
+    # isn't on yet, and the program names the setup step.
+    - name: Mint the Fabrik App's tokens
+      id: tokens
+      uses: ./kit/.github/actions/store-token
       with:
-        export-env: false
-      env:
-        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}
-        FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
-        FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
-
-    # Only to read the Product's Kit config, the role defaults a record falls back on.
-    - name: Mint a Fabrik App token to read the Kit config
-      id: product
-      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-      with:
-        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
-        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
-        permission-contents: read
-
-    # Asks as the App itself whether it's installed on fabrik-runs, so a store
-    # setup hasn't made yet fails no step. Its key never leaves this step.
-    - name: Find the fabrik-runs store
-      id: find-store
-      continue-on-error: true
-      shell: bash
-      working-directory: ${{ github.action_path }}/../../..
-      env:
-        FABRIK_APP_CLIENT_ID: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
-        FABRIK_APP_PRIVATE_KEY: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
-      run: node src/kit/find-store-main.ts
-
-    # Minted only for a store the App is on; skipped, the program names the setup step.
-    - name: Mint a Fabrik App token for the fabrik-runs store
-      id: store
-      if: steps.find-store.outputs.installed == 'true'
-      continue-on-error: true
-      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-      with:
-        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
-        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
-        owner: jrey8343
-        repositories: fabrik-runs
-        permission-contents: write
+        op-push-token: ${{ inputs.op-push-token }}
+        kit-config-token: "true"
 
     - name: Write the Run record
+      id: record
       shell: bash
       working-directory: ${{ github.action_path }}/../../..
       env:
-        FABRIK_PRODUCT_TOKEN: ${{ steps.product.outputs.token }}
-        FABRIK_STORE_TOKEN: ${{ steps.store.outputs.token }}
+        FABRIK_PRODUCT_TOKEN: ${{ steps.tokens.outputs.kit-config-token }}
+        FABRIK_STORE_TOKEN: ${{ steps.tokens.outputs.store-token }}
         FABRIK_TRANSCRIPT_DIR: ${{ runner.temp }}/transcript
       run: node src/kit/record-main.ts

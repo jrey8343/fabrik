@@ -7,7 +7,9 @@ import {
   notificationsOf,
   repoSnapshot,
   snapshotOf,
+  tickSnapshot,
 } from "../__fixtures__/snapshots.ts";
+import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { planFor } from "./rules.ts";
 
 const check = { kind: "design-queue-check" } as const;
@@ -53,7 +55,7 @@ describe("The caps.design_sessions cap", () => {
     const plan = planFor(
       check,
       designQueueSnapshotOf([holding[0]!, aDesignQueueIssue({ number: 5 })]),
-      kitConfig({ caps: { designSessions: 1 } }),
+      kitConfig({ caps: { ...DEFAULT_KIT_CONFIG.caps, designSessions: 1 } }),
     );
 
     expect(plan).toEqual({
@@ -66,7 +68,7 @@ describe("The caps.design_sessions cap", () => {
     const plan = planFor(
       check,
       designQueueSnapshotOf([holding[0]!, aDesignQueueIssue({ number: 5 })]),
-      kitConfig({ caps: { designSessions: 0 } }),
+      kitConfig({ caps: { ...DEFAULT_KIT_CONFIG.caps, designSessions: 0 } }),
     );
 
     expect(plan).toEqual({
@@ -160,7 +162,7 @@ describe("Re-designs first", () => {
         aDesignQueueIssue({ number: 5, neededDesignAt: at, redesign: true }),
         aDesignQueueIssue({ number: 1, neededDesignAt: "2026-10-02T09:00:00Z" }),
       ]),
-      kitConfig({ caps: { designSessions: 0 } }),
+      kitConfig({ caps: { ...DEFAULT_KIT_CONFIG.caps, designSessions: 0 } }),
     );
 
     expect(plan).toEqual({
@@ -195,7 +197,7 @@ describe("Which sessions hold a slot", () => {
     const plan = planFor(
       check,
       designQueueSnapshotOf([aDesignQueueIssue({ number: 3, ...issue }), aDesignQueueIssue({ number: 5 })], inProgress),
-      kitConfig({ caps: { designSessions: 1 } }),
+      kitConfig({ caps: { ...DEFAULT_KIT_CONFIG.caps, designSessions: 1 } }),
     );
 
     expect(plan).toEqual({ kind: "nothing", reason: "caps.design_sessions is 1 and #3 holds a slot, so #5 waits" });
@@ -306,7 +308,7 @@ describe("What triggers a Design queue check", () => {
   });
 
   it("the hourly scheduled tick, which catches a slot freed by needs-design coming off by hand", () => {
-    const plan = planFor({ kind: "scheduled-tick", now: "2026-11-09T04:05:00.000Z" }, repoSnapshot(), kitConfig());
+    const plan = planFor({ kind: "scheduled-tick", now: "2026-11-09T04:05:00.000Z" }, tickSnapshot(), kitConfig());
 
     expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
   });

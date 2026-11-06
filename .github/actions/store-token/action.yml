@@ -1,0 +1,85 @@
+# Mints the Fabrik App's token for the fabrik-runs store (src/kit/runStore.ts),
+# for fabrik-runs alone with Contents write only, for the two actions that write
+# to it: write-run-record (the push job) and write-score-record (the
+# score-record job). It loads the Fabrik App key through the push service
+# account, asks as the App itself whether it's installed on fabrik-runs
+# (src/kit/find-store-main.ts), and mints the token only for a store the App is
+# on, so a store setup hasn't made yet fails no step: the token comes out
+# empty, and the program that writes says so. Asked for one, it also mints a
+# token that reads the Product repo's Kit config, so the App key never leaves
+# this action.
+#
+# Its callers use it after Set up Node, through the Kit checkout every
+# workflow makes at kit/, since a composite action's local `uses` path starts
+# at the workspace, not at the action:
+#   - id: tokens
+#     uses: ./kit/.github/actions/store-token
+#     with:
+#       op-push-token: ${{ inputs.op-push-token }}
+name: Mint the store token
+description: Mints the Fabrik App's Contents-write token for the fabrik-runs store, once it has found the App on it.
+
+inputs:
+  op-push-token:
+    description: The push service account's token (secrets.OP_PUSH_TOKEN), which reads the Fabrik App vault.
+    required: true
+  kit-config-token:
+    description: '"true" to also mint a token that reads the Product repo''s Kit config.'
+    required: false
+    default: "false"
+
+outputs:
+  store-token:
+    description: The store's token, empty when the App isn't on fabrik-runs or the token couldn't be minted.
+    value: ${{ steps.store.outputs.token }}
+  kit-config-token:
+    description: The token that reads the Product repo's Kit config, when asked for.
+    value: ${{ steps.kit-config.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Load the Fabrik App key
+      id: op
+      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+      with:
+        export-env: false
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}
+        FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+        FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+    # Only to read the Product's Kit config, the role defaults a Run record falls back on.
+    - name: Mint a Fabrik App token to read the Kit config
+      id: kit-config
+      if: inputs.kit-config-token == 'true'
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+        permission-contents: read
+
+    # Asks as the App itself whether it's installed on fabrik-runs, so a store
+    # setup hasn't made yet fails no step. Its key never leaves this step.
+    - name: Find the fabrik-runs store
+      id: find-store
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        FABRIK_APP_CLIENT_ID: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        FABRIK_APP_PRIVATE_KEY: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+      run: node src/kit/find-store-main.ts
+
+    # Minted only for a store the App is on; skipped, the program says nothing was written.
+    - name: Mint a Fabrik App token for the fabrik-runs store
+      id: store
+      if: steps.find-store.outputs.installed == 'true'
+      continue-on-error: true
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+        owner: jrey8343
+        repositories: fabrik-runs
+        permission-contents: write
