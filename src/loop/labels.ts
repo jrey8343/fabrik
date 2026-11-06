@@ -45,7 +45,7 @@ export const WEEKLY_LIMIT_LABEL = "fabrik:weekly-limit";
 /** The label on an Audit, which the scheduled tick opens for the Auditor to fill in (#150). */
 export const AUDIT_LABEL = "fabrik:audit";
 
-/** The label on a Retro, which the scheduled tick opens for the Retro's run to fill in (#151). */
+/** The label on a Retro, which the scheduled tick opens for the Retro run to fill in (#151). */
 export const RETRO_LABEL = "fabrik:retro";
 
 /** Every label that marks an issue as the Kit's own, so the adapter reads it into the snapshot. */
