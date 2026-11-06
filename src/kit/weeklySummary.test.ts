@@ -11,6 +11,7 @@ import {
   anOpenMonitorIssue,
   anOpenPullRequest,
   anAuditRunRecord,
+  aRetroRunRecord,
   aReview,
   aRunRecord,
   aScoreEntry,
@@ -1013,6 +1014,32 @@ describe("the Weekly summary", () => {
       kind: "summary",
       summary: {
         cost: { thisWeek: 5.5 },
+        costPerMergedPullRequest: { thisWeek: { usd: 1 } },
+        costPerSpec: { thisWeek: { usd: 0.5 } },
+      },
+    });
+  });
+
+  it("counts a Retro run in the week's total cost, but in neither cost per merged PR nor cost per Spec", () => {
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
+          aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-03T06:00:00Z", totalCostUsd: 0.5 }),
+          aRetroRunRecord({ issue: 120, endedAt: "2026-11-07T00:00:00Z", totalCostUsd: 2 }),
+        ],
+        facts: [
+          factsOf({
+            pullRequests: [aMergedPullRequest("2026-11-05T00:00:00Z")],
+            specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-05T00:00:00Z")], { number: 3 })],
+          }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "summary",
+      summary: {
+        cost: { thisWeek: 3.5 },
         costPerMergedPullRequest: { thisWeek: { usd: 1 } },
         costPerSpec: { thisWeek: { usd: 0.5 } },
       },
