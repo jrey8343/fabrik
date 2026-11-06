@@ -89,7 +89,9 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
         return weekly === null ? intake(event.issue, context.issue) : WEEKLY_RUNS[weekly].start(context, config);
       });
     case "label-added":
-      return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, snapshot.pullRequest, config));
+      return withIssue(snapshot, (context) =>
+        labelAdded(event.issue, event.label, context, snapshot.pullRequest, config, whyNoPrototype(config, prototypes)),
+      );
     case "issue-comment-created":
       // A needs-design issue is in a Design session; a needs-info one waits on its author.
       return withIssue(snapshot, (context) =>
@@ -251,10 +253,13 @@ function missingFromSnapshot(what: string): Plan {
 
 /**
  * Adding needs-triage starts Triage; adding needs-design asks for a Design
- * queue check, whose agent:design starts the Design session's first turn;
- * adding agent:implement starts (or resumes) an Implement run; and adding
- * agent:research starts a Researcher run, whether Dispatch added it to
- * release a research Decision or the Operator re-added it by hand.
+ * queue check, whose agent:design starts the Design session's first turn
+ * (agent:design re-added starts a refused turn again, or the prototype turn
+ * a prototype request asks for, which `noPrototype` may rule out: see
+ * startQueuedSession); adding agent:implement starts (or resumes) an
+ * Implement run; and adding agent:research starts a Researcher run, whether
+ * Dispatch added it to release a research Decision or the Operator re-added
+ * it by hand.
  */
 function labelAdded(
   issueNumber: number,
@@ -262,9 +267,10 @@ function labelAdded(
   context: IssueContext,
   pullRequest: PullRequestSnapshot | null,
   config: KitConfig,
+  noPrototype: string | null,
 ): Plan {
   if (label === NEEDS_DESIGN) return startSession(issueNumber, context);
-  if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config);
+  if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config, noPrototype);
   if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
   if (label === RESEARCH_LABEL) return startResearcher(issueNumber, context, config);
   if (label !== NEEDS_TRIAGE) {

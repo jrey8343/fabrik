@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
 import { anIssue, aPullRequest, AUDITED_SHA, auditBody, designQueueSnapshotOf, HEAD_SHA, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { UI } from "../__fixtures__/uiEvidence.ts";
 import { type CaptureResult, evidenceSection } from "../evidence/uiEvidence.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
@@ -837,8 +838,9 @@ describe("Gathering a pull request's UI evidence marker", () => {
 
 describe("Gathering an issue's Design session", () => {
   async function gatheredIssue(
-    comments: { body: string; createdAt?: string; author: { __typename: string } }[],
+    comments: { body: string; createdAt?: string; author: { login?: string; __typename: string } }[],
     timeline: unknown[] = [],
+    appLogin: string | null = null,
   ) {
     const github = {
       async graphql(query: string): Promise<unknown> {
@@ -865,7 +867,7 @@ describe("Gathering an issue's Design session", () => {
       },
     } as unknown as GitHub;
     const event = { kind: "issue-comment-created", issue: 6, commenter: "operator", commenterIsBot: false, body: "More context", comment: 9 } as const;
-    return (await gatherSnapshot(github, repo, event, null, null)).issue;
+    return (await gatherSnapshot(github, repo, event, null, appLogin)).issue;
   }
 
   it("reads a Design-session turn's failure notice as a failed turn, so the session keeps its slot", async () => {
@@ -922,6 +924,49 @@ describe("Gathering an issue's Design session", () => {
     expect(planFor(reply, snapshotOf(issue ?? anIssue()), kitConfig())).toMatchObject({
       kind: "act",
       actions: [{ kind: "start-agent-run", role: "design", issue: 6 }],
+    });
+  });
+
+  describe("its pending prototype request", () => {
+    const brief = "- **A**: one long form.\n- **B**: a stepper.\n- **C**: a calendar first.";
+    const app = { login: "fabrik-app", __typename: "Bot" };
+
+    /** The prototype request the core posts for an ordinary turn, started by the Operator's reply 9001, that asked for one. */
+    function requestComment(): string {
+      const output = JSON.stringify({ kind: "prototype", route: "/book", variants: 3, brief, comment: "Prototyping the booking page." });
+      const plan = planFor(
+        { kind: "agent-run-finished", role: "design", issue: 6, output, startedBy: 9001 },
+        snapshotOf(anIssue({ number: 6, labels: ["needs-design"], designRounds: 1 }), { startingComment: { id: 9001, exists: true } }),
+        kitConfig({ ui: UI }),
+        { prototypes: true },
+      );
+      return plan.kind === "act" && plan.actions[0]?.kind === "comment" ? plan.actions[0].body : "";
+    }
+
+    it("reads the prototype request the core posted as the session's pending request, with the reply that asked for it", async () => {
+      const issue = await gatheredIssue([{ body: requestComment(), author: app }]);
+
+      expect(issue?.pendingPrototype).toEqual({ request: { route: "/book", variants: 3, brief }, reply: 9001 });
+    });
+
+    it("counts only a request posted since the issue last got needs-design", async () => {
+      const issue = await gatheredIssue(
+        [{ body: requestComment(), createdAt: "2026-10-02T09:00:00Z", author: app }],
+        [{ __typename: "LabeledEvent", createdAt: "2026-11-01T09:00:00Z", label: { name: "needs-design" } }],
+      );
+
+      expect(issue?.pendingPrototype).toBeNull();
+    });
+
+    // As byAppOf takes them: the Kit job, which only routes, doesn't know the App's login.
+    it("takes only the Fabrik App's request once it knows the App's login, and any bot's while it doesn't, never a person's", async () => {
+      const other = { login: "other-app", __typename: "Bot" };
+      const person = { login: "jrey", __typename: "User" };
+
+      expect((await gatheredIssue([{ body: requestComment(), author: app }], [], "fabrik-app[bot]"))?.pendingPrototype).not.toBeNull();
+      expect((await gatheredIssue([{ body: requestComment(), author: other }], [], "fabrik-app[bot]"))?.pendingPrototype).toBeNull();
+      expect((await gatheredIssue([{ body: requestComment(), author: other }]))?.pendingPrototype).not.toBeNull();
+      expect((await gatheredIssue([{ body: requestComment(), author: person }]))?.pendingPrototype).toBeNull();
     });
   });
 });

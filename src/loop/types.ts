@@ -5,6 +5,7 @@ import type { ChangedPath } from "../guard/trust-root.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { Label } from "./labels.ts";
+import type { PrototypeRequestMarker } from "./markers.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
 export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" | "retro" | "research";
@@ -362,6 +363,14 @@ export interface IssueSnapshot {
    * a Design session slot even before round 1 posts.
    */
   readonly firstTurnClaimed: boolean;
+  /**
+   * Its current Design session's pending prototype request (#155): the
+   * latest prototype request with no prototype round, prototype failure
+   * round or failed turn since, read from the Fabrik App's comments
+   * (src/github/threads.ts); null when there is none. While one is pending,
+   * agent:design starts the session's prototype turn (src/loop/design.ts).
+   */
+  readonly pendingPrototype: PrototypeRequestMarker | null;
   /**
    * The agent PR whose Verdict sent this Ticket back to design, read from the
    * Kit's note on it (src/loop/backToDesign.ts), while the Design session that
@@ -797,6 +806,13 @@ export type Action =
        * which the Review job downloads for the Reviewer. A PR with no marker gets none.
        */
       readonly evidence?: EvidenceMarker;
+      /**
+       * For a Design session's prototype turn (#155): the pending prototype
+       * request it builds, and the Operator's reply that started the turn
+       * which asked for it. Its run is role `design`, on the Design role's
+       * model and effort, within the Implement role's timeout.
+       */
+      readonly prototype?: PrototypeRequestMarker;
       readonly model: string;
       readonly effort: string | null;
       readonly timeoutMinutes: number;

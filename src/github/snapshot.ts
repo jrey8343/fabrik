@@ -50,6 +50,7 @@ import {
   countEmptyDiffs,
   designSessionOf,
   designTurnFailedIn,
+  pendingPrototypeIn,
   pushedSinceVerdictIn,
   requestChangesRunIn,
   researchRunFailedIn,
@@ -68,7 +69,7 @@ const ISSUE_QUERY = `
         body
         labels(first: 100) { nodes { name } }
         parent { number state labels(first: 100) { nodes { name } } }
-        comments(last: 100) { nodes { body createdAt author { __typename } } }
+        comments(last: 100) { nodes { body createdAt author { login __typename } } }
         timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT], last: 100) {
           nodes {
             __typename
@@ -95,7 +96,7 @@ interface IssueQueryResult {
       body: string;
       labels: { nodes: { name: string }[] };
       parent: ParentNode | null;
-      comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
+      comments: { nodes: { body: string; createdAt: string; author: { login: string; __typename: string } | null }[] };
       // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
       timelineItems: { nodes: LabelTimelineItem[] };
       closedByPullRequestsReferences: { nodes: { number: number }[] };
@@ -954,6 +955,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
     body: comment.body,
     createdAt: comment.createdAt,
     byBot: comment.author?.__typename === "Bot",
+    byApp: byAppOf(comment.author, appLogin),
   }));
   const timeline = issue.timelineItems.nodes;
   const thisSession = commentsSince(lastNeededDesignAt(timeline), comments);
@@ -973,6 +975,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       sentBack: designSessionOf(comments).sentBack,
       turnFailed: designTurnFailedIn(thisSession),
       firstTurnClaimed: firstTurnClaimed(timeline),
+      pendingPrototype: pendingPrototypeIn(thisSession),
       emptyDiffs: countEmptyDiffs(comments.map((comment) => comment.body)),
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),

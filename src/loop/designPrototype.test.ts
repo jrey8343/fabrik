@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
+import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { prototypeRequestIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
-import type { Plan } from "./types.ts";
+import type { IssueSnapshot, Plan } from "./types.ts";
 
 function commentsOf(plan: Plan): string[] {
   if (plan.kind !== "act") throw new Error(`expected a plan that acts, got ${JSON.stringify(plan)}`);
@@ -131,5 +132,82 @@ describe("An ordinary Design turn that ends in a prototype round", () => {
       failure: "infrastructure",
       reason: "The Design-session turn on #7 emitted output that breaks its contract: only a prototype turn ends in a prototype-round, and this was an ordinary turn",
     });
+  });
+});
+
+describe("agent:design on an issue whose Design session has a pending prototype request", () => {
+  const added = { kind: "label-added", issue: 7, label: "agent:design" } as const;
+  const pending = { request: { route: "/book", variants: 3, brief: requested.brief }, reply: 9001 };
+  // Told apart, so the run's model and effort are seen to be the Design role's and its timeout the Implement role's.
+  const roles = {
+    ...DEFAULT_KIT_CONFIG.roles,
+    design: { model: "claude-designer", effort: "high", timeoutMinutes: 30 },
+    implement: { model: "claude-implementer", effort: "medium", timeoutMinutes: 75 },
+  };
+  const issue = (overrides: Partial<IssueSnapshot> = {}) =>
+    snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design", "agent:design"], designRounds: 1, pendingPrototype: pending, ...overrides }), {
+      operator: "jrey",
+    });
+
+  it("starts the session's prototype turn, carrying the request, on the Design model and effort within the Implement role's timeout", () => {
+    const plan = planFor(added, issue(), kitConfig({ ui: UI, roles }), switchedOn);
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:design" },
+        {
+          kind: "start-agent-run",
+          role: "design",
+          issue: 7,
+          model: "claude-designer",
+          effort: "high",
+          timeoutMinutes: 75,
+          prototype: pending,
+          subscription: "Claude token",
+        },
+      ],
+    });
+    expect(notificationsOf(plan, "jrey")).toEqual([]);
+  });
+
+  it("starts an ordinary turn, as before, on an issue with no request pending", () => {
+    const plan = planFor(added, issue({ pendingPrototype: null }), kitConfig({ ui: UI, roles }), switchedOn);
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:design" },
+        { kind: "start-agent-run", role: "design", issue: 7, model: "claude-designer", effort: "high", timeoutMinutes: 30, subscription: "Claude token" },
+      ],
+    });
+  });
+
+  it.each([
+    ["while Prototypes are off", kitConfig({ ui: UI, roles }), {}],
+    ["on a Product repo with no ui block, which can't serve or capture one", kitConfig({ ui: null, roles }), switchedOn],
+  ])("starts an ordinary turn %s, even with a request pending", (_, config, options) => {
+    const plan = planFor(added, issue(), config, options);
+
+    expect(plan).toMatchObject({ kind: "act", actions: [{ kind: "remove-label" }, { kind: "start-agent-run", timeoutMinutes: 30 }] });
+    expect(plan.kind === "act" ? plan.actions.find(({ kind }) => kind === "start-agent-run") : null).not.toHaveProperty("prototype");
+  });
+
+  // It waits behind the prototype turn in the session's concurrency group, and reads its round once it's posted.
+  it("leaves the Operator's reply to start an ordinary turn, as any reply does, while the request is pending", () => {
+    const replied = { kind: "issue-comment-created", issue: 7, commenter: "jrey", commenterIsBot: false, body: "Also try a dark one", comment: 9002 } as const;
+
+    const plan = planFor(replied, issue({ labels: ["enhancement", "needs-design"] }), kitConfig({ ui: UI, roles }), switchedOn);
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [{ kind: "start-agent-run", role: "design", issue: 7, model: "claude-designer", effort: "high", timeoutMinutes: 30, subscription: "Claude token" }],
+    });
+  });
+
+  it("only takes agent:design off an issue that has left its Design session, starting nothing", () => {
+    const plan = planFor(added, issue({ labels: ["ready-for-agent", "agent:design"] }), kitConfig({ ui: UI, roles }), switchedOn);
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "remove-label", issue: 7, label: "agent:design" }] });
   });
 });

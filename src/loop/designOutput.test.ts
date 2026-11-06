@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { resolveKitConfig } from "../kit/config.ts";
-import { PROTOTYPE_DEFAULT_VARIANTS, PROTOTYPE_MIN_VARIANTS, PROTOTYPE_VARIANT_CAP, parseDesignTurnOutput } from "./designOutput.ts";
+import {
+  PROTOTYPE_DEFAULT_VARIANTS,
+  PROTOTYPE_MIN_VARIANTS,
+  PROTOTYPE_VARIANT_CAP,
+  parseDesignTurnOutput,
+  parsePrototypeTurnOutput,
+} from "./designOutput.ts";
 
 const turn = (value: unknown) => parseDesignTurnOutput(JSON.stringify(value));
 
@@ -178,6 +184,37 @@ describe("A prototype turn's prototype-round output: the variants it built", () 
         "a prototype-round needs non-empty recommendation text",
       ],
     });
+  });
+});
+
+describe("A prototype turn's output, which only a prototype-round keeps to", () => {
+  const prototypeTurn = (value: unknown) => parsePrototypeTurnOutput(JSON.stringify(value));
+
+  it("reads a prototype-round as any Design turn's output reads it", () => {
+    expect(prototypeTurn({ ...built, operatorCommentsConsidered: ["9001"] })).toEqual(turn({ ...built, operatorCommentsConsidered: ["9001"] }));
+    expect(prototypeTurn(built).ok).toBe(true);
+  });
+
+  // The turn was started to build the variants, so even a well-formed ordinary outcome breaks its contract.
+  it.each([
+    ["round", { kind: "round", intro: "Before we build:", questions: [{ question: "Which route?", recommendation: "/book" }] }],
+    ["prototype", requested],
+    ["not-planned", { kind: "not-planned", comment: "Not worth building." }],
+    ["mockup", { kind: "mockup" }],
+  ])("refuses a %s output, naming the kind", (kind, output) => {
+    expect(prototypeTurn(output)).toEqual({ ok: false, errors: [`a prototype turn ends only in a prototype-round, not "${kind}"`] });
+  });
+
+  it("names a malformed prototype-round's problems as any Design turn's output does", () => {
+    const malformed = { ...built, intro: " ", variants: built.variants.slice(0, 1) };
+
+    expect(prototypeTurn(malformed)).toEqual(turn(malformed));
+    expect(prototypeTurn(malformed).ok).toBe(false);
+  });
+
+  it("refuses output that isn't a JSON object", () => {
+    expect(parsePrototypeTurnOutput("Here are the variants")).toMatchObject({ ok: false, errors: [expect.stringMatching(/^Design-session output is not valid JSON: /)] });
+    expect(prototypeTurn(["prototype-round"])).toEqual({ ok: false, errors: ["Design-session output must be a JSON object"] });
   });
 });
 

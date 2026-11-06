@@ -36,6 +36,12 @@
 //   ui-evidence-failure      for that Review, why the run's capture failed, as the marker records it, which
 //                            the Reviewer hears when it has no capture result to read; empty when it captured,
 //                            when the marker records no outcome, or for any other run
+//   prototype                "true" when the Design run is a Design session's prototype turn (#155), which
+//                            routes to design like any Design run; else "false"
+//   prototype_request        for that prototype turn, its request as one line of JSON: route, variants, brief
+//                            and reply (the Operator's reply that started the turn which asked for it, or null);
+//                            else empty. The only output that holds agent text, the brief, so a job reads it
+//                            through `env:`, never in a `run:` script
 // Its step summary names that Subscription, and notes when rotation is off.
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
@@ -46,6 +52,7 @@ import { GitHub, type Repo } from "../github/client.ts";
 import { loopEventFrom } from "../github/events.ts";
 import { gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
+import type { PrototypeRequestMarker } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
 import { kitConfigErrors } from "../skills/pinnedManifests.ts";
@@ -168,7 +175,17 @@ export function kitJobOutputs(plan: Plan | null, ticket: number | null, config: 
     "ui-evidence-artifact": String(run?.evidence?.artifact ?? ""),
     // Only ever one of the CAPTURE_FAILURES the marker reads as.
     "ui-evidence-failure": run?.evidence?.failure ?? "",
+    // Whether the Design run is the session's prototype turn, which the prototype job runs in the design job's place.
+    prototype: String(run?.prototype !== undefined),
+    // The one output that holds agent text: the request's brief, written by the Design agent. One line of JSON,
+    // whose newlines JSON.stringify escapes, as GITHUB_OUTPUT's key=value lines need; read only through `env:`.
+    prototype_request: run?.prototype === undefined ? "" : prototypeRequestOutput(run.prototype),
   };
+}
+
+/** A prototype turn's request, as the prototype job reads it: its route, variant count and brief, and the reply that asked for it. */
+function prototypeRequestOutput({ request: { route, variants, brief }, reply }: PrototypeRequestMarker): string {
+  return JSON.stringify({ route, variants, brief, reply });
 }
 
 if (import.meta.main) {

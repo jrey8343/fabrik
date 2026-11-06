@@ -31,6 +31,7 @@ import {
   type MonitorMarker,
   monitorMarkerIn,
   monitorMarkerLine,
+  type PrototypeRequestMarker,
   prototypeRequestMarker,
   SESSION_FINISHED,
 } from "./markers.ts";
@@ -67,14 +68,41 @@ const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
  * agent:design, which the Design queue check adds when a slot frees up, starts
  * the session's first turn. The Kit also re-adds it to start a turn refused on
  * its Subscription's weekly limit again, on the next free one, whichever round
- * it was (src/loop/failures.ts). The label comes off as the turn starts, so
- * the running turn and then its round hold the slot, not the label. It always
- * comes off, so it never holds a slot for a session that can't start.
+ * it was (src/loop/failures.ts), and to start the prototype turn a prototype
+ * request asks for. The label comes off as the turn starts, so the running
+ * turn and then its round hold the slot, not the label. It always comes off,
+ * so it never holds a slot for a session that can't start.
+ *
+ * Which turn it starts is read from the thread, never from the label: while
+ * the session has a pending prototype request, and this Kit can take a
+ * Prototype (`noPrototype` is null), it's the prototype turn, so a refused
+ * prototype turn restarts as one; otherwise an ordinary turn.
  */
-export function startQueuedSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
+export function startQueuedSession(issueNumber: number, { issue }: IssueContext, config: KitConfig, noPrototype: string | null): Plan {
   const removeLabel: Action = { kind: "remove-label", issue: issueNumber, label: DESIGN_LABEL };
   if (whileInSession(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
+  const pending = noPrototype === null ? issue.pendingPrototype : null;
+  if (pending !== null) return { kind: "act", actions: [removeLabel, prototypeTurn(issueNumber, pending, config)] };
   return { kind: "act", actions: [removeLabel, ...startAgentRun("design", issueNumber, config).actions] };
+}
+
+/**
+ * A session's prototype turn (#155): the Design run that builds its pending
+ * request, on the Design role's model and effort, so the variants come from
+ * the model the Operator has been talking to. Building and serving the
+ * Product takes a build's time, so it runs within the Implement role's timeout.
+ */
+function prototypeTurn(issueNumber: number, pending: PrototypeRequestMarker, config: KitConfig): Action {
+  const { model, effort } = config.roles.design;
+  return {
+    kind: "start-agent-run",
+    role: "design",
+    issue: issueNumber,
+    model,
+    effort,
+    timeoutMinutes: config.roles.implement.timeoutMinutes,
+    prototype: pending,
+  };
 }
 
 /**
@@ -189,10 +217,11 @@ export function turnStartFrom(comment: number | undefined, found: StartingCommen
 }
 
 /**
- * Why a turn can't ask for a Prototype in this Kit, or null when it can: UI
- * prototypes are dormant until switched on (#282), and only a Product repo
- * with a `ui` block takes one, since its prototype turn serves and captures
- * the variants through that block. Kit config decides, never an agent.
+ * Why a turn can't ask for a Prototype in this Kit, nor a pending request
+ * start a prototype turn, or null when it can: UI prototypes are dormant
+ * until switched on (#282), and only a Product repo with a `ui` block takes
+ * one, since its prototype turn serves and captures the variants through
+ * that block. Kit config decides, never an agent.
  */
 export function whyNoPrototype({ ui }: Pick<KitConfig, "ui">, switchedOn: boolean): string | null {
   if (!switchedOn) return "Prototypes are off in this Kit, so a turn can't ask for one";

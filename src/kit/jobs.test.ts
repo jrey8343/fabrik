@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { aPullRequest, anIssue, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { UI } from "../__fixtures__/uiEvidence.ts";
 import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 import { planFor } from "../loop/rules.ts";
+import type { Plan } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { kitJobOutputs } from "./jobs.ts";
 
@@ -87,6 +89,35 @@ describe("The Kit job's routing", () => {
 
   it("passes out roles.research's timeout whatever it routes to: the Researcher's 30 minutes by default", () => {
     expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ route: "none", "research-timeout-minutes": "30" });
+  });
+
+  // A prototype turn is a Design run (#155), so it routes to design; the prototype job, not the design job, runs it on `prototype`.
+  it("passes out a prototype turn as one, with its request as one line of JSON for the prototype job's prompt, its brief's newlines escaped", () => {
+    const pending = { request: { route: "/book", variants: 3, brief: "- **A**: a form.\n- **B**: a stepper -->\n- **C**: a calendar" }, reply: 9001 };
+    const issue = anIssue({ number: 7, labels: ["needs-design", "agent:design"], designRounds: 1, pendingPrototype: pending });
+    const prototypes = kitConfig({ ui: UI });
+
+    const plan = planFor({ kind: "label-added", issue: 7, label: "agent:design" }, snapshotOf(issue), prototypes, { prototypes: true });
+
+    expect(kitJobOutputs(plan, null, prototypes)).toMatchObject({
+      route: "design",
+      prototype: "true",
+      prototype_request: String.raw`{"route":"/book","variants":3,"brief":"- **A**: a form.\n- **B**: a stepper -->\n- **C**: a calendar","reply":9001}`,
+      model: "claude-opus-5-5",
+      "implement-timeout-minutes": "60",
+      subscription: "Claude token",
+    });
+  });
+
+  it.each<[string, Plan | null]>([
+    [
+      "an ordinary Design-session turn",
+      planFor({ kind: "label-added", issue: 7, label: "agent:design" }, snapshotOf(anIssue({ number: 7, labels: ["needs-design", "agent:design"] })), kitConfig()),
+    ],
+    ["a Triage run", planFor({ kind: "label-added", issue: 7, label: "needs-triage" }, snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] })), kitConfig())],
+    ["an event the Loop doesn't act on", null],
+  ])("passes out %s as no prototype turn, with no request", (_, plan) => {
+    expect(kitJobOutputs(plan, null, kitConfig())).toMatchObject({ prototype: "false", prototype_request: "" });
   });
 
   // The Review job downloads the screenshots, and its Reviewer hears why capture failed when there are none to read (#153).

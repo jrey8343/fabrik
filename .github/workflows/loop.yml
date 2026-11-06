@@ -103,6 +103,12 @@ jobs:
       ui-evidence-run: ${{ steps.route.outputs.ui-evidence-run }}
       ui-evidence-artifact: ${{ steps.route.outputs.ui-evidence-artifact }}
       ui-evidence-failure: ${{ steps.route.outputs.ui-evidence-failure }}
+      # "true" when the Design run is a Design session's prototype turn, else "false".
+      prototype: ${{ steps.route.outputs.prototype }}
+      # For a prototype turn, its request as one line of JSON (route, variants, brief, reply); else empty.
+      # The one output that holds agent text, the Design agent's brief, so a job reads it only through
+      # `env:`, never in a `run:` script, where it could inject a command.
+      prototype_request: ${{ steps.route.outputs.prototype_request }}
     steps:
       # No expression context names the commit of a called workflow, so read
       # it from the OIDC token's job_workflow_sha claim.
