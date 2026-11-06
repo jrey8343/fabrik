@@ -1,0 +1,64 @@
+# Links a UI pull request's preview deployment in its evidence section (#153):
+# loads the Fabrik App key through the push service account, mints a token
+# for the Product repo alone that can edit a PR's body and nothing else, and
+# runs src/kit/preview-main.ts. That program polls the URL Run the Loop filled
+# Kit config's preview.url template in to, for PREVIEW_POLL_MINUTES at most
+# (src/kit/previewLink.ts), then edits the section to link the preview, or to
+# say it never answered. It fetches only that URL: never a hosting provider's
+# API, and it waits on no deployment status.
+#
+# The push job runs it after Run the Loop, only when the plan asked to link a
+# preview, with its own timeout-minutes and continue-on-error: true, so a slow
+# or broken host never fails the push job, and the Run record step after it
+# still runs:
+#   - uses: ./kit/.github/actions/link-preview
+name: Link the preview deployment
+description: Polls a UI pull request's preview deployment and links it in the PR's evidence section, or says it never answered.
+
+inputs:
+  op-push-token:
+    description: The push service account's token (secrets.OP_PUSH_TOKEN), which reads the Fabrik App vault.
+    required: true
+  url:
+    description: The preview deployment's URL, Kit config's preview.url filled in for the PR as Run the Loop's push left it.
+    required: true
+  pull-request:
+    description: The PR whose evidence section links the preview.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24
+
+    - name: Load the Fabrik App key
+      id: op
+      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+      with:
+        export-env: false
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}
+        FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+        FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+    # For this repo alone, as with no owner or repositories, and only to edit the PR's
+    # body: the push job's own GITHUB_TOKEN holds no permissions.
+    - name: Mint a Fabrik App token to edit the PR
+      id: app
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+        permission-pull-requests: write
+
+    - name: Poll the preview and link it
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
+        FABRIK_PREVIEW_URL: ${{ inputs.url }}
+        FABRIK_PREVIEW_PULL_REQUEST: ${{ inputs.pull-request }}
+      run: node src/kit/preview-main.ts

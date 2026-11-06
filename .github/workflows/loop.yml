@@ -852,6 +852,22 @@ jobs:
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
 
+      # A UI PR's preview deployment (#153): when the plan pushed a UI PR whose
+      # Kit config declares preview.url, polls the URL it filled in, for a few
+      # minutes at most (src/kit/previewLink.ts), and links it in the PR's
+      # evidence section, or says it never answered. continue-on-error, and a
+      # timeout of its own inside the job's, so a slow or broken host never
+      # fails the push job, and the Run record step still runs.
+      - name: Link the preview deployment
+        if: steps.loop.outputs.preview-url != ''
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: ./kit/.github/actions/link-preview
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          url: ${{ steps.loop.outputs.preview-url }}
+          pull-request: ${{ steps.loop.outputs.preview-pull-request }}
+
       # The run's Run record and transcript, to the fabrik-runs store (ADR-0009).
       # always(), so a Loop that failed still leaves its record; continue-on-error,
       # so a store problem never fails the push job or stalls the Loop. Without

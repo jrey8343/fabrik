@@ -305,11 +305,15 @@ async function main(): Promise<void> {
   const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
   const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions);
   const plan = planFor(event, snapshot, config);
-  await applyPlan(github, repo, plan, branch);
+  const { preview } = await applyPlan(github, repo, plan, branch);
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
   // The Design queue job runs the check likewise, once this plan has landed.
   if (wantsDesignQueueCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "design-queue=true\n");
+  // The push job's preview step polls it and links it, once this plan has pushed (src/kit/previewLink.ts).
+  if (preview !== null) {
+    await appendFile(required("GITHUB_OUTPUT"), `preview-url=${preview.url}\npreview-pull-request=${preview.pullRequest}\n`);
+  }
   await report(describe(plan));
   if (plan.kind === "fail") {
     console.log(`::error title=Infrastructure failure::${plan.reason}`);

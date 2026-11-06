@@ -3,6 +3,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { JUDGE_JOB } from "./judge.ts";
+import { PREVIEW_POLL_MINUTES } from "./previewLink.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 
 const root = new URL("../../", import.meta.url);
@@ -75,6 +76,36 @@ describe("The Kit's workflows", () => {
     expect(kit).toContain("retry: ${{ steps.route.outputs.retry }}");
     expect(kit).toContain("step-up: ${{ steps.route.outputs.step-up }}");
     expect(kit).toContain("request-changes: ${{ steps.route.outputs.request-changes }}");
+  });
+
+  // The preview link (#153): bounded and never failing, so a slow or broken host costs the push job nothing.
+  describe("loop.yml's push job's preview step", () => {
+    const push = jobIn(loop, "push");
+    const steps = stepsOf(push);
+    const at = (text: string) => steps.findIndex((step) => step.includes(text));
+    const preview = steps[at("uses: ./kit/.github/actions/link-preview")] ?? "";
+
+    it("runs after Run the Loop and before the Run record, only when the Loop's plan asked to link a UI PR's preview", () => {
+      expect(at("uses: ./kit/.github/actions/link-preview"), "the push job has no preview step").toBeGreaterThan(at("name: Run the Loop"));
+      expect(at("uses: ./kit/.github/actions/link-preview")).toBeLessThan(at("uses: ./kit/.github/actions/write-run-record"));
+      expect(preview).toContain("if: steps.loop.outputs.preview-url != ''");
+    });
+
+    it("can't fail the push job: it goes on past any error, and its own timeout outlasts the Kit's poll budget but leaves the job time for the Run record", () => {
+      const stepTimeout = Number(/timeout-minutes: (\d+)\n/.exec(preview)?.[1]);
+      const jobTimeout = Number(/\n    timeout-minutes: (\d+)\n/.exec(push)?.[1]);
+
+      expect(preview).toContain("continue-on-error: true");
+      expect(stepTimeout).toBeGreaterThan(PREVIEW_POLL_MINUTES);
+      expect(stepTimeout).toBeLessThan(jobTimeout);
+      expect(jobTimeout).toBe(10);
+    });
+
+    it("polls the URL Run the Loop filled in for the PR it named, as the Fabrik App through the push service account", () => {
+      expect(preview).toContain("url: ${{ steps.loop.outputs.preview-url }}");
+      expect(preview).toContain("pull-request: ${{ steps.loop.outputs.preview-pull-request }}");
+      expect(preview).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
+    });
   });
 
   it.each(["triage", "design", "implement", "review", "audit"])(
@@ -276,6 +307,52 @@ describe("The run the Loop action", () => {
     expect(mint).toContain("id: app");
     expect(run).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
     expect(run).toContain("FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}");
+  });
+
+  it("passes out the preview its plan asked to link, for the push job's preview step", () => {
+    const run = steps.find((step) => step.includes("run: node src/main.ts"))!;
+
+    expect(run).toContain("id: loop");
+    expect(action).toMatch(/\n  preview-url:\n.*\n\s+value: \$\{\{ steps\.loop\.outputs\.preview-url \}\}\n/);
+    expect(action).toMatch(/\n  preview-pull-request:\n.*\n\s+value: \$\{\{ steps\.loop\.outputs\.preview-pull-request \}\}\n/);
+  });
+});
+
+describe("The link-preview action, which the push job's preview step runs", () => {
+  const action = readFileSync(new URL(".github/actions/link-preview/action.yml", root), "utf8");
+  const steps = action.split(/\n(?=    - )/).slice(1);
+  const mint = steps.find((step) => step.includes("uses: actions/create-github-app-token@"));
+  const program = steps.find((step) => step.includes("run: node src/kit/preview-main.ts"));
+
+  it("loads the Fabrik App key through the push service account, and nothing else", () => {
+    const secrets = steps.filter((step) => step.includes("1password/load-secrets-action@"));
+
+    expect(secrets).toHaveLength(1);
+    expect(secrets[0]).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}");
+    expect([...secrets[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual([
+      "op://Fabrik App/Fabrik App/client-id",
+      "op://Fabrik App/Fabrik App/private-key",
+    ]);
+  });
+
+  it("mints a Fabrik App token for the Product repo alone that can edit a PR's body and do nothing else", () => {
+    expect(steps.filter((step) => step.includes("uses: actions/create-github-app-token@"))).toHaveLength(1);
+    expect(mint).toContain("id: app");
+    expect(mint).not.toMatch(/owner:|repositories:/);
+    expect([...(mint ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`)).toEqual(["pull-requests: write"]);
+  });
+
+  it("polls and edits with the Kit's Node program, given the URL and the PR through its env, never in its command line", () => {
+    expect(program, "no step runs src/kit/preview-main.ts").toBeDefined();
+    expect(program).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
+    expect(program).toContain("FABRIK_PREVIEW_URL: ${{ inputs.url }}");
+    expect(program).toContain("FABRIK_PREVIEW_PULL_REQUEST: ${{ inputs.pull-request }}");
+    expect(/run: (.*)/.exec(program ?? "")?.[1]).toBe("node src/kit/preview-main.ts");
+    expect(steps.indexOf(mint!)).toBeLessThan(steps.indexOf(program!));
+  });
+
+  it("checks nothing out, so it runs no Product code", () => {
+    expect(action).not.toContain("actions/checkout@");
   });
 });
 
