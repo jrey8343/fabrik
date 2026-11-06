@@ -228,6 +228,22 @@ export function turnStartFrom(comment: number | undefined, found: StartingCommen
 }
 
 /**
+ * What a finished turn, ordinary or a prototype turn, does when the reply it
+ * answers can't be counted on, or null when it can, or none started it: a
+ * reply the push job didn't check fails the run, and one the Operator deleted
+ * posts nothing, since the turn answered a reply that is no longer there.
+ * `said` words each, with the reply's comment id.
+ */
+export function replyNotThere(
+  start: TurnStart,
+  said: { readonly unchecked: (comment: number) => string; readonly deleted: (comment: number) => string },
+): Plan | null {
+  if (start.kind === "unchecked-reply") return { kind: "fail", failure: "infrastructure", reason: said.unchecked(start.comment) };
+  if (start.kind === "reply" && !start.comment.exists) return { kind: "nothing", reason: said.deleted(start.comment.id) };
+  return null;
+}
+
+/**
  * Why a turn can't ask for a Prototype in this Kit, nor a pending request
  * start a prototype turn, or null when it can: only a Product repo with a
  * `ui` block takes one, since its prototype turn serves and captures the
@@ -256,19 +272,11 @@ export function applyTurn(
   noPrototype: string | null,
   given: readonly GivenOperatorComment[] = [],
 ): Plan {
-  if (start.kind === "unchecked-reply") {
-    return {
-      kind: "fail",
-      failure: "infrastructure",
-      reason: `The Design-session turn on #${issueNumber} was started by a reply (comment ${start.comment}) the push job didn't check is still there`,
-    };
-  }
-  if (start.kind === "reply" && !start.comment.exists) {
-    return {
-      kind: "nothing",
-      reason: `The Operator's reply that started this Design-session turn on #${issueNumber} (comment ${start.comment.id}) was deleted, so the turn posts nothing`,
-    };
-  }
+  const gone = replyNotThere(start, {
+    unchecked: (comment) => `The Design-session turn on #${issueNumber} was started by a reply (comment ${comment}) the push job didn't check is still there`,
+    deleted: (comment) => `The Operator's reply that started this Design-session turn on #${issueNumber} (comment ${comment}) was deleted, so the turn posts nothing`,
+  });
+  if (gone !== null) return gone;
   const parsed = parseDesignTurnOutput(text);
   if (!parsed.ok) {
     return {

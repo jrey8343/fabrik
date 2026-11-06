@@ -6,7 +6,7 @@
 import { type CaptureFailure, code, failureWords, type PreviewLink } from "../evidence/uiEvidence.ts";
 import { type PreviewConfig, previewNamesPullRequest } from "../kit/config.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
-import { turnStartFrom, whileInSession } from "./design.ts";
+import { replyNotThere, turnStartFrom, whileInSession } from "./design.ts";
 import { prototypeTurnRefused } from "./failures.ts";
 import { parsePrototypeTurnOutput, prototypeBranchFor, type PrototypeRoundOutput } from "./designOutput.ts";
 import {
@@ -42,20 +42,11 @@ export function applyPrototypeTurn(
   found: StartingComment | null,
   preview: PreviewConfig | null,
 ): Plan {
-  const start = turnStartFrom(event.request.reply ?? undefined, found);
-  if (start.kind === "unchecked-reply") {
-    return {
-      kind: "fail",
-      failure: "infrastructure",
-      reason: `The prototype turn on #${event.issue} answers a reply (comment ${start.comment}) the push job didn't check is still there`,
-    };
-  }
-  if (start.kind === "reply" && !start.comment.exists) {
-    return {
-      kind: "nothing",
-      reason: `The Operator's reply that approved the prototype on #${event.issue} (comment ${start.comment.id}) was deleted, so the prototype turn posts nothing`,
-    };
-  }
+  const gone = replyNotThere(turnStartFrom(event.request.reply ?? undefined, found), {
+    unchecked: (comment) => `The prototype turn on #${event.issue} answers a reply (comment ${comment}) the push job didn't check is still there`,
+    deleted: (comment) => `The Operator's reply that approved the prototype on #${event.issue} (comment ${comment}) was deleted, so the prototype turn posts nothing`,
+  });
+  if (gone !== null) return gone;
   const notNow = whileInSession(event.issue, issue);
   if (notNow !== null) return notNow;
   // The push job reads only the Fabrik App's own requests, so a look-alike another bot posted, which the Kit
