@@ -1134,7 +1134,7 @@ describe("A Replay's results", () => {
     ]);
   });
 
-  it("compares the baseline with the original's first attempt only, never a Retry, nor a past Replay's runs", () => {
+  it("compares the baseline with the original's first Implement run and its Review only, never a Retry, nor a past Replay's runs", () => {
     const outcomes = outcomesOf(anArm(12, "baseline", 9001), anArm(12, "variant", 9001), anArm(7, "baseline", 9002), anArm(7, "variant", 9002));
     const retry = { runId: 600, retry: 1, endedAt: "2026-10-01T11:00:00Z", totalCostUsd: 9 };
     const pastReplay = { ...replayOf(12, "baseline"), issue: 130 };
