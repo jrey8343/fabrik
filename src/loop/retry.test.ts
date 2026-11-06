@@ -52,6 +52,15 @@ describe("An Execution flaw starts a retry", () => {
       expect(actionsOf(plan)).not.toContainEqual(RETRY_TRIGGER);
     }
   });
+
+  // A visual failure the Reviewer saw in the screenshots is an Execution flaw like any other (#153).
+  it("an Execution flaw on a UI PR, naming a route and screenshot, starts a retry exactly as one on any PR", () => {
+    const flaw = reviewed("verdict: execution-flaw\n\n- `/waitlist` spills off the side at mobile width (`after-mobile-waitlist.png`).");
+    const marked = aPullRequest({ uiEvidence: { run: 9100, artifact: 9202 } });
+
+    expect(planFor(flaw, snapshotOfPullRequest(marked), kitConfig())).toEqual(planFor(flaw, snapshotOfPullRequest(aPullRequest()), kitConfig()));
+    expect(actionsOf(planFor(flaw, snapshotOfPullRequest(marked), kitConfig()))).toContainEqual(RETRY_TRIGGER);
+  });
 });
 
 /** agent:implement added to Ticket #7, whose agent PR is #50. */
@@ -98,6 +107,13 @@ describe("Starting a retry", () => {
     const plan = planFor(retryLabeled, resumeSnapshot(), kitConfig({ maxInFlight: 0 }));
 
     expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", pullRequest: 50 }));
+  });
+
+  // Its Implement job captures again from its own diff (#153), so the run carries no evidence of its own.
+  it("on a UI PR starts exactly the retry it would on any PR", () => {
+    const marked = { ...flawedPullRequest(), uiEvidence: { run: 9100, artifact: 9202 } };
+
+    expect(planFor(retryLabeled, resumeSnapshot(marked), kitConfig())).toEqual(planFor(retryLabeled, resumeSnapshot(), kitConfig()));
   });
 
   it("the second Execution flaw starts a Step-up, on the Step-up model", () => {
