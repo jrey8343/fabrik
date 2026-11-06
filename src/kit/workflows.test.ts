@@ -365,8 +365,7 @@ describe("The run the Loop action", () => {
 });
 
 describe("The link-preview action, which the push job's preview step runs", () => {
-  const action = readFileSync(new URL(".github/actions/link-preview/action.yml", root), "utf8");
-  const steps = action.split(/\n(?=    - )/).slice(1);
+  const { text: action, steps } = actionNamed("link-preview");
   const mint = steps.find((step) => step.includes("uses: actions/create-github-app-token@"));
   const program = steps.find((step) => step.includes("run: node src/kit/preview-main.ts"));
 
@@ -385,7 +384,7 @@ describe("The link-preview action, which the push job's preview step runs", () =
     expect(steps.filter((step) => step.includes("uses: actions/create-github-app-token@"))).toHaveLength(1);
     expect(mint).toContain("id: app");
     expect(mint).not.toMatch(/owner:|repositories:/);
-    expect([...(mint ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`)).toEqual(["pull-requests: write"]);
+    expect(permissionsOf(mint)).toEqual(["pull-requests: write"]);
   });
 
   it("polls and edits with the Kit's Node program, given the URL and the PR through its env, never in its command line", () => {
