@@ -57,7 +57,8 @@ export function infrastructureFailureOf(run: Pick<FailedRun, "secretsStep" | "re
 function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: KitConfig): string {
   switch (failure) {
     case "timeout":
-      return `it was cancelled, most likely by its ${config.roles[run.role].timeoutMinutes}-minute timeout`;
+      // A prototype turn builds and serves the Product, so it ran within the Implement role's timeout.
+      return `it was cancelled, most likely by its ${config.roles[run.prototype === true ? "implement" : run.role].timeoutMinutes}-minute timeout`;
     case "unreachable-1password":
       return "its secrets couldn't be loaded from 1Password";
     case "crash":
@@ -118,7 +119,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
   const ranOn = ranOnOf(run, config);
-  const failedRun = `The ${RUN_NAMES[run.role]} run on #${run.issue}`;
+  const failedRun = run.prototype === true ? `The prototype turn on #${run.issue}` : `The ${RUN_NAMES[run.role]} run on #${run.issue}`;
   const refused = heldOnRefusal(run, failure, context, ranOn);
   if (refused !== null) {
     // Its place in the order: a run held before, resumed and refused again, keeps the one it had.
@@ -153,10 +154,13 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   const where = labelled === target ? "" : ` on #${labelled}`;
   // A Design-session turn has none to re-add: its issue keeps needs-design, and the Operator's reply starts it again.
   const label = run.role === "design" ? null : RESUME_LABELS[run.role];
+  // The failure notice ends a prototype turn's request (src/github/threads.ts), so a reply starts an ordinary turn.
   const resume =
-    label === null
-      ? "Reply on this issue to run the turn again."
-      : `Re-add the \`${label}\` label${where} to run it again.`;
+    label !== null
+      ? `Re-add the \`${label}\` label${where} to run it again.`
+      : run.prototype === true
+        ? "Reply on this issue to carry the session on: the turn your reply starts can ask for the prototype again."
+        : "Reply on this issue to run the turn again.";
   const detail = run.report === null || run.report.detail.trim() === "" ? [] : ["", `> ${run.report.detail.trim()}`];
   const repoWide = repoWideNotice(failure, context, {
     run: failedRun,

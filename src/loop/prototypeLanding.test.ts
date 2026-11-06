@@ -393,3 +393,47 @@ describe("The Design session after a prototype round", () => {
     });
   });
 });
+
+describe("A failed prototype turn", () => {
+  /** The prototype job on #7, failed or cancelled, as the push job reads it: an Infrastructure failure of a Design-session turn. */
+  const failedTurn = (overrides: Partial<Extract<LoopEvent, { kind: "agent-run-failed" }>> = {}): LoopEvent => ({
+    kind: "agent-run-failed",
+    role: "design",
+    prototype: true,
+    issue: 7,
+    runUrl: RUN,
+    jobResult: "cancelled",
+    secretsStep: "success",
+    report: null,
+    ...overrides,
+  });
+
+  it("posts the Design-session turn's failure notice, named for the prototype turn and its own timeout, the Implement role's, and says a reply carries the session on", () => {
+    const plan = planFor(failedTurn(), inSession(), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: 7,
+          body: [
+            "<!-- fabrik:design-turn-failed -->",
+            `@jrey The prototype turn on #7 failed: it was cancelled, most likely by its ${DEFAULT_KIT_CONFIG.roles.implement.timeoutMinutes}-minute timeout.`,
+            "",
+            "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Reply on this issue to carry the session on: the turn your reply starts can ask for the prototype again.",
+            "",
+            `[The run](${RUN})`,
+          ].join("\n"),
+        },
+      ],
+    });
+  });
+
+  it("ends the pending request, so the Operator's reply starts an ordinary turn", () => {
+    const [notice = ""] = commentsOf(planFor(failedTurn({ jobResult: "failure" }), inSession(), kitConfig()));
+    const request = `<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`;
+
+    expect(pendingPrototypeIn([request, notice].map((body) => ({ body, byApp: true })))).toBeNull();
+  });
+});

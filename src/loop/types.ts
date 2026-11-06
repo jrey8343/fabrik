@@ -158,6 +158,12 @@ export type LoopEvent =
       /** An agent job failed or was cancelled; the push job carries the news. */
       readonly kind: "agent-run-failed";
       readonly role: AgentRole;
+      /**
+       * For a Design-session turn: whether it was the session's prototype turn
+       * (#155), from the Kit job's `prototype` output, which ran within the
+       * Implement role's timeout. Absent, it was an ordinary turn.
+       */
+      readonly prototype?: boolean;
       /** The Ticket (or issue) the run was for. */
       readonly issue: number;
       /** The Actions run, linked from the failure comment. */
