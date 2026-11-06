@@ -4,6 +4,7 @@ import {
   aCommit,
   aDesignRound,
   aLabelAdded,
+  A_REPLAY,
   aMergedPullRequest,
   anEscapeMarkerIssue,
   anOpenAudit,
@@ -12,6 +13,7 @@ import {
   anOpenPullRequest,
   anOpenRetro,
   anAuditRunRecord,
+  aReplayRunRecord,
   aRetroRunRecord,
   aReview,
   aRunRecord,
@@ -2293,6 +2295,114 @@ describe("the Weekly summary", () => {
     it("keeps a week with only score files from being skipped, placing one whose record isn't in the store by when it was scored", () => {
       const result = weeklySummary(input({ scoreFiles: [aScoreFile({ scoredAt: "2026-11-04T12:05:00Z", entries: [aScoreEntry()] })] }));
       expect(result).toMatchObject({ kind: "summary", summary: { scores: { thisWeek: { rubrics: [{ scorer: "efficiency", runsScored: 1 }] } } } });
+    });
+  });
+
+  describe("Replay runs", () => {
+    const summaryOf = (week: WeeklySummaryInput) => {
+      const result = weeklySummary(week);
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result;
+    };
+
+    const weeklyReading = (utilization: number) => ({ status: "allowed", rateLimitType: "seven_day", utilization, resetsAt: null }) as const;
+    const judgeRun = (overrides: Partial<RunRecord>) => aRunRecord({ role: "score", baseSha: null, ...overrides });
+    const variant = { ...A_REPLAY, arm: "variant" } as const;
+    // A live week: Ticket 7 built, scored, reviewed and merged as PR 50, which an escape opened this week names.
+    const live = input({
+      records: [
+        aRunRecord({ runId: 1000, endedAt: "2026-11-02T00:00:00Z", totalCostUsd: 1, rateLimit: weeklyReading(0.4) }),
+        judgeRun({ runId: 1000, endedAt: "2026-11-02T00:05:00Z", totalCostUsd: 0.25 }),
+        aRunRecord({ runId: 1001, role: "review", verdict: "pass", endedAt: "2026-11-02T06:00:00Z", totalCostUsd: 0.5, transcript: "transcripts/1001-1-review.jsonl.gz" }),
+      ],
+      scoreFiles: [aScoreFile({ runId: 1000 })],
+      facts: [
+        factsOf({
+          pullRequests: [aMergedPullRequest("2026-11-03T00:00:00Z")],
+          tickets: [aTicketTimeline([aLabelAdded("agent:implement", "2026-11-01T20:00:00Z")], { closedAt: "2026-11-03T00:00:00Z" })],
+          escapeMarkerIssues: [anEscapeMarkerIssue("From audit #70\n<!-- fabrik:escape strong #50 -->", { createdAt: "2026-11-05T00:00:00Z" })],
+        }),
+      ],
+    });
+    // Replay 140 re-running Ticket 7 later in the week, on another Subscription:
+    // each arm's Implement and Review, the judge's runs scoring them, and their score files.
+    const replayRecords = [
+      aReplayRunRecord({ endedAt: "2026-11-06T00:00:00Z", totalCostUsd: 2, subscription: "Claude token 2", rateLimit: weeklyReading(0.9) }),
+      judgeRun({ runId: 2000, replay: A_REPLAY, subscription: "Claude token 2", endedAt: "2026-11-06T00:05:00Z", totalCostUsd: 0.5 }),
+      aReplayRunRecord({ replay: variant, subscription: "Claude token 2", endedAt: "2026-11-06T00:30:00Z", ...UNKNOWN_COST_BASIS }),
+      aReplayRunRecord({
+        role: "review",
+        verdict: "pass",
+        subscription: "Claude token 2",
+        endedAt: "2026-11-06T01:00:00Z",
+        totalCostUsd: 0.75,
+        transcript: "transcripts/2000-1-review-replay-baseline.jsonl.gz",
+      }),
+      aReplayRunRecord({ replay: variant, role: "review", verdict: "execution-flaw", subscription: "Claude token 2", endedAt: "2026-11-06T02:00:00Z" }),
+    ];
+    const replayScoreFiles = [
+      aScoreFile({ runId: 2000, replay: A_REPLAY, entries: [aScoreEntry({ score: 0.1, pass: false })] }),
+      aSkippedScoreFile({ reason: "judge-failed" }, { runId: 2000, replay: variant }),
+    ];
+    const withReplays = { ...live, records: [...live.records, ...replayRecords], scoreFiles: [...live.scoreFiles, ...replayScoreFiles] };
+
+    it("leaves them out of every figure, count and cost, so a week with them reads as the same week without them but for its replay spend", () => {
+      const { summary, body } = summaryOf(withReplays);
+      const without = summaryOf(live);
+      expect({ ...summary, replaySpend: without.summary.replaySpend }).toEqual(without.summary);
+      const replayLines = /^(\| Replay spend \|.*|.* left out of replay spend\.\n)\n/gm;
+      expect(body.replace(replayLines, "")).toBe(without.body);
+    });
+
+    it("shows what the week's replays cost, their Implement, Review and judge runs summed, on its own line under the cost", () => {
+      const lastWeeks = aReplayRunRecord({ runId: 1900, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 1.25 });
+      const { summary, body } = summaryOf({ ...withReplays, records: [...withReplays.records, lastWeeks] });
+      expect(summary.replaySpend).toEqual({ thisWeek: { usd: 4.25, unknownCost: 1 }, lastWeek: { usd: 1.25, unknownCost: 0 } });
+      expect(body).toContain("| API-equivalent cost | $1.75 | $0.00 | +$1.75 |\n| Replay spend | $4.25 | $1.25 | +$3.00 |\n");
+    });
+
+    it("says how many replay runs the replay spend leaves out, their cost basis being unknown, and none the cost leaves out", () => {
+      const { body } = summaryOf(withReplays);
+      expect(body).toContain("1 run with an unknown cost basis is left out of replay spend.");
+      expect(body).not.toContain("left out of the cost.");
+    });
+
+    it("keeps a week whose only runs were replays from being skipped, so what they cost is still shown", () => {
+      const { summary, body } = summaryOf(input({ records: [aReplayRunRecord({ totalCostUsd: 3 })] }));
+      expect(summary.cost.thisWeek).toBe(0);
+      expect(body).toContain("| Replay spend | $3.00 | – | – |");
+    });
+
+    it("has no replay spend line in a week with no replay records, showing a dash for a last week with none", () => {
+      const { summary, body } = summaryOf(live);
+      expect(summary.replaySpend).toEqual({ thisWeek: null, lastWeek: null });
+      expect(body).not.toContain("Replay spend");
+      const lastWeeks = aReplayRunRecord({ endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 1.25 });
+      expect(summaryOf({ ...live, records: [...live.records, lastWeeks] }).body).not.toContain("Replay spend");
+      expect(summaryOf(withReplays).body).toContain("| Replay spend | $4.25 | – | – |");
+    });
+
+    it("scores the week's live runs only, leaving a replay's score files out of the Scores section", () => {
+      const { summary } = summaryOf(
+        input({
+          records: [aRunRecord(), aReplayRunRecord()],
+          scoreFiles: [
+            aScoreFile({ entries: [aScoreEntry({ score: 0.8 })] }),
+            aScoreFile({ runId: 2000, replay: A_REPLAY, entries: [aScoreEntry({ score: 0.2, pass: false })] }),
+            aSkippedScoreFile({ reason: "judge-failed" }, { runId: 2000, replay: variant }),
+          ],
+        }),
+      );
+      expect(summary.scores.thisWeek).toEqual({
+        scoreFiles: 1,
+        rubrics: [{ scorer: "efficiency", version: 1, runsScored: 1, medianScore: 0.8, passing: 1 }],
+        skips: { "weekly-limit": 0, "no-transcript": 0, "infrastructure-failure": 0, "judge-failed": 0, "judge-output-invalid": 0 },
+      });
+    });
+
+    it("has no Scores section in a week whose only score files are replays'", () => {
+      const { body } = summaryOf(input({ records: [aRunRecord(), aReplayRunRecord()], scoreFiles: [aScoreFile({ runId: 2000, replay: A_REPLAY })] }));
+      expect(body).not.toContain("## Scores");
     });
   });
 

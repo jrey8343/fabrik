@@ -25,7 +25,7 @@ import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { judgeRunRecordFor, readRunRecord } from "./runRecord.ts";
 import { JUDGE_MODEL, RUN_STORE } from "./runStore.ts";
 import { type ScoreRecordOutcome, scoreRecordSummary, writeScoreRecord } from "./scoreRecord.ts";
-import { scoreFileFor } from "./scorer.ts";
+import { scoreFileFor, scoringRubrics } from "./scorer.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -84,8 +84,9 @@ async function outcome(): Promise<ScoreRecordOutcome> {
   const score = scoreFileFor({
     scored,
     scoredPath,
-    // The Kit's rubrics at the commit the judge ran, since both jobs check out the Kit job's sha.
-    rubrics: await loadRubrics(),
+    // The Kit's rubrics at the commit the judge ran, since both jobs check out the Kit job's sha,
+    // refused unless that's the scored run's pinned release.
+    rubrics: scoringRubrics(scored, { sha: kitSha, rubrics: await loadRubrics() }),
     scoredAt: endedAt,
     outcome: judgeOutcome(
       { result: await readIfPresent(join(judgeDir, JUDGE_RESULT_FILE)), failure },

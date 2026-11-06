@@ -39,10 +39,13 @@ async function report(heading: string, line: string): Promise<void> {
   if (summary !== undefined && summary !== "") await appendFile(summary, `### ${heading}\n\n${line}\n`);
 }
 
-/** How writing the record went, and, once a store token was in hand, the store and what was written to it, for scoring. */
+/**
+ * How writing the record went, and, once a store token was in hand, the store,
+ * what was written to it and the Kit commit this job checked out, for scoring.
+ */
 interface Recorded {
   readonly outcome: RecordOutcome;
-  readonly written: { readonly store: GitHub; readonly files: RunRecordFiles | null; readonly write: RecordWrite } | null;
+  readonly written: { readonly store: GitHub; readonly files: RunRecordFiles | null; readonly write: RecordWrite; readonly kitSha: string } | null;
 }
 
 async function recordRun(): Promise<Recorded> {
@@ -91,7 +94,7 @@ async function recordRun(): Promise<Recorded> {
   });
   const store = new GitHub(storeToken, apiUrl);
   const write = await writeRunRecord(store, files, transcript?.gzip ?? null, (ms) => sleep(ms));
-  return { outcome: write, written: { store, files, write } };
+  return { outcome: write, written: { store, files, write, kitSha } };
 }
 
 async function main(): Promise<void> {
@@ -99,7 +102,9 @@ async function main(): Promise<void> {
   // Before scoring, so a scoring problem never hides what happened to the record.
   await report("Run record", recordWriteSummary(outcome));
   if (written === null) return;
-  const scoring = await scoreRecordedRun(written.store, written, await loadRubrics(), new Date().toISOString(), (ms) => sleep(ms));
+  // The rubrics in this job's Kit checkout, at the Kit job's sha.
+  const kit = { sha: written.kitSha, rubrics: await loadRubrics() };
+  const scoring = await scoreRecordedRun(written.store, written, kit, new Date().toISOString(), (ms) => sleep(ms));
   // The judge job runs on these, and the score-record job reads the scored record back from the store by its path.
   if (scoring.kind === "score") await appendFile(required("GITHUB_OUTPUT"), `score=true\nrecord=${scoring.record}\n`);
   const line = recordedRunScoringSummary(scoring);

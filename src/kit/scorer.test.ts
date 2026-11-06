@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
 import { type Rubric, rubricSet } from "./rubrics.ts";
 import type { ReplayArm, RunRecord } from "./runRecord.ts";
-import { type JudgeRun, scoreFileFor, scoringPlan } from "./scorer.ts";
+import { type JudgeRun, scoreFileFor, scoringPlan, scoringRubrics } from "./scorer.ts";
 
 /** A run id whose SHA-256 falls in the sampled quarter, and one whose doesn't. */
 const SAMPLED_RUN = 1007;
@@ -55,6 +55,36 @@ describe("The scoring plan for a finished run", () => {
     ["a Request-changes run", { requestChanges: true }],
   ])("always scores %s, whatever its run id", (_, run) => {
     expect(scoringPlan(implementRun({ runId: UNSAMPLED_RUN, ...run }))).toEqual({ kind: "score" });
+  });
+
+  describe("always picks a Replay arm's Implement run, never sampling it, so every arm has a process measure", () => {
+    /** A Replay arm's Implement run on Ticket 7, for replay issue 300, whose run id falls outside the sample. */
+    const armRun = (overrides: Partial<RunRecord> = {}) =>
+      implementRun({ runId: UNSAMPLED_RUN, replay: { issue: 300, arm: "variant", ticket: 7, candidateSha: null }, ...overrides });
+
+    it("scores a replay Implement run whose run id falls outside the sample", () => {
+      expect(scoringPlan(armRun())).toEqual({ kind: "score" });
+    });
+
+    it("never picks a replay arm's Review, which no Scorer scores", () => {
+      expect(scoringPlan(armRun({ role: "review" }))).toEqual({ kind: "not-sampled" });
+    });
+
+    it("still skips a replay run with no transcript", () => {
+      expect(scoringPlan(armRun({ transcript: null }))).toEqual({ kind: "skip", skip: { reason: "no-transcript" } });
+    });
+
+    it.each(["provider-error", "weekly-limit"] as const)("still skips a replay run whose Infrastructure failure was %s", (failure) => {
+      const run = armRun({ jobResult: "failure", infrastructureFailure: failure });
+
+      expect(scoringPlan(run)).toEqual({ kind: "skip", skip: { reason: "infrastructure-failure" } });
+    });
+
+    it("still skips a replay run whose last weekly-limit reading was at 0.75, keeping the reading", () => {
+      const rateLimit = { status: "allowed", rateLimitType: "seven_day", utilization: 0.75, resetsAt: 1_800_500_000 };
+
+      expect(scoringPlan(armRun({ rateLimit }))).toEqual({ kind: "skip", skip: { reason: "weekly-limit", rateLimit } });
+    });
   });
 
   describe("records a picked run it can't score as skipped", () => {
@@ -124,6 +154,34 @@ const RUBRICS: readonly Rubric[] = [
   { name: "ticket-compliance", version: 1, threshold: 0.8, labels: ["compliant", "scope-creep", "guessed"], text: "Whether it built the Ticket." },
   { name: "skill-use", version: 1, threshold: 0.7, labels: ["followed", "missed-skill"], text: "Whether it used its skills." },
 ];
+
+describe("The rubrics a run is scored under", () => {
+  /** The pinned release that ran and recorded the run, and a candidate Kit sha a `kit` variant laid its prompts and Base skills from. */
+  const PINNED = "a".repeat(40);
+  const CANDIDATE = "c".repeat(40);
+  /** The candidate's rubrics, one of them bumped, as a Kit checkout at the candidate sha would hold them. */
+  const CANDIDATE_RUBRICS = RUBRICS.map((rubric) => (rubric.name === "efficiency" ? { ...rubric, version: 2, text: "How few calls the run made." } : rubric));
+  const kitVariantRun = implementRun({ kitSha: PINNED, replay: { issue: 300, arm: "variant", ticket: 7, candidateSha: CANDIDATE } });
+
+  it("are the pinned release's for a kit variant's run", () => {
+    expect(scoringRubrics(kitVariantRun, { sha: PINNED, rubrics: RUBRICS })).toEqual(RUBRICS);
+  });
+
+  it("are never a kit variant's candidate sha's", () => {
+    expect(() => scoringRubrics(kitVariantRun, { sha: CANDIDATE, rubrics: CANDIDATE_RUBRICS })).toThrow(
+      `Run 1007-1 is scored under the rubrics of its pinned release ${PINNED}, never those of its candidate Kit sha ${CANDIDATE}`,
+    );
+  });
+
+  it("are the Kit's at the commit that ran a live run, and never another commit's", () => {
+    const live = implementRun({ kitSha: PINNED });
+
+    expect(scoringRubrics(live, { sha: PINNED, rubrics: RUBRICS })).toEqual(RUBRICS);
+    expect(() => scoringRubrics(live, { sha: "d".repeat(40), rubrics: RUBRICS })).toThrow(
+      `Run 1007-1 is scored under the rubrics of its pinned release ${PINNED}, not those read at ${"d".repeat(40)}`,
+    );
+  });
+});
 
 const SCORED_PATH = "runs/owner/product/2026-11/1007-1-implement.json";
 const JUDGE_RECORD = "runs/owner/product/2026-11/1007-1-score.json";

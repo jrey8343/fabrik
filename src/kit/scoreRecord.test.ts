@@ -12,6 +12,9 @@ const RUBRICS: readonly Rubric[] = [
   { name: "skill-use", version: 1, threshold: 0.7, labels: ["followed", "missed-skill"], text: "Whether it used its skills." },
 ];
 
+/** The rubrics as the push job reads them, from its checkout of the Kit commit that ran the run (aRunRecord's kitSha). */
+const KIT = { sha: "f".repeat(40), rubrics: RUBRICS };
+
 /** A sampled first Implement run on Ticket 7, its record and transcript in the store. */
 const scored = aRunRecord({ runId: 1007, transcript: "transcripts/owner/product/2026-11/1007-1-implement.jsonl.gz" });
 const SCORED_PATH = "runs/owner/product/2026-11/1007-1-implement.json";
@@ -190,14 +193,14 @@ describe("The push job's scoring of the run it just recorded", () => {
   it("asks the judge job to score a picked run, with its record's path, and writes nothing itself", async () => {
     const store = storeWith();
 
-    expect(await scoreRecordedRun(store, recorded(), RUBRICS, "2026-11-04T12:01:00Z", noWait)).toEqual({ kind: "score", record: RETRY_PATH });
+    expect(await scoreRecordedRun(store, recorded(), KIT, "2026-11-04T12:01:00Z", noWait)).toEqual({ kind: "score", record: RETRY_PATH });
     expect(store.writes).toEqual([]);
   });
 
   it("writes a picked run's skip score file itself, beside its record, when the plan skips it", async () => {
     const store = storeWith();
 
-    const scoring = await scoreRecordedRun(store, recorded({ ...retry, transcript: null }), RUBRICS, "2026-11-04T12:01:00Z", noWait);
+    const scoring = await scoreRecordedRun(store, recorded({ ...retry, transcript: null }), KIT, "2026-11-04T12:01:00Z", noWait);
 
     expect(store.writes).toHaveLength(1);
     const [path] = store.writes;
@@ -217,23 +220,23 @@ describe("The push job's scoring of the run it just recorded", () => {
     const store = storeWith();
     const scoredAt = "2026-11-04T12:01:00Z";
 
-    expect(await scoreRecordedRun(store, recorded(retry, { kind: "public-store" }), RUBRICS, scoredAt, noWait)).toEqual({ kind: "none" });
-    expect(await scoreRecordedRun(store, recorded({ ...retry, transcript: null }, { kind: "public-store" }), RUBRICS, scoredAt, noWait)).toEqual({
+    expect(await scoreRecordedRun(store, recorded(retry, { kind: "public-store" }), KIT, scoredAt, noWait)).toEqual({ kind: "none" });
+    expect(await scoreRecordedRun(store, recorded({ ...retry, transcript: null }, { kind: "public-store" }), KIT, scoredAt, noWait)).toEqual({
       kind: "none",
     });
-    expect(await scoreRecordedRun(store, { files: null, write: { kind: "no-record" } }, RUBRICS, scoredAt, noWait)).toEqual({ kind: "none" });
+    expect(await scoreRecordedRun(store, { files: null, write: { kind: "no-record" } }, KIT, scoredAt, noWait)).toEqual({ kind: "none" });
     expect(store.writes).toEqual([]);
   });
 
   it("plans on a record the store already held, and leaves a skip score file it already holds as it was", async () => {
     const skipped = { ...retry, transcript: null };
     const first = storeWith();
-    await scoreRecordedRun(first, recorded(skipped), RUBRICS, "2026-11-04T12:01:00Z", noWait);
+    await scoreRecordedRun(first, recorded(skipped), KIT, "2026-11-04T12:01:00Z", noWait);
     const store = storeWith({ files: first.writes });
 
     const again = recorded(skipped, { kind: "written", written: [], existing: [RETRY_PATH] });
 
-    const scoring = await scoreRecordedRun(store, again, RUBRICS, "2026-11-04T12:09:00Z", noWait);
+    const scoring = await scoreRecordedRun(store, again, KIT, "2026-11-04T12:09:00Z", noWait);
 
     expect(scoring).toMatchObject({ kind: "skip", write: { kind: "written", written: [], existing: first.writes } });
     expect(store.held.get(first.writes[0]!)).toBe("earlier");
@@ -243,7 +246,7 @@ describe("The push job's scoring of the run it just recorded", () => {
     const store = storeWith();
     const review = aRunRecord({ runId: 1009, role: "review", transcript: "transcripts/owner/product/2026-11/1009-1-review.jsonl.gz" });
 
-    expect(await scoreRecordedRun(store, recorded(review), RUBRICS, "2026-11-04T12:01:00Z", noWait)).toEqual({ kind: "none" });
+    expect(await scoreRecordedRun(store, recorded(review), KIT, "2026-11-04T12:01:00Z", noWait)).toEqual({ kind: "none" });
     expect(store.writes).toEqual([]);
   });
 });
