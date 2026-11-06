@@ -247,6 +247,38 @@ describe("Picking a Replay's Tickets", () => {
     });
   });
 
+  it("picks the listed Tickets that are eligible in the order listed, and names each one left out", () => {
+    const reverted = aCandidate(4, { merged: { ...aCandidate(4).merged!, reverted: true } });
+    const candidates = [aCandidate(3), reverted, aCandidate(12), aCandidate(20, { merged: null }), aCandidate(9)];
+
+    const pick = pickReplayTickets({ tickets: [12, 4, 9, 20, 3] }, candidates);
+
+    expect(pick.picked.map(({ ticket }) => ticket)).toEqual([12, 9, 3]);
+    expect(pick.leftOut).toEqual([
+      { ticket: 4, reason: "its merged PR #104 was reverted" },
+      { ticket: 20, reason: "no merged PR closed it" },
+    ]);
+  });
+
+  describe("by default", () => {
+    /** Ticket `ticket`, eligible, whose one first Implement run cost `cost`. */
+    const costing = (ticket: number, cost: number) =>
+      aCandidate(ticket, { records: [aRunRecord({ issue: ticket, pullRequest: null, baseSha: baseOf(ticket), totalCostUsd: cost })] });
+
+    it("picks 5, the most recent eligible Tickets taken from each third of original cost in turn", () => {
+      // Merged on day `ticket`, so a higher number is more recent. Ticket 16 is the most recent, but reverted.
+      const cheap = [costing(1, 1.5), costing(4, 1), costing(7, 2), costing(10, 1.2), costing(13, 1.8)];
+      const middling = [costing(2, 5.5), costing(5, 6), costing(8, 5), costing(11, 5.2), costing(14, 6.5)];
+      const expensive = [costing(3, 25), costing(6, 20), costing(9, 30), costing(12, 22), costing(15, 21)];
+      const reverted = aCandidate(16, { merged: { ...aCandidate(16).merged!, reverted: true } });
+
+      const pick = pickReplayTickets({ tickets: null }, [...expensive, reverted, ...cheap, ...middling]);
+
+      expect(pick.picked.map(({ ticket }) => ticket)).toEqual([13, 14, 15, 10, 11]);
+      expect(pick.leftOut).toEqual([]);
+    });
+  });
+
   describe("leaves out a listed Ticket that isn't eligible, with why", () => {
     const merged = aCandidate(12).merged!;
 
