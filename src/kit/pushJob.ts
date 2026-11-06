@@ -49,6 +49,13 @@ export type PushJobInput =
 const FAILED = ["failure", "cancelled"];
 
 /**
+ * The key of a Retro run's first job (#151), which gathers its evidence from
+ * fabrik-runs (.github/actions/gather-retro-evidence) before the Retro job,
+ * keyed `retro`, runs the agent on it.
+ */
+export const RETRO_EVIDENCE_JOB = "retro-evidence";
+
+/**
  * What the push job applies. `eventIssue` is the Actions event's issue number,
  * the run's subject for Triage, Design, the Auditor and the Retro (whose
  * subjects are the pending Audit and the pending Retro the App opened), and
@@ -72,6 +79,9 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
     case "retro": {
       const issue = route === "implement" ? ticket : eventIssue;
       if (issue === null) return { kind: "nothing", reason: `the ${route} run names no issue` };
+      // A Retro whose evidence job failed never ran its agent, and is that run's failure.
+      const evidence = route === "retro" ? needs[RETRO_EVIDENCE_JOB] : undefined;
+      if (evidence !== undefined && FAILED.includes(evidence.result)) return failure(route, issue, evidence);
       const job = needs[route];
       if (job !== undefined && FAILED.includes(job.result)) return failure(route, issue, job);
       if (job?.result !== "success") return { kind: "nothing", reason: `the ${route} job ended ${job?.result ?? "unknown"}` };
