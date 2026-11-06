@@ -713,10 +713,11 @@ function alreadyRuns(base: Pick<KitConfig, "roles">, variable: ReplayVariable): 
 }
 
 // The Kit's part of a replay issue's body: below the Operator's request, from
-// a hidden start line to the end of the body, the plan listed for the
-// Operator to read, then the hidden markers that hold it: the plan, written
-// once when the request is accepted, and each Ticket's progress. The Kit only
-// ever rewrites its own part, so the Operator's text above it stays theirs.
+// a hidden start line to the end of the body, the results for the Operator to
+// read, then the hidden markers that hold them: the plan, written once when
+// the request is accepted, the results last shown, and each Ticket's
+// progress. The Kit only ever rewrites its own part, so the Operator's text
+// above it stays theirs.
 
 /** What a Replay runs: the variable, and each picked Ticket with its arms. */
 export interface ReplayPlan {
@@ -969,7 +970,8 @@ export type ReplayGates = "passed" | "setup-failed" | "build-failed" | "tests-fa
 
 /**
  * How the merged PR's tests did, laid over an arm's diff: never a pass when
- * the PR has none, Kit config has no test command, or they never ran.
+ * the PR has none, Kit config has no test command, or they never ran because
+ * the arm's setup or build failed first, which counts as failing them.
  */
 export type ReplayHiddenTests = "passed" | "failed" | "no-hidden-tests" | "no-test-command" | "not-run";
 
@@ -1186,14 +1188,14 @@ function resultsLines({ plan, progress }: ReplayMarks, results: readonly TicketR
   });
   const done = rows.flatMap(({ result }) => (result === undefined ? [] : [result]));
   const totals = done.length === 0 ? null : totalsOf(done);
+  const headline = totals === null ? [] : comparison(totals.variant, totals.baseline);
   return [
     "## Replay results",
     "",
-    ...(totals === null ? [] : [`**variant: ${comparison(totals.variant, totals.baseline).join("; ")}**`, ""]),
+    ...(headline.length === 0 ? [] : [`**variant: ${headline.join("; ")}**`, ""]),
     `Each Ticket runs twice from the commit its first Implement run started from: a baseline as it was built, and a variant with \`${variableLine(variable)}\`. Cost, turns and duration are its Implement and Review runs' together.`,
     "",
-    tableRow(["Ticket", "Arm", "Gates", "Verdict", "Hidden tests", ...SCORERS.map(scorerWords), "Cost", "Turns", "Duration", "Patch", "Flags"]),
-    tableRow(Array.from({ length: 8 + SCORERS.length }, () => "---")),
+    ...tableHead(["Ticket", "Arm", "Gates", "Verdict", "Hidden tests", ...SCORERS.map(scorerWords), "Cost", "Turns", "Duration", "Patch", "Flags"]),
     ...rows.flatMap(({ planned, state, result }) => ARMS.map((arm) => armRow(planned, arm, variable, result?.arms[arm] ?? null, state, open))),
     ...(totals === null ? [] : ["", ...totalsLines(totals, done.length)]),
     ...(plan.leftOut.length === 0 ? [] : ["", "Left out:", "", ...plan.leftOut.map(leftOutLine)]),
@@ -1282,8 +1284,7 @@ function totalsLines(totals: Readonly<Record<ReplayArm | "original", Totals>>, d
     "",
     `Over the ${done === 1 ? "1 Ticket" : `${done} Tickets`} done, beside the original: each one's first Implement run and its Review.`,
     "",
-    tableRow(["Arm", "Gates", "Pass Verdicts", "Hidden tests", ...SCORERS.map(scorerWords), "Cost", "Turns", "Duration"]),
-    tableRow(Array.from({ length: 7 + SCORERS.length }, () => "---")),
+    ...tableHead(["Arm", "Gates", "Pass Verdicts", "Hidden tests", ...SCORERS.map(scorerWords), "Cost", "Turns", "Duration"]),
     row("baseline", totals.baseline),
     row("variant", totals.variant),
     row("original", totals.original),
@@ -1334,7 +1335,8 @@ function armRow(planned: PlannedTicket, arm: ReplayArm, variable: ReplayVariable
   const settings = armWords(arm, planned.arms[arm], variable);
   if (result === null) {
     const state = open || progress.state === "done" || progress.state === "failed" ? progressWords(progress) : "cancelled";
-    return tableRow([ticket, settings, state, ...Array.from({ length: 6 + SCORERS.length }, () => NONE), flags]);
+    // A failure's reason is the one cell not of the Kit's own words, so a pipe in it can't split the row.
+    return tableRow([ticket, settings, state.replaceAll("|", "\\|"), ...Array.from({ length: 6 + SCORERS.length }, () => NONE), flags]);
   }
   return tableRow([
     ticket,
@@ -1353,6 +1355,11 @@ function armRow(planned: PlannedTicket, arm: ReplayArm, variable: ReplayVariable
 
 function tableRow(cells: readonly string[]): string {
   return `| ${cells.join(" | ")} |`;
+}
+
+/** A table's heading row, and the delimiter row under it, a cell for each heading. */
+function tableHead(headings: readonly string[]): string[] {
+  return [tableRow(headings), tableRow(headings.map(() => "---"))];
 }
 
 /** What a cell shows for a figure the store holds nothing of. */
@@ -1414,14 +1421,14 @@ const VERDICT_WORDS: Readonly<Record<Verdict | "none", string>> = {
   none: "none",
 };
 
-/** How the plan names each flag. */
+/** How the results name each flag. */
 const FLAG_WORDS: Readonly<Record<ReplayFlag, string>> = {
   "human-touches": "Human touches",
   "edited-input": "edited input",
   "no-hidden-tests": "no hidden tests",
 };
 
-/** A Ticket's progress, as the plan shows it. */
+/** A Ticket's progress, as its rows show it while it has no result. */
 function progressWords(progress: ReplayProgress): string {
   switch (progress.state) {
     case "pending":

@@ -1016,7 +1016,10 @@ describe("A Replay's results", () => {
       ),
     );
 
-    expect(visible(body)).toContain("| Ticket | Arm | Gates | Verdict | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration | Patch | Flags |");
+    const shown = visible(body);
+    const header = shown.indexOf("| Ticket | Arm | Gates | Verdict | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration | Patch | Flags |");
+    expect(header).not.toBe(-1);
+    expect(shown[header + 1]).toBe("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
     expect(rowsOf(body)).toEqual([
       `| #12 (merged in #112) | baseline, default effort | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "baseline")} | – |`,
       `| #12 (merged in #112) | variant, effort high | passed | Execution flaw | failed | 0.60 | 0.85 | 0.70 | $1.90 | 24 | 3 min | ${patchOf(12, "variant")} | – |`,
@@ -1042,6 +1045,20 @@ describe("A Replay's results", () => {
       `| #7 (merged in #107) | baseline, default effort | in progress in run 9003 | ${NOTHING_YET} | – |`,
       `| #7 (merged in #107) | variant, effort high | in progress in run 9003 | ${NOTHING_YET} | – |`,
     ]);
+  });
+
+  it("keeps a failed Ticket's row whole whatever its reason holds", () => {
+    const once = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
+    const failed = finished(started(once, 12, 9002), 12, 9002, { kind: "infrastructure", reason: "exit 1 | tee\nlog" });
+
+    expect(rowsOf(resultsIn(failed.body, outcomesOf()))[0]).toBe(`| #12 (merged in #112) | baseline, default effort | failed: exit 1 \\| tee log | ${NOTHING_YET} | – |`);
+  });
+
+  it("heads the results with no line while the store holds nothing to compare", () => {
+    const shown = visible(resultsIn(aFinishedReplay().body, outcomesOf()));
+
+    expect(shown.filter((line) => line.startsWith("**variant"))).toEqual([]);
+    expect(shown).toContain("Baseline vs original: the store holds nothing of the original runs to compare.");
   });
 
   it("shows every Ticket not finished as cancelled once the Operator closes the issue, keeping what finished", () => {
