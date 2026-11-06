@@ -49,6 +49,26 @@ describe("Landing a live Design session's outcome", () => {
     });
   });
 
+  it("swaps needs-design for wayfinder:map and runs Dispatch on its Decisions when the live session ended with a Map", () => {
+    const plan = planFor(
+      commented("<!-- fabrik:live-outcome map -->\n**Design session finished live.** This issue is now a Map, with its first Decisions filed."),
+      inSession(),
+      kitConfig(),
+    );
+
+    // The live session already rewrote the body and filed the Decisions, so the
+    // Kit only moves the labels and asks for the checks.
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "needs-design" },
+        { kind: "add-labels", issue: 7, labels: ["wayfinder:map"] },
+        { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
+      ],
+    });
+  });
+
   it("does not start an async turn for the outcome comment", () => {
     const plan = planFor(commented("<!-- fabrik:live-outcome brief -->\nDone."), inSession(), kitConfig());
 
