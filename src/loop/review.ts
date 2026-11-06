@@ -37,7 +37,7 @@ export function startReview(pullRequest: PullRequestSnapshot, operator: string, 
   const why = whyNotReviewable(pullRequest) ?? whyAwaitingRun(pullRequest, operator);
   if (why !== null) return { kind: "nothing", reason: why };
   const { model, effort, timeoutMinutes } = config.roles.review;
-  const { number, uiEvidence } = pullRequest;
+  const { number, uiEvidenceMarker } = pullRequest;
   return {
     kind: "act",
     actions: [
@@ -45,7 +45,7 @@ export function startReview(pullRequest: PullRequestSnapshot, operator: string, 
         kind: "start-agent-run",
         role: "review",
         issue: number,
-        ...(uiEvidence === null ? {} : { evidence: uiEvidence }),
+        ...(uiEvidenceMarker === null ? {} : { evidence: uiEvidenceMarker }),
         model,
         effort,
         timeoutMinutes,

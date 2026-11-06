@@ -1,6 +1,7 @@
 // The Implementer output contract: alongside its commits (passed out as a git
 // bundle), an Implement agent job emits the title and summary of the draft PR
 // its push job opens. Both sides check it, so a malformed output never half-applies.
+import { isRoute } from "../kit/config.ts";
 import { isCommentIdList } from "./considered.ts";
 
 export interface ImplementOutput {
@@ -34,11 +35,6 @@ export type ImplementOutputResult =
 
 /** GitHub caps PR titles at 256 characters. */
 const MAX_TITLE = 256;
-
-/** Whether a value is a route: a path under the app's base URL, never a URL of its own (`//host/...` is one). */
-function isRoute(value: unknown): value is string {
-  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//");
-}
 
 /** Whether a run's routes are a list of paths starting with `/`; anything else reads as none named. */
 function isRouteList(value: unknown): value is string[] {

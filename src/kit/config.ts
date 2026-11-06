@@ -1,5 +1,6 @@
 // The Kit config: loaded from a Product repo's .fabrik/ folder, with every v1
 // default filled in, and validated at the start of every run. Pure, no I/O.
+import { spelled } from "../loop/readable.ts";
 import { AGENT_ROLES, type AgentRole as AgentRoleName } from "../loop/types.ts";
 import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
 
@@ -88,6 +89,16 @@ export interface UiConfig {
   readonly defaultRoutes: readonly string[];
 }
 
+/**
+ * Whether a value is a route: a path on the site captured under `ui.url`,
+ * starting with exactly one `/`, since `//host/...` would leave it for another
+ * host. Kit config's `ui.default_routes`, the Implementer's routes, a Ticket's
+ * and the capture result's are all routes by this one rule.
+ */
+export function isRoute(value: unknown): value is string {
+  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//");
+}
+
 /** A browser viewport UI evidence is captured at. */
 export interface Viewport {
   readonly name: "mobile" | "desktop";
@@ -138,24 +149,26 @@ export interface PreviewOf {
 
 /**
  * The pull request's preview deployment: `template` with `{pr}` its number,
- * `{branch_slug}` its branch's slug (branchSlug) and `{sha}` its full head
- * commit, written out as a parsed URL, so it is one line that can't break out of a link.
+ * `{branch_slug}` its branch's slug and `{sha}` its full head commit, written
+ * out as a parsed URL, so it is one line that can't break out of a link. So
+ * the agent branch fabrik/ticket-12 is fabrik-ticket-12, a name that fits in
+ * a hostname, as hosts name a branch's preview. The Kit never shortens it,
+ * though a host may shorten a long one.
  */
 export function previewUrl(template: string, { number, branch, headSha }: PreviewOf): string {
-  const url = URL.parse(fillPlaceholders(template, { pr: String(number), branch_slug: branchSlug(branch), sha: headSha }));
+  const url = URL.parse(fillPlaceholders(template, { pr: String(number), branch_slug: slug(branch), sha: headSha }));
   if (url === null) throw new Error(`The preview.url template ${template} doesn't fill in to a URL`);
   return url.href;
 }
 
 /**
- * `{branch_slug}`: the branch name in lower case, with each run of characters
- * other than a letter or a digit (a to z, 0 to 9) made one `-`, and no `-` at
- * either end. So the agent branch fabrik/ticket-12 is fabrik-ticket-12, a name
- * that fits in a hostname, as hosts name a branch's preview. The Kit never
- * shortens it, though a host may shorten a long one.
+ * The text as a slug: in lower case, with each run of characters other than a
+ * letter or a digit (a to z, 0 to 9) made one `-`, and no `-` at either end.
+ * A preview's `{branch_slug}` is its branch's, and a screenshot's file name
+ * holds its route's (src/evidence/capture.ts).
  */
-export function branchSlug(branch: string): string {
-  return branch
+export function slug(text: string): string {
+  return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
@@ -585,9 +598,8 @@ function checkServe(command: string): string | null {
   return command.trim() === "" ? "the command that serves the branch can't be blank" : null;
 }
 
-/** A path on the site captured under `ui.url`; `//` would leave it for another host. */
 function checkRoute(route: string): string | null {
-  return route.startsWith("/") && !route.startsWith("//") ? null : "a route must be a path starting with one /, such as /book";
+  return isRoute(route) ? null : "a route must be a path starting with one /, such as /book";
 }
 
 function checkHttpOrHttpsUrl(url: string): string | null {
@@ -621,20 +633,15 @@ function isPreviewPlaceholder(name: string): name is PreviewPlaceholder {
 }
 
 function checkPreviewTemplate(template: string): string | null {
-  const only = `a preview URL may use only ${spelledList(PREVIEW_PLACEHOLDERS.map((name) => `{${name}}`))}`;
+  const only = `a preview URL may use only ${spelled(PREVIEW_PLACEHOLDERS.map((name) => `{${name}}`), "and")}`;
   const unknown = [...template.matchAll(PLACEHOLDER)].filter(([, name = ""]) => !isPreviewPlaceholder(name));
   if (unknown.length > 0) {
-    const tokens = spelledList(unknown.map(([token]) => token));
+    const tokens = spelled(unknown.map(([token]) => token), "and");
     return `${tokens} ${unknown.length === 1 ? "is not a placeholder" : "are not placeholders"}; ${only}`;
   }
   const filled = fillPlaceholders(template, PLACEHOLDER_STAND_INS);
   if (/[{}]/.test(filled)) return `it has a { or } that isn't part of a placeholder; ${only}`;
   return checkHttpOrHttpsUrl(filled);
-}
-
-/** `a`, `a and b`, or `a, b and c`. */
-function spelledList(items: readonly string[]): string {
-  return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
 function readAudit(audit: Reader, defaults: KitConfig["audit"]): KitConfig["audit"] {

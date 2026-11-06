@@ -365,8 +365,7 @@ describe("The run the Loop action", () => {
 });
 
 describe("The link-preview action, which the push job's preview step runs", () => {
-  const action = readFileSync(new URL(".github/actions/link-preview/action.yml", root), "utf8");
-  const steps = action.split(/\n(?=    - )/).slice(1);
+  const { text: action, steps } = actionNamed("link-preview");
   const mint = steps.find((step) => step.includes("uses: actions/create-github-app-token@"));
   const program = steps.find((step) => step.includes("run: node src/kit/preview-main.ts"));
 
@@ -385,7 +384,7 @@ describe("The link-preview action, which the push job's preview step runs", () =
     expect(steps.filter((step) => step.includes("uses: actions/create-github-app-token@"))).toHaveLength(1);
     expect(mint).toContain("id: app");
     expect(mint).not.toMatch(/owner:|repositories:/);
-    expect([...(mint ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`)).toEqual(["pull-requests: write"]);
+    expect(permissionsOf(mint)).toEqual(["pull-requests: write"]);
   });
 
   it("polls and edits with the Kit's Node program, given the URL and the PR through its env, never in its command line", () => {
@@ -450,9 +449,10 @@ describe("loop.yml's Review job on a UI PR", () => {
   const download = (): string => steps()[stepAt("uses: actions/download-artifact@")] ?? "";
   const reviewer = (): string => steps()[stepAt("id: agent\n")] ?? "";
 
-  it("gets where a UI PR's evidence is kept from the Kit job: the Implement run that captured it and its artifact", () => {
+  it("gets where a UI PR's evidence is kept from the Kit job: the Implement run that captured it, its artifact, and why its capture failed", () => {
     expect(job("kit")).toContain("ui-evidence-run: ${{ steps.route.outputs.ui-evidence-run }}");
     expect(job("kit")).toContain("ui-evidence-artifact: ${{ steps.route.outputs.ui-evidence-artifact }}");
+    expect(job("kit")).toContain("ui-evidence-failure: ${{ steps.route.outputs.ui-evidence-failure }}");
   });
 
   it("can read Actions artifacts, and holds only read permissions", () => {
@@ -487,6 +487,11 @@ describe("loop.yml's Review job on a UI PR", () => {
     expect(reviewer()).toContain(
       "FABRIK_UI_EVIDENCE_DIR: ${{ needs.kit.outputs.ui-evidence-run != '' && format('{0}/fabrik-ui-evidence', runner.temp) || '' }}\n",
     );
+  });
+
+  // The download is skipped when the marker names no artifact, so the PR body's reason is the Reviewer's only one.
+  it("tells the Reviewer why the PR's capture failed, as its marker records it, for when there's no capture result to read", () => {
+    expect(reviewer()).toContain("FABRIK_UI_EVIDENCE_FAILURE: ${{ needs.kit.outputs.ui-evidence-failure }}\n");
   });
 });
 
@@ -654,7 +659,7 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
   // The push job downloads fabrik-agent-* and reads an empty download as a timeout.
   it("keeps the evidence only when capture recorded a result, apart from the push job's artifacts, never failing the job", () => {
     for (const upload of [evidence(), gallery()]) {
-      expect(upload).toContain("if: steps.capture.outputs.ui-evidence != ''\n");
+      expect(upload).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
       expect(upload).toContain("continue-on-error: true");
       expect(upload).toContain("if-no-files-found: ignore");
       expect(upload).not.toMatch(/name: fabrik-agent-/);
@@ -665,7 +670,7 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
   });
 
   it("passes out the capture result and the ids of both evidence artifacts, for the push job", () => {
-    expect(implement()).toContain("ui-evidence: ${{ steps.capture.outputs.ui-evidence }}");
+    expect(implement()).toContain("ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}");
     expect(implement()).toContain("ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}");
     expect(implement()).toContain("ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}");
   });
@@ -673,8 +678,8 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
   // Switched on (#239): no gate is left, so every UI PR in a repo with a ui block captures evidence.
   it("is active: capture runs on every Implement run whose agent ended well, and both uploads whenever it recorded a result", () => {
     expect(capture()).toContain("if: success()\n");
-    expect(evidence()).toContain("if: steps.capture.outputs.ui-evidence != ''\n");
-    expect(gallery()).toContain("if: steps.capture.outputs.ui-evidence != ''\n");
+    expect(evidence()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
+    expect(gallery()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
     expect(implement()).not.toMatch(/if: false\b/);
   });
 

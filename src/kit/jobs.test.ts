@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { aPullRequest, anIssue, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 import { planFor } from "../loop/rules.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { kitJobOutputs } from "./jobs.ts";
@@ -51,5 +52,25 @@ describe("The Kit job's routing", () => {
     const outputs = kitJobOutputs(null, null, kitConfig());
 
     expect(outputs).toMatchObject({ route: "none", "implement-timeout-minutes": "60", "retro-timeout-minutes": "45" });
+  });
+
+  // The Review job downloads the screenshots, and its Reviewer hears why capture failed when there are none to read (#153).
+  it.each<[string, EvidenceMarker | null, Record<string, string>]>([
+    ["a UI PR whose capture captured", { run: 9100, artifact: 9202, failure: null }, { "ui-evidence-run": "9100", "ui-evidence-artifact": "9202", "ui-evidence-failure": "" }],
+    [
+      "a UI PR whose capture failed and kept nothing",
+      { run: 9100, artifact: null, failure: "build-failed" },
+      { "ui-evidence-run": "9100", "ui-evidence-artifact": "", "ui-evidence-failure": "build-failed" },
+    ],
+    [
+      "a UI PR whose marker is from before markers recorded how capture ended",
+      { run: 9100, artifact: null },
+      { "ui-evidence-run": "9100", "ui-evidence-artifact": "", "ui-evidence-failure": "" },
+    ],
+    ["a PR that isn't UI", null, { "ui-evidence-run": "", "ui-evidence-artifact": "", "ui-evidence-failure": "" }],
+  ])("passes out for the Review of %s where its UI evidence is kept, and why its capture failed", (_, uiEvidenceMarker, evidence) => {
+    const plan = planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(aPullRequest({ uiEvidenceMarker })), kitConfig());
+
+    expect(kitJobOutputs(plan, 7, kitConfig())).toMatchObject({ route: "review", ...evidence });
   });
 });

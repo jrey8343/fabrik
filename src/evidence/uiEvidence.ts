@@ -1,14 +1,16 @@
 // The UI evidence module (#153): whether a pull request is UI, which routes to
 // capture and why, the capture result the Implement job's capture step
 // writes and every later reader shares, which of its screenshots the Reviewer
-// gets, and what the Operator reads of it on the PR: the evidence section, its
-// marker, which the PR snapshot reads back, and withoutEvidence, which keeps
-// both out of agent text. The gallery is beside it (src/evidence/gallery.ts).
-// Pure, no I/O.
+// gets and what its prompt says of them (src/agent/review.ts only reads the
+// files in), and what the Operator reads of it on the PR: the evidence
+// section, its marker, which the PR snapshot reads back, and withoutEvidence,
+// which keeps both out of agent text. The gallery is beside it
+// (src/evidence/gallery.ts). Pure, no I/O.
 import { posix } from "node:path";
-import { REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+import { isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
+import { spelled } from "../loop/readable.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 
 /**
@@ -33,8 +35,10 @@ export interface ChosenRoute {
 /** An inline code span in a Ticket body: text between single backticks on one line. */
 const CODE_SPAN = /`([^`\n]+)`/g;
 
-/** A route a Ticket names: a path starting with a single `/` (so never `//host/...`), with no spaces. */
-const TICKET_ROUTE = /^\/(?!\/)\S*$/;
+/** A route a Ticket names: a route (isRoute), and with no spaces, so `/book now` is prose, not a route. */
+function isTicketRoute(text: string): boolean {
+  return isRoute(text) && !/\s/.test(text);
+}
 
 /**
  * The routes a Ticket body names, in the order it names them. A Ticket names
@@ -47,7 +51,7 @@ const TICKET_ROUTE = /^\/(?!\/)\S*$/;
 function ticketRoutes(body: string): string[] {
   return linesOutsideCode(body)
     .flatMap((line) => [...line.matchAll(CODE_SPAN)].map(([, text = ""]) => text))
-    .filter((text) => TICKET_ROUTE.test(text));
+    .filter(isTicketRoute);
 }
 
 /**
@@ -173,7 +177,7 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | nu
   const { route, reason, viewport, side, status, image } = value;
   const before = errors.length;
   // As the Implementer output reads a route, so a route it named never makes its capture unreadable.
-  if (typeof route !== "string" || !route.startsWith("/") || route.startsWith("//")) {
+  if (!isRoute(route)) {
     errors.push(`${at}.route must be a path starting with one /, such as /book`);
   }
   if (!isOneOf(ROUTE_REASONS, reason)) errors.push(`${at}.reason must be ${spelled(ROUTE_REASONS)}`);
@@ -217,17 +221,17 @@ function repeatedCaptures(captures: readonly (Capture | null)[]): string[] {
   return problems;
 }
 
+/** The capture failure a value names, or null when it names none the Kit knows. */
+export function captureFailureOf(value: unknown): CaptureFailure | null {
+  return isOneOf(CAPTURE_FAILURES, value) ? value : null;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isOneOf<T extends string>(options: readonly T[], value: unknown): value is T {
   return (options as readonly unknown[]).includes(value);
-}
-
-/** `a`, `a or b`, or `a, b or c`; or with `and`. */
-function spelled(options: readonly string[], conjunction: "or" | "and" = "or"): string {
-  return options.length <= 1 ? options.join("") : `${options.slice(0, -1).join(", ")} ${conjunction} ${options.at(-1)}`;
 }
 
 /**
@@ -253,6 +257,90 @@ export function reviewerImages(captures: readonly Capture[]): readonly Capture[]
     .slice(0, REVIEWER_IMAGE_CAP);
 }
 
+/** Where in its working directory a UI PR's Reviewer finds the screenshots it's given. */
+export const REVIEWER_IMAGES_DIR = "fabrik-ui-evidence";
+
+const UI_PR = "This pull request changes the Product repo's UI";
+
+/** What a UI PR's Reviewer is given of its UI evidence, for its prompt's block. */
+export interface ReviewerEvidence {
+  /** The capture result the Review job downloaded, or null when it read none. */
+  readonly result: CaptureResult | null;
+  /** The captures whose screenshots are in REVIEWER_IMAGES_DIR. */
+  readonly given: readonly Capture[];
+  /** The PR's head as the Review job read it, or null when its input names none. */
+  readonly head: string | null;
+  /**
+   * Why the PR's capture failed, as its marker records it, or null when it
+   * records none: what the Reviewer hears when there's no capture result to read.
+   */
+  readonly recorded: CaptureFailure | null;
+}
+
+/**
+ * The UI evidence block of a UI PR's review prompt: the screenshots it was
+ * given, each by route, viewport and side, and what to judge in them; or,
+ * when capture failed or left no result, why, and to review the code as
+ * usual. Any push to the PR starts a Review with the last Implement run's
+ * evidence, so when the PR's head isn't the commit captured, the block says
+ * the screenshots are of an earlier one.
+ */
+export function reviewerEvidenceBlock({ result, given, head, recorded }: ReviewerEvidence): string[] {
+  if (result === null || given.length === 0) {
+    // With no capture result to read, the marker's reason is the one the PR body gives.
+    const failure = result === null ? recorded : result.outcome === "failed" ? result.reason : null;
+    const why = failure === null ? UNREAD : `capture failed because ${FAILURE_WORDS[failure]}`;
+    return ["## UI evidence", `${UI_PR}, but ${why}. There are no screenshots, so review the code as usual.`];
+  }
+  const captured = `\`${result.headSha.slice(0, 7)}\``;
+  const at = `this branch at ${captured}`;
+  const opening =
+    result.outcome === "captured"
+      ? `${UI_PR}, so the Kit captured screenshots of ${at} once the Implementer's run had ended.`
+      : `${UI_PR}, but ${reviewerFailureWords(result.reason)}. Review the code as usual, and judge the ${screenshots(given.length)} it took first, of ${at}, as below.`;
+  const [they, show] = given.length === 1 ? ["It was", "it shows"] : ["They were", "they show"];
+  const stale =
+    head === null || head === result.headSha
+      ? []
+      : [`${they} captured at ${captured}, before the PR's current head \`${head.slice(0, 7)}\`, so later commits may change what ${show}.`];
+  const where = given.length === 1 ? "It's" : `These ${given.length} are`;
+  const of = given.length < result.captures.length ? ` They're the ${given.length} that matter most of the ${result.captures.length} it took.` : "";
+  return [
+    "## UI evidence",
+    [
+      opening,
+      ...stale,
+      "After is this branch, served in the Implement run's Sandbox; Before, where there is one, is the production site.",
+      "Each shows one screen of the page from its top, not the whole page, so content below its bottom edge is out of view rather than cut off.",
+      `${where} in \`${REVIEWER_IMAGES_DIR}/\` in your working directory: open each with your Read tool to see it.${of}`,
+    ].join(" "),
+    given.map(reviewerImageLine).join("\n"),
+    "Judge them as part of the PR:",
+    [
+      "- Do they show what the Ticket asked for?",
+      "- Is there plain breakage: a blank or error page, content spilling over at mobile width, or overlapping or cut-off content?",
+      "- Against Before, where there is one, has any part of the page the Ticket didn't touch regressed?",
+    ].join("\n"),
+    "Taste is the Operator's: don't fail the PR over a design choice the Ticket didn't settle. A visual failure is an `execution-flaw` like any other: name the route and the screenshot in the finding, so the Implementer knows what to fix.",
+  ];
+}
+
+/** Why the Reviewer has no screenshots when there's no capture result to read, and nothing says why capture failed. */
+const UNREAD = "capture left no result this Review could read: the Implement run kept none, or they have expired";
+
+/** Why the Reviewer has no full set of screenshots: capture failed, or left none its Review could read. */
+function reviewerFailureWords(reason: CaptureFailure): string {
+  return reason === "no-result" ? UNREAD : `capture failed because ${FAILURE_WORDS[reason]}`;
+}
+
+/** One screenshot the Reviewer is given: its file, then its route (agent text, so as code on one line), viewport and side. */
+function reviewerImageLine({ image, route, viewport, side, status }: Capture): string {
+  const size = UI_VIEWPORTS.find(({ name }) => name === viewport);
+  const width = size === undefined ? "" : ` (${size.width}×${size.height})`;
+  const error = isServerError(status) ? `. It ${serverErrorWords(String(status), "it shows")}` : "";
+  return `- \`${REVIEWER_IMAGES_DIR}/${image}\`: ${code(route)} at ${viewport} width${width}, ${SIDE_WORDS[side]}${error}`;
+}
+
 /** How the evidence section names why each route was captured. */
 export const ROUTE_REASON_WORDS: Readonly<Record<RouteReason, string>> = {
   ticket: "named by the Ticket",
@@ -271,16 +359,22 @@ export type PreviewLink =
   | { readonly kind: "linked"; readonly url: string }
   | { readonly kind: "never-answered"; readonly url: string };
 
-/** Where a UI pull request's evidence is kept, as its marker records it. */
+/** Where a UI pull request's evidence is kept, and how its capture ended, as its marker records it. */
 export interface EvidenceMarker {
   /** The Actions run whose Implement job captured it. */
   readonly run: number;
   /** The id of that run's artifact holding the screenshots and the capture result, or null when it kept none. */
   readonly artifact: number | null;
+  /**
+   * Why its capture failed, or null when it captured: what the Reviewer hears
+   * when there's no capture result to read. Absent from a marker written before
+   * markers recorded it.
+   */
+  readonly failure?: CaptureFailure | null;
 }
 
 /** A UI pull request's evidence, as the push job puts it together for the PR body. */
-export interface UiEvidence extends EvidenceMarker {
+export interface UiEvidence extends Pick<EvidenceMarker, "run" | "artifact"> {
   /** What capture recorded. */
   readonly result: CaptureResult;
   /** The gallery's web address, or null when the run kept none. */
@@ -331,7 +425,8 @@ function failureLine(reason: CaptureFailure, captures: readonly Capture[]): stri
   return `**Capture failed:** ${FAILURE_WORDS[reason]}. ${took}`;
 }
 
-function screenshots(count: number): string {
+/** `1 screenshot`, or `n screenshots`. */
+export function screenshots(count: number): string {
   return `${count} screenshot${count === 1 ? "" : "s"}`;
 }
 
@@ -343,12 +438,21 @@ function routeLine({ route, reason }: ChosenRoute, captures: readonly Capture[])
   if (errors.length === 0) return line;
   const answered = errors.map(({ status, side, viewport }) => `${status} for ${SIDE_WORDS[side]} at ${viewport}`);
   const shows = errors.length === 1 ? "that screenshot shows" : "those screenshots show";
-  return `${line}. **Server error:** it answered ${spelled(answered, "and")}, so ${shows} an error page, not the design.`;
+  return `${line}. **Server error:** it ${serverErrorWords(spelled(answered, "and"), shows)}.`;
 }
 
 /** Whether a page answered with a server error, so its screenshot is of an error page. */
 export function isServerError(status: number): boolean {
   return status >= 500 && status <= 599;
+}
+
+/**
+ * What a screenshot of a page that answered a server error shows, in the
+ * words the evidence section, the gallery and the Reviewer's block share:
+ * the page `answered` its status, so what `shows` it is of an error page.
+ */
+export function serverErrorWords(answered: string, shows: string): string {
+  return `answered ${answered}, so ${shows} an error page, not the design`;
 }
 
 /** How the evidence names each side. */
@@ -380,9 +484,10 @@ function capturedRoutes(captures: readonly Capture[]): ChosenRoute[] {
   return onceEach(captures.map(({ route, reason }) => ({ route, reason })));
 }
 
-/** The marker line closing the evidence section. */
-function evidenceMarker({ run, artifact }: EvidenceMarker): string {
-  return `<!-- fabrik:ui-evidence ${JSON.stringify({ run, artifact })} -->`;
+/** The marker line closing the evidence section, which records how its capture ended. */
+function evidenceMarker({ run, artifact, result }: UiEvidence): string {
+  const failure = result.outcome === "failed" ? result.reason : null;
+  return `<!-- fabrik:ui-evidence ${JSON.stringify({ run, artifact, failure })} -->`;
 }
 
 /** The marker line, matched against a whole line with its outer whitespace trimmed. */
@@ -434,9 +539,10 @@ function markerOf(json: string | undefined): EvidenceMarker | null {
     return null;
   }
   if (!isObject(value)) return null;
-  const { run, artifact } = value;
+  const { run, artifact, failure } = value;
   if (!isId(run) || !(artifact === null || isId(artifact))) return null;
-  return { run, artifact };
+  // A capture outcome it doesn't record, or that doesn't read, leaves where the evidence is kept as it was.
+  return { run, artifact, ...(failure === null || isOneOf(CAPTURE_FAILURES, failure) ? { failure } : {}) };
 }
 
 /** A GitHub id: a whole number above zero. */

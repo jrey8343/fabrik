@@ -198,7 +198,7 @@ async function agentResultEvent(
   });
   // The capture result and artifact ids come from the Implement job's outputs; the core decides whether the run is UI.
   const capture = input.capture ?? { result: null, artifact: null, galleryArtifact: null };
-  const evidence = { capture, run: Number(required("GITHUB_RUN_ID")), repoUrl: thisRepoUrl() };
+  const evidence = { ...capture, run: Number(required("GITHUB_RUN_ID")), repoUrl: thisRepoUrl() };
   return { event: agentRunEventFrom(result, branch.changes, retry, null, evidence), source, branch };
 }
 

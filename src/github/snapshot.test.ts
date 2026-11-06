@@ -658,15 +658,34 @@ describe("Gathering a pull request's UI evidence marker", () => {
   }
 
   it("reads back where the evidence section's marker says the UI evidence is kept, in a body the Fabrik App wrote", async () => {
-    expect(await gathered(uiBody(9100, 9202))).toMatchObject({ uiEvidence: { run: 9100, artifact: 9202 } });
+    expect(await gathered(uiBody(9100, 9202))).toMatchObject({ uiEvidenceMarker: { run: 9100, artifact: 9202 } });
   });
 
   it("reads back a marker naming no artifact, as when capture left no result", async () => {
-    expect(await gathered(uiBody(9100, null))).toMatchObject({ uiEvidence: { run: 9100, artifact: null } });
+    expect(await gathered(uiBody(9100, null))).toMatchObject({ uiEvidenceMarker: { run: 9100, artifact: null } });
+  });
+
+  it("reads back the capture's outcome the marker records: null for a capture that captured, else why it failed", async () => {
+    const failed: CaptureResult = { outcome: "failed", reason: "build-failed", headSha: HEAD_SHA, captures: [] };
+    const failedBody = evidenceSection({ result: failed, run: 9100, artifact: null, gallery: null, preview: { kind: "none" } });
+
+    expect((await gathered(uiBody(9100, 9202)))?.uiEvidenceMarker).toEqual({ run: 9100, artifact: 9202, failure: null });
+    expect((await gathered(`Adds a waitlist.\n\n${failedBody}\n\nCloses #7`))?.uiEvidenceMarker).toEqual({
+      run: 9100,
+      artifact: null,
+      failure: "build-failed",
+    });
+  });
+
+  it.each([
+    ["from before markers recorded it", `<!-- fabrik:ui-evidence {"run":9100,"artifact":null} -->`],
+    ["that names no capture failure the Kit knows", `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"on-fire"} -->`],
+  ])("reads a marker %s as recording no capture outcome, and still marks the PR UI", async (_, marker) => {
+    expect((await gathered(`Adds a waitlist.\n\n${marker}\n\nCloses #7`))?.uiEvidenceMarker).toEqual({ run: 9100, artifact: null });
   });
 
   it("finds no UI evidence on a PR whose body has no marker: not a UI PR", async () => {
-    expect(await gathered("Adds a retry to the booking API.\n\nCloses #7")).toMatchObject({ uiEvidence: null });
+    expect(await gathered("Adds a retry to the booking API.\n\nCloses #7")).toMatchObject({ uiEvidenceMarker: null });
   });
 
   it.each([
@@ -674,12 +693,12 @@ describe("Gathering a pull request's UI evidence marker", () => {
     ["another bot", { login: "other-app", __typename: "Bot" }],
     ["a deleted account", null],
   ])("ignores a marker in the body of a PR %s opened, so nobody can fake one", async (_, author) => {
-    expect(await gathered(uiBody(9100, 9202), author)).toMatchObject({ uiEvidence: null });
+    expect(await gathered(uiBody(9100, 9202), author)).toMatchObject({ uiEvidenceMarker: null });
   });
 
   it("takes any bot's body for the App's when the run doesn't know the App's login, as the Kit job, which only routes, doesn't", async () => {
-    expect(await gathered(uiBody(9100, 9202), APP_BOT, null)).toMatchObject({ uiEvidence: { run: 9100, artifact: 9202 } });
-    expect(await gathered(uiBody(9100, 9202), { login: "fabrik-app", __typename: "User" }, null)).toMatchObject({ uiEvidence: null });
+    expect(await gathered(uiBody(9100, 9202), APP_BOT, null)).toMatchObject({ uiEvidenceMarker: { run: 9100, artifact: 9202 } });
+    expect(await gathered(uiBody(9100, 9202), { login: "fabrik-app", __typename: "User" }, null)).toMatchObject({ uiEvidenceMarker: null });
   });
 
   it.each([
@@ -689,7 +708,7 @@ describe("Gathering a pull request's UI evidence marker", () => {
     ["names an artifact that isn't an id", `<!-- fabrik:ui-evidence {"run":9100,"artifact":-1} -->`],
     ["shares its line", `See <!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`],
   ])("finds no UI evidence where the marker %s", async (_, marker) => {
-    expect(await gathered(`Adds a waitlist.\n\n${marker}\n\nCloses #7`)).toMatchObject({ uiEvidence: null });
+    expect(await gathered(`Adds a waitlist.\n\n${marker}\n\nCloses #7`)).toMatchObject({ uiEvidenceMarker: null });
   });
 });
 

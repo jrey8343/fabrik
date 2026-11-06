@@ -1,7 +1,9 @@
-// The capture step's program, run as loop.yml's Implement job runs it, in a
-// Product repo without a ui block: now Visual evidence is on, the step runs on
-// every Implement run, so it must leave such a repo exactly as it was before
-// (#239). A repo with a ui block drives Playwright, which the Pilot exercises.
+// The capture step's program, run as loop.yml's Implement job runs it, from a
+// Product checkout of the agent's branch with the default branch fetched. In a
+// repo without a ui block it must leave the repo exactly as it was before
+// Visual evidence (#239). It reads the ui block from the default branch, never
+// from the branch's own files. A capture that reaches the server drives
+// Playwright, which the Pilot exercises; one that stops before it is tested here.
 import { execFile } from "node:child_process";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -13,7 +15,8 @@ import { AGENT_RESULT_FILE } from "../agent/result.ts";
 import { KIT_CONFIG_PATH, resolveKitConfig } from "../kit/config.ts";
 import { kitJobSummary } from "../kit/kitJob.ts";
 import { planFor } from "../loop/rules.ts";
-import { GALLERY_FILE } from "./capture.ts";
+import { CAPTURE_RESULT_FILE, EVIDENCE_DIR, GALLERY_FILE } from "./capture.ts";
+import { parseCaptureResult } from "./uiEvidence.ts";
 
 const run = promisify(execFile);
 const KIT = resolve(import.meta.dirname, "..", "..");
@@ -22,22 +25,62 @@ const STARTER = join(KIT, "templates/fabrik-config.json");
 
 const TICKET = "Add a waitlist to full days on `/book`.";
 
+/** The starter Kit config, which has no ui block, with this one. */
+async function withUi(): Promise<string> {
+  const starter = JSON.parse(await readFile(STARTER, "utf8")) as Record<string, unknown>;
+  const ui = { paths: ["src/pages/**"], serve: "npm run preview", url: "http://127.0.0.1:4321", before_url: null, default_routes: [] };
+  return `${JSON.stringify({ ...starter, ui }, null, 2)}\n`;
+}
+
+async function git(dir: string, ...args: string[]): Promise<string> {
+  const { stdout } = await run("git", ["-c", "user.name=Fabrik test", "-c", "user.email=test@example.com", ...args], { cwd: dir });
+  return stdout.trim();
+}
+
 /**
  * The Implement job as capture finds it once the agent has ended: a Product
- * checkout whose Kit config is the starter, which has no ui block, and an
- * Implementer that changed a page and named its route. The agent's runner
+ * checkout of the branch the Implementer left, which changed a page, cut from
+ * a default branch whose Kit config was the starter, with that default
+ * branch fetched as origin/main once its Kit config became `defaultConfig`.
+ * The branch's own Kit config is `branchConfig`, the starter unless given. The
+ * Ticket is `ticket`, and the Implementer named `routes`. The agent's runner
  * also holds a gallery the agent left where capture writes.
  */
-async function anImplementJob() {
+async function anImplementJob({
+  defaultConfig,
+  branchConfig,
+  ticket = TICKET,
+  routes = ["/book"],
+}: { defaultConfig?: string; branchConfig?: string; ticket?: string; routes?: string[] } = {}) {
+  const starter = await readFile(STARTER, "utf8");
   const product = await tempDir("product");
+  await git(product, "init", "-q", "-b", "main");
   await mkdir(join(product, ".fabrik"));
-  await writeFile(join(product, KIT_CONFIG_PATH), await readFile(STARTER, "utf8"));
+  await mkdir(join(product, "src/pages"), { recursive: true });
+  await writeFile(join(product, KIT_CONFIG_PATH), starter);
+  await writeFile(join(product, "src/pages/book.astro"), "<h1>Book</h1>\n");
+  await git(product, "add", "-A");
+  await git(product, "commit", "-q", "-m", "The starter");
+  await git(product, "switch", "-q", "-c", "fabrik/ticket-7");
+  await writeFile(join(product, "src/pages/book.astro"), "<h1>Book</h1>\n<p>Join the waitlist</p>\n");
+  if (branchConfig !== undefined) await writeFile(join(product, KIT_CONFIG_PATH), branchConfig);
+  await git(product, "commit", "-q", "-am", "A waitlist");
+  const head = await git(product, "rev-parse", "HEAD");
+  // The default branch moves on after the branch was cut, as when the ui block lands there.
+  await git(product, "switch", "-q", "main");
+  if (defaultConfig !== undefined) {
+    await writeFile(join(product, KIT_CONFIG_PATH), defaultConfig);
+    await git(product, "commit", "-q", "-am", "The Kit config moves on");
+  }
+  await git(product, "update-ref", "refs/remotes/origin/main", "HEAD");
+  await git(product, "switch", "-q", "fabrik/ticket-7");
+
   const out = await tempDir("fabrik-out");
   const result = {
     role: "implement",
     issue: 7,
-    output: JSON.stringify({ title: "Waitlist", summary: "Adds a waitlist to full days.", routes: ["/book"] }),
-    branch: { name: "fabrik/ticket-7", base: { ref: "main", sha: "a".repeat(40) }, head: "c".repeat(40) },
+    output: JSON.stringify({ title: "Waitlist", summary: "Adds a waitlist to full days.", routes }),
+    branch: { name: "fabrik/ticket-7", base: { ref: "main", sha: "a".repeat(40) }, head },
   };
   await writeFile(join(out, AGENT_RESULT_FILE), JSON.stringify(result));
   await writeFile(join(out, GALLERY_FILE), "<!doctype html><title>Planted by the agent</title>");
@@ -47,37 +90,42 @@ async function anImplementJob() {
     outputs: join(runner, "github-output"),
     summary: join(runner, "step-summary"),
   };
-  await writeFile(files.issue, JSON.stringify({ number: 7, body: TICKET }));
+  await writeFile(files.issue, JSON.stringify({ number: 7, body: ticket }));
   await writeFile(files.outputs, "");
   await writeFile(files.summary, "");
-  return { product, out, files };
+  return { product, out, files, head };
+}
+
+/** Runs the capture step as loop.yml does, from the Product checkout; only what the step's env names, never the runner's own GitHub files. */
+async function capture({ product, out, files }: Awaited<ReturnType<typeof anImplementJob>>): Promise<string> {
+  const { stdout } = await run(process.execPath, [CAPTURE_MAIN], {
+    cwd: product,
+    env: {
+      PATH: process.env["PATH"] ?? "",
+      FABRIK_OUT_DIR: out,
+      FABRIK_ISSUE_FILE: files.issue,
+      FABRIK_DEFAULT_BRANCH: "main",
+      GITHUB_OUTPUT: files.outputs,
+      GITHUB_STEP_SUMMARY: files.summary,
+    },
+  });
+  return stdout;
 }
 
 describe("The capture step in a Product repo without a ui block", () => {
   it("captures nothing and gets only the Kit job's quiet step-summary line: no result passed out, so no upload, and no summary of its own", async () => {
-    const { product, out, files } = await anImplementJob();
+    const job = await anImplementJob();
 
-    // As loop.yml runs it, from the Product checkout; only what the step's env names, never the runner's own GitHub files.
-    const { stdout } = await run(process.execPath, [CAPTURE_MAIN], {
-      cwd: product,
-      env: {
-        PATH: process.env["PATH"] ?? "",
-        FABRIK_OUT_DIR: out,
-        FABRIK_ISSUE_FILE: files.issue,
-        FABRIK_DEFAULT_BRANCH: "main",
-        GITHUB_OUTPUT: files.outputs,
-        GITHUB_STEP_SUMMARY: files.summary,
-      },
-    });
+    const stdout = await capture(job);
 
-    // An empty ui-evidence output: both uploads run only when it isn't (loop.yml).
-    expect(await readFile(files.outputs, "utf8")).toBe("ui-evidence=\n");
-    expect(await readFile(files.summary, "utf8")).toBe("");
+    // An empty ui-capture-result output: both uploads run only when it isn't (loop.yml).
+    expect(await readFile(job.files.outputs, "utf8")).toBe("ui-capture-result=\n");
+    expect(await readFile(job.files.summary, "utf8")).toBe("");
     expect(stdout).toBe("");
     // Nothing built, served or screenshotted, and nothing of the agent's left to pass for evidence.
-    expect(await readdir(out)).toEqual([AGENT_RESULT_FILE]);
+    expect(await readdir(job.out)).toEqual([AGENT_RESULT_FILE]);
 
-    const resolved = resolveKitConfig({ config: await readFile(join(product, KIT_CONFIG_PATH), "utf8") });
+    const resolved = resolveKitConfig({ config: await readFile(join(job.product, KIT_CONFIG_PATH), "utf8") });
     if (!resolved.ok) throw new Error(resolved.errors.join("; "));
     const { config } = resolved;
     const ticket = anIssue({ number: 7, body: TICKET, labels: ["ready-for-agent", "agent:implement"] });
@@ -86,5 +134,28 @@ describe("The capture step in a Product repo without a ui block", () => {
     expect(kitJob.split("\n").filter((line) => line.includes("Visual evidence"))).toEqual([
       "Visual evidence is off until Kit config has a `ui` block: `/fabrik-setup` turns it on.",
     ]);
+  });
+});
+
+// The push job reads the default branch's Kit config to say whether the PR is UI, so capture reads the same one.
+describe("The Kit config the capture step reads", () => {
+  it("is the default branch's: a branch cut before the ui block landed there is captured, as the push job finds it UI", async () => {
+    // No route anywhere, so capture stops before it builds anything: what it records shows it found the branch UI.
+    const job = await anImplementJob({ defaultConfig: await withUi(), ticket: "Add a waitlist to full days.", routes: [] });
+
+    await capture(job);
+
+    const failed = { outcome: "failed", reason: "no-routes", headSha: job.head, captures: [] };
+    expect(parseCaptureResult(await readFile(join(job.out, EVIDENCE_DIR, CAPTURE_RESULT_FILE), "utf8"))).toEqual({ ok: true, result: failed });
+    expect(await readFile(job.files.outputs, "utf8")).toBe(`ui-capture-result=${JSON.stringify(failed)}\n`);
+  });
+
+  it("is never the branch's own, which a branch can't use to turn capture on", async () => {
+    const job = await anImplementJob({ branchConfig: await withUi(), ticket: "Add a waitlist to full days.", routes: [] });
+
+    await capture(job);
+
+    expect(await readFile(job.files.outputs, "utf8")).toBe("ui-capture-result=\n");
+    expect(await readdir(job.out)).toEqual([AGENT_RESULT_FILE]);
   });
 });

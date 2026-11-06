@@ -371,7 +371,7 @@ const captured: CaptureResult = { outcome: "captured", headSha: HEAD, captures: 
 
 describe("What the capture step leaves", () => {
   it("passes the capture result out as one compact JSON line, which reads back as it was", () => {
-    const { "ui-evidence": line } = captureStepOutputs({ kind: "recorded", result: captured });
+    const { "ui-capture-result": line } = captureStepOutputs({ kind: "recorded", result: captured });
 
     expect(line).not.toContain("\n");
     expect(line).toBe(JSON.stringify(captured));
@@ -382,7 +382,7 @@ describe("What the capture step leaves", () => {
     ["Visual evidence is off", { kind: "off" }],
     ["there was nothing to capture", { kind: "skipped", why: "the Implementer made no commit" }],
   ] as const)("passes out an empty result when %s, so no evidence is uploaded", (_case, outcome) => {
-    expect(captureStepOutputs(outcome)).toEqual({ "ui-evidence": "" });
+    expect(captureStepOutputs(outcome)).toEqual({ "ui-capture-result": "" });
   });
 
   it("writes the capture result, and a gallery holding every screenshot it took", () => {

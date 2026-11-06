@@ -1,11 +1,14 @@
 // The Implement job's UI evidence capture step (#153), run once the
 // Implementer's agent has ended: the Playwright shell around captureEvidence
 // (src/evidence/capture.ts), which makes every decision. This file only does
-// what it's told on the runner: diffs the branch, installs Chromium, runs
+// what it's told on the runner: reads Kit config from the default branch's
+// commit, the one the push job reads to say whether the PR is UI, never from
+// the branch's own files, which may be older; diffs the branch against that
+// same commit, installs Chromium, runs
 // `sandbox.build`, frees `ui.url`'s port, starts `ui.serve`, screenshots each
 // shot headless, and writes the screenshots, the capture result and the
 // gallery into the agent's output directory, passing the result out as the
-// step output `ui-evidence`. No model turns, no MCP, no video. Capture's own
+// step output `ui-capture-result`. No model turns, no MCP, no video. Capture's own
 // failures are in the capture result, never this step's exit code. Its tests
 // run it in a repo without a ui block, where it must do nothing; the Pilot
 // exercises the Playwright path.
@@ -15,19 +18,21 @@
 // program that imports Playwright). Env:
 //   FABRIK_OUT_DIR         the agent's output directory, holding agent-result.json
 //   FABRIK_ISSUE_FILE      the Ticket, as prepare-agent read it; its body names routes
-//   FABRIK_DEFAULT_BRANCH  the branch the diff is against
+//   FABRIK_DEFAULT_BRANCH  the default branch, fetched as origin/<it>: Kit config is read, and
+//                          the branch diffed against, at its commit
 // Nothing here holds a secret, and the build and server get none (buildAndServeEnv).
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { type Browser, type BrowserContext, chromium, errors } from "playwright-core";
 import { AGENT_RESULT_FILE, readAgentRunResult } from "../agent/result.ts";
-import { readKitConfigFromCheckout } from "../kit/checkout.ts";
+import { readKitConfigWith } from "../kit/checkout.ts";
 import type { Viewport } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
+import { writeOutputs, writeSummary } from "../kit/stepFiles.ts";
 import {
   buildAndServeEnv,
   CAPTURE_RESULT_FILE,
@@ -60,18 +65,19 @@ class PlaywrightCapturer implements Capturer {
 
   private readonly productDir: string;
   private readonly evidenceDir: string;
-  private readonly defaultBranch: string;
+  private readonly base: string;
   private readonly env: Readonly<Record<string, string>>;
 
-  constructor(productDir: string, evidenceDir: string, defaultBranch: string, env: Readonly<Record<string, string>>) {
+  /** `base` is the default branch's commit, which the branch is diffed against. */
+  constructor(productDir: string, evidenceDir: string, base: string, env: Readonly<Record<string, string>>) {
     this.productDir = productDir;
     this.evidenceDir = evidenceDir;
-    this.defaultBranch = defaultBranch;
+    this.base = base;
     this.env = env;
   }
 
   async changedPaths(headSha: string): Promise<readonly string[]> {
-    const args = ["diff", "--name-only", "--no-renames", "-z", `origin/${this.defaultBranch}...${headSha}`];
+    const args = ["diff", "--name-only", "--no-renames", "-z", `${this.base}...${headSha}`];
     const { stdout } = await run("git", args, { cwd: this.productDir, maxBuffer: 64 * 1024 * 1024 });
     return stdout.split("\0").filter((path) => path !== "");
   }
@@ -213,6 +219,23 @@ class PlaywrightCapturer implements Capturer {
   }
 }
 
+/** The commit a ref names in the Product checkout, which fails when the checkout lacks it. */
+async function commitOf(productDir: string, ref: string): Promise<string> {
+  const { stdout } = await run("git", ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], { cwd: productDir });
+  return stdout.trim();
+}
+
+/** A file's text at a commit the checkout has, or null when the commit has no such file. */
+async function fileAt(productDir: string, commit: string, path: string): Promise<string | null> {
+  try {
+    const { stdout } = await run("git", ["cat-file", "blob", `${commit}:${path}`], { cwd: productDir, maxBuffer: 64 * 1024 * 1024 });
+    return stdout;
+  } catch {
+    // The commit itself is known to be there (commitOf), so it's the file that isn't.
+    return null;
+  }
+}
+
 /** Signals a process's whole group, which it leads (spawned detached); gone already is fine. */
 function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   if (child.pid === undefined) return;
@@ -245,9 +268,10 @@ async function main(): Promise<void> {
   await rm(evidenceDir, { recursive: true, force: true });
   await rm(join(outDir, GALLERY_FILE), { force: true });
 
-  const resolved = await readKitConfigFromCheckout(productDir);
+  const base = await commitOf(productDir, `origin/${required("FABRIK_DEFAULT_BRANCH")}`);
+  const resolved = await readKitConfigWith((path) => fileAt(productDir, base, path));
   if (!resolved.ok) {
-    // The Kit job checked this same Kit config, so only a branch that changed it gets here; its push is refused anyway.
+    // The Kit job checked Kit config as this run started, so the default branch's has changed since.
     for (const error of resolved.errors) console.log(`::warning title=UI evidence not captured::${error}`);
     await writeOutputs(captureStepOutputs({ kind: "skipped", why: "Kit config doesn't read" }));
     return;
@@ -255,7 +279,7 @@ async function main(): Promise<void> {
   const { config } = resolved;
   const result = readAgentRunResult(await readFile(join(outDir, AGENT_RESULT_FILE), "utf8"));
   const issue = JSON.parse(await readFile(required("FABRIK_ISSUE_FILE"), "utf8")) as { body?: unknown };
-  const capturer = new PlaywrightCapturer(productDir, evidenceDir, required("FABRIK_DEFAULT_BRANCH"), buildAndServeEnv(process.env, config.sandbox.env));
+  const capturer = new PlaywrightCapturer(productDir, evidenceDir, base, buildAndServeEnv(process.env, config.sandbox.env));
   const outcome = await captureEvidence(
     {
       ui: config.ui,
@@ -280,18 +304,6 @@ async function main(): Promise<void> {
   await writeOutputs(captureStepOutputs(outcome));
   const summary = captureStepSummary(outcome);
   if (summary !== null) await writeSummary(summary);
-}
-
-async function writeOutputs(outputs: Readonly<Record<string, string>>): Promise<void> {
-  const path = process.env["GITHUB_OUTPUT"];
-  if (path === undefined || path === "") return;
-  await appendFile(path, Object.entries(outputs).map(([key, value]) => `${key}=${value}\n`).join(""));
-}
-
-async function writeSummary(text: string): Promise<void> {
-  console.log(text);
-  const path = process.env["GITHUB_STEP_SUMMARY"];
-  if (path !== undefined && path !== "") await appendFile(path, text);
 }
 
 main().catch((error: unknown) => {

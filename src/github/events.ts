@@ -121,8 +121,7 @@ function changesKitConfig(payload: Record<string, unknown>): boolean {
  * Implement job passed out, and the push job's own Actions run, which the
  * Implement job shared, in the Product repo at `repoUrl`.
  */
-export interface PushJobEvidence {
-  readonly capture: CaptureOutputs;
+export interface PushJobEvidence extends CaptureOutputs {
   readonly run: number;
   readonly repoUrl: string;
 }
@@ -184,8 +183,7 @@ export function agentRunEventFrom(
  * gallery is linked from the push job's own run, never from an address the
  * agent's runner passed out: an unzipped artifact opens in the browser.
  */
-function implementEvidence({ capture, run, repoUrl }: PushJobEvidence, headSha: string): ImplementEvidence {
-  const { result, artifact, galleryArtifact } = capture;
+function implementEvidence({ result, artifact, galleryArtifact, run, repoUrl }: PushJobEvidence, headSha: string): ImplementEvidence {
   return {
     ...(result === null ? {} : { result }),
     headSha,

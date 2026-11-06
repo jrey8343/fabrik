@@ -96,13 +96,13 @@ describe("What the push job applies", () => {
       pushJobInput(needs("implement", { implement: ok(outputs) }, { ticket: "7" }), null);
 
     it("is the capture result and artifact ids the Implement job passed out", () => {
-      const input = withOutputs({ "ui-evidence": JSON.stringify(captured), "ui-evidence-artifact": "9202", "ui-gallery-artifact": "9201" });
+      const input = withOutputs({ "ui-capture-result": JSON.stringify(captured), "ui-evidence-artifact": "9202", "ui-gallery-artifact": "9201" });
 
       expect(input).toMatchObject({ kind: "agent-result", capture: { result: captured, artifact: 9202, galleryArtifact: 9201 } });
     });
 
     it("is none when capture recorded nothing, as in a repo without a ui block, the Implement job passing out empty outputs", () => {
-      const input = withOutputs({ "ui-evidence": "", "ui-evidence-artifact": "", "ui-gallery-artifact": "" });
+      const input = withOutputs({ "ui-capture-result": "", "ui-evidence-artifact": "", "ui-gallery-artifact": "" });
 
       expect(input).toMatchObject({ kind: "agent-result", capture: { result: null, artifact: null, galleryArtifact: null } });
     });
@@ -112,19 +112,19 @@ describe("What the push job applies", () => {
       ["breaks the capture result's contract", JSON.stringify({ ...captured, headSha: "4f2b9c0" })],
       ["isn't an object", "[]"],
     ])("has no capture result when the one passed out %s, and that's never a failure", (_, text) => {
-      const input = withOutputs({ "ui-evidence": text, "ui-evidence-artifact": "9202", "ui-gallery-artifact": "9201" });
+      const input = withOutputs({ "ui-capture-result": text, "ui-evidence-artifact": "9202", "ui-gallery-artifact": "9201" });
 
       expect(input).toMatchObject({ kind: "agent-result", capture: { result: null, artifact: 9202, galleryArtifact: 9201 } });
     });
 
     it.each(["", "abc", "0", "-3", "9.5"])("has no artifact id when the one passed out is %j", (id) => {
-      const input = withOutputs({ "ui-evidence": JSON.stringify(captured), "ui-evidence-artifact": id, "ui-gallery-artifact": id });
+      const input = withOutputs({ "ui-capture-result": JSON.stringify(captured), "ui-evidence-artifact": id, "ui-gallery-artifact": id });
 
       expect(input).toMatchObject({ kind: "agent-result", capture: { result: captured, artifact: null, galleryArtifact: null } });
     });
 
     it("isn't read for a run other than Implement", () => {
-      const input = pushJobInput(needs("triage", { triage: ok({ "ui-evidence": JSON.stringify(captured) }) }), 12);
+      const input = pushJobInput(needs("triage", { triage: ok({ "ui-capture-result": JSON.stringify(captured) }) }), 12);
 
       expect(input).not.toHaveProperty("capture");
     });
@@ -206,7 +206,7 @@ describe("What the push job applies", () => {
   });
 
   // The Implement job's agent step has a timeout of its own (#153), which fails the job where V1's job timeout
-  // cancelled it, so its job notes it, and the push job reads it as V1 did: a timeout, never a crash.
+  // cancelled it, so its job notes it, and the push job reads it as V1 did: an Infrastructure failure by timeout, never of another kind.
   it("reads an Implement job whose agent step its timeout stopped as cancelled, as its job timeout left it", () => {
     const input = pushJobInput(
       needs("implement", { implement: { result: "failure", outputs: { "secrets-step": "success", "agent-timed-out": "true" } } }, { ticket: "7" }),
