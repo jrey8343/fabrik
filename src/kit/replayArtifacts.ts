@@ -14,7 +14,7 @@ import { REPLAY_GATES_FILE } from "./replayGates.ts";
 import { ARM_JOB_FILE, type ArmArtifacts, type ArmRunArtifacts, replayArtifact, type ReplayArtifactKind } from "./replayRecord.ts";
 import type { ReplayArm, ReplayRole } from "./runRecord.ts";
 
-/** One file of an arm's artifact of `kind`, in `dir`, the job's downloads; null when it isn't there. */
+/** Where one file of an arm's artifact of `kind` is in `dir`, the job's downloads, whether or not the artifact left it. */
 function fileOf(dir: string, kind: ReplayArtifactKind, arm: ReplayArm, file: string): string {
   return join(dir, replayArtifact(kind, arm), file);
 }

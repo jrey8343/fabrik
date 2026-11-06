@@ -260,9 +260,9 @@ describe("The replay score action", () => {
   const judge = stepWith(steps, "uses: ./kit/.github/actions/run-judge");
 
   it("runs the scoring plan on the arm's Implement run before the judge, and the judge only on a run it picks", () => {
-    expect(at(steps, "replay-plan-main.ts")).toBeLessThan(at(steps, "uses: ./kit/.github/actions/run-judge"));
-    expect(stepWith(steps, "replay-plan-main.ts")).toContain("id: plan\n");
-    expect(judge).toContain("if: steps.plan.outputs.score == 'true'");
+    expect(at(steps, "replay-scoring-plan-main.ts")).toBeLessThan(at(steps, "uses: ./kit/.github/actions/run-judge"));
+    expect(stepWith(steps, "replay-scoring-plan-main.ts")).toContain("id: scoring-plan\n");
+    expect(judge).toContain("if: steps.scoring-plan.outputs.score == 'true'");
   });
 
   it("runs the existing judge on the arm's Implement transcript, under artifact names carrying the arm", () => {
@@ -282,7 +282,7 @@ describe("The replay score action", () => {
     expect(account).toContain("if: always()");
     expect(account).toContain("FABRIK_AGENT_STEP: ${{ steps.judge.outcome }}");
     expect(account).toContain("FABRIK_SECRETS_STEP: ${{ steps.judge.outputs.secrets-step }}");
-    expect(account).toContain("FABRIK_NOT_RUN: ${{ steps.plan.outputs.score != 'true' && steps.plan.outputs.why || '' }}");
+    expect(account).toContain("FABRIK_NOT_RUN: ${{ steps.scoring-plan.outputs.score != 'true' && steps.scoring-plan.outputs.why || '' }}");
     expect(stepWith(steps, `name: ${named("score")}\n`)).toContain(`/${ARM_JOB_FILE}`);
   });
 });

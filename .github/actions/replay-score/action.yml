@@ -2,7 +2,7 @@
 # (.github/actions/run-judge), on the arm's transcript, at the pinned release's
 # rubrics: the judge reads them from the Kit checkout its job made at the Kit
 # job's sha, and nothing here lays a candidate Kit sha over it. First it runs
-# the scoring plan on the run (src/kit/replay-plan-main.ts), which picks every
+# the scoring plan on the run (src/kit/replay-scoring-plan-main.ts), which picks every
 # Replay arm's Implement run but still skips one with no transcript, an
 # Infrastructure failure or a reading near the weekly limit, so a skipped run
 # spends no judge run (#286); the replay-record job writes a skip's score file.
@@ -57,18 +57,18 @@ runs:
         path: ${{ runner.temp }}/replay
 
     - name: Plan whether to score the arm's Implement run
-      id: plan
+      id: scoring-plan
       shell: bash
       working-directory: ${{ github.action_path }}/../../..
       env:
         FABRIK_KIT_OUTPUTS: ${{ inputs.kit-outputs }}
         FABRIK_ARM: ${{ inputs.arm }}
         FABRIK_REPLAY_DIR: ${{ runner.temp }}/replay
-      run: node src/kit/replay-plan-main.ts
+      run: node src/kit/replay-scoring-plan-main.ts
 
     - name: Run the judge
       id: judge
-      if: steps.plan.outputs.score == 'true'
+      if: steps.scoring-plan.outputs.score == 'true'
       uses: ./kit/.github/actions/run-judge
       with:
         op-agent-token: ${{ inputs.op-agent-token }}
@@ -90,7 +90,7 @@ runs:
         FABRIK_JOB_STATUS: ${{ job.status }}
         FABRIK_RAN_MODEL: ${{ steps.judge.outputs.model }}
         FABRIK_RAN_EFFORT: ${{ steps.judge.outputs.effort }}
-        FABRIK_NOT_RUN: ${{ steps.plan.outputs.score != 'true' && steps.plan.outputs.why || '' }}
+        FABRIK_NOT_RUN: ${{ steps.scoring-plan.outputs.score != 'true' && steps.scoring-plan.outputs.why || '' }}
       run: node src/kit/replay-arm-main.ts "$RUNNER_TEMP/fabrik-score/arm-job.json"
 
     - name: Pass the judge's account on
