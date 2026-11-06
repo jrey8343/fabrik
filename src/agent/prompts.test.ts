@@ -321,6 +321,17 @@ describe("Prototypes in the prompts", () => {
     expect(line).toContain("A Prototype linked from the Ticket is a reference to rewrite");
     expect(line).toContain("never code to merge, cherry-pick or copy wholesale from `prototype/*`");
   });
+
+  it("review says nothing of a Prototype: the Reviewer judges a PR against its Ticket alone", async () => {
+    expect(await prompt("review")).not.toMatch(/prototype/i);
+  });
+
+  it("design says nothing of a Prototype itself: only the Kit's context on a repo that can prototype does", async () => {
+    const text = await prompt("design");
+    expect(text).not.toContain("Prototype");
+    expect(text).not.toContain("prototype/");
+    expect(text).not.toContain('"kind": "prototype"');
+  });
 });
 
 describe("Questions for the Operator", () => {
