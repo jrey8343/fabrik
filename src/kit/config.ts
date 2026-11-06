@@ -1,5 +1,6 @@
 // The Kit config: loaded from a Product repo's .fabrik/ folder, with every v1
 // default filled in, and validated at the start of every run. Pure, no I/O.
+import { spelled } from "../loop/readable.ts";
 import { AGENT_ROLES, type AgentRole as AgentRoleName } from "../loop/types.ts";
 import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
 
@@ -630,20 +631,15 @@ function isPreviewPlaceholder(name: string): name is PreviewPlaceholder {
 }
 
 function checkPreviewTemplate(template: string): string | null {
-  const only = `a preview URL may use only ${spelledList(PREVIEW_PLACEHOLDERS.map((name) => `{${name}}`))}`;
+  const only = `a preview URL may use only ${spelled(PREVIEW_PLACEHOLDERS.map((name) => `{${name}}`), "and")}`;
   const unknown = [...template.matchAll(PLACEHOLDER)].filter(([, name = ""]) => !isPreviewPlaceholder(name));
   if (unknown.length > 0) {
-    const tokens = spelledList(unknown.map(([token]) => token));
+    const tokens = spelled(unknown.map(([token]) => token), "and");
     return `${tokens} ${unknown.length === 1 ? "is not a placeholder" : "are not placeholders"}; ${only}`;
   }
   const filled = fillPlaceholders(template, PLACEHOLDER_STAND_INS);
   if (/[{}]/.test(filled)) return `it has a { or } that isn't part of a placeholder; ${only}`;
   return checkHttpOrHttpsUrl(filled);
-}
-
-/** `a`, `a and b`, or `a, b and c`. */
-function spelledList(items: readonly string[]): string {
-  return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
 function readAudit(audit: Reader, defaults: KitConfig["audit"]): KitConfig["audit"] {

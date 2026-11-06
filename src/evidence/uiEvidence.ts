@@ -10,6 +10,7 @@ import { posix } from "node:path";
 import { isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
+import { spelled } from "../loop/readable.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 
 /**
@@ -233,11 +234,6 @@ function isOneOf<T extends string>(options: readonly T[], value: unknown): value
   return (options as readonly unknown[]).includes(value);
 }
 
-/** `a`, `a or b`, or `a, b or c`; or with `and`. */
-function spelled(options: readonly string[], conjunction: "or" | "and" = "or"): string {
-  return options.length <= 1 ? options.join("") : `${options.slice(0, -1).join(", ")} ${conjunction} ${options.at(-1)}`;
-}
-
 /**
  * The screenshots a Reviewer gets, at most REVIEWER_IMAGE_CAP so they fit in
  * its context, the ones that matter most first: After before Before, mobile
@@ -429,7 +425,8 @@ function failureLine(reason: CaptureFailure, captures: readonly Capture[]): stri
   return `**Capture failed:** ${FAILURE_WORDS[reason]}. ${took}`;
 }
 
-function screenshots(count: number): string {
+/** `1 screenshot`, or `n screenshots`. */
+export function screenshots(count: number): string {
   return `${count} screenshot${count === 1 ? "" : "s"}`;
 }
 

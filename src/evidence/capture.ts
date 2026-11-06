@@ -5,7 +5,16 @@
 import { UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { parseImplementOutput } from "../loop/implementOutput.ts";
 import { gallery, type GalleryShot } from "./gallery.ts";
-import { type Capture, type CaptureFailure, type CaptureResult, type CaptureSide, type ChosenRoute, isUi, routesFor } from "./uiEvidence.ts";
+import {
+  type Capture,
+  type CaptureFailure,
+  type CaptureResult,
+  type CaptureSide,
+  type ChosenRoute,
+  isUi,
+  routesFor,
+  screenshots,
+} from "./uiEvidence.ts";
 
 /**
  * Where the capture step writes, in the agent's output directory: this
@@ -244,7 +253,7 @@ export function captureStepSummary(outcome: CaptureOutcome): string | null {
       return summary(`Nothing was captured: ${outcome.why}.`);
     case "recorded": {
       const { result } = outcome;
-      const shots = `${result.captures.length} screenshot${result.captures.length === 1 ? "" : "s"}`;
+      const shots = screenshots(result.captures.length);
       if (result.outcome === "failed") return summary(`Capture failed (\`${result.reason}\`) after ${shots}; its log says where it stopped.`);
       const routes = new Set(result.captures.map(({ route }) => route)).size;
       return summary(`Captured ${shots} of ${routes} route${routes === 1 ? "" : "s"} at \`${result.headSha.slice(0, 7)}\`.`);
