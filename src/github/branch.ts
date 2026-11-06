@@ -159,6 +159,10 @@ async function cutFromMain(git: Git, url: string, branch: BuiltBranch, bundlePat
  * only while the branch is still there, and a first round's only while there
  * is no branch yet. It never rebases onto a branch that moved, nor replaces
  * one, as an agent PR's runs may; the next prototype turn builds on what's there.
+ * A branch that moved while the turn ran, as a live Design session's push may
+ * move it, reads as moved, with nothing to push, so the core can say so
+ * (src/loop/prototypeLanding.ts). The lease still refuses a push that loses
+ * the race in the moments between reading the branch and pushing it.
  */
 async function fastForwardOnly(git: Git, url: string, branch: BuiltBranch, bundlePath: string): Promise<AgentBranchGit> {
   const ref = `refs/heads/${branch.name}`;
@@ -166,10 +170,21 @@ async function fastForwardOnly(git: Git, url: string, branch: BuiltBranch, bundl
   await git("fetch", "--quiet", "--depth=1", url, base);
   const tip = await fetchBundle(git, branch, bundlePath);
   if (!(await isAncestor(git, base, tip))) throw new Error(`${branch.name} doesn't start from ${branch.base.ref} at ${base}`);
+  // The head the turn started on: a later round's base, or no branch at all for a first round's.
+  const from = branch.base.ref === branch.name ? base : null;
+  const changes = { net: await diff(git, base, tip), commits: await commitsIn(git, `${base}..${tip}`), updatedFromMain: false };
+  const now = (await git("ls-remote", url, ref)).split("\t")[0]?.trim() || null;
+  if (now !== from) {
+    return {
+      changes: { ...changes, moved: { from, to: now } },
+      head: null,
+      push: () => Promise.reject(new Error(`${branch.name} moved while the prototype turn ran, so there's nothing to push`)),
+    };
+  }
   // An empty lease means the branch mustn't exist yet.
-  const lease = branch.base.ref === branch.name ? base : "";
+  const lease = from ?? "";
   return {
-    changes: { net: await diff(git, base, tip), commits: await commitsIn(git, `${base}..${tip}`), updatedFromMain: false },
+    changes,
     head: tip,
     async push(name) {
       if (name !== branch.name) throw new Error(`Asked to push ${name}, but the bundle holds ${branch.name}`);

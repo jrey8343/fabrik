@@ -390,7 +390,7 @@ describe("A prototype turn's branch", () => {
     expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "refuse", paths: ["AGENTS.md"] });
   });
 
-  it("refuses to push over the branch when it moved since the turn started, rather than rebase onto it or replace it", async () => {
+  it("reads a branch that moved since the turn started as moved, with nothing to push, rather than rebase onto it or replace it", async () => {
     const earlier = await pushedRound({ "src/pages/book/A.tsx": "variant A\n" });
     await git(clone, "fetch", "--quiet", "origin");
     await git(clone, "checkout", "--quiet", "-B", PROTOTYPE, `origin/${PROTOTYPE}`);
@@ -401,12 +401,44 @@ describe("A prototype turn's branch", () => {
     await git(other, "push", "--quiet", "origin", PROTOTYPE);
     const branch = await rebuildPrototype({ ref: PROTOTYPE, sha: earlier });
 
-    await expect(branch.push(PROTOTYPE)).rejects.toThrow();
+    expect(branch.changes.moved).toEqual({ from: earlier, to: moved });
     expect(branch.changes.rebase).toBeUndefined();
+    expect(branch.head).toBeNull();
+    await expect(branch.push(PROTOTYPE)).rejects.toThrow();
     expect(await git(remote, "rev-parse", `refs/heads/${PROTOTYPE}`)).toBe(moved);
   });
 
-  it("refuses, on a first round, to replace a prototype branch that was pushed while the turn worked", async () => {
+  it("reads a branch deleted since the turn started as moved to nowhere, with nothing to push", async () => {
+    const earlier = await pushedRound({ "src/pages/book/A.tsx": "variant A\n" });
+    await git(clone, "fetch", "--quiet", "origin");
+    await git(clone, "checkout", "--quiet", "-B", PROTOTYPE, `origin/${PROTOTYPE}`);
+    await commit(clone, { "src/pages/book/C.tsx": "variant C\n" }, "Another variant");
+    await git(remote, "update-ref", "-d", `refs/heads/${PROTOTYPE}`);
+    const branch = await rebuildPrototype({ ref: PROTOTYPE, sha: earlier });
+
+    expect(branch.changes.moved).toEqual({ from: earlier, to: null });
+    expect(branch.head).toBeNull();
+    await expect(branch.push(PROTOTYPE)).rejects.toThrow();
+  });
+
+  it("reads, on a first round, a prototype branch pushed while the turn worked as moved, with nothing to push", async () => {
+    const { main } = await firstRound();
+    const meanwhile = await pushedRound({ "src/pages/book/Z.tsx": "meanwhile\n" });
+    const branch = await rebuildPrototype({ ref: "main", sha: main });
+
+    expect(branch.changes.moved).toEqual({ from: null, to: meanwhile });
+    expect(branch.head).toBeNull();
+    await expect(branch.push(PROTOTYPE)).rejects.toThrow();
+    expect(await git(remote, "rev-parse", `refs/heads/${PROTOTYPE}`)).toBe(meanwhile);
+  });
+
+  it("reads a branch that stayed where the turn started as not moved", async () => {
+    const { main } = await firstRound();
+
+    expect((await rebuildPrototype({ ref: "main", sha: main })).changes.moved).toBeUndefined();
+  });
+
+  it("refuses, on a first round, to replace a prototype branch pushed after the push job read it, in the moments before its own push", async () => {
     const { main } = await firstRound();
     const branch = await rebuildPrototype({ ref: "main", sha: main });
     const meanwhile = await pushedRound({ "src/pages/book/Z.tsx": "meanwhile\n" });

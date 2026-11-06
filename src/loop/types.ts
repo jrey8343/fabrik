@@ -57,6 +57,14 @@ export interface BranchChanges {
    * the run's own changes, as rebased; with one, there's nothing to push.
    */
   readonly rebase?: { readonly onto: string; readonly conflicted: boolean };
+  /**
+   * For a prototype turn's branch (#155) that moved while the turn ran, as a
+   * live Design session's push may move it: the head the turn started on
+   * (null when it cut the branch afresh, there being none) and where the
+   * branch is now (null when it's gone). A prototype branch is only ever
+   * fast-forwarded from the head its turn started on, so there's nothing to push.
+   */
+  readonly moved?: { readonly from: string | null; readonly to: string | null };
 }
 
 /**

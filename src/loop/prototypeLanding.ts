@@ -7,6 +7,7 @@ import { type CaptureFailure, code, type PreviewLink } from "../evidence/uiEvide
 import { type PreviewConfig, previewNamesPullRequest } from "../kit/config.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { turnStartFrom, whileInSession } from "./design.ts";
+import { prototypeTurnRefused } from "./failures.ts";
 import { parsePrototypeTurnOutput, prototypeBranchFor, type PrototypeRoundOutput } from "./designOutput.ts";
 import {
   DESIGN_ROUND_MARKER,
@@ -16,7 +17,7 @@ import {
   type PrototypeRequestMarker,
 } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
-import type { Action, IssueContext, LoopEvent, Plan, PostedComment, StartingComment } from "./types.ts";
+import type { Action, BranchChanges, IssueContext, LoopEvent, Plan, PostedComment, StartingComment } from "./types.ts";
 
 type PrototypeRunFinished = Extract<LoopEvent, { kind: "prototype-run-finished" }>;
 
@@ -30,7 +31,10 @@ const ROUND_COMMENT: PostedComment = { posted: "prototype-round" };
  * The push job's decision on a prototype turn's branch and round. `found` is
  * what the snapshot found of the Operator's reply that approved the
  * prototype: like any Design-session turn, one whose reply was deleted posts
- * nothing. `preview` is Kit config's, whose link the round waits on.
+ * nothing, and so does a result the session no longer waits on. A result it
+ * still waits on but can't land, whose output breaks its contract or whose
+ * branch moved, gets the Design-session turn's failure notice, never silence.
+ * `preview` is Kit config's, whose link the round waits on.
  */
 export function applyPrototypeTurn(
   event: PrototypeRunFinished,
@@ -52,18 +56,6 @@ export function applyPrototypeTurn(
       reason: `The Operator's reply that approved the prototype on #${event.issue} (comment ${start.comment.id}) was deleted, so the prototype turn posts nothing`,
     };
   }
-  const parsed = parsePrototypeTurnOutput(event.output);
-  if (!parsed.ok) {
-    return {
-      kind: "fail",
-      failure: "infrastructure",
-      reason: `The prototype turn on #${event.issue} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
-    };
-  }
-  const own = prototypeBranchFor(event.issue);
-  if (event.branch !== own) {
-    return { kind: "fail", failure: "infrastructure", reason: `\`${event.branch}\` isn't #${event.issue}'s prototype branch, ${own}` };
-  }
   const notNow = whileInSession(event.issue, issue);
   if (notNow !== null) return notNow;
   // The push job reads only the Fabrik App's own requests, so a look-alike another bot posted, which
@@ -73,6 +65,20 @@ export function applyPrototypeTurn(
       kind: "nothing",
       reason: `#${event.issue}'s Design session isn't waiting on the prototype request this turn built, so its result is stale`,
     };
+  }
+  // What the push job can't land is the prototype turn's Infrastructure failure, as its agent job failing would be.
+  const refused = (how: string) => prototypeTurnRefused(event.issue, operator, how, event.runUrl);
+  const parsed = parsePrototypeTurnOutput(event.output);
+  if (!parsed.ok) {
+    // The notice's one line may quote the output, so it mentions nobody and stays one line.
+    const errors = withoutMentions(parsed.errors.join("; ").replace(/\s+/g, " "));
+    return refused(`its output broke the prototype turn's output contract (${errors})`);
+  }
+  const own = prototypeBranchFor(event.issue);
+  if (event.branch !== own) return refused(`it built \`${event.branch}\`, which isn't #${event.issue}'s prototype branch, ${own}`);
+  const { moved } = event.changes;
+  if (moved !== undefined) {
+    return refused(`${movedWhileItRan(own, moved)}, and the Kit only ever fast-forwards a prototype branch from the head its turn started on, so it pushed nothing`);
   }
   const round = issue.designRounds + 1;
   const comment = (body: string): Action => ({ kind: "comment", issue: event.issue, body });
@@ -122,6 +128,13 @@ type RoundPreview = { readonly kind: "none" } | { readonly kind: "pending"; read
 function previewOfRound(preview: PreviewConfig | null): RoundPreview {
   if (preview === null) return { kind: "none" };
   return previewNamesPullRequest(preview.url) ? { kind: "needs-pull-request" } : { kind: "pending", template: preview.url };
+}
+
+/** How the prototype branch moved while its turn ran: on from where the turn started, there when the turn cut it afresh, or gone. */
+function movedWhileItRan(branch: string, { from, to }: NonNullable<BranchChanges["moved"]>): string {
+  if (to === null) return `\`${branch}\` was deleted while it ran`;
+  if (from === null) return `\`${branch}\` was pushed, at ${to.slice(0, 7)}, while it ran, though the turn cut it afresh`;
+  return `\`${branch}\` moved from ${from.slice(0, 7)} to ${to.slice(0, 7)} while it ran`;
 }
 
 function sameRequest({ request: a, reply: replyA }: PrototypeRequestMarker, { request: b, reply: replyB }: PrototypeRequestMarker): boolean {
