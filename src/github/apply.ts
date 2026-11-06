@@ -1,6 +1,7 @@
 // The adapter's apply side: carries out the plan the core returns, one action
 // at a time, as the token the job holds. It holds no Loop rules.
 import { previewUrl } from "../kit/config.ts";
+import { withDecisionLine } from "../loop/decisionsSoFar.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
 import type { GitHub, Repo } from "./client.ts";
 
@@ -292,7 +293,12 @@ async function applyToIssue(
       return;
     }
     case "comment-linking": {
-      const body = action.body.map((part) => (typeof part === "string" ? part : postedIn(posted, part))).join("");
+      const body = action.body
+        .map((part) => {
+          if (typeof part === "string") return part;
+          return "posted" in part ? postedIn(posted, part) : `#${createdIn(created, part).number}`;
+        })
+        .join("");
       await github.rest("POST", `${issue}/comments`, { body });
       return;
     }
@@ -305,6 +311,13 @@ async function applyToIssue(
     case "edit-issue-body":
       await github.rest("PATCH", issue, { body: action.body });
       return;
+    case "append-to-decisions-so-far": {
+      // Read right before the write, so what the Operator edited after the plan was made stays.
+      const line = action.line.map((part) => (typeof part === "string" ? part : postedIn(posted, part))).join("");
+      const map = (await github.rest("GET", issue)) as { body: string | null };
+      await github.rest("PATCH", issue, { body: withDecisionLine(map.body ?? "", line) });
+      return;
+    }
     case "close-as-superseded": {
       const body = action.comment
         .map((part) => (typeof part === "string" ? part : `#${createdIn(created, part).number}`))

@@ -79,9 +79,10 @@ export const MONITOR_LABEL = "fabrik:monitor";
  */
 export const MAP_LABEL = "wayfinder:map";
 
-/** How a Decision under a Map gets resolved, which its `wayfinder:<type>` label says (#154). */
+/** How a Decision on a Map gets resolved. Each names the `wayfinder:<type>` label the Decision carries. */
 export const DECISION_TYPES = ["research", "prototype", "grilling", "task"] as const;
 export type DecisionType = (typeof DECISION_TYPES)[number];
+/** A Decision's label, which says how it gets resolved. A Decision carries no state or category label. */
 export type DecisionLabel = `wayfinder:${DecisionType}`;
 
 /** The label on a research Decision: one the Researcher resolves AFK, under an open Map (#154). */
@@ -104,9 +105,14 @@ export type Label =
   | KitIssueLabel
   | typeof MONITOR_LABEL
   | typeof MAP_LABEL
+  | DecisionLabel
   | typeof RESEARCH_LABEL;
 
-/** Every label the Kit uses, so the setup skill can create each one. */
+/**
+ * Every label the Kit uses, so the setup skill can create each one. The Map
+ * and Decision labels join it when Ideas and Maps is switched on (#263);
+ * until then GitHub creates them as a Map lands.
+ */
 export const ALL_LABELS: readonly Label[] = [
   ...STATE_LABELS,
   DISPATCH_LABEL,

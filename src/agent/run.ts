@@ -155,6 +155,8 @@ const ROLE_SPECS = {
           return `The Design session on #${issue} split it into ${output.tickets.length} sibling Ticket(s)`;
         case "not-planned":
           return `The Design session on #${issue} finished as not planned`;
+        case "map":
+          return `The Design session on #${issue} charted it as a Map with ${output.decisions.length} Decision(s)`;
       }
     },
     readsParentSpec: true,

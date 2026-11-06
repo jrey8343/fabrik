@@ -60,6 +60,9 @@ export const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 /** The first line of the Kit's note that a Ticket came back to design from an agent PR. */
 export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
 
+/** The heading of a Map's Decisions so far: one line under it per Decision resolved. */
+export const DECISIONS_SO_FAR_HEADING = "## Decisions so far";
+
 /** What a Monitor issue's marker line says it tracks (#148): a Sentry group, or red main. */
 export type MonitorMarker = { readonly kind: "sentry"; readonly group: string } | { readonly kind: "red-main" };
 

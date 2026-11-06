@@ -43,6 +43,16 @@ const spec = {
   tickets: [{ key: "split", title: "Move billing out", body: "## What to build\n\nMove billing into its own module.", blockedBy: [] }],
 };
 
+const map = {
+  kind: "map",
+  comment: "Too foggy for one session.",
+  destination: "Booking and billing live in modules of their own.",
+  notes: "Consult the codebase-design skill.",
+  notYetSpecified: "- Where invoices live",
+  outOfScope: "- Splitting payroll",
+  decisions: [{ key: "seam", title: "Billing's seam?", body: "## Question\n\nWhere does billing's seam fall?", type: "grilling", blockedBy: [] }],
+};
+
 describe("A Design session's rewrite keeps the issue's From audit line and escape marker", () => {
   it("ends the Operator brief with both lines, as the filed issue did", () => {
     const plan = planFor(turnFinished(operatorBrief), inSession(filedCandidate), kitConfig());
@@ -103,6 +113,38 @@ describe("A Design session's rewrite keeps the issue's From audit line and escap
     );
   });
 
+  it("ends the Map body with both lines too, since it rewrites the filed issue in place, and leaves its Decisions as they were", () => {
+    const plan = planFor(turnFinished(map), inSession(filedCandidate), kitConfig());
+
+    expect(rewrittenBody(plan)).toBe(
+      [
+        "## Destination",
+        "",
+        "Booking and billing live in modules of their own.",
+        "",
+        "## Notes",
+        "",
+        "Consult the codebase-design skill.",
+        "",
+        "## Decisions so far",
+        "",
+        "## Not yet specified",
+        "",
+        "- Where invoices live",
+        "",
+        "## Out of scope",
+        "",
+        "- Splitting payroll",
+        "",
+        "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
+        "",
+        "From audit #40",
+        "<!-- fabrik:escape strong #31 #35 -->",
+      ].join("\n"),
+    );
+    expect(createdBody(plan, "decision:seam")).toBe("## Question\n\nWhere does billing's seam fall?");
+  });
+
   it("leaves the Spec's Tickets as they were: only the Spec takes the issue's place", () => {
     const plan = planFor(turnFinished(spec), inSession(filedCandidate), kitConfig());
 
@@ -149,6 +191,7 @@ describe("A Design session's rewrite keeps the issue's From audit line and escap
     ["an Operator brief", operatorBrief],
     ["an agent brief", agentBrief],
     ["a Spec", spec],
+    ["a Map", map],
   ])("rewrites an issue with neither line as %s exactly as before, mentioning the Audit in passing or not", (_, output) => {
     const plainIssue = [
       "Booking and billing share one module, as From audit #40 said.",
