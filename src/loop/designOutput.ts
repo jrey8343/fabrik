@@ -6,7 +6,9 @@
 // Spec. Any Ticket in an outcome may instead be an Operator step. Or the
 // session ends as not planned: the Operator decided the issue won't be built.
 // Or, when the destination is too foggy to design in one session, the issue
-// becomes a Map with its first Decisions.
+// becomes a Map with its first Decisions. Two kinds carry a Prototype (#155)
+// and end nothing: an ordinary turn's `prototype`, the request the Operator
+// approved, and a prototype turn's `prototype-round`, the variants it built.
 import { isRoute } from "../kit/config.ts";
 import { isCommentIdList } from "./considered.ts";
 import { DECISION_TYPES, type DecisionType } from "./labels.ts";
