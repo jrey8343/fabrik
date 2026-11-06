@@ -296,6 +296,16 @@ describe("Capturing UI evidence", () => {
     expect(logs.join("\n")).toContain("http://127.0.0.1:4321");
   });
 
+  it("keeps the capture it took when stopping the server fails", async () => {
+    const { capturer } = runner({
+      stop: async () => {
+        throw new Error("kill ESRCH");
+      },
+    });
+
+    expect(await captureEvidence(input(), capturer)).toMatchObject({ kind: "recorded", result: { outcome: "captured" } });
+  });
+
   it("names each screenshot a plain file by its side, viewport and route, unique even for routes that read alike, as the capture result reads it back", async () => {
     const { capturer } = runner();
     const long = `/${"treatments/".repeat(8)}dry-needling`;

@@ -43,7 +43,7 @@ export interface Shot extends ChosenRoute {
   readonly image: string;
 }
 
-/** How a step capture waits on ended: it finished, it failed, or it ran past the time it was given. */
+/** How a command capture runs to its end ended: it finished, it failed, or it ran past the time it was given. */
 export type Finished = "ok" | "failed" | "timed-out";
 
 /** What capture does to the runner: the Playwright shell for real, a fake in tests. */
@@ -125,7 +125,8 @@ export async function captureEvidence(input: CaptureInput, capturer: Capturer): 
     capturer.log(`Capture failed: ${messageOf(error)}`);
     failure = "error";
   } finally {
-    await capturer.stop();
+    // Stopping is tidying up: it never costs what capture took.
+    await capturer.stop().catch((error: unknown) => capturer.log(`Capture couldn't stop all it started: ${messageOf(error)}`));
   }
   return recorded(failure === null ? { outcome: "captured", headSha, captures } : { outcome: "failed", reason: failure, headSha, captures });
 }
