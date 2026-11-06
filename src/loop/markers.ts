@@ -197,16 +197,43 @@ function numberOnFirstLineIn(body: string, line: RegExp): number | null {
  * can leave one open above the trailer it ends with.
  */
 export function linesOutsideCode(body: string): string[] {
+  return fencedRunsOf(body).runs.flatMap(({ code, lines }) => (code ? [] : lines));
+}
+
+/** A run of a Markdown body's lines: one fenced code block, its fence lines included, or lines outside any. */
+export interface MarkdownRun {
+  readonly code: boolean;
+  readonly lines: readonly string[];
+}
+
+/**
+ * A Markdown body's lines in runs, each one fenced code block or the lines
+ * between them, as linesOutsideCode reads them. A fence that never closes
+ * quotes nothing there, but GitHub renders everything after it as code:
+ * `open` is the first such fence, or null when every fence closes.
+ */
+export function fencedRunsOf(body: string): { readonly runs: readonly MarkdownRun[]; readonly open: string | null } {
   const lines = body.split("\n");
-  const outside: string[] = [];
+  const runs: { code: boolean; lines: string[] }[] = [];
+  const add = (code: boolean, added: readonly string[]) => {
+    const last = runs.at(-1);
+    if (last !== undefined && !last.code && !code) last.lines.push(...added);
+    else runs.push({ code, lines: [...added] });
+  };
+  let open: string | null = null;
   for (let at = 0; at < lines.length; at++) {
     const line = lines[at] ?? "";
     const fence = fenceOpenedBy(line);
     const closing = fence === null ? -1 : lines.findIndex((each, i) => i > at && closesFence(fence, each));
-    if (closing === -1) outside.push(line);
-    else at = closing;
+    if (closing === -1) {
+      open ??= fence;
+      add(false, [line]);
+    } else {
+      add(true, lines.slice(at, closing + 1));
+      at = closing;
+    }
   }
-  return outside;
+  return { runs, open };
 }
 
 /** The fence a line opens a fenced code block with, as CommonMark reads it, or null when it opens none. */

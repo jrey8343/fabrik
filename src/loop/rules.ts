@@ -26,6 +26,7 @@ import { startAgentRun } from "./runs.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
 import { isPendingRetro } from "./retro.ts";
+import { landRetro } from "./retroLanding.ts";
 import { dispatch } from "./dispatch.ts";
 import { applyRedChecks, applyReview, startReview } from "./review.ts";
 import type {
@@ -108,6 +109,8 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
       return applyReview(event, snapshot);
     case "audit-run-finished":
       return withIssue(snapshot, (context) => landAudit(event, context, snapshot.namedPullRequests));
+    case "retro-run-finished":
+      return withIssue(snapshot, (context) => landRetro(event, context));
     case "pull-request-changes-requested":
       return requestChanges(event, snapshot, config);
     // Context for the next run that reads the PR, never a trigger (ADR-0007).

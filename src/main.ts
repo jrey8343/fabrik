@@ -32,7 +32,8 @@ function describe(plan: Plan): string {
     case "fail":
       return `The run failed (${plan.failure} failure): ${plan.reason}`;
     case "act":
-      return plan.actions.map(describeAction).join("\n");
+      // Notes, such as what a Retro's landing dropped, change nothing on GitHub, so they follow the actions, set apart.
+      return [...plan.actions.map(describeAction), ...(plan.notes === undefined ? [] : ["", ...plan.notes.map((note) => `- ${note}`)])].join("\n");
   }
 }
 
