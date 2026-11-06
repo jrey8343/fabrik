@@ -147,6 +147,14 @@ describe("Product intent in the Design prompt", () => {
     expect(brief).toContain('It opens with a "Who and why" line, which starts `**Who and why**:`');
     expect(brief).toContain("the End users it serves and why it matters to them");
   });
+
+  it("turns a decision the Vision doesn't yet say into an Update vision.md Operator step carrying the exact lines", async () => {
+    const intent = section(await prompt("design"), "Product intent");
+    expect(intent).toContain('an Operator step titled "Update `vision.md`"');
+    expect(intent).toContain("the exact lines to add to `docs/product/vision.md`, or to change in it");
+    expect(intent).toContain("finishes as a small Spec instead: one Ticket and that Operator step");
+    expect(intent).toContain("With no Vision, add no such step.");
+  });
 });
 
 describe("Questions for the Operator", () => {
