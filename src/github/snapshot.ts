@@ -911,7 +911,7 @@ async function gatherPullRequest(
       pushedSinceVerdict: pushedSinceVerdictIn(botComments),
       changesRequested: changesRequestedOf(pullRequest.reviews.nodes[0]),
       // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
-      uiEvidence: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
+      uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
     },
     dispatch: null,
     designQueue: null,

@@ -384,7 +384,7 @@ export interface PullRequestSnapshot {
    * Where its UI evidence is kept, read from the marker in the body the Fabrik
    * App wrote (src/evidence/uiEvidence.ts), or null when it has none: not a UI PR.
    */
-  readonly uiEvidence: EvidenceMarker | null;
+  readonly uiEvidenceMarker: EvidenceMarker | null;
 }
 
 /** A review requesting changes on a PR, as GitHub records it. */

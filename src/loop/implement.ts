@@ -165,7 +165,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       ),
     };
   }
-  const evidence = evidenceFor(event, config, pullRequest.uiEvidence !== null);
+  const evidence = evidenceFor(event, config, pullRequest.uiEvidenceMarker !== null);
   // The body and the note go first: the push starts a Review, which must see the run's outcome (or it posts no
   // Verdict) and the body as it now stands.
   return {

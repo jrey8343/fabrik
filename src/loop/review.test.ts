@@ -54,7 +54,7 @@ describe("Review: starting one", () => {
   // The Kit job passes it out for the Review job, which downloads the screenshots (#153).
   it("a push to a UI PR, whose body marks where its UI evidence is kept, starts a Review carrying that, and otherwise the same", () => {
     const config = kitConfig();
-    const marked = aPullRequest({ uiEvidence: { run: 9100, artifact: 9202 } });
+    const marked = aPullRequest({ uiEvidenceMarker: { run: 9100, artifact: 9202 } });
     const plan = planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(marked), config);
 
     expect(plan).toEqual({
@@ -75,14 +75,14 @@ describe("Review: starting one", () => {
   });
 
   it("a Review of a UI PR whose Implement run kept no screenshots still carries where it was captured, so the Reviewer hears why there are none", () => {
-    const marked = aPullRequest({ uiEvidence: { run: 9100, artifact: null } });
+    const marked = aPullRequest({ uiEvidenceMarker: { run: 9100, artifact: null } });
     const plan = planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(marked), kitConfig());
 
     expect(actionsOf(plan)).toMatchObject([{ kind: "start-agent-run", role: "review", evidence: { run: 9100, artifact: null } }]);
   });
 
   it("agent:review added to a UI PR starts a Review carrying where its UI evidence is kept, as a push does", () => {
-    const marked = aPullRequest({ labels: ["agent:review"], uiEvidence: { run: 9100, artifact: 9202 } });
+    const marked = aPullRequest({ labels: ["agent:review"], uiEvidenceMarker: { run: 9100, artifact: 9202 } });
     const plan = planFor({ kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" }, snapshotOfPullRequest(marked), kitConfig());
 
     expect(actionsOf(plan)).toMatchObject([{ kind: "start-agent-run", role: "review", evidence: { run: 9100, artifact: 9202 } }]);

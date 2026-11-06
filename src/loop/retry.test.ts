@@ -56,7 +56,7 @@ describe("An Execution flaw starts a retry", () => {
   // A visual failure the Reviewer saw in the screenshots is an Execution flaw like any other (#153).
   it("an Execution flaw on a UI PR, naming a route and screenshot, starts a retry exactly as one on any PR", () => {
     const flaw = reviewed("verdict: execution-flaw\n\n- `/waitlist` spills off the side at mobile width (`after-mobile-waitlist.png`).");
-    const marked = aPullRequest({ uiEvidence: { run: 9100, artifact: 9202 } });
+    const marked = aPullRequest({ uiEvidenceMarker: { run: 9100, artifact: 9202 } });
 
     expect(planFor(flaw, snapshotOfPullRequest(marked), kitConfig())).toEqual(planFor(flaw, snapshotOfPullRequest(aPullRequest()), kitConfig()));
     expect(actionsOf(planFor(flaw, snapshotOfPullRequest(marked), kitConfig()))).toContainEqual(RETRY_TRIGGER);
@@ -111,7 +111,7 @@ describe("Starting a retry", () => {
 
   // Its Implement job captures again from its own diff (#153), so the run carries no evidence of its own.
   it("on a UI PR starts exactly the retry it would on any PR", () => {
-    const marked = { ...flawedPullRequest(), uiEvidence: { run: 9100, artifact: 9202 } };
+    const marked = { ...flawedPullRequest(), uiEvidenceMarker: { run: 9100, artifact: 9202 } };
 
     expect(planFor(retryLabeled, resumeSnapshot(marked), kitConfig())).toEqual(planFor(retryLabeled, resumeSnapshot(), kitConfig()));
   });
@@ -406,7 +406,7 @@ describe("The evidence section on a retry's PR", () => {
       evidence: anEvidence(CAPTURED),
       ...overrides,
     });
-  const markedUi = () => aPullRequest({ verdicts: flawedPullRequest().verdicts, uiEvidence: { run: 8000, artifact: 8002 } });
+  const markedUi = () => aPullRequest({ verdicts: flawedPullRequest().verdicts, uiEvidenceMarker: { run: 8000, artifact: 8002 } });
 
   it("replaces the old one on a PR marked UI, though the retry's own changes match no ui.paths, so the old one is gone", () => {
     const actions = actionsOf(planFor(copyingForward(), retrySnapshot(markedUi()), kitConfig({ ui: UI })));
@@ -434,7 +434,7 @@ describe("The preview deployment of a retry's PR", () => {
   const PREVIEW = { url: "https://{branch_slug}.shop.pages.dev" };
   const uiRetry = (overrides: Partial<Extract<LoopEvent, { kind: "implement-run-finished" }>> = {}) =>
     retried({ evidence: anEvidence(CAPTURED), ...overrides });
-  const markedUi = () => aPullRequest({ verdicts: flawedPullRequest().verdicts, uiEvidence: { run: 8000, artifact: 8002 } });
+  const markedUi = () => aPullRequest({ verdicts: flawedPullRequest().verdicts, uiEvidenceMarker: { run: 8000, artifact: 8002 } });
 
   it.each([
     ["a retry", uiRetry()],

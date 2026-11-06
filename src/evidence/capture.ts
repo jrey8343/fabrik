@@ -212,8 +212,8 @@ function slug(route: string): string {
 }
 
 /** The step output the push job reads the capture result from: one compact JSON line, empty when nothing was captured. */
-export function captureStepOutputs(outcome: CaptureOutcome): Readonly<Record<"ui-evidence", string>> {
-  return { "ui-evidence": outcome.kind === "recorded" ? JSON.stringify(outcome.result) : "" };
+export function captureStepOutputs(outcome: CaptureOutcome): Readonly<Record<"ui-capture-result", string>> {
+  return { "ui-capture-result": outcome.kind === "recorded" ? JSON.stringify(outcome.result) : "" };
 }
 
 /** What capture writes beside its screenshots: the capture result, and the gallery when it took any. */

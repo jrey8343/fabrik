@@ -654,7 +654,7 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
   // The push job downloads fabrik-agent-* and reads an empty download as a timeout.
   it("keeps the evidence only when capture recorded a result, apart from the push job's artifacts, never failing the job", () => {
     for (const upload of [evidence(), gallery()]) {
-      expect(upload).toContain("if: steps.capture.outputs.ui-evidence != ''\n");
+      expect(upload).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
       expect(upload).toContain("continue-on-error: true");
       expect(upload).toContain("if-no-files-found: ignore");
       expect(upload).not.toMatch(/name: fabrik-agent-/);
@@ -665,7 +665,7 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
   });
 
   it("passes out the capture result and the ids of both evidence artifacts, for the push job", () => {
-    expect(implement()).toContain("ui-evidence: ${{ steps.capture.outputs.ui-evidence }}");
+    expect(implement()).toContain("ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}");
     expect(implement()).toContain("ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}");
     expect(implement()).toContain("ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}");
   });
@@ -673,8 +673,8 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
   // Switched on (#239): no gate is left, so every UI PR in a repo with a ui block captures evidence.
   it("is active: capture runs on every Implement run whose agent ended well, and both uploads whenever it recorded a result", () => {
     expect(capture()).toContain("if: success()\n");
-    expect(evidence()).toContain("if: steps.capture.outputs.ui-evidence != ''\n");
-    expect(gallery()).toContain("if: steps.capture.outputs.ui-evidence != ''\n");
+    expect(evidence()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
+    expect(gallery()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
     expect(implement()).not.toMatch(/if: false\b/);
   });
 

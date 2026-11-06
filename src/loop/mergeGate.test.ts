@@ -261,7 +261,7 @@ describe("A Request-changes run's branch", () => {
   });
 
   it("replaces the evidence section on a PR marked UI with its own, so the old one is gone", () => {
-    const markedUi = aPullRequest({ verdicts: [earlier("pass", { headSha: HEAD_SHA })], uiEvidence: { run: 8000, artifact: 8002 } });
+    const markedUi = aPullRequest({ verdicts: [earlier("pass", { headSha: HEAD_SHA })], uiEvidenceMarker: { run: 8000, artifact: 8002 } });
 
     const plan = planFor(requestChangesPushed(undefined, anEvidence(CAPTURED)), pushSnapshot(markedUi), kitConfig({ ui: UI }));
 

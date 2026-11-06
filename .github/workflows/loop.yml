@@ -423,7 +423,7 @@ jobs:
       # UI evidence (#153), for the push job: the capture result as one compact
       # JSON line, empty when nothing was captured, and the numeric ids of the
       # zipped screenshots-and-result artifact and the unzipped gallery's.
-      ui-evidence: ${{ steps.capture.outputs.ui-evidence }}
+      ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}
       ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}
       ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}
     steps:
@@ -563,7 +563,7 @@ jobs:
       # continue-on-error: keeping evidence must never fail a run that passed.
       - name: Keep the UI evidence
         id: evidence
-        if: steps.capture.outputs.ui-evidence != ''
+        if: steps.capture.outputs.ui-capture-result != ''
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -577,7 +577,7 @@ jobs:
       # screenshot leaves none.
       - name: Keep the UI evidence gallery
         id: gallery
-        if: steps.capture.outputs.ui-evidence != ''
+        if: steps.capture.outputs.ui-capture-result != ''
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

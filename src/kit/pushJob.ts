@@ -20,7 +20,7 @@ export type Needs = Readonly<Record<string, NeededJob>>;
  * whether the run is UI, and so whether any of it reaches the PR.
  */
 export interface CaptureOutputs {
-  /** The capture step's result (`ui-evidence`), or null when it passed out none that reads. */
+  /** The capture step's result (`ui-capture-result`), or null when it passed out none that reads. */
   readonly result: CaptureResult | null;
   /** The id of the zipped artifact of the screenshots and the capture result (`ui-evidence-artifact`). */
   readonly artifact: number | null;
@@ -152,7 +152,7 @@ function failure(role: AgentRole, issue: number, job: NeededJob, kit: NeededJob)
 }
 
 function captureOutputs(outputs: NeededJob["outputs"]): CaptureOutputs {
-  const text = outputs["ui-evidence"] ?? "";
+  const text = outputs["ui-capture-result"] ?? "";
   const read = text === "" ? null : parseCaptureResult(text);
   return {
     result: read?.ok === true ? read.result : null,

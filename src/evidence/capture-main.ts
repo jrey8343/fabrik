@@ -5,7 +5,7 @@
 // `sandbox.build`, frees `ui.url`'s port, starts `ui.serve`, screenshots each
 // shot headless, and writes the screenshots, the capture result and the
 // gallery into the agent's output directory, passing the result out as the
-// step output `ui-evidence`. No model turns, no MCP, no video. Capture's own
+// step output `ui-capture-result`. No model turns, no MCP, no video. Capture's own
 // failures are in the capture result, never this step's exit code. Its tests
 // run it in a repo without a ui block, where it must do nothing; the Pilot
 // exercises the Playwright path.

@@ -70,8 +70,8 @@ describe("The capture step in a Product repo without a ui block", () => {
       },
     });
 
-    // An empty ui-evidence output: both uploads run only when it isn't (loop.yml).
-    expect(await readFile(files.outputs, "utf8")).toBe("ui-evidence=\n");
+    // An empty ui-capture-result output: both uploads run only when it isn't (loop.yml).
+    expect(await readFile(files.outputs, "utf8")).toBe("ui-capture-result=\n");
     expect(await readFile(files.summary, "utf8")).toBe("");
     expect(stdout).toBe("");
     // Nothing built, served or screenshotted, and nothing of the agent's left to pass for evidence.
