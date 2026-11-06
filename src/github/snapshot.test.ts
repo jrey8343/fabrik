@@ -948,6 +948,26 @@ describe("Gathering an issue's Design session", () => {
 
       expect(issue?.pendingPrototype).toEqual({ request: { route: "/book", variants: 3, brief }, reply: 9001 });
     });
+
+    it("counts only a request posted since the issue last got needs-design", async () => {
+      const issue = await gatheredIssue(
+        [{ body: requestComment(), createdAt: "2026-10-02T09:00:00Z", author: app }],
+        [{ __typename: "LabeledEvent", createdAt: "2026-11-01T09:00:00Z", label: { name: "needs-design" } }],
+      );
+
+      expect(issue?.pendingPrototype).toBeNull();
+    });
+
+    // As byAppOf takes them: the Kit job, which only routes, doesn't know the App's login.
+    it("takes only the Fabrik App's request once it knows the App's login, and any bot's while it doesn't, never a person's", async () => {
+      const other = { login: "other-app", __typename: "Bot" };
+      const person = { login: "jrey", __typename: "User" };
+
+      expect((await gatheredIssue([{ body: requestComment(), author: app }], [], "fabrik-app[bot]"))?.pendingPrototype).not.toBeNull();
+      expect((await gatheredIssue([{ body: requestComment(), author: other }], [], "fabrik-app[bot]"))?.pendingPrototype).toBeNull();
+      expect((await gatheredIssue([{ body: requestComment(), author: other }]))?.pendingPrototype).not.toBeNull();
+      expect((await gatheredIssue([{ body: requestComment(), author: person }]))?.pendingPrototype).toBeNull();
+    });
   });
 });
 
