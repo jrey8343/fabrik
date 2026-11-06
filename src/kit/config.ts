@@ -110,6 +110,11 @@ export interface PreviewConfig {
   readonly url: string;
 }
 
+/** The placeholders a `preview.url` template may use, filled in from the pull request after the push. */
+export const PREVIEW_PLACEHOLDERS = ["pr", "branch_slug", "sha"] as const;
+
+export type PreviewPlaceholder = (typeof PREVIEW_PLACEHOLDERS)[number];
+
 /** The Sentry project the Monitor reads a Product repo's production errors from. */
 export interface MonitorErrors {
   readonly provider: "sentry";
@@ -528,11 +533,6 @@ function readPreview(preview: Reader | null | undefined): PreviewConfig | null {
   const url = preview.nullableString("url", checkPreviewTemplate);
   return url === undefined || url === null ? null : { url };
 }
-
-/** The placeholders a `preview.url` template may use, filled in from the pull request after the push. */
-export const PREVIEW_PLACEHOLDERS = ["pr", "branch_slug", "sha"] as const;
-
-export type PreviewPlaceholder = (typeof PREVIEW_PLACEHOLDERS)[number];
 
 /** A stand-in for each placeholder, so a template can be checked as the URL it fills in to. */
 const PLACEHOLDER_STAND_INS: Readonly<Record<PreviewPlaceholder, string>> = {
