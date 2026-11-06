@@ -338,6 +338,7 @@ describe("Labels", () => {
     "fabrik:token-rotation",
     "fabrik:weekly-limit",
     "fabrik:audit",
+    "fabrik:retro",
     "fabrik:monitor",
   ];
 

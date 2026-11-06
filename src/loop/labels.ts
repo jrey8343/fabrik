@@ -49,7 +49,7 @@ export const AUDIT_LABEL = "fabrik:audit";
 export const RETRO_LABEL = "fabrik:retro";
 
 /** Every label that marks an issue as the Kit's own, so the adapter reads it into the snapshot. */
-export const KIT_ISSUE_LABELS = [TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL, AUDIT_LABEL] as const;
+export const KIT_ISSUE_LABELS = [TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL, AUDIT_LABEL, RETRO_LABEL] as const;
 export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
 
 /**

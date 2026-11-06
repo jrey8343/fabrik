@@ -1,9 +1,10 @@
 // The store-token action's first look at the store
 // (.github/actions/store-token, which the write the Run record and
-// score-record actions share): asks, as the Fabrik App itself, whether
-// it's installed on fabrik-runs, and writes `installed=true` or `installed=false`
-// to GITHUB_OUTPUT. The store's token is minted only when it is, so a store
-// setup hasn't made yet fails no step and leaves no error annotation.
+// score-record actions share), and the scheduled tick's, for the retro gate
+// (.github/actions/run-loop): asks, as the Fabrik App itself, whether it's
+// installed on fabrik-runs, and writes `installed=true` or `installed=false`
+// to GITHUB_OUTPUT. A token for the store is minted only when it is, so a
+// store setup hasn't made yet fails no step and leaves no error annotation.
 //   node src/kit/find-store-main.ts
 // Reads the App's FABRIK_APP_CLIENT_ID and FABRIK_APP_PRIVATE_KEY.
 import { appendFile } from "node:fs/promises";
