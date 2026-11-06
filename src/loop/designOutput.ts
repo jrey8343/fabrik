@@ -507,11 +507,44 @@ function readTurn(value: unknown): DesignTurnOutputResult {
 
 /** Parses the text an agent emitted, then checks it. */
 export function parseDesignTurnOutput(text: string): DesignTurnOutputResult {
-  let value: unknown;
+  const json = jsonOf(text);
+  return json.ok ? readDesignTurnOutput(json.value) : json;
+}
+
+/** What a prototype turn ends in: its prototype round's variants. */
+export type PrototypeRoundOutput = Extract<DesignTurnOutput, { kind: "prototype-round" }>;
+
+export type PrototypeTurnOutputResult =
+  | { readonly ok: true; readonly output: PrototypeRoundOutput }
+  | { readonly ok: false; readonly errors: readonly string[] };
+
+/**
+ * Checks a prototype turn's already-parsed output (#155) against the
+ * contract: the turn was started to build the variants, so it ends only in
+ * a prototype-round, and any other kind breaks its contract however well
+ * formed. Its kind is named before anything else is checked.
+ */
+export function readPrototypeTurnOutput(value: unknown): PrototypeTurnOutputResult {
+  if (isObject(value) && value.kind !== "prototype-round") return notPrototypeRound(value.kind);
+  const result = readDesignTurnOutput(value);
+  if (!result.ok) return result;
+  return result.output.kind === "prototype-round" ? { ok: true, output: result.output } : notPrototypeRound(result.output.kind);
+}
+
+/** Parses the text a prototype turn's agent emitted, then checks it. */
+export function parsePrototypeTurnOutput(text: string): PrototypeTurnOutputResult {
+  const json = jsonOf(text);
+  return json.ok ? readPrototypeTurnOutput(json.value) : json;
+}
+
+function notPrototypeRound(kind: unknown): PrototypeTurnOutputResult {
+  return { ok: false, errors: [`a prototype turn ends only in a prototype-round, not ${JSON.stringify(kind)}`] };
+}
+
+function jsonOf(text: string): { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly errors: readonly string[] } {
   try {
-    value = JSON.parse(text);
+    return { ok: true, value: JSON.parse(text) as unknown };
   } catch (error) {
     return { ok: false, errors: [`Design-session output is not valid JSON: ${(error as Error).message}`] };
   }
-  return readDesignTurnOutput(value);
 }
