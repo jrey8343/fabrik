@@ -319,6 +319,55 @@ describe("loop.yml's Audit job", () => {
   });
 });
 
+// A UI PR's Review (#153): the Kit job passes out where its marker says the
+// UI evidence is kept, and the Review job downloads it for the Reviewer.
+describe("loop.yml's Review job on a UI PR", () => {
+  const review = (): string => job("review");
+  const steps = (): readonly string[] => stepsOf(review());
+  const stepAt = (pattern: string): number => steps().findIndex((step) => step.includes(pattern));
+  const download = (): string => steps()[stepAt("uses: actions/download-artifact@")] ?? "";
+  const reviewer = (): string => steps()[stepAt("id: agent\n")] ?? "";
+
+  it("gets where a UI PR's evidence is kept from the Kit job: the Implement run that captured it and its artifact", () => {
+    expect(job("kit")).toContain("ui-evidence-run: ${{ steps.route.outputs.ui-evidence-run }}");
+    expect(job("kit")).toContain("ui-evidence-artifact: ${{ steps.route.outputs.ui-evidence-artifact }}");
+  });
+
+  it("can read Actions artifacts, and holds only read permissions", () => {
+    const permissions = /\n    permissions:\n((?: {6}.*\n)+)/.exec(review())?.[1] ?? "";
+
+    expect(
+      permissions
+        .trim()
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => !line.startsWith("#")),
+    ).toEqual(["contents: read", "issues: read", "pull-requests: read", "actions: read"]);
+  });
+
+  it("downloads the evidence only when given an artifact, from the run that kept it, with its own read-only token", () => {
+    expect(download()).toContain("uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2");
+    expect(download()).toContain("if: needs.kit.outputs.ui-evidence-artifact != ''\n");
+    expect(download()).toContain("run-id: ${{ needs.kit.outputs.ui-evidence-run }}\n");
+    expect(download()).toContain("artifact-ids: ${{ needs.kit.outputs.ui-evidence-artifact }}\n");
+    expect(download()).toContain("github-token: ${{ github.token }}\n");
+  });
+
+  // Retention can lapse before a late Review; the Reviewer is then told capture left no result.
+  it("never fails the Review on the download, which comes before any secret loads and lands outside the working directory", () => {
+    expect(download()).toContain("continue-on-error: true\n");
+    expect(download()).toContain("path: ${{ runner.temp }}/fabrik-ui-evidence\n");
+    expect(stepAt("uses: actions/download-artifact@")).toBeGreaterThan(stepAt("uses: ./kit/.github/actions/prepare-agent"));
+    expect(stepAt("uses: actions/download-artifact@")).toBeLessThan(stepAt("id: op\n"));
+  });
+
+  it("tells the Reviewer where the evidence was downloaded only on a UI PR, so any other PR's prompt says nothing of it", () => {
+    expect(reviewer()).toContain(
+      "FABRIK_UI_EVIDENCE_DIR: ${{ needs.kit.outputs.ui-evidence-run != '' && format('{0}/fabrik-ui-evidence', runner.temp) || '' }}\n",
+    );
+  });
+});
+
 describe("schedule.yml's tick, which opens the pending Audit", () => {
   it("holds only the push service account, so the Auditor's run needs no change to the shim", () => {
     expect(schedule).toMatch(/on:\n {2}workflow_call:\n {4}secrets:\n {6}OP_PUSH_TOKEN:\n(?: {8}.*\n)+\n/);

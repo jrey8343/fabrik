@@ -87,6 +87,11 @@ jobs:
       subscription: ${{ steps.route.outputs.subscription }}
       # "true" when Subscription rotation is on, for the judge, which reads no Kit config.
       rotation: ${{ steps.route.outputs.rotation }}
+      # For a Review of a UI PR: where its UI evidence marker says the evidence is kept, the
+      # Implement run that captured it and that run's artifact of the screenshots (empty when
+      # it kept none), which the Review job downloads. Empty for any other run.
+      ui-evidence-run: ${{ steps.route.outputs.ui-evidence-run }}
+      ui-evidence-artifact: ${{ steps.route.outputs.ui-evidence-artifact }}
     steps:
       # No expression context names the commit of a called workflow, so read
       # it from the OIDC token's job_workflow_sha claim.
@@ -650,7 +655,8 @@ jobs:
   # The Reviewer (ADR-0002). Read-only: a checkout of the PR's head at the
   # commit its checks passed on, no GitHub write credential, and only the
   # agent service account. It runs none of the PR's code, and passes its
-  # Verdict out as an artifact for the push job to post.
+  # Verdict out as an artifact for the push job to post. On a UI PR it also
+  # downloads the screenshots its Implement run captured, for the Reviewer to see.
   review:
     name: Review
     needs: [kit, review-checks]
@@ -666,6 +672,8 @@ jobs:
       contents: read
       issues: read
       pull-requests: read
+      # To download a UI PR's UI evidence from the Implement run that captured it.
+      actions: read
     outputs:
       # Read by the push job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}
@@ -705,6 +713,21 @@ jobs:
           issue: ${{ needs.kit.outputs.ticket }}
           pull-request: ${{ needs.kit.outputs.pull-request }}
 
+      # A UI PR's UI evidence (#153): the screenshots and capture result its marker
+      # names, from the Implement run that kept them, read as data and never run.
+      # Outside the working directory: the Reviewer's runner copies in the ones it
+      # gets (src/agent/review.ts). continue-on-error: retention can lapse before a
+      # late Review, which the Reviewer then hears as capture having left no result.
+      - name: Download the UI evidence
+        if: needs.kit.outputs.ui-evidence-artifact != ''
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          run-id: ${{ needs.kit.outputs.ui-evidence-run }}
+          artifact-ids: ${{ needs.kit.outputs.ui-evidence-artifact }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/fabrik-ui-evidence
+
       - name: Load the Claude token
         id: op
         uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
@@ -725,6 +748,8 @@ jobs:
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
           FABRIK_MODEL: ${{ needs.kit.outputs.model }}
           FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
+          # Only on a UI PR: where its UI evidence was downloaded, whether or not that worked.
+          FABRIK_UI_EVIDENCE_DIR: ${{ needs.kit.outputs.ui-evidence-run != '' && format('{0}/fabrik-ui-evidence', runner.temp) || '' }}
         run: node ../kit/src/agent/run.ts review
 
       - name: Pass the Verdict to the push job

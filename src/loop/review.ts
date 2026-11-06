@@ -30,15 +30,27 @@ type Reviewed = Extract<LoopEvent, { kind: "review-run-finished" }>;
  * A push to an agent draft PR, or agent:review added to it, starts a Review,
  * unless a Retry or Request-changes run is in flight on it: that run's push
  * starts the next one. The Review job waits for the PR's required checks
- * before anything else.
+ * before anything else. A UI PR's Review carries where its marker says the UI
+ * evidence is kept, so the Reviewer sees the screenshots; the Verdict is the same.
  */
 export function startReview(pullRequest: PullRequestSnapshot, operator: string, config: KitConfig): Plan {
   const why = whyNotReviewable(pullRequest) ?? whyAwaitingRun(pullRequest, operator);
   if (why !== null) return { kind: "nothing", reason: why };
   const { model, effort, timeoutMinutes } = config.roles.review;
+  const { number, uiEvidence } = pullRequest;
   return {
     kind: "act",
-    actions: [{ kind: "start-agent-run", role: "review", issue: pullRequest.number, model, effort, timeoutMinutes }],
+    actions: [
+      {
+        kind: "start-agent-run",
+        role: "review",
+        issue: number,
+        ...(uiEvidence === null ? {} : { evidence: uiEvidence }),
+        model,
+        effort,
+        timeoutMinutes,
+      },
+    ],
   };
 }
 

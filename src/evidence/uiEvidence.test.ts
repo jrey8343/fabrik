@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { type CaptureFailure, type CaptureResult, evidenceSection, isUi, parseCaptureResult, routesFor, type UiEvidence, withoutEvidence } from "./uiEvidence.ts";
+import { type Capture, type CaptureFailure, type CaptureResult, evidenceSection, isUi, parseCaptureResult, reviewerImages, routesFor, type UiEvidence, withoutEvidence } from "./uiEvidence.ts";
 
 /** The Pilot's ui block: an Astro site served from its build. */
 const ui: UiConfig = {
@@ -510,5 +510,63 @@ describe("Text without its evidence", () => {
     const text = `Adds a waitlist.\n\nThe PR body ends with a \`${MARKER}\` line.\n\nCloses #12`;
 
     expect(withoutEvidence(text)).toBe(text);
+  });
+});
+
+describe("The images a Reviewer gets", () => {
+  /** A capture of this route and why, at this viewport and side, named as the capture step names its files. */
+  const shot = (route: string, reason: Capture["reason"], viewport: Capture["viewport"], side: Capture["side"]): Capture => ({
+    route,
+    reason,
+    viewport,
+    side,
+    status: 200,
+    image: `${side}-${viewport}-${route === "/" ? "home" : route.slice(1).replace(/\//g, "-")}.png`,
+  });
+
+  it("put After before Before, mobile before desktop, and routes in reason order: the Ticket's, the Implementer's, then the defaults", () => {
+    const captures = [
+      shot("/", "default", "desktop", "after"),
+      shot("/book", "ticket", "mobile", "before"),
+      shot("/book/waitlist", "implementer", "mobile", "after"),
+      shot("/book", "ticket", "desktop", "after"),
+      shot("/book", "ticket", "mobile", "after"),
+      shot("/book/waitlist", "implementer", "mobile", "before"),
+      shot("/", "default", "mobile", "after"),
+    ];
+
+    expect(reviewerImages(captures).map(({ image }) => image)).toEqual([
+      "after-mobile-book.png",
+      "after-mobile-book-waitlist.png",
+      "after-mobile-home.png",
+      "after-desktop-book.png",
+      "after-desktop-home.png",
+      "before-mobile-book.png",
+      "before-mobile-book-waitlist.png",
+    ]);
+  });
+
+  it("stop at eight, so four routes at both viewports and sides give the Reviewer every After and no Before", () => {
+    const routes: [string, Capture["reason"]][] = [["/book", "ticket"], ["/book/waitlist", "implementer"], ["/", "default"], ["/services", "default"]];
+    const captures = (["before", "after"] as const).flatMap((side) =>
+      (["desktop", "mobile"] as const).flatMap((viewport) => routes.map(([route, reason]) => shot(route, reason, viewport, side))),
+    );
+
+    expect(captures).toHaveLength(16);
+    expect(reviewerImages(captures).map(({ image }) => image)).toEqual([
+      "after-mobile-book.png",
+      "after-mobile-book-waitlist.png",
+      "after-mobile-home.png",
+      "after-mobile-services.png",
+      "after-desktop-book.png",
+      "after-desktop-book-waitlist.png",
+      "after-desktop-home.png",
+      "after-desktop-services.png",
+    ]);
+  });
+
+  it("are every capture when there are eight or fewer, and none when there are none", () => {
+    expect(reviewerImages([shot("/book", "ticket", "desktop", "before")])).toEqual([shot("/book", "ticket", "desktop", "before")]);
+    expect(reviewerImages([])).toEqual([]);
   });
 });

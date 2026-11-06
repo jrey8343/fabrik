@@ -653,6 +653,11 @@ export type Action =
       readonly stepUp?: boolean;
       /** For an Auditor run: the pending Audit's marked commit, which its job checks out and reads up to. */
       readonly commit?: string;
+      /**
+       * For a Review of a UI PR: where its marker says the UI evidence is kept,
+       * which the Review job downloads for the Reviewer. A PR with no marker gets none.
+       */
+      readonly evidence?: EvidenceMarker;
       readonly model: string;
       readonly effort: string | null;
       readonly timeoutMinutes: number;

@@ -1,11 +1,12 @@
 // The UI evidence module (#153): whether a pull request is UI, which routes to
 // capture and why, the capture result the Implement job's capture step
-// writes and every later reader shares, and what the Operator reads of it on
-// the PR: the evidence section, its marker, which the PR snapshot reads back,
-// and withoutEvidence, which keeps both out of agent text. The gallery is
-// beside it (src/evidence/gallery.ts). Pure, no I/O.
+// writes and every later reader shares, which of its screenshots the Reviewer
+// gets, and what the Operator reads of it on the PR: the evidence section, its
+// marker, which the PR snapshot reads back, and withoutEvidence, which keeps
+// both out of agent text. The gallery is beside it (src/evidence/gallery.ts).
+// Pure, no I/O.
 import { posix } from "node:path";
-import { UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+import { REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 import { FULL_SHA } from "../skills/lock.ts";
@@ -229,6 +230,29 @@ function spelled(options: readonly string[], conjunction: "or" | "and" = "or"): 
   return options.length <= 1 ? options.join("") : `${options.slice(0, -1).join(", ")} ${conjunction} ${options.at(-1)}`;
 }
 
+/**
+ * The screenshots a Reviewer gets, at most REVIEWER_IMAGE_CAP so they fit in
+ * its context, the ones that matter most first: After before Before, mobile
+ * before desktop, then routes in reason order (the Ticket's, the
+ * Implementer's, the defaults), each reason's routes in the order they were
+ * captured. The Operator's gallery has them all.
+ */
+export function reviewerImages(captures: readonly Capture[]): readonly Capture[] {
+  const routes = captures.map(({ route }) => route);
+  const rank = ({ side, viewport, reason, route }: Capture): number[] => [
+    side === "after" ? 0 : 1,
+    UI_VIEWPORTS.findIndex(({ name }) => name === viewport),
+    ROUTE_REASONS.indexOf(reason),
+    routes.indexOf(route),
+  ];
+  return captures
+    .toSorted((a, b) => {
+      const [ranked, other] = [rank(a), rank(b)];
+      return ranked.reduce((order, value, at) => order || value - (other[at] ?? 0), 0);
+    })
+    .slice(0, REVIEWER_IMAGE_CAP);
+}
+
 /** How the evidence section names why each route was captured. */
 export const ROUTE_REASON_WORDS: Readonly<Record<RouteReason, string>> = {
   ticket: "named by the Ticket",
@@ -292,7 +316,7 @@ export function evidenceSection(evidence: UiEvidence): string {
 }
 
 /** Why capture failed, in plain words. */
-const FAILURE_WORDS: Readonly<Record<CaptureFailure, string>> = {
+export const FAILURE_WORDS: Readonly<Record<CaptureFailure, string>> = {
   "build-failed": "`sandbox.build` failed, so there was no build to serve",
   "server-did-not-start": "the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran",
   timeout: "it ran out of time",
@@ -447,7 +471,7 @@ function link(text: string, url: string): string {
  * break or other control character shows as U+FFFD, so agent text can never
  * start a line of its own, and the span's backticks outnumber any run of them inside.
  */
-function code(text: string): string {
+export function code(text: string): string {
   const oneLine = text.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, "\uFFFD");
   const longest = Math.max(0, ...[...oneLine.matchAll(/`+/g)].map(([run]) => run.length));
   const fence = "`".repeat(longest + 1);

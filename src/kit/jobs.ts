@@ -27,6 +27,9 @@
 //   subscription             the Subscription the plan's agent run is given: the `Fabrik` vault item
 //                            its job loads the Claude token from; empty when it starts none
 //   rotation                 "true" when two or more Subscriptions are listed, so rotation is on; else "false"
+//   ui-evidence-run          for a Review of a UI PR, the Implement run its UI evidence marker names; else empty
+//   ui-evidence-artifact     for that Review, the run's artifact of the screenshots and capture result,
+//                            which the Review job downloads; empty when it kept none, or for any other run
 // Its step summary names that Subscription, and notes when rotation is off.
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
@@ -134,6 +137,9 @@ async function main(productDir: string): Promise<void> {
     subscription: run === null ? "" : subscriptionOf(run),
     // For the judge, which reads no Kit config: whether its stream watch kills it on overage.
     rotation: String(rotationIsOn(config)),
+    // Only ever the whole-number ids the PR's marker reads as (src/evidence/uiEvidence.ts), never agent text.
+    "ui-evidence-run": String(run?.evidence?.run ?? ""),
+    "ui-evidence-artifact": String(run?.evidence?.artifact ?? ""),
   };
   await appendFile(
     required("GITHUB_OUTPUT"),
