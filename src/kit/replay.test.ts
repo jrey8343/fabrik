@@ -872,6 +872,44 @@ describe("A Replay's next step on the tick", () => {
       expect(nextReplayStep(aTick([finishedAll]))).toMatchObject({ kind: "nothing" });
     });
 
+    it("holding to the plan once it's written, whatever the Operator edits in the request", () => {
+      const accepted = anAcceptedIssue(140);
+      const edited = { ...accepted, body: accepted.body.replace("review.effort: high", "implement.model: claude-opus-5-5") };
+
+      expect(replayMarksIn(edited.body)).toEqual(replayMarksIn(accepted.body));
+      expect(nextReplayStep(aTick([edited]))).toEqual({ kind: "start", issue: 140, ticket: 12 });
+    });
+
+    it("reading a marker only below the Kit's start line, and only as the Kit writes one", () => {
+      const accepted = anAcceptedIssue(140).body;
+      const [operatorPart = "", kitPart = ""] = accepted.split("<!-- fabrik:replay-start -->");
+      const markers = kitPart.split("\n").filter((line) => line.startsWith("<!--"));
+
+      expect(replayMarksIn(`${operatorPart}${markers.join("\n")}`)).toBeNull();
+      expect(replayMarksIn(accepted.replace(/fabrik:replay-plan \{/, "fabrik:replay-plan {,"))).toBeNull();
+    });
+
+    it.each([
+      ["a model the Kit never runs", (plan: string) => plan.replace('"model":"claude-opus-5-5"', '"model":"claude-fable-5"')],
+      ["an effort Kit config doesn't take", (plan: string) => plan.replace('"effort":"medium"', '"effort":"extreme"')],
+      ["a base that isn't a full sha", (plan: string) => plan.replace(/"baseSha":"[0-9a-f]{40}"/, '"baseSha":"main"')],
+      ["a variable no request names", (plan: string) => plan.replace('"role":"review"', '"role":"design"')],
+      ["a flag the Kit doesn't know", (plan: string) => plan.replace('"flags":[]', '"flags":["lucky"]')],
+    ])("reading no plan from a plan marker edited to hold %s", (_, edit) => {
+      const accepted = anAcceptedIssue(140).body;
+      const tampered = accepted.replace(/^<!-- fabrik:replay-plan .*$/m, edit);
+
+      expect(tampered).not.toBe(accepted);
+      expect(replayMarksIn(tampered)).toBeNull();
+    });
+
+    it("reading a Ticket whose progress marker doesn't read as pending", () => {
+      const running = started(anAcceptedIssue(140), 12, 9001);
+      const broken = running.body.replace('"state":"in-progress"', '"state":"sleeping"');
+
+      expect(replayMarksIn(broken)?.progress[0]).toEqual({ ticket: 12, state: "pending" });
+    });
+
     it("never changing the Operator's text above the Kit's part, however often the Kit rewrites its own", () => {
       const body = "Does Review hold up at a higher effort?  \r\n\r\n```replay\r\nreview.effort: high\r\ntickets: 12\r\n```\r\nThanks!";
 

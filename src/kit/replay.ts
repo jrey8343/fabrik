@@ -798,22 +798,125 @@ function markerJson(value: unknown): string {
   return JSON.stringify(value).replace(/[<>@]/g, (c) => MARKER_ESCAPES[c] ?? c);
 }
 
-/** What the markers in a replay issue's body hold, or null when the Kit hasn't accepted its request. */
+/**
+ * What the markers in a replay issue's body hold, read only from the Kit's
+ * part, or null when it holds no plan that reads: the Kit hasn't accepted the
+ * request. A plan reads only as the Kit writes one, every value one a request
+ * and Kit config could give, so an edited marker can't run anything a
+ * request couldn't ask for. A Ticket whose progress marker doesn't read is
+ * pending.
+ */
 export function replayMarksIn(body: string): ReplayMarks | null {
   const lines = body
     .slice(kitPartAt(body) ?? body.length)
     .split("\n")
     .map((line) => line.trim());
   const planJson = lines.map((line) => PLAN_MARKER.exec(line)?.[1]).find((json) => json !== undefined);
-  if (planJson === undefined) return null;
-  const plan = JSON.parse(planJson) as ReplayPlan;
+  const plan = planJson === undefined ? null : readPlan(parsed(planJson));
+  if (plan === null) return null;
   const marked = lines.flatMap((line) => {
     const json = PROGRESS_MARKER.exec(line)?.[1];
-    return json === undefined ? [] : [JSON.parse(json) as TicketProgress];
+    const progress = json === undefined ? null : readProgress(parsed(json));
+    return progress === null ? [] : [progress];
   });
   // A Ticket with no progress marker of its own hasn't started.
   const progress = plan.tickets.map(({ ticket }): TicketProgress => marked.find((each) => each.ticket === ticket) ?? { ticket, state: "pending" });
   return { plan, progress };
+}
+
+/** A marker's JSON, or undefined when it doesn't parse. */
+function parsed(json: string): unknown {
+  try {
+    return JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The plan as its marker holds it: each Ticket's baseline only, since its variant is the baseline with the variable changed. */
+function storedPlan({ variable, tickets, leftOut }: ReplayPlan): unknown {
+  return {
+    variable,
+    tickets: tickets.map(({ ticket, pullRequest, baseSha, flags, arms }) => ({
+      ticket,
+      pullRequest,
+      baseSha,
+      flags,
+      baseline: { implement: arms.baseline.implement, review: arms.baseline.review },
+    })),
+    leftOut,
+  };
+}
+
+/** The plan a marker holds (storedPlan), or null when any of it is a value the Kit wouldn't write. */
+function readPlan(value: unknown): ReplayPlan | null {
+  if (!isObject(value) || !Array.isArray(value.tickets) || !Array.isArray(value.leftOut)) return null;
+  const variable = readVariableValue(value.variable);
+  if (variable === null) return null;
+  const tickets = value.tickets.map((ticket) => readPlannedTicket(ticket, variable));
+  const leftOut = value.leftOut.map((each) => (isObject(each) && isId(each.ticket) && typeof each.reason === "string" ? { ticket: each.ticket, reason: each.reason } : null));
+  if (tickets.includes(null) || leftOut.includes(null)) return null;
+  const planned = tickets.filter((ticket) => ticket !== null);
+  if (new Set(planned.map(({ ticket }) => ticket)).size !== planned.length) return null;
+  return { variable, tickets: planned, leftOut: leftOut.filter((each) => each !== null) };
+}
+
+/** A variable as a plan holds it, held to the same rules as the request's own, or null. */
+function readVariableValue(value: unknown): ReplayVariable | null {
+  if (!isObject(value)) return null;
+  const { kind, role, model, effort, sha } = value;
+  if (kind === "kit") return typeof sha === "string" && checkCandidateKit(sha) === null ? { kind, sha } : null;
+  if (typeof role !== "string" || !isReplayRole(role)) return null;
+  if (kind === "model") return typeof model === "string" && refuseModel(model) === null ? { kind, role, model } : null;
+  if (kind === "effort") return typeof effort === "string" && checkEffort(effort) === null ? { kind, role, effort } : null;
+  return null;
+}
+
+/** A planned Ticket as a plan holds it, its arms rebuilt from its baseline and the variable, or null. */
+function readPlannedTicket(value: unknown, variable: ReplayVariable): PlannedTicket | null {
+  if (!isObject(value) || !isId(value.ticket) || !isId(value.pullRequest) || !Array.isArray(value.flags) || !isObject(value.baseline)) return null;
+  const { ticket, pullRequest, baseSha, flags } = value;
+  if (typeof baseSha !== "string" || !FULL_SHA.test(baseSha)) return null;
+  if (!flags.every((flag) => REPLAY_FLAGS.includes(flag)) || new Set(flags).size !== flags.length) return null;
+  const implement = readRoleSettings(value.baseline.implement);
+  const review = readRoleSettings(value.baseline.review);
+  if (implement === null || review === null) return null;
+  const baseline: ReplayArmSettings = { implement, review, candidateSha: null };
+  return { ticket, pullRequest, baseSha, flags: REPLAY_FLAGS.filter((flag) => flags.includes(flag)), arms: { baseline, variant: varied(baseline, variable) } };
+}
+
+/** A role's model and effort as Kit config could give them, or null. */
+function readRoleSettings(value: unknown): ReplayRoleSettings | null {
+  if (!isObject(value)) return null;
+  const { model, effort } = value;
+  if (typeof model !== "string" || model.trim() === "" || refuseFable(model) !== null) return null;
+  if (!(effort === null || (typeof effort === "string" && checkEffort(effort) === null))) return null;
+  return { model, effort };
+}
+
+/** A Ticket's progress as its marker holds it, or null when it doesn't read. */
+function readProgress(value: unknown): TicketProgress | null {
+  if (!isObject(value) || !isId(value.ticket)) return null;
+  const { ticket, state, run, reason, retrying } = value;
+  if (state === "pending") return { ticket, state };
+  if (state === "retried") return typeof reason === "string" ? { ticket, state, reason } : null;
+  if (!isId(run)) return null;
+  if (state === "in-progress") return retrying === null || typeof retrying === "string" ? { ticket, state, run, retrying } : null;
+  if (state === "done") return { ticket, state, run };
+  if (state === "failed") return typeof reason === "string" ? { ticket, state, run, reason } : null;
+  return null;
+}
+
+/** Every flag, in the order a picked Ticket carries them. */
+const REPLAY_FLAGS: readonly ReplayFlag[] = ["human-touches", "edited-input", "no-hidden-tests"];
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A Ticket, PR or run number: a whole number above zero. */
+function isId(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
 }
 
 /** A planned Ticket's progress marker line, carrying it as JSON. */
@@ -830,7 +933,7 @@ export function replayBody(body: string, marks: ReplayMarks): string {
   const operatorPart = body.slice(0, kitPartAt(body) ?? body.length);
   const separator = operatorPart === "" ? "" : operatorPart.endsWith("\n") ? "\n" : "\n\n";
   const markers = [
-    `<!-- fabrik:replay-plan ${markerJson(marks.plan)} -->`,
+    `<!-- fabrik:replay-plan ${markerJson(storedPlan(marks.plan))} -->`,
     ...marks.progress.map((progress) => `<!-- fabrik:replay-ticket ${markerJson(progress)} -->`),
   ];
   return `${operatorPart}${separator}${[KIT_PART_START, ...planLines(marks), ...markers].join("\n")}\n`;
