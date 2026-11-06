@@ -270,10 +270,14 @@ describe("Reading an issue's pending prototype request in the current session", 
     app([designRoundMarker(n), marker, `@jrey **Design session, round ${n}.** Here are the variants.`].join("\n"));
   const ordinaryRound = (n: number) => app(`${designRoundMarker(n)}\n@jrey **Design session, round ${n}.**`);
 
-  it("reads the request the core posted as pending, through the Operator's replies and the session's ordinary rounds since", () => {
-    expect(pendingPrototypeIn([ordinaryRound(1), other("Yes, prototype it."), requested(), other("Keep the header."), ordinaryRound(2)])).toEqual({
+  it("reads the request the core posted as pending, through the Operator's replies and the session's ordinary rounds since, with its comment, its prototype turn not yet started", () => {
+    const request = requested();
+
+    expect(pendingPrototypeIn([ordinaryRound(1), other("Yes, prototype it."), request, other("Keep the header."), ordinaryRound(2)])).toEqual({
       request: asked,
       reply: null,
+      comment: request.id,
+      started: false,
     });
   });
 
@@ -302,9 +306,13 @@ describe("Reading an issue's pending prototype request in the current session", 
   it("reads the latest request as pending when another follows one that ended", () => {
     const again = { route: "/checkout", variants: 3, brief: "Three checkouts." };
 
-    expect(pendingPrototypeIn([requested(), prototypeRound(2, PROTOTYPE_ROUND_MARKER), other("Try /checkout too."), requested(again)])).toEqual({
+    const latest = requested(again);
+
+    expect(pendingPrototypeIn([requested(), prototypeRound(2, PROTOTYPE_ROUND_MARKER), other("Try /checkout too."), latest])).toEqual({
       request: again,
       reply: null,
+      comment: latest.id,
+      started: false,
     });
   });
 
@@ -318,7 +326,7 @@ describe("Reading an issue's pending prototype request in the current session", 
     const { body } = requested();
 
     expect(pendingPrototypeIn([other(body)])).toBeNull();
-    expect(pendingPrototypeIn([requested(), other(prototypeRound(2, PROTOTYPE_ROUND_MARKER).body), other(turnFailed().body)])).toEqual({
+    expect(pendingPrototypeIn([requested(), other(prototypeRound(2, PROTOTYPE_ROUND_MARKER).body), other(turnFailed().body)])).toMatchObject({
       request: asked,
       reply: null,
     });

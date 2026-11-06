@@ -69,9 +69,12 @@ function finished(overrides: Partial<PrototypeRunFinished> = {}): PrototypeRunFi
   };
 }
 
+/** #7's request as the push job reads it from its comment, 9003: its prototype turn has started. */
+const PENDING = { ...REQUEST, comment: 9003, started: true };
+
 /** #7 two rounds into its Design session, its request still pending and the reply that approved it still there. */
 function inSession(issue: Partial<IssueSnapshot> = {}, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"], designRounds: 2, pendingPrototype: REQUEST, ...issue }), {
+  return snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"], designRounds: 2, pendingPrototype: PENDING, ...issue }), {
     operator: "jrey",
     startingComment: { id: 9001, exists: true },
     ...overrides,
@@ -425,7 +428,7 @@ describe("The Operator's reply that approved the prototype", () => {
   it("needs no check when agent:design started the turn that asked for the prototype, which no reply did", () => {
     const request = { ...REQUEST, reply: null };
 
-    const plan = planFor(finished({ request }), inSession({ pendingPrototype: request }, { startingComment: null }), kitConfig());
+    const plan = planFor(finished({ request }), inSession({ pendingPrototype: { ...PENDING, reply: null } }, { startingComment: null }), kitConfig());
 
     expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
   });

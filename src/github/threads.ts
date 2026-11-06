@@ -13,6 +13,7 @@ import {
   PROTOTYPE_ROUND_MARKER,
   type PrototypeRequestMarker,
   prototypeRequestIn,
+  prototypeStartedIn,
   REQUEST_CHANGES_RUN_MARKER,
   RESEARCH_RUN_FAILED_MARKER,
   RETRY_PUSH_MARKER,
@@ -20,7 +21,7 @@ import {
   UNMARKED_RETRY_PUSH,
   VERDICT_MARKER,
 } from "../loop/markers.ts";
-import type { IssueSnapshot, Verdict, VerdictRecord } from "../loop/types.ts";
+import type { IssueSnapshot, PendingPrototype, Verdict, VerdictRecord } from "../loop/types.ts";
 import { VERDICTS } from "../loop/verdict.ts";
 
 /** The Verdicts recorded in these comments, oldest first. Comments without a valid marker are skipped. */
@@ -154,17 +155,19 @@ export interface ThreadComment {
  * it can fall outside the last 100 comments the snapshot reads while the
  * request doesn't; that reads as not pending too, the safe side, since a
  * request taken for pending builds a Prototype, where one taken for not
- * pending leaves the Operator's next reply to start an ordinary turn.
+ * pending leaves the Operator's next reply to start an ordinary turn. It
+ * carries its comment's id, and whether the Kit marked its prototype turn
+ * started there.
  */
 export function pendingPrototypeIn(
   comments: readonly ThreadComment[],
   existing: ReadonlySet<number> = new Set(comments.map(({ id }) => id)),
-): PrototypeRequestMarker | null {
-  let pending: PrototypeRequestMarker | null = null;
-  for (const { body, byApp } of comments) {
+): PendingPrototype | null {
+  let pending: PendingPrototype | null = null;
+  for (const { id, body, byApp } of comments) {
     if (!byApp) continue;
     const request = prototypeRequestIn(body);
-    if (request !== null) pending = request;
+    if (request !== null) pending = { ...request, comment: id, started: prototypeStartedIn(body) };
     else if (endsPrototypeRequest(body)) pending = null;
   }
   return pending !== null && pending.reply !== null && !existing.has(pending.reply) ? null : pending;

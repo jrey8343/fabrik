@@ -591,9 +591,10 @@ jobs:
   # agent:research off a research Decision as its Research run starts (the
   # running job holds the slot), and agent:design off an issue as its Design
   # session's first turn, or a prototype turn, starts (the running turn, then
-  # its round, hold the slot). It applies the same plan the Kit job routed on;
-  # the run itself is the agent job's. Like the push job, it never touches
-  # Product code.
+  # its round, hold the slot), marking a prototype turn's request started on
+  # the request's own comment (src/loop/design.ts). It applies the same plan
+  # the Kit job routed on; the run itself is the agent job's. Like the push
+  # job, it never touches Product code.
   implement-claim:
     name: Claim the work
     needs: kit

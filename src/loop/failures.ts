@@ -18,7 +18,7 @@ import { canHold, heldAfterKill } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
-import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
+import type { Action, AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 import { failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
@@ -134,7 +134,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       ...(killed ? {} : { held }),
     });
     const holds = killed ? heldAfterKill(held, context.kitIssues) : holding(held, repoWide?.firstReset ?? null);
-    return { kind: "act", actions: [...holds, ...(repoWide?.actions ?? [])] };
+    return { kind: "act", actions: [...holds, ...waitingAgain(run, issue), ...(repoWide?.actions ?? [])] };
   }
   // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.
   if (isWeeklyRole(run.role)) {
@@ -174,6 +174,8 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       kind: "act",
       actions: [
         { kind: "remove-label", issue: labelled, label: rerun },
+        // Before the label, whose Loop run reads it.
+        ...waitingAgain(run, issue),
         { kind: "add-labels", issue: labelled, labels: [rerun] },
         ...(repoWide?.actions ?? []),
       ],
@@ -199,6 +201,18 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       ...(repoWide?.actions ?? []),
     ],
   };
+}
+
+/**
+ * For a prototype turn refused on its Subscription, which the Kit holds or
+ * re-runs through agent:design (#155): its request marked waiting for its
+ * prototype turn again, so agent:design starts that turn and not an ordinary
+ * one (src/loop/design.ts). Nothing for any other run, nor once the request
+ * is no longer pending.
+ */
+function waitingAgain(run: FailedRun, { pendingPrototype }: IssueContext["issue"]): Action[] {
+  if (run.prototype !== true || pendingPrototype?.started !== true) return [];
+  return [{ kind: "mark-prototype-request", issue: run.issue, comment: pendingPrototype.comment, started: false }];
 }
 
 /** What a failure notice says of retrying a run that isn't a research Decision's. */

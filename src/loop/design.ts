@@ -74,15 +74,23 @@ const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
  * so it never holds a slot for a session that can't start.
  *
  * Which turn it starts is read from the thread, never from the label: while
- * the session has a pending prototype request, and this Kit can take a
- * Prototype (`noPrototype` is null), it's the prototype turn, so a refused
- * prototype turn restarts as one; otherwise an ordinary turn.
+ * the session has a pending prototype request whose prototype turn hasn't
+ * started, and this Kit can take a Prototype (`noPrototype` is null), it's
+ * the prototype turn, which marks the request started on its comment as it
+ * starts; otherwise an ordinary turn. A prototype turn refused on its
+ * Subscription and held or re-run has that mark taken off (src/loop/failures.ts),
+ * so it restarts as a prototype turn; an ordinary turn the Operator's reply
+ * started while the request was pending leaves it, so it restarts as an
+ * ordinary turn, and its reply is answered.
  */
 export function startQueuedSession(issueNumber: number, { issue }: IssueContext, config: KitConfig, noPrototype: string | null): Plan {
   const removeLabel: Action = { kind: "remove-label", issue: issueNumber, label: DESIGN_LABEL };
   if (whileInSession(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
   const pending = noPrototype === null ? issue.pendingPrototype : null;
-  if (pending !== null) return { kind: "act", actions: [removeLabel, prototypeTurn(issueNumber, pending, config)] };
+  if (pending !== null && !pending.started) {
+    const started: Action = { kind: "mark-prototype-request", issue: issueNumber, comment: pending.comment, started: true };
+    return { kind: "act", actions: [removeLabel, prototypeTurn(issueNumber, pending, config), started] };
+  }
   return { kind: "act", actions: [removeLabel, ...startAgentRun("design", issueNumber, config).actions] };
 }
 
@@ -101,7 +109,7 @@ function prototypeTurn(issueNumber: number, pending: PrototypeRequestMarker, con
     model,
     effort,
     timeoutMinutes: config.roles.implement.timeoutMinutes,
-    prototype: pending,
+    prototype: { request: pending.request, reply: pending.reply },
   };
 }
 

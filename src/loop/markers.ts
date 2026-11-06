@@ -127,6 +127,29 @@ export function readPrototypeRequest(value: unknown): PrototypeRequestMarker | n
 }
 
 /**
+ * The line the Kit puts right under a prototype request's marker (#155), by
+ * editing the request's comment, once the request's prototype turn starts,
+ * and takes out again if that turn is refused on its Subscription and held or
+ * re-run, so agent:design starts the prototype turn only while none has
+ * started (src/loop/design.ts). The comment's own second line is its
+ * "**Prototype requested.**" lead-in, so nothing the agent wrote can stand
+ * where this goes.
+ */
+const PROTOTYPE_STARTED_MARKER = "<!-- fabrik:prototype-started -->";
+
+/** Whether a prototype request's comment carries the line its prototype turn's start left on it. */
+export function prototypeStartedIn(body: string): boolean {
+  return body.split("\n", 2)[1] === PROTOTYPE_STARTED_MARKER;
+}
+
+/** A prototype request's comment, marked as its prototype turn having started, or not: the line under its marker put in or taken out. */
+export function withPrototypeStarted(body: string, started: boolean): string {
+  if (prototypeStartedIn(body) === started) return body;
+  const [marker = "", ...rest] = body.split("\n");
+  return [marker, ...(started ? [PROTOTYPE_STARTED_MARKER, ...rest] : rest.slice(1))].join("\n");
+}
+
+/**
  * The line a prototype round (#155) carries right under its round marker,
  * the round's first line, so the round still counts as a round. A round
  * ends its session's pending prototype request (src/github/threads.ts).

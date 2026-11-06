@@ -18,6 +18,7 @@ import {
   tickSnapshot,
 } from "../__fixtures__/snapshots.ts";
 import { agentRunIn } from "../github/apply.ts";
+import { UI } from "../__fixtures__/uiEvidence.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AgentRole, KitIssueSnapshot, LoopEvent, Plan, Snapshot } from "./types.ts";
@@ -311,7 +312,7 @@ describe("A held run, under Dispatch's max_in_flight cap and the Design session 
   });
 });
 
-function refused(role: AgentRole, issue: number): LoopEvent {
+function refused(role: AgentRole, issue: number): Extract<LoopEvent, { kind: "agent-run-failed" }> {
   return {
     kind: "agent-run-failed",
     role,
@@ -380,6 +381,47 @@ describe("A run refused on its weekly limit while no other Subscription is free,
       issue: 40,
       body: expect.stringContaining(heldMarker(8, "triage", "needs-triage")),
     });
+  });
+});
+
+// Whether a session's prototype turn has started is marked on its request's comment (#155), so a resumed
+// agent:design starts again the turn that was held: the prototype turn until it has started, an ordinary turn after.
+describe("A Design session's prototype turn, while every Subscription is used up, with rotation on", () => {
+  const request = { route: "/book", variants: 3, brief: "- **A**: a form.\n- **B**: a stepper." };
+  const session = (started: boolean, kitIssues: KitIssueSnapshot[]) =>
+    snapshotOf(
+      anIssue({
+        number: 7,
+        labels: ["enhancement", "needs-design", "agent:design"],
+        designRounds: 1,
+        pendingPrototype: { request, reply: null, comment: 9010, started },
+      }),
+      { operator: "jrey", kitIssues },
+    );
+  const config = kitConfig({ ...TWO_SUBSCRIPTIONS, ui: UI });
+
+  it("is held when due without marking its request started, so the reset's agent:design starts the prototype turn", () => {
+    const plan = planFor({ kind: "label-added", issue: 7, label: "agent:design" }, session(false, BOTH_USED_UP), config);
+
+    expect(agentRunIn(plan)).toBeNull();
+    expect(actionsOf(plan)).toContainEqual({ kind: "hold-agent-run", role: "design", issue: 7, label: "agent:design", until: EARLIER });
+    expect(actionsOf(plan).filter((action) => action.kind === "mark-prototype-request")).toEqual([]);
+  });
+
+  it("refused while none is free, is held with its request marked waiting again, so the reset's agent:design starts the prototype turn", () => {
+    const plan = planFor({ ...refused("design", 7), prototype: true }, session(true, [weeklyLimitIssue(40, "Claude token 2", EARLIER, false)]), config);
+
+    expect(actionsOf(plan)).toContainEqual({ kind: "hold-agent-run", role: "design", issue: 7, label: "agent:design", until: EARLIER });
+    expect(actionsOf(plan).filter((action) => action.kind === "mark-prototype-request")).toEqual([
+      { kind: "mark-prototype-request", issue: 7, comment: 9010, started: false },
+    ]);
+  });
+
+  it("an ordinary turn of the session refused while none is free leaves the request's mark as it is", () => {
+    const plan = planFor(refused("design", 7), session(true, [weeklyLimitIssue(40, "Claude token 2", EARLIER, false)]), config);
+
+    expect(actionsOf(plan)).toContainEqual({ kind: "hold-agent-run", role: "design", issue: 7, label: "agent:design", until: EARLIER });
+    expect(actionsOf(plan).filter((action) => action.kind === "mark-prototype-request")).toEqual([]);
   });
 });
 

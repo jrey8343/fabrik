@@ -11,11 +11,17 @@ const EARLIER = "2026-11-08T10:00:00.000Z";
 
 function refused(
   role: Exclude<AgentRole, "audit">,
-  { issue = 7, subscription = "Claude token", resetsAt = RESETS_AT }: { issue?: number; subscription?: string; resetsAt?: string } = {},
+  {
+    issue = 7,
+    subscription = "Claude token",
+    resetsAt = RESETS_AT,
+    prototype = false,
+  }: { issue?: number; subscription?: string; resetsAt?: string; prototype?: boolean } = {},
 ): LoopEvent {
   return {
     kind: "agent-run-failed",
     role,
+    ...(prototype ? { prototype } : {}),
     issue,
     runUrl: RUN,
     jobResult: "failure",
@@ -109,24 +115,51 @@ describe("A run refused on its Subscription's weekly limit, with rotation on", (
     ]);
   });
 
-  // The turn to start is read from the thread (#155): the refusal posts nothing on the issue, so its request stays pending.
-  it("agent:design re-added after a refused prototype turn starts the prototype turn again, on the next free Subscription", () => {
-    const pending = { request: { route: "/book", variants: 3, brief: "- **A**: a form.\n- **B**: a stepper.\n- **C**: a calendar." }, reply: 9001 };
+  // The turn to start is read from the thread (#155): the refusal posts nothing on the issue, so its request stays pending,
+  // and whether its prototype turn has started is marked on the request's own comment, which the snapshot reads back.
+  describe("on a session whose prototype turn has started building its pending request", () => {
+    const request = { route: "/book", variants: 3, brief: "- **A**: a form.\n- **B**: a stepper.\n- **C**: a calendar." };
+    const pending = { request, reply: 9001, comment: 9010, started: true };
     const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], designRounds: 2, pendingPrototype: pending });
     const config = kitConfig({ ...TWO_SUBSCRIPTIONS, ui: UI });
 
-    const refusal = planFor(refused("design"), snapshotOf(issue), config);
-    const restart = planFor(
-      { kind: "label-added", issue: 7, label: "agent:design" },
-      snapshotOf({ ...issue, labels: [...issue.labels, "agent:design"] }, { kitIssues: [kitIssueOpenedBy(refusal, 41)] }),
-      config,
-    );
+    /** agent:design re-added after the refusal, on #7 as its push job left it: the request's comment marked as the refusal marked it. */
+    function restartAfter(refusal: Plan): Plan {
+      const marked = actionsOf(refusal).find((action) => action.kind === "mark-prototype-request");
+      const started = marked?.kind === "mark-prototype-request" ? marked.started : pending.started;
+      return planFor(
+        { kind: "label-added", issue: 7, label: "agent:design" },
+        snapshotOf({ ...issue, labels: [...issue.labels, "agent:design"], pendingPrototype: { ...pending, started } }, { kitIssues: [kitIssueOpenedBy(refusal, 41)] }),
+        config,
+      );
+    }
 
-    expect(actionsOf(refusal).filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([]);
-    expect(actionsOf(restart)).toEqual([
-      { kind: "remove-label", issue: 7, label: "agent:design" },
-      expect.objectContaining({ kind: "start-agent-run", role: "design", issue: 7, prototype: pending, timeoutMinutes: 60, subscription: "Claude token 2" }),
-    ]);
+    it("agent:design re-added after a refused prototype turn starts the prototype turn again, on the next free Subscription", () => {
+      const refusal = planFor(refused("design", { prototype: true }), snapshotOf(issue), config);
+
+      expect(actionsOf(refusal).filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([]);
+      expect(actionsOf(refusal).slice(0, 3)).toEqual([
+        { kind: "remove-label", issue: 7, label: "agent:design" },
+        { kind: "mark-prototype-request", issue: 7, comment: 9010, started: false },
+        { kind: "add-labels", issue: 7, labels: ["agent:design"] },
+      ]);
+      expect(actionsOf(restartAfter(refusal))).toEqual([
+        { kind: "remove-label", issue: 7, label: "agent:design" },
+        expect.objectContaining({ kind: "start-agent-run", role: "design", issue: 7, prototype: { request, reply: 9001 }, timeoutMinutes: 60, subscription: "Claude token 2" }),
+        { kind: "mark-prototype-request", issue: 7, comment: 9010, started: true },
+      ]);
+    });
+
+    it("agent:design re-added after a refused ordinary turn, which the Operator's reply started meanwhile, starts that ordinary turn again", () => {
+      const refusal = planFor(refused("design"), snapshotOf(issue), config);
+
+      expect(actionsOf(refusal).some((action) => action.kind === "mark-prototype-request")).toBe(false);
+      expect(actionsOf(restartAfter(refusal))).toEqual([
+        { kind: "remove-label", issue: 7, label: "agent:design" },
+        expect.objectContaining({ kind: "start-agent-run", role: "design", issue: 7, timeoutMinutes: 30, subscription: "Claude token 2" }),
+      ]);
+      expect(actionsOf(restartAfter(refusal))[1]).not.toHaveProperty("prototype");
+    });
   });
 
   it("a second refusal on a Subscription whose issue is open comments quietly there, and re-runs while another is free", () => {

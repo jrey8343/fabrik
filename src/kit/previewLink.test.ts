@@ -194,7 +194,8 @@ describe("Linking each variant's preview in a prototype round", () => {
       runUrl: `${REPO}/actions/runs/9100/attempts/1`,
       repoUrl: REPO,
     } as const;
-    const issue = anIssue({ number: 7, labels: ["needs-design"], designRounds: 2, pendingPrototype: request });
+    // Its prototype turn has started, so the request's comment says so.
+    const issue = anIssue({ number: 7, labels: ["needs-design"], designRounds: 2, pendingPrototype: { ...request, comment: 9010, started: true } });
     const plan = planFor(event, snapshotOf(issue, { operator: "jrey", startingComment: { id: 9001, exists: true } }), kitConfig({ ui: UI, preview: { url: template } }));
     const github = issueSeven();
     const { preview } = await applyPlan(github, repo, plan, { head: HEAD, push: async () => {} });
