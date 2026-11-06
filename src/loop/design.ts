@@ -94,23 +94,26 @@ export function startQueuedSession(issueNumber: number, { issue }: IssueContext,
   return { kind: "act", actions: [removeLabel, ...startAgentRun("design", issueNumber, config).actions] };
 }
 
-/**
- * A session's prototype turn (#155): the Design run that builds its pending
- * request, on the Design role's model and effort, so the variants come from
- * the model the Operator has been talking to. Building and serving the
- * Product takes a build's time, so it runs within the Implement role's timeout.
- */
+/** A session's prototype turn (#155): the Design run that builds its pending request, as its role, prototypeRole, runs. */
 function prototypeTurn(issueNumber: number, pending: PrototypeRequestMarker, config: KitConfig): Action {
-  const { model, effort } = config.roles.design;
   return {
     kind: "start-agent-run",
     role: "design",
     issue: issueNumber,
-    model,
-    effort,
-    timeoutMinutes: config.roles.implement.timeoutMinutes,
+    ...prototypeRole(config.roles),
     prototype: { request: pending.request, reply: pending.reply },
   };
+}
+
+/**
+ * The role a session's prototype turn (#155) runs as: the Design role's model
+ * and effort, so the variants come from the model the Operator has been
+ * talking to, within the Implement role's timeout, since building and serving
+ * the Product takes a build's time. The Kit job's plan, the runner and a
+ * failed turn's notice all read it here.
+ */
+export function prototypeRole(roles: Pick<KitConfig["roles"], "design" | "implement">): KitConfig["roles"]["design"] {
+  return { model: roles.design.model, effort: roles.design.effort, timeoutMinutes: roles.implement.timeoutMinutes };
 }
 
 /**

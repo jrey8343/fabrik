@@ -9,7 +9,8 @@ import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { rebuildAgentBranch } from "../github/branch.ts";
 import { bundleAgentBranch } from "./implement.ts";
-import { PROTOTYPE_AUTHOR, PROTOTYPE_SECTIONS, prototypeRole, prototypeTurnContext, setPrototypeEnv, startPrototypeBranch } from "./prototype.ts";
+import { prototypeRole } from "../loop/design.ts";
+import { PROTOTYPE_AUTHOR, PROTOTYPE_SECTIONS, prototypeTurnContext, setPrototypeEnv, startPrototypeBranch } from "./prototype.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult, type BuiltBranch } from "./result.ts";
 
 /** The Kit job's prototype_request output, as the prototype job's env passes it. */

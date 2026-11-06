@@ -13,6 +13,7 @@
 // Kit off that Subscription. A Retro run is never re-run or held: the tick
 // can't start one at a reset, so its Retro fails, for the tick to try again.
 import { isPendingAudit } from "./audit.ts";
+import { prototypeRole } from "./design.ts";
 import { type HeldRun, heldInOrder, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
 import { canHold, heldAfterKill } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
@@ -57,8 +58,7 @@ export function infrastructureFailureOf(run: Pick<FailedRun, "secretsStep" | "re
 function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: KitConfig): string {
   switch (failure) {
     case "timeout":
-      // A prototype turn builds and serves the Product, so it ran within the Implement role's timeout.
-      return `it was cancelled, most likely by its ${config.roles[run.prototype === true ? "implement" : run.role].timeoutMinutes}-minute timeout`;
+      return `it was cancelled, most likely by its ${(run.prototype === true ? prototypeRole(config.roles) : config.roles[run.role]).timeoutMinutes}-minute timeout`;
     case "unreachable-1password":
       return "its secrets couldn't be loaded from 1Password";
     case "crash":

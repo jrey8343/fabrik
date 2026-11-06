@@ -10,7 +10,7 @@
 // bundle, as an Implement run's commits.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { AgentRole, KitConfig } from "../kit/config.ts";
+import type { KitConfig } from "../kit/config.ts";
 import { prototypeBranchFor, variantLetter } from "../loop/designOutput.ts";
 import { type PrototypeRequestMarker, readPrototypeRequest } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
@@ -61,16 +61,6 @@ export function prototypeTurnContext(
       `Once you finish, the Kit builds the branch, serves it, and captures each variant at mobile and desktop widths, at \`${served}?variant=${letters[0] ?? "A"}\` and so on, so each variant must render there from its letter alone.`,
     ],
   };
-}
-
-/**
- * The role a prototype turn runs as: the Design role's model and effort,
- * since it is a turn of the Design session, within the Implement role's
- * timeout, since it builds and serves the Product, as the prototype job's
- * agent step's timeout is.
- */
-export function prototypeRole(roles: Pick<KitConfig["roles"], "design" | "implement">): AgentRole {
-  return { model: roles.design.model, effort: roles.design.effort, timeoutMinutes: roles.implement.timeoutMinutes };
 }
 
 /**
