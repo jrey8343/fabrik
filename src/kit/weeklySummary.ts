@@ -29,7 +29,7 @@ import {
   within,
 } from "./retroEvidence.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
+import { type RateLimitReading, type ReplayRun, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
 
 // The GitHub facts the metrics read are the Retro evidence module's (src/kit/retroEvidence.ts).
@@ -148,7 +148,11 @@ export interface CostFigure {
   readonly unknownCost: number;
 }
 
-/** The week's headline figures. */
+/**
+ * The week's headline figures. Every figure but `replaySpend` reads live runs
+ * only, leaving out Replay arms' records and score files and the judge's
+ * records for Replay runs.
+ */
 export interface WeeklySummary {
   /** The Monday the week began on, in the Operator's time zone, as `yyyy-mm-dd`. */
   readonly week: string;
@@ -156,6 +160,12 @@ export interface WeeklySummary {
   readonly cost: WeekOverWeek<number>;
   /** How many of the week's records the cost leaves out, their cost basis being unknown. */
   readonly unknownCost: WeekOverWeek<number>;
+  /**
+   * What the week's Replays cost: every Replay arm's record that ended in the
+   * week, the judge's runs scoring them included. Every other figure leaves
+   * Replays out. Null in a week with no Replay record.
+   */
+  readonly replaySpend: WeekOverWeek<ReplaySpend | null>;
   /**
    * For each agent PR merged in the week, the cost of every Implement, Retry,
    * Step-up and Review record on its Ticket, whatever week the run was in,
@@ -214,6 +224,13 @@ export interface WeeklySummary {
   readonly scoringCost: WeekOverWeek<ScoringCost>;
   /** One section per Product repo, in the order the facts came. */
   readonly repos: readonly RepoSection[];
+}
+
+/** The summed cost of a week's Replay records, in USD. */
+export interface ReplaySpend {
+  readonly usd: number;
+  /** How many Replay records it leaves out, their cost basis being unknown. */
+  readonly unknownCost: number;
 }
 
 /** The summed cost of a week's judge runs, in USD, and its share of the week's cost. */
@@ -404,14 +421,20 @@ export interface SubscriptionUsage {
 }
 
 /** The summary to file for the week that just ended, or skip. */
-export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
+export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResult {
+  // A Replay is an experiment: every figure leaves it out, and its spend gets a line of its own.
+  const { records, scoreFiles } = everything;
+  const input: WeeklySummaryInput = { ...everything, records: records.filter(isLive), scoreFiles: scoreFiles.filter(isLive) };
+  const replays = records.filter((record) => !isLive(record));
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
+  const replaySpend = { thisWeek: replaySpendOf(weeks.thisWeek, replays), lastWeek: replaySpendOf(weeks.lastWeek, replays) };
   const repos = input.facts.map((facts) => repoSectionOf(facts, input));
   // Held work counts too, so a queue never sits unseen through a week nothing ran.
   const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null);
-  if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && quiet) return { kind: "skip" };
+  // And a week only Replays ran in is no quiet week either, so what they cost still shows.
+  if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && replaySpend.thisWeek === null && quiet) return { kind: "skip" };
   const change = <K extends keyof WeekMetrics>(metric: K): WeekOverWeek<WeekMetrics[K]> => ({
     thisWeek: thisWeek[metric],
     lastWeek: lastWeek[metric],
@@ -420,6 +443,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     week: weeks.thisWeek.monday,
     cost: change("cost"),
     unknownCost: change("unknownCost"),
+    replaySpend,
     costPerMergedPullRequest: change("costPerMergedPullRequest"),
     costPerSpec: change("costPerSpec"),
     spendNeverMerged: change("spendNeverMerged"),
@@ -447,6 +471,17 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     repos,
   };
   return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
+}
+
+/** Whether a record or score file is a live run's, not a Replay arm's. */
+function isLive({ replay }: { readonly replay: ReplayRun | null }): boolean {
+  return replay === null;
+}
+
+/** The summed cost of the Replay records that ended in the week, or null if none did. */
+function replaySpendOf(week: Week, replays: readonly RunRecord[]): ReplaySpend | null {
+  const ended = replays.filter((record) => within(week, record.endedAt));
+  return ended.length === 0 ? null : costOf(ended);
 }
 
 // The metrics: one week's figures, computed the same way for any week. Which
@@ -1023,7 +1058,7 @@ function localTime(time: number, timeZone: string): string {
 // Held shows what the Design-session, Monitor and Map caps hold.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
-  const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
+  const { cost, unknownCost, replaySpend, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
   const share = ({ reverted, merged }: RevertRate) => (merged === 0 ? null : reverted / merged);
   const revertCell = (rate: RevertRate) => orNone(share(rate), (value) => `${percent(value)} (${rate.reverted} of ${rate.merged})`);
   const revertChange = pointsChange({ thisWeek: share(revertRate.thisWeek), lastWeek: share(revertRate.lastWeek) });
@@ -1040,6 +1075,9 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     const change = thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, dollars);
     return `| ${name} | ${shown(thisWeek)} | ${shown(lastWeek)} | ${change} |`;
   };
+  // Replay spend sits under the cost it's left out of, in a week with any.
+  const replaySpendRows =
+    replaySpend.thisWeek === null ? [] : [row("Replay spend", { thisWeek: replaySpend.thisWeek.usd, lastWeek: replaySpend.lastWeek?.usd ?? null }, dollars)];
   const costFigures: [string, WeekOverWeek<CostFigure>][] = [
     ["cost per merged PR", costPerMergedPullRequest],
     ["cost per Spec", costPerSpec],
@@ -1051,6 +1089,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     "| | This week | Last week | Change |",
     "| --- | ---: | ---: | ---: |",
     row("API-equivalent cost", cost, dollars),
+    ...replaySpendRows,
     costRow("Cost per merged PR", costPerMergedPullRequest),
     costRow("Cost per Spec", costPerSpec),
     costRow("Spend that never merged", spendNeverMerged),
@@ -1073,6 +1112,8 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
       "",
     );
   }
+  const replaysLeftOut = replaySpend.thisWeek?.unknownCost ?? 0;
+  if (replaysLeftOut > 0) lines.push(`${runsWithUnknownCost(replaysLeftOut)} left out of replay spend.`, "");
   for (const [name, figure] of costFigures) {
     const leftOut = figure.thisWeek.unknownCost;
     if (leftOut > 0) lines.push(`${runsWithUnknownCost(leftOut)} left out of ${name}.`, "");
