@@ -11,6 +11,7 @@ import {
   readArmJob,
   readReplayRunEnded,
   replayRunContextOf,
+  replayRunEnded,
   replayRunFiles,
   writeReplayRun,
 } from "./replayRecord.ts";
@@ -282,6 +283,19 @@ describe("How a replay Ticket's run ended, for the Loop to land on the replay is
     const files = replayRunFiles(CONTEXT, { baseline: armRan("baseline"), variant: armRan("variant", { implement: ran({ job: null, transcript: null, transcriptGzip: null }) }) }, KIT, ENDED_AT);
 
     expect(files.ended.end).toEqual({ kind: "infrastructure", reason: "the variant arm's Implement run left no account of how it went, as when its workflow run is cancelled" });
+  });
+
+  it("is told with no rubrics to read, so the replay-record job leaves it before anything else can fail", () => {
+    const arms = { baseline: armRan("baseline"), variant: armRan("variant", { implement: ran({ job: null, transcript: null, transcriptGzip: null }) }) };
+
+    expect(replayRunEnded(CONTEXT, arms, ENDED_AT)).toEqual({
+      issue: 140,
+      ticket: 12,
+      run: 9001,
+      end: { kind: "infrastructure", reason: "the variant arm's Implement run left no account of how it went, as when its workflow run is cancelled" },
+      subscription: "Claude token",
+      resetsAt: null,
+    });
   });
 
   it("keeps a Ticket's patches and gates only from the run it's done in, since each arm has one place for them, and every run's records", () => {

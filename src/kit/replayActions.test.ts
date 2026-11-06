@@ -349,6 +349,14 @@ describe("The replay-record action, the replay's push job", () => {
     expect(checkout).toContain("persist-credentials: false");
   });
 
+  it("says how the run ended whatever a step before it came to, the store's token failing to load included, so the run can still land", () => {
+    expect(stepWith(steps, "uses: ./kit/.github/actions/store-token")).toContain("continue-on-error: true");
+    expect(record).toContain("if: always()");
+    for (const step of steps.slice(0, at(steps, "replay-record-main.ts"))) {
+      expect(step.includes("continue-on-error: true") || step.includes("uses: actions/setup-node@"), step).toBe(true);
+    }
+  });
+
   it("lands the run on the replay issue through the Loop, as the Fabrik App, even when the store couldn't be written", () => {
     expect(record).toContain("continue-on-error: true");
     expect(land).toContain("if: always() && steps.record.outputs.ended != ''");

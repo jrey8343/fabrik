@@ -227,12 +227,9 @@ export interface ReplayRunFiles {
  * or the score file of a run the scoring plan skips.
  */
 export function replayRunFiles(context: ReplayRunContext, arms: Readonly<Record<ReplayArm, ArmArtifacts>>, kit: KitRubrics, endedAt: string): ReplayRunFiles {
-  const runs = REPLAY_ARMS.map((arm) => ({
-    arm,
-    implement: armRunOf(context, arm, "implement", arms[arm].implement, endedAt),
-    review: armRunOf(context, arm, "review", arms[arm].review, endedAt),
-  }));
-  const end = endOf(runs);
+  const runs = armRunsOf(context, arms, endedAt);
+  const ended = endedOf(context, runs);
+  const { end } = ended;
   const writes: { message: string; files: StoreFile[] }[] = [];
   for (const { arm, implement, review } of runs) {
     const artifacts = arms[arm];
@@ -248,17 +245,37 @@ export function replayRunFiles(context: ReplayRunContext, arms: Readonly<Record<
     if (review.kind === "ran") writes.push({ message: storeCommitMessage(review.files.record), files: runFiles(review.files, artifacts.review) });
     if (implement.kind === "ran") writes.push(...scoringFiles(implement.files, artifacts.judge, kit, endedAt));
   }
+  return { ended, writes };
+}
+
+/**
+ * How a replay Ticket's run ended, from what its arms' jobs left, as
+ * replayRunFiles says it too. It needs no rubrics and writes nothing, so the
+ * replay-record job leaves it first, before anything else can fail.
+ */
+export function replayRunEnded(context: ReplayRunContext, arms: Readonly<Record<ReplayArm, ArmArtifacts>>, endedAt: string): ReplayRunEnded {
+  return endedOf(context, armRunsOf(context, arms, endedAt));
+}
+
+/** Each arm's Implement and Review runs, in the arms' order, as their jobs left them. */
+function armRunsOf(context: ReplayRunContext, arms: Readonly<Record<ReplayArm, ArmArtifacts>>, endedAt: string): ArmRuns {
+  return REPLAY_ARMS.map((arm) => ({
+    arm,
+    implement: armRunOf(context, arm, "implement", arms[arm].implement, endedAt),
+    review: armRunOf(context, arm, "review", arms[arm].review, endedAt),
+  }));
+}
+
+/** How the run of these arms' runs ended, for the Loop to land. */
+function endedOf(context: ReplayRunContext, runs: ArmRuns): ReplayRunEnded {
   const refused = runs.flatMap(({ implement, review }) => [implement, review]).find(isWeeklyLimit);
   return {
-    ended: {
-      issue: context.issue,
-      ticket: context.ticket,
-      run: context.runId,
-      end,
-      subscription: context.subscription,
-      resetsAt: refused?.kind === "ran" && refused.failureReport !== null ? (readFailureReport(refused.failureReport).resetsAt ?? null) : null,
-    },
-    writes,
+    issue: context.issue,
+    ticket: context.ticket,
+    run: context.runId,
+    end: endOf(runs),
+    subscription: context.subscription,
+    resetsAt: refused?.kind === "ran" && refused.failureReport !== null ? (readFailureReport(refused.failureReport).resetsAt ?? null) : null,
   };
 }
 
@@ -267,6 +284,9 @@ type ArmRun =
   | { readonly kind: "ran"; readonly files: RunRecordFiles; readonly failureReport: string | null }
   | { readonly kind: "not-run"; readonly why: string }
   | { readonly kind: "missing" };
+
+/** Each arm's two runs, in the arms' order. */
+type ArmRuns = readonly { readonly arm: ReplayArm; readonly implement: ArmRun; readonly review: ArmRun }[];
 
 function armRunOf(context: ReplayRunContext, arm: ReplayArm, role: ReplayRole, artifacts: ArmRunArtifacts, endedAt: string): ArmRun {
   const job = readArmJob(artifacts.job);
@@ -289,7 +309,7 @@ const ROLE_NAMES: Readonly<Record<ReplayRole, string>> = { implement: "Implement
  * have run, while its Review may never have started, as when its patch
  * wasn't laid.
  */
-function endOf(runs: readonly { readonly arm: ReplayArm; readonly implement: ArmRun; readonly review: ArmRun }[]): ReplayTicketEnd {
+function endOf(runs: ArmRuns): ReplayTicketEnd {
   if (runs.some(({ implement, review }) => isWeeklyLimit(implement) || isWeeklyLimit(review))) return { kind: "weekly-limit" };
   for (const { arm, implement, review } of runs) {
     for (const [role, run] of [["implement", implement], ["review", review]] as const) {

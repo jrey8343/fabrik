@@ -1548,10 +1548,11 @@ jobs:
   # writes each arm's patch, Run records, transcripts and judge's record and
   # score file to the store, each create-only, then lands the run on the
   # replay issue through the Loop. always(), so it runs once both arms' jobs
-  # have ended, whatever they came to and even when the run was cancelled:
-  # no Ticket is left in progress, and an arm that left no account of its run
-  # lands as an Infrastructure failure. continue-on-error, so it never fails
-  # the run.
+  # have ended, whatever they came to and even when the run was cancelled: an
+  # arm that left no account of its run lands as an Infrastructure failure. A
+  # run this job can't land at all, the scheduled tick releases once its
+  # Ticket is in progress past the longest a run can last
+  # (src/loop/replayGate.ts). continue-on-error, so it never fails the run.
   replay-record:
     name: Replay record
     needs: [kit, implement-claim, replay-implement, replay-gates, replay-review, replay-score]
