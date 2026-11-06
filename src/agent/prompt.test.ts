@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_KIT_CONFIG, type KitConfig } from "../kit/config.ts";
 import { extraSkillsLine, promptFor } from "./prompt.ts";
+import { RETRO_ISSUE_HEADING } from "./retro.ts";
 
 describe("the prompt line naming a role's Extra skills", () => {
   it("is one line naming each Extra skill, where it is, and where to learn when to use it", () => {
@@ -99,6 +100,30 @@ describe("an AFK role's prompt", () => {
         "The Operator wrote these for this repo.",
         "Booking first.",
         "## The pending Audit",
+        "```json",
+        JSON.stringify(issue, null, 2),
+        "```",
+        "## More",
+        "Context.",
+      ].join("\n\n") + "\n",
+    );
+  });
+
+  it("gives the Retro this repo's retro instructions from .fabrik/retro.md, and no Extra skills line", () => {
+    const withRetro: KitConfig = {
+      ...config({ design: [eventStorming], review: [deciders] }),
+      instructions: { ...DEFAULT_KIT_CONFIG.instructions, retro: "Weigh the billing escapes first.\n" },
+    };
+
+    const prompt = promptFor({ ...base, template: "# The Kit's retro prompt\n", role: "retro", config: withRetro, heading: RETRO_ISSUE_HEADING });
+
+    expect(prompt).toBe(
+      [
+        "# The Kit's retro prompt",
+        "## This Product repo's retro instructions",
+        "The Operator wrote these for this repo.",
+        "Weigh the billing escapes first.",
+        "## The pending Retro",
         "```json",
         JSON.stringify(issue, null, 2),
         "```",
