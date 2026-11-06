@@ -99,7 +99,10 @@ describe("A Design turn that asks for a Prototype while Prototypes are off", () 
 });
 
 describe("An ordinary Design turn that ends in a prototype round", () => {
-  it("fails as a broken contract and posts nothing: only a prototype turn builds variants", () => {
+  it.each([
+    ["while Prototypes are off", kitConfig(), {}],
+    ["with Prototypes switched on and a ui block", kitConfig({ ui: UI }), switchedOn],
+  ])("fails as a broken contract and posts nothing %s: only a prototype turn builds variants", (_, config, options) => {
     const built = {
       kind: "prototype-round",
       intro: "Two takes on `/book`.",
@@ -110,7 +113,7 @@ describe("An ordinary Design turn that ends in a prototype round", () => {
       recommendation: "B",
     };
 
-    const plan = planFor(turnFinished(built), inSession, kitConfig());
+    const plan = planFor(turnFinished(built), inSession, config, options);
 
     expect(plan).toEqual({
       kind: "fail",

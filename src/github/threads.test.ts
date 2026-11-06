@@ -3,6 +3,7 @@
 // writer and the reader can't drift apart.
 import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "../loop/rules.ts";
 import type { LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 import { countEmptyDiffs, designSessionOf, designTurnFailedIn, requestChangesRunIn, verdictsIn } from "./threads.ts";
@@ -180,6 +181,23 @@ describe("Reading a Ticket's Design session from its comments", () => {
     );
 
     expect(designSessionOf(commentsOf(plan).map(kit)).designRounds).toBe(1);
+  });
+
+  it("reads a prototype request the core posted as no round, and no end of the session or its return", () => {
+    const output = JSON.stringify({ kind: "prototype", route: "/book", variants: 3, brief: "Three takes.", comment: "Prototyping it." });
+    const plan = planFor(
+      { kind: "agent-run-finished", role: "design", issue: 7, output },
+      snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: 1 })),
+      kitConfig({ ui: UI }),
+      { prototypes: true },
+    );
+    const requested = commentsOf(plan);
+
+    expect(requested).toHaveLength(1);
+    expect(designSessionOf([note(50), round(1), person("Yes, prototype it."), ...requested.map(kit)])).toEqual({
+      designRounds: 1,
+      sentBack: { pullRequest: 50, verdictUrl: VERDICT_URL },
+    });
   });
 });
 
