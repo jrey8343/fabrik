@@ -79,7 +79,10 @@ const PROTOTYPE_EXAMPLE = {
 /**
  * What a Design-session turn is told of Prototypes: when and how it may offer
  * one, ask for the one the Operator approved, read the Operator's choice, and
- * record it in the outcome. Only tests pass `switchedOn`.
+ * record it in the outcome. Nothing at all on a repo without a `ui` block,
+ * which the Kit can't serve and capture, or while Prototypes are dormant, so
+ * the turn's prompt is then just as it was. The Kit config decides, never an
+ * agent. Only tests pass `switchedOn`.
  */
 export function prototypeContext(
   config: Pick<KitConfig, "ui">,
@@ -98,7 +101,7 @@ export function prototypeContext(
       [
         "- **Offer a Prototype only when the open question is how a page looks**: its layout, what it shows first, how its parts sit together.",
         "Never offer one for a question of logic, data or behaviour, which an ordinary round settles.",
-        'Ask it as one question of a round, naming the route and how many variants it builds, with your recommendation, such as "Prototype the booking page (`/book`) as 3 variants first?".',
+        `Ask it as one question of a round, naming the route and how many variants it builds, with your recommendation, such as "Prototype the booking page (\`${PROTOTYPE_EXAMPLE.route}\`) as ${PROTOTYPE_DEFAULT_VARIANTS} variants first?".`,
         `Offer ${PROTOTYPE_DEFAULT_VARIANTS} variants unless the Operator asked for another count, never fewer than ${PROTOTYPE_MIN_VARIANTS} or more than ${PROTOTYPE_VARIANT_CAP}.`,
         "Nothing is built until the Operator says yes.",
       ].join(" "),
