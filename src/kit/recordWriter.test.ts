@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { noWait, storeWith } from "../__fixtures__/store.ts";
-import type { RunRecord, RunRecordFiles } from "./runRecord.ts";
-import { recordWriteSummary, writeRunRecord } from "./recordWriter.ts";
+import type { ReplayArm, RunRecord, RunRecordFiles } from "./runRecord.ts";
+import { recordWriteSummary, storeCommitMessage, writeRunRecord } from "./recordWriter.ts";
 
 const RECORD_PATH = "runs/acme/widgets/2026-11/9001-1-triage.json";
 const TRANSCRIPT_PATH = "transcripts/acme/widgets/2026-11/9001-1-triage.jsonl.gz";
@@ -9,7 +9,7 @@ const TRANSCRIPT = new Uint8Array([0x1f, 0x8b, 8, 0]);
 
 /** The record a passing Triage run on #12 gets; only its path and content matter here. */
 function files(overrides: Partial<RunRecordFiles> = {}): RunRecordFiles {
-  const record = { schema: 1, repo: "acme/widgets", runId: 9001, runAttempt: 1, role: "triage", issue: 12 } as unknown as RunRecord;
+  const record = { schema: 4, repo: "acme/widgets", runId: 9001, runAttempt: 1, role: "triage", issue: 12, replay: null } as unknown as RunRecord;
   return { record, recordPath: RECORD_PATH, transcriptPath: TRANSCRIPT_PATH, ...overrides };
 }
 
@@ -114,5 +114,22 @@ describe("The step summary's line on the Run record", () => {
     expect(recordWriteSummary({ kind: "written", written: [], existing: [TRANSCRIPT_PATH, RECORD_PATH] })).toBe(
       `Already there, left as it was: ${TRANSCRIPT_PATH}, ${RECORD_PATH}.`,
     );
+  });
+});
+
+describe("The store commit of a run's files", () => {
+  const run = { repo: "acme/widgets", runId: 9001, runAttempt: 1, role: "implement", replay: null } as const;
+
+  it("names the repo, the run and its role", () => {
+    expect(storeCommitMessage(run)).toBe("acme/widgets run 9001-1 (implement)");
+  });
+
+  it("names a Replay arm's run's arm too, so the two arms of one workflow run each name their own", () => {
+    const arm = (arm: ReplayArm) => storeCommitMessage({ ...run, replay: { issue: 300, arm, ticket: 7, candidateSha: null } });
+
+    expect([arm("baseline"), arm("variant")]).toEqual([
+      "acme/widgets run 9001-1 (implement, replay baseline)",
+      "acme/widgets run 9001-1 (implement, replay variant)",
+    ]);
   });
 });

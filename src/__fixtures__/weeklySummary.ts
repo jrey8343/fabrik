@@ -26,7 +26,7 @@ import { aMonitorIssueBody } from "./monitor.ts";
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
   return {
-    schema: 3,
+    schema: 4,
     kitSha: "f".repeat(40),
     repo: "owner/product",
     runId: 1000,
@@ -42,6 +42,7 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     stepUp: false,
     requestChanges: false,
     prototype: false,
+    replay: null,
     baseSha: "b".repeat(40),
     jobResult: "success",
     subtype: "success",
@@ -88,7 +89,7 @@ export function aScoreEntry(overrides: Partial<ScoreEntry> = {}): ScoreEntry {
 /** The score file of aRunRecord()'s run, scored five minutes after it ended: passing Efficiency, Ticket compliance and Skill use. */
 export function aScoreFile(overrides: Partial<ScoreFile> = {}): ScoreFile {
   return {
-    schema: 1,
+    schema: 2,
     kitSha: "f".repeat(40),
     repo: "owner/product",
     runId: 1000,
@@ -96,6 +97,7 @@ export function aScoreFile(overrides: Partial<ScoreFile> = {}): ScoreFile {
     role: "implement",
     issue: 7,
     pullRequest: 50,
+    replay: null,
     record: "runs/owner/product/2026-11/1000-1-implement.json",
     scoredAt: "2026-11-04T12:05:00Z",
     rubrics: ["efficiency@1", "ticket-compliance@1", "skill-use@1"],
