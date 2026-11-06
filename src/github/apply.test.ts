@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { acceptedBody } from "../__fixtures__/replay.ts";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
+import { replayMarksIn } from "../kit/replay.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
 import { applyPlan } from "./apply.ts";
@@ -535,5 +537,59 @@ describe("Marking whether a prototype request's prototype turn has started (#155
     await applyPlan(github, repo, mark(false));
 
     expect(github.calls).toEqual([`GET ${issues}/comments/9010`]);
+  });
+});
+
+describe("Marking a replay Ticket in progress as its run's claim takes agent:replay off (#156)", () => {
+  /** A GitHub holding replay issue #140, accepted with Tickets 12 and 7, which a GET reads and a PATCH replaces. */
+  function holdingReplay(body = acceptedBody()) {
+    const issue = { body };
+    const calls: string[] = [];
+    return {
+      issue,
+      calls,
+      async rest(method: string, path: string, sent?: unknown): Promise<unknown> {
+        calls.push(`${method} ${path}`);
+        if (path.endsWith("/labels/agent%3Areplay")) return null;
+        expect(path).toBe(`${issues}/140`);
+        if (method === "GET") return { number: 140, body: issue.body };
+        if (method === "PATCH") issue.body = (sent as { body: string }).body;
+        return null;
+      },
+      async graphql(): Promise<never> {
+        throw new Error("no GraphQL expected");
+      },
+    };
+  }
+
+  const claim: Plan = {
+    kind: "act",
+    actions: [
+      { kind: "remove-label", issue: 140, label: "agent:replay" },
+      { kind: "mark-replay-started", issue: 140, ticket: 12 },
+    ],
+  };
+
+  it("marks it in progress in the run applying the plan, read fresh, after the label came off", async () => {
+    const github = holdingReplay();
+
+    await applyPlan(github, repo, claim, null, 9001);
+
+    expect(replayMarksIn(github.issue.body)?.progress).toEqual([
+      { ticket: 12, state: "in-progress", run: 9001, retrying: null },
+      { ticket: 7, state: "pending" },
+    ]);
+    expect(github.calls).toEqual([`DELETE ${issues}/140/labels/agent%3Areplay`, `GET ${issues}/140`, `PATCH ${issues}/140`]);
+  });
+
+  it("fails, writing nothing, when the Ticket isn't waiting to run, as when another run claimed it first, so its replay jobs never start", async () => {
+    const github = holdingReplay(acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 8000, retrying: null }]));
+
+    await expect(applyPlan(github, repo, claim, null, 9001)).rejects.toThrow("#12 isn't waiting to run on replay #140, so run 9001 doesn't claim it");
+    expect(github.calls.some((call) => call.startsWith("PATCH"))).toBe(false);
+  });
+
+  it("fails in a job that names no run to mark it in", async () => {
+    await expect(applyPlan(holdingReplay(), repo, claim)).rejects.toThrow("This job names no Actions run to mark #12 in progress in");
   });
 });

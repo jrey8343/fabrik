@@ -2,7 +2,7 @@
 // the resolved Kit config go in; a plan comes out.
 import type { CaptureResult, EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
-import type { ReplayAcceptance, ReplayIssue } from "../kit/replay.ts";
+import type { PlannedTicket, ReplayAcceptance, ReplayIssue } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { SentBack } from "./backToDesign.ts";
@@ -930,6 +930,34 @@ export type Action =
        * place for every role, so the builders of a run leave it out.
        */
       readonly subscription?: string;
+    }
+  | {
+      /**
+       * Starts a Replay Ticket's two arms (#156), baseline and variant; the
+       * workflow does this by routing to `replay` (src/kit/jobs.ts), not the
+       * adapter. A replay run is never held, so the core's holding leaves
+       * it alone, and never re-run on another Subscription.
+       */
+      readonly kind: "start-replay";
+      /** The replay issue. */
+      readonly issue: number;
+      /** The Ticket it replays, from the issue's plan, with what each arm runs it with. */
+      readonly ticket: PlannedTicket;
+      /** The Subscription both arms run on, which `planFor` gives it as it gives every run. */
+      readonly subscription?: string;
+    }
+  | {
+      /**
+       * Marks a replay issue's Ticket in progress in the run applying it, as
+       * its claim takes agent:replay off (#156): the adapter reads the body
+       * fresh and marks it with this Actions run's id (withTicketStarted,
+       * src/kit/replay.ts), and fails, so the run's replay jobs never
+       * start, when the Ticket isn't waiting to run there, as when another
+       * run claimed it first.
+       */
+      readonly kind: "mark-replay-started";
+      readonly issue: number;
+      readonly ticket: number;
     }
   | {
       /**

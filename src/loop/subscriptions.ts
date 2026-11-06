@@ -118,18 +118,17 @@ export function chosenSubscription(
   return freeSubscriptions(kitIssues, config)[0] ?? firstSubscription(config);
 }
 
-/** The Plan with every run it starts given the chosen Subscription. */
+/** The Plan with every run it starts, a Replay Ticket's two arms included, given the chosen Subscription. */
 export function onChosenSubscription(
   plan: Plan,
   kitIssues: readonly KitIssueSnapshot[],
   config: Pick<KitConfig, "subscriptions">,
 ): Plan {
-  if (plan.kind !== "act" || !plan.actions.some((action) => action.kind === "start-agent-run")) return plan;
+  const starts = (action: Action) => action.kind === "start-agent-run" || action.kind === "start-replay";
+  if (plan.kind !== "act" || !plan.actions.some(starts)) return plan;
   const subscription = chosenSubscription(kitIssues, config);
   return {
     kind: "act",
-    actions: plan.actions.map(
-      (action): Action => (action.kind === "start-agent-run" ? { ...action, subscription } : action),
-    ),
+    actions: plan.actions.map((action): Action => (starts(action) ? { ...action, subscription } : action)),
   };
 }

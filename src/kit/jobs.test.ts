@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aPullRequest, anIssue, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { acceptedBody, baseOf } from "../__fixtures__/replay.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 import { planFor } from "../loop/rules.ts";
@@ -9,6 +10,34 @@ import { kitJobOutputs } from "./jobs.ts";
 
 const config = kitConfig({
   roles: { ...DEFAULT_KIT_CONFIG.roles, retro: { model: "claude-retro", effort: "high", timeoutMinutes: 50 } },
+});
+
+describe("The Kit job's routing of a replay Ticket (#156)", () => {
+  const replay = anIssue({ number: 140, author: "operator", labels: ["fabrik:replay", "agent:replay"], body: acceptedBody() });
+  const started = planFor({ kind: "label-added", issue: 140, label: "agent:replay" }, snapshotOf(replay), kitConfig());
+
+  it("routes agent:replay on an accepted replay issue to replay, passing out its next Ticket, merged PR and baseSha, each arm's settings and the Subscription", () => {
+    expect(kitJobOutputs(started, null, kitConfig())).toMatchObject({
+      route: "replay",
+      "replay-issue": "140",
+      ticket: "12",
+      "pull-request": "112",
+      "base-sha": baseOf(12),
+      "replay-arms": JSON.stringify({
+        baseline: { implement: { model: "claude-sonnet-5-5", effort: null }, review: { model: "claude-opus-5-5", effort: null }, candidateSha: null },
+        variant: { implement: { model: "claude-sonnet-5-5", effort: null }, review: { model: "claude-opus-5-5", effort: "high" }, candidateSha: null },
+      }),
+      subscription: "Claude token",
+      model: "",
+      effort: "",
+      branch: "",
+      retry: "",
+    });
+  });
+
+  it("passes out no replay for any other run", () => {
+    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "replay-issue": "", "base-sha": "", "replay-arms": "" });
+  });
 });
 
 describe("The Kit job's routing", () => {

@@ -8,7 +8,7 @@ import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult } from "./agen
 import { type AgentBranchGit, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { prototypeBranchFor } from "./loop/designOutput.ts";
-import { applyPlan, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
+import { applyPlan, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { GitHub, type Repo } from "./github/client.ts";
 import {
   agentFailureEventFrom,
@@ -86,6 +86,10 @@ function describeAction(action: Action): string {
       return `- close #${action.issue} as superseded`;
     case "start-agent-run":
       return `- a ${action.role} run on #${action.issue}${action.pullRequest === undefined ? "" : `, ${action.requestChanges === undefined ? "retrying" : "with the Operator's requested changes on"} #${action.pullRequest}`} (${action.model}), which the Kit job routes to its agent job`;
+    case "start-replay":
+      return `- replay #${action.ticket.ticket} of replay #${action.issue}, both arms, which the Kit job routes to its replay jobs`;
+    case "mark-replay-started":
+      return `- mark #${action.ticket} in progress on replay #${action.issue} in this run`;
     case "hold-agent-run":
       return `- hold the ${action.role} run on #${action.issue}${action.until === null ? "" : ` until ${action.until}`}, starting no agent job`;
     case "drop-held-run":
@@ -359,9 +363,13 @@ async function main(): Promise<void> {
   const store = storeToken === undefined || storeToken === "" ? null : new GitHub(storeToken, process.env["GITHUB_API_URL"]);
   const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store);
   const plan = planFor(event, snapshot, config);
-  const { preview } = await applyPlan(github, repo, plan, branch);
+  // A replay Ticket's claim marks it in progress in this run, and fails when another run claimed it first.
+  const { preview } = await applyPlan(github, repo, plan, branch, Number(required("GITHUB_RUN_ID")));
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
+  // The replay jobs run only on the Ticket this run's claim marked in progress, once it has.
+  const claimed = replayClaimIn(plan);
+  if (claimed !== null) await appendFile(required("GITHUB_OUTPUT"), `replay-ticket=${claimed}\n`);
   // The Design queue job runs the check likewise, once this plan has landed.
   if (wantsDesignQueueCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "design-queue=true\n");
   // The push job's preview step polls it and links it, once this plan has pushed (src/kit/previewLink.ts): a UI

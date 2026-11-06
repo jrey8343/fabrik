@@ -10,7 +10,7 @@ import { heldOf } from "./heldRun.ts";
 import { REPLAY_TRIGGER_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { spelled } from "./readable.ts";
 import { chosenSubscription } from "./subscriptions.ts";
-import type { Action, KitConfig, Plan, ReplaySnapshot, Snapshot } from "./types.ts";
+import type { Action, KitConfig, KitIssueSnapshot, Plan, ReplaySnapshot, Snapshot } from "./types.ts";
 
 /**
  * Whether the scheduled tick runs the replay step. Off until Replay is
@@ -50,12 +50,8 @@ function capacityOf(now: string, { capacity }: ReplaySnapshot, { kitIssues }: Sn
   if (waiting.length > 0) {
     return { spare: false, why: `${spelled(waiting.map((number) => `#${number}`), "and")} ${waiting.length === 1 ? "waits" : "wait"} for Dispatch, and live work goes first` };
   }
-  // Any Subscription's, not just the one the run would use: a replay never spends into a limit.
-  const usedUp = kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL) || issue.labels.includes(USAGE_CREDITS_LABEL));
-  if (usedUp !== undefined) {
-    const what = usedUp.labels.includes(WEEKLY_LIMIT_LABEL) ? "weekly-limit" : "usage-credits";
-    return { spare: false, why: `A Subscription is used up, as the ${what} issue #${usedUp.number} says` };
-  }
+  const usedUp = whyUsedUp(kitIssues);
+  if (usedUp !== null) return { spare: false, why: usedUp };
   if (capacity.weeklyLimits === null) return { spare: false, why: "The fabrik-runs store couldn't be read, so the weekly limit's utilization isn't known" };
   // With every Subscription free, the first listed.
   const subscription = chosenSubscription(kitIssues, config);
@@ -69,6 +65,18 @@ function capacityOf(now: string, { capacity }: ReplaySnapshot, { kitIssues }: Sn
     };
   }
   return { spare: true };
+}
+
+/**
+ * Why a Subscription is used up, from the first open weekly-limit or
+ * usage-credits issue, or null while none is open. Any Subscription's, not
+ * only the one a replay run would use, so a Replay never spends into a limit.
+ */
+export function whyUsedUp(kitIssues: readonly KitIssueSnapshot[]): string | null {
+  const usedUp = kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL) || issue.labels.includes(USAGE_CREDITS_LABEL));
+  if (usedUp === undefined) return null;
+  const what = usedUp.labels.includes(WEEKLY_LIMIT_LABEL) ? "weekly-limit" : "usage-credits";
+  return `A Subscription is used up, as the ${what} issue #${usedUp.number} says`;
 }
 
 /**

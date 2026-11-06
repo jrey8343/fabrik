@@ -15,6 +15,7 @@ import {
   NEEDS_TRIAGE,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
+  REPLAY_TRIGGER_LABEL,
   RESEARCH_LABEL,
   REVIEW_LABEL,
   WONTFIX,
@@ -35,6 +36,7 @@ import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
 import { REPLAY_SWITCHED_ON, replayGate } from "./replayGate.ts";
+import { startReplay } from "./replayRun.ts";
 import { retroGate } from "./retroGate.ts";
 import { landRetro } from "./retroLanding.ts";
 import { WEEKLY_RUNS, weeklyRoleOf } from "./weeklyRuns.ts";
@@ -276,6 +278,7 @@ function labelAdded(
   if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config);
   if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
   if (label === RESEARCH_LABEL) return startResearcher(issueNumber, context, config);
+  if (label === REPLAY_TRIGGER_LABEL) return startReplay(issueNumber, context);
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }
