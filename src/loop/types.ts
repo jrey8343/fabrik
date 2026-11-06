@@ -139,6 +139,11 @@ export type LoopEvent =
       readonly secretsStep: "success" | "failure" | "cancelled" | "skipped" | null;
       /** What the agent job reported about its own failure, or null if it left nothing. */
       readonly report: FailureReport | null;
+      /**
+       * The Subscription the run used, from the Kit job's `subscription`
+       * output. Absent, it is read as the first listed Subscription.
+       */
+      readonly subscription?: string;
     }
   | { readonly kind: "issue-closed"; readonly issue: number }
   /** A PR was opened or pushed to, so its required checks start; a Review waits for them. */

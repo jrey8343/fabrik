@@ -5,9 +5,10 @@
 // trigger to re-add, since the scheduled tick opens the next one
 // (src/loop/auditFailure.ts).
 import { failAudit } from "./auditFailure.ts";
-import { repoWideNotice } from "./kitIssues.ts";
+import { refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
+import { rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
 import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
@@ -57,8 +58,13 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
       return run.role === "review" ? "the Reviewer gave no valid Verdict" : "the agent gave no valid output";
     case "provider-error":
       return "the model provider returned an error";
-    case "dead-token":
-      return "the Claude token was refused (`authentication_failed`), so it may need rotating";
+    case "dead-token": {
+      // With rotation on, it names the Subscription whose vault item needs rotating.
+      const subscription = subscriptionOfRun(run, config);
+      const rotation = rotationIsOn(config);
+      const token = refusedToken({ subscription, rotation });
+      return `${token} was refused (\`authentication_failed\`), so ${rotation ? `its \`${subscription}\` vault item` : "it"} may need rotating`;
+    }
     case "weekly-limit":
       return "it hit the weekly usage limit";
     case "metered-billing":
@@ -74,10 +80,17 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
 export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig): Plan {
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
+  const ranOn = { subscription: subscriptionOfRun(run, config), rotation: rotationIsOn(config) };
   // The scheduled tick tries a failed Audit again, so there's no trigger label to re-add.
   if (run.role === "audit") {
     const how = howItFailed(failure, run, config);
-    return failAudit(context, { failure, how, runUrl: run.runUrl, resetsAt: run.report?.resetsAt ?? null });
+    return failAudit(context, {
+      failure,
+      how,
+      runUrl: run.runUrl,
+      resetsAt: run.report?.resetsAt ?? null,
+      ranOn,
+    });
   }
   const pullRequest = issue.openPullRequests[0];
   const target = pullRequest ?? run.issue;
@@ -95,6 +108,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     run: failedRun,
     runUrl: run.runUrl,
     resetsAt: run.report?.resetsAt ?? null,
+    ...ranOn,
   });
   const body = [
     ...(run.role === "design" ? [DESIGN_TURN_FAILED_MARKER] : []),

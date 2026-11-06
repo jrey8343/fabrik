@@ -198,6 +198,7 @@ async function failedRunEvent(
     jobResult: input.jobResult,
     secretsStep: input.secretsStep,
     report: reportText === null ? null : readFailureReport(reportText),
+    ...(input.subscription === undefined ? {} : { subscription: input.subscription }),
   });
   return { event, source: `the failed ${input.role} run on #${input.issue}` };
 }
