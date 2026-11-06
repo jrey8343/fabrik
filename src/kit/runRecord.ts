@@ -1,12 +1,13 @@
 // The Run record (ADR-0009): from what the push job knows when an AFK agent
-// run ends, the one schema 2 record of that run, and the paths it and its
+// run ends, the one schema 3 record of that run, and the paths it and its
 // transcript take in the store, or no record when no agent run ended. A judge
 // run, scoring a finished run, gets a record too, in role `score`, from what
 // the score-record job knows when it ends. The stream is read through the one
 // stream-json reader (src/agent/stream.ts). The paths are inside the store,
 // RUN_STORE (src/kit/runStore.ts). A record read back from the store is read
 // at the current schema: a schema 1 record, written before runs were given a
-// Subscription, as being on the first listed one. Pure, no I/O.
+// Subscription, as being on the first listed one, and a schema 1 or 2 record,
+// written before prototype turns, as no prototype turn. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
@@ -68,10 +69,10 @@ export interface RateLimitReading {
 /** A record's role: the agent role that ran, or `score` for a judge run scoring a finished run. */
 export type RunRecordRole = AgentRole | "score";
 
-/** The schema a Run record is written at: 2 added `subscription`. */
-export const RUN_RECORD_SCHEMA = 2;
+/** The schema a Run record is written at: 2 added `subscription`, 3 added `prototype`. */
+export const RUN_RECORD_SCHEMA = 3;
 
-/** One AFK agent run, schema 2. */
+/** One AFK agent run, schema 3. */
 export interface RunRecord {
   readonly schema: typeof RUN_RECORD_SCHEMA;
   readonly kitSha: string;
@@ -302,14 +303,18 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
 /**
  * A Run record as read back from the store, at the current schema: a schema 1
  * record, which names no Subscription, is read as being on the first listed
- * one. Null for anything that isn't a record of a schema the Kit knows.
+ * one, and a schema 1 or 2 record, written before there were prototype turns,
+ * as no prototype turn. Null for anything that isn't a record of a schema the
+ * Kit knows.
  */
 export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
   if (typeof stored !== "object" || stored === null) return null;
   const { schema } = stored as { schema?: unknown };
   if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
+  if (schema === 2) return { ...(stored as Omit<RunRecord, "schema" | "prototype">), schema: RUN_RECORD_SCHEMA, prototype: false };
   if (schema === 1) {
-    return { ...(stored as Omit<RunRecord, "schema" | "subscription">), schema: RUN_RECORD_SCHEMA, subscription: firstSubscription({ subscriptions }) };
+    const record = stored as Omit<RunRecord, "schema" | "subscription" | "prototype">;
+    return { ...record, schema: RUN_RECORD_SCHEMA, subscription: firstSubscription({ subscriptions }), prototype: false };
   }
   return null;
 }
