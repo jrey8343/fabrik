@@ -186,7 +186,10 @@ async function agentResultEvent(
     repo,
     token: required("FABRIK_APP_TOKEN"),
   });
-  return { event: agentRunEventFrom(result, branch.changes, retry), source, branch };
+  // The capture result and artifact ids come from the Implement job's outputs; the core decides whether the run is UI.
+  const capture = input.capture ?? { result: null, artifact: null, galleryArtifact: null };
+  const evidence = { capture, run: Number(required("GITHUB_RUN_ID")), repoUrl: thisRepoUrl() };
+  return { event: agentRunEventFrom(result, branch.changes, retry, null, evidence), source, branch };
 }
 
 /** The routed agent job failed or was cancelled. Its failure report is missing when its timeout cancelled it. */
