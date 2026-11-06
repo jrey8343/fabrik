@@ -155,6 +155,12 @@ describe("Product intent in the Design prompt", () => {
     expect(intent).toContain("finishes as a small Spec instead: one Ticket and that Operator step");
     expect(intent).toContain("With no Vision, add no such step.");
   });
+
+  it("counts the Vision and Roadmap's folder among the trust-root files an Implementer can't change", async () => {
+    const turn = section(await prompt("design"), "Your turn");
+    const trustRoots = turn.split("\n").find((line) => line.includes("the trust-root files, which are")) ?? "";
+    expect(trustRoots).toContain("`docs/product/`");
+  });
 });
 
 describe("Questions for the Operator", () => {
