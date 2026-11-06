@@ -94,6 +94,15 @@ export interface ReplayRun {
   readonly candidateSha: string | null;
 }
 
+/**
+ * Whether a Run record or score file is a live run's, not a Replay arm's.
+ * Every metric the Weekly summary and the Retro read leaves Replays out, so
+ * an experiment never counts as the factory's own work.
+ */
+export function isLive({ replay }: { readonly replay: ReplayRun | null }): boolean {
+  return replay === null;
+}
+
 /** One AFK agent run, schema 4. */
 export interface RunRecord {
   readonly schema: typeof RUN_RECORD_SCHEMA;

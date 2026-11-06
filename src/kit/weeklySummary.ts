@@ -30,7 +30,7 @@ import {
 } from "./retroEvidence.ts";
 import { replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { type RateLimitReading, type ReplayRun, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
+import { isLive, type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
 
 // The GitHub facts the metrics read are the Retro evidence module's (src/kit/retroEvidence.ts).
@@ -490,11 +490,6 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
     repos,
   };
   return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
-}
-
-/** Whether a record or score file is a live run's, not a Replay arm's. */
-function isLive({ replay }: { readonly replay: ReplayRun | null }): boolean {
-  return replay === null;
 }
 
 /** The summed cost of the Replay records that ended in the week, or null if none did. */

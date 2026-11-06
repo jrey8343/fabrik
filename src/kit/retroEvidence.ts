@@ -16,7 +16,7 @@ import { followUpsIn } from "../loop/followUps.ts";
 import { escapeMarkerIn, fromPullRequestIn, fromRetroIn } from "../loop/markers.ts";
 import { retrosIn, retroWindowStart } from "../loop/retro.ts";
 import { type RetroEvidence, type RetroIssueSnapshot, STRENGTHS, type Strength, type Verdict, type VerdictRecord } from "../loop/types.ts";
-import { recordPathOf, type RunRecord, runKey } from "./runRecord.ts";
+import { isLive, recordPathOf, type RunRecord, runKey } from "./runRecord.ts";
 import { inSample, type ScoreFile } from "./scorer.ts";
 import { cutMarker, cutTo, digestOf, largestCap, type TranscriptDigest } from "./transcriptDigest.ts";
 
@@ -743,9 +743,13 @@ export function evidenceTicketsOf(input: Omit<RetroEvidenceInput, "tickets">): n
   return [...new Set(numbers)];
 }
 
-/** What the metrics read of the input: only this repo's records, whatever the store gave. */
+/**
+ * What the metrics read of the input: only this repo's live records, whatever
+ * the store gave. A Replay arm's record names the Ticket and PR it re-ran,
+ * but no Replay run built or let through what merged (#156).
+ */
 function metricsOf({ records, facts, operator }: Pick<RetroEvidenceInput, "records" | "facts" | "operator">): MetricsInput {
-  return { records: records.filter((record) => record.repo === facts.repo), facts: [facts], operator };
+  return { records: records.filter((record) => record.repo === facts.repo && isLive(record)), facts: [facts], operator };
 }
 
 /**
@@ -1008,16 +1012,17 @@ function followUpsOf(window: Window, { facts, operator }: RetroEvidenceInput): F
 }
 
 /**
- * The repo's score files with a failing entry whose run ended in the window,
- * oldest first. A score file whose record the store doesn't hold goes by when
- * it was scored, minutes after its run ended, as the Weekly summary does.
+ * The repo's live score files with a failing entry whose run ended in the
+ * window, oldest first: never a Replay arm's, as the Weekly summary's Scores
+ * leave them out. A score file whose record the store doesn't hold goes by
+ * when it was scored, minutes after its run ended, as the Weekly summary does.
  */
 function lowScoresOf(window: Window, records: readonly RunRecord[], { facts, scoreFiles }: RetroEvidenceInput, digested: Digested): LowScoreEvidence[] {
   const byRun = new Map(records.map((record) => [runKey(record), record]));
   return Object.entries(scoreFiles)
     .flatMap(([ref, file]) => {
       const entries = file.entries ?? [];
-      if (file.repo !== facts.repo || entries.every((entry) => entry.pass)) return [];
+      if (file.repo !== facts.repo || !isLive(file) || entries.every((entry) => entry.pass)) return [];
       const record = byRun.get(runKey(file));
       const endedAt = record?.endedAt ?? file.scoredAt;
       if (!within(window, endedAt)) return [];
