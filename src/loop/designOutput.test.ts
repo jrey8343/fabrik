@@ -15,4 +15,22 @@ describe("A Design turn's prototype output: the Operator approved a Prototype", 
   it("reads the route, the variant count, the brief and the request comment's lead-in", () => {
     expect(turn(requested)).toEqual({ ok: true, output: requested });
   });
+
+  it.each([2, 5])("reads %i variants", (variants) => {
+    expect(turn({ ...requested, variants })).toMatchObject({ ok: true, output: { variants } });
+  });
+
+  it.each([
+    ["a route not starting with /", { ...requested, route: "book" }, "a prototype needs a route, a path starting with /"],
+    ["a route that is a whole URL", { ...requested, route: "https://penrithphysio.com.au/book" }, "a prototype needs a route, a path starting with /"],
+    ["a protocol-relative route", { ...requested, route: "//penrithphysio.com.au/book" }, "a prototype needs a route, a path starting with /"],
+    ["no route", { ...requested, route: undefined }, "a prototype needs a route, a path starting with /"],
+    ["1 variant", { ...requested, variants: 1 }, "a prototype needs variants, a whole number from 2 to 5"],
+    ["6 variants", { ...requested, variants: 6 }, "a prototype needs variants, a whole number from 2 to 5"],
+    ["2.5 variants", { ...requested, variants: 2.5 }, "a prototype needs variants, a whole number from 2 to 5"],
+    ["variants given as text", { ...requested, variants: "3" }, "a prototype needs variants, a whole number from 2 to 5"],
+    ["no variant count", { ...requested, variants: undefined }, "a prototype needs variants, a whole number from 2 to 5"],
+  ])("refuses %s, naming it", (_, output, error) => {
+    expect(turn(output)).toEqual({ ok: false, errors: [error] });
+  });
 });

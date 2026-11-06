@@ -7,9 +7,22 @@
 // session ends as not planned: the Operator decided the issue won't be built.
 // Or, when the destination is too foggy to design in one session, the issue
 // becomes a Map with its first Decisions.
+import { isRoute } from "../kit/config.ts";
 import { isCommentIdList } from "./considered.ts";
 import { DECISION_TYPES, type DecisionType } from "./labels.ts";
 import type { AgentBrief } from "./triageOutput.ts";
+
+/**
+ * The fewest variants a Prototype builds: with one, there is nothing to
+ * choose between. A Kit constant, not Kit config, like the two below.
+ */
+export const PROTOTYPE_MIN_VARIANTS = 2;
+
+/** How many variants a Prototype builds when the Operator didn't ask for another count, as the `prototype` skill does. */
+export const PROTOTYPE_DEFAULT_VARIANTS = 3;
+
+/** The most variants a Prototype builds: past five they stop being different and the gallery stops being quick to look through. */
+export const PROTOTYPE_VARIANT_CAP = 5;
 
 export interface RoundQuestion {
   readonly question: string;
@@ -274,6 +287,11 @@ function isDecisionType(value: unknown): value is DecisionType {
   return (DECISION_TYPES as readonly unknown[]).includes(value);
 }
 
+/** A whole number of variants within the Kit's minimum and cap. */
+function isVariantCount(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= PROTOTYPE_MIN_VARIANTS && (value as number) <= PROTOTYPE_VARIANT_CAP;
+}
+
 /** What the blocked-by edges within an outcome link: its Tickets, or its Decisions. */
 interface Blocked {
   readonly key: string;
@@ -380,7 +398,12 @@ function readTurn(value: unknown): DesignTurnOutputResult {
         },
       };
     }
-    case "prototype":
+    case "prototype": {
+      if (!isRoute(value.route)) errors.push("a prototype needs a route, a path starting with /");
+      if (!isVariantCount(value.variants)) {
+        errors.push(`a prototype needs variants, a whole number from ${PROTOTYPE_MIN_VARIANTS} to ${PROTOTYPE_VARIANT_CAP}`);
+      }
+      if (errors.length > 0) return { ok: false, errors };
       return {
         ok: true,
         output: {
@@ -391,6 +414,7 @@ function readTurn(value: unknown): DesignTurnOutputResult {
           comment: value.comment as string,
         },
       };
+    }
     default:
       return {
         ok: false,
