@@ -190,7 +190,7 @@ describe("agent:design on an issue whose Design session has a pending prototype 
     expect(plan.kind === "act" ? plan.actions.find(({ kind }) => kind === "start-agent-run") : null).not.toHaveProperty("prototype");
   });
 
-  // It waits behind the prototype turn in the session's concurrency group, and reads its round once it's posted.
+  // Its turn waits behind the prototype turn's job in the session's concurrency group: one turn of a session runs at a time.
   it("leaves the Operator's reply to start an ordinary turn, as any reply does, while the request is pending", () => {
     const replied = { kind: "issue-comment-created", issue: 7, commenter: "jrey", commenterIsBot: false, body: "Also try a dark one", comment: 9002 } as const;
 

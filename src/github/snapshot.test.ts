@@ -276,7 +276,7 @@ describe("Gathering a Design queue check's needs-design issues", () => {
       );
 
     for (const queue of [
-      // The prototype turn waits behind its claim, then runs, then its push job posts the round.
+      // The prototype turn queued, then running, then done while its push job posts the round.
       await asked([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Design-session turn #3", status: "completed", conclusion: "skipped" }, { name: "fabrik / Prototype turn #3", status: "queued" }] }]),
       await asked([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Prototype turn #3", status: "in_progress" }] }]),
       await asked([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Prototype turn #3", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] }]),
