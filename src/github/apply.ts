@@ -135,6 +135,8 @@ async function apply(
     case "check-dispatch":
     // Nor this: the push job hands it on to the Design queue job.
     case "check-design-queue":
+    // Nor this: the push job hands it on to its preview step.
+    case "link-preview":
       return;
     case "create-issue":
       return createIssue(github, repo, action, made.created);
@@ -230,6 +232,7 @@ async function applyToIssue(
       kind:
         | "check-dispatch"
         | "check-design-queue"
+        | "link-preview"
         | "create-issue"
         | "add-blocked-by"
         | "open-issue"

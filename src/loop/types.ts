@@ -726,7 +726,23 @@ export type Action =
   /** Run a Dispatch check, in the Dispatch job, once the rest of this plan has landed. */
   | { readonly kind: "check-dispatch" }
   /** Run a Design queue check, in the Design queue job, once the rest of this plan has landed (#147). */
-  | { readonly kind: "check-design-queue" };
+  | { readonly kind: "check-design-queue" }
+  | {
+      /**
+       * Links a UI PR's preview deployment in its evidence section (#153). Not
+       * a GitHub change itself: once this plan has pushed, the push job hands
+       * it on to its preview step, which fills `template` in for the PR as the
+       * push left it, polls that URL, and edits the section to link it, or to
+       * say it never answered. Never a hosting provider's API.
+       */
+      readonly kind: "link-preview";
+      /** The PR, or null for the one this plan opens. */
+      readonly pullRequest: number | null;
+      /** Kit config's `preview.url`. */
+      readonly template: string;
+      /** The PR's branch, which this plan pushes. */
+      readonly branch: string;
+    };
 
 /**
  * What the core decided: actions to apply, nothing (with the reason why), or

@@ -99,6 +99,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
   if (changes.net.length === 0) return emptyDiff(issueNumber, issue);
 
   const { title, summary } = parsed.output;
+  const evidence = evidenceFor(event, config, false);
   return {
     kind: "act",
     actions: [
@@ -109,9 +110,10 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
         head: branch,
         base,
         title: withoutMentions(title),
-        body: pullRequestBody(summary, issueNumber, evidenceFor(event, config, false)),
+        body: pullRequestBody(summary, issueNumber, evidence),
         draft: true,
       },
+      ...previewToLink(evidence, config, branch, null),
     ],
   };
 }
@@ -163,6 +165,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       ),
     };
   }
+  const evidence = evidenceFor(event, config, pullRequest.uiEvidence !== null);
   // The body and the note go first: the push starts a Review, which must see the run's outcome (or it posts no
   // Verdict) and the body as it now stands.
   return {
@@ -170,11 +173,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
     actions: [
       // The body says what the PR as a whole now does, so the next Review, which reads the body, never judges a stale one.
       // Its evidence section is this run's, never an earlier run's, so the evidence matches the PR's new head.
-      {
-        kind: "edit-issue-body",
-        issue: pullRequest.number,
-        body: pullRequestBody(parsed.output.summary, issueNumber, evidenceFor(event, config, pullRequest.uiEvidence !== null)),
-      },
+      { kind: "edit-issue-body", issue: pullRequest.number, body: pullRequestBody(parsed.output.summary, issueNumber, evidence) },
       {
         kind: "comment",
         issue: pullRequest.number,
@@ -191,6 +190,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         ].join("\n"),
       },
       { kind: "push-branch", branch },
+      ...previewToLink(evidence, config, branch, pullRequest.number),
     ],
   };
 }
@@ -225,6 +225,17 @@ function evidenceFor(event: ImplementRunFinished, config: KitConfig, marked: boo
     // The push job polls a declared preview once it has pushed, and links it if it answers.
     preview: config.preview === null ? { kind: "none" } : { kind: "pending" },
   });
+}
+
+/**
+ * The preview deployment to link once the push job has pushed: a UI PR's,
+ * when Kit config declares `preview.url`, which its evidence section says is
+ * linked once it answers. A PR with no evidence section gets none, and nor
+ * does one in a repo that declares no preview, so the push job polls nothing.
+ */
+function previewToLink(evidence: string | null, config: KitConfig, branch: string, pullRequest: number | null): Action[] {
+  if (evidence === null || config.preview === null) return [];
+  return [{ kind: "link-preview", pullRequest, template: config.preview.url, branch }];
 }
 
 /** Why a retry's branch can't land on this PR now, or null when it can. */

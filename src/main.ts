@@ -80,6 +80,8 @@ function describeAction(action: Action): string {
       return "- run a Dispatch check";
     case "check-design-queue":
       return "- run a Design queue check";
+    case "link-preview":
+      return `- link the preview deployment of ${action.pullRequest === null ? "the PR it opens" : `#${action.pullRequest}`} once it answers, or say it never answered`;
     case "push-branch":
       return `- push ${action.branch}`;
     case "open-pull-request":

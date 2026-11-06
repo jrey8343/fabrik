@@ -396,3 +396,33 @@ describe("The evidence section on a first run's draft PR", () => {
     ]);
   });
 });
+
+describe("The preview deployment of a first run's draft PR", () => {
+  const PREVIEW = { url: "https://deploy-preview-{pr}--shop.netlify.app" };
+
+  it("is linked once the push job has pushed and opened the PR, from Kit config's template and the branch, when the run is UI", () => {
+    const plan = planFor(uiRun(), snapshotOf(readyTicket()), kitConfig({ ui: UI, preview: PREVIEW }));
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["push-branch", "open-pull-request", "link-preview"]);
+    expect(actionsOf(plan)[2]).toEqual({
+      kind: "link-preview",
+      pullRequest: null,
+      template: "https://deploy-preview-{pr}--shop.netlify.app",
+      branch: "fabrik/ticket-7",
+    });
+  });
+
+  it("is linked whatever capture passed out, failed or none, since the PR is UI all the same", () => {
+    const plan = planFor(uiRun(anEvidence(undefined, { artifact: null, gallery: null })), snapshotOf(readyTicket()), kitConfig({ ui: UI, preview: PREVIEW }));
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["push-branch", "open-pull-request", "link-preview"]);
+  });
+
+  it.each([
+    ["Kit config declares no preview.url", uiRun(), kitConfig({ ui: UI })],
+    ["the branch changes nothing ui.paths matches", finished({ evidence: anEvidence(CAPTURED) }), kitConfig({ ui: UI, preview: PREVIEW })],
+    ["the repo has no ui block", uiRun(), kitConfig({ preview: PREVIEW })],
+  ])("isn't polled when %s, so the push job does nothing more than push and open the PR", (_, event, config) => {
+    expect(actionsOf(planFor(event, snapshotOf(readyTicket()), config)).map((action) => action.kind)).toEqual(["push-branch", "open-pull-request"]);
+  });
+});
