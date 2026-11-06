@@ -211,7 +211,18 @@ export interface AuditMarks {
 
 /** The Audit marker lines in `body`, each matched against a whole line with its outer whitespace trimmed. */
 export function auditMarksIn(body: string): AuditMarks {
+  const { value: commit, pending, failed } = weeklyMarksIn(body, AUDIT_MARKER, AUDIT_PENDING_MARKER, AUDIT_FAILED_MARKER);
+  return { commit, pending, failed };
+}
+
+/**
+ * The marker lines in `body` of an issue a weekly gate opens pending for its
+ * run (src/loop/weeklyGate.ts), an Audit or a Retro: the value its own
+ * `marker` captures, and whether it has the pending or the failed line. Each
+ * is matched against a whole line with its outer whitespace trimmed.
+ */
+function weeklyMarksIn(body: string, marker: RegExp, pending: string, failed: string) {
   const lines = body.split("\n").map((line) => line.trim());
-  const commit = lines.map((line) => AUDIT_MARKER.exec(line)?.[1]).find((sha) => sha !== undefined) ?? null;
-  return { commit, pending: lines.includes(AUDIT_PENDING_MARKER), failed: lines.includes(AUDIT_FAILED_MARKER) };
+  const value = lines.map((line) => marker.exec(line)?.[1]).find((each) => each !== undefined) ?? null;
+  return { value, pending: lines.includes(pending), failed: lines.includes(failed) };
 }
