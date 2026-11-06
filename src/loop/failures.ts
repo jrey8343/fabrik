@@ -178,12 +178,17 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     };
   }
   const marker = FAILURE_MARKERS[run.role];
+  // A research Decision has no retries to count against, and Dispatch leaves it alone once its run failed.
+  const notRetried =
+    run.role === "research"
+      ? "neither the Loop nor Dispatch runs it again by itself"
+      : "the Loop won't retry it and it doesn't count against the Ticket's retries";
   const body = [
     ...(marker === undefined ? [] : [marker]),
     `${repoWide === null ? `@${operator} ` : ""}${failedRun} failed: ${howItFailed(failure, run, config)}.`,
     ...detail,
     "",
-    `This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. ${resume}`,
+    `This is an Infrastructure failure, so ${notRetried}. ${resume}`,
     ...(repoWide === null ? [] : ["", repoWide.pointer]),
     "",
     `[The run](${run.runUrl})`,
