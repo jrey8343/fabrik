@@ -45,6 +45,7 @@ describe("Review: starting one", () => {
           model: config.roles.review.model,
           effort: config.roles.review.effort,
           timeoutMinutes: 30,
+          subscription: "Claude token",
         },
       ],
     });

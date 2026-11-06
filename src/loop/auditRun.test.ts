@@ -60,6 +60,7 @@ describe("The App's pending Audit, when it's opened", () => {
           model: "claude-auditor",
           effort: "high",
           timeoutMinutes: 50,
+          subscription: "Claude token",
         },
       ],
     });

@@ -51,6 +51,7 @@ describe("Request changes at the Merge gate", () => {
           model: config.roles.stepUp.model,
           effort: config.roles.stepUp.effort,
           timeoutMinutes: config.roles.implement.timeoutMinutes,
+          subscription: "Claude token",
         },
       ],
     });
@@ -102,6 +103,7 @@ describe("Resuming a Request-changes run after an Infrastructure failure", () =>
           model: config.roles.stepUp.model,
           effort: config.roles.stepUp.effort,
           timeoutMinutes: config.roles.implement.timeoutMinutes,
+          subscription: "Claude token",
         },
       ],
     });

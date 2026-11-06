@@ -23,6 +23,7 @@ import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
 import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
 import { startAgentRun } from "./runs.ts";
+import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
 import { dispatch } from "./dispatch.ts";
@@ -40,6 +41,12 @@ import type {
 
 /** The Loop rules core: decides what the Kit does about one Loop event. Pure, no I/O. */
 export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
+  // Every run the Plan starts is given its Subscription here, whichever role it is.
+  return onChosenSubscription(planOnAnySubscription(event, snapshot, config), snapshot.kitIssues, config);
+}
+
+/** What the Kit does about one Loop event, before the runs it starts are given a Subscription. */
+function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
   switch (event.kind) {
     case "issue-opened":
       // The App opens a pending Audit for the Auditor to fill in; Intake never sorts it.

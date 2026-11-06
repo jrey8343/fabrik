@@ -596,6 +596,12 @@ export type Action =
       readonly model: string;
       readonly effort: string | null;
       readonly timeoutMinutes: number;
+      /**
+       * The Subscription it runs on: the `Fabrik` vault item name its job loads
+       * the Claude token from. `planFor` gives it to every run it starts, in one
+       * place for every role, so the builders of a run leave it out.
+       */
+      readonly subscription?: string;
     }
   /** Push the agent branch the Implement run built, which the push job holds from its bundle. */
   | { readonly kind: "push-branch"; readonly branch: string }
