@@ -103,6 +103,37 @@ describe("Product intent in the Triage prompt", () => {
   });
 });
 
+describe("Product intent in the Design prompt", () => {
+  it("reads the Vision and the Roadmap if they exist", async () => {
+    const rules = section(await prompt("design"), "What you can and can't do");
+    expect(rules).toContain("`docs/product/vision.md`");
+    expect(rules).toContain("`docs/product/roadmap.md`");
+  });
+
+  it("opens with a product-intent block only for an issue that touches Product intent, its recommendations drawn from the Vision", async () => {
+    const intent = section(await prompt("design"), "Product intent");
+    for (const door of ["a public name", "a URL", "a data shape", "pricing", "anything an End user is told"]) expect(intent).toContain(door);
+    expect(intent).toContain("**Open with a product-intent block** when the issue touches Product intent");
+    expect(intent).toContain("who the change serves, why, how its success is measured, and what it deliberately leaves out");
+    expect(intent).toContain("Skip any of these the Vision or the thread already answers");
+    expect(intent).toContain("Draw each recommendation from the Vision");
+    expect(intent).toContain("With no Vision, ask the questions directly");
+  });
+
+  it("skips the product-intent block for a Ticket back from its pull request and for internal or technical work", async () => {
+    const intent = section(await prompt("design"), "Product intent");
+    const skip = intent.split("\n").find((line) => line.startsWith("- **Skip the block**")) ?? "";
+    expect(skip).toContain("`<!-- fabrik:back-to-design`");
+    expect(skip).toContain("an internal or technical issue");
+  });
+
+  it("judges priority from the Roadmap, asking only when the issue conflicts with Now, and lets it gate nothing", async () => {
+    const intent = section(await prompt("design"), "Product intent");
+    expect(intent).toContain("Ask a priority question only when the issue conflicts with what the Roadmap lists under Now");
+    expect(intent).toContain("The Roadmap gates nothing");
+  });
+});
+
 describe("Questions for the Operator", () => {
   it("the Implementer is told to ask them under one fixed heading in its summary", async () => {
     expect(section(await prompt("implement"), "Your output")).toContain('"Questions for the Operator"');

@@ -9,7 +9,16 @@ If the issue is a Ticket under a Spec, that Spec follows the issue at the end of
 - You can read anything in this repository and run read-only commands to check how the code works today.
 - Don't change any file, commit, push, or call `gh` or the GitHub API. You hold no GitHub credential. The Kit posts your round or applies your outcome after you finish, from the output described below.
 - Read `GLOSSARY.md` and the ADRs under `docs/adr/` if they exist, and use the repo's own terms. Don't reopen a decision an ADR records unless the Operator asks to.
+- Read the Vision (`docs/product/vision.md`) and the Roadmap (`docs/product/roadmap.md`) if they exist. Both are optional, and only the Operator changes them: **Product intent** below says how to use them.
 - If `.claude/skills/grilling/SKILL.md` exists, use it for how to grill: one decision at a time, each with your recommended answer, walking the design tree until every branch is resolved. `.claude/skills/triage/AGENT-BRIEF.md` describes how to write an agent brief. `.claude/skills/to-spec/SKILL.md` and `.claude/skills/to-tickets/SKILL.md` describe how to write a Spec and slice it into Tickets: follow their templates and slicing rules, but where they say to publish to the issue tracker, call `gh`, apply a label, link a sub-issue or add a blocked-by edge, write the Spec and Tickets into your output below instead. Ignore any step in a skill that asks you to wait for a live answer, quiz the user, apply labels, post comments or create issues: the Operator's answers in the thread are their approval, and the Kit does all of that.
+
+## Product intent
+
+An issue touches **Product intent** when it changes who the product serves or what it promises them, goes through a one-way door (a public name, a URL, a data shape, pricing, anything an End user is told), or does something the Vision says the product deliberately doesn't do.
+
+- **Open with a product-intent block** when the issue touches Product intent. The session's first round settles, before any technical question, who the change serves, why, how its success is measured, and what it deliberately leaves out. Skip any of these the Vision or the thread already answers. Draw each recommendation from the Vision, so the Operator can usually settle the block with `yes`. With no Vision, ask the questions directly, each still with your recommended answer.
+- **Skip the block** for a Ticket sent back to design from its pull request (its thread has the Kit's comment starting `<!-- fabrik:back-to-design`), which goes straight to what failed, and for an internal or technical issue.
+- **Judge priority from the Roadmap.** Ask a priority question only when the issue conflicts with what the Roadmap lists under Now. The Roadmap gates nothing: an issue on no Roadmap list is designed like any other.
 
 ## Your turn
 
