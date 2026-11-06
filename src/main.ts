@@ -15,6 +15,7 @@ import {
   agentRunEventFrom,
   auditEventFrom,
   loopEventFrom,
+  prototypeEventFrom,
   researchEventFrom,
   retroEventFrom,
   reviewEventFrom,
@@ -166,7 +167,8 @@ async function loopEvent(repo: Repo): Promise<EventSource> {
 /**
  * The push job's event: the result an agent job passed out. The agent could
  * have rewritten that artifact, so its issue must be the one this run is for,
- * and an Implement or Researcher run's branch is rebuilt from its bundle and checked here.
+ * and the branch of an Implement or Researcher run, or of a prototype turn, is
+ * rebuilt from its bundle and checked here.
  */
 async function agentResultEvent(
   input: Extract<PushJobInput, { kind: "agent-result" }>,
@@ -195,6 +197,20 @@ async function agentResultEvent(
     }
     const branch = await rebuildAgentBranch(built, bundlePath, remote());
     return { event: researchEventFrom(result, branch.changes, thisRunUrl(), thisRepoUrl()), source, branch };
+  }
+  if (input.prototype !== undefined) {
+    // What the turn built, its request and its capture come from the Kit job's plan and the prototype
+    // job's outputs, which the agent can't rewrite (src/kit/pushJob.ts); the core checks the branch is the issue's.
+    const { request, capture } = input.prototype;
+    if (request === null) throw new Error(`The Kit job passed out no prototype request for #${result.issue} that reads`);
+    const built = result.branch;
+    if (built === undefined || built.name !== prototypeBranchFor(result.issue)) {
+      throw new Error(`The prototype turn on #${result.issue} didn't build ${prototypeBranchFor(result.issue)}`);
+    }
+    // A prototype branch's push only fast-forwards it from the head the turn started on (src/github/branch.ts).
+    const branch = await rebuildAgentBranch(built, bundlePath, remote());
+    const evidence = { ...capture, run: Number(required("GITHUB_RUN_ID")), repoUrl: thisRepoUrl() };
+    return { event: prototypeEventFrom(result, request, branch, evidence, thisRunUrl()), source: `the prototype turn on #${result.issue}`, branch };
   }
   if (result.role !== "implement") {
     return { event: agentRunEventFrom(result, null, null, input.startedBy), source, branch: null };
@@ -237,6 +253,7 @@ async function failedRunEvent(
     secretsStep: input.secretsStep,
     report: reportText === null ? null : readFailureReport(reportText),
     ...(input.subscription === undefined ? {} : { subscription: input.subscription }),
+    ...(input.prototype === undefined ? {} : { prototype: input.prototype }),
   });
   return { event, source: `the failed ${input.role} run on #${input.issue}` };
 }
