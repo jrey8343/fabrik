@@ -4,7 +4,15 @@ import { aMergedPullRequest, anEscapeMarkerIssue, aRunRecord, factsOf } from "..
 import { readAgentRunResult } from "../agent/result.ts";
 import type { CaptureOutputs } from "../kit/pushJob.ts";
 import { evidenceBundle, readEvidenceBundle } from "../kit/retroEvidence.ts";
-import { agentFailureEventFrom, agentRunEventFrom, auditEventFrom, loopEventFrom, researchEventFrom, retroEventFrom } from "./events.ts";
+import {
+  agentFailureEventFrom,
+  agentRunEventFrom,
+  auditEventFrom,
+  loopEventFrom,
+  prototypeEventFrom,
+  researchEventFrom,
+  retroEventFrom,
+} from "./events.ts";
 
 describe("A push", () => {
   const push = (overrides: Record<string, unknown> = {}) => ({
@@ -371,6 +379,64 @@ describe("A finished Researcher run", () => {
   });
 });
 
+describe("A finished prototype turn", () => {
+  const RUN = "https://github.com/acme/shop/actions/runs/9100/attempts/1";
+  const REPO = "https://github.com/acme/shop";
+  const HEAD = "7e3d1c9b5a4f2e0d8c6b4a2f0e9d7c5b3a1f0e2d";
+  const OUTPUT = '{"kind":"prototype-round","intro":"Two ways.","variants":[],"recommendation":"A"}';
+  const branch = { name: "prototype/7", base: { ref: "main", sha: "b".repeat(40) }, head: HEAD };
+  const result = readAgentRunResult(JSON.stringify({ role: "design", issue: 7, output: OUTPUT, branch }));
+  const request = { request: { route: "/book", variants: 2, brief: "Two ways." }, reply: 9001 };
+  const changes = { net: [{ path: "src/pages/book/A.tsx" }], commits: [{ path: "src/pages/book/A.tsx" }], updatedFromMain: false };
+  const captured = {
+    outcome: "captured",
+    headSha: HEAD,
+    captures: [{ route: "/book", variant: "A", viewport: "mobile", status: 200, image: "variant-a-mobile.png" }],
+  } as const;
+  /** Run 9100's push job, in acme/shop, with what the prototype job passed out. */
+  const pushJob = (capture: CaptureOutputs) => ({ ...capture, run: 9100, repoUrl: REPO });
+
+  it("carries the turn's output, unparsed, the request the Kit job built it on, the branch, what it changes and the head the push leaves, what capture recorded, and the gallery in the push job's own run", () => {
+    const event = prototypeEventFrom(result, request, { changes, head: HEAD }, pushJob({ result: captured, artifact: null, galleryArtifact: 9201 }), RUN);
+
+    expect(event).toEqual({
+      kind: "prototype-run-finished",
+      issue: 7,
+      output: OUTPUT,
+      request,
+      branch: "prototype/7",
+      changes,
+      headSha: HEAD,
+      capture: captured,
+      gallery: `${REPO}/actions/runs/9100/artifacts/9201`,
+      runUrl: RUN,
+      repoUrl: REPO,
+    });
+  });
+
+  it("carries no capture result or gallery when the prototype job passed out none, and no head when the turn made no commit", () => {
+    const event = prototypeEventFrom(
+      result,
+      request,
+      { changes: { net: [], commits: [], updatedFromMain: false }, head: null },
+      pushJob({ result: null, artifact: null, galleryArtifact: null }),
+      RUN,
+    );
+
+    expect(event).toMatchObject({ kind: "prototype-run-finished", headSha: null, gallery: null });
+    expect(event).not.toHaveProperty("capture");
+  });
+
+  it("refuses a result that names no branch, or is another role's", () => {
+    const evidence = pushJob({ result: null, artifact: null, galleryArtifact: null });
+    const noBranch = readAgentRunResult(JSON.stringify({ role: "design", issue: 7, output: OUTPUT }));
+    const triage = readAgentRunResult(JSON.stringify({ role: "triage", issue: 7, output: "{}" }));
+
+    expect(() => prototypeEventFrom(noBranch, request, { changes, head: HEAD }, evidence, RUN)).toThrow(/names no branch/);
+    expect(() => prototypeEventFrom(triage, request, { changes, head: HEAD }, evidence, RUN)).toThrow(/triage result/);
+  });
+});
+
 describe("A failed agent run", () => {
   const job = {
     role: "triage" as const,
@@ -396,5 +462,10 @@ describe("A failed agent run", () => {
 
   it("names no Subscription when the Kit job passed none out", () => {
     expect(agentFailureEventFrom(job)).not.toHaveProperty("subscription");
+  });
+
+  it("says a failed Design-session turn was the session's prototype turn when the push job found it was, and says nothing of it otherwise", () => {
+    expect(agentFailureEventFrom({ ...job, role: "design", prototype: true })).toMatchObject({ role: "design", prototype: true });
+    expect(agentFailureEventFrom({ ...job, role: "design" })).not.toHaveProperty("prototype");
   });
 });
