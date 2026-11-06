@@ -17,7 +17,7 @@ import { STRENGTHS } from "../loop/types.ts";
 import { CONSIDERED_PREFIX, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
 import { MAP_CAP_HEADING } from "./design.ts";
-import { OPERATOR_COMMENTS_HEADING } from "./operatorComments.ts";
+import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
 import { PROTOTYPE_SECTIONS } from "./prototype.ts";
 import { RESEARCH_ISSUE_HEADING, RESEARCH_SECTIONS } from "./research.ts";
 import { RETRO_ISSUE_HEADING, RETRO_SECTIONS } from "./retro.ts";
@@ -35,6 +35,39 @@ const part = (text: string, heading: string) => text.split(`\n### ${heading}\n`)
 
 /** The line Triage's comment carries on an idea too foggy for one Design session, which a Design session looks for. */
 const FOG_LINE = "This looks too foggy for one Design session.";
+
+describe("The prompts of the runs on a PR the Operator requested changes on (ADR-0010)", () => {
+  it.each(["review", "implement"])("%s names the section the Request changes arrive under, as amendments to the Ticket", async (role) => {
+    expect(await prompt(role)).toContain(`"${REQUESTED_CHANGES_HEADING}"`);
+  });
+
+  it("review judges the PR against the amended Ticket: a later review wins, an amendment may widen scope, and a Design flaw needs a real self-contradiction, never size", async () => {
+    const rules = section(await prompt("review"), "The Operator's Request changes");
+    expect(rules).toContain("the Ticket as amended");
+    expect(rules).toContain("A later review wins over an earlier one");
+    expect(rules).toContain("may widen scope");
+    expect(rules).toContain("contradicts itself");
+    expect(rules).toContain("never a `design-flaw` for its size");
+  });
+
+  it("review's Ticket-wins rule covers plain Operator comments only", async () => {
+    const comments = section(await prompt("review"), "The Operator's comments");
+    expect(comments).toContain("When a comment conflicts with the Ticket, the Ticket wins.");
+    expect(comments).toContain("never to a Request changes");
+  });
+
+  it("implement tells a retry never to revert a requested change", async () => {
+    const text = await prompt("implement");
+    expect(section(text, "When you're fixing a PR")).toContain("Never revert a requested change");
+  });
+
+  it("implement no longer has a Request-changes run meet a criterion its requested changes conflict with, and has it name each criterion it amended", async () => {
+    const run = section(await prompt("implement"), "When the Operator requested changes");
+    expect(run).not.toContain("and still meet the Ticket's acceptance criteria");
+    expect(run).toContain("the requested changes win");
+    expect(run).toContain("name each acceptance criterion it amended");
+  });
+});
 
 describe("The prompts of the runs that read an agent PR", () => {
   it.each(["review", "implement", "design"])("%s names the section the Operator's comments arrive under", async (role) => {

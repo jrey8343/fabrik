@@ -13,7 +13,7 @@ import { sandboxEnv } from "../kit/secrets.ts";
 import { agentBranchFor, IMPLEMENTER_AUTHOR } from "../loop/agentPullRequest.ts";
 import { verdictsIn } from "../github/threads.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
-import { givenOperatorComments, operatorCommentId, operatorCommentsSection } from "./operatorComments.ts";
+import { givenOperatorComments, operatorCommentId, operatorCommentsSection, operatorInputSections } from "./operatorComments.ts";
 import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -106,16 +106,18 @@ export interface PullRequestRunContext {
 /**
  * What a retry's prompt carries beyond the Ticket: the PR it fixes, the
  * findings of that PR's latest Verdict, the Fabrik App's comment with a marker,
- * and the Operator's comments on the PR, set apart from the findings.
+ * and, set apart from the findings, the Operator's Request changes reviews on
+ * the PR, which amend the Ticket (ADR-0010), and its comments.
  */
 export async function retryContext(pullRequestFile: string): Promise<PullRequestRunContext> {
   const value: unknown = JSON.parse(await readFile(pullRequestFile, "utf8"));
-  const { number, title, body, comments, operatorComments } = (value ?? {}) as {
+  const { number, title, body, comments, operatorComments, requestedChanges } = (value ?? {}) as {
     number?: unknown;
     title?: unknown;
     body?: unknown;
     comments?: { body?: unknown; author?: { __typename?: unknown } | null }[];
     operatorComments?: unknown;
+    requestedChanges?: unknown;
   };
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   // Only a bot's markers count, as in the core's snapshot, so nobody can plant findings by quoting one.
@@ -126,6 +128,7 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
   );
   const latest = verdicts.at(-1);
   if (latest === undefined) throw new Error(`#${number} has no Verdict for the retry to fix`);
+  const fromOperator = operatorInputSections({ operatorComments, requestedChanges });
   return {
     pullRequest: number,
     parts: [
@@ -135,9 +138,9 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
       "## The findings to fix",
       "The latest Verdict on the PR, posted by the Kit:",
       latest.trimEnd(),
-      ...operatorCommentsSection(operatorComments),
+      ...fromOperator.parts,
     ],
-    operatorComments: givenOperatorComments(operatorComments),
+    operatorComments: fromOperator.given,
   };
 }
 

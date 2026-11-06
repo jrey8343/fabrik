@@ -27,7 +27,7 @@ import { mapCapFull } from "../loop/mapCap.ts";
 import { fromAuditIn } from "../loop/markers.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
-import { operatorCommentId, type OperatorComment } from "./operatorComments.ts";
+import { operatorCommentId, type OperatorComment, type RequestedChange } from "./operatorComments.ts";
 
 /** What these reads need of a GitHub client. */
 export type Reader = Pick<GitHub, "graphql" | "rest">;
@@ -223,6 +223,22 @@ export async function readOperatorComments(
   pullRequest: number,
   operator: string,
 ): Promise<OperatorComment[]> {
+  return (await readOperatorFeedback(github, repo, pullRequest, operator)).operatorComments;
+}
+
+/**
+ * What the Operator wrote on the PR: its comments, as readOperatorComments
+ * gives them, and its Request changes reviews, oldest first, each with its
+ * own inline comments (which stay among the comments too) and kept even when
+ * its body is empty. Those amend the Ticket for the PR (ADR-0010). Other
+ * people's reviews, and the Operator's still pending, are left out.
+ */
+async function readOperatorFeedback(
+  github: Reader,
+  repo: Repo,
+  pullRequest: number,
+  operator: string,
+): Promise<{ operatorComments: OperatorComment[]; requestedChanges: RequestedChange[] }> {
   const base = `/repos/${repo.owner}/${repo.name}`;
   interface Written {
     readonly id: number;
@@ -232,7 +248,9 @@ export async function readOperatorComments(
   }
   const [conversation, inline, reviews] = await Promise.all([
     allPages<Written & { created_at: string }>(github, `${base}/issues/${pullRequest}/comments`),
-    allPages<Written & { created_at: string; path: string; line: number | null; original_line?: number | null }>(
+    allPages<
+      Written & { created_at: string; path: string; line: number | null; original_line?: number | null; pull_request_review_id?: number | null }
+    >(
       github,
       `${base}/pulls/${pullRequest}/comments`,
     ),
@@ -264,7 +282,33 @@ export async function readOperatorComments(
         body: r.body ?? "",
       })),
   ];
-  return comments.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+  const requestedChanges: RequestedChange[] = reviews
+    .filter((r) => theirs(r) && r.state === "CHANGES_REQUESTED")
+    .map((r) => ({
+      id: operatorCommentId("review", r.id),
+      url: r.html_url,
+      submittedAt: r.submitted_at ?? "",
+      body: r.body ?? "",
+      comments: inline
+        .filter((c) => theirs(c) && c.pull_request_review_id === r.id)
+        .sort(byTime((c) => c.created_at))
+        .map((c) => ({
+          id: operatorCommentId("inline", c.id),
+          url: c.html_url,
+          path: c.path,
+          line: c.line ?? c.original_line ?? null,
+          body: c.body ?? "",
+        })),
+    }));
+  return {
+    operatorComments: comments.sort(byTime((c) => c.createdAt)),
+    requestedChanges: requestedChanges.sort(byTime((r) => r.submittedAt)),
+  };
+}
+
+/** Oldest first, by the time `at` reads off each item. */
+function byTime<T>(at: (item: T) => string): (a: T, b: T) => number {
+  return (a, b) => (at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : 0);
 }
 
 const PULL_REQUEST_QUERY = `
@@ -301,7 +345,9 @@ interface PullRequestQueryResult {
  * The PR: for a Review, what it judges (never its other comments, so earlier
  * Verdicts don't steer it); for a retry, its number, title, body and comments with
  * their authors' kind, so only the Fabrik App's Verdicts count as findings.
- * Either way, the Operator's comments on it come apart, in `operatorComments`.
+ * Either way, the Operator's comments on it come apart, in `operatorComments`,
+ * and, on a PR the Operator requested changes on, its Request changes reviews
+ * in `requestedChanges`, which amend the Ticket (ADR-0010).
  */
 export async function readPullRequest(
   github: Reader,
@@ -309,16 +355,18 @@ export async function readPullRequest(
   number: number,
   { withComments, operator }: { readonly withComments: boolean; readonly operator: string },
 ): Promise<unknown> {
-  const [data, operatorComments] = await Promise.all([
+  const [data, { operatorComments, requestedChanges }] = await Promise.all([
     github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, { owner: repo.owner, name: repo.name, number }),
-    readOperatorComments(github, repo, number, operator),
+    readOperatorFeedback(github, repo, number, operator),
   ]);
   const pullRequest = data.repository.pullRequest;
   if (pullRequest === null) throw new Error(`Pull request #${number} not found`);
   const { title, body, baseRefName, headRefName, headRefOid, comments } = pullRequest;
+  // Only a PR the Operator requested changes on carries them, so every other PR's input is as it always was.
+  const amended = requestedChanges.length === 0 ? {} : { requestedChanges };
   return withComments
-    ? { number, title, body, comments: comments.nodes, operatorComments }
-    : { number, title, body, baseRefName, headRefName, headRefOid, operatorComments };
+    ? { number, title, body, comments: comments.nodes, operatorComments, ...amended }
+    : { number, title, body, baseRefName, headRefName, headRefOid, operatorComments, ...amended };
 }
 
 /** The Operator's review requesting changes, its inline comments included. */
