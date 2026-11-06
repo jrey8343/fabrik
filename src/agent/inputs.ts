@@ -357,7 +357,8 @@ export async function readMapOffer(
 ): Promise<MapOffer> {
   if (spec !== null) return { kind: "under-a-spec", spec: spec.number };
   const openMaps = await gatherOpenMaps(github, repo);
-  return mapCapFull(openMaps, config) ? { kind: "cap-full", cap: config.caps.maps, openMaps } : { kind: "may-offer" };
+  const full = mapCapFull(openMaps.map(({ number }) => number), config);
+  return full ? { kind: "cap-full", cap: config.caps.maps, openMaps } : { kind: "may-offer" };
 }
 
 // --- An Auditor run's inputs (#150) -----------------------------------------

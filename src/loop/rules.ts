@@ -26,6 +26,7 @@ import { heldOf } from "./heldRun.ts";
 import { scheduledTick } from "./kitIssues.ts";
 import { resumingHeldRuns } from "./resume.ts";
 import { heldWhileUsedUp } from "./hold.ts";
+import { mapCapOf } from "./mapCap.ts";
 import { startResearcher } from "./research.ts";
 import { landResearch } from "./researchLanding.ts";
 import { startAgentRun } from "./runs.ts";
@@ -93,8 +94,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
               event.output,
               context,
               turnStartFrom(event.startedBy, snapshot.startingComment),
-              snapshot.openMaps,
-              config,
+              snapshot.openMaps === null ? null : mapCapOf(snapshot.openMaps, config),
               event.operatorComments,
             ),
           );
