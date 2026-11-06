@@ -6,8 +6,12 @@
 // (src/loop/auditFailure.ts). With rotation on, a run refused on its
 // Subscription's weekly limit is re-run once, quietly, through its trigger
 // label while another Subscription is free, so the Operator hears nothing.
+// Once none is free it is held instead, with no failure comment, and so is a
+// refused Auditor run, whose Audit stays pending (src/loop/heldRun.ts).
+import { isPendingAudit } from "./audit.ts";
 import { failAudit } from "./auditFailure.ts";
-import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
+import { type HeldRun, holding } from "./heldRun.ts";
+import { anotherSubscriptionFree, refusedToken, repoWideNotice, type StalledRun } from "./kitIssues.ts";
 import { DESIGN_LABEL, DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
 import { rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
@@ -82,6 +86,27 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
 }
 
 /**
+ * With rotation on, the run a weekly-limit refusal holds rather than fails, or
+ * null: a run of any role while no other Subscription is free, and an Auditor
+ * run whatever is free, since it has no trigger label to re-run it through
+ * and is resumed on its pending Audit. An Audit that's no longer pending holds
+ * nothing.
+ */
+function heldOnRefusal(
+  run: FailedRun,
+  failure: InfrastructureFailure,
+  { issue, kitIssues }: IssueContext,
+  ranOn: Pick<StalledRun, "subscription" | "rotation" | "subscriptions">,
+): HeldRun | null {
+  if (failure !== "weekly-limit" || !ranOn.rotation) return null;
+  if (run.role === "audit") return isPendingAudit(issue) ? { role: "audit", issue: run.issue, label: null } : null;
+  if (anotherSubscriptionFree(kitIssues, ranOn)) return null;
+  // The review trigger lives on the PR; every other role's on the issue.
+  const labelled = run.role === "review" ? (issue.openPullRequests[0] ?? run.issue) : run.issue;
+  return { role: run.role, issue: labelled, label: RERUN_LABELS[run.role] };
+}
+
+/**
  * One comment on the Ticket's PR if it has one, else the issue. It carries the
  * Operator's only @-mention, unless the failure stalls the whole repo: then a
  * Kit-owned issue does the notifying, once, and the comment points there.
@@ -94,6 +119,17 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     rotation: rotationIsOn(config),
     subscriptions: config.subscriptions,
   };
+  const held = heldOnRefusal(run, failure, context, ranOn);
+  if (held !== null) {
+    const repoWide = repoWideNotice(failure, context, {
+      run: run.role === "audit" ? `The Audit run on #${run.issue}` : `The ${ROLE_NAMES[run.role]} run on #${run.issue}`,
+      runUrl: run.runUrl,
+      resetsAt: run.report?.resetsAt ?? null,
+      ...ranOn,
+      held,
+    });
+    return { kind: "act", actions: [...holding(held, repoWide?.firstReset ?? null), ...(repoWide?.actions ?? [])] };
+  }
   // The scheduled tick tries a failed Audit again, so there's no trigger label to re-add.
   if (run.role === "audit") {
     const how = howItFailed(failure, run, config);

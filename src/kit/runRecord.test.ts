@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { kitConfig } from "../__fixtures__/snapshots.ts";
+import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { agentRunIn } from "../github/apply.ts";
+import { planFor } from "../loop/rules.ts";
 import type { Needs } from "./pushJob.ts";
 import { agentRunEnded, type JudgeRunEnd, judgeRunRecordFor, readRunRecord, type RunEnd, runRecordFor } from "./runRecord.ts";
 
@@ -322,6 +324,25 @@ describe("The Run record a run's end yields", () => {
     });
 
     it("the Kit job routed straight to the push job", () => {
+      expect(runRecordFor(runEnd({ needs: needs("push"), agentResult: null, transcript: null }))).toBeNull();
+    });
+
+    it("a held run: its Plan starts no agent job, so the Kit job routes it to the push job", () => {
+      const usedUp = (number: number, subscription: string) => ({
+        number,
+        labels: ["fabrik:weekly-limit" as const],
+        body: `<!-- fabrik:subscription ${subscription} -->\n<!-- fabrik:resets-at 2026-11-09T04:00:00.000Z -->`,
+        comments: [],
+      });
+      const plan = planFor(
+        { kind: "label-added", issue: 7, label: "needs-triage" },
+        snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] }), {
+          kitIssues: [usedUp(40, "Claude token"), usedUp(41, "Claude token 2")],
+        }),
+        kitConfig({ subscriptions: ["Claude token", "Claude token 2"] }),
+      );
+
+      expect(agentRunIn(plan)).toBeNull();
       expect(runRecordFor(runEnd({ needs: needs("push"), agentResult: null, transcript: null }))).toBeNull();
     });
 

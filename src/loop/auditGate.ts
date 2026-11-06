@@ -6,6 +6,7 @@ import { auditsIn, lastAudit } from "./audit.ts";
 import { scheduledTick } from "./kitIssues.ts";
 import { AUDIT_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { AUDIT_PENDING_MARKER, auditMarker } from "./markers.ts";
+import { rotationIsOn } from "./subscriptions.ts";
 import type { Action, KitConfig, Plan, Snapshot } from "./types.ts";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -58,7 +59,11 @@ function auditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   if (done !== undefined) return { kind: "nothing", reason: `#${done.number} already audited this week` };
   const open = audits.find((audit) => audit.open);
   if (open !== undefined) return { kind: "nothing", reason: `Audit #${open.number} is still open` };
-  const limit = snapshot.kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
+  // With rotation on the Audit opens anyway: its Auditor run starts on a free
+  // Subscription, or is held on the pending Audit while none is.
+  const limit = rotationIsOn(config)
+    ? undefined
+    : snapshot.kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
   if (limit !== undefined) return { kind: "nothing", reason: `The weekly usage limit is reached, as #${limit.number} says` };
   const failed = thisWeek.filter((audit) => audit.failed).reverse();
   if (failed.length >= FAILED_AUDITS_A_WEEK) {

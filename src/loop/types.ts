@@ -608,6 +608,23 @@ export type Action =
        */
       readonly subscription?: string;
     }
+  | {
+      /**
+       * Holds a role's agent run, with rotation on, while every listed
+       * Subscription is used up: no agent job starts. It changes nothing on
+       * GitHub itself; the Plan's other actions take the trigger label off and
+       * leave the held marker on a weekly-limit issue. The Kit job's step
+       * summary reads it.
+       */
+      readonly kind: "hold-agent-run";
+      readonly role: AgentRole;
+      /** The issue or PR the run is on: the one its trigger label lives on, or the pending Audit. */
+      readonly issue: number;
+      /** The trigger label that resumes it, or null for an Auditor run, which has none. */
+      readonly label: Label | null;
+      /** When the first weekly-limit issue's limit resets, if known. */
+      readonly until: string | null;
+    }
   /** Push the agent branch the Implement run built, which the push job holds from its bundle. */
   | { readonly kind: "push-branch"; readonly branch: string }
   | {
