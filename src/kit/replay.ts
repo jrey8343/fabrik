@@ -985,6 +985,15 @@ export interface ReplayArmGates {
   readonly hiddenTests: ReplayHiddenTests;
 }
 
+/** An arm's gates as its gates job, or the store, holds them, or null for anything that doesn't read as one. */
+export function readReplayArmGates(value: unknown): ReplayArmGates | null {
+  if (!isObject(value)) return null;
+  const { ticket, arm, run, gates, hiddenTests } = value;
+  if (!isId(ticket) || !isId(run) || !(arm === "baseline" || arm === "variant")) return null;
+  if (!isKeyOf(GATES_WORDS, gates) || !isKeyOf(HIDDEN_TESTS_WORDS, hiddenTests)) return null;
+  return { ticket, arm, run, gates, hiddenTests };
+}
+
 /** What a Replay's results are read from: its arms' outcomes, and the original runs they replay. */
 export interface ReplayOutcomes {
   /** Whether the replay issue is open: closing it cancels every Ticket not yet finished. */
