@@ -78,13 +78,20 @@ describe("Product intent in the Triage prompt", () => {
     expect(decision).toContain("**Any doubt on any test sends the issue to `needs-design`.**");
   });
 
-  it("never sets an issue aside as wontfix on product grounds, sending a Vision conflict or an idea on no Roadmap list to needs-design", async () => {
+  it("never sets an issue aside as wontfix on product grounds, sending a Vision conflict to needs-design", async () => {
     const decision = section(await prompt("triage"), "The decision");
     const wontfix = lineStarting(decision, "- `wontfix`");
     expect(wontfix).toContain("Never on product grounds");
     expect(wontfix).toContain("conflicts with the Vision goes to `needs-design`");
     expect(wontfix).toContain("quoting the line it conflicts with");
-    expect(wontfix).toContain("an idea on none of its lists, with your comment saying it isn't on the Roadmap");
+  });
+
+  it("sends an idea it would set aside for being on no Roadmap list to needs-design, and never keeps an issue off the Fast path for that alone", async () => {
+    const wontfix = lineStarting(section(await prompt("triage"), "The decision"), "- `wontfix`");
+    expect(wontfix).toContain(
+      "an idea you'd otherwise set aside because it's on none of its lists goes to `needs-design` instead, with your comment saying it isn't on the Roadmap",
+    );
+    expect(wontfix).toContain("Being on no Roadmap list never, by itself, keeps an issue off the Fast path.");
   });
 
   it("counts the Vision and Roadmap's folder among the trust roots of test 5", async () => {

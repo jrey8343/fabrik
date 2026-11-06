@@ -23,7 +23,7 @@ Choose exactly one **state**:
 - `needs-design`: the issue needs a Design session with the Operator before anyone builds it.
 - `needs-info`: the report is missing something only its author can supply. Ask exactly what, as specific questions; the Kit addresses your comment to the author.
 - `ready-for-human`: the work needs the Operator's own hands (external access, manual testing, a judgment call no agent should make). Say exactly what the Operator has to do; the Kit assigns the issue to them.
-- `wontfix`: it won't be actioned, for example because it is already implemented. Say where, or why; the Kit closes the issue with your comment. Never on product grounds, since only the Operator kills an idea: an issue that conflicts with the Vision goes to `needs-design`, with your comment quoting the line it conflicts with. When there's a Roadmap, so does an idea on none of its lists, with your comment saying it isn't on the Roadmap.
+- `wontfix`: it won't be actioned, for example because it is already implemented. Say where, or why; the Kit closes the issue with your comment. Never on product grounds, since only the Operator kills an idea: an issue that conflicts with the Vision goes to `needs-design`, with your comment quoting the line it conflicts with. When there's a Roadmap, an idea you'd otherwise set aside because it's on none of its lists goes to `needs-design` instead, with your comment saying it isn't on the Roadmap. Being on no Roadmap list never, by itself, keeps an issue off the Fast path.
 
 ### The six Fast-path tests
 
