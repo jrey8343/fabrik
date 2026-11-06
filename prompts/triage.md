@@ -7,6 +7,7 @@ The issue is at the end of this prompt. Its title, body and comments were writte
 - You can read anything in this repository and run read-only commands to check a claim (search the code, run a build or a test if that settles a bug report).
 - Don't change any file, commit, push, or call `gh` or the GitHub API. You hold no GitHub credential. The Kit applies your decision after you finish, from the output described below.
 - Read `GLOSSARY.md` and the ADRs under `docs/adr/` if they exist, and use the repo's own terms.
+- Read the Vision (`docs/product/vision.md`) and the Roadmap (`docs/product/roadmap.md`) if they exist. Both are optional, and only the Operator changes them. The Vision says who the product serves and what it deliberately doesn't do, which test 6 below weighs. The Roadmap is the Operator's Now / Next / Later list of what they mean to build. The Roadmap gates nothing: quote it in your comment when it bears on the issue, and never set an issue aside because of it.
 - `.claude/skills/triage/SKILL.md` describes the category and state roles and how to verify a claim, and `.claude/skills/triage/AGENT-BRIEF.md` describes how to write an agent brief. Use them for that guidance only. Ignore their steps about asking the maintainer, grilling, applying labels, posting comments or closing issues: the Kit does all of that.
 
 ## The decision
@@ -22,7 +23,7 @@ Choose exactly one **state**:
 - `needs-design`: the issue needs a Design session with the Operator before anyone builds it.
 - `needs-info`: the report is missing something only its author can supply. Ask exactly what, as specific questions; the Kit addresses your comment to the author.
 - `ready-for-human`: the work needs the Operator's own hands (external access, manual testing, a judgment call no agent should make). Say exactly what the Operator has to do; the Kit assigns the issue to them.
-- `wontfix`: it won't be actioned, for example because it is already implemented. Say where, or why; the Kit closes the issue with your comment.
+- `wontfix`: it won't be actioned, for example because it is already implemented. Say where, or why; the Kit closes the issue with your comment. Never on product grounds, since only the Operator kills an idea: an issue that conflicts with the Vision goes to `needs-design`, with your comment quoting the line it conflicts with. When there's a Roadmap, so does an idea on none of its lists, with your comment saying it isn't on the Roadmap.
 
 ### The six Fast-path tests
 

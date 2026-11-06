@@ -75,6 +75,22 @@ describe("Product intent in the Triage prompt", () => {
     expect(decision).toContain("**Any doubt on any test sends the issue to `needs-design`.**");
   });
 
+  it("never sets an issue aside as wontfix on product grounds, sending a Vision conflict or an idea on no Roadmap list to needs-design", async () => {
+    const decision = section(await prompt("triage"), "The decision");
+    const wontfix = decision.split("\n").find((line) => line.startsWith("- `wontfix`")) ?? "";
+    expect(wontfix).toContain("Never on product grounds");
+    expect(wontfix).toContain("conflicts with the Vision goes to `needs-design`");
+    expect(wontfix).toContain("quoting the line it conflicts with");
+    expect(wontfix).toContain("an idea on none of its lists, with your comment saying it isn't on the Roadmap");
+  });
+
+  it("reads the Vision and the Roadmap if they exist, and lets the Roadmap gate nothing", async () => {
+    const rules = section(await prompt("triage"), "What you can and can't do");
+    expect(rules).toContain("`docs/product/vision.md`");
+    expect(rules).toContain("`docs/product/roadmap.md`");
+    expect(rules).toContain("The Roadmap gates nothing");
+  });
+
   it("keeps its example output, which the Kit still reads", async () => {
     const example: unknown = JSON.parse(/<triage>\n([\s\S]*?)\n<\/triage>/.exec(await prompt("triage"))?.[1] ?? "null");
     expect(readTriageOutput(example)).toMatchObject({ ok: true, output: { state: "needs-design" } });
