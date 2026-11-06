@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { JUDGE_JOB } from "./judge.ts";
 import { PREVIEW_POLL_MINUTES } from "./previewLink.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
+import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE } from "../evidence/capture.ts";
 
 const root = new URL("../../", import.meta.url);
 const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml", ".github/workflows/weekly-summary.yml"].map((path) => ({
@@ -504,6 +505,109 @@ describe("loop.yml's scoring jobs", () => {
   it.each([JUDGE_JOB, "score-record"])("%s leaves reading and writing GitHub to the Kit's actions, never inline gh calls or shell steps", (name) => {
     expect(job(name)).not.toMatch(/\bgh (api|issue|pr|repo|release|run|workflow) /);
     expect(job(name)).not.toMatch(/\n\s+run: /);
+  });
+});
+
+describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
+  const implement = () => job("implement");
+  const steps = () => stepsOf(implement());
+  const stepAt = (pattern: string) => steps().findIndex((step) => step.includes(pattern));
+  const step = (pattern: string) => steps()[stepAt(pattern)] ?? "";
+  const capture = () => step("name: Capture UI evidence");
+  const evidence = () => step("name: Keep the UI evidence\n");
+  const gallery = () => step("name: Keep the UI evidence gallery");
+
+  it("captures after the Implementer's agent has ended and before its result goes to the push job, from the Kit's program", () => {
+    expect(stepAt("name: Capture UI evidence")).toBeGreaterThan(stepAt("id: agent\n"));
+    expect(stepAt("name: Capture UI evidence")).toBeLessThan(stepAt("name: fabrik-agent-result"));
+    expect(stepAt("id: agent\n")).toBeGreaterThan(-1);
+    expect(capture()).toContain("id: capture\n");
+    expect(capture()).toMatch(/working-directory: product\n(?:.*\n)*?\s+run: node \.\.\/kit\/src\/evidence\/capture-main\.ts\n/);
+  });
+
+  it("can't fail the job: it goes on when capture fails, and stops at the Kit's capture timeout", () => {
+    expect(capture()).toContain("continue-on-error: true");
+    expect(capture()).toContain(`timeout-minutes: ${CAPTURE_TIMEOUT_MINUTES}\n`);
+  });
+
+  it("hands capture no secret: neither the 1Password step's outputs nor any GitHub token", () => {
+    expect(capture()).not.toMatch(/FABRIK_SECRETS|steps\.op\.|secrets\.|github\.token|GH_TOKEN|GITHUB_TOKEN/);
+  });
+
+  it("keeps the gallery unzipped, so it opens in one click, and the screenshots and capture result zipped, both for 30 days", () => {
+    expect(gallery()).toContain("uses: actions/upload-artifact@");
+    expect(gallery()).toContain("id: gallery\n");
+    expect(gallery()).toContain(`path: \${{ runner.temp }}/fabrik-out/${GALLERY_FILE}\n`);
+    expect(gallery()).toContain("archive: false\n");
+    expect(gallery()).toContain("retention-days: 30\n");
+
+    expect(evidence()).toContain("uses: actions/upload-artifact@");
+    expect(evidence()).toContain("id: evidence\n");
+    expect(evidence()).toContain("name: fabrik-ui-evidence\n");
+    expect(evidence()).toContain(`path: \${{ runner.temp }}/fabrik-out/${EVIDENCE_DIR}/\n`);
+    expect(evidence()).not.toContain("archive:");
+    expect(evidence()).toContain("retention-days: 30\n");
+  });
+
+  // The push job downloads fabrik-agent-* and reads an empty download as a timeout.
+  it("keeps the evidence only when capture recorded a result, apart from the push job's artifacts, never failing the job", () => {
+    for (const upload of [evidence(), gallery()]) {
+      expect(upload).toMatch(/if: (?:false && )?steps\.capture\.outputs\.ui-evidence != ''\n/);
+      expect(upload).toContain("continue-on-error: true");
+      expect(upload).toContain("if-no-files-found: ignore");
+      expect(upload).not.toMatch(/name: fabrik-agent-/);
+    }
+    expect(GALLERY_FILE).not.toMatch(/^fabrik-agent-/);
+    expect(stepAt("name: Keep the UI evidence\n")).toBeGreaterThan(stepAt("name: Capture UI evidence"));
+    expect(stepAt("name: Keep the UI evidence gallery")).toBeGreaterThan(stepAt("name: Capture UI evidence"));
+  });
+
+  it("passes out the capture result and the ids of both evidence artifacts, for the push job", () => {
+    expect(implement()).toContain("ui-evidence: ${{ steps.capture.outputs.ui-evidence }}");
+    expect(implement()).toContain("ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}");
+    expect(implement()).toContain("ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}");
+  });
+
+  // Gated off until Visual evidence's switch-on Ticket, which drops each `false && `: main stays as V1.
+  it("is gated off until switch-on, capture and both uploads alike, so V1 runs are unchanged", () => {
+    expect(capture()).toContain("if: false && success()\n");
+    expect(evidence()).toContain("if: false && steps.capture.outputs.ui-evidence != ''\n");
+    expect(gallery()).toContain("if: false && steps.capture.outputs.ui-evidence != ''\n");
+    expect(implement().match(/if: false && /g)).toHaveLength(3);
+  });
+
+  it("stops the job at the Kit job's Implement job timeout, and its agent step at the Implement role's own", () => {
+    expect(job("kit")).toContain("implement-job-timeout-minutes: ${{ steps.route.outputs.implement-job-timeout-minutes }}");
+    expect(implement()).toMatch(/\n    timeout-minutes: \$\{\{ fromJSON\(needs\.kit\.outputs\.implement-job-timeout-minutes\) \}\}\n/);
+    expect(step("id: agent\n")).toContain("timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}\n");
+  });
+
+  // V1's job timeout cancelled the job; the agent step's own fails it, so the job notes it for the push job (src/kit/pushJob.ts).
+  it("notes an agent step its timeout stopped, and leaves that run no failure report, so the push job reads it as a timeout", () => {
+    const started = stepAt("id: started\n");
+    const timedOut = step("id: agent-time\n");
+
+    expect(started).toBeGreaterThan(-1);
+    expect(started).toBeLessThan(stepAt("id: agent\n"));
+    expect(stepAt("id: agent-time\n")).toBeGreaterThan(stepAt("id: agent\n"));
+    expect(timedOut).toContain("if: failure() && steps.agent.outcome == 'failure'\n");
+    expect(timedOut).toContain("STARTED_AT: ${{ steps.started.outputs.at }}");
+    expect(timedOut).toContain("TIMEOUT_MINUTES: ${{ needs.kit.outputs.implement-timeout-minutes }}");
+    expect(implement()).toContain("agent-timed-out: ${{ steps.agent-time.outputs.timed-out }}");
+    expect(step("name: fabrik-agent-failure")).toContain("if: failure() && steps.agent-time.outputs.timed-out != 'true'\n");
+  });
+
+  // The Kit job installs nothing, so its program, which reads capture's timeout, may import no package.
+  it("leaves the Kit job's program importing no package at run time", () => {
+    expect(job("kit")).toContain("run: node kit/src/kit/jobs.ts product");
+    expect(packagesReachedBy("src/kit/jobs.ts")).toEqual([]);
+  });
+
+  // Only the capture program imports Playwright, and it runs after prepare-agent's npm ci.
+  it("runs capture after the Kit is installed, the only program that imports Playwright", () => {
+    expect(stepAt("name: Capture UI evidence")).toBeGreaterThan(stepAt("uses: ./kit/.github/actions/prepare-agent"));
+    expect(packagesReachedBy("src/evidence/capture-main.ts")).toContain("src/evidence/capture-main.ts imports playwright-core");
+    expect(packagesReachedBy("src/evidence/capture.ts")).toEqual([]);
   });
 });
 
