@@ -22,12 +22,13 @@
 //                          the branch diffed against, at its commit
 // Nothing here holds a secret, and the build and server get none (buildAndServeEnv).
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
-import { type Browser, type BrowserContext, chromium, errors } from "playwright-core";
+import { type Browser, type BrowserContext, chromium, errors, type Page } from "playwright-core";
 import { AGENT_RESULT_FILE, readAgentRunResult } from "../agent/result.ts";
 import { readKitConfigWith } from "../kit/checkout.ts";
 import type { Viewport } from "../kit/config.ts";
@@ -47,6 +48,7 @@ import {
   implementerRoutesIn,
   servedAt,
   type Shot,
+  type VariantTake,
 } from "./capture.ts";
 
 const run = promisify(execFile);
@@ -156,6 +158,50 @@ class PlaywrightCapturer implements Capturer {
     }
   }
 
+  async recordVariant(take: VariantTake, timeoutMs: number): Promise<{ readonly status: number; readonly video: boolean } | "timed-out"> {
+    const end = Date.now() + timeoutMs;
+    const videoDir = await mkdtemp(join(tmpdir(), "fabrik-video-"));
+    // A context of its own, so its video holds this take alone; the video is written once its page closes.
+    const context = await (await this.launched()).newContext({ ...contextOptions(take.viewport), recordVideo: { dir: videoDir } });
+    try {
+      const page = await context.newPage();
+      let status: number;
+      try {
+        const response = await page.goto(take.url, { waitUntil: "load", timeout: Math.max(1, timeoutMs - SCROLL_MS - 10_000) });
+        if (response === null) throw new Error(`${take.url} gave no response`);
+        status = response.status();
+        await page.waitForLoadState("networkidle", { timeout: Math.max(1, Math.min(5_000, end - Date.now())) }).catch(() => undefined);
+        await mkdir(this.evidenceDir, { recursive: true });
+        await page.screenshot({ path: join(this.evidenceDir, take.image), type: "png", animations: "disabled", timeout: Math.max(1, end - Date.now()) });
+      } catch (error) {
+        if (error instanceof errors.TimeoutError) return "timed-out";
+        throw error;
+      }
+      // The take keeps its screenshot whatever becomes of its video.
+      const scrolled = await scrollThrough(page, Math.min(end, Date.now() + SCROLL_MS)).then(
+        () => true,
+        (error: unknown) => {
+          console.log(`The video of ${take.url} at ${take.viewport.name} wasn't kept: ${error instanceof Error ? error.message : String(error)}`);
+          return false;
+        },
+      );
+      const video = page.video();
+      await page.close();
+      if (!scrolled || video === null) return { status, video: false };
+      const saved = await video.saveAs(join(this.evidenceDir, take.video)).then(
+        () => true,
+        (error: unknown) => {
+          console.log(`The video of ${take.url} at ${take.viewport.name} couldn't be saved: ${error instanceof Error ? error.message : String(error)}`);
+          return false;
+        },
+      );
+      return { status, video: saved };
+    } finally {
+      await context.close().catch(() => undefined);
+      await rm(videoDir, { recursive: true, force: true });
+    }
+  }
+
   async stop(): Promise<void> {
     await this.browser?.close().catch(() => undefined);
     for (const child of this.started) signalGroup(child, "SIGTERM");
@@ -206,17 +252,45 @@ class PlaywrightCapturer implements Capturer {
   private async contextFor(viewport: Viewport): Promise<BrowserContext> {
     const known = this.contexts.get(viewport.name);
     if (known !== undefined) return known;
-    this.browser ??= await chromium.launch({ headless: true });
-    const mobile = viewport.name === "mobile";
-    const context = await this.browser.newContext({
-      viewport: { width: viewport.width, height: viewport.height },
-      isMobile: mobile,
-      hasTouch: mobile,
-      deviceScaleFactor: 1,
-    });
+    const context = await (await this.launched()).newContext(contextOptions(viewport));
     this.contexts.set(viewport.name, context);
     return context;
   }
+
+  private async launched(): Promise<Browser> {
+    this.browser ??= await chromium.launch({ headless: true });
+    return this.browser;
+  }
+}
+
+/** A browser context at a Kit viewport, a phone's touch screen at mobile. */
+function contextOptions(viewport: Viewport) {
+  const mobile = viewport.name === "mobile";
+  return { viewport: { width: viewport.width, height: viewport.height }, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 1 };
+}
+
+/** How long a take's scripted scroll runs at most, so each variant's video stays short. */
+const SCROLL_MS = 8_000;
+
+/** Run in the page (the Kit compiles without the DOM's types): scrolls half a screen down, true when it was already at its foot. */
+const SCROLL_HALF_A_SCREEN = `(() => {
+  const before = window.scrollY;
+  window.scrollBy({ top: window.innerHeight / 2, behavior: "smooth" });
+  return before + window.innerHeight >= document.documentElement.scrollHeight;
+})()`;
+
+/**
+ * The scripted part of a take's video: a moment on the page as it loaded,
+ * then down it a half screen at a time to its foot, or until `until`, then a
+ * moment there.
+ */
+async function scrollThrough(page: Page, until: number): Promise<void> {
+  await page.waitForTimeout(Math.max(0, Math.min(1_000, until - Date.now())));
+  while (Date.now() < until - 1_000) {
+    if ((await page.evaluate(SCROLL_HALF_A_SCREEN)) === true) break;
+    await page.waitForTimeout(500);
+  }
+  await page.waitForTimeout(Math.max(0, Math.min(1_000, until - Date.now())));
 }
 
 /** The commit a ref names in the Product checkout, which fails when the checkout lacks it. */

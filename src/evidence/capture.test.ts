@@ -59,6 +59,10 @@ function runner(overrides: Partial<Capturer> = {}) {
       calls.push(`screenshot ${shot.url} at ${shot.viewport.name} as ${shot.image}`);
       return 200;
     },
+    recordVariant: async (take) => {
+      calls.push(`record ${take.url} at ${take.viewport.name}`);
+      return { status: 200, video: true };
+    },
     stop: async () => {
       calls.push("stop");
     },
