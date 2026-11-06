@@ -7,6 +7,7 @@ import type {
   CommentFacts,
   CommitFacts,
   EscapeMarkerIssueFacts,
+  FollowUpIssueFacts,
   GitHubFacts,
   LabelEvent,
   MonitorIssueFacts,
@@ -18,7 +19,7 @@ import type {
   SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
-import { designRoundMarker, verdictMarker } from "../loop/markers.ts";
+import { designRoundMarker, fromPullRequestLine, verdictMarker } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
 import { aMonitorIssueBody } from "./monitor.ts";
 
@@ -170,6 +171,7 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     designQueue: { issues: [], designTurnsInProgress: [] },
     monitorIssues: [],
     escapeMarkerIssues: [],
+    followUpIssues: [],
     openAudits: [],
     openRetros: [],
     ...overrides,
@@ -179,6 +181,11 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
 /** Issue 80, "Make the cart module deeper", which the Operator opened on 2026-11-03 with `body`, still open. */
 export function anEscapeMarkerIssue(body: string, overrides: Partial<EscapeMarkerIssueFacts> = {}): EscapeMarkerIssueFacts {
   return { number: 80, title: "Make the cart module deeper", author: "operator", createdAt: "2026-11-03T00:00:00Z", state: "open", body, ...overrides };
+}
+
+/** Issue 90, which the Operator opened from a Follow-up on PR `pullRequest` through its Open as issue link, titled as the link prefilled it. */
+export function aFollowUpIssue(pullRequest: number, title: string, overrides: Partial<FollowUpIssueFacts> = {}): FollowUpIssueFacts {
+  return { number: 90, title, author: "operator", body: `Worth its own issue.\n\n${fromPullRequestLine(pullRequest)}`, ...overrides };
 }
 
 /** Audit 90, which the Fabrik App opened on 2026-11-01 and nobody has closed. */

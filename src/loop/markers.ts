@@ -141,10 +141,32 @@ export function fromAuditLine(audit: number): string {
  * none. A line quoted as code isn't one (see linesOutsideCode).
  */
 export function fromAuditIn(body: string): number | null {
-  const line = linesOutsideCode(body)
-    .map((each) => FROM_AUDIT_LINE.exec(each.trim()))
-    .find((match) => match !== null);
-  return line === undefined || line === null ? null : Number(line[1]);
+  return numberOnFirstLineIn(body, FROM_AUDIT_LINE);
+}
+
+/**
+ * The line a Follow-up's filed issue ends with, naming the PR whose pass
+ * listed it (src/loop/followUps.ts), matched against a whole line with its
+ * outer whitespace trimmed.
+ */
+export const FROM_PULL_REQUEST_LINE = /^From PR #([1-9][0-9]*)$/;
+
+/** The `From PR #n` line for a Follow-up on PR #`pullRequest`'s pass, which fromPullRequestIn reads back. */
+export function fromPullRequestLine(pullRequest: number): string {
+  return `From PR #${pullRequest}`;
+}
+
+/** The PR the first `From PR #n` line in `body` names, or null if it has none. A line quoted as code isn't one. */
+export function fromPullRequestIn(body: string): number | null {
+  return numberOnFirstLineIn(body, FROM_PULL_REQUEST_LINE);
+}
+
+/** The number `line` captures from the first line outside code in `body` it matches, its outer whitespace trimmed, or null. */
+function numberOnFirstLineIn(body: string, line: RegExp): number | null {
+  const match = linesOutsideCode(body)
+    .map((each) => line.exec(each.trim()))
+    .find((each) => each !== null);
+  return match === undefined || match === null ? null : Number(match[1]);
 }
 
 /**

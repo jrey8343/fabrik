@@ -23,7 +23,7 @@ import type {
 } from "../kit/weeklySummary.ts";
 import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { AUDIT_LABEL, MONITOR_LABEL, RETRO_LABEL } from "../loop/labels.ts";
-import { escapeMarkerIn } from "../loop/markers.ts";
+import { escapeMarkerIn, fromPullRequestIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import { type GitHub, pagesOf, type Repo } from "./client.ts";
 import { gatherDesignQueueSlice, loginOf } from "./snapshot.ts";
@@ -47,7 +47,7 @@ const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(now - ESCAPE_WINDOWS_REACH_MS).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, escapeMarkerIssues, openAudits, openRetros] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
@@ -57,7 +57,7 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     // workflow runs, so it reads Design turns in progress from the issues, as the scheduled tick does.
     gatherDesignQueueSlice(github, null, repo),
     pagesOf<RawMonitorIssue>(github, MONITOR_ISSUES_QUERY, repo, { monitor: MONITOR_LABEL }, (data) => data.repository.issues),
-    gatherEscapeMarkerIssues(github, repo, operator, escapeSince),
+    gatherOperatorIssues(github, repo, operator, escapeSince),
     pagesOf<RawOpenKitIssue>(github, OPEN_KIT_ISSUES_QUERY, repo, { label: AUDIT_LABEL }, (data) => data.repository.issues),
     pagesOf<RawOpenKitIssue>(github, OPEN_KIT_ISSUES_QUERY, repo, { label: RETRO_LABEL }, (data) => data.repository.issues),
   ]);
@@ -73,7 +73,10 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     openPullRequests: open.filter(isAgent).map(openPullRequestOf),
     designQueue,
     monitorIssues: monitorIssues.map(monitorIssueOf),
-    escapeMarkerIssues,
+    escapeMarkerIssues: operatorIssues.filter((issue) => escapeMarkerIn(issue.body) !== null).map(escapeMarkerIssueOf),
+    followUpIssues: operatorIssues
+      .filter((issue) => fromPullRequestIn(issue.body) !== null)
+      .map(({ number, title, author, body }) => ({ number, title, author: loginOf(author), body })),
     openAudits: openAudits.map(openKitIssueOf),
     openRetros: openRetros.map(openKitIssueOf),
   };
@@ -339,13 +342,8 @@ async function gatherClosedPullRequests(github: Pick<GitHub, "graphql">, repo: R
   });
 }
 
-/** The issues the Operator opened in the window whose body has an escape marker, such as filed Audit candidates. */
-async function gatherEscapeMarkerIssues(
-  github: Pick<GitHub, "graphql">,
-  repo: Repo,
-  operator: string,
-  since: string,
-): Promise<EscapeMarkerIssueFacts[]> {
+/** The issues the Operator opened in the window, newest first. */
+async function gatherOperatorIssues(github: Pick<GitHub, "graphql">, repo: Repo, operator: string, since: string): Promise<RawOpenedIssue[]> {
   const sinceMs = Date.parse(since);
   const issues = await pagesOf<RawOpenedIssue>(
     github,
@@ -355,16 +353,7 @@ async function gatherEscapeMarkerIssues(
     (data) => data.repository.issues,
     (page) => page.some((issue) => Date.parse(issue.createdAt) < sinceMs),
   );
-  return issues
-    .filter((issue) => Date.parse(issue.createdAt) >= sinceMs && escapeMarkerIn(issue.body) !== null)
-    .map((issue) => ({
-      number: issue.number,
-      title: issue.title,
-      author: loginOf(issue.author),
-      createdAt: issue.createdAt,
-      state: issue.state === "CLOSED" ? "closed" : "open",
-      body: issue.body,
-    }));
+  return issues.filter((issue) => Date.parse(issue.createdAt) >= sinceMs);
 }
 
 // --- Into the summary's facts -------------------------------------------------
@@ -460,6 +449,18 @@ function openIssueOf(issue: RawIssue): OpenIssueFacts {
     createdAt: issue.createdAt,
     comments: issue.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(issue.timelineItems.nodes),
+  };
+}
+
+/** An issue whose body has an escape marker, such as a filed Audit candidate. */
+function escapeMarkerIssueOf(issue: RawOpenedIssue): EscapeMarkerIssueFacts {
+  return {
+    number: issue.number,
+    title: issue.title,
+    author: loginOf(issue.author),
+    createdAt: issue.createdAt,
+    state: issue.state === "CLOSED" ? "closed" : "open",
+    body: issue.body,
   };
 }
 

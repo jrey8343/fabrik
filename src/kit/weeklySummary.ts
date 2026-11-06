@@ -34,6 +34,7 @@ export type {
   CommitFacts,
   DefaultBranchCommitFacts,
   EscapeMarkerIssueFacts,
+  FollowUpIssueFacts,
   LabelEvent,
   MergedTitleFacts,
   OpenPullRequestFacts,

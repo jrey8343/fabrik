@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { aRetroEvidenceInput } from "../__fixtures__/retroEvidence.ts";
+import { aRetroEvidenceInput, aVerdictWithFollowUps } from "../__fixtures__/retroEvidence.ts";
 import {
   aComment,
   aCommit,
+  aFollowUpIssue,
   anEscapeMarkerIssue,
   aLabelAdded,
   aMergedPullRequest,
@@ -475,6 +476,51 @@ describe("the evidence bundle", () => {
         ["#52", "Build the till", "open", ["request-changes"]],
         ["#53", "Build the thing", "open", ["push"]],
       ]);
+    });
+  });
+
+  describe("Follow-ups", () => {
+    it("holds each Follow-up on a pass Verdict of an agent PR merged in the window, with the issue the Operator opened it as", () => {
+      const money = { title: "Extract the money type", body: "The cart and the till both round prices." };
+      const tax = { title: "Cache the tax table", body: "" };
+      const { followUps } = evidenceBundle(
+        aRetroEvidenceInput({
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-03T00:00:00Z", { number: 50, comments: [aVerdictWithFollowUps("pass", [money, tax], "2026-11-02T00:00:00Z", 50)] }),
+              aMergedPullRequest("2026-10-30T00:00:00Z", { number: 51, comments: [aVerdictWithFollowUps("pass", [money], "2026-10-29T00:00:00Z", 51)] }), // the last Retro's
+            ],
+            followUpIssues: [
+              aFollowUpIssue(50, "Extract the money type", { number: 90 }),
+              aFollowUpIssue(50, "Cache the tax table", { number: 91, author: "someone" }),
+              aFollowUpIssue(49, "Cache the tax table", { number: 92 }),
+            ],
+          }),
+        }),
+      );
+      expect(followUps).toEqual([
+        { ref: "#50", pullRequest: 50, title: "Extract the money type", body: "The cart and the till both round prices.", openedAs: 90 },
+        { ref: "#50", pullRequest: 50, title: "Cache the tax table", body: "", openedAs: null },
+      ]);
+    });
+
+    it("reads them from the Fabrik App's pass Verdicts alone, never a flaw's or a person's quote of one", () => {
+      const followUp = { title: "Extract the money type", body: "Rounding repeats." };
+      const { followUps } = evidenceBundle(
+        aRetroEvidenceInput({
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-03T00:00:00Z", {
+                comments: [
+                  aVerdictWithFollowUps("execution-flaw", [followUp], "2026-11-01T00:00:00Z", 50),
+                  aVerdictWithFollowUps("pass", [followUp], "2026-11-02T00:00:00Z", 50, { author: "operator", byBot: false }),
+                ],
+              }),
+            ],
+          }),
+        }),
+      );
+      expect(followUps).toEqual([]);
     });
   });
 });

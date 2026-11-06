@@ -8,7 +8,8 @@
 // Pure, no I/O.
 import { verdictsIn } from "../github/threads.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
-import { escapeMarkerIn } from "../loop/markers.ts";
+import { followUpsIn } from "../loop/followUps.ts";
+import { escapeMarkerIn, fromPullRequestIn } from "../loop/markers.ts";
 import { STRENGTHS, type Strength, type VerdictRecord } from "../loop/types.ts";
 import { recordPathOf, type RunRecord } from "./runRecord.ts";
 
@@ -148,6 +149,15 @@ export interface EscapeMarkerIssueFacts {
   readonly body: string;
 }
 
+/** An issue the Operator opened whose body says `From PR #n`: a Follow-up opened through its Open as issue link. */
+export interface FollowUpIssueFacts {
+  readonly number: number;
+  readonly title: string;
+  /** Who opened it: only the Operator's issues count. */
+  readonly author: string;
+  readonly body: string;
+}
+
 /** What the metrics read of one Product repo on GitHub. */
 export interface MetricFacts {
   /** The Product repo, as `owner/name`. */
@@ -161,6 +171,8 @@ export interface MetricFacts {
   readonly mergedPullRequestTitles: readonly MergedTitleFacts[];
   /** The issues the Operator opened in the last 97 days whose body has an escape marker. */
   readonly escapeMarkerIssues: readonly EscapeMarkerIssueFacts[];
+  /** The issues the Operator opened in the last 97 days whose body says `From PR #n`. */
+  readonly followUpIssues: readonly FollowUpIssueFacts[];
 }
 
 /** What the metrics read: the store's Run records, each Product repo's GitHub facts, and the Operator's GitHub login. */
@@ -393,6 +405,8 @@ export interface EvidenceBundle {
   readonly escapes: readonly EscapeEvidence[];
   /** The Operator's feedback in the window, per agent PR it was given on, whether merged, closed or still open. */
   readonly feedback: readonly FeedbackEvidence[];
+  /** The Follow-ups on the pass Verdicts of the agent PRs merged in the window, PR by PR. */
+  readonly followUps: readonly FollowUpEvidence[];
 }
 
 /** A Run record, by its path in the store. */
@@ -470,6 +484,17 @@ export type OperatorFeedback =
       readonly inline: readonly InlineCommentFacts[];
     };
 
+/** A Follow-up a pass Verdict named: work outside its Ticket's scope, left for the Operator to open as an issue or ignore. */
+export interface FollowUpEvidence {
+  /** `#<pr>`: the PR whose pass named it. */
+  readonly ref: string;
+  readonly pullRequest: number;
+  readonly title: string;
+  readonly body: string;
+  /** The issue the Operator opened it as through its Open as issue link, still titled as the link prefilled it, or null. */
+  readonly openedAs: number | null;
+}
+
 /** The evidence bundle for one Retro: what it reads of one Product repo for its window. Pure, no I/O. */
 export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
   const end = Date.parse(input.windowEnd);
@@ -479,6 +504,7 @@ export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
     window: { start: new Date(window.start).toISOString(), end: new Date(window.end).toISOString() },
     escapes: escapesOf(window, metrics),
     feedback: feedbackOf(window, input),
+    followUps: followUpsOf(window, input),
   };
 }
 
@@ -555,6 +581,21 @@ function pushesOf(commits: readonly CommitFacts[], operator: string): OperatorFe
     commits: run.map(({ sha, message, at }) => ({ sha, message, at })),
     patch: run.flatMap((commit) => (commit.patch === null ? [] : [commit.patch])).join("\n"),
   }));
+}
+
+/** The Follow-ups the Fabrik App's pass Verdicts listed on each agent PR merged in the window, read back from the Verdict comments. */
+function followUpsOf(window: Window, { facts, operator }: RetroEvidenceInput): FollowUpEvidence[] {
+  return mergedIn(window, facts).flatMap(({ number, comments }) =>
+    comments
+      .filter((comment) => verdictsOn([comment]).some(({ record }) => record.verdict === "pass"))
+      .flatMap((comment) => followUpsIn(comment.body))
+      .map(({ title, body }) => {
+        const opened = facts.followUpIssues.find(
+          (issue) => issue.author === operator && fromPullRequestIn(issue.body) === number && issue.title.trim() === title.trim(),
+        );
+        return { ref: `#${number}`, pullRequest: number, title, body, openedAs: opened?.number ?? null };
+      }),
+  );
 }
 
 function recordEvidenceOf(record: RunRecord): RecordEvidence {

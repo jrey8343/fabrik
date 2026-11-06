@@ -443,6 +443,22 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 
+  it("holds the issues the Operator opened in the 97 days whose body says From PR #n, the Follow-ups they opened, with their title and body", async () => {
+    const filed = "Both modules round prices.\n\nFrom PR #50";
+    const github = repoWith({
+      operatorIssues: [
+        aRawOperatorIssue(91, "2026-11-05T00:00:00Z", "Just an idea, from PR #50."),
+        aRawOperatorIssue(90, "2026-11-04T00:00:00Z", filed),
+        aRawOperatorIssue(89, "2026-11-04T00:00:00Z", "```\nFrom PR #50\n```"), // quoted as code
+        aRawOperatorIssue(60, "2026-08-03T00:00:00Z", "From PR #30"), // before the window
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(facts.followUpIssues).toEqual([{ number: 90, title: "Issue 90", author: "jrey8343", body: filed }]);
+  });
+
   it("holds the open fabrik:audit issues, with who opened them and when", async () => {
     const github = repoWith({
       openAudits: [
