@@ -207,6 +207,7 @@ A Product repo's Kit config lives in `.fabrik/`. Every file is optional and ever
     "implement": { "model": "claude-sonnet-5-5", "effort": null, "timeout_minutes": 60 },
     "review": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 30 },
     "audit": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 45 },
+    "retro": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 45 },
     "dispatch": { "timeout_minutes": 10 },
     "step_up": { "model": "claude-opus-5-5", "effort": null }
   },
@@ -214,6 +215,7 @@ A Product repo's Kit config lives in `.fabrik/`. Every file is optional and ever
   "caps": { "design_sessions": 2, "monitor_issues": 5 },
   "monitor": { "errors": null, "red_main": true },
   "audit": { "day": "sunday" },
+  "retro": { "day": "saturday" },
   "operator": null
 }
 ```

@@ -660,6 +660,13 @@ describe("The Kit config template", () => {
     });
   });
 
+  it("spells out retro.day and roles.retro at their Kit defaults", () => {
+    expect(JSON.parse(template)).toMatchObject({
+      retro: { day: "saturday" },
+      roles: { retro: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 } },
+    });
+  });
+
   it("resolves to every Kit default", () => {
     expect(resolveKitConfig({ config: template })).toEqual({ ok: true, config: DEFAULTS });
   });
