@@ -111,14 +111,23 @@ export function replayThisUrl(repoUrl: string, variable: ReplayVariable): string
 
 /** The request block's line naming `variable`. */
 function variableLine(variable: ReplayVariable): string {
-  switch (variable.kind) {
-    case "model":
-      return `${variable.role}.model: ${variable.model}`;
-    case "effort":
-      return `${variable.role}.effort: ${variable.effort}`;
-    case "kit":
-      return `${KIT_FIELD}: ${variable.sha}`;
-  }
+  const { key, value } = fieldOf(variable);
+  return `${key}: ${value}`;
+}
+
+/** A variable that changes one role's setting: its model or its effort. */
+type RoleVariable = Extract<ReplayVariable, { readonly kind: "model" | "effort" }>;
+
+/** The role setting a role variable changes, and the value it gives it. */
+function settingOf(variable: RoleVariable): { readonly setting: RoleVariable["kind"]; readonly value: string } {
+  return variable.kind === "model" ? { setting: "model", value: variable.model } : { setting: "effort", value: variable.effort };
+}
+
+/** The request field naming `variable`, and its value there. */
+function fieldOf(variable: ReplayVariable): { readonly key: string; readonly value: string } {
+  if (variable.kind === "kit") return { key: KIT_FIELD, value: variable.sha };
+  const { setting, value } = settingOf(variable);
+  return { key: `${variable.role}.${setting}`, value };
 }
 
 /** The fence line that opens a request block. */
@@ -445,14 +454,9 @@ export function replayArms(base: Pick<KitConfig, "roles">, variable: ReplayVaria
 
 /** `baseline` with `variable` changed. */
 function varied(baseline: ReplayArmSettings, variable: ReplayVariable): ReplayArmSettings {
-  switch (variable.kind) {
-    case "model":
-      return { ...baseline, [variable.role]: { ...baseline[variable.role], model: variable.model } };
-    case "effort":
-      return { ...baseline, [variable.role]: { ...baseline[variable.role], effort: variable.effort } };
-    case "kit":
-      return { ...baseline, candidateSha: variable.sha };
-  }
+  if (variable.kind === "kit") return { ...baseline, candidateSha: variable.sha };
+  const { setting, value } = settingOf(variable);
+  return { ...baseline, [variable.role]: { ...baseline[variable.role], [setting]: value } };
 }
 
 /** One file a merged PR changed, as its diff names it: a rename also carries the path it moved from. */
@@ -756,15 +760,11 @@ function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): { readonl
 
 /** What the base Kit config already runs as the variable's variant would, in words; null when the variant changes it. */
 function alreadyRuns(base: Pick<KitConfig, "roles">, variable: ReplayVariable): string | null {
-  switch (variable.kind) {
-    case "model":
-      return base.roles[variable.role].model === variable.model ? `${RUN_NAMES[variable.role]} on ${variable.model}` : null;
-    case "effort":
-      return base.roles[variable.role].effort === variable.effort ? `${RUN_NAMES[variable.role]} at effort ${variable.effort}` : null;
-    case "kit":
-      // The baseline loads the pinned release's prompts, never a candidate's.
-      return null;
-  }
+  // The baseline loads the pinned release's prompts, never a candidate's.
+  if (variable.kind === "kit") return null;
+  const { setting, value } = settingOf(variable);
+  if (base.roles[variable.role][setting] !== value) return null;
+  return `${RUN_NAMES[variable.role]} ${setting === "model" ? "on" : "at effort"} ${value}`;
 }
 
 // The Kit's part of a replay issue's body: below the Operator's request, from
@@ -925,11 +925,11 @@ function readPlan(value: unknown): ReplayPlan | null {
 function readVariableValue(value: unknown): ReplayVariable | null {
   if (!isObject(value)) return null;
   const { kind, role, model, effort, sha } = value;
-  if (kind === "kit") return typeof sha === "string" && checkCandidateKit(sha) === null ? { kind, sha } : null;
-  if (typeof role !== "string" || !isReplayRole(role)) return null;
-  if (kind === "model") return typeof model === "string" && refuseModel(model) === null ? { kind, role, model } : null;
-  if (kind === "effort") return typeof effort === "string" && checkEffort(effort) === null ? { kind, role, effort } : null;
-  return null;
+  // Read back through the request field that names it, so it's held to that field's own rules.
+  const [key, given] = kind === "kit" ? [KIT_FIELD, sha] : kind === "model" || kind === "effort" ? [`${String(role)}.${kind}`, kind === "model" ? model : effort] : [null, null];
+  if (key === null || typeof given !== "string") return null;
+  const field = variableField(key);
+  return typeof field === "string" || field.check(given) !== null ? null : field.variable(given);
 }
 
 /** A planned Ticket as a plan holds it, its arms rebuilt from its baseline and the variable, or null. */
@@ -1462,16 +1462,9 @@ function scorerWords(scorer: string): string {
 
 /** An arm, with how it runs what the variable changes: a candidate Kit's baseline is always the pinned release. */
 function armWords(arm: ReplayArm, settings: ReplayArmSettings, variable: ReplayVariable): string {
-  switch (variable.kind) {
-    case "model":
-      return `${arm}, ${settings[variable.role].model}`;
-    case "effort": {
-      const { effort } = settings[variable.role];
-      return `${arm}, ${effort === null ? "default effort" : `effort ${effort}`}`;
-    }
-    case "kit":
-      return settings.candidateSha === null ? arm : `${arm}, Kit ${shortSha(settings.candidateSha)}`;
-  }
+  if (variable.kind === "kit") return settings.candidateSha === null ? arm : `${arm}, Kit ${shortSha(settings.candidateSha)}`;
+  const { model, effort } = settings[variable.role];
+  return `${arm}, ${variable.kind === "model" ? model : effort === null ? "default effort" : `effort ${effort}`}`;
 }
 
 const GATES_WORDS: Readonly<Record<ReplayGates, string>> = {
