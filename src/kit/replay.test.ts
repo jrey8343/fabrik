@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readReplayRequest } from "./replay.ts";
+import { readReplayRequest, type ReplayVariable, replayThisUrl } from "./replay.ts";
 
 /** A Fabrik commit with a prompt change to try. */
 const CANDIDATE = "0123456789abcdef0123456789abcdef01234567";
@@ -187,5 +187,23 @@ describe("Reading a replay request", () => {
       ok: false,
       errors: [`kit is ${JSON.stringify(sha)}: a candidate Kit must be a Fabrik commit's full 40-character lowercase SHA`],
     });
+  });
+});
+
+describe("The Replay this link", () => {
+  const PRODUCT = "https://github.com/owner/product";
+
+  it.each<[string, ReplayVariable]>([
+    ["Implement's model", { kind: "model", role: "implement", model: "claude-opus-5-5" }],
+    ["Implement's effort", { kind: "effort", role: "implement", effort: "xhigh" }],
+    ["Review's model", { kind: "model", role: "review", model: "claude-sonnet-5-5" }],
+    ["Review's effort", { kind: "effort", role: "review", effort: "medium" }],
+    ["a candidate Kit", { kind: "kit", sha: CANDIDATE }],
+  ])("files a replay issue whose request reads back as %s, with the default pick", (_, variable) => {
+    const url = new URL(replayThisUrl(PRODUCT, variable));
+
+    expect(`${url.origin}${url.pathname}`).toBe(`${PRODUCT}/issues/new`);
+    expect(url.searchParams.get("labels")).toBe("fabrik:replay");
+    expect(readReplayRequest(url.searchParams.get("body") ?? "")).toEqual({ ok: true, request: { variable, tickets: null } });
   });
 });

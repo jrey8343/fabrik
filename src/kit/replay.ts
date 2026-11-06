@@ -4,7 +4,10 @@
 // (`implement.model`, `implement.effort`, `review.model`, `review.effort`, or
 // `kit` for a candidate Fabrik commit) and, if the Operator likes, `tickets`:
 // up to 10 Ticket numbers to replay in place of the default pick. A model or
-// effort is held to Kit config's own rules. Pure, no I/O.
+// effort is held to Kit config's own rules. The "Replay this" link files a
+// replay issue whose request names one variable. Pure, no I/O.
+import { newIssueUrl } from "../loop/followUps.ts";
+import { REPLAY_LABEL } from "../loop/labels.ts";
 import { spelled } from "../loop/readable.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { FULL_SHA } from "../skills/lock.ts";
@@ -77,6 +80,30 @@ export function readReplayRequest(body: string): ReplayRequestResult {
   }
   if (errors.length > 0 || named?.variable === undefined) return { ok: false, errors };
   return { ok: true, request: { variable: named.variable, tickets } };
+}
+
+/**
+ * The "Replay this" link: the Product repo's new-issue form, prefilled with
+ * the `fabrik:replay` label and a request block naming `variable`, which
+ * readReplayRequest reads back as it, with the default pick of Tickets.
+ * `repoUrl` is the Product repo whose Tickets it replays, as https://github.com/owner/name.
+ */
+export function replayThisUrl(repoUrl: string, variable: ReplayVariable): string {
+  const line = variableLine(variable);
+  // The block goes in as the trailer, the part of the body newIssueUrl never cuts.
+  return newIssueUrl(repoUrl, `Replay ${line}`, "", [REQUEST_FENCE, line, "```"].join("\n"), [REPLAY_LABEL]);
+}
+
+/** The request block's line naming `variable`. */
+function variableLine(variable: ReplayVariable): string {
+  switch (variable.kind) {
+    case "model":
+      return `${variable.role}.model: ${variable.model}`;
+    case "effort":
+      return `${variable.role}.effort: ${variable.effort}`;
+    case "kit":
+      return `${KIT_FIELD}: ${variable.sha}`;
+  }
 }
 
 /** The fence line that opens a request block. */
