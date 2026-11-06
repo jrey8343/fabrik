@@ -13,6 +13,7 @@ import type {
   OpenAuditFacts,
   OpenIssueFacts,
   OpenPullRequestFacts,
+  OpenRetroFacts,
   ReviewFacts,
   SpecFacts,
   TicketFacts,
@@ -169,6 +170,7 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     monitorIssues: [],
     escapeMarkerIssues: [],
     openAudits: [],
+    openRetros: [],
     ...overrides,
   };
 }
@@ -181,6 +183,11 @@ export function anEscapeMarkerIssue(body: string, overrides: Partial<EscapeMarke
 /** Audit 90, which the Fabrik App opened on 2026-11-01 and nobody has closed. */
 export function anOpenAudit(overrides: Partial<OpenAuditFacts> = {}): OpenAuditFacts {
   return { number: 90, title: "Audit: week of 2026-10-26", author: "fabrik-app[bot]", createdAt: "2026-11-01T00:00:00Z", ...overrides };
+}
+
+/** Retro 120, which the Fabrik App opened on Saturday 2026-11-07 and nobody has closed. */
+export function anOpenRetro(overrides: Partial<OpenRetroFacts> = {}): OpenRetroFacts {
+  return { number: 120, title: "Retro: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-07T00:00:00Z", ...overrides };
 }
 
 /** The Fabrik App's comment `body` at `at`; a person's with `{ author, byBot: false }`. */

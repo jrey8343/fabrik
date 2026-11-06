@@ -162,6 +162,16 @@ export interface OpenAuditFacts {
   readonly createdAt: string;
 }
 
+/** An open `fabrik:retro` issue, as Waiting on you reads it. */
+export interface OpenRetroFacts {
+  readonly number: number;
+  readonly title: string;
+  /** Who opened it: only the Fabrik App's Retros count. */
+  readonly author: string;
+  /** ISO 8601. */
+  readonly createdAt: string;
+}
+
 /** What the summary reads of one Product repo on GitHub. */
 export interface GitHubFacts {
   /** The Product repo, as `owner/name`. */
@@ -190,6 +200,8 @@ export interface GitHubFacts {
   readonly escapeMarkerIssues: readonly EscapeMarkerIssueFacts[];
   /** The repo's open `fabrik:audit` issues, whoever opened them. */
   readonly openAudits: readonly OpenAuditFacts[];
+  /** The repo's open `fabrik:retro` issues, whoever opened them. */
+  readonly openRetros: readonly OpenRetroFacts[];
 }
 
 export interface WeeklySummaryInput {
@@ -364,6 +376,8 @@ export type WaitingItem =
   | (ItemBase & { readonly kind: "ready-for-human" })
   /** The Fabrik App's open Audit, filled or still pending, waiting since it was opened. */
   | (ItemBase & { readonly kind: "audit" })
+  /** The Fabrik App's open Retro, filled or still pending, waiting since it was opened. */
+  | (ItemBase & { readonly kind: "retro" })
   /** An agent PR out of draft with a passing Verdict at its head, waiting since that Verdict. */
   | (ItemBase & {
       readonly kind: "merge-gate";
@@ -443,12 +457,25 @@ export type WeeklySummaryResult =
       readonly body: string;
     };
 
+/**
+ * The Kit-internal switch for the Weekly summary's Retro line (#151). While
+ * it's off, an open Retro waits on nobody: it neither shows in Waiting on you
+ * nor keeps a quiet week from being skipped, so a release cut before
+ * switch-on reads as if the Retro didn't exist.
+ */
+export const RETRO_SWITCHED_ON = false;
+
+export interface WeeklySummaryOptions {
+  /** Overrides the switch; only tests pass it. */
+  readonly retro?: boolean;
+}
+
 /** The summary to file for the week that just ended, or skip. */
-export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
+export function weeklySummary(input: WeeklySummaryInput, { retro = RETRO_SWITCHED_ON }: WeeklySummaryOptions = {}): WeeklySummaryResult {
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
-  const repos = input.facts.map((facts) => repoSectionOf(facts, input));
+  const repos = input.facts.map((facts) => repoSectionOf(facts, input, retro));
   // Held work counts too, so a queue never sits unseen through a week nothing ran.
   const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null);
   if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && quiet) return { kind: "skip" };
@@ -864,13 +891,15 @@ function dispatchOf(ticket: TicketFacts): string | null {
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
-function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: WeeklySummaryInput): RepoSection {
+function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: WeeklySummaryInput, retro: boolean): RepoSection {
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
+  // Until switch-on an open Retro waits on nobody, so it neither shows nor keeps a quiet week from being skipped.
+  const retros = retro ? openRetrosOf(facts, appLogin, items) : [];
   return {
     repo: facts.repo,
-    // An open Audit waits on the Operator, so it also keeps a quiet week from being skipped.
-    waitingOnYou: oldestFirst([...waitingOnYou(facts, items), ...openAuditsOf(facts, appLogin, items)]),
+    // An open Audit or Retro waits on the Operator, so it also keeps a quiet week from being skipped.
+    waitingOnYou: oldestFirst([...waitingOnYou(facts, items), ...openAuditsOf(facts, appLogin, items), ...retros]),
     stuck: stuck(facts, records, items, now),
     held: heldIn(facts, appLogin, now),
   };
@@ -879,6 +908,11 @@ function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: 
 /** The Fabrik App's open Audits, aged from when each was opened: a person's `fabrik:audit` issue is no Audit. */
 function openAuditsOf({ openAudits }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
   return openAudits.filter((audit) => audit.author === appLogin).map((audit) => ({ kind: "audit", ...items.issue(audit, audit.createdAt) }));
+}
+
+/** The Fabrik App's open Retros, filled or still pending, aged from when each was opened: a person's `fabrik:retro` issue is no Retro. */
+function openRetrosOf({ openRetros }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
+  return openRetros.filter((retro) => retro.author === appLogin).map((retro) => ({ kind: "retro", ...items.issue(retro, retro.createdAt) }));
 }
 
 /** What a cap holds in the repo, or null when nothing is held. */
@@ -1103,11 +1137,12 @@ function localTime(time: number, timeZone: string): string {
   return new Date(wallClock(time, timeZone).asUtc).toISOString().slice(0, 16).replace("T", " ");
 }
 
-// Rendering. Only shipped features get a section: the Retro, Map and Monitor
-// issues add theirs when their Specs ship. Scores shows only in a week with
-// score files, and never a run's own scores. Held shows what the
-// Design-session and Monitor caps hold, until the Ideas and Maps caps add
-// their lines.
+// Rendering. Only shipped features get a section: the Map and Monitor issues
+// add theirs when their Specs ship. The open Retro gets no section, only its
+// line in Waiting on you, which waits for RETRO_SWITCHED_ON. Scores shows
+// only in a week with score files, and never a run's own scores. Held shows
+// what the Design-session and Monitor caps hold, until the Ideas and Maps
+// caps add their lines.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
   const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
@@ -1280,6 +1315,8 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `ready-for-human for ${duration(item.age)}`);
     case "audit":
       return itemLine(item, `Audit open for ${duration(item.age)}`);
+    case "retro":
+      return itemLine(item, `Retro open for ${duration(item.age)}`);
     case "merge-gate":
       return itemLine(item, `at the Merge gate, Operator wait ${duration(item.operatorWait)}`);
   }
