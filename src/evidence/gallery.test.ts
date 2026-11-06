@@ -86,3 +86,24 @@ describe("The gallery's rows", () => {
     expect(html).toContain("<h2><code>/book/waitlist</code>, named by the Implementer</h2>");
   });
 });
+
+describe("The gallery's captions", () => {
+  // A route may be the Implementer's: agent text, which the page shows and never runs or loads.
+  it("show a route as text, whatever HTML it holds", () => {
+    const route = `/book"><script>alert(1)</script><img src="https://evil.example/x.png">`;
+    const html = gallery([{ ...shots[2]!, route }], meta);
+
+    expect(html).toContain(
+      "<h2><code>/book&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;&lt;img src=&quot;https://evil.example/x.png&quot;&gt;</code>, named by the Implementer</h2>",
+    );
+    expect(html).not.toMatch(/<script|evil\.example\/x\.png"/);
+    expect(loaded(html).every((value) => value.startsWith("data:image/png;base64,"))).toBe(true);
+  });
+
+  it("flag a screenshot of a page that answered a server error, so it isn't mistaken for the design", () => {
+    const html = gallery([shots[0]!, { ...shots[4]!, status: 503 }], meta);
+
+    expect(html).toContain("<figcaption>Before: answered 503, so this is an error page, not the design</figcaption>");
+    expect(html).toContain("<figcaption>After</figcaption>");
+  });
+});

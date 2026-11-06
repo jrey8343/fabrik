@@ -4,7 +4,7 @@
 // images and writes the page.
 import { Buffer } from "node:buffer";
 import { UI_VIEWPORTS } from "../kit/config.ts";
-import { type Capture, CAPTURE_SIDES, ROUTE_REASON_WORDS, SIDE_WORDS } from "./uiEvidence.ts";
+import { type Capture, CAPTURE_SIDES, isServerError, ROUTE_REASON_WORDS, SIDE_WORDS } from "./uiEvidence.ts";
 
 /** A capture with its image's bytes, a PNG. */
 export interface GalleryShot extends Capture {
@@ -23,6 +23,18 @@ export interface GalleryMeta {
  */
 const POLICY = "default-src 'none'; img-src data:; style-src 'unsafe-inline'";
 
+/** Before and After share a row, half each, and a side alone takes the whole row. */
+const STYLE = [
+  ":root { color-scheme: light dark; font-family: system-ui, sans-serif; }",
+  "body { margin: 0 auto; max-width: 1600px; padding: 16px; }",
+  "section { margin-top: 32px; }",
+  ".pair { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 16px; align-items: start; }",
+  "figure { margin: 0; }",
+  "figcaption { margin-bottom: 4px; font-weight: 600; }",
+  "figure.error figcaption { color: #c62828; }",
+  "img { display: block; max-width: 100%; height: auto; border: 1px solid #8888; }",
+].join(" ");
+
 /** The gallery page: every capture's image inlined, so it refers to nothing outside itself. */
 export function gallery(captures: readonly GalleryShot[], meta: GalleryMeta): string {
   const { ticket, headSha } = meta;
@@ -34,10 +46,11 @@ export function gallery(captures: readonly GalleryShot[], meta: GalleryMeta): st
     `<meta http-equiv="Content-Security-Policy" content="${POLICY}">`,
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     `<title>UI evidence for #${ticket} at ${headSha.slice(0, 7)}</title>`,
+    `<style>${STYLE}</style>`,
     "</head>",
     "<body>",
     `<h1>UI evidence for #${ticket}</h1>`,
-    `<p>Captured at <code>${headSha}</code>.</p>`,
+    `<p>Captured at <code>${headSha}</code>. After is this branch, served in the Sandbox; Before, where there is one, is the production site.</p>`,
     ...routesOf(captures).flatMap((route) => routeSection(route, captures)),
     "</body>",
     "</html>",
@@ -61,11 +74,12 @@ function routeSection({ route, reason }: GalleryShot, captures: readonly Gallery
   return ["<section>", `<h2><code>${escaped(route)}</code>, ${ROUTE_REASON_WORDS[reason]}</h2>`, ...rows, "</section>"];
 }
 
-/** One screenshot, inlined, captioned with its side. */
-function figure({ route, viewport, side, png }: GalleryShot): string {
+/** One screenshot, inlined, captioned with its side, and flagged when its page answered a server error. */
+function figure({ route, viewport, side, status, png }: GalleryShot): string {
   const alt = escaped(`${route} at ${viewport}, ${SIDE_WORDS[side]}`);
   const source = `data:image/png;base64,${Buffer.from(png).toString("base64")}`;
-  return `<figure><img alt="${alt}" src="${source}"><figcaption>${SIDE_WORDS[side]}</figcaption></figure>`;
+  const caption = isServerError(status) ? `${SIDE_WORDS[side]}: answered ${status}, so this is an error page, not the design` : SIDE_WORDS[side];
+  return `<figure${isServerError(status) ? ' class="error"' : ""}><figcaption>${caption}</figcaption><img alt="${alt}" src="${source}"></figure>`;
 }
 
 function capitalised(text: string): string {
