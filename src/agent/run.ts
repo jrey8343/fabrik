@@ -81,13 +81,14 @@ import {
   requestChangesContext,
   retryContext,
   setImplementerEnv,
+  setSandboxEnv,
   startAgentBranch,
 } from "./implement.ts";
 import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
 import { mapCapContext, prototypeContext, sentBackContext } from "./design.ts";
-import { PROTOTYPE_REQUEST_ENV, prototypeTurnContext, setPrototypeEnv, startPrototypeBranch } from "./prototype.ts";
+import { PROTOTYPE_AUTHOR, PROTOTYPE_REQUEST_ENV, prototypeTurnContext, startPrototypeBranch } from "./prototype.ts";
 import { claudeArgs, leaveFailureReport, readyHook, schemaOf, setAgentEnv, streamWatch } from "./launch.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
@@ -313,7 +314,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     }
   }
   if (spec.prototypes === true) {
-    setPrototypeEnv(config);
+    // The Claude token and the Sandbox's values and test secrets, as the Implementer's, committing as the Fabrik Prototype.
+    setSandboxEnv(config, PROTOTYPE_AUTHOR);
     extra.push(...prototypeTurnContext(config, issueNumber, required(PROTOTYPE_REQUEST_ENV)).parts);
     branch = await startPrototypeBranch(productDir, issueNumber);
   }

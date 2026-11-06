@@ -16,7 +16,7 @@ import { prototypeBranchFor, variantLetter } from "../loop/designOutput.ts";
 import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import { fenced } from "./design.ts";
-import { cutBranch, setSandboxEnv } from "./implement.ts";
+import { cutBranch } from "./implement.ts";
 import type { BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -70,15 +70,6 @@ export function prototypeTurnContext(
  * code, never the Implementer's.
  */
 export const PROTOTYPE_AUTHOR = { name: "Fabrik Prototype", email: "fabrik-prototype@users.noreply.github.com" } as const;
-
-/**
- * Sets a prototype turn's env, which the agent inherits: the Claude token
- * and the Sandbox's values and test secrets, as the Implementer's, and the
- * Fabrik Prototype's commit identity.
- */
-export function setPrototypeEnv(config: KitConfig): void {
-  setSandboxEnv(config, PROTOTYPE_AUTHOR);
-}
 
 /**
  * Starts the issue's prototype branch: a later round carries on from the head

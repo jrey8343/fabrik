@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { rebuildAgentBranch } from "../github/branch.ts";
-import { bundleAgentBranch } from "./implement.ts";
+import { bundleAgentBranch, setSandboxEnv } from "./implement.ts";
 import { prototypeRole } from "../loop/design.ts";
-import { PROTOTYPE_AUTHOR, PROTOTYPE_SECTIONS, prototypeTurnContext, setPrototypeEnv, startPrototypeBranch } from "./prototype.ts";
+import { PROTOTYPE_AUTHOR, PROTOTYPE_SECTIONS, prototypeTurnContext, startPrototypeBranch } from "./prototype.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult, type BuiltBranch } from "./result.ts";
 
 /** The Kit job's prototype_request output, as the prototype job's env passes it. */
@@ -101,7 +101,7 @@ describe("A prototype turn's env", () => {
     const config = kitConfig({ sandbox: { ...kitConfig().sandbox, env: { NODE_ENV: "test" }, secrets: { STRIPE_KEY: "op://Sandbox/stripe/key" } } });
     process.env["FABRIK_SECRETS"] = JSON.stringify({ CLAUDE_CODE_OAUTH_TOKEN: "sk-claude", STRIPE_KEY: "sk_test_1" });
 
-    setPrototypeEnv(config);
+    setSandboxEnv(config, PROTOTYPE_AUTHOR);
 
     expect(process.env["FABRIK_SECRETS"]).toBeUndefined();
     expect(process.env).toMatchObject({
