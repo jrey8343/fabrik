@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, aTicket, dispatchSnapshotOf, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { planFor } from "./rules.ts";
 
@@ -62,29 +62,5 @@ describe("Starting a Researcher", () => {
     const plan = planFor(labelled(), snapshotOf(decision), kitConfig());
 
     expect(plan).toEqual({ kind: "nothing", reason });
-  });
-});
-
-describe("A Dispatch check, while nothing adds agent:research yet", () => {
-  const ready = {
-    number: 12,
-    open: true,
-    labels: ["wayfinder:research"],
-    assignees: [],
-    openBlockers: [],
-    parentIssue: { number: 3, open: true, labels: ["wayfinder:map"] },
-    lastRunFailed: false,
-  };
-
-  it("releases its Tickets as before, and no research Decision, however ready", () => {
-    const plan = planFor({ kind: "dispatch-check" }, dispatchSnapshotOf([aTicket({ number: 7 })], { researchDecisions: [ready] }), kitConfig());
-
-    expect(plan).toEqual({ kind: "act", actions: [{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }] });
-  });
-
-  it("releases nothing when a research Decision is all it has", () => {
-    const plan = planFor({ kind: "dispatch-check" }, dispatchSnapshotOf([], { researchDecisions: [ready] }), kitConfig());
-
-    expect(plan).toEqual({ kind: "nothing", reason: "No Ticket can be dispatched: none is ready-for-agent" });
   });
 });
