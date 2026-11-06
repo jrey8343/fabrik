@@ -10,6 +10,7 @@ import type {
   NamedPullRequestSnapshot,
   Plan,
   PullRequestSnapshot,
+  ResearchDecisionSnapshot,
   RetroIssueSnapshot,
   Snapshot,
   TicketSnapshot,
@@ -87,7 +88,21 @@ export function aTicket(overrides: Partial<TicketSnapshot> = {}): TicketSnapshot
   };
 }
 
-/** A Dispatch check's snapshot: these Tickets and, by default, nothing in flight. */
+/** A research Decision Dispatch can release: open, unassigned, unblocked, under the open Map #3, its last run not failed. */
+export function aResearchDecision(overrides: Partial<ResearchDecisionSnapshot> = {}): ResearchDecisionSnapshot {
+  return {
+    number: 1,
+    open: true,
+    labels: ["wayfinder:research"],
+    assignees: [],
+    openBlockers: [],
+    parentIssue: { number: 3, open: true, labels: ["enhancement", "wayfinder:map"] },
+    lastRunFailed: false,
+    ...overrides,
+  };
+}
+
+/** A Dispatch check's snapshot: these Tickets and, by default, no research Decision and nothing in flight. */
 export function dispatchSnapshotOf(
   tickets: readonly TicketSnapshot[],
   inFlight: Partial<Omit<DispatchSnapshot, "tickets">> = {},
@@ -95,7 +110,14 @@ export function dispatchSnapshotOf(
   return {
     issue: null,
     pullRequest: null,
-    dispatch: { tickets, openAgentDraftPullRequests: 0, implementRunsInProgress: 0, researchDecisions: [], ...inFlight },
+    dispatch: {
+      tickets,
+      openAgentDraftPullRequests: 0,
+      implementRunsInProgress: 0,
+      researchDecisions: [],
+      researchRunsInProgress: 0,
+      ...inFlight,
+    },
     designQueue: null,
     spec: null,
     operator: "operator",

@@ -309,6 +309,14 @@ interface DesignQueueQueryResult {
 export const IMPLEMENT_JOB_NAME = "Implement";
 
 /**
+ * The name of the Research job, which Dispatch counts Research runs by as it
+ * counts Implement runs by IMPLEMENT_JOB_NAME. loop.yml has no Research job
+ * until #260 adds one by this name, and the job-name test holds the two
+ * together from then.
+ */
+export const RESEARCH_JOB_NAME = "Research";
+
+/**
  * The name of the Design job in .github/workflows/loop.yml, which follows it
  * with ` #<issue>` (a test holds the two together). Called from a Product
  * repo's caller workflow, it shows up as `<caller job> / Design-session turn #7`.
@@ -1031,14 +1039,20 @@ async function gatherDispatch(
     (pr) => pr.isDraft && isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }),
   ).length;
 
-  const [implementRunsInProgress, researchDecisions] = await Promise.all([
-    countImplementRuns(actions, repo),
+  const [runs, researchDecisions] = await Promise.all([
+    countDispatchedRuns(actions, repo),
     gatherResearchDecisions(github, repo),
   ]);
   return {
     issue: null,
     pullRequest: null,
-    dispatch: { tickets, openAgentDraftPullRequests, implementRunsInProgress, researchDecisions },
+    dispatch: {
+      tickets,
+      openAgentDraftPullRequests,
+      implementRunsInProgress: runs.implement,
+      researchDecisions,
+      researchRunsInProgress: runs.research,
+    },
     designQueue: null,
     operator: operator ?? page.repository.owner.login,
   };
@@ -1194,16 +1208,19 @@ interface Job {
 }
 
 /**
- * Implement jobs not yet finished, across every workflow run in the repo:
- * running, and also queued or waiting (behind its concurrency group, say)
- * after its claim took agent:implement off the Ticket, so no slot goes
- * uncounted between the label coming off and the run starting.
+ * The Implement and Research jobs not yet finished, across every workflow
+ * run in the repo: running, and also queued or waiting (behind its
+ * concurrency group, say) after its claim took the trigger label off, so no
+ * slot goes uncounted between the label coming off and the run starting.
  */
-export async function countImplementRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<number> {
-  const jobs = await jobsOfUnfinishedRuns(github, repo);
-  return jobs
-    .filter((job) => job.status !== "completed")
-    .filter(({ name }) => name === IMPLEMENT_JOB_NAME || name.endsWith(` / ${IMPLEMENT_JOB_NAME}`)).length;
+export async function countDispatchedRuns(
+  github: Pick<GitHub, "rest">,
+  repo: Repo,
+): Promise<{ implement: number; research: number }> {
+  const unfinished = (await jobsOfUnfinishedRuns(github, repo)).filter((job) => job.status !== "completed");
+  const named = (jobName: string) =>
+    unfinished.filter(({ name }) => name === jobName || name.endsWith(` / ${jobName}`)).length;
+  return { implement: named(IMPLEMENT_JOB_NAME), research: named(RESEARCH_JOB_NAME) };
 }
 
 const DESIGN_JOB = new RegExp(`^(?:.+ / )?${DESIGN_JOB_NAME} #([1-9][0-9]*)$`);

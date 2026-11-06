@@ -34,7 +34,7 @@ import { checkDesignQueue } from "./designQueue.ts";
 import { retroGate } from "./retroGate.ts";
 import { landRetro } from "./retroLanding.ts";
 import { WEEKLY_RUNS, weeklyRoleOf } from "./weeklyRuns.ts";
-import { dispatch } from "./dispatch.ts";
+import { dispatch, RESEARCH_DISPATCH_SWITCHED_ON } from "./dispatch.ts";
 import { applyRedChecks, applyReview, startReview } from "./review.ts";
 import type {
   Action,
@@ -47,11 +47,24 @@ import type {
   Snapshot,
 } from "./types.ts";
 
+export interface PlanOptions {
+  /**
+   * Overrides RESEARCH_DISPATCH_SWITCHED_ON; only tests pass it. The
+   * switch-on Ticket (#263) deletes the switch and this option.
+   */
+  readonly researchDispatch?: boolean;
+}
+
 /** The Loop rules core: decides what the Kit does about one Loop event. Pure, no I/O. */
-export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
+export function planFor(
+  event: LoopEvent,
+  snapshot: Snapshot,
+  config: KitConfig,
+  { researchDispatch = RESEARCH_DISPATCH_SWITCHED_ON }: PlanOptions = {},
+): Plan {
   // Every run the Plan starts is given its Subscription here, whichever role it is,
   // or held, with rotation on, while every Subscription is used up.
-  const planned = planOnAnySubscription(event, snapshot, config);
+  const planned = planOnAnySubscription(event, snapshot, config, researchDispatch);
   // A Kit-owned issue the Plan closes, as the scheduled tick closes a weekly-limit
   // issue at its reset, no longer stands in the way of the runs it starts.
   const kitIssues = snapshot.kitIssues.filter((issue) => !closes(planned, issue.number));
@@ -63,7 +76,7 @@ function closes(plan: Plan, issue: number): boolean {
 }
 
 /** What the Kit does about one Loop event, before the runs it starts are given a Subscription. */
-function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
+function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: KitConfig, researchDispatch: boolean): Plan {
   switch (event.kind) {
     case "issue-opened":
       // The App opens a pending Audit for the Auditor to fill in, and a pending
@@ -146,7 +159,12 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     case "dispatch-check":
       return snapshot.dispatch === null
         ? missingFromSnapshot("the Tickets a Dispatch check weighs")
-        : dispatch(snapshot.dispatch, config, heldOf("implement", snapshot.kitIssues));
+        : dispatch(
+            snapshot.dispatch,
+            config,
+            { implement: heldOf("implement", snapshot.kitIssues), research: heldOf("research", snapshot.kitIssues) },
+            researchDispatch,
+          );
     case "design-queue-check":
       return snapshot.designQueue === null
         ? missingFromSnapshot("the needs-design issues a Design queue check weighs")

@@ -9,7 +9,7 @@ import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
-import { countImplementRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, readKitConfigSources } from "./snapshot.ts";
+import { countDispatchedRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, readKitConfigSources } from "./snapshot.ts";
 
 const repo = { owner: "acme", name: "shop" };
 
@@ -31,7 +31,7 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
   it("counts a running Implement job, called from a Product repo's caller workflow", async () => {
     const actions = actionsWith([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "in_progress" }] }]);
 
-    expect(await countImplementRuns(actions, repo)).toBe(1);
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 0 });
   });
 
   it("counts an Implement job still queued or waiting after its claim took agent:implement off the Ticket", async () => {
@@ -42,7 +42,7 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
       { id: 4, status: "waiting", jobs: [{ name: "fabrik / Implement", status: "pending" }] },
     ]);
 
-    expect(await countImplementRuns(actions, repo)).toBe(4);
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 4, research: 0 });
   });
 
   it("doesn't count a finished Implement job, or any other job", async () => {
@@ -51,7 +51,28 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
       { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement failed", status: "in_progress" }] },
     ]);
 
-    expect(await countImplementRuns(actions, repo)).toBe(0);
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0 });
+  });
+});
+
+describe("Counting the Research runs a Dispatch check sees in flight", () => {
+  it("counts a Research job running, queued or waiting, called from a Product repo's caller workflow or not, beside the Implement jobs", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "in_progress" }, { name: "fabrik / Implement", status: "in_progress" }] },
+      { id: 2, status: "queued", jobs: [{ name: "fabrik / Research", status: "queued" }] },
+      { id: 3, status: "waiting", jobs: [{ name: "Research", status: "waiting" }] },
+    ]);
+
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 3 });
+  });
+
+  it("doesn't count a finished Research job, or any other job", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed" }, { name: "fabrik / Push", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Retro evidence", status: "in_progress" }, { name: "fabrik / Research failed", status: "in_progress" }] },
+    ]);
+
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0 });
   });
 });
 
@@ -66,7 +87,7 @@ describe("The Implement job's name", () => {
 
 describe("The judge job's name", () => {
   // #149: scoring never takes a Dispatch slot, nor a Design session slot.
-  it("is never counted as an Implement run or a Design-session turn in flight while it scores a run", async () => {
+  it("is never counted as an Implement run, a Research run or a Design-session turn in flight while it scores a run", async () => {
     const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
     const judgeJob = new RegExp(`^ {2}${JUDGE_JOB}:\n {4}name: (.+)$`, "m").exec(workflow)?.[1];
     expect(judgeJob).toBeDefined();
@@ -75,7 +96,7 @@ describe("The judge job's name", () => {
       { id: 2, status: "queued", jobs: [{ name: `fabrik / ${judgeJob}`, status: "queued" }] },
     ]);
 
-    expect(await countImplementRuns(actions, repo)).toBe(0);
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0 });
     expect(await designTurnsInProgress(actions, repo)).toEqual([]);
   });
 });
@@ -959,6 +980,17 @@ describe("Gathering a Dispatch check's research Decisions", () => {
       { number: 14, open: true, labels: ["wayfinder:research"], assignees: [], openBlockers: [], parentIssue: { number: 5, open: false, labels: ["wayfinder:map"] }, lastRunFailed: false },
       { number: 15, open: true, labels: ["wayfinder:research"], assignees: [], openBlockers: [], parentIssue: null, lastRunFailed: false },
     ]);
+  });
+
+  it("holds the Research runs in flight beside the Implement runs, read through the Actions token", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "in_progress" }] },
+      { id: 2, status: "queued", jobs: [{ name: "fabrik / Implement", status: "queued" }, { name: "fabrik / Research", status: "queued" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(researchGitHub([]), repo, { kind: "dispatch-check" }, null, null, actions as unknown as GitHub);
+
+    expect(snapshot.dispatch).toMatchObject({ implementRunsInProgress: 1, researchRunsInProgress: 2 });
   });
 
   const BOT = { __typename: "Bot" };
