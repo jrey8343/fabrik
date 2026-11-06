@@ -16,7 +16,7 @@ This session runs with the Operator's own GitHub credentials, so you publish the
 2. Check that it's open and labelled `needs-design`. If it isn't, it's not in a Design session: tell the Operator and stop.
 3. Earlier rounds the Kit posted start with `<!-- fabrik:design-round N -->`. The Operator's replies to them are decisions already made. An answer of `yes` takes every recommendation in that round.
 4. Read `GLOSSARY.md` and `docs/adr/` if they exist, and use the repo's terms.
-5. Read the Vision (`docs/product/vision.md`) and the Roadmap (`docs/product/roadmap.md`) if they exist. Both are optional, and both are Trust-root files under `docs/product/` that only the Operator changes: never edit either one, and never plan a Ticket that does.
+5. Read the Vision (`docs/product/vision.md`) and the Roadmap (`docs/product/roadmap.md`) if they exist. Both are optional, and both are Trust-root files under `docs/product/` at the repo root that only the Operator changes: never edit either one, and never plan a Ticket that does.
 
 ## Product intent
 
