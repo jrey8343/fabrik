@@ -99,11 +99,6 @@ describe("Product intent in the Triage prompt", () => {
     expect(rules).toContain("`docs/product/roadmap.md`");
     expect(rules).toContain("The Roadmap gates nothing");
   });
-
-  it("keeps its example output, which the Kit still reads", async () => {
-    const example: unknown = JSON.parse(/<triage>\n([\s\S]*?)\n<\/triage>/.exec(await prompt("triage"))?.[1] ?? "null");
-    expect(readTriageOutput(example)).toMatchObject({ ok: true, output: { state: "needs-design" } });
-  });
 });
 
 describe("Product intent in the Design prompt", () => {
@@ -183,6 +178,13 @@ describe("Questions for the Operator", () => {
 
   it("the Reviewer is told an Operator comment may answer them", async () => {
     expect(section(await prompt("review"), "The Operator's comments")).toContain('"Questions for the Operator"');
+  });
+});
+
+describe("The Triage agent's prompt", () => {
+  it("keeps its example output, which the Kit still reads", async () => {
+    const example: unknown = JSON.parse(/<triage>\n([\s\S]*?)\n<\/triage>/.exec(await prompt("triage"))?.[1] ?? "null");
+    expect(readTriageOutput(example)).toMatchObject({ ok: true, output: { state: "needs-design" } });
   });
 });
 
