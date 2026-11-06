@@ -250,7 +250,8 @@ export interface IssueSnapshot {
   readonly author: string;
   /**
    * Whether the Fabrik App itself opened it, not a person or any other bot:
-   * only then is its body read for an Audit's markers (src/loop/audit.ts), and
+   * only then is its body read for an Audit's or a Retro's markers
+   * (src/loop/audit.ts, src/loop/retro.ts), and
    * only then does a Design session keep its body's Monitor marker (src/loop/design.ts).
    * The Kit job, which only routes and doesn't know the App's login, takes any
    * bot for the App, so another bot's look-alike pending Audit costs one

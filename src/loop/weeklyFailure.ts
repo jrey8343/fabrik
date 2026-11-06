@@ -1,14 +1,15 @@
-// A failed Auditor run (#150) leaves its issue, the pending Audit the
-// scheduled tick opened, closed as not planned, with one line on how it
-// failed. The tick tries it again, so unlike a Ticket's failure there's no
-// trigger label to re-add and nobody to tell, unless the failure stalls the
-// whole repo.
+// A failed Auditor run (#150) or Retro run (#151) leaves its issue, the
+// pending Audit or pending Retro the scheduled tick opened, closed as not
+// planned, with one line on how it failed. The tick tries it again, so unlike
+// a Ticket's failure there's no trigger label to re-add and nobody to tell,
+// unless the failure stalls the whole repo.
 import { isPendingAudit } from "./audit.ts";
 import { repoWideNotice } from "./kitIssues.ts";
-import { AUDIT_FAILED_MARKER, auditMarker, auditMarksIn } from "./markers.ts";
+import { AUDIT_FAILED_MARKER, auditMarker, auditMarksIn, RETRO_FAILED_MARKER, retroMarker, retroMarksIn } from "./markers.ts";
+import { isPendingRetro } from "./retro.ts";
 import type { InfrastructureFailure, IssueContext, Plan } from "./types.ts";
 
-/** How an Auditor run failed. */
+/** How an Auditor run or a Retro run failed. */
 export interface WeeklyRunFailure {
   readonly failure: InfrastructureFailure;
   /** How it failed, as the issue's one line says it, such as "it crashed". */
@@ -34,6 +35,26 @@ export function failAudit(context: IssueContext, run: WeeklyRunFailure): Plan {
     run: "The Auditor's run",
     stalled: "The Audit run",
     markers: [...(commit === null ? [] : [auditMarker(commit)]), AUDIT_FAILED_MARKER],
+  });
+}
+
+/**
+ * The plan for a failed Retro run on the Retro in `context`, whether its
+ * evidence job or its agent job failed, or its reply broke the Retro output
+ * contract: its body becomes one line on how the run failed, keeping its
+ * retro marker, with the failed marker in place of the pending one, and it
+ * closes as not planned, mentioning nobody. A dead token or the weekly limit
+ * also gets the Kit's repo-wide notice, as for any run. A Retro that's no
+ * longer pending (the Operator closed it, say) changes nothing.
+ */
+export function failRetro(context: IssueContext, run: WeeklyRunFailure): Plan {
+  const { windowEnd } = retroMarksIn(context.issue.body);
+  return failPending(context, run, {
+    pending: isPendingRetro(context.issue),
+    name: "Retro",
+    run: "The Retro's run",
+    stalled: "The Retro run",
+    markers: [...(windowEnd === null ? [] : [retroMarker(windowEnd)]), RETRO_FAILED_MARKER],
   });
 }
 
