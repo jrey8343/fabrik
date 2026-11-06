@@ -6,8 +6,8 @@ import {
   AUDITED_SHA,
   kitConfig,
   notificationsOf,
-  repoSnapshot,
   snapshotOf,
+  tickSnapshot,
 } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AuditIssueSnapshot, KitConfig, KitIssueSnapshot, Plan } from "./types.ts";
@@ -28,7 +28,7 @@ function tick(
   }: { head?: string | null; issues?: readonly AuditIssueSnapshot[]; kitIssues?: readonly KitIssueSnapshot[] } = {},
   config: KitConfig = kitConfig(),
 ): Plan {
-  return planFor({ kind: "scheduled-tick", now }, repoSnapshot({ kitIssues, audit: { head, issues } }), config);
+  return planFor({ kind: "scheduled-tick", now }, tickSnapshot({ kitIssues, audit: { head, issues } }), config);
 }
 
 /** A tick that opens no Audit and closes or posts nothing: it only asks for the Design queue check every tick ends with. */
@@ -229,7 +229,7 @@ describe("The tick's other rules", () => {
 
 describe("A tick's snapshot without the audit slice", () => {
   it("fails rather than guess, and changes nothing", () => {
-    const plan = planFor({ kind: "scheduled-tick", now: SUNDAY }, repoSnapshot(), kitConfig());
+    const plan = planFor({ kind: "scheduled-tick", now: SUNDAY }, tickSnapshot({ audit: null }), kitConfig());
 
     expect(plan).toEqual({ kind: "fail", failure: "infrastructure", reason: expect.stringContaining("audit") });
   });

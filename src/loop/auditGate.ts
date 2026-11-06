@@ -5,18 +5,13 @@ import { auditsIn, lastAudit } from "./audit.ts";
 import { AUDIT_LABEL } from "./labels.ts";
 import { AUDIT_PENDING_MARKER, auditMarker } from "./markers.ts";
 import type { Action, KitConfig, Plan, Snapshot } from "./types.ts";
-import { dateOf, heldBack, scheduledTickWith, weekStart } from "./weeklyGate.ts";
+import { dateOf, heldBack, weekStart } from "./weeklyGate.ts";
 
 /**
- * The scheduled tick with the audit gate: closes the weekly-limit issue after
- * its reset, as scheduledTick does, alongside opening a pending Audit when
- * one is due. The scheduled-tick rule calls it on every tick.
+ * The audit gate: a pending Audit to open, or why there's none this tick. The
+ * scheduled-tick rule runs it on every tick, beside the retro gate
+ * (scheduledTickWith).
  */
-export function scheduledTickWithAuditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
-  return scheduledTickWith([auditGate], now, snapshot, config);
-}
-
-/** The audit gate on its own: a pending Audit to open, or why there's none this tick. */
 export function auditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   const { day } = config.audit;
   if (day === null) return { kind: "nothing", reason: "The Audit is off: audit.day is null" };
