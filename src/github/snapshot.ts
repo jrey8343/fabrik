@@ -268,8 +268,8 @@ export async function gatherSnapshot(
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
   // By default the Operator owns the Product repos they run Fabrik in.
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment, audit, namedPullRequests }
-    : { ...part, spec, kitIssues, startingComment, audit, namedPullRequests };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment, audit, retro: null, namedPullRequests }
+    : { ...part, spec, kitIssues, startingComment, audit, retro: null, namedPullRequests };
 }
 
 // The newest Audit issues, open and closed: enough to hold this week's, any
@@ -500,7 +500,7 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "namedPullRequests">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "namedPullRequests">;
 
 const KIT_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $labels: [String!]!) {

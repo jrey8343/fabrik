@@ -1,10 +1,11 @@
 // The markers the Kit's comments open with, and the marker lines it puts in
 // issue bodies: a Monitor issue's marker line and the Monitor's note closing
-// its red-main issue (#148), an Audit's own, and the `From audit #n` line and
-// escape marker an Audit candidate's filed issue ends with (#150). The core
-// writes them; the adapter reads a thread's comments back through them into
-// the snapshot (src/github/threads.ts), and the body lines are read from the
-// issues themselves, so the Loop's history lives on GitHub alone.
+// its red-main issue (#148), an Audit's own, the `From audit #n` line and
+// escape marker an Audit candidate's filed issue ends with (#150), and a
+// Retro's own (#151). The core writes them; the adapter reads a thread's
+// comments back through them into the snapshot (src/github/threads.ts), and
+// the body lines are read from the issues themselves, so the Loop's history
+// lives on GitHub alone.
 import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
@@ -213,6 +214,39 @@ export interface AuditMarks {
 export function auditMarksIn(body: string): AuditMarks {
   const { value: commit, pending, failed } = weeklyMarksIn(body, AUDIT_MARKER, AUDIT_PENDING_MARKER, AUDIT_FAILED_MARKER);
   return { commit, pending, failed };
+}
+
+/**
+ * A Retro's marker line (#151): `<!-- fabrik:retro <window-end> -->`, the end
+ * of the window the Retro reads, which is the time of the tick that opened
+ * it, so the next Retro's window starts where this one's ended. Its body
+ * keeps the line through every state.
+ */
+export function retroMarker(windowEnd: string): string {
+  return `<!-- fabrik:retro ${new Date(windowEnd).toISOString()} -->`;
+}
+
+/** The marker line on a Retro still waiting on its run. */
+export const RETRO_PENDING_MARKER = "<!-- fabrik:retro-pending -->";
+
+/** The marker line on a Retro whose run failed, in place of the pending one. */
+export const RETRO_FAILED_MARKER = "<!-- fabrik:retro-failed -->";
+
+const RETRO_MARKER = /^<!-- fabrik:retro (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z) -->$/;
+
+/** What a Retro's body says through its marker lines. Only a body the Fabrik App wrote is read for them. */
+export interface RetroMarks {
+  /** The end of the window it reads, as an ISO 8601 time, from its retro marker; null when it has none. */
+  readonly windowEnd: string | null;
+  readonly pending: boolean;
+  readonly failed: boolean;
+}
+
+/** The Retro marker lines in `body`, each matched against a whole line with its outer whitespace trimmed. */
+export function retroMarksIn(body: string): RetroMarks {
+  const { value, pending, failed } = weeklyMarksIn(body, RETRO_MARKER, RETRO_PENDING_MARKER, RETRO_FAILED_MARKER);
+  const windowEnd = value === null || Number.isNaN(Date.parse(value)) ? null : value;
+  return { windowEnd, pending, failed };
 }
 
 /**

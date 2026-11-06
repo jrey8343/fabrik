@@ -431,6 +431,8 @@ export interface Snapshot {
   readonly startingComment: StartingComment | null;
   /** Gathered for a scheduled tick only: what the audit gate weighs. */
   readonly audit: AuditSnapshot | null;
+  /** Gathered for a scheduled tick only: what the retro gate weighs. */
+  readonly retro: RetroSnapshot | null;
   /**
    * Gathered for an Audit run finishing only, whose Audit is `issue`: each PR
    * its reply names under "Introduced by" that GitHub has, in any order. A
@@ -474,6 +476,31 @@ export interface AuditIssueSnapshot {
   readonly byApp: boolean;
   readonly body: string;
 }
+
+/** What the retro gate weighs on a scheduled tick (src/loop/retroGate.ts). */
+export interface RetroSnapshot {
+  /**
+   * Whether the fabrik-runs store is ready for a Retro to read: the Fabrik App
+   * is installed on it, and it's private. A store that isn't means no Retro.
+   */
+  readonly storeReady: boolean;
+  /** The newest `fabrik:retro` issues, open and closed, in any order. */
+  readonly issues: readonly RetroIssueSnapshot[];
+  /**
+   * Whether any agent PR merged, or closed unmerged, since the window a Retro
+   * opened now would start (src/loop/retro.ts): the last Retro's window end,
+   * or 7 days before the tick on a first run.
+   */
+  readonly agentPullRequestClosed: boolean;
+  /** Whether the Operator opened any issue with an escape marker since then. */
+  readonly escapeFiled: boolean;
+}
+
+/**
+ * A `fabrik:retro` issue, open or closed, as the adapter read it
+ * (src/loop/retro.ts), through the same query and in the same shape as an Audit's.
+ */
+export type RetroIssueSnapshot = AuditIssueSnapshot;
 
 /** The Operator's reply that started a Design-session turn, as the adapter found it when the turn finished. */
 export interface StartingComment {

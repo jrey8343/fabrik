@@ -5,7 +5,7 @@
 import { AUDIT_DAYS, type AuditDay } from "../kit/config.ts";
 import { scheduledTick } from "./kitIssues.ts";
 import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
-import type { Action, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
+import type { Action, AuditIssueSnapshot, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
 
 export const DAY = 24 * 60 * 60 * 1000;
 
@@ -39,6 +39,16 @@ function alongside(first: Plan, second: Plan): Plan {
 
 function actionsOf(plan: Plan): readonly Action[] {
   return plan.kind === "act" ? plan.actions : [];
+}
+
+/**
+ * The ones among a gate's issues, `fabrik:audit` or `fabrik:retro`, that
+ * the Fabrik App opened, newest first: only those are read for markers.
+ */
+export function byAppNewestFirst<Issue extends AuditIssueSnapshot>(issues: readonly Issue[]): Issue[] {
+  return issues
+    .filter((issue) => issue.byApp)
+    .toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.number - a.number);
 }
 
 /** One of a gate's issues, an Audit or a Retro the Fabrik App opened, as the gate weighs it. */
