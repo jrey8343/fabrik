@@ -345,6 +345,42 @@ function evidenceMarker({ run, artifact }: EvidenceMarker): string {
   return `<!-- fabrik:ui-evidence ${JSON.stringify({ run, artifact })} -->`;
 }
 
+/** The marker line, matched against a whole line with its outer whitespace trimmed. */
+const EVIDENCE_MARKER = /^<!-- fabrik:ui-evidence (\{.*\}) -->$/;
+
+/**
+ * Where the marker in this body says its UI evidence is kept, or null when it
+ * has none: not a UI pull request. Read only from a body the Fabrik App wrote
+ * (src/github/snapshot.ts). The last marker counts, the section being Kit
+ * text after the Implementer's summary, and one that doesn't read is none.
+ */
+export function evidenceMarkerIn(body: string): EvidenceMarker | null {
+  const markers = body.split("\n").flatMap((line) => {
+    const marker = markerOf(EVIDENCE_MARKER.exec(line.trim())?.[1]);
+    return marker === null ? [] : [marker];
+  });
+  return markers.at(-1) ?? null;
+}
+
+function markerOf(json: string | undefined): EvidenceMarker | null {
+  if (json === undefined) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!isObject(value)) return null;
+  const { run, artifact } = value;
+  if (!isId(run) || !(artifact === null || isId(artifact))) return null;
+  return { run, artifact };
+}
+
+/** A GitHub id: a whole number above zero. */
+function isId(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
 /**
  * A line that looks like one of the evidence section's hidden lines, matched
  * with its outer whitespace trimmed: its start line, its marker, or anything

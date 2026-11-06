@@ -1,5 +1,6 @@
 // The Loop rules core's interface: a Loop event, a snapshot of GitHub state and
 // the resolved Kit config go in; a plan comes out.
+import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { Label } from "./labels.ts";
@@ -320,6 +321,11 @@ export interface PullRequestSnapshot {
   readonly pushedSinceVerdict: boolean;
   /** The latest review that requested changes on it, if any: what a stalled Request-changes run resumes from. */
   readonly changesRequested: ChangesRequestedReview | null;
+  /**
+   * Where its UI evidence is kept, read from the marker in the body the Fabrik
+   * App wrote (src/evidence/uiEvidence.ts), or null when it has none: not a UI PR.
+   */
+  readonly uiEvidence: EvidenceMarker | null;
 }
 
 /** A review requesting changes on a PR, as GitHub records it. */
