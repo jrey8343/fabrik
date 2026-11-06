@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
-import { sandboxEnv, secretsTemplate } from "./secrets.ts";
+import { sandboxEnv, secretsTemplate, testEnv } from "./secrets.ts";
 
 const withSandbox = (sandbox: Partial<typeof DEFAULT_KIT_CONFIG.sandbox>) =>
   kitConfig({ sandbox: { ...DEFAULT_KIT_CONFIG.sandbox, ...sandbox } });
@@ -41,5 +41,23 @@ describe("Test secrets", () => {
 
   it("fails closed without the Claude token", () => {
     expect(() => sandboxEnv(kitConfig(), "{}")).toThrow(/CLAUDE_CODE_OAUTH_TOKEN/);
+  });
+
+  // A Replay arm's gates job (#156) runs the Product's own commands, with no agent, so it loads no Claude token.
+  describe("for a replay arm's gates, which run the Sandbox's commands and no agent", () => {
+    it("gives them the Sandbox values and each resolved test secret, and never a Claude token", () => {
+      const config = withSandbox({ env: { PORT: "3000" }, secrets: { STRIPE_TEST_KEY: "op://v/Stripe/test-key" } });
+      const resolved = JSON.stringify({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-1", STRIPE_TEST_KEY: "sk_test_1" });
+
+      expect(testEnv(config, resolved)).toEqual({ PORT: "3000", STRIPE_TEST_KEY: "sk_test_1" });
+    });
+
+    it("needs nothing resolved when the Product has no test secrets", () => {
+      expect(testEnv(kitConfig(), "{}")).toEqual({});
+    });
+
+    it("fails closed when 1Password didn't resolve a declared test secret", () => {
+      expect(() => testEnv(withSandbox({ secrets: { STRIPE_TEST_KEY: "op://v/Stripe/test-key" } }), "{}")).toThrow(/STRIPE_TEST_KEY/);
+    });
   });
 });
