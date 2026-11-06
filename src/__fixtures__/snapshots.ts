@@ -39,7 +39,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, ...overrides };
+  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, openMaps: null, ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
@@ -69,7 +69,7 @@ export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
   overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, ...overrides };
+  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, openMaps: null, ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -104,6 +104,7 @@ export function dispatchSnapshotOf(
     retro: null,
     namedPullRequests: null,
     held: null,
+    openMaps: null,
   };
 }
 
@@ -138,12 +139,13 @@ export function designQueueSnapshotOf(
     retro: null,
     namedPullRequests: null,
     held: null,
+    openMaps: null,
   };
 }
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
 export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "held">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, ...overrides };
+  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, held: null, openMaps: null, ...overrides };
 }
 
 /**

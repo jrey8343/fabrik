@@ -36,8 +36,9 @@ export function designRoundMarker(round: number): string {
 }
 
 /**
- * The first line of the Kit's failure notice for a Design-session turn: the
- * session keeps its slot while that notice is the Operator's move (#147).
+ * The first line of the Kit's failure notice for a Design-session turn, and
+ * of its refusal of a Map the Map cap holds (src/loop/design.ts): the session
+ * keeps its slot while that notice is the Operator's move (#147).
  */
 export const DESIGN_TURN_FAILED_MARKER = "<!-- fabrik:design-turn-failed -->";
 

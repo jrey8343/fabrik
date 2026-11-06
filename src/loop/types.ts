@@ -512,6 +512,12 @@ export interface Snapshot {
    * (src/loop/resume.ts). A number naming nothing GitHub has isn't here.
    */
   readonly held: readonly HeldTargetSnapshot[] | null;
+  /**
+   * Gathered for a Design-session turn finishing only: the open `wayfinder:map`
+   * issues, by number, oldest first, whoever made them, the Kit or the
+   * Operator by hand. What the Map cap counts (src/loop/mapCap.ts).
+   */
+  readonly openMaps: readonly number[] | null;
 }
 
 /** An issue or PR a held run is on, as the adapter read it on a scheduled tick (src/loop/resume.ts). */

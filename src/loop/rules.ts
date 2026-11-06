@@ -90,6 +90,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
               event.output,
               context,
               turnStartFrom(event.startedBy, snapshot.startingComment),
+              snapshot.openMaps,
+              config,
               event.operatorComments,
             ),
           );
