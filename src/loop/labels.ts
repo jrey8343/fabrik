@@ -108,6 +108,15 @@ export const RESEARCH_DECISION_LABEL = "wayfinder:research" satisfies DecisionLa
  */
 export const RESEARCH_LABEL = "agent:research";
 
+/**
+ * The trigger label the scheduled tick adds to a replay issue to start its
+ * next pending Ticket, both arms (#156), as Dispatch adds agent:implement
+ * (ADR-0001). The label comes off as the run starts. A trigger label, not one
+ * of KIT_ISSUE_LABELS. It stays out of ALL_LABELS until Replay is switched on
+ * (#295), so setup doesn't create it before anything adds it.
+ */
+export const REPLAY_TRIGGER_LABEL = "agent:replay";
+
 /** A label the Kit itself adds or removes. Labels read from GitHub stay plain strings: anyone can add any label. */
 export type Label =
   | StateLabel
@@ -119,7 +128,8 @@ export type Label =
   | typeof MONITOR_LABEL
   | typeof MAP_LABEL
   | DecisionLabel
-  | typeof RESEARCH_LABEL;
+  | typeof RESEARCH_LABEL
+  | typeof REPLAY_TRIGGER_LABEL;
 
 /** Every label the Kit uses, so the setup skill can create each one. */
 export const ALL_LABELS: readonly Label[] = [

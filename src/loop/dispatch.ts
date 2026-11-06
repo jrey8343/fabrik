@@ -27,18 +27,7 @@ interface Candidate {
 export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDispatched): Plan {
   const tickets = [...snapshot.tickets].sort((a, b) => a.number - b.number);
   const decisions = [...snapshot.researchDecisions].sort((a, b) => a.number - b.number);
-  const candidates: Candidate[] = [
-    ...tickets.map((ticket): Candidate => ({
-      number: ticket.number,
-      label: DISPATCH_LABEL,
-      why: held.implement.includes(ticket.number) && ticket.open ? `#${ticket.number} is held` : whyNotEligible(ticket),
-    })),
-    ...decisions.map((decision): Candidate => ({
-      number: decision.number,
-      label: RESEARCH_LABEL,
-      why: held.research.includes(decision.number) && decision.open ? `#${decision.number} is held` : whyNotReleasable(decision),
-    })),
-  ].sort((a, b) => a.number - b.number);
+  const candidates = candidatesOf(snapshot, held);
   const ineligible = candidates.flatMap(({ why }) => (why === null ? [] : [why]));
   const eligible = candidates.filter(({ why }) => why === null);
   if (eligible.length === 0) {
@@ -97,6 +86,34 @@ export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: He
     kind: "act",
     actions: eligible.slice(0, free).map(({ number, label }) => ({ kind: "add-labels", issue: number, labels: [label] })),
   };
+}
+
+/**
+ * The Tickets and research Decisions a Dispatch check would release, slots
+ * aside, lowest issue number first: what waits for Dispatch, which the replay
+ * step lets go first (src/loop/replayGate.ts).
+ */
+export function waitingForDispatch(
+  snapshot: Pick<DispatchSnapshot, "tickets" | "researchDecisions">,
+  held: HeldDispatched,
+): number[] {
+  return candidatesOf(snapshot, held).flatMap(({ number, why }) => (why === null ? [number] : []));
+}
+
+/** Every issue Dispatch weighs, lowest issue number first, with why it can't be released, or null. */
+function candidatesOf(snapshot: Pick<DispatchSnapshot, "tickets" | "researchDecisions">, held: HeldDispatched): Candidate[] {
+  return [
+    ...snapshot.tickets.map((ticket): Candidate => ({
+      number: ticket.number,
+      label: DISPATCH_LABEL,
+      why: held.implement.includes(ticket.number) && ticket.open ? `#${ticket.number} is held` : whyNotEligible(ticket),
+    })),
+    ...snapshot.researchDecisions.map((decision): Candidate => ({
+      number: decision.number,
+      label: RESEARCH_LABEL,
+      why: held.research.includes(decision.number) && decision.open ? `#${decision.number} is held` : whyNotReleasable(decision),
+    })),
+  ].sort((a, b) => a.number - b.number);
 }
 
 function count(n: number, one: string, many: string): string {

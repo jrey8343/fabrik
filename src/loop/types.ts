@@ -2,7 +2,9 @@
 // the resolved Kit config go in; a plan comes out.
 import type { CaptureResult, EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
+import type { ReplayAcceptance, ReplayIssue } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
+import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { Label } from "./labels.ts";
 import type { PrototypeRequestMarker } from "./markers.ts";
@@ -632,6 +634,8 @@ export interface Snapshot {
   readonly audit: AuditSnapshot | null;
   /** Gathered for a scheduled tick only: what the retro gate weighs. */
   readonly retro: RetroSnapshot | null;
+  /** Gathered for a scheduled tick only, once Replay is switched on (#295): what the replay step weighs. */
+  readonly replay: ReplaySnapshot | null;
   /**
    * Gathered for an Audit run finishing only, whose Audit is `issue`: each PR
    * its reply names under "Introduced by" that GitHub has, in any order. A
@@ -728,6 +732,43 @@ export interface RetroSnapshot {
 
 /** A `fabrik:retro` issue, open or closed, as the adapter read it (src/loop/retro.ts). */
 export type RetroIssueSnapshot = WeeklyIssueSnapshot;
+
+/**
+ * What the replay step weighs on a scheduled tick (src/loop/replayGate.ts,
+ * #156). With no replay issue open, it holds none, and nothing else is read.
+ */
+export interface ReplaySnapshot {
+  /** Every open `fabrik:replay` issue, whoever filed it, in any order. */
+  readonly issues: readonly ReplayIssueSnapshot[];
+  /** What the spare-capacity gate weighs, read only while one of `issues` is the Operator's; else null. */
+  readonly capacity: ReplayCapacitySnapshot | null;
+  /** What accepting a waiting request weighs, read only while a valid one waits (replayReads); else null. */
+  readonly acceptance: ReplayAcceptance | null;
+}
+
+/**
+ * A replay issue as the adapter read it: its body whole, though the Operator
+ * filed it, since its request is the Operator's own text, and the Fabrik
+ * App's comments alone (ADR-0007).
+ */
+export interface ReplayIssueSnapshot extends ReplayIssue {
+  readonly labels: readonly string[];
+}
+
+/** What the spare-capacity gate weighs beside the Kit-owned issues (src/loop/replayGate.ts). */
+export interface ReplayCapacitySnapshot {
+  /** What Dispatch weighs: every open `ready-for-agent` issue, in any order. */
+  readonly tickets: readonly TicketSnapshot[];
+  /** And every open `wayfinder:research` issue, in any order. */
+  readonly researchDecisions: readonly ResearchDecisionSnapshot[];
+  /**
+   * The newest weekly-limit reading on each Subscription, from the store's
+   * Run records of the last two months, every Product repo's and Replay
+   * runs' included; a Subscription none read one for isn't here. Null when
+   * the store couldn't be read.
+   */
+  readonly weeklyLimits: Readonly<Record<string, RateLimitReading>> | null;
+}
 
 /** The Operator's reply that started a Design-session turn, as the adapter found it when the turn finished. */
 export interface StartingComment {

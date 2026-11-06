@@ -376,8 +376,8 @@ export async function gatherSnapshot(
   const theOperator = part?.operator ?? operator ?? owner;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, namedPullRequests, held, openMaps }
-    : { ...part, spec, kitIssues, startingComment, audit, retro, namedPullRequests, held, openMaps };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, replay: null, namedPullRequests, held, openMaps }
+    : { ...part, spec, kitIssues, startingComment, audit, retro, replay: null, namedPullRequests, held, openMaps };
 }
 
 /**
@@ -763,7 +763,7 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "namedPullRequests" | "held" | "openMaps">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "replay" | "namedPullRequests" | "held" | "openMaps">;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body author { login __typename } }";
 

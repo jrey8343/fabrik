@@ -21,6 +21,13 @@ export const SAMPLED_SHARE = 1 / 4;
 export const SCORING_UTILIZATION_LIMIT = 0.75;
 
 /**
+ * The weekly-limit utilization, from 0 to 1, at or above which no replay
+ * Ticket starts (#156), so a Replay stays in the lower half of the week's
+ * budget (src/loop/replayGate.ts).
+ */
+export const REPLAY_UTILIZATION_LIMIT = 0.5;
+
+/**
  * A skip the scoring plan decides from the run's record, before any judge
  * runs. A `weekly-limit` skip keeps the reading it was skipped for.
  */
@@ -52,13 +59,17 @@ export function scoringPlan(record: RunRecord): ScoringPlan {
   const failure = record.infrastructureFailure;
   if (failure !== null && failure !== "timeout") return { kind: "skip", skip: { reason: "infrastructure-failure" } };
   const rateLimit = record.rateLimit;
-  if (rateLimit !== null && nearWeeklyLimit(rateLimit)) return { kind: "skip", skip: { reason: "weekly-limit", rateLimit } };
+  if (rateLimit !== null && atOrOver(rateLimit, SCORING_UTILIZATION_LIMIT)) return { kind: "skip", skip: { reason: "weekly-limit", rateLimit } };
   return { kind: "score" };
 }
 
-/** Whether a weekly-limit reading says the Subscription is close to its limit: any status but `allowed`, or utilization at the limit. */
-function nearWeeklyLimit(reading: RateLimitReading): boolean {
-  return reading.status !== "allowed" || (reading.utilization !== null && reading.utilization >= SCORING_UTILIZATION_LIMIT);
+/**
+ * Whether a weekly-limit reading says the Subscription is at or over `limit`,
+ * a utilization from 0 to 1: any status but `allowed`, or a utilization at
+ * `limit` or above. An `allowed` reading that gives no utilization is under it.
+ */
+export function atOrOver(reading: RateLimitReading, limit: number): boolean {
+  return reading.status !== "allowed" || (reading.utilization !== null && reading.utilization >= limit);
 }
 
 /**
