@@ -19,6 +19,10 @@ describe("The scoring plan for a finished run", () => {
     expect(scoringPlan(implementRun({ role, retry: 1, stepUp: true }))).toEqual({ kind: "not-sampled" });
   });
 
+  it("never samples a prototype turn, a Design-session turn like any other", () => {
+    expect(scoringPlan(implementRun({ role: "design", prototype: true }))).toEqual({ kind: "not-sampled" });
+  });
+
   describe("samples one in four first Implement runs, by run id", () => {
     it("scores a first run whose run id falls in the sample", () => {
       expect(scoringPlan(implementRun({ runId: SAMPLED_RUN }))).toEqual({ kind: "score" });

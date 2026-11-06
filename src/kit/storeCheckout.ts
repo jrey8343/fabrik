@@ -32,8 +32,8 @@ async function readStoreFiles(storeDir: string, directory: "runs" | "scores"): P
 /**
  * Every Run record under `runs/`, by its path in the store, at the current
  * schema: a schema 1 record, which names no Subscription, as being on the
- * first of `subscriptions` (readRunRecord). A file of a schema the Kit
- * doesn't know is left out.
+ * first of `subscriptions`, and a schema 1 or 2 record as no prototype turn
+ * (readRunRecord). A file of a schema the Kit doesn't know is left out.
  */
 export async function readStoreRunRecords(
   storeDir: string,
