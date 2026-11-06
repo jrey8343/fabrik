@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { type Capture, type CaptureFailure, type CaptureResult, evidenceSection, isUi, parseCaptureResult, reviewerImages, routesFor, type UiEvidence, withoutEvidence } from "./uiEvidence.ts";
+import { type Capture, type CaptureFailure, type CaptureResult, evidenceSection, isUi, parseCaptureResult, reviewerImages, routesFor, type UiEvidence, withoutEvidence, withPreviewLink } from "./uiEvidence.ts";
 
 /** The Pilot's ui block: an Astro site served from its build. */
 const ui: UiConfig = {
@@ -568,5 +568,39 @@ describe("The images a Reviewer gets", () => {
   it("are every capture when there are eight or fewer, and none when there are none", () => {
     expect(reviewerImages([shot("/book", "ticket", "desktop", "before")])).toEqual([shot("/book", "ticket", "desktop", "before")]);
     expect(reviewerImages([])).toEqual([]);
+  });
+});
+
+describe("Linking the preview in a PR body's evidence section, once the push job has polled it", () => {
+  const PREVIEW = "https://pr-12.shop.example.dev/";
+  /** A UI PR's body as its push job opened it: run 9100's section, waiting on the preview. */
+  const body = (run = 9100) =>
+    `Adds a waitlist to full days.\n\n${evidenceSection(evidence(allCaptured, { run, preview: { kind: "pending" } }))}\n\nCloses #12`;
+  const sectionSaying = (preview: UiEvidence["preview"]) =>
+    `Adds a waitlist to full days.\n\n${evidenceSection(evidence(allCaptured, { preview }))}\n\nCloses #12`;
+
+  it.each([
+    ["links a preview that answered", { kind: "linked", url: PREVIEW }],
+    ["says a preview never answered", { kind: "never-answered", url: PREVIEW }],
+  ] as const)("%s, leaving the rest of the body as it was", (_, preview) => {
+    expect(withPreviewLink(body(), 9100, preview)).toBe(sectionSaying(preview));
+  });
+
+  it("keeps whatever the Operator changed around the section", () => {
+    const edited = body().replace("Adds a waitlist to full days.", "Adds a waitlist to full days.\r\n\r\nThe Operator's note.");
+
+    expect(withPreviewLink(edited, 9100, { kind: "linked", url: PREVIEW })).toBe(
+      sectionSaying({ kind: "linked", url: PREVIEW }).replace("Adds a waitlist to full days.", "Adds a waitlist to full days.\r\n\r\nThe Operator's note."),
+    );
+  });
+
+  it.each([
+    ["holds another run's section, as after a later run replaced it", body(9300)],
+    ["holds a section that already says what came of the preview", sectionSaying({ kind: "never-answered", url: PREVIEW })],
+    ["holds a section of a repo with no preview declared", sectionSaying({ kind: "none" })],
+    ["holds no section at all", "Adds a waitlist to full days.\n\nCloses #12"],
+    ["holds the waiting line outside any section", "The preview deployment is linked here once it answers.\n\nCloses #12"],
+  ])("changes nothing in a body that %s", (_, text) => {
+    expect(withPreviewLink(text, 9100, { kind: "linked", url: PREVIEW })).toBeNull();
   });
 });

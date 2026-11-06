@@ -272,3 +272,49 @@ describe("A retry whose branch moved while it ran (ADR-0006)", () => {
     expect(branch.changes.rebase).toEqual({ onto: moved, conflicted: true });
   });
 });
+
+describe("The head a push leaves the agent branch at, which fills in a preview URL's {sha}", () => {
+  it("is a first run's own tip", async () => {
+    const start = await git(clone, "rev-parse", "HEAD~1");
+    const tip = await commit(clone, { "src/feature.ts": "feature v2\n" }, "Build it");
+    const bundle = join(root, "first-run.bundle");
+    await git(clone, "bundle", "create", "--quiet", bundle, `refs/heads/${BRANCH}`, `^${start}`);
+
+    const branch = await rebuildAgentBranch({ name: BRANCH, base: { ref: "main", sha: start }, head: tip }, bundle, {
+      serverUrl: `file://${root}`,
+      repo: { owner: "acme", name: "shop" },
+      token: "unused",
+    });
+    await branch.push(BRANCH);
+
+    expect(branch.head).toBe(tip);
+    expect(await git(remote, "rev-parse", `refs/heads/${BRANCH}`)).toBe(tip);
+  });
+
+  it("is a retry's own tip when it only adds commits", async () => {
+    const tip = await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix");
+
+    const branch = await rebuild(prHead);
+    await branch.push(BRANCH);
+
+    expect(branch.head).toBe(tip);
+  });
+
+  it("is where a retry's commits were rebased onto a branch that moved, not the tip the run built", async () => {
+    await operatorPushes({ "src/other.ts": "the Operator's\n" });
+    const built = await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix");
+
+    const branch = await rebuild(prHead);
+    await branch.push(BRANCH);
+
+    expect(branch.head).toBe(await git(remote, "rev-parse", `refs/heads/${BRANCH}`));
+    expect(branch.head).not.toBe(built);
+  });
+
+  it("is none when a moved branch conflicts, as there is nothing to push", async () => {
+    await operatorPushes({ "src/feature.ts": "the Operator's feature\n" });
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix");
+
+    expect((await rebuild(prHead)).head).toBeNull();
+  });
+});

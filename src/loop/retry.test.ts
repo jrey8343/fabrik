@@ -430,6 +430,30 @@ describe("The evidence section on a retry's PR", () => {
   });
 });
 
+describe("The preview deployment of a retry's PR", () => {
+  const PREVIEW = { url: "https://{branch_slug}.shop.pages.dev" };
+  const uiRetry = (overrides: Partial<Extract<LoopEvent, { kind: "implement-run-finished" }>> = {}) =>
+    retried({ evidence: anEvidence(CAPTURED), ...overrides });
+  const markedUi = () => aPullRequest({ verdicts: flawedPullRequest().verdicts, uiEvidence: { run: 8000, artifact: 8002 } });
+
+  it.each([
+    ["a retry", uiRetry()],
+    ["a Request-changes run", uiRetry({ fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true } })],
+  ])("is linked on %s's UI PR once the push job has pushed, from Kit config's template and the PR's branch", (_, event) => {
+    const actions = actionsOf(planFor(event, retrySnapshot(markedUi()), kitConfig({ ui: UI, preview: PREVIEW })));
+
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch", "link-preview"]);
+    expect(actions[3]).toEqual({ kind: "link-preview", pullRequest: 50, template: "https://{branch_slug}.shop.pages.dev", branch: "fabrik/ticket-7" });
+  });
+
+  it.each([
+    ["Kit config declares no preview.url", retrySnapshot(markedUi()), kitConfig({ ui: UI })],
+    ["the PR isn't UI", retrySnapshot(), kitConfig({ ui: UI, preview: PREVIEW })],
+  ])("isn't polled when %s", (_, snapshot, config) => {
+    expect(actionsOf(planFor(uiRetry(), snapshot, config)).map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+  });
+});
+
 describe("A retry whose branch moved while it ran (ADR-0006)", () => {
   const MOVED = "b".repeat(40);
   /** The PR, now at MOVED: the Operator pushed while the retry, built on HEAD_SHA, ran. */
