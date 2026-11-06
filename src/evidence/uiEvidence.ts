@@ -2,7 +2,7 @@
 // capture and why, and the capture result the Implement job's capture step
 // writes and every later reader shares. Pure, no I/O.
 import { posix } from "node:path";
-import type { UiConfig } from "../kit/config.ts";
+import { UI_ROUTE_CAP, type UiConfig } from "../kit/config.ts";
 
 /**
  * Whether a pull request is UI: some changed path matches one of `ui.paths`,
@@ -48,7 +48,9 @@ export function routesFor(
     ...ticketRoutes(ticketBody).map((route): ChosenRoute => ({ route, reason: "ticket" })),
     ...implementerRoutes.map((route): ChosenRoute => ({ route, reason: "implementer" })),
   ]);
-  return named.length > 0 ? named : onceEach(defaultRoutes.map((route) => ({ route, reason: "default" })));
+  const routes = named.length > 0 ? named : onceEach(defaultRoutes.map((route) => ({ route, reason: "default" })));
+  // The cap trims every route but the Ticket's, which always come first.
+  return routes.filter(({ reason }, index) => reason === "ticket" || index < UI_ROUTE_CAP);
 }
 
 /** Each route once, where it first appears. */

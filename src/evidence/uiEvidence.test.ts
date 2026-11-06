@@ -99,6 +99,41 @@ describe("The routes UI evidence captures", () => {
     ]);
   });
 
+  it("stop at four, trimming the Implementer's routes after the Ticket's", () => {
+    const body = ticket("Add a waitlist to `/book` and show it on `/book/physio`.");
+
+    expect(routesFor(body, ["/book", "/book/massage", "/book/pilates", "/book/hydro"], [])).toEqual([
+      { route: "/book", reason: "ticket" },
+      { route: "/book/physio", reason: "ticket" },
+      { route: "/book/massage", reason: "implementer" },
+      { route: "/book/pilates", reason: "implementer" },
+    ]);
+  });
+
+  it("keep every route the Ticket names, even past four, and then take none of the Implementer's", () => {
+    const body = ticket("Restyle `/`, `/book`, `/services`, `/about`, `/contact` and `/blog`.");
+
+    expect(routesFor(body, ["/pricing"], ["/faq"]).map(({ route, reason }) => `${reason} ${route}`)).toEqual([
+      "ticket /",
+      "ticket /book",
+      "ticket /services",
+      "ticket /about",
+      "ticket /contact",
+      "ticket /blog",
+    ]);
+  });
+
+  it("stop at four default routes too", () => {
+    const defaults = ["/", "/book", "/services", "/about", "/contact"];
+
+    expect(routesFor(ticket("Tighten the footer."), [], defaults).map(({ route }) => route)).toEqual([
+      "/",
+      "/book",
+      "/services",
+      "/about",
+    ]);
+  });
+
   it("are none at all when nothing names a route and there are no defaults, which capture records as no-routes", () => {
     expect(routesFor(ticket("Tighten the spacing in the footer."), [], [])).toEqual([]);
   });
