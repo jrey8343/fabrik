@@ -352,7 +352,7 @@ describe("loop.yml's Audit job", () => {
   });
 });
 
-describe("schedule.yml's tick, which opens the pending Audit", () => {
+describe("schedule.yml's tick, which opens the pending Audit and the pending Retro", () => {
   it("asks the run the Loop action to find the fabrik-runs store, which the retro gate weighs, and is the only job that does", () => {
     const tick = jobIn(schedule, "tick");
 
@@ -361,7 +361,7 @@ describe("schedule.yml's tick, which opens the pending Audit", () => {
     expect(loop).not.toContain("find-store:");
   });
 
-  it("holds only the push service account, so the Auditor's run needs no change to the shim", () => {
+  it("holds only the push service account, so neither the Auditor's run nor the Retro's needs a change to the shim", () => {
     expect(schedule).toMatch(/on:\n {2}workflow_call:\n {4}secrets:\n {6}OP_PUSH_TOKEN:\n(?: {8}.*\n)+\n/);
     expect(schedule).not.toContain("OP_AGENT_TOKEN");
     expect(schedule).not.toContain("OP_IMPLEMENT_TOKEN");
