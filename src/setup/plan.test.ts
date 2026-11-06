@@ -734,6 +734,74 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
   });
 });
 
+describe("Visual evidence, the opt-in step for UI evidence on UI pull requests", () => {
+  const operator = {
+    visualEvidence: {
+      paths: ["src/pages/**", "src/components/**/*.{astro,tsx}"],
+      serve: "npm run preview",
+      url: "http://localhost:4321",
+      beforeUrl: "https://clinic.example.com",
+      defaultRoutes: ["/", "/book"],
+      previewUrl: "https://deploy-preview-{pr}--clinic.netlify.app",
+    },
+  };
+  const theirs = '{ "max_in_flight": 1, "operator": "jrey8343" }\n';
+
+  function withConfig(config: string): ProductState {
+    return aCleanProduct({ files: { ".fabrik/config.json": config } });
+  }
+
+  it("writes the ui and preview blocks into the Kit config, keeping what it already holds", () => {
+    const { actions } = planSetup(withConfig(theirs), kit, operator);
+
+    expect(JSON.parse(written(actions, ".fabrik/config.json") ?? "{}")).toEqual({
+      max_in_flight: 1,
+      operator: "jrey8343",
+      ui: {
+        paths: ["src/pages/**", "src/components/**/*.{astro,tsx}"],
+        serve: "npm run preview",
+        url: "http://localhost:4321",
+        before_url: "https://clinic.example.com",
+        default_routes: ["/", "/book"],
+      },
+      preview: { url: "https://deploy-preview-{pr}--clinic.netlify.app" },
+    });
+  });
+
+  it("writes them into the starter Kit config on a repo that has none, which resolves with every v1 default and Visual evidence on", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, operator);
+
+    expect(actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toHaveLength(1);
+    expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULT_KIT_CONFIG,
+        ui: {
+          paths: ["src/pages/**", "src/components/**/*.{astro,tsx}"],
+          serve: "npm run preview",
+          url: "http://localhost:4321",
+          beforeUrl: "https://clinic.example.com",
+          defaultRoutes: ["/", "/book"],
+        },
+        preview: { url: "https://deploy-preview-{pr}--clinic.netlify.app" },
+      },
+    });
+  });
+
+  it("leaves the Kit config alone until the Operator answers the step, so Visual evidence stays opt-in", () => {
+    expect(written(planSetup(withConfig(theirs), kit).actions, ".fabrik/config.json")).toBeUndefined();
+    expect(written(planSetup(aCleanProduct(), kit).actions, ".fabrik/config.json")).toBe(kit.templates.kitConfig);
+  });
+
+  it("plans nothing once the Kit config holds those blocks, however the Operator has formatted it", () => {
+    const setUp = afterApplying(withConfig(theirs), planSetup(withConfig(theirs), kit, operator));
+    const reformatted = JSON.stringify(JSON.parse(setUp.files[".fabrik/config.json"] ?? "{}"));
+
+    expect(planSetup(setUp, kit, operator)).toEqual(planSetup(setUp, kit));
+    expect(written(planSetup(withConfig(reformatted), kit, operator).actions, ".fabrik/config.json")).toBeUndefined();
+  });
+});
+
 function storeWritten(actions: readonly SetupAction[], path: string): string | undefined {
   const action = actions.find((a) => a.kind === "write-store-file" && a.path === path);
   return action?.kind === "write-store-file" ? action.content : undefined;
