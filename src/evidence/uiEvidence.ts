@@ -4,8 +4,10 @@
 // gets and what its prompt says of them (src/agent/review.ts only reads the
 // files in), and what the Operator reads of it on the PR: the evidence
 // section, its marker, which the PR snapshot reads back, and withoutEvidence,
-// which keeps both out of agent text. The gallery is beside it
-// (src/evidence/gallery.ts). Pure, no I/O.
+// which keeps both out of agent text. A prototype turn's capture of its
+// variants (#155) shares the capture result, and neither the Reviewer nor the
+// evidence section ever shows it. The galleries, the PR's and the prototype's,
+// are beside it (src/evidence/gallery.ts). Pure, no I/O.
 import { posix } from "node:path";
 import { isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
