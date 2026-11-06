@@ -14,7 +14,8 @@ import { join } from "node:path";
 import { gatherGitHubFacts, productReposOf } from "../github/facts.ts";
 import { GitHub, GitHubError } from "../github/client.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
-import type { RunRecord } from "./runRecord.ts";
+import { DEFAULT_KIT_CONFIG } from "./config.ts";
+import { readRunRecord, type RunRecord } from "./runRecord.ts";
 import { RUN_STORE } from "./runStore.ts";
 import type { ScoreFile } from "./scorer.ts";
 import { type SummaryIssue, WEEKLY_SUMMARY_LABEL, type WeeklyFiling, weeklyFilingOf } from "./weeklyFiling.ts";
@@ -32,8 +33,8 @@ async function report(line: string): Promise<void> {
   if (summary !== undefined && summary !== "") await appendFile(summary, `### Weekly summary\n\n${line}\n`);
 }
 
-/** Every schema 1 file under one of the checkout's directories, whatever repo or month: none when the directory isn't there. */
-async function readStoreFiles<T extends { readonly schema: number }>(storeDir: string, directory: "runs" | "scores"): Promise<T[]> {
+/** Every file under one of the checkout's directories, whatever repo or month, parsed: none when the directory isn't there. */
+async function readStoreFiles(storeDir: string, directory: "runs" | "scores"): Promise<unknown[]> {
   const root = join(storeDir, directory);
   let paths: string[];
   try {
@@ -42,8 +43,23 @@ async function readStoreFiles<T extends { readonly schema: number }>(storeDir: s
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
-  const files = await Promise.all(paths.map(async (path) => JSON.parse(await readFile(join(root, path), "utf8")) as T));
-  return files.filter((file) => file.schema === 1);
+  return Promise.all(paths.map(async (path): Promise<unknown> => JSON.parse(await readFile(join(root, path), "utf8"))));
+}
+
+/**
+ * Every Run record in the store, at the current schema. The summary has no
+ * Product's Kit config, so a schema 1 record is read as being on the one V1
+ * Subscription, the first a Kit config lists by default.
+ */
+async function readRunRecords(storeDir: string): Promise<RunRecord[]> {
+  return (await readStoreFiles(storeDir, "runs")).flatMap((file) => readRunRecord(file, DEFAULT_KIT_CONFIG.subscriptions) ?? []);
+}
+
+/** Every schema 1 score file in the store. */
+async function readScoreFiles(storeDir: string): Promise<ScoreFile[]> {
+  return (await readStoreFiles(storeDir, "scores")).filter(
+    (file): file is ScoreFile => typeof file === "object" && file !== null && (file as { schema?: unknown }).schema === 1,
+  );
 }
 
 /** The store repo's REST path, for its issues and labels. */
@@ -109,9 +125,9 @@ async function main(): Promise<string> {
   const caller = await store.fileText(RUN_STORE, STORE_CALLER_PATH, required("GITHUB_SHA"));
   const timeZone = (caller === null ? null : timeZoneIn(caller)) ?? "UTC";
   const storeDir = required("FABRIK_STORE_DIR");
-  const records = await readStoreFiles<RunRecord>(storeDir, "runs");
+  const records = await readRunRecords(storeDir);
   // No scores/ until scoring has run.
-  const scoreFiles = await readStoreFiles<ScoreFile>(storeDir, "scores");
+  const scoreFiles = await readScoreFiles(storeDir);
   const repos = await productReposOf(products);
   const facts = await Promise.all(repos.map((repo) => gatherGitHubFacts(products, repo, now, RUN_STORE.owner)));
 

@@ -1,10 +1,12 @@
 // The Run record (ADR-0009): from what the push job knows when an AFK agent
-// run ends, the one schema 1 record of that run, and the paths it and its
+// run ends, the one schema 2 record of that run, and the paths it and its
 // transcript take in the store, or no record when no agent run ended. A judge
 // run, scoring a finished run, gets a record too, in role `score`, from what
 // the score-record job knows when it ends. The stream is read through the one
 // stream-json reader (src/agent/stream.ts). The paths are inside the store,
-// RUN_STORE (src/kit/runStore.ts). Pure, no I/O.
+// RUN_STORE (src/kit/runStore.ts). A record read back from the store is read
+// at the current schema: a schema 1 record, written before runs were given a
+// Subscription, as being on the first listed one. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
@@ -30,6 +32,8 @@ export interface RunEnd {
   readonly endedAt: string;
   /** The role defaults from the Product's Kit config. */
   readonly roles: KitConfig["roles"];
+  /** The Subscriptions the Product's Kit config lists, the first of which a run the Kit job gave none is on. */
+  readonly subscriptions: KitConfig["subscriptions"];
   /** The agent result artifact's text, or null if there was none. */
   readonly agentResult: string | null;
   /** The failure report artifact's text, or null if there was none. */
@@ -63,9 +67,12 @@ export interface RateLimitReading {
 /** A record's role: the agent role that ran, or `score` for a judge run scoring a finished run. */
 export type RunRecordRole = AgentRole | "score";
 
-/** One AFK agent run, schema 1. */
+/** The schema a Run record is written at: 2 added `subscription`. */
+export const RUN_RECORD_SCHEMA = 2;
+
+/** One AFK agent run, schema 2. */
 export interface RunRecord {
-  readonly schema: 1;
+  readonly schema: typeof RUN_RECORD_SCHEMA;
   readonly kitSha: string;
   readonly repo: string;
   readonly runId: number;
@@ -80,6 +87,11 @@ export interface RunRecord {
   readonly endedAt: string;
   readonly model: string;
   readonly effort: string | null;
+  /**
+   * The Subscription the run used: the `Fabrik` vault item name its Claude
+   * token came from, never the secret. A judge run's is the scored run's.
+   */
+  readonly subscription: string;
   /** 0 for a first Implement run (and every other role), else its Retry number. */
   readonly retry: number;
   readonly stepUp: boolean;
@@ -174,6 +186,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     pullRequest,
     endedAt: end.endedAt,
     ...whatRan(agent, kit, end.roles[role]),
+    subscription: nonEmpty(kit["subscription"]) ?? firstListed(end.subscriptions),
     retry: implement ? (countOf(kit["retry"]) ?? 0) : 0,
     stepUp: implement && kit["step-up"] === "true",
     requestChanges: implement && kit["request-changes"] === "true",
@@ -222,6 +235,8 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     pullRequest: scored.pullRequest,
     endedAt: end.endedAt,
     ...whatRan(judge.outputs, {}, { model: end.judgeModel, effort: null }),
+    // The Kit job gives the judge the Subscription it gave the run the judge scores.
+    subscription: scored.subscription,
     retry: 0,
     stepUp: false,
     requestChanges: false,
@@ -257,7 +272,7 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
   const modelUsage = Object.fromEntries(Object.entries(stream?.modelUsage ?? {}).map(([model, usage]) => [model, costOf(usage)]));
   const { infrastructureFailure, verdict, ...ran } = facts;
   return {
-    schema: 1,
+    schema: RUN_RECORD_SCHEMA,
     ...ran,
     subtype: stringOr(last?.["subtype"]),
     isError: typeof last?.["is_error"] === "boolean" ? last["is_error"] : null,
@@ -275,6 +290,27 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
     rateLimit: readingOf(stream?.rateLimits.findLast((info) => info["rateLimitType"] === WEEKLY_LIMIT) ?? null),
     transcript: transcriptPath,
   };
+}
+
+/**
+ * A Run record as read back from the store, at the current schema: a schema 1
+ * record, which names no Subscription, is read as being on the first listed
+ * one. Null for anything that isn't a record of a schema the Kit knows.
+ */
+export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
+  if (typeof stored !== "object" || stored === null) return null;
+  const { schema } = stored as { schema?: unknown };
+  if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
+  if (schema === 1) {
+    return { ...(stored as Omit<RunRecord, "schema" | "subscription">), schema: RUN_RECORD_SCHEMA, subscription: firstListed(subscriptions) };
+  }
+  return null;
+}
+
+function firstListed(subscriptions: KitConfig["subscriptions"]): string {
+  const first = subscriptions[0];
+  if (first === undefined) throw new Error("Kit config lists no Subscription");
+  return first;
 }
 
 /**
