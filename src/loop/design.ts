@@ -87,9 +87,9 @@ export function startQueuedSession(issueNumber: number, { issue }: IssueContext,
 }
 
 /**
- * A session's prototype turn (#155): a Design run, on the Design role's model
- * and effort, so the variants come from the model the Operator has been
- * talking to, that builds the pending request. Building and serving the
+ * A session's prototype turn (#155): the Design run that builds its pending
+ * request, on the Design role's model and effort, so the variants come from
+ * the model the Operator has been talking to. Building and serving the
  * Product takes a build's time, so it runs within the Implement role's timeout.
  */
 function prototypeTurn(issueNumber: number, pending: PrototypeRequestMarker, config: KitConfig): Action {
