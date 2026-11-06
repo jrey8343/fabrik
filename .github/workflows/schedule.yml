@@ -2,12 +2,13 @@
 # .github/workflows/fabrik.yml on its schedule.
 #
 # This file is wiring only. It runs the Loop's time-based rules (closing the
-# weekly-limit issue after its reset, opening the week's pending Audit, and a
-# Design queue check) through the Loop rules core, which src/main.ts runs as a
-# `scheduled-tick` event, once a week the Product repo's skills bumps for its
-# own Skills sources, and every hour the Monitor, in a job of its own. The
-# Fabrik App opening the pending Audit starts the Loop workflow, whose Audit
-# job runs the Auditor, so the tick itself holds only the push service account.
+# weekly-limit issue after its reset, opening the week's pending Audit and
+# pending Retro, and a Design queue check) through the Loop rules core, which
+# src/main.ts runs as a `scheduled-tick` event, once a week the Product repo's
+# skills bumps for its own Skills sources, and every hour the Monitor, in a job
+# of its own. The Fabrik App opening the pending Audit or Retro starts the Loop
+# workflow, whose Audit job runs the Auditor and whose Retro evidence and Retro
+# jobs run the Retro, so the tick itself holds only the push service account.
 #
 # Like the Loop's push job (ADR-0002), the tick, skills bump and Monitor jobs
 # run on a fresh VM, load the Fabrik App key through the push service account,
@@ -82,6 +83,8 @@ jobs:
         uses: ./kit/.github/actions/run-loop
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          # Whether the fabrik-runs store is ready for a Retro, which the retro gate weighs.
+          find-store: "true"
 
   # The hourly Design queue check (#147), which catches a slot freed by an
   # event the Loop doesn't watch, such as needs-design coming off by hand.

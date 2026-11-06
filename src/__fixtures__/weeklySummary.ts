@@ -7,17 +7,19 @@ import type {
   CommentFacts,
   CommitFacts,
   EscapeMarkerIssueFacts,
+  FollowUpIssueFacts,
   GitHubFacts,
   LabelEvent,
   MonitorIssueFacts,
   OpenAuditFacts,
   OpenIssueFacts,
   OpenPullRequestFacts,
+  OpenRetroFacts,
   ReviewFacts,
   SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
-import { designRoundMarker, verdictMarker } from "../loop/markers.ts";
+import { designRoundMarker, fromPullRequestLine, verdictMarker } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
 import { aMonitorIssueBody } from "./monitor.ts";
 
@@ -62,6 +64,11 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
 /** An Auditor's run on Audit 90 in `owner/product`, costing $1. */
 export function anAuditRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
   return aRunRecord({ role: "audit", issue: 90, pullRequest: null, ...overrides });
+}
+
+/** A Retro's run on Retro 120 in `owner/product`, costing $1. */
+export function aRetroRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
+  return aRunRecord({ role: "retro", issue: 120, pullRequest: null, ...overrides });
 }
 
 /** A run's cost fields when one of its models has an unknown cost basis: no figure for it, and no total. */
@@ -121,18 +128,20 @@ export function aMergedPullRequest(mergedAt: string, overrides: Partial<AgentPul
     reviews: [],
     comments: [],
     labelEvents: [],
+    changedPaths: [],
     ...overrides,
   };
 }
 
-/** The Operator requesting changes at `at`. */
+/** The Operator requesting changes at `at`, saying nothing more. */
 export function aReview(at: string, overrides: Partial<ReviewFacts> = {}): ReviewFacts {
-  return { author: "operator", state: "changes-requested", at, ...overrides };
+  return { author: "operator", state: "changes-requested", body: "", comments: [], at, ...overrides };
 }
 
-/** A commit someone other than the Fabrik App made at `at`. */
+/** A commit the Operator made at `at`, its patch unread; the Fabrik App's with `{ byApp: true }`. */
 export function aCommit(at: string, overrides: Partial<CommitFacts> = {}): CommitFacts {
-  return { byApp: false, at, ...overrides };
+  const byApp = overrides.byApp ?? false;
+  return { sha: "d".repeat(40), byApp, author: byApp ? "fabrik-implementer" : "operator", message: "A commit", patch: null, at, ...overrides };
 }
 
 /** The App adding `label` at `at`. */
@@ -164,7 +173,9 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     designQueue: { issues: [], designTurnsInProgress: [] },
     monitorIssues: [],
     escapeMarkerIssues: [],
+    followUpIssues: [],
     openAudits: [],
+    openRetros: [],
     ...overrides,
   };
 }
@@ -174,9 +185,19 @@ export function anEscapeMarkerIssue(body: string, overrides: Partial<EscapeMarke
   return { number: 80, title: "Make the cart module deeper", author: "operator", createdAt: "2026-11-03T00:00:00Z", state: "open", body, ...overrides };
 }
 
+/** Issue 90, which the Operator opened from a Follow-up on PR `pullRequest` through its Open as issue link, titled as the link prefilled it. */
+export function aFollowUpIssue(pullRequest: number, title: string, overrides: Partial<FollowUpIssueFacts> = {}): FollowUpIssueFacts {
+  return { number: 90, title, author: "operator", body: `Worth its own issue.\n\n${fromPullRequestLine(pullRequest)}`, ...overrides };
+}
+
 /** Audit 90, which the Fabrik App opened on 2026-11-01 and nobody has closed. */
 export function anOpenAudit(overrides: Partial<OpenAuditFacts> = {}): OpenAuditFacts {
   return { number: 90, title: "Audit: week of 2026-10-26", author: "fabrik-app[bot]", createdAt: "2026-11-01T00:00:00Z", ...overrides };
+}
+
+/** Retro 120, which the Fabrik App opened on Saturday 2026-11-07 and nobody has closed. */
+export function anOpenRetro(overrides: Partial<OpenRetroFacts> = {}): OpenRetroFacts {
+  return { number: 120, title: "Retro: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-07T00:00:00Z", ...overrides };
 }
 
 /** The Fabrik App's comment `body` at `at`; a person's with `{ author, byBot: false }`. */
@@ -199,15 +220,22 @@ export function anOpenIssue(overrides: Partial<OpenIssueFacts> = {}): OpenIssueF
   return { number: 12, title: "An open issue", labels: [], createdAt: "2026-10-01T00:00:00Z", comments: [], labelEvents: [], ...overrides };
 }
 
-/** Open agent PR 50, a draft at head `h…h` opened on 2026-10-01, with nothing on it unless a test says so. */
-export function anOpenPullRequest(overrides: Partial<OpenPullRequestFacts> = {}): OpenPullRequestFacts {
+/**
+ * Open agent PR 50, a draft at head `h…h` opened on 2026-10-01, with nothing
+ * on it unless a test says so. A commit given only its time is the
+ * Operator's, as aCommit makes it.
+ */
+export function anOpenPullRequest(
+  { commits = [], ...overrides }: Omit<Partial<OpenPullRequestFacts>, "commits"> & { readonly commits?: readonly (Partial<CommitFacts> & Pick<CommitFacts, "at">)[] } = {},
+): OpenPullRequestFacts {
   return {
     number: 50,
     title: "Build the thing",
     draft: true,
     headSha: "h".repeat(40),
     createdAt: "2026-10-01T00:00:00Z",
-    commits: [],
+    commits: commits.map((commit) => aCommit(commit.at, commit)),
+    reviews: [],
     comments: [],
     labelEvents: [],
     ...overrides,

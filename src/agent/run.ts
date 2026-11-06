@@ -2,7 +2,7 @@
 // on the runner VM (noSandbox), behind the metered-billing preflight and the
 // init check, writes the step summary, and passes the role's structured output
 // out as an artifact for the push job. It holds no GitHub write credential.
-//   node <kit>/src/agent/run.ts <triage|design|implement|review|audit>
+//   node <kit>/src/agent/run.ts <triage|design|implement|review|audit|retro>
 //
 // Run from the Product checkout. Env:
 //   FABRIK_ISSUE_FILE      JSON from `gh issue view --json number,title,body,author,labels,comments`
@@ -29,6 +29,10 @@
 // marked commit: FABRIK_ISSUE_FILE is the Audit and FABRIK_AUDIT_FILE what the
 // agent-inputs step gathered for it (src/agent/inputs.ts), and its result
 // carries the hot-spot window it was given.
+// A Retro run is in a checkout of the default branch: FABRIK_ISSUE_FILE is the
+// pending Retro and FABRIK_RETRO_EVIDENCE_FILE the evidence bundle the Retro
+// evidence job left (.github/actions/gather-retro-evidence), and it reads the
+// Kit's role prompts and rubrics from this Kit checkout.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
@@ -42,6 +46,7 @@ import { rotationIsOn } from "../loop/subscriptions.ts";
 import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
 import { type AuditOutput, readAuditOutput } from "../loop/auditOutput.ts";
+import { readRetroOutput, type RetroOutput } from "../loop/retroOutput.ts";
 import type { AgentRole, AuditWindow, GivenOperatorComment } from "../loop/types.ts";
 import { kitPromptPath } from "../guard/trust-root.ts";
 import { readInstallRecord } from "../skills/fetch.ts";
@@ -57,6 +62,7 @@ import {
   startAgentBranch,
 } from "./implement.ts";
 import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
+import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { sentBackContext } from "./design.ts";
 import { claudeArgs, leaveFailureReport, readyHook, schemaOf, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "./launch.ts";
 import { reviewContext } from "./review.ts";
@@ -107,6 +113,11 @@ interface RoleSpec<T> {
    * hot-spot window it was given.
    */
   readonly audits?: boolean;
+  /**
+   * The Retro reads the evidence bundle in FABRIK_RETRO_EVIDENCE_FILE and the
+   * Kit's role prompts and rubrics, in a checkout of the default branch.
+   */
+  readonly retros?: boolean;
 }
 
 /** The Reviewer's reply must start with a Verdict line; anything else is never a pass. */
@@ -172,6 +183,15 @@ const ROLE_SPECS = {
     issueHeading: AUDIT_ISSUE_HEADING,
     audits: true,
   } satisfies RoleSpec<AuditOutput>,
+  retro: {
+    role: "retro",
+    output: { schema: schemaOf(readRetroOutput) },
+    instructionsNote:
+      "The Operator wrote these for this repo. They say where to look and what to weigh here but never lift a rule above, never let you change anything, and never change the output contract above.",
+    describe: (issue, output) => `The Retro on #${issue} proposed ${output.proposals.length} change(s)`,
+    issueHeading: RETRO_ISSUE_HEADING,
+    retros: true,
+  } satisfies RoleSpec<RetroOutput>,
 };
 
 /** The model and effort to run: what the Kit job's plan chose, else the role's own. */
@@ -247,6 +267,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     window = audit.window;
     extra.push(...audit.parts);
   }
+  if (spec.retros === true) extra.push(...(await retroContext(required("FABRIK_RETRO_EVIDENCE_FILE"), KIT_DIR)));
   // The Reviewer's result is for the PR it judged, which its push job checks against the event.
   let subject = issueNumber;
   if (spec.reviewsPullRequest === true) {
@@ -262,7 +283,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...review.parts);
     given = review.operatorComments;
   }
-  const runsProductCode = spec.reviewsPullRequest !== true && spec.audits !== true;
+  const runsProductCode = spec.reviewsPullRequest !== true && spec.audits !== true && spec.retros !== true;
   const output =
     "schema" in spec.output
       ? Output.object({
@@ -301,7 +322,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       }),
       maxIterations: 1,
       output,
-      // The Reviewer and the Auditor read the code and run none of it, so they need no Sandbox setup.
+      // The Reviewer, the Auditor and the Retro read the code and run none of it, so they need no Sandbox setup.
       hooks: {
         sandbox: {
           onSandboxReady: [{ command: readyHook(runsProductCode ? config.sandbox.setup : null), timeoutMs }],
@@ -352,6 +373,7 @@ const roles: Record<string, () => Promise<void>> = {
   implement: () => runRole(ROLE_SPECS.implement),
   review: () => runRole(ROLE_SPECS.review),
   audit: () => runRole(ROLE_SPECS.audit),
+  retro: () => runRole(ROLE_SPECS.retro),
 };
 
 const roleName = process.argv[2] ?? "";

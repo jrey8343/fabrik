@@ -4,7 +4,7 @@
 // assignee, no mention.
 import { shortSha } from "../skills/lock.ts";
 import { isPendingAudit, TOP_RECOMMENDATION_HEADING } from "./audit.ts";
-import { failAudit } from "./auditFailure.ts";
+import { failWeekly } from "./weeklyRuns.ts";
 import { type AuditCandidate, type AuditOutput, parseAuditOutput } from "./auditOutput.ts";
 import { newIssueUrl } from "./followUps.ts";
 import { auditMarker, auditMarksIn, escapeMarker, fromAuditLine } from "./markers.ts";
@@ -33,7 +33,7 @@ export function landAudit(event: AuditFinished, context: IssueContext, named: re
     // The failed Audit's one line may quote the reply, so it mentions nobody and stays one line.
     const errors = withoutMentions(parsed.errors.join("; ").replace(/\s+/g, " "));
     const how = `its reply broke the Audit output contract (${errors})`;
-    return failAudit(context, { failure: "missing-output", how, runUrl: event.runUrl, resetsAt: null });
+    return failWeekly("audit", context, { failure: "missing-output", how, runUrl: event.runUrl, resetsAt: null });
   }
   const output = silenced(parsed.output);
   // A clean week still leaves an Audit on the record, which closes itself.

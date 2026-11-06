@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, AUDITED_SHA, auditBody, kitConfig, notificationsOf, snapshotOf, tickSnapshot } from "../__fixtures__/snapshots.ts";
+import {
+  anIssue,
+  AUDITED_SHA,
+  auditBody,
+  kitConfig,
+  notificationsOf,
+  RETRO_WINDOW_END,
+  retroBody,
+  snapshotOf,
+  tickSnapshot,
+} from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AgentRole, HeldTargetSnapshot, KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
@@ -141,6 +151,25 @@ describe("A held run whose issue or PR has closed, or moved on in the Loop, at t
       reason: "GitHub no longer has #7",
     });
     expect(labelsAdded(plan)).toEqual([]);
+  });
+});
+
+// A Retro run is never held (src/loop/failures.ts): the tick can't start one,
+// so its Retro fails instead, and the tick opens the next.
+describe("A held marker naming a Retro run, at the reset", () => {
+  it("is dropped, even on the App's pending Retro, and starts no run", () => {
+    const retro = anIssueHeld(120, ["fabrik:retro"], { byApp: true, body: retroBody(RETRO_WINDOW_END, "pending") });
+    const kitIssues = [weeklyLimitIssue(40, "Claude token 2", EARLIER, [held(120, "retro", null)], true)];
+
+    const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: [retro] }), TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "drop-held-run",
+      role: "retro",
+      issue: 120,
+      reason: expect.stringContaining("never holds a Retro run"),
+    });
+    expect(actionsOf(plan).filter((action) => action.kind === "start-agent-run")).toEqual([]);
   });
 });
 

@@ -34,6 +34,7 @@ export function heldMarker({ issue, role, label, order = null }: HeldRun): strin
  * The label whose adding starts each role's run again: its trigger label, and
  * agent:design for a Design-session turn, whichever round it was
  * (src/loop/design.ts). An Auditor run has none: its pending Audit is all it needs.
+ * Nor has a Retro run, which is never held: its Retro fails instead (src/loop/failures.ts).
  */
 export const RESUME_LABELS = {
   triage: NEEDS_TRIAGE,
@@ -41,6 +42,7 @@ export const RESUME_LABELS = {
   implement: DISPATCH_LABEL,
   review: REVIEW_LABEL,
   audit: null,
+  retro: null,
 } as const satisfies Readonly<Record<AgentRole, Label | null>>;
 
 /** How the Kit names each role's run, as in "The Triage run on #7", in its comments and step summaries alike. */
@@ -50,6 +52,7 @@ export const RUN_NAMES: Readonly<Record<AgentRole, string>> = {
   implement: "Implement",
   review: "Review",
   audit: "Audit",
+  retro: "Retro",
 };
 
 /**

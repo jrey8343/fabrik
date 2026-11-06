@@ -21,6 +21,11 @@
 # (`score`) runs the judge with no tools and no write credential, and the
 # score-record job, the judge run's own push job, writes what it came to.
 #
+# A Retro run (#151) is two jobs before the push job. The Retro evidence job,
+# shaped like the push job, reads this repo's paths in fabrik-runs with a
+# Contents-read token and runs no agent and no Product code (ADR-0009's
+# addendum). The Retro job then runs the agent on that evidence, read-only.
+#
 # The steps these jobs share are composite actions in .github/actions/, used
 # from the Kit's own checkout at kit/: prepare-agent readies an agent job, and
 # run-loop runs the Loop as the Fabrik App.
@@ -62,6 +67,8 @@ jobs:
       implement-job-timeout-minutes: ${{ steps.route.outputs.implement-job-timeout-minutes }}
       review-timeout-minutes: ${{ steps.route.outputs.review-timeout-minutes }}
       audit-timeout-minutes: ${{ steps.route.outputs.audit-timeout-minutes }}
+      # Both of a Retro run's jobs, its evidence job and its Retro job, run within it.
+      retro-timeout-minutes: ${{ steps.route.outputs.retro-timeout-minutes }}
       dispatch-timeout-minutes: ${{ steps.route.outputs.dispatch-timeout-minutes }}
       # For a Review or a retry: the agent PR, and the Ticket its branch was cut for.
       # For a first Implement run: its Ticket, with no PR.
@@ -910,6 +917,88 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # A Retro run's first job (#151), which gathers the pending Retro's evidence
+  # from this repo's paths in fabrik-runs and its GitHub facts. Shaped like the
+  # push job (ADR-0009's addendum): it checks out only the Kit, runs no agent
+  # and no Product code, and through the push service account mints only
+  # read-only Fabrik App tokens, Contents read on fabrik-runs among them. It
+  # passes the evidence out as fabrik-retro-evidence, for the Retro job and
+  # the push job. When it fails, the push job fails the Retro.
+  retro-evidence:
+    name: Retro evidence
+    needs: kit
+    if: needs.kit.outputs.route == 'retro'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.retro-timeout-minutes) }}
+    permissions: {}
+    outputs:
+      # Read by the push job: a failed 1Password step means the evidence was never gathered.
+      secrets-step: ${{ steps.evidence.outputs.secrets-step }}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Gather the Retro's evidence
+        id: evidence
+        uses: ./kit/.github/actions/gather-retro-evidence
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+
+  # The Retro (#151), a Retro run's second job. Read-only, like the Auditor: a
+  # checkout of the default branch, no GitHub write credential, and only the
+  # agent service account. It gets the Base skills alone, runs none of the
+  # code, reads the evidence job's bundle, and passes its proposals out as an
+  # artifact for the push job to fill the Retro in with.
+  retro:
+    name: Retro
+    needs: [kit, retro-evidence]
+    if: needs.kit.outputs.route == 'retro'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.retro-timeout-minutes) }}
+    # One Retro run per repo at a time.
+    concurrency:
+      group: fabrik-retro
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      # Read by the push job: a failed 1Password step means the agent never started.
+      secrets-step: ${{ steps.retro.outputs.secrets-step }}
+      # For its Run record: the model and effort the runner passed, and the commit the run started from.
+      model: ${{ steps.retro.outputs.model }}
+      effort: ${{ steps.retro.outputs.effort }}
+      base-sha: ${{ steps.retro.outputs.base-sha }}
+    steps:
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # Checks out the default branch, takes the evidence and runs the Retro;
+      # it leaves fabrik-agent-result or fabrik-agent-failure, and always keeps
+      # fabrik-transcript-retro for the Run record.
+      - name: Run the Retro
+        id: retro
+        uses: ./kit/.github/actions/run-retro
+        with:
+          op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
+          github-token: ${{ github.token }}
+          # The Subscription whose Claude token the Retro runs on, chosen by the Kit job.
+          subscription: ${{ needs.kit.outputs.subscription }}
+          model: ${{ needs.kit.outputs.model }}
+          effort: ${{ needs.kit.outputs.effort }}
+
   # The push job, after whichever agent job the Kit job routed to, or straight
   # after the Kit job when it routed here. What it applies, src/main.ts decides
   # from how those jobs ended (src/kit/pushJob.ts): the agent job's result (for
@@ -919,7 +1008,7 @@ jobs:
   # after a cancelled agent job.
   push:
     name: Push
-    needs: [kit, triage, design, implement, review-checks, review, audit]
+    needs: [kit, triage, design, implement, review-checks, review, audit, retro-evidence, retro]
     if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -954,6 +1043,17 @@ jobs:
           pattern: fabrik-agent-*
           merge-multiple: true
           path: ${{ runner.temp }}/agent
+
+      # A Retro run's evidence, which src/main.ts reads the refs and the streak
+      # table the Kit checks the proposals against from, never from the agent's
+      # result. A failed evidence job leaves none, and its failure needs none.
+      - name: Take the Retro's evidence
+        if: needs.kit.outputs.route == 'retro'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fabrik-retro-evidence
+          path: ${{ runner.temp }}/retro-evidence
 
       - name: Run the Loop
         id: loop

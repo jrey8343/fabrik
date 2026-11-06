@@ -5,6 +5,8 @@ import {
   auditBody,
   AUDITED_SHA,
   kitConfig,
+  RETRO_WINDOW_END,
+  retroBody,
   snapshotOf,
   snapshotOfPullRequest,
 } from "../__fixtures__/snapshots.ts";
@@ -65,6 +67,16 @@ const STARTS: readonly (readonly [string, (kitIssues: KitIssueSnapshot[]) => [Lo
       { kind: "issue-opened", issue: 98 },
       snapshotOf(
         anIssue({ number: 98, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "pending") }),
+        { kitIssues },
+      ),
+    ],
+  ],
+  [
+    "Retro",
+    (kitIssues) => [
+      { kind: "issue-opened", issue: 120 },
+      snapshotOf(
+        anIssue({ number: 120, byApp: true, labels: ["fabrik:retro"], body: retroBody(RETRO_WINDOW_END, "pending") }),
         { kitIssues },
       ),
     ],

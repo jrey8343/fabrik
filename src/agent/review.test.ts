@@ -47,6 +47,23 @@ const pullRequest = {
 };
 
 describe("A Review's context", () => {
+  it("carries the repo's CODING_STANDARDS.md when it has one at its root", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(pullRequest);
+    await writeFile(join(productDir, "CODING_STANDARDS.md"), "# Coding standards\n\n- Name a test for the behaviour it checks.\n");
+
+    const text = (await reviewContext(productDir, pullRequestFile, specFile)).parts.join("\n");
+
+    expect(text).toContain("## CODING_STANDARDS.md\n# Coding standards\n\n- Name a test for the behaviour it checks.");
+  });
+
+  it("carries no Coding standards when the repo has no CODING_STANDARDS.md", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(pullRequest);
+
+    const text = (await reviewContext(productDir, pullRequestFile, specFile)).parts.join("\n");
+
+    expect(text).not.toContain("CODING_STANDARDS.md");
+  });
+
   it("sets out the Operator's comments in their own section after the PR, each under its id and place", async () => {
     const { productDir, pullRequestFile, specFile } = await inputs(pullRequest);
 

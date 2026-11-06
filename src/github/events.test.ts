@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { aRetroEvidenceInput } from "../__fixtures__/retroEvidence.ts";
+import { aMergedPullRequest, anEscapeMarkerIssue, aRunRecord, factsOf } from "../__fixtures__/weeklySummary.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import type { CaptureOutputs } from "../kit/pushJob.ts";
-import { agentFailureEventFrom, agentRunEventFrom, auditEventFrom, loopEventFrom } from "./events.ts";
+import { evidenceBundle, readEvidenceBundle } from "../kit/retroEvidence.ts";
+import { agentFailureEventFrom, agentRunEventFrom, auditEventFrom, loopEventFrom, retroEventFrom } from "./events.ts";
 
 describe("A push", () => {
   const push = (overrides: Record<string, unknown> = {}) => ({
@@ -231,6 +234,89 @@ describe("A finished Audit run", () => {
 
   it("isn't an agent-run-finished event", () => {
     expect(() => agentRunEventFrom(readAgentRunResult(artifact({ kind: "last-days", days: 30 })))).toThrow(/auditEventFrom/);
+  });
+});
+
+describe("A finished Retro run", () => {
+  const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
+  const REPO = "https://github.com/acme/shop";
+  const RESULT = JSON.stringify({ role: "retro", issue: 120, output: '{"proposals":[]}' });
+  const RECORD = "runs/owner/product/2026-11/1001-1-review.json";
+  const TRANSCRIPT = "transcripts/owner/product/2026-11/1001-1-review.jsonl.gz";
+
+  /**
+   * The evidence job's artifact, as the push job downloads it: the bundle for
+   * Retro 120's window, holding escape #80 against #50, whose passing Review
+   * run left its transcript, and #51, whose Implement run left none.
+   */
+  const artifact = JSON.stringify(
+    evidenceBundle(
+      aRetroEvidenceInput({
+        records: [
+          aRunRecord({ runId: 1001, role: "review", pullRequest: 50, verdict: "pass", endedAt: "2026-11-01T00:00:00Z", transcript: TRANSCRIPT }),
+          aRunRecord({ runId: 1002, role: "implement", issue: 8, pullRequest: 51, endedAt: "2026-11-02T00:00:00Z" }),
+        ],
+        facts: factsOf({
+          pullRequests: [
+            aMergedPullRequest("2026-11-02T00:00:00Z", { number: 50, ticket: 7 }),
+            aMergedPullRequest("2026-11-03T00:00:00Z", { number: 51, ticket: 8 }),
+          ],
+          escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #51 -->", { number: 80 })],
+        }),
+      }),
+    ),
+  );
+
+  it("carries the Retro's output, unparsed, with the bundle's window, refs and streak table, each record's transcript, this run and the Product repo", () => {
+    const event = retroEventFrom(readAgentRunResult(RESULT), readEvidenceBundle(artifact), RUN, REPO);
+
+    expect(event).toEqual({
+      kind: "retro-run-finished",
+      issue: 120,
+      output: '{"proposals":[]}',
+      evidence: {
+        window: { start: "2026-10-31T00:00:00.000Z", end: "2026-11-07T00:00:00.000Z" },
+        refs: [
+          { ref: "#80", kind: "escape" },
+          { ref: "#50", kind: "pull-request" },
+          { ref: "#7", kind: "issue" },
+          { ref: RECORD, kind: "record" },
+          { ref: "#51", kind: "pull-request" },
+          { ref: "#8", kind: "issue" },
+          { ref: "runs/owner/product/2026-11/1002-1-implement.json", kind: "record" },
+        ],
+        streakTable: [
+          expect.objectContaining({ ref: "#50", number: 50, escaped: true, reverted: false, requestChanges: false }),
+          expect.objectContaining({ ref: "#51", number: 51, escaped: true, reverted: false, requestChanges: false }),
+        ],
+        transcripts: { [RECORD]: TRANSCRIPT },
+      },
+      runUrl: RUN,
+      repoUrl: REPO,
+    });
+  });
+
+  it("refuses another role's result", () => {
+    const audit = readAgentRunResult(JSON.stringify({ role: "audit", issue: 97, output: "{}", window: { kind: "last-days", days: 30 } }));
+
+    expect(() => retroEventFrom(audit, readEvidenceBundle(artifact), RUN, REPO)).toThrow(/audit result/);
+  });
+
+  it("isn't an agent-run-finished event", () => {
+    expect(() => agentRunEventFrom(readAgentRunResult(RESULT))).toThrow(/retroEventFrom/);
+  });
+
+  it.each([
+    ["isn't JSON", "{"],
+    ["isn't an object", "[]"],
+    ["has no window", JSON.stringify({ ...JSON.parse(artifact), window: undefined })],
+    ["has a window that isn't two times", JSON.stringify({ ...JSON.parse(artifact), window: { start: "last week", end: "2026-11-07T00:00:00.000Z" } })],
+    ["has no streak table", JSON.stringify({ ...JSON.parse(artifact), streakTable: undefined })],
+    ["has a streak row with no flags", JSON.stringify({ ...JSON.parse(artifact), streakTable: [{ ref: "#50", number: 50 }] })],
+    ["has no history", JSON.stringify({ ...JSON.parse(artifact), history: undefined })],
+    ...["escapes", "feedback", "followUps", "lowScores", "sample"].map((part): [string, string] => [`has no ${part}`, JSON.stringify({ ...JSON.parse(artifact), [part]: undefined })]),
+  ])("refuses evidence that %s", (_, text) => {
+    expect(() => readEvidenceBundle(text)).toThrow(/evidence\.json/);
   });
 });
 

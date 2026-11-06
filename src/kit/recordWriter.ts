@@ -6,7 +6,7 @@
 import { Buffer } from "node:buffer";
 import { type GitHub, GitHubError } from "../github/client.ts";
 import type { RunIdentity, RunRecordFiles } from "./runRecord.ts";
-import { RUN_STORE, RUN_STORE_REPO } from "./runStore.ts";
+import { RUN_STORE, RUN_STORE_REPO, storeIsPrivate } from "./runStore.ts";
 
 /** The store's REST API: the writer reads its visibility and creates files. */
 export type StoreApi = Pick<GitHub, "rest">;
@@ -41,9 +41,7 @@ export async function writeStoreFiles(
   message: string,
   wait: (ms: number) => Promise<void>,
 ): Promise<StoreWrite> {
-  // Records hold Product repos' issues and transcripts their code: never in a store others can read.
-  const repo = (await store.rest("GET", `/repos/${RUN_STORE.owner}/${RUN_STORE.name}`)) as { private?: unknown };
-  if (repo.private !== true) return { kind: "public-store" };
+  if (!(await storeIsPrivate(store))) return { kind: "public-store" };
   const written: string[] = [];
   const existing: string[] = [];
   for (const { path, content } of files) {

@@ -40,10 +40,9 @@ export function heldWhileUsedUp(
   kitIssues: readonly KitIssueSnapshot[],
   config: Pick<KitConfig, "subscriptions">,
 ): Plan {
-  if (plan.kind !== "act" || !rotationIsOn(config) || freeSubscriptions(kitIssues, config).length > 0) return plan;
+  if (plan.kind !== "act" || !runsDueAreHeld(kitIssues, config)) return plan;
   if (!plan.actions.some((action) => action.kind === "start-agent-run")) return plan;
   const { until, on } = holdingOn(kitIssues);
-  // Every Subscription unusable through usage-credits issues alone: nowhere holds its marker, so the run starts.
   if (on === undefined) return plan;
   const { actions: planned } = plan;
   const starts = planned.filter((action) => action.kind === "start-agent-run");
@@ -60,6 +59,18 @@ export function heldWhileUsedUp(
     return holding(run, until).filter((step) => step.kind !== "remove-label" || !removed);
   });
   return { kind: "act", actions: [...actions, ...comments] };
+}
+
+/**
+ * Whether a run due now is held rather than started (heldWhileUsedUp): with
+ * rotation on, while every listed Subscription is used up and a weekly-limit
+ * issue is open to carry its held marker. With every Subscription unusable
+ * through usage-credits issues alone, nowhere holds its marker, so it starts.
+ * A Retro run is never held: its pending Retro fails instead
+ * (src/loop/weeklyRuns.ts).
+ */
+export function runsDueAreHeld(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): boolean {
+  return rotationIsOn(config) && freeSubscriptions(kitIssues, config).length === 0 && canHold(kitIssues);
 }
 
 /**

@@ -49,8 +49,15 @@ const KIT_RUBRICS = `${RUBRICS_DIR}/`;
  */
 const ROOT_FOLDERS = [".fabrik/", ".github/workflows/", "docs/product/"];
 
+/** The Product repo's Coding standards, which only the Reviewer reads, from the repo root. */
+export const CODING_STANDARDS_FILE = "CODING_STANDARDS.md";
+
+/** Files that are trust roots only at the repo root: the Coding standards the Reviewer judges against. */
+const ROOT_FILES = [CODING_STANDARDS_FILE];
+
 function isTrustRoot(path: string): boolean {
   if (KIT_PROMPTS.includes(path) || path.startsWith(KIT_RUBRICS)) return true;
+  if (ROOT_FILES.includes(path)) return true;
   if (ROOT_FOLDERS.some((folder) => path.startsWith(folder))) return true;
   const segments = path.split("/");
   const name = segments.at(-1) ?? "";

@@ -54,6 +54,22 @@ describe("What the push job applies", () => {
     });
   });
 
+  it("applies a Retro run's result for the event's issue, the pending Retro, once the Retro job succeeded", () => {
+    expect(pushJobInput(needs("retro", { "retro-evidence": ok(), retro: ok() }), 120)).toEqual({
+      kind: "agent-result",
+      role: "retro",
+      issue: 120,
+      pullRequest: null,
+      review: null,
+      startedBy: null,
+    });
+  });
+
+  // loop.yml's push job needs both of a Retro run's jobs (src/kit/workflows.test.ts), so this is only ever a miswiring.
+  it("applies nothing for a Retro route whose needs name neither of the Retro's jobs, rather than guess at a result", () => {
+    expect(pushJobInput(needs("retro"), 120)).toEqual({ kind: "nothing", reason: "the retro job ended unknown" });
+  });
+
   it("applies an Implement run's result for the Ticket the Kit job's plan named, with a retry's PR and a Request-changes run's review", () => {
     const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", review: "900" }), 50);
 
@@ -162,6 +178,22 @@ describe("What the push job applies", () => {
     expect(input).toEqual({ kind: "agent-failure", role: "audit", issue: 98, jobResult: result, secretsStep: "success" });
   });
 
+  it.each(["failure", "cancelled"])("gives a Retro run's failure on the pending Retro when the Retro job's result is %s", (result) => {
+    const input = pushJobInput(needs("retro", { "retro-evidence": ok(), retro: { result, outputs: { "secrets-step": "success" } } }), 120);
+
+    expect(input).toEqual({ kind: "agent-failure", role: "retro", issue: 120, jobResult: result, secretsStep: "success" });
+  });
+
+  // The Retro job never starts without its evidence, so the Retro would otherwise stay pending and block the next one.
+  it.each(["failure", "cancelled"])("gives a Retro run's failure on the pending Retro when the Retro evidence job's result is %s", (result) => {
+    const input = pushJobInput(
+      needs("retro", { "retro-evidence": { result, outputs: { "secrets-step": "failure" } }, retro: { result: "skipped", outputs: {} } }),
+      120,
+    );
+
+    expect(input).toEqual({ kind: "agent-failure", role: "retro", issue: 120, jobResult: result, secretsStep: "failure" });
+  });
+
   it("names the Ticket for a failed Implement or Review run, where the core finds its PR", () => {
     const implement = pushJobInput(needs("implement", { implement: { result: "failure", outputs: {} } }, { ticket: "7", "pull-request": "50" }), 50);
     const checks = pushJobInput(
@@ -220,6 +252,24 @@ describe("What the push job applies", () => {
       secretsStep: "success",
       subscription: "Claude token 2",
     });
+  });
+
+  it("names the Subscription a failed Retro run used, its evidence job's failure included", () => {
+    const evidenceFailed = pushJobInput(
+      needs(
+        "retro",
+        { "retro-evidence": { result: "failure", outputs: { "secrets-step": "success" } }, retro: { result: "skipped", outputs: {} } },
+        { subscription: "Claude token 2" },
+      ),
+      120,
+    );
+    const retroFailed = pushJobInput(
+      needs("retro", { "retro-evidence": ok(), retro: { result: "failure", outputs: { "secrets-step": "success" } } }, { subscription: "Claude token 2" }),
+      120,
+    );
+
+    expect(evidenceFailed).toMatchObject({ kind: "agent-failure", role: "retro", issue: 120, subscription: "Claude token 2" });
+    expect(retroFailed).toMatchObject({ kind: "agent-failure", role: "retro", issue: 120, subscription: "Claude token 2" });
   });
 
   it("does nothing when the Kit job routed nowhere, or failed", () => {

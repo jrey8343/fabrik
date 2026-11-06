@@ -9,11 +9,12 @@ import { type AgentBranchGit, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { applyPlan, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { GitHub, type Repo } from "./github/client.ts";
-import { agentFailureEventFrom, agentRunEventFrom, auditEventFrom, loopEventFrom, reviewEventFrom } from "./github/events.ts";
+import { agentFailureEventFrom, agentRunEventFrom, auditEventFrom, loopEventFrom, retroEventFrom, reviewEventFrom } from "./github/events.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
+import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
 import { planFor } from "./loop/rules.ts";
 import type { Action, KitConfig, LoopEvent, Plan } from "./loop/types.ts";
 
@@ -32,7 +33,8 @@ function describe(plan: Plan): string {
     case "fail":
       return `The run failed (${plan.failure} failure): ${plan.reason}`;
     case "act":
-      return plan.actions.map(describeAction).join("\n");
+      // Notes, such as what a Retro's landing dropped, change nothing on GitHub, so they follow the actions, set apart.
+      return [...plan.actions.map(describeAction), ...(plan.notes === undefined ? [] : ["", ...plan.notes.map((note) => `- ${note}`)])].join("\n");
   }
 }
 
@@ -163,6 +165,12 @@ async function agentResultEvent(
   if (result.issue !== input.issue) throw new Error(`The agent's result is for #${result.issue}, not #${input.issue}`);
   const source = `the ${result.role} run on #${result.issue}`;
   if (result.role === "audit") return { event: auditEventFrom(result, thisRunUrl(), thisRepoUrl()), source, branch: null };
+  if (result.role === "retro") {
+    // What the Retro was given comes from the evidence job's artifact, which the agent can't rewrite, never from its result.
+    const evidenceDir = process.env["FABRIK_RETRO_EVIDENCE_DIR"] || join(required("RUNNER_TEMP"), "retro-evidence");
+    const bundle = readEvidenceBundle(await readFile(join(evidenceDir, RETRO_EVIDENCE_FILE), "utf8"));
+    return { event: retroEventFrom(result, bundle, thisRunUrl(), thisRepoUrl()), source, branch: null };
+  }
   if (result.role !== "implement") {
     return { event: agentRunEventFrom(result, null, null, input.startedBy), source, branch: null };
   }
@@ -212,7 +220,7 @@ async function failedRunEvent(
   return { event, source: `the failed ${input.role} run on #${input.issue}` };
 }
 
-/** The Product repo's web address, which a pass's Follow-ups and an Audit's candidates open issues on. */
+/** The Product repo's web address, which a pass's Follow-ups and an Audit's candidates open issues on, and a Retro's evidence links to. */
 function thisRepoUrl(): string {
   return `${required("GITHUB_SERVER_URL")}/${required("GITHUB_REPOSITORY")}`;
 }
@@ -303,7 +311,11 @@ async function main(): Promise<void> {
   // The Fabrik App's bot login, so only the App's own issues count as its: a Design session keeps only their
   // Monitor marker, and only the App's Audits are read for their markers.
   const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
-  const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions);
+  // Only the scheduled tick's run-loop step sets it, once it has found the Fabrik App on fabrik-runs: a token
+  // that reads only the store's metadata, so the retro gate weighs whether the store is private.
+  const storeToken = process.env["FABRIK_STORE_METADATA_TOKEN"];
+  const store = storeToken === undefined || storeToken === "" ? null : new GitHub(storeToken, process.env["GITHUB_API_URL"]);
+  const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store);
   const plan = planFor(event, snapshot, config);
   const { preview } = await applyPlan(github, repo, plan, branch);
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.

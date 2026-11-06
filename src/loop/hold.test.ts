@@ -10,9 +10,11 @@ import {
   dispatchSnapshotOf,
   kitConfig,
   notificationsOf,
-  repoSnapshot,
+  RETRO_WINDOW_END,
+  retroBody,
   snapshotOf,
   snapshotOfPullRequest,
+  tickSnapshot,
 } from "../__fixtures__/snapshots.ts";
 import { agentRunIn } from "../github/apply.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
@@ -172,6 +174,28 @@ describe("A run due while every Subscription is used up, with rotation on", () =
     const actions = actionsOf(planFor(event, snapshot, TWO_SUBSCRIPTIONS));
 
     expect(actions.filter((action) => "issue" in action && action.issue === 98 && action.kind !== "hold-agent-run")).toEqual([]);
+  });
+
+  // The scheduled tick can't start a Retro run at the reset, so a Retro is never held: it fails, and the tick opens the next.
+  it("a Retro run due is never held: its pending Retro fails, closed as not planned, for the tick to try again", () => {
+    const retro = anIssue({ number: 120, byApp: true, labels: ["fabrik:retro"], body: retroBody(RETRO_WINDOW_END, "pending") });
+
+    const plan = planFor({ kind: "issue-opened", issue: 120 }, snapshotOf(retro, { kitIssues: BOTH_USED_UP }), TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(plan)).toEqual([
+      {
+        kind: "edit-issue-body",
+        issue: 120,
+        body: [
+          "The Retro's run failed: it was due to start while every listed Subscription was used up.",
+          "",
+          `<!-- fabrik:retro ${RETRO_WINDOW_END} -->`,
+          "<!-- fabrik:retro-failed -->",
+        ].join("\n"),
+      },
+      { kind: "close", issue: 120, reason: "not_planned" },
+    ]);
+    expect(notificationsOf(plan)).toEqual([]);
   });
 
   it("starts the run as usual while one Subscription is still free", () => {
@@ -357,12 +381,64 @@ describe("An Auditor run refused on its weekly limit, with rotation on", () => {
   });
 });
 
+// A Retro run has no trigger label to re-run it through, and the scheduled
+// tick can't start one at the reset, so it's never re-run or held: its Retro
+// fails, and the tick opens the next one.
+describe("A Retro run refused on its weekly limit, with rotation on", () => {
+  const retro = anIssue({ number: 120, byApp: true, labels: ["fabrik:retro"], body: retroBody(RETRO_WINDOW_END, "pending") });
+  const failed = [
+    {
+      kind: "edit-issue-body",
+      issue: 120,
+      body: `The Retro's run failed: it hit the weekly usage limit. [The run](${RUN})\n\n<!-- fabrik:retro ${RETRO_WINDOW_END} -->\n<!-- fabrik:retro-failed -->`,
+    },
+    { kind: "close", issue: 120, reason: "not_planned" },
+  ];
+
+  it.each([
+    ["while no other Subscription is free", [weeklyLimitIssue(40, "Claude token 2", EARLIER, false)]],
+    ["while another Subscription is free", []],
+  ])("fails its Retro %s, holding nothing, and its Subscription's weekly-limit issue names the run", (_, kitIssues) => {
+    const actions = actionsOf(planFor(refused("retro", 120), snapshotOf(retro, { kitIssues }), TWO_SUBSCRIPTIONS));
+
+    expect(actions.filter((action) => "issue" in action && action.issue === 120)).toEqual(failed);
+    expect(actions.filter((action) => action.kind === "hold-agent-run")).toEqual([]);
+    expect(JSON.stringify(actions)).not.toContain("fabrik:held");
+    expect(actions).toContainEqual(
+      expect.objectContaining({
+        kind: "open-issue",
+        labels: ["fabrik:weekly-limit"],
+        body: expect.stringContaining("<!-- fabrik:subscription Claude token -->"),
+      }),
+    );
+    expect(actions).toContainEqual(
+      expect.objectContaining({ kind: "open-issue", body: expect.stringContaining("The Retro run on #120") }),
+    );
+  });
+
+  it("a Retro that's no longer pending holds nothing, even while none is free, and its failed run changes nothing", () => {
+    const filled = anIssue({ number: 120, byApp: true, labels: ["fabrik:retro"], body: retroBody(RETRO_WINDOW_END, "filled") });
+    const other = weeklyLimitIssue(40, "Claude token 2", EARLIER, false);
+
+    const plan = planFor(refused("retro", 120), snapshotOf(filled, { kitIssues: [other] }), TWO_SUBSCRIPTIONS);
+
+    expect(plan.kind === "act" ? plan.actions.filter((action) => action.kind === "hold-agent-run") : []).toEqual([]);
+    expect(plan.kind === "act" ? plan.actions.filter((action) => "issue" in action && action.issue === 120) : []).toEqual([]);
+  });
+
+  it("with one Subscription listed, fails its Retro as V1 does", () => {
+    const actions = actionsOf(planFor(refused("retro", 120), snapshotOf(retro), kitConfig()));
+
+    expect(actions).toContainEqual({ kind: "close", issue: 120, reason: "not_planned" });
+  });
+});
+
 describe("The Audit due while a Subscription's weekly-limit issue is open, with rotation on", () => {
   const SUNDAY = "2026-11-08T04:00:00.000Z";
   const HEAD = "c0ffee5".padEnd(40, "0");
   const opened = (kitIssues: KitIssueSnapshot[], config = TWO_SUBSCRIPTIONS) =>
     actionsOf(
-      planFor({ kind: "scheduled-tick", now: SUNDAY }, repoSnapshot({ kitIssues, audit: { head: HEAD, issues: [] } }), config),
+      planFor({ kind: "scheduled-tick", now: SUNDAY }, tickSnapshot({ kitIssues, audit: { head: HEAD, issues: [] } }), config),
     ).filter((action) => action.kind === "open-issue");
 
   it("opens while another Subscription is free, so its Auditor run starts there", () => {

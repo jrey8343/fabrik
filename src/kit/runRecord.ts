@@ -14,13 +14,13 @@ import { infrastructureFailureOf } from "../loop/failures.ts";
 import { firstSubscription } from "../loop/subscriptions.ts";
 import type { AgentRole, InfrastructureFailure, KitConfig, Verdict } from "../loop/types.ts";
 import { parseVerdict } from "../loop/verdict.ts";
-import { type NeededJob, type Needs, pushJobInput } from "./pushJob.ts";
+import { type NeededJob, type Needs, pushJobInput, RETRO_EVIDENCE_JOB } from "./pushJob.ts";
 
 /** What the push job knows when the run ends. */
 export interface RunEnd {
   /** The jobs' `needs`, as `toJSON(needs)` gives it, the Kit job's outputs included. */
   readonly needs: Needs;
-  /** The Actions event's issue number, the subject of a Triage, Design or Auditor run. */
+  /** The Actions event's issue number, the subject of a Triage, Design, Auditor or Retro run. */
   readonly eventIssue: number | null;
   /** The Product repo, as `owner/name`. */
   readonly repo: string;
@@ -81,7 +81,8 @@ export interface RunRecord {
   readonly role: RunRecordRole;
   /**
    * The run's subject: the Ticket for Implement and Review, the event's issue
-   * for Triage and Design, the pending Audit for the Auditor, the scored run's for a judge run.
+   * for Triage and Design, the pending Audit for the Auditor, the pending Retro
+   * for the Retro, the scored run's for a judge run.
    */
   readonly issue: number;
   readonly pullRequest: number | null;
@@ -99,7 +100,8 @@ export interface RunRecord {
   readonly requestChanges: boolean;
   /**
    * The commit the run started from: an Implement branch's base, a Review's PR
-   * head, the event's commit for Triage and Design, the Audit's marked commit for the Auditor.
+   * head, the event's commit for Triage and Design, the Audit's marked commit
+   * for the Auditor, the default branch commit it checked out for the Retro.
    */
   readonly baseSha: string | null;
   readonly jobResult: string;
@@ -310,12 +312,12 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
 
 /**
  * The job whose failure the push job saw: for a Review, the Reviewer, unless
- * its checks job failed first and the Reviewer never ran.
+ * its checks job failed first and the Reviewer never ran; for a Retro, the
+ * Retro job, unless its evidence job failed first and the Retro never ran.
  */
 function failedJob(needs: Needs, role: AgentRole): NeededJob | undefined {
-  if (role !== "review") return needs[role];
-  const checks = needs["review-checks"];
-  return checks !== undefined && FAILED.includes(checks.result) ? checks : needs["review"];
+  const first = role === "review" ? needs["review-checks"] : role === "retro" ? needs[RETRO_EVIDENCE_JOB] : undefined;
+  return first !== undefined && FAILED.includes(first.result) ? first : needs[role];
 }
 
 const FAILED = ["failure", "cancelled"];
@@ -381,11 +383,15 @@ function readingOf(info: StreamMessage | null): RateLimitReading | null {
 
 /** Where a record and its transcript go, by the run's name in the store. */
 function pathsFor(run: StoredRun, withTranscript: boolean): { recordPath: string; transcriptPath: string | null } {
-  const name = runStoreName(run);
   return {
-    recordPath: `runs/${name}.json`,
-    transcriptPath: withTranscript ? `transcripts/${name}.jsonl.gz` : null,
+    recordPath: recordPathOf(run),
+    transcriptPath: withTranscript ? `transcripts/${runStoreName(run)}.jsonl.gz` : null,
   };
+}
+
+/** Where a run's record sits in the store. */
+export function recordPathOf(run: StoredRun): string {
+  return `runs/${runStoreName(run)}.json`;
 }
 
 /**

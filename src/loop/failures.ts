@@ -1,23 +1,25 @@
 // Failure notices: an agent run that fails for a reason outside the work is an
 // Infrastructure failure. It's never retried and never counts against a
 // Ticket's retries; the Operator gets one comment saying how to resume it. A
-// failed Auditor run goes to failAudit instead, which fails its Audit with no
+// failed Auditor or Retro run fails its Audit or Retro instead, with no
 // trigger to re-add, since the scheduled tick opens the next one
-// (src/loop/auditFailure.ts). With rotation on, a run refused on its
-// Subscription's weekly limit is re-run once, quietly, through its trigger
-// label while another Subscription is free, so the Operator hears nothing.
-// Once none is free it is held instead, with no failure comment, and so is a
-// refused Auditor run, whose Audit stays pending (src/loop/heldRun.ts). A run
-// killed for spending usage credits is re-run or held the same way, while its
-// Subscription's usage-credits issue keeps the Kit off that Subscription.
+// (src/loop/weeklyRuns.ts). With rotation on, a
+// run refused on its Subscription's weekly limit is re-run once, quietly,
+// through its trigger label while another Subscription is free, so the
+// Operator hears nothing. Once none is free it is held instead, with no
+// failure comment, and so is a refused Auditor run, whose Audit stays pending
+// (src/loop/heldRun.ts). A run killed for spending usage credits is re-run or
+// held the same way, while its Subscription's usage-credits issue keeps the
+// Kit off that Subscription. A Retro run is never re-run or held: the tick
+// can't start one at a reset, so its Retro fails, for the tick to try again.
 import { isPendingAudit } from "./audit.ts";
-import { failAudit } from "./auditFailure.ts";
 import { type HeldRun, heldInOrder, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
 import { canHold, heldAfterKill } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
 import type { InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
+import { failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
@@ -74,7 +76,7 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
  * null: a run of any role while no other Subscription is free, and an Auditor
  * run whatever is free, since it has no trigger label to re-run it through
  * and is resumed on its pending Audit. An Audit that's no longer pending holds
- * nothing.
+ * nothing, and a Retro run is never held.
  */
 function heldOnRefusal(
   run: FailedRun,
@@ -83,6 +85,8 @@ function heldOnRefusal(
   ranOn: RanOn,
 ): HeldRun | null {
   if (!ranOn.rotation || !RERUN_FAILURES.includes(failure)) return null;
+  // The tick can't start a Retro run at the reset, so its Retro fails, and the tick opens the next one.
+  if (run.role === "retro") return null;
   // A kill opens no weekly-limit issue, and only one can hold the run: with none open it fails as usual.
   if (failure === "usage-credits" && !canHold(kitIssues)) return null;
   // A killed Auditor run is held only while none is free: else its Audit fails, for the tick to try again.
@@ -120,10 +124,10 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     const holds = killed ? heldAfterKill(held, context.kitIssues) : holding(held, repoWide?.firstReset ?? null);
     return { kind: "act", actions: [...holds, ...(repoWide?.actions ?? [])] };
   }
-  // The scheduled tick tries a failed Audit again, so there's no trigger label to re-add.
-  if (run.role === "audit") {
+  // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.
+  if (isWeeklyRole(run.role)) {
     const how = howItFailed(failure, run, config);
-    return failAudit(context, {
+    return failWeekly(run.role, context, {
       failure,
       how,
       runUrl: run.runUrl,
