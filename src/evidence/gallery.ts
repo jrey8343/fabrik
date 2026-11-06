@@ -4,7 +4,7 @@
 // images and writes the page.
 import { Buffer } from "node:buffer";
 import { UI_VIEWPORTS } from "../kit/config.ts";
-import { type Capture, CAPTURE_SIDES, isServerError, ROUTE_REASON_WORDS, SIDE_WORDS } from "./uiEvidence.ts";
+import { type Capture, CAPTURE_SIDES, isServerError, ROUTE_REASON_WORDS, serverErrorWords, SIDE_WORDS } from "./uiEvidence.ts";
 
 /** A capture with its image's bytes, a PNG. */
 export interface GalleryShot extends Capture {
@@ -78,7 +78,7 @@ function routeSection({ route, reason }: GalleryShot, captures: readonly Gallery
 function figure({ route, viewport, side, status, png }: GalleryShot): string {
   const alt = escaped(`${route} at ${viewport}, ${SIDE_WORDS[side]}`);
   const source = `data:image/png;base64,${Buffer.from(png).toString("base64")}`;
-  const caption = isServerError(status) ? `${SIDE_WORDS[side]}: answered ${status}, so this is an error page, not the design` : SIDE_WORDS[side];
+  const caption = isServerError(status) ? `${SIDE_WORDS[side]}: ${serverErrorWords(String(status), "this is")}` : SIDE_WORDS[side];
   return `<figure${isServerError(status) ? ' class="error"' : ""}><figcaption>${caption}</figcaption><img alt="${alt}" src="${source}"></figure>`;
 }
 

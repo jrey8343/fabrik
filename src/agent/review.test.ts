@@ -304,7 +304,7 @@ describe("A Review's UI evidence", () => {
 
     expect(parts).toContain(
       [
-        "- `fabrik-ui-evidence/after-mobile-waitlist.png`: `/waitlist` at mobile width (390×844), After. It answered 503, so it shows a server's error page, not the design",
+        "- `fabrik-ui-evidence/after-mobile-waitlist.png`: `/waitlist` at mobile width (390×844), After. It answered 503, so it shows an error page, not the design",
         "- `fabrik-ui-evidence/after-desktop-waitlist.png`: `/waitlist` at desktop width (1440×900), After",
       ].join("\n"),
     );

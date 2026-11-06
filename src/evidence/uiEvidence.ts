@@ -1,10 +1,11 @@
 // The UI evidence module (#153): whether a pull request is UI, which routes to
 // capture and why, the capture result the Implement job's capture step
 // writes and every later reader shares, which of its screenshots the Reviewer
-// gets, and what the Operator reads of it on the PR: the evidence section, its
-// marker, which the PR snapshot reads back, and withoutEvidence, which keeps
-// both out of agent text. The gallery is beside it (src/evidence/gallery.ts).
-// Pure, no I/O.
+// gets and what its prompt says of them (src/agent/review.ts only reads the
+// files in), and what the Operator reads of it on the PR: the evidence
+// section, its marker, which the PR snapshot reads back, and withoutEvidence,
+// which keeps both out of agent text. The gallery is beside it
+// (src/evidence/gallery.ts). Pure, no I/O.
 import { posix } from "node:path";
 import { REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
@@ -253,6 +254,65 @@ export function reviewerImages(captures: readonly Capture[]): readonly Capture[]
     .slice(0, REVIEWER_IMAGE_CAP);
 }
 
+/** Where in its working directory a UI PR's Reviewer finds the screenshots it's given. */
+export const REVIEWER_IMAGES_DIR = "fabrik-ui-evidence";
+
+const UI_PR = "This pull request changes the Product repo's UI";
+
+/**
+ * The UI evidence block of a UI PR's review prompt: the screenshots it was
+ * given, each by route, viewport and side, and what to judge in them; or,
+ * when capture failed or left no result, why, and to review the code as
+ * usual. `result` is the capture result the Review job downloaded, or null
+ * when it read none, and `given` the captures whose screenshots are in
+ * REVIEWER_IMAGES_DIR.
+ */
+export function reviewerEvidenceBlock(result: CaptureResult | null, given: readonly Capture[]): string[] {
+  if (result === null || given.length === 0) {
+    const failure = result?.outcome === "failed" ? result.reason : "no-result";
+    return ["## UI evidence", `${UI_PR}, but ${reviewerFailureWords(failure)}. There are no screenshots, so review the code as usual.`];
+  }
+  const at = `this branch at \`${result.headSha.slice(0, 7)}\``;
+  const opening =
+    result.outcome === "captured"
+      ? `${UI_PR}, so the Kit captured screenshots of ${at} once the Implementer's run had ended.`
+      : `${UI_PR}, but ${reviewerFailureWords(result.reason)}. Review the code as usual, and judge the ${screenshots(given.length)} it took first, of ${at}, as below.`;
+  const where = given.length === 1 ? "It's" : `These ${given.length} are`;
+  const of = given.length < result.captures.length ? ` They're the ${given.length} that matter most of the ${result.captures.length} it took.` : "";
+  return [
+    "## UI evidence",
+    [
+      opening,
+      "After is this branch, served in the Implement run's Sandbox; Before, where there is one, is the production site.",
+      "Each shows one screen of the page from its top, not the whole page, so content below its bottom edge is out of view rather than cut off.",
+      `${where} in \`${REVIEWER_IMAGES_DIR}/\` in your working directory: open each with your Read tool to see it.${of}`,
+    ].join(" "),
+    given.map(reviewerImageLine).join("\n"),
+    "Judge them as part of the PR:",
+    [
+      "- Do they show what the Ticket asked for?",
+      "- Is there plain breakage: a blank or error page, content spilling over at mobile width, or overlapping or cut-off content?",
+      "- Against Before, where there is one, has any part of the page the Ticket didn't touch regressed?",
+    ].join("\n"),
+    "Taste is the Operator's: don't fail the PR over a design choice the Ticket didn't settle. A visual failure is an `execution-flaw` like any other: name the route and the screenshot in the finding, so the Implementer knows what to fix.",
+  ];
+}
+
+/** Why the Reviewer has no full set of screenshots: capture failed, or left none its Review could read. */
+function reviewerFailureWords(reason: CaptureFailure): string {
+  return reason === "no-result"
+    ? "capture left no result this Review could read: the Implement run kept none, or they have expired"
+    : `capture failed because ${FAILURE_WORDS[reason]}`;
+}
+
+/** One screenshot the Reviewer is given: its file, then its route (agent text, so as code on one line), viewport and side. */
+function reviewerImageLine({ image, route, viewport, side, status }: Capture): string {
+  const size = UI_VIEWPORTS.find(({ name }) => name === viewport);
+  const width = size === undefined ? "" : ` (${size.width}×${size.height})`;
+  const error = isServerError(status) ? `. It ${serverErrorWords(String(status), "it shows")}` : "";
+  return `- \`${REVIEWER_IMAGES_DIR}/${image}\`: ${code(route)} at ${viewport} width${width}, ${SIDE_WORDS[side]}${error}`;
+}
+
 /** How the evidence section names why each route was captured. */
 export const ROUTE_REASON_WORDS: Readonly<Record<RouteReason, string>> = {
   ticket: "named by the Ticket",
@@ -343,12 +403,21 @@ function routeLine({ route, reason }: ChosenRoute, captures: readonly Capture[])
   if (errors.length === 0) return line;
   const answered = errors.map(({ status, side, viewport }) => `${status} for ${SIDE_WORDS[side]} at ${viewport}`);
   const shows = errors.length === 1 ? "that screenshot shows" : "those screenshots show";
-  return `${line}. **Server error:** it answered ${spelled(answered, "and")}, so ${shows} an error page, not the design.`;
+  return `${line}. **Server error:** it ${serverErrorWords(spelled(answered, "and"), shows)}.`;
 }
 
 /** Whether a page answered with a server error, so its screenshot is of an error page. */
 export function isServerError(status: number): boolean {
   return status >= 500 && status <= 599;
+}
+
+/**
+ * What a screenshot of a page that answered a server error shows, in the
+ * words the evidence section, the gallery and the Reviewer's block share:
+ * the page `answered` its status, so what `shows` it is of an error page.
+ */
+export function serverErrorWords(answered: string, shows: string): string {
+  return `answered ${answered}, so ${shows} an error page, not the design`;
 }
 
 /** How the evidence names each side. */
