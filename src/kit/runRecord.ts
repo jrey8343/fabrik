@@ -2,7 +2,9 @@
 // run ends, the one schema 4 record of that run, and the paths it and its
 // transcript take in the store, or no record when no agent run ended. A judge
 // run, scoring a finished run, gets a record too, in role `score`, from what
-// the score-record job knows when it ends. The stream is read through the one
+// the score-record job knows when it ends, and so does a Replay arm's
+// Implement or Review run (#156), from what the replay-record job knows, at
+// paths that name its arm. The stream is read through the one
 // stream-json reader (src/agent/stream.ts). The paths are inside the store,
 // RUN_STORE (src/kit/runStore.ts). A record read back from the store is read
 // at the current schema: a schema 1 record, written before runs were given a
@@ -83,6 +85,12 @@ export interface ReplayRun {
   readonly arm: ReplayArm;
   /** The replayed Ticket, the run's subject. */
   readonly ticket: number;
+  /**
+   * For a `kit` variant only, the candidate Kit sha whose prompts and Base
+   * skills the arm loaded over the pinned release, which the record's own
+   * `kitSha` still names. null for a baseline and a model or effort variant.
+   */
+  readonly candidateSha: string | null;
 }
 
 /** One AFK agent run, schema 4. */
@@ -241,8 +249,8 @@ export interface JudgeRunEnd {
 
 /**
  * The judge run's record, in role `score`, and its paths beside the scored
- * run's. Its subject is the scored run's; what ran, how it ended, the effort
- * it spent, its cost and its weekly-limit reading are its own.
+ * run's. Its subject and Replay are the scored run's; what ran, how it ended,
+ * the effort it spent, its cost and its weekly-limit reading are its own.
  */
 export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
   const { scored, judge } = end;
@@ -264,7 +272,8 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     stepUp: false,
     requestChanges: false,
     prototype: false,
-    replay: null,
+    // A Replay arm's judge run is the arm's too, so its cost counts as the Replay's.
+    replay: scored.replay,
     baseSha: null,
     jobResult: judge.result,
     infrastructureFailure: failureOf(judge.result, judge.outputs["secrets-step"], end.failureReport),

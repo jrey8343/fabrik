@@ -326,7 +326,7 @@ describe("The score file", () => {
     });
 
     describe("for a Replay arm's run, with the arm after the role, so the two arms of one workflow run each get their own", () => {
-      const armRun = (arm: ReplayArm) => implementRun({ replay: { issue: 300, arm, ticket: 7 } });
+      const armRun = (arm: ReplayArm) => implementRun({ replay: { issue: 300, arm, ticket: 7, candidateSha: null } });
       const scoreOf = (arm: ReplayArm) =>
         scoreFileFor({ scored: armRun(arm), scoredPath: `runs/owner/product/2026-11/1007-1-implement-replay-${arm}.json`, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: judged });
 
@@ -342,7 +342,7 @@ describe("The score file", () => {
           runId: 1007,
           role: "implement",
           issue: 7,
-          replay: { issue: 300, arm: "variant", ticket: 7 },
+          replay: { issue: 300, arm: "variant", ticket: 7, candidateSha: null },
           record: "runs/owner/product/2026-11/1007-1-implement-replay-variant.json",
         });
       });

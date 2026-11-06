@@ -8,6 +8,7 @@ import {
   type JudgeRunEnd,
   judgeRunRecordFor,
   type ReplayRunEnd,
+  type ReplayRun,
   readRunRecord,
   replayRunRecordFor,
   type RunEnd,
@@ -993,7 +994,7 @@ describe("A Replay arm's record", () => {
   /** What the replay-record job knows when the baseline arm's passing Implement run, replaying Ticket 7, ends, with whatever the case changes. */
   function replayRunEnd(overrides: Partial<ReplayRunEnd> = {}): ReplayRunEnd {
     return {
-      replay: { issue: REPLAY_ISSUE, arm: "baseline", ticket: TICKET },
+      replay: { issue: REPLAY_ISSUE, arm: "baseline", ticket: TICKET, candidateSha: null },
       role: "implement",
       pullRequest: MERGED_PR,
       baseSha: BASE_SHA,
@@ -1044,6 +1045,155 @@ describe("A Replay arm's record", () => {
     expect(files.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-implement-replay-baseline.json");
     expect(files.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-1-implement-replay-baseline.jsonl.gz");
     expect(files.record.transcript).toBe(files.transcriptPath);
+  });
+
+  describe("names the candidate Kit sha only for a `kit` variant", () => {
+    const CANDIDATE_SHA = "e".repeat(40);
+
+    it("a `kit` variant's names the candidate whose prompts and Base skills it loaded, while its kitSha stays the pinned release", () => {
+      const record = replayRunRecordFor(replayRunEnd({ replay: { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: CANDIDATE_SHA } })).record;
+
+      expect(record.kitSha).toBe(KIT_SHA);
+      expect(record.replay).toEqual({ issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: CANDIDATE_SHA });
+    });
+
+    it("a baseline's, and a model or effort variant's, names none", () => {
+      const baseline = replayRunRecordFor(replayRunEnd()).record;
+      const variant = replayRunRecordFor(
+        replayRunEnd({
+          replay: { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: null },
+          job: job("success", { model: "claude-sonnet-5-5" }),
+          settings: { model: "claude-sonnet-5-5", effort: "high" },
+        }),
+      ).record;
+
+      expect(baseline.replay).toEqual({ issue: REPLAY_ISSUE, arm: "baseline", ticket: TICKET, candidateSha: null });
+      expect(variant).toMatchObject({ model: "claude-sonnet-5-5", replay: { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: null } });
+    });
+  });
+
+  it("the baseline's and the variant's Implement and Review runs, all in one workflow run, each get their own record and transcript paths", () => {
+    const variant = { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: null } as const;
+    const runs = [
+      replayRunRecordFor(replayRunEnd()),
+      replayRunRecordFor(replayRunEnd({ replay: variant })),
+      replayRunRecordFor(replayRunEnd({ role: "review", agentResult: agentResult("review", TICKET, "verdict: pass\n\nFine.") })),
+      replayRunRecordFor(replayRunEnd({ role: "review", replay: variant, agentResult: agentResult("review", TICKET, "verdict: pass\n\nFine.") })),
+    ];
+
+    expect(runs.map((files) => files.recordPath)).toEqual([
+      "runs/acme/widgets/2026-11/9001-1-implement-replay-baseline.json",
+      "runs/acme/widgets/2026-11/9001-1-implement-replay-variant.json",
+      "runs/acme/widgets/2026-11/9001-1-review-replay-baseline.json",
+      "runs/acme/widgets/2026-11/9001-1-review-replay-variant.json",
+    ]);
+    expect(runs.map((files) => files.transcriptPath)).toEqual([
+      "transcripts/acme/widgets/2026-11/9001-1-implement-replay-baseline.jsonl.gz",
+      "transcripts/acme/widgets/2026-11/9001-1-implement-replay-variant.jsonl.gz",
+      "transcripts/acme/widgets/2026-11/9001-1-review-replay-baseline.jsonl.gz",
+      "transcripts/acme/widgets/2026-11/9001-1-review-replay-variant.jsonl.gz",
+    ]);
+  });
+
+  describe("a Review arm's run reviews the arm's diff against the Ticket, with no PR of its own", () => {
+    const review = (verdict: string) =>
+      replayRunRecordFor(replayRunEnd({ role: "review", agentResult: agentResult("review", TICKET, `verdict: ${verdict}\n\nFindings.`) })).record;
+
+    it.each(["pass", "execution-flaw", "design-flaw"])("carries its %s Verdict, on the Ticket and its merged PR, from the Ticket's base", (verdict) => {
+      expect(review(verdict)).toMatchObject({
+        role: "review",
+        issue: TICKET,
+        pullRequest: MERGED_PR,
+        baseSha: BASE_SHA,
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        verdict,
+      });
+    });
+
+    it("an Implement arm's carries no Verdict, whatever its output says", () => {
+      const record = replayRunRecordFor(replayRunEnd({ agentResult: agentResult("implement", TICKET, "verdict: pass") })).record;
+
+      expect(record.verdict).toBeNull();
+    });
+  });
+
+  describe("an arm's run that failed is recorded as its Infrastructure failure", () => {
+    it("a failed 1Password load is recorded on the arm's model and effort, the agent never having started", () => {
+      const files = replayRunRecordFor(
+        replayRunEnd({
+          job: job("failure", { "secrets-step": "failure", "base-sha": "", model: "", effort: "" }),
+          settings: { model: "claude-sonnet-5-5", effort: "low" },
+          agentResult: null,
+          transcript: null,
+        }),
+      );
+
+      expect(files.record).toMatchObject({
+        role: "implement",
+        model: "claude-sonnet-5-5",
+        effort: "low",
+        jobResult: "failure",
+        infrastructureFailure: "unreachable-1password",
+        turns: null,
+        totalCostUsd: null,
+        transcript: null,
+      });
+      expect(files.transcriptPath).toBeNull();
+      expect(files.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-implement-replay-baseline.json");
+    });
+
+    it("a run refused on its weekly limit shows that failure and the Subscription it was refused on", () => {
+      const record = replayRunRecordFor(
+        replayRunEnd({
+          job: job("failure"),
+          agentResult: null,
+          failureReport: JSON.stringify({ failure: "weekly-limit", detail: "", resetsAt: "2026-11-09T04:00:00.000Z" }),
+          transcript: [init],
+        }),
+      ).record;
+
+      expect(record).toMatchObject({ jobResult: "failure", infrastructureFailure: "weekly-limit", subscription: "Claude token 2" });
+    });
+
+    it("a Review timed out by its timeout-minutes gets a record with no Verdict and no result fields", () => {
+      const record = replayRunRecordFor(replayRunEnd({ role: "review", job: job("cancelled"), agentResult: null, transcript: [init] })).record;
+
+      expect(record).toMatchObject({ role: "review", jobResult: "cancelled", infrastructureFailure: "timeout", verdict: null, durationMs: null, turns: null });
+    });
+  });
+
+  it("reads back from the store as written, its Replay included", () => {
+    const written = replayRunRecordFor(replayRunEnd({ replay: { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: "e".repeat(40) } })).record;
+
+    expect(readRunRecord(JSON.parse(JSON.stringify(written)), ["Claude token"])).toEqual(written);
+  });
+
+  it("a judge run scoring an arm's Implement run is that arm's too: its record names the Replay and sits at the arm's paths", () => {
+    const variant = { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET, candidateSha: null } as const;
+    const judged = (replay: ReplayRun) =>
+      judgeRunRecordFor({
+        scored: replayRunRecordFor(replayRunEnd({ replay })).record,
+        judge: { result: "success", outputs: { "secrets-step": "success", model: "claude-sonnet-5-5", effort: "" } },
+        judgeModel: "claude-sonnet-5-5",
+        kitSha: KIT_SHA,
+        endedAt: "2026-11-05T10:04:00Z",
+        failureReport: null,
+        transcript: [init, result()],
+      });
+    const baseline = judged({ ...variant, arm: "baseline" });
+    const variantJudge = judged(variant);
+
+    expect(variantJudge.record).toMatchObject({ role: "score", issue: TICKET, pullRequest: MERGED_PR, replay: variant });
+    expect([baseline.recordPath, variantJudge.recordPath]).toEqual([
+      "runs/acme/widgets/2026-11/9001-1-score-replay-baseline.json",
+      "runs/acme/widgets/2026-11/9001-1-score-replay-variant.json",
+    ]);
+    expect([baseline.transcriptPath, variantJudge.transcriptPath]).toEqual([
+      "transcripts/acme/widgets/2026-11/9001-1-score-replay-baseline.jsonl.gz",
+      "transcripts/acme/widgets/2026-11/9001-1-score-replay-variant.jsonl.gz",
+    ]);
   });
 });
 
