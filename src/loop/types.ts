@@ -806,6 +806,13 @@ export type Action =
        * which the Review job downloads for the Reviewer. A PR with no marker gets none.
        */
       readonly evidence?: EvidenceMarker;
+      /**
+       * For a Design session's prototype turn (#155): the pending prototype
+       * request it builds, and the Operator's reply that started the turn
+       * which asked for it. Its run is role `design`, on the Design role's
+       * model and effort, within the Implement role's timeout.
+       */
+      readonly prototype?: PrototypeRequestMarker;
       readonly model: string;
       readonly effort: string | null;
       readonly timeoutMinutes: number;
