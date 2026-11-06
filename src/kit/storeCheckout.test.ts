@@ -22,16 +22,23 @@ describe("Reading the store's checkout", () => {
   const record = aRecordWithTranscript({ repo: "owner/product", runId: 1001, role: "review", endedAt: "2026-11-01T00:00:00Z" });
   const scorePath = "scores/owner/product/2026-11/1001-1-implement-abc123.json";
 
-  it("reads every Run record at the current schema and every schema 1 score file, each by its path in the store", async () => {
+  it("reads every Run record and score file at the current schema, each by its path in the store", async () => {
     const store = await aCheckoutWith({
       [recordPathOf(record)]: JSON.stringify(record),
       "runs/owner/product/2026-11/1002-1-triage.json": JSON.stringify({ ...record, schema: 5 }),
       [scorePath]: JSON.stringify(aScoreFile()),
-      "scores/owner/product/2026-11/1003-1-implement-def456.json": JSON.stringify({ ...aScoreFile(), schema: 2 }),
+      "scores/owner/product/2026-11/1003-1-implement-def456.json": JSON.stringify({ ...aScoreFile(), schema: 3 }),
     });
 
     expect(await readStoreRunRecords(store, ["Claude token", "Claude token 2"])).toEqual({ [recordPathOf(record)]: record });
     expect(await readStoreScoreFiles(store)).toEqual({ [scorePath]: aScoreFile() });
+  });
+
+  it("reads a schema 1 score file, written before Replays, as no replay's, at the current schema", async () => {
+    const { replay: _, ...older } = aScoreFile();
+    const store = await aCheckoutWith({ [scorePath]: JSON.stringify({ ...older, schema: 1 }) });
+
+    expect(await readStoreScoreFiles(store)).toEqual({ [scorePath]: { ...aScoreFile(), schema: 2, replay: null } });
   });
 
   it("reads a schema 1 Run record, written before runs were given a Subscription, as on the first listed one", async () => {

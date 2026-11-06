@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { isObject } from "../agent/stream.ts";
 import { type Rubric, rubricSet } from "./rubrics.ts";
-import { type RateLimitReading, type RunRecord, type RunRecordRole, runStoreName } from "./runRecord.ts";
+import { type RateLimitReading, type ReplayRun, type RunRecord, type RunRecordRole, runStoreName } from "./runRecord.ts";
 
 /**
  * The share of first Implement runs scored: one in four. A run is in the
@@ -152,9 +152,12 @@ export interface ScoreEntry {
   readonly rationale: string;
 }
 
-/** The scores of one picked run under one rubric set, or why it has none; schema 1. */
+/** The schema a score file is written at: 2 added `replay`. */
+export const SCORE_FILE_SCHEMA = 2;
+
+/** The scores of one picked run under one rubric set, or why it has none; schema 2. */
 export interface ScoreFile {
-  readonly schema: 1;
+  readonly schema: typeof SCORE_FILE_SCHEMA;
   readonly kitSha: string;
   readonly repo: string;
   readonly runId: number;
@@ -162,6 +165,8 @@ export interface ScoreFile {
   readonly role: RunRecordRole;
   readonly issue: number;
   readonly pullRequest: number | null;
+  /** The scored run's: null for a live run, else the Replay arm it was. */
+  readonly replay: ReplayRun | null;
   /** The scored run's Run record's store path. */
   readonly record: string;
   readonly scoredAt: string;
@@ -176,6 +181,18 @@ export interface ScoreFile {
   readonly entries: readonly ScoreEntry[] | null;
 }
 
+/**
+ * A score file as read back from the store, at the current schema: a schema 1
+ * file, written before there were Replays, as no replay's. Null for anything
+ * that isn't a score file of a schema the Kit knows.
+ */
+export function readScoreFile(stored: unknown): ScoreFile | null {
+  if (!isObject(stored)) return null;
+  if (stored["schema"] === SCORE_FILE_SCHEMA) return stored as unknown as ScoreFile;
+  if (stored["schema"] === 1) return { ...(stored as unknown as Omit<ScoreFile, "schema" | "replay">), schema: SCORE_FILE_SCHEMA, replay: null };
+  return null;
+}
+
 /** A score file and where it goes in the store. */
 export interface ScoreFileWithPath {
   readonly file: ScoreFile;
@@ -187,7 +204,7 @@ export function scoreFileFor(input: ScoreFileInput): ScoreFileWithPath {
   const { scored, rubrics, outcome } = input;
   const set = rubricSet(rubrics);
   const file: ScoreFile = {
-    schema: 1,
+    schema: SCORE_FILE_SCHEMA,
     kitSha: scored.kitSha,
     repo: scored.repo,
     runId: scored.runId,
@@ -195,6 +212,7 @@ export function scoreFileFor(input: ScoreFileInput): ScoreFileWithPath {
     role: scored.role,
     issue: scored.issue,
     pullRequest: scored.pullRequest,
+    replay: scored.replay,
     record: input.scoredPath,
     scoredAt: input.scoredAt,
     rubrics: set.pairs,

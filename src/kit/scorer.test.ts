@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
 import { type Rubric, rubricSet } from "./rubrics.ts";
-import type { RunRecord } from "./runRecord.ts";
+import type { ReplayArm, RunRecord } from "./runRecord.ts";
 import { type JudgeRun, scoreFileFor, scoringPlan } from "./scorer.ts";
 
 /** A run id whose SHA-256 falls in the sampled quarter, and one whose doesn't. */
@@ -149,7 +149,7 @@ describe("The score file", () => {
     const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: { kind: "judged", judge, output: judgeOutput() } });
 
     expect(file).toEqual({
-      schema: 1,
+      schema: 2,
       kitSha: scored.kitSha,
       repo: "owner/product",
       runId: 1007,
@@ -157,6 +157,7 @@ describe("The score file", () => {
       role: "implement",
       issue: 7,
       pullRequest: 50,
+      replay: null,
       record: SCORED_PATH,
       scoredAt: SCORED_AT,
       rubrics: ["efficiency@1", "ticket-compliance@1", "skill-use@1"],
@@ -202,7 +203,7 @@ describe("The score file", () => {
       const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: plan });
 
       expect(file).toEqual({
-        schema: 1,
+        schema: 2,
         kitSha: scored.kitSha,
         repo: "owner/product",
         runId: 1007,
@@ -210,6 +211,7 @@ describe("The score file", () => {
         role: "implement",
         issue: 7,
         pullRequest: 50,
+        replay: null,
         record: SCORED_PATH,
         scoredAt: SCORED_AT,
         rubrics: ["efficiency@1", "ticket-compliance@1", "skill-use@1"],
@@ -321,6 +323,29 @@ describe("The score file", () => {
 
       expect(after.path).not.toBe(before.path);
       expect(after.path).toMatch(/^scores\/owner\/product\/2026-11\/1007-1-implement-[0-9a-f]+\.json$/);
+    });
+
+    describe("for a Replay arm's run, with the arm after the role, so the two arms of one workflow run each get their own", () => {
+      const armRun = (arm: ReplayArm) => implementRun({ replay: { issue: 300, arm, ticket: 7 } });
+      const scoreOf = (arm: ReplayArm) =>
+        scoreFileFor({ scored: armRun(arm), scoredPath: `runs/owner/product/2026-11/1007-1-implement-replay-${arm}.json`, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: judged });
+
+      it("at its arm's path", () => {
+        const { hash } = rubricSet(RUBRICS);
+
+        expect(scoreOf("baseline").path).toBe(`scores/owner/product/2026-11/1007-1-implement-replay-baseline-${hash}.json`);
+        expect(scoreOf("variant").path).toBe(`scores/owner/product/2026-11/1007-1-implement-replay-variant-${hash}.json`);
+      });
+
+      it("naming the scored run's Replay, as it names the run's subject", () => {
+        expect(scoreOf("variant").file).toMatchObject({
+          runId: 1007,
+          role: "implement",
+          issue: 7,
+          replay: { issue: 300, arm: "variant", ticket: 7 },
+          record: "runs/owner/product/2026-11/1007-1-implement-replay-variant.json",
+        });
+      });
     });
   });
 });

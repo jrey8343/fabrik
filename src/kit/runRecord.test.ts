@@ -3,7 +3,16 @@ import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { agentRunIn } from "../github/apply.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Needs } from "./pushJob.ts";
-import { agentRunEnded, type JudgeRunEnd, judgeRunRecordFor, readRunRecord, type RunEnd, runRecordFor } from "./runRecord.ts";
+import {
+  agentRunEnded,
+  type JudgeRunEnd,
+  judgeRunRecordFor,
+  type ReplayRunEnd,
+  readRunRecord,
+  replayRunRecordFor,
+  type RunEnd,
+  runRecordFor,
+} from "./runRecord.ts";
 
 const KIT_SHA = "f".repeat(40);
 const BASE_SHA = "b".repeat(40);
@@ -973,6 +982,68 @@ describe("A Run record read back from the store", () => {
   it("of a schema the Kit doesn't know reads as no record", () => {
     expect(readRunRecord({ ...written, schema: 5 }, ["Claude token"])).toBeNull();
     expect(readRunRecord("not a record", ["Claude token"])).toBeNull();
+  });
+});
+
+describe("A Replay arm's record", () => {
+  const REPLAY_ISSUE = 300;
+  const TICKET = 7;
+  const MERGED_PR = 50;
+
+  /** What the replay-record job knows when the baseline arm's passing Implement run, replaying Ticket 7, ends, with whatever the case changes. */
+  function replayRunEnd(overrides: Partial<ReplayRunEnd> = {}): ReplayRunEnd {
+    return {
+      replay: { issue: REPLAY_ISSUE, arm: "baseline", ticket: TICKET },
+      role: "implement",
+      pullRequest: MERGED_PR,
+      baseSha: BASE_SHA,
+      repo: "acme/widgets",
+      runId: 9001,
+      runAttempt: 1,
+      kitSha: KIT_SHA,
+      endedAt: "2026-11-05T10:00:00Z",
+      job: job("success", { "base-sha": "" }),
+      settings: { model: "claude-opus-5-5", effort: "high" },
+      subscription: "Claude token 2",
+      agentResult: agentResult("implement", TICKET),
+      failureReport: null,
+      transcript: [init, result()],
+      ...overrides,
+    };
+  }
+
+  it("is a first Implement run on the replayed Ticket and its merged PR, from the Ticket's base, at the pinned Kit, naming its Replay", () => {
+    expect(replayRunRecordFor(replayRunEnd()).record).toMatchObject({
+      schema: 4,
+      kitSha: KIT_SHA,
+      repo: "acme/widgets",
+      runId: 9001,
+      runAttempt: 1,
+      role: "implement",
+      issue: TICKET,
+      pullRequest: MERGED_PR,
+      model: "claude-opus-5-5",
+      subscription: "Claude token 2",
+      retry: 0,
+      stepUp: false,
+      requestChanges: false,
+      prototype: false,
+      replay: { issue: REPLAY_ISSUE, arm: "baseline", ticket: TICKET },
+      baseSha: BASE_SHA,
+      jobResult: "success",
+      infrastructureFailure: null,
+      verdict: null,
+      turns: 12,
+      totalCostUsd: 1.25,
+    });
+  });
+
+  it("sits at its arm's paths, beside the usual pattern", () => {
+    const files = replayRunRecordFor(replayRunEnd());
+
+    expect(files.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-implement-replay-baseline.json");
+    expect(files.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-1-implement-replay-baseline.jsonl.gz");
+    expect(files.record.transcript).toBe(files.transcriptPath);
   });
 });
 

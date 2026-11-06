@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { readTranscriptGzip } from "../agent/transcript.ts";
 import type { KitConfig } from "./config.ts";
 import { readRunRecord, type RunRecord } from "./runRecord.ts";
-import type { ScoreFile } from "./scorer.ts";
+import { readScoreFile, type ScoreFile } from "./scorer.ts";
 
 /** Every path under one of the checkout's directories ending in `suffix`, as a path in the store: none when the directory isn't there. */
 async function pathsIn(storeDir: string, directory: string, suffix: string): Promise<string[]> {
@@ -49,13 +49,17 @@ export async function readStoreRunRecords(
   );
 }
 
-/** Every schema 1 score file under `scores/`, by its path in the store. */
+/**
+ * Every score file under `scores/`, by its path in the store, at the current
+ * schema: a schema 1 file as no replay's (readScoreFile). A file of a schema
+ * the Kit doesn't know is left out.
+ */
 export async function readStoreScoreFiles(storeDir: string): Promise<Record<string, ScoreFile>> {
   const files = await readStoreFiles(storeDir, "scores");
   return Object.fromEntries(
-    files.filter((entry): entry is [string, ScoreFile] => {
-      const [, file] = entry;
-      return typeof file === "object" && file !== null && (file as { schema?: unknown }).schema === 1;
+    files.flatMap(([path, file]): [string, ScoreFile][] => {
+      const score = readScoreFile(file);
+      return score === null ? [] : [[path, score]];
     }),
   );
 }

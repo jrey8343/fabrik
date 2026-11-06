@@ -195,7 +195,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
   const { role, issue, pullRequest, job } = ran;
   const kit = end.needs["kit"]?.outputs ?? {};
   const agent = job?.outputs ?? {};
-  const { recordPath, transcriptPath } = pathsFor({ ...end, role }, end.transcript !== null);
+  const { recordPath, transcriptPath } = pathsFor({ ...end, role, replay: null }, end.transcript !== null);
   const implement = role === "implement";
   const facts: RunFacts = {
     kitSha: end.kitSha,
@@ -269,6 +269,73 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     jobResult: judge.result,
     infrastructureFailure: failureOf(judge.result, judge.outputs["secrets-step"], end.failureReport),
     verdict: null,
+  };
+  return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
+}
+
+/** The roles a Replay arm runs: one Implement run, then one Review of its diff. */
+export type ReplayRole = Extract<AgentRole, "implement" | "review">;
+
+/** What the replay-record job knows when one arm's Implement or Review run, replaying a merged Ticket, ends. */
+export interface ReplayRunEnd {
+  /** Which Replay, arm and Ticket the run was. */
+  readonly replay: ReplayRun;
+  readonly role: ReplayRole;
+  /** The replayed Ticket's merged PR. */
+  readonly pullRequest: number;
+  /** The Ticket's `baseSha`, its first Implement run's base, which both arms start from. */
+  readonly baseSha: string;
+  /** The Product repo, as `owner/name`. */
+  readonly repo: string;
+  /** The Actions run id and its attempt, which both arms share. */
+  readonly runId: number;
+  readonly runAttempt: number;
+  /** The pinned Kit release writing the record, whatever prompts and Base skills the arm loaded. */
+  readonly kitSha: string;
+  /** When the replay-record job ran, as an ISO 8601 time. */
+  readonly endedAt: string;
+  /** The arm's job for the role: how it ended, and the outputs it passed out as an agent job does (`secrets-step`, `model`, `effort`). */
+  readonly job: NeededJob;
+  /** The arm's model and effort for the role, which the record names when the job passed out none. */
+  readonly settings: { readonly model: string; readonly effort: string | null };
+  /** The Subscription the Kit job gave the Replay. */
+  readonly subscription: string;
+  /** The agent result artifact's text, or null if there was none. */
+  readonly agentResult: string | null;
+  /** The failure report artifact's text, or null if there was none. */
+  readonly failureReport: string | null;
+  /** The transcript's stream-json lines, or null if no transcript survived the run. */
+  readonly transcript: readonly string[] | null;
+}
+
+/**
+ * A Replay arm's run's record, at its arm's paths. It is a first run on the
+ * replayed Ticket and its merged PR, started from the Ticket's `baseSha`:
+ * never a Retry, Step-up or Request-changes run.
+ */
+export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
+  const { replay, role, job } = end;
+  const { recordPath, transcriptPath } = pathsFor({ ...end, role, replay }, end.transcript !== null);
+  const facts: RunFacts = {
+    kitSha: end.kitSha,
+    repo: end.repo,
+    runId: end.runId,
+    runAttempt: end.runAttempt,
+    role,
+    issue: replay.ticket,
+    pullRequest: end.pullRequest,
+    endedAt: end.endedAt,
+    ...whatRan(job.outputs, {}, end.settings),
+    subscription: end.subscription,
+    retry: 0,
+    stepUp: false,
+    requestChanges: false,
+    prototype: false,
+    replay,
+    baseSha: end.baseSha,
+    jobResult: job.result,
+    infrastructureFailure: failureOf(job.result, job.outputs["secrets-step"], end.failureReport),
+    verdict: role === "review" ? verdictOf(end.agentResult) : null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
 }
@@ -426,10 +493,11 @@ export function recordPathOf(run: StoredRun): string {
 
 /**
  * A run in one role, as the store tells it from every other: its repo, its
- * workflow run and attempt, and the role. Its record, transcript and score
- * files, and the commits that write them, all name it.
+ * workflow run and attempt, the role, and for a Replay's run its arm, since
+ * both arms run in one workflow run. Its record, transcript and score files,
+ * and the commits that write them, all name it.
  */
-export type RunIdentity = Pick<RunRecord, "repo" | "runId" | "runAttempt" | "role">;
+export type RunIdentity = Pick<RunRecord, "repo" | "runId" | "runAttempt" | "role" | "replay">;
 
 /** A run as the store files it: who it is, and when it ended, whose month its files sit in. */
 export type StoredRun = RunIdentity & Pick<RunRecord, "endedAt">;
@@ -437,7 +505,7 @@ export type StoredRun = RunIdentity & Pick<RunRecord, "endedAt">;
 /**
  * A run's name in the store, which its record, its transcript and its score
  * files share: the run's repo, the month (UTC) it ended, its workflow run and
- * attempt, and the role.
+ * attempt, the role, and a Replay's arm.
  */
 export function runStoreName(run: StoredRun): string {
   const month = new Date(run.endedAt).toISOString().slice(0, 7);
@@ -449,9 +517,10 @@ export function runKey(run: RunIdentity): string {
   return `${run.repo}/${runName(run)}`;
 }
 
-/** A run's name within its repo and month: its workflow run, attempt and role. */
-function runName({ runId, runAttempt, role }: RunIdentity): string {
-  return `${runId}-${runAttempt}-${role}`;
+/** A run's name within its repo and month: its workflow run, attempt and role, and a Replay's arm after them. */
+function runName({ runId, runAttempt, role, replay }: RunIdentity): string {
+  const name = `${runId}-${runAttempt}-${role}`;
+  return replay === null ? name : `${name}-replay-${replay.arm}`;
 }
 
 /** A positive whole number from a job output, or null. */
