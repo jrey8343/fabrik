@@ -146,7 +146,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withIssue(snapshot, (context) => landAudit(event, context, snapshot.namedPullRequests));
     case "retro-run-finished":
       return withIssue(snapshot, (context) => landRetro(event, context, config));
-    // Nothing raises it until the research job passes its branch to the push job (#260).
+    // Nothing raises it until the Research job is switched on and the push job needs it (#263).
     case "research-run-finished":
       return withIssue(snapshot, (context) => landResearch(event, context));
     case "pull-request-changes-requested":

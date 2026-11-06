@@ -45,9 +45,16 @@ export function setImplementerEnv(config: KitConfig): void {
 
 /** Cuts the Ticket's agent branch from the checkout's current commit, the tip of main. */
 export async function startAgentBranch(productDir: string, ticket: number): Promise<BuiltBranch> {
+  return cutBranch(productDir, agentBranchFor(ticket));
+}
+
+/**
+ * Cuts the branch `name` from the checkout's current commit, the tip of the
+ * default branch: an Implementer's agent branch, or a Researcher's throwaway one.
+ */
+export async function cutBranch(productDir: string, name: string): Promise<BuiltBranch> {
   const ref = await git(productDir, "rev-parse", "--abbrev-ref", "HEAD");
   const sha = await git(productDir, "rev-parse", "HEAD");
-  const name = agentBranchFor(ticket);
   await git(productDir, "checkout", "--quiet", "-b", name);
   return { name, base: { ref, sha }, head: null };
 }
@@ -181,15 +188,16 @@ export async function requestChangesContext(pullRequestFile: string, reviewFile:
 }
 
 /**
- * Bundles the commits the Implementer made on its branch into `outDir`. With
- * none, there's no bundle and the head stays null: the push job reads that as
- * an empty diff. Work left uncommitted isn't the Implementer's output.
+ * Bundles the commits made on the run's branch (the Implementer's, or the
+ * Researcher's findings, which the Kit commits) into `outDir`. With none,
+ * there's no bundle and the head stays null: the push job reads that as an
+ * empty diff. Work left uncommitted isn't the run's output.
  */
 export async function bundleAgentBranch(productDir: string, started: BuiltBranch, outDir: string): Promise<BuiltBranch> {
   const current = await git(productDir, "rev-parse", "--abbrev-ref", "HEAD");
-  if (current !== started.name) throw new Error(`The Implementer left ${started.name} for ${current}`);
+  if (current !== started.name) throw new Error(`The agent left ${started.name} for ${current}`);
   if ((await git(productDir, "status", "--porcelain")) !== "") {
-    console.log("::warning title=Uncommitted work::The Implementer left changes it didn't commit; they aren't pushed");
+    console.log("::warning title=Uncommitted work::The agent left changes it didn't commit; they aren't pushed");
   }
   const head = await git(productDir, "rev-parse", "HEAD");
   if (head === started.base.sha) return started;

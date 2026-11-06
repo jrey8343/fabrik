@@ -4,7 +4,7 @@ import { aMergedPullRequest, anEscapeMarkerIssue, aRunRecord, factsOf } from "..
 import { readAgentRunResult } from "../agent/result.ts";
 import type { CaptureOutputs } from "../kit/pushJob.ts";
 import { evidenceBundle, readEvidenceBundle } from "../kit/retroEvidence.ts";
-import { agentFailureEventFrom, agentRunEventFrom, auditEventFrom, loopEventFrom, retroEventFrom } from "./events.ts";
+import { agentFailureEventFrom, agentRunEventFrom, auditEventFrom, loopEventFrom, researchEventFrom, retroEventFrom } from "./events.ts";
 
 describe("A push", () => {
   const push = (overrides: Record<string, unknown> = {}) => ({
@@ -317,6 +317,57 @@ describe("A finished Retro run", () => {
     ...["escapes", "feedback", "followUps", "lowScores", "sample"].map((part): [string, string] => [`has no ${part}`, JSON.stringify({ ...JSON.parse(artifact), [part]: undefined })]),
   ])("refuses evidence that %s", (_, text) => {
     expect(() => readEvidenceBundle(text)).toThrow(/evidence\.json/);
+  });
+});
+
+describe("A finished Researcher run", () => {
+  const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
+  const REPO = "https://github.com/acme/shop";
+  const OUTPUT = '{"gist":"Stripe Checkout takes one payment for every seat.","keyFacts":["A line item has a quantity."]}';
+  const branch = {
+    name: "research/42-which-payment-provider-takes-group-bookings",
+    base: { ref: "main", sha: "b".repeat(40) },
+    head: "a".repeat(40),
+  };
+  const artifact = (fields: Record<string, unknown> = {}) => JSON.stringify({ role: "research", issue: 42, output: OUTPUT, branch, ...fields });
+  const changes = {
+    net: [{ path: "docs/research/42-which-payment-provider-takes-group-bookings.md" }],
+    commits: [{ path: "docs/research/42-which-payment-provider-takes-group-bookings.md" }],
+    updatedFromMain: false,
+  };
+
+  it("carries the Researcher's output, unparsed, with the branch it built and what that changes, this run and the Product repo", () => {
+    expect(researchEventFrom(readAgentRunResult(artifact()), changes, RUN, REPO)).toEqual({
+      kind: "research-run-finished",
+      issue: 42,
+      output: OUTPUT,
+      branch: "research/42-which-payment-provider-takes-group-bookings",
+      changes,
+      runUrl: RUN,
+      repoUrl: REPO,
+    });
+  });
+
+  it("keeps the branch the run built when the result is read, as it does an Implement run's", () => {
+    expect(readAgentRunResult(artifact()).branch).toEqual(branch);
+  });
+
+  it.each([
+    ["names no branch", { branch: undefined }],
+    ["names a branch that isn't a ref", { branch: { ...branch, name: "research/42 findings" } }],
+    ["names a base with no commit", { branch: { ...branch, base: { ref: "main", sha: "main" } } }],
+  ])("refuses a result that %s", (_, fields) => {
+    expect(() => readAgentRunResult(artifact(fields))).toThrow(/branch/);
+  });
+
+  it("refuses another role's result", () => {
+    const audit = readAgentRunResult(JSON.stringify({ role: "audit", issue: 97, output: "{}", window: { kind: "last-days", days: 30 } }));
+
+    expect(() => researchEventFrom(audit, changes, RUN, REPO)).toThrow(/audit result/);
+  });
+
+  it("isn't an agent-run-finished event", () => {
+    expect(() => agentRunEventFrom(readAgentRunResult(artifact()))).toThrow(/researchEventFrom/);
   });
 });
 
