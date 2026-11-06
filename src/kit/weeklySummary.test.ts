@@ -11,8 +11,10 @@ import {
   anOpenIssue,
   anOpenMonitorIssue,
   anOpenPullRequest,
+  anOpenReplay,
   anOpenRetro,
   anAuditRunRecord,
+  aReplayBody,
   aReplayRunRecord,
   aRetroRunRecord,
   aReview,
@@ -61,6 +63,11 @@ describe("the Weekly summary", () => {
 
   it("isn't skipped in a week with no records but an open Retro", () => {
     const facts = [factsOf({ repo: "owner/quiet" }), factsOf({ openRetros: [anOpenRetro()] })];
+    expect(weeklySummary(input({ facts })).kind).toBe("summary");
+  });
+
+  it("isn't skipped in a week with no records but a Replay whose results are in", () => {
+    const facts = [factsOf({ repo: "owner/quiet" }), factsOf({ openReplays: [anOpenReplay()] })];
     expect(weeklySummary(input({ facts })).kind).toBe("summary");
   });
 
@@ -418,6 +425,40 @@ describe("the Weekly summary", () => {
           openRetros: [anOpenRetro({ author: "operator" }), anOpenRetro({ number: 121, author: "other-app[bot]" })],
         });
         expect(waiting).toEqual([]);
+      });
+    });
+
+    describe("with an open Replay", () => {
+      it("lists the Operator's open replay issue whose results are in, waiting since the Kit last wrote its body", () => {
+        const waiting = waitingIn({
+          openIssues: [anOpenIssue({ number: 13, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-05T20:00:00Z")] })],
+          openReplays: [anOpenReplay({ number: 140, title: "Replay review.effort: high", lastEditedAt: "2026-11-06T20:00:00Z" })],
+        });
+        expect(waiting).toEqual([
+          expect.objectContaining({ kind: "ready-for-human", number: 13 }),
+          {
+            kind: "replay",
+            number: 140,
+            title: "Replay review.effort: high",
+            url: "https://github.com/owner/product/issues/140",
+            since: "2026-11-06T20:00:00Z",
+            age: 2 * 24 * HOUR,
+          },
+        ]);
+      });
+
+      it("lists one whose Tickets all failed too, its results being in", () => {
+        const failed = aReplayBody({ state: "failed", run: 2001, reason: "the Sandbox timed out" });
+        expect(waitingIn({ openReplays: [anOpenReplay({ body: failed })] })).toMatchObject([{ kind: "replay", number: 140 }]);
+      });
+
+      it.each([
+        ["whose request the tick hasn't accepted", { body: "```replay\nreview.effort: high\n```\n" }],
+        ["whose Ticket is still pending", { body: aReplayBody({ state: "pending" }) }],
+        ["whose Ticket is in progress", { body: aReplayBody({ state: "in-progress", run: 2000, retrying: null }) }],
+        ["that someone other than the Operator filed", { author: "someone-else" }],
+      ])("never lists one %s", (_, overrides) => {
+        expect(waitingIn({ openReplays: [anOpenReplay(overrides)] })).toEqual([]);
       });
     });
 
@@ -1724,6 +1765,19 @@ describe("the Weekly summary", () => {
           ].join("\n"),
         ),
       });
+    });
+
+    it("lists a Replay whose results are in with how long they have waited", () => {
+      const facts = factsOf({ openIssues: [readyForHuman(13, 30)], openReplays: [anOpenReplay({ title: "Replay review.effort: high", lastEditedAt: hoursAgo(50) })] });
+      expect(bodyOf(facts)).toContain(
+        [
+          "### Waiting on you",
+          "",
+          "- [#140](https://github.com/owner/product/issues/140) Replay review.effort: high: Replay results in for 2 days",
+          "- [#13](https://github.com/owner/product/issues/13) Operator work 13: ready-for-human for 30 hours",
+          "",
+        ].join("\n"),
+      );
     });
 
     it("lists an open Retro with how long it has been open", () => {

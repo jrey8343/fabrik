@@ -3,7 +3,7 @@
 // The Kit renders every word of layout; the Retro wrote only its proposals'
 // text. The Retro stays silent: no state label, no assignee, no mention.
 import { type KitConfig, picksIn } from "../kit/config.ts";
-import { RUN_STORE_REPO } from "../kit/runStore.ts";
+import { storeFileUrl } from "../kit/runStore.ts";
 import { newIssueUrl } from "./followUps.ts";
 import { READY_FOR_HUMAN } from "./labels.ts";
 import { FROM_AUDIT_LINE, FROM_PULL_REQUEST_LINE, FROM_RETRO_LINE, fencedRunsOf, fromRetroLine, retroMarker, retroMarksIn } from "./markers.ts";
@@ -353,10 +353,5 @@ function evidenceLink(ref: string, { evidence, repoUrl }: RetroFinished): string
   const elsewhere = /^([^\s/#]+\/[^\s/#]+)#([1-9][0-9]*)$/.exec(ref);
   if (elsewhere !== null) return `[${ref}](https://github.com/${elsewhere[1]}/issues/${elsewhere[2]})`;
   const transcript = evidence.transcripts[ref];
-  return `[\`${ref}\`](${storeFile(ref)})${transcript === undefined ? "" : `, with its [transcript](${storeFile(transcript)})`}`;
-}
-
-/** A file in the fabrik-runs store, on its default branch. */
-function storeFile(path: string): string {
-  return `https://github.com/${RUN_STORE_REPO}/blob/HEAD/${path.split("/").map(encodeURIComponent).join("/")}`;
+  return `[\`${ref}\`](${storeFileUrl(ref)})${transcript === undefined ? "" : `, with its [transcript](${storeFileUrl(transcript)})`}`;
 }

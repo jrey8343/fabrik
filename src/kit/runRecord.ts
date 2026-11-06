@@ -4,13 +4,14 @@
 // run, scoring a finished run, gets a record too, in role `score`, from what
 // the score-record job knows when it ends, and so does a Replay arm's
 // Implement or Review run (#156), from what the replay-record job knows, at
-// paths that name its arm. The stream is read through the one
-// stream-json reader (src/agent/stream.ts). The paths are inside the store,
-// RUN_STORE (src/kit/runStore.ts). A record read back from the store is read
-// at the current schema: a schema 1 record, written before runs were given a
-// Subscription, as being on the first listed one, a schema 1 or 2 record,
-// written before prototype turns, as no prototype turn, and a schema 1, 2 or
-// 3 record, written before Replays, as no replay's. Pure, no I/O.
+// paths that name its arm, as its patch's path does. The stream is read
+// through the one stream-json reader (src/agent/stream.ts). The paths are
+// inside the store, RUN_STORE (src/kit/runStore.ts). A record read back from
+// the store is read at the current schema: a schema 1 record, written before
+// runs were given a Subscription, as being on the first listed one, a schema
+// 1 or 2 record, written before prototype turns, as no prototype turn, and a
+// schema 1, 2 or 3 record, written before Replays, as no replay's. Pure, no
+// I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
@@ -498,6 +499,15 @@ function pathsFor(run: StoredRun, withTranscript: boolean): { recordPath: string
 /** Where a run's record sits in the store. */
 export function recordPathOf(run: StoredRun): string {
   return `runs/${runStoreName(run)}.json`;
+}
+
+/**
+ * Where a Replay arm's patch, its diff from the Ticket's `baseSha`, sits in
+ * the store: by the Product repo, the replay issue, the Ticket and the arm,
+ * so each arm of each Ticket has one.
+ */
+export function replayPatchPath(repo: string, { issue, ticket, arm }: Pick<ReplayRun, "issue" | "ticket" | "arm">): string {
+  return `replays/${repo}/${issue}/${ticket}-${arm}.patch`;
 }
 
 /**

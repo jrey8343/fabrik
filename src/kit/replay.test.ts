@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
+import { aRunRecord, aScoreEntry, aScoreFile } from "../__fixtures__/weeklySummary.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfig } from "./config.ts";
 import {
   hiddenTests,
@@ -9,19 +9,24 @@ import {
   readReplayRequest,
   type ReplayAcceptance,
   replayArms,
+  type ReplayGates,
+  type ReplayHiddenTests,
+  type ReplayOutcomes,
   type ReplayCandidate,
   type ReplayIssue,
   replayMarksIn,
   replayReads,
+  replayResultsIn,
   type ReplayStep,
   type ReplayTick,
   type ReplayTicketEnd,
   type ReplayVariable,
   replayThisUrl,
+  withReplayResults,
   withTicketFinished,
   withTicketStarted,
 } from "./replay.ts";
-import type { RunRecord } from "./runRecord.ts";
+import type { ReplayArm, ReplayRun, RunRecord } from "./runRecord.ts";
 
 /** A Fabrik commit with a prompt change to try. */
 const CANDIDATE = "0123456789abcdef0123456789abcdef01234567";
@@ -489,48 +494,68 @@ describe("A merged PR's hidden tests", () => {
   });
 });
 
+/** The Operator, who files every replay issue that counts. */
+const OPERATOR = "jrey8343";
+
+/** Kit config at every candidate's baseSha: Implement on Sonnet at medium effort, Review on Opus at the CLI's default. */
+const BASE: KitConfig = {
+  ...DEFAULT_KIT_CONFIG,
+  roles: {
+    ...DEFAULT_KIT_CONFIG.roles,
+    implement: { model: "claude-sonnet-5-5", effort: "medium", timeoutMinutes: 60 },
+    review: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
+  },
+};
+
+/** The arms of a Ticket built under BASE, replayed with review.effort: high. */
+const REVIEW_HIGH_ARMS = {
+  baseline: { implement: { model: "claude-sonnet-5-5", effort: "medium" }, review: { model: "claude-opus-5-5", effort: null }, candidateSha: null },
+  variant: { implement: { model: "claude-sonnet-5-5", effort: "medium" }, review: { model: "claude-opus-5-5", effort: "high" }, candidateSha: null },
+};
+
+/** Replay issue `number`, open and the Operator's, asking for review.effort: high on Tickets 12 and 7. */
+function aReplayIssue(number: number, overrides: Partial<ReplayIssue> = {}): ReplayIssue {
+  return { number, open: true, author: OPERATOR, body: bodyWith("review.effort: high", "tickets: 12, 7"), comments: [], ...overrides };
+}
+
+/** What accepting a request weighs: these candidates, each built under BASE, and no candidate Kit checked. */
+function acceptanceOf(candidates: readonly ReplayCandidate[]): ReplayAcceptance {
+  const baseConfigs = Object.fromEntries(candidates.map(({ ticket }) => [baseOf(ticket), { ok: true, config: BASE } as const]));
+  return { candidates, baseConfigs, fabrikCommits: {} };
+}
+
+/** A tick with spare capacity, these replay issues, and Tickets 7, 12 and 20 to pick from. */
+function aTick(issues: readonly ReplayIssue[], overrides: Partial<ReplayTick> = {}): ReplayTick {
+  return { operator: OPERATOR, issues, capacity: { spare: true }, acceptance: acceptanceOf([aCandidate(7), aCandidate(12), aCandidate(20)]), ...overrides };
+}
+
+/** The body an accept step writes, failing the test on any other step. */
+function acceptedBody(step: ReplayStep): string {
+  if (step.kind !== "accept") throw new Error(`expected an accept step, got ${JSON.stringify(step)}`);
+  return step.body;
+}
+
+/** Replay issue `number` once the tick accepted its request, review.effort: high on Tickets 12 and 7, both pending, picked from `acceptance`'s candidates. */
+function anAcceptedIssue(number: number, overrides: Partial<ReplayIssue> = {}, acceptance?: ReplayAcceptance): ReplayIssue {
+  const issue = aReplayIssue(number, overrides);
+  return { ...issue, body: acceptedBody(nextReplayStep(aTick([{ ...issue, open: true }], acceptance === undefined ? {} : { acceptance }))) };
+}
+
+/** The issue with its Ticket `ticket` started by run `run`, failing the test when it can't start. */
+function started(issue: ReplayIssue, ticket: number, run: number): ReplayIssue {
+  const body = withTicketStarted(issue.body, ticket, run);
+  if (body === null) throw new Error(`#${ticket} can't start on #${issue.number}`);
+  return { ...issue, body };
+}
+
+/** The issue with run `run` of its Ticket `ticket` ended so, failing the test when it can't end. */
+function finished(issue: ReplayIssue, ticket: number, run: number, end: ReplayTicketEnd): ReplayIssue {
+  const body = withTicketFinished(issue.body, ticket, run, end);
+  if (body === null) throw new Error(`#${ticket}'s run ${run} can't end on #${issue.number}`);
+  return { ...issue, body };
+}
+
 describe("A Replay's next step on the tick", () => {
-  /** The Operator, who files every replay issue that counts. */
-  const OPERATOR = "jrey8343";
-
-  /** Kit config at every candidate's baseSha: Implement on Sonnet at medium effort, Review on Opus at the CLI's default. */
-  const BASE: KitConfig = {
-    ...DEFAULT_KIT_CONFIG,
-    roles: {
-      ...DEFAULT_KIT_CONFIG.roles,
-      implement: { model: "claude-sonnet-5-5", effort: "medium", timeoutMinutes: 60 },
-      review: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
-    },
-  };
-
-  /** The arms of a Ticket built under BASE, replayed with review.effort: high. */
-  const REVIEW_HIGH_ARMS = {
-    baseline: { implement: { model: "claude-sonnet-5-5", effort: "medium" }, review: { model: "claude-opus-5-5", effort: null }, candidateSha: null },
-    variant: { implement: { model: "claude-sonnet-5-5", effort: "medium" }, review: { model: "claude-opus-5-5", effort: "high" }, candidateSha: null },
-  };
-
-  /** Replay issue `number`, open and the Operator's, asking for review.effort: high on Tickets 12 and 7. */
-  function aReplayIssue(number: number, overrides: Partial<ReplayIssue> = {}): ReplayIssue {
-    return { number, open: true, author: OPERATOR, body: bodyWith("review.effort: high", "tickets: 12, 7"), comments: [], ...overrides };
-  }
-
-  /** What accepting a request weighs: these candidates, each built under BASE, and no candidate Kit checked. */
-  function acceptanceOf(candidates: readonly ReplayCandidate[]): ReplayAcceptance {
-    const baseConfigs = Object.fromEntries(candidates.map(({ ticket }) => [baseOf(ticket), { ok: true, config: BASE } as const]));
-    return { candidates, baseConfigs, fabrikCommits: {} };
-  }
-
-  /** A tick with spare capacity, these replay issues, and Tickets 7, 12 and 20 to pick from. */
-  function aTick(issues: readonly ReplayIssue[], overrides: Partial<ReplayTick> = {}): ReplayTick {
-    return { operator: OPERATOR, issues, capacity: { spare: true }, acceptance: acceptanceOf([aCandidate(7), aCandidate(12), aCandidate(20)]), ...overrides };
-  }
-
-  /** The body an accept step writes, failing the test on any other step. */
-  function acceptedBody(step: ReplayStep): string {
-    if (step.kind !== "accept") throw new Error(`expected an accept step, got ${JSON.stringify(step)}`);
-    return step.body;
-  }
-
   describe("accepts a valid new request", () => {
     it("writing its plan into the body: the picked Tickets, their flags and each arm's settings, every Ticket pending", () => {
       const step = nextReplayStep(aTick([aReplayIssue(140)]));
@@ -748,12 +773,6 @@ describe("A Replay's next step on the tick", () => {
     });
   });
 
-  /** Replay issue `number` once the tick accepted its request, review.effort: high on Tickets 12 and 7, both pending. */
-  function anAcceptedIssue(number: number, overrides: Partial<ReplayIssue> = {}): ReplayIssue {
-    const issue = aReplayIssue(number, overrides);
-    return { ...issue, body: acceptedBody(nextReplayStep(aTick([{ ...issue, open: true }]))) };
-  }
-
   describe("starts the next pending Ticket", () => {
     it("of an accepted request, the first in its plan", () => {
       expect(nextReplayStep(aTick([anAcceptedIssue(140)]))).toEqual({ kind: "start", issue: 140, ticket: 12 });
@@ -775,20 +794,6 @@ describe("A Replay's next step on the tick", () => {
       expect(nextReplayStep(aTick([anAcceptedIssue(140, { open: false })]))).toMatchObject({ kind: "nothing" });
     });
   });
-
-  /** The issue with its Ticket `ticket` started by run `run`, failing the test when it can't start. */
-  function started(issue: ReplayIssue, ticket: number, run: number): ReplayIssue {
-    const body = withTicketStarted(issue.body, ticket, run);
-    if (body === null) throw new Error(`#${ticket} can't start on #${issue.number}`);
-    return { ...issue, body };
-  }
-
-  /** The issue with run `run` of its Ticket `ticket` ended so, failing the test when it can't end. */
-  function finished(issue: ReplayIssue, ticket: number, run: number, end: ReplayTicketEnd): ReplayIssue {
-    const body = withTicketFinished(issue.body, ticket, run, end);
-    if (body === null) throw new Error(`#${ticket}'s run ${run} can't end on #${issue.number}`);
-    return { ...issue, body };
-  }
 
   describe("keeps each Ticket's progress in the body", () => {
     it("marking a Ticket its run starts in progress with the run's id, the plan reading back unchanged", () => {
@@ -922,6 +927,325 @@ describe("A Replay's next step on the tick", () => {
       expect(above(done.body)).toBe(above(accepted.body));
       expect(replayMarksIn(done.body)?.progress).toEqual([{ ticket: 12, state: "done", run: 9001 }]);
     });
+  });
+});
+
+describe("A Replay's results", () => {
+  /** Replay 140's arm `arm` of Ticket `ticket`. */
+  const replayOf = (ticket: number, arm: ReplayArm): ReplayRun => ({ issue: 140, arm, ticket, candidateSha: null });
+
+  /** What one arm of a Ticket measured, as a test gives it: anything left out is as anArm makes it. */
+  interface ArmGiven {
+    readonly implement?: Partial<RunRecord>;
+    readonly review?: Partial<RunRecord>;
+    /** Its Efficiency, Ticket compliance and Skill use scores, or null for no score file. */
+    readonly scores?: readonly [number, number, number] | null;
+    readonly gates?: ReplayGates;
+    readonly hiddenTests?: ReplayHiddenTests;
+  }
+
+  /**
+   * Arm `arm` of Ticket `ticket`, run in workflow run `run`, as the store
+   * holds it: an Implement and a Review run, each costing $1 over 12 turns
+   * and 90 seconds, a pass Verdict, scores of 0.80, 0.90 and 0.75, and its
+   * gates and hidden tests passed, unless a test says otherwise.
+   */
+  function anArm(ticket: number, arm: ReplayArm, run: number, given: ArmGiven = {}): Omit<ReplayOutcomes, "open"> {
+    const replay = replayOf(ticket, arm);
+    const ran = { runId: run, issue: ticket, pullRequest: ticket + 100, baseSha: baseOf(ticket), replay, endedAt: "2026-11-05T12:00:00Z" };
+    const [efficiency, compliance, skillUse] = given.scores === undefined ? [0.8, 0.9, 0.75] : (given.scores ?? []);
+    return {
+      records: [aRunRecord({ ...ran, role: "implement", ...given.implement }), aRunRecord({ ...ran, role: "review", verdict: "pass", ...given.review })],
+      scoreFiles:
+        given.scores === null
+          ? []
+          : [
+              aScoreFile({
+                runId: run,
+                issue: ticket,
+                pullRequest: ticket + 100,
+                replay,
+                entries: [
+                  aScoreEntry({ score: efficiency }),
+                  aScoreEntry({ scorer: "ticket-compliance", score: compliance }),
+                  aScoreEntry({ scorer: "skill-use", score: skillUse }),
+                ],
+              }),
+            ],
+      gates: [{ ticket, arm, run, gates: given.gates ?? "passed", hiddenTests: given.hiddenTests ?? "passed" }],
+    };
+  }
+
+  /** The outcomes of these arms, read back from the store of an open replay issue. */
+  function outcomesOf(...arms: Omit<ReplayOutcomes, "open">[]): ReplayOutcomes {
+    return {
+      open: true,
+      records: arms.flatMap(({ records }) => records),
+      scoreFiles: arms.flatMap(({ scoreFiles }) => scoreFiles),
+      gates: arms.flatMap(({ gates }) => gates),
+    };
+  }
+
+  /** Replay 140, review.effort: high on Tickets 12 and 7, with both done, in runs 9001 and 9002. */
+  function aFinishedReplay(): ReplayIssue {
+    const twelve = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "done" });
+    return finished(started(twelve, 7, 9002), 7, 9002, { kind: "done" });
+  }
+
+  /** The body with its results written from `outcomes`, failing the test when it has no plan. */
+  function resultsIn(body: string, outcomes: ReplayOutcomes): string {
+    const written = withReplayResults(body, outcomes);
+    if (written === null) throw new Error("expected a body with a plan");
+    return written;
+  }
+
+  /** The results table's rows, one per arm of each Ticket. */
+  const rowsOf = (body: string) => visible(body).filter((line) => line.startsWith("| #"));
+
+  /** The store link of arm `arm`'s patch of Ticket `ticket`. */
+  const patchOf = (ticket: number, arm: ReplayArm) => `[patch](https://github.com/jrey8343/fabrik-runs/blob/HEAD/replays/owner/product/140/${ticket}-${arm}.patch)`;
+
+  it("shows each arm of each Ticket in a row of its own: its gates, Verdict, hidden tests, scores, cost, turns, duration and patch", () => {
+    const body = resultsIn(
+      aFinishedReplay().body,
+      outcomesOf(
+        anArm(12, "baseline", 9001, { implement: { totalCostUsd: 1.5, turns: 20, durationMs: 120_000 }, review: { totalCostUsd: 0.5, turns: 4, durationMs: 60_000 } }),
+        anArm(12, "variant", 9001, { review: { verdict: "execution-flaw", totalCostUsd: 0.9 }, hiddenTests: "failed", scores: [0.6, 0.85, 0.7] }),
+        anArm(7, "baseline", 9002, { review: { verdict: "design-flaw" }, gates: "tests-failed", hiddenTests: "failed" }),
+        anArm(7, "variant", 9002, { implement: { durationMs: 270_000 }, scores: null }),
+      ),
+    );
+
+    const shown = visible(body);
+    const header = shown.indexOf("| Ticket | Arm | Gates | Verdict | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration | Patch | Flags |");
+    expect(header).not.toBe(-1);
+    expect(shown[header + 1]).toBe("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+    expect(rowsOf(body)).toEqual([
+      `| #12 (merged in #112) | baseline, default effort | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "baseline")} | – |`,
+      `| #12 (merged in #112) | variant, effort high | passed | Execution flaw | failed | 0.60 | 0.85 | 0.70 | $1.90 | 24 | 3 min | ${patchOf(12, "variant")} | – |`,
+      `| #7 (merged in #107) | baseline, default effort | tests failed | Design flaw | failed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(7, "baseline")} | – |`,
+      `| #7 (merged in #107) | variant, effort high | passed | pass | passed | – | – | – | $2.00 | 24 | 6 min | ${patchOf(7, "variant")} | – |`,
+    ]);
+  });
+
+  /** The cells of a row with no result, after where its Ticket stands and before its flags. */
+  const NOTHING_YET = "– | – | – | – | – | – | – | – | –";
+
+  it("shows a Ticket not done as pending, in progress or failed, on both its rows", () => {
+    const once = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
+    const failed = finished(started(once, 12, 9002), 12, 9002, { kind: "infrastructure", reason: "the Sandbox timed out" });
+
+    expect(rowsOf(resultsIn(failed.body, outcomesOf()))).toEqual([
+      `| #12 (merged in #112) | baseline, default effort | failed: the Sandbox timed out | ${NOTHING_YET} | – |`,
+      `| #12 (merged in #112) | variant, effort high | failed: the Sandbox timed out | ${NOTHING_YET} | – |`,
+      `| #7 (merged in #107) | baseline, default effort | pending | ${NOTHING_YET} | – |`,
+      `| #7 (merged in #107) | variant, effort high | pending | ${NOTHING_YET} | – |`,
+    ]);
+    expect(rowsOf(resultsIn(started(failed, 7, 9003).body, outcomesOf())).slice(2)).toEqual([
+      `| #7 (merged in #107) | baseline, default effort | in progress in run 9003 | ${NOTHING_YET} | – |`,
+      `| #7 (merged in #107) | variant, effort high | in progress in run 9003 | ${NOTHING_YET} | – |`,
+    ]);
+  });
+
+  it("keeps a failed Ticket's row whole whatever its reason holds", () => {
+    const once = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
+    const failed = finished(started(once, 12, 9002), 12, 9002, { kind: "infrastructure", reason: "exit 1 | tee\nlog" });
+
+    expect(rowsOf(resultsIn(failed.body, outcomesOf()))[0]).toBe(`| #12 (merged in #112) | baseline, default effort | failed: exit 1 \\| tee log | ${NOTHING_YET} | – |`);
+  });
+
+  it("heads the results with no line while the store holds nothing to compare", () => {
+    const shown = visible(resultsIn(aFinishedReplay().body, outcomesOf()));
+
+    expect(shown.filter((line) => line.startsWith("**variant"))).toEqual([]);
+    expect(shown).toContain("Baseline vs original: the store holds nothing of the original runs to compare.");
+  });
+
+  it("shows every Ticket not finished as cancelled once the Operator closes the issue, keeping what finished", () => {
+    const twelve = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "done" });
+    const outcomes = { ...outcomesOf(anArm(12, "baseline", 9001), anArm(12, "variant", 9001)), open: false };
+
+    const rows = rowsOf(resultsIn(started(twelve, 7, 9002).body, outcomes));
+
+    expect(rows[0]).toBe(`| #12 (merged in #112) | baseline, default effort | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "baseline")} | – |`);
+    expect(rows.slice(2)).toEqual([
+      `| #7 (merged in #107) | baseline, default effort | cancelled | ${NOTHING_YET} | – |`,
+      `| #7 (merged in #107) | variant, effort high | cancelled | ${NOTHING_YET} | – |`,
+    ]);
+  });
+
+  /**
+   * Ticket `ticket`'s original first Implement run, on 1 October, and its
+   * Review an hour later, each costing $1 over 12 turns and 90 seconds, with a
+   * pass Verdict, unless a test says otherwise.
+   */
+  function theOriginal(ticket: number, given: { readonly implement?: Partial<RunRecord>; readonly review?: Partial<RunRecord> } = {}): RunRecord[] {
+    const ran = { runId: 500 + ticket, issue: ticket, pullRequest: ticket + 100, baseSha: baseOf(ticket) };
+    return [
+      aRunRecord({ ...ran, role: "implement", endedAt: "2026-10-01T09:00:00Z", ...given.implement }),
+      aRunRecord({ ...ran, role: "review", endedAt: "2026-10-01T10:00:00Z", verdict: "pass", ...given.review }),
+    ];
+  }
+
+  /** Replay 140 finished: Ticket 12's variant failing its hidden tests at a lower cost, and Ticket 7's baseline failing its tests and its variant having no test command. */
+  function aMixedReplay(): string {
+    const outcomes = outcomesOf(
+      anArm(12, "baseline", 9001),
+      anArm(12, "variant", 9001, { review: { verdict: "execution-flaw", totalCostUsd: 0.4 }, hiddenTests: "failed", scores: [0.6, 0.8, 0.7] }),
+      anArm(7, "baseline", 9002, { gates: "tests-failed", hiddenTests: "failed" }),
+      anArm(7, "variant", 9002, { implement: { turns: 31 }, gates: "no-test-command", hiddenTests: "no-test-command", scores: null }),
+    );
+    const originals = [
+      ...theOriginal(12),
+      ...theOriginal(7, { implement: { totalCostUsd: 2.5, durationMs: 270_000 }, review: { verdict: "execution-flaw", totalCostUsd: 0.5 } }),
+    ];
+    return resultsIn(aFinishedReplay().body, { ...outcomes, records: [...outcomes.records, ...originals] });
+  }
+
+  /** The lines of the body's Totals section, its heading and the blank lines in it left out. */
+  function totalsIn(body: string): string[] {
+    const shown = visible(body);
+    const at = shown.indexOf("### Totals");
+    const end = shown.findIndex((line, i) => i > at && line.startsWith("Baseline vs original"));
+    return at === -1 ? [] : shown.slice(at + 1, end + 1).filter((line) => line !== "");
+  }
+
+  it("totals each arm over its Tickets done, beside the original runs, with the baseline's gap from the original", () => {
+    expect(totalsIn(aMixedReplay())).toEqual([
+      "Over the 2 Tickets done, beside the original: each one's first Implement run and its Review.",
+      "| Arm | Gates | Pass Verdicts | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| baseline | 1/2 | 2/2 | 1/2 | 0.80 | 0.90 | 0.75 | $4.00 | 48 | 6 min |",
+      "| variant | 1/1 | 1/2 | 0/1 | 0.60 | 0.80 | 0.70 | $3.40 | 67 | 6 min |",
+      "| original | – | 1/2 | – | – | – | – | $5.00 | 48 | 9 min |",
+      "Baseline vs original: pass Verdicts 2/2 vs 1/2; cost −20%; turns 0%; duration −33%.",
+    ]);
+  });
+
+  it("compares the baseline with the original's first attempt only, never a Retry, nor a past Replay's runs", () => {
+    const outcomes = outcomesOf(anArm(12, "baseline", 9001), anArm(12, "variant", 9001), anArm(7, "baseline", 9002), anArm(7, "variant", 9002));
+    const retry = { runId: 600, retry: 1, endedAt: "2026-10-01T11:00:00Z", totalCostUsd: 9 };
+    const pastReplay = { ...replayOf(12, "baseline"), issue: 130 };
+    const records = [
+      ...theOriginal(12, { review: { verdict: "execution-flaw" } }),
+      aRunRecord({ ...retry, issue: 12 }),
+      aRunRecord({ ...retry, issue: 12, role: "review", endedAt: "2026-10-01T12:00:00Z", verdict: "pass" }),
+      aRunRecord({ runId: 700, issue: 12, role: "review", replay: pastReplay, verdict: "pass", totalCostUsd: 9 }),
+      ...theOriginal(7, { review: { verdict: "execution-flaw" } }),
+    ];
+
+    const body = resultsIn(aFinishedReplay().body, { ...outcomes, records: [...outcomes.records, ...records] });
+
+    expect(totalsIn(body)).toContain("| original | – | 0/2 | – | – | – | – | $4.00 | 48 | 6 min |");
+  });
+
+  it("never totals a figure the store doesn't hold for every run, nor compares it", () => {
+    const unknown = { totalCostUsd: null, turns: null };
+    const outcomes = outcomesOf(anArm(12, "baseline", 9001, { review: unknown }), anArm(12, "variant", 9001), anArm(7, "baseline", 9002), anArm(7, "variant", 9002));
+
+    const body = resultsIn(aFinishedReplay().body, { ...outcomes, records: [...outcomes.records, ...theOriginal(12), ...theOriginal(7, { implement: unknown })] });
+
+    expect(rowsOf(body)[0]).toContain("| 0.75 | – | – | 3 min |");
+    expect(totalsIn(body)).toEqual(expect.arrayContaining(["| baseline | 2/2 | 2/2 | 2/2 | 0.80 | 0.90 | 0.75 | – | – | 6 min |", "| original | – | 2/2 | – | – | – | – | – | – | 6 min |"]));
+    expect(visible(body)).toContain("**variant: gates 2/2 vs 2/2; pass Verdicts 2/2 vs 2/2; hidden tests 2/2 vs 2/2; duration 0%**");
+    expect(totalsIn(body).at(-1)).toBe("Baseline vs original: pass Verdicts 2/2 vs 2/2; duration 0%.");
+  });
+
+  it("heads the results with one line of the variant's totals against the baseline's", () => {
+    expect(visible(aMixedReplay())).toContain("**variant: gates 1/1 vs 1/2; pass Verdicts 1/2 vs 2/2; hidden tests 0/1 vs 1/2; cost −15%; turns +40%; duration 0%**");
+  });
+
+  it("keeps the Operator's request at the top as it was, its one request block, the plan and each Ticket's progress", () => {
+    const request = "Does Review hold up at a higher effort?  \r\n\r\n```replay\r\nreview.effort: high\r\ntickets: 12\r\n```\r\nThanks!";
+    const done = finished(started(anAcceptedIssue(140, { body: request }), 12, 9001), 12, 9001, { kind: "done" });
+
+    const body = resultsIn(done.body, outcomesOf(anArm(12, "baseline", 9001), anArm(12, "variant", 9001)));
+
+    expect(body.startsWith(request)).toBe(true);
+    expect(body.slice(0, body.indexOf("<!-- fabrik:replay-start -->"))).toBe(done.body.slice(0, done.body.indexOf("<!-- fabrik:replay-start -->")));
+    expect(readReplayRequest(body)).toEqual(readReplayRequest(request));
+    expect(replayMarksIn(body)).toEqual(replayMarksIn(done.body));
+  });
+
+  it("shows the plan's variable, whatever the Operator has since edited in the request", () => {
+    const done = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "done" });
+    const edited = done.body.replace("review.effort: high", "implement.model: claude-opus-5-5");
+
+    const shown = visible(resultsIn(edited, outcomesOf(anArm(12, "baseline", 9001), anArm(12, "variant", 9001)))).join("\n");
+
+    expect(shown.slice(shown.indexOf("## Replay results"))).toContain("a variant with `review.effort: high`");
+    expect(shown).not.toContain("variant, claude-opus-5-5");
+  });
+
+  describe("shows the results as each Ticket finishes", () => {
+    /** Replay 140 once Ticket 12 is done in run 9001 and its results are shown. */
+    function twelveShown(): ReplayIssue {
+      const twelve = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "done" });
+      return { ...twelve, body: resultsIn(twelve.body, outcomesOf(anArm(12, "baseline", 9001), anArm(12, "variant", 9001))) };
+    }
+
+    it("keeping a done Ticket's results as the next one starts, and its run ends, until they're read again", () => {
+      const shown = twelveShown();
+
+      const running = started(shown, 7, 9002);
+      const refused = finished(running, 7, 9002, { kind: "weekly-limit" });
+
+      expect(rowsOf(running.body)).toEqual([
+        ...rowsOf(shown.body).slice(0, 2),
+        `| #7 (merged in #107) | baseline, default effort | in progress in run 9002 | ${NOTHING_YET} | – |`,
+        `| #7 (merged in #107) | variant, effort high | in progress in run 9002 | ${NOTHING_YET} | – |`,
+      ]);
+      expect(rowsOf(refused.body)).toEqual(rowsOf(shown.body));
+      expect(totalsIn(refused.body)).toEqual(totalsIn(shown.body));
+    });
+
+    it("but showing no figure from a results marker edited to hold one the Kit wouldn't write", () => {
+      const shown = twelveShown();
+      const tampered = shown.body.replace(/^(<!-- fabrik:replay-results .*)"costUsd":2([,}])/m, '$1"costUsd":"lots"$2');
+
+      expect(tampered).not.toBe(shown.body);
+      expect(rowsOf(started({ ...shown, body: tampered }, 7, 9002).body).slice(0, 2)).toEqual([
+        `| #12 (merged in #112) | baseline, default effort | done | ${NOTHING_YET} | – |`,
+        `| #12 (merged in #112) | variant, effort high | done | ${NOTHING_YET} | – |`,
+      ]);
+    });
+  });
+
+  describe("are in", () => {
+    it("once every Ticket in the plan is done or failed", () => {
+      const once = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
+      const failed = finished(started(once, 12, 9002), 12, 9002, { kind: "infrastructure", reason: "the Sandbox timed out" });
+
+      expect(replayResultsIn(aFinishedReplay().body)).toBe(true);
+      expect(replayResultsIn(finished(started(failed, 7, 9003), 7, 9003, { kind: "done" }).body)).toBe(true);
+    });
+
+    it.each<[string, () => string]>([
+      ["before its request is accepted", () => bodyWith("review.effort: high")],
+      ["while a Ticket is pending", () => finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "done" }).body],
+      ["while a Ticket waits to run again", () => finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" }).body],
+      ["while a Ticket is in progress", () => started(finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "done" }), 7, 9002).body],
+    ])("not %s", (_, body) => {
+      expect(replayResultsIn(body())).toBe(false);
+    });
+  });
+
+  it("shows a Ticket's flags on each of its rows, and no hidden tests never as a pass", () => {
+    const untested = aCandidate(7, {
+      merged: { ...aCandidate(7).merged!, files: [{ path: "src/booking.ts", removed: false }] },
+      lastEdited: { ticket: "2026-10-02T00:00:00Z", spec: null },
+    });
+    const issue = anAcceptedIssue(140, {}, acceptanceOf([aCandidate(12, { humanTouches: 2 }), untested]));
+    const done = finished(started(issue, 7, 9001), 7, 9001, { kind: "done" });
+
+    const rows = rowsOf(resultsIn(done.body, outcomesOf(anArm(7, "baseline", 9001, { hiddenTests: "no-hidden-tests" }), anArm(7, "variant", 9001, { hiddenTests: "no-hidden-tests" }))));
+
+    expect(rows).toEqual([
+      `| #12 (merged in #112) | baseline, default effort | pending | ${NOTHING_YET} | Human touches |`,
+      `| #12 (merged in #112) | variant, effort high | pending | ${NOTHING_YET} | Human touches |`,
+      `| #7 (merged in #107) | baseline, default effort | passed | pass | no hidden tests | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(7, "baseline")} | edited input, no hidden tests |`,
+      `| #7 (merged in #107) | variant, effort high | passed | pass | no hidden tests | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(7, "variant")} | edited input, no hidden tests |`,
+    ]);
   });
 });
 

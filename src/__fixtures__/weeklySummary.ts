@@ -1,5 +1,6 @@
 // Small builders for the Weekly summary's tests, matching anIssue, aPullRequest
 // and snapshotOf (./snapshots.ts): say only what a test cares about.
+import { type ReplayProgress, replayBody } from "../kit/replay.ts";
 import type { ReplayRun, RunRecord } from "../kit/runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "../kit/scorer.ts";
 import type {
@@ -14,6 +15,7 @@ import type {
   OpenAuditFacts,
   OpenIssueFacts,
   OpenPullRequestFacts,
+  OpenReplayFacts,
   OpenRetroFacts,
   ReviewFacts,
   SpecFacts,
@@ -187,6 +189,7 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     followUpIssues: [],
     openAudits: [],
     openRetros: [],
+    openReplays: [],
     openMaps: [],
     ...overrides,
   };
@@ -210,6 +213,31 @@ export function anOpenAudit(overrides: Partial<OpenAuditFacts> = {}): OpenAuditF
 /** Retro 120, which the Fabrik App opened on Saturday 2026-11-07 and nobody has closed. */
 export function anOpenRetro(overrides: Partial<OpenRetroFacts> = {}): OpenRetroFacts {
   return { number: 120, title: "Retro: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-07T00:00:00Z", ...overrides };
+}
+
+/**
+ * Replay issue 140's body once the tick accepted its request, review.effort:
+ * high on Ticket 7 (merged as PR 50), with Ticket 7's replay `progress`.
+ */
+export function aReplayBody(progress: ReplayProgress): string {
+  const settings = { model: "claude-opus-5-5", effort: null };
+  const baseline = { implement: settings, review: settings, candidateSha: null };
+  const arms = { baseline, variant: { ...baseline, review: { ...settings, effort: "high" } } };
+  const plan = { variable: { kind: "effort", role: "review", effort: "high" }, tickets: [{ ticket: 7, pullRequest: 50, baseSha: "b".repeat(40), flags: [], arms }], leftOut: [] } as const;
+  return replayBody("```replay\nreview.effort: high\ntickets: 7\n```\n", { plan, progress: [{ ticket: 7, ...progress }] });
+}
+
+/** Replay issue 140, which the Operator opened on 2026-11-01, its one Ticket done and its results written on 2026-11-06. */
+export function anOpenReplay(overrides: Partial<OpenReplayFacts> = {}): OpenReplayFacts {
+  return {
+    number: 140,
+    title: "Replay review.effort: high",
+    author: "operator",
+    createdAt: "2026-11-01T00:00:00Z",
+    lastEditedAt: "2026-11-06T20:00:00Z",
+    body: aReplayBody({ state: "done", run: 2000 }),
+    ...overrides,
+  };
 }
 
 /** The Fabrik App's comment `body` at `at`; a person's with `{ author, byBot: false }`. */

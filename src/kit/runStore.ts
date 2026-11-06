@@ -9,6 +9,11 @@ export const RUN_STORE = { owner: "jrey8343", name: "fabrik-runs" } as const;
 /** The store as `owner/name`. */
 export const RUN_STORE_REPO = `${RUN_STORE.owner}/${RUN_STORE.name}`;
 
+/** A file in the store, on its default branch, by its path there. */
+export function storeFileUrl(path: string): string {
+  return `https://github.com/${RUN_STORE_REPO}/blob/HEAD/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 /**
  * The model the judge scores runs with (#149): Sonnet, at its default effort.
  * A Kit constant, like the store, so scores stay comparable across Product

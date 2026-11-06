@@ -28,6 +28,7 @@ import {
   type Window,
   within,
 } from "./retroEvidence.ts";
+import { replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
 import { type RateLimitReading, type ReplayRun, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
@@ -97,6 +98,20 @@ export interface OpenRetroFacts {
   readonly createdAt: string;
 }
 
+/** An open `fabrik:replay` issue, as Waiting on you reads it. */
+export interface OpenReplayFacts {
+  readonly number: number;
+  readonly title: string;
+  /** Who filed it: only the Operator's replay issues count, as only they run. */
+  readonly author: string;
+  /** ISO 8601. */
+  readonly createdAt: string;
+  /** When its body was last edited, ISO 8601: the Kit writing its results, once they're in. Null for a body never edited. */
+  readonly lastEditedAt: string | null;
+  /** Its body as it stands, whose markers say whether its results are in. */
+  readonly body: string;
+}
+
 /** What the summary reads of one Product repo on GitHub: what the metrics read, and the rest. */
 export interface GitHubFacts extends MetricFacts {
   readonly specs: readonly SpecFacts[];
@@ -116,6 +131,8 @@ export interface GitHubFacts extends MetricFacts {
   readonly openAudits: readonly OpenAuditFacts[];
   /** The repo's open `fabrik:retro` issues, whoever opened them. */
   readonly openRetros: readonly OpenRetroFacts[];
+  /** The repo's open `fabrik:replay` issues, whoever filed them. */
+  readonly openReplays: readonly OpenReplayFacts[];
   /** The repo's open Maps, by number, oldest first, read as the Map cap reads them: whoever charted them. */
   readonly openMaps: readonly number[];
 }
@@ -325,6 +342,8 @@ export type WaitingItem =
   | (ItemBase & { readonly kind: "audit" })
   /** The Fabrik App's open Retro, filled or still pending, waiting since it was opened. */
   | (ItemBase & { readonly kind: "retro" })
+  /** The Operator's open replay issue whose results are in, waiting since the Kit wrote them for the Operator to act on and close it. */
+  | (ItemBase & { readonly kind: "replay" })
   /** An open Map, whoever charted it, waiting since it got `wayfinder:map`. */
   | (ItemBase & {
       readonly kind: "map";
@@ -760,16 +779,17 @@ function hasUnknownCostBasis(record: RunRecord): boolean {
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
-function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: WeeklySummaryInput): RepoSection {
+function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: filedAt }: WeeklySummaryInput): RepoSection {
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
   return {
     repo: facts.repo,
-    // An open Audit, Retro or Map waits on the Operator, so it also keeps a quiet week from being skipped.
+    // An open Audit, Retro, finished Replay or Map waits on the Operator, so it also keeps a quiet week from being skipped.
     waitingOnYou: oldestFirst([
       ...waitingOnYou(facts, items),
       ...openAuditsOf(facts, appLogin, items),
       ...openRetrosOf(facts, appLogin, items),
+      ...finishedReplaysOf(facts, operator, items),
       ...openMapsOf(facts, items),
       ...failedResearchOf(facts, appLogin, items),
     ]),
@@ -786,6 +806,18 @@ function openAuditsOf({ openAudits }: GitHubFacts, appLogin: string, items: Item
 /** The Fabrik App's open Retros, filled or still pending, aged from when each was opened: a person's `fabrik:retro` issue is no Retro. */
 function openRetrosOf({ openRetros }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
   return openRetros.filter((retro) => retro.author === appLogin).map((retro) => ({ kind: "retro", ...items.issue(retro, retro.createdAt) }));
+}
+
+/**
+ * The Operator's open replay issues whose results are in, by the Replay
+ * module's own reading of their markers, aged from when the Kit last wrote
+ * the body, which is when it wrote the results: a replay issue someone else
+ * filed never runs.
+ */
+function finishedReplaysOf({ openReplays }: GitHubFacts, operator: string, items: Items): WaitingItem[] {
+  return openReplays
+    .filter((replay) => replay.author === operator && replayResultsIn(replay.body))
+    .map((replay) => ({ kind: "replay", ...items.issue(replay, replay.lastEditedAt ?? replay.createdAt) }));
 }
 
 /** The Decision labels whose Decisions the Operator resolves live: all but research, which the Researcher resolves AFK. */
@@ -1241,6 +1273,8 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `Audit open for ${duration(item.age)}`);
     case "retro":
       return itemLine(item, `Retro open for ${duration(item.age)}`);
+    case "replay":
+      return itemLine(item, `Replay results in for ${duration(item.age)}`);
     case "map":
       return itemLine(item, `Map open for ${duration(item.age)}, ${decisions(item.decisionsWaiting)} waiting on you`);
     case "research-failed":
