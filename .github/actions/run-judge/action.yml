@@ -15,6 +15,7 @@
 #       github-token: ${{ github.token }}
 #       ticket: ${{ needs.kit.outputs.ticket }}
 #       subscription: ${{ needs.kit.outputs.subscription }}
+#       rotation: ${{ needs.kit.outputs.rotation }}
 # It leaves the judge's answer (fabrik-judge-result) or its failure report
 # (fabrik-judge-failure), and its transcript (fabrik-transcript-score), for the
 # score-record job (.github/actions/write-score-record). Its outputs are for
@@ -34,6 +35,9 @@ inputs:
     required: true
   subscription:
     description: The Subscription whose Claude token the judge runs on, the Fabrik vault item name the Kit job chose (needs.kit.outputs.subscription).
+    required: true
+  rotation:
+    description: '"true" when Subscription rotation is on (needs.kit.outputs.rotation), so the judge is killed on overage, as an agent run is.'
     required: true
 
 outputs:
@@ -98,6 +102,7 @@ runs:
         FABRIK_TRANSCRIPT_DIR: ${{ runner.temp }}/scored-transcript
         FABRIK_TICKET_FILE: ${{ runner.temp }}/judge-ticket.json
         FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-judge
+        FABRIK_ROTATION: ${{ inputs.rotation }}
       run: node src/kit/judge-main.ts
 
     - name: Pass the judge's answer to the score-record job

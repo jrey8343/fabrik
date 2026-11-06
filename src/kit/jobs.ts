@@ -25,6 +25,7 @@
 //   dispatch-timeout-minutes the Dispatch job's Kit config timeout
 //   subscription             the Subscription the plan's agent run is given: the `Fabrik` vault item
 //                            its job loads the Claude token from; empty when it starts none
+//   rotation                 "true" when two or more Subscriptions are listed, so rotation is on; else "false"
 // Its step summary names that Subscription, and notes when rotation is off.
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
@@ -41,6 +42,7 @@ import { kitConfigErrors } from "../skills/pinnedManifests.ts";
 import { callerWorkflowPath, checkKit } from "./caller.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
 import { kitJobSummary, subscriptionOf } from "./kitJob.ts";
+import { rotationIsOn } from "../loop/subscriptions.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -127,6 +129,8 @@ async function main(productDir: string): Promise<void> {
     "dispatch-timeout-minutes": String(config.roles.dispatch.timeoutMinutes),
     // Only ever a vault item name from the Kit config checked above, never a secret.
     subscription: run === null ? "" : subscriptionOf(run),
+    // For the judge, which reads no Kit config: whether its stream watch kills it on overage.
+    rotation: String(rotationIsOn(config)),
   };
   await appendFile(
     required("GITHUB_OUTPUT"),

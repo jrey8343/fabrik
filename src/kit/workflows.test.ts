@@ -795,6 +795,16 @@ describe("The Subscription each agent job runs on", () => {
     expect(claudeTokensIn(judge)).toEqual(["op://Fabrik/${{ inputs.subscription }}/credential"]);
   });
 
+  it("the judge is told whether rotation is on, so its stream watch kills it on overage as an agent run's does", () => {
+    expect(jobIn(loop, "kit")).toContain("rotation: ${{ steps.route.outputs.rotation }}");
+    expect(jobIn(loop, "score")).toContain("rotation: ${{ needs.kit.outputs.rotation }}");
+    expect(judge).toMatch(/\n  rotation:\n\s+description: .*\n\s+required: true\n/);
+    expect(judge).toContain("FABRIK_ROTATION: ${{ inputs.rotation }}");
+    expect(readFileSync(new URL("src/kit/judge-main.ts", root), "utf8")).toContain(
+      'streamWatch(join(outDir, TRANSCRIPT_FILE), abort, { rotation: process.env["FABRIK_ROTATION"] === "true" })',
+    );
+  });
+
   it.each([...workflows, ...actions.map(({ name, text }) => ({ path: `.github/actions/${name}`, text }))])(
     "$path loads no more than one Claude token in any job, and names no Subscription itself",
     ({ text }) => {

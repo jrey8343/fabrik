@@ -84,6 +84,8 @@ jobs:
       # job loads the Claude token from. Only ever a vault item name from the
       # Kit config this job checked, never a secret.
       subscription: ${{ steps.route.outputs.subscription }}
+      # "true" when Subscription rotation is on, for the judge, which reads no Kit config.
+      rotation: ${{ steps.route.outputs.rotation }}
     steps:
       # No expression context names the commit of a called workflow, so read
       # it from the OIDC token's job_workflow_sha claim.
@@ -980,6 +982,8 @@ jobs:
           ticket: ${{ needs.kit.outputs.ticket }}
           # The scored Implement run's Subscription, chosen by this Loop run's Kit job.
           subscription: ${{ needs.kit.outputs.subscription }}
+          # With rotation on, the judge is killed on overage, as an agent run is.
+          rotation: ${{ needs.kit.outputs.rotation }}
 
   # The judge run's own push job (ADR-0009's addendum): it writes the judge's
   # transcript, its Run record (role `score`) and the score file to fabrik-runs.

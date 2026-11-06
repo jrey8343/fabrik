@@ -13,6 +13,7 @@
 //   FABRIK_TRANSCRIPT_DIR   the scored run's gzipped transcript (loop.yml's fabrik-transcript-implement)
 //   FABRIK_TICKET_FILE      the Ticket's title and body (src/kit/judge-ticket-main.ts)
 //   FABRIK_OUT_DIR          where to write judge-result.json or judge-failure.json, the agent log and the transcript
+//   FABRIK_ROTATION         "true" when Subscription rotation is on, so overage in the stream kills the judge
 //   CLAUDE_CODE_OAUTH_TOKEN, from the agent service account (ADR-0004)
 // Writes the step outputs `model` and `effort`, for the judge's Run record.
 import { execFileSync } from "node:child_process";
@@ -58,7 +59,8 @@ async function main(): Promise<void> {
   await writeOutputs({ model: JUDGE_MODEL, effort: "" });
 
   const abort = new AbortController();
-  const watch = streamWatch(join(outDir, TRANSCRIPT_FILE), abort);
+  // With rotation on, a judge whose stream shows overage is stopped, as an agent run is.
+  const watch = streamWatch(join(outDir, TRANSCRIPT_FILE), abort, { rotation: process.env["FABRIK_ROTATION"] === "true" });
   // Unknown until the prompt is built: a judge that fails before then can't say.
   let digestTrimmed: boolean | null = null;
   try {
