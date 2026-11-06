@@ -109,6 +109,16 @@ export function prototypeRequestIn(body: string): PrototypeRequestMarker | null 
   } catch {
     return null;
   }
+  return readPrototypeRequest(value);
+}
+
+/**
+ * A prototype request as its marker's JSON holds it, and the Kit job passes
+ * it out to the prototype job (src/kit/jobs.ts): its route, variant count and
+ * brief, and the reply that asked for it; null when it isn't one the Design
+ * turn output contract would take.
+ */
+export function readPrototypeRequest(value: unknown): PrototypeRequestMarker | null {
   if (typeof value !== "object" || value === null) return null;
   const { route, variants, brief, reply = null } = value as Record<string, unknown>;
   if (!isRoute(route) || !isVariantCount(variants) || typeof brief !== "string" || brief.trim() === "") return null;
