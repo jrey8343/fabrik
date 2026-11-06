@@ -318,6 +318,35 @@ describe("The Run record a run's end yields", () => {
       expect(files?.transcriptPath).toBeNull();
     });
 
+    // The Retro job never started, so there's no transcript or base commit, and only the Kit job's plan names the model.
+    it.each([
+      ["failed", "failure", "success", "crash"],
+      ["failed to load the Fabrik App key", "failure", "failure", "unreachable-1password"],
+      ["was cancelled", "cancelled", "success", "timeout"],
+    ])("a Retro run whose evidence job %s is recorded as that job's end, its agent never having started", (_, result, secretsStep, failure) => {
+      const files = runRecordFor(
+        runEnd({
+          needs: needs("retro", { "retro-evidence": { result, outputs: { "secrets-step": secretsStep } }, retro: { result: "skipped", outputs: {} } }),
+          eventIssue: 120,
+          agentResult: null,
+          transcript: null,
+        }),
+      );
+
+      expect(files?.record).toMatchObject({
+        role: "retro",
+        issue: 120,
+        pullRequest: null,
+        model: "claude-opus-5-5",
+        baseSha: null,
+        jobResult: result,
+        infrastructureFailure: failure,
+        turns: null,
+        transcript: null,
+      });
+      expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-retro.json");
+    });
+
     it("a failed Retro run is recorded as the Infrastructure failure its report names", () => {
       const files = retro("failure", { failureReport: JSON.stringify({ failure: "missing-output", detail: "no <retro> tag" }), transcript: [init] });
 

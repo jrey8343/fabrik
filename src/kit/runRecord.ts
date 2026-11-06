@@ -11,7 +11,7 @@ import { readStream, type StreamMessage } from "../agent/stream.ts";
 import { infrastructureFailureOf } from "../loop/failures.ts";
 import type { AgentRole, InfrastructureFailure, KitConfig, Verdict } from "../loop/types.ts";
 import { parseVerdict } from "../loop/verdict.ts";
-import { type NeededJob, type Needs, pushJobInput } from "./pushJob.ts";
+import { type NeededJob, type Needs, pushJobInput, RETRO_EVIDENCE_JOB } from "./pushJob.ts";
 
 /** What the push job knows when the run ends. */
 export interface RunEnd {
@@ -281,12 +281,12 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
 
 /**
  * The job whose failure the push job saw: for a Review, the Reviewer, unless
- * its checks job failed first and the Reviewer never ran.
+ * its checks job failed first and the Reviewer never ran; for a Retro, the
+ * Retro job, unless its evidence job failed first and the Retro never ran.
  */
 function failedJob(needs: Needs, role: AgentRole): NeededJob | undefined {
-  if (role !== "review") return needs[role];
-  const checks = needs["review-checks"];
-  return checks !== undefined && FAILED.includes(checks.result) ? checks : needs["review"];
+  const first = role === "review" ? needs["review-checks"] : role === "retro" ? needs[RETRO_EVIDENCE_JOB] : undefined;
+  return first !== undefined && FAILED.includes(first.result) ? first : needs[role];
 }
 
 const FAILED = ["failure", "cancelled"];
