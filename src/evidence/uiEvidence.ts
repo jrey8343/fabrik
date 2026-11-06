@@ -78,9 +78,11 @@ export type CaptureSide = (typeof CAPTURE_SIDES)[number];
 
 /**
  * Why capture failed: the server never answered at `ui.url`, capture ran out
- * of time, there was no route to capture, or anything else it caught.
+ * of time, there was no route to capture, or anything else it caught. The
+ * push job records the last, `no-result`, itself: a UI pull request whose
+ * Implement job passed it no capture result it could read.
  */
-export const CAPTURE_FAILURES = ["server-did-not-start", "timeout", "no-routes", "error"] as const;
+export const CAPTURE_FAILURES = ["server-did-not-start", "timeout", "no-routes", "error", "no-result"] as const;
 
 export type CaptureFailure = (typeof CAPTURE_FAILURES)[number];
 
@@ -267,15 +269,32 @@ export function evidenceSection(evidence: UiEvidence): string {
   return [
     SECTION_START,
     "## UI evidence",
-    ...(gallery === null ? [] : ["", galleryLine(gallery, result)]),
+    ...(result.outcome === "failed" ? ["", failureLine(result.reason, captures)] : []),
+    ...(gallery === null || captures.length === 0 ? [] : ["", galleryLine(gallery, result)]),
     "",
     previewLine(preview),
-    "",
-    "Captured routes:",
-    "",
-    ...capturedRoutes(captures).map((chosen) => routeLine(chosen, captures)),
+    ...(captures.length === 0 ? [] : ["", "Captured routes:", "", ...capturedRoutes(captures).map((chosen) => routeLine(chosen, captures))]),
     evidenceMarker(evidence),
   ].join("\n");
+}
+
+/** Why capture failed, in plain words. */
+const FAILURE_WORDS: Readonly<Record<CaptureFailure, string>> = {
+  "server-did-not-start": "the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran",
+  timeout: "it ran out of time",
+  "no-routes": "there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`",
+  error: "it hit an error the Kit didn't expect, which the Implement job's log shows",
+  "no-result": "it left no result the push job could read",
+};
+
+/** A failed capture's reason, and the screenshots it took first: a failed capture keeps them. */
+function failureLine(reason: CaptureFailure, captures: readonly Capture[]): string {
+  const took = captures.length === 0 ? "There are no screenshots." : `It took ${screenshots(captures.length)} first.`;
+  return `**Capture failed:** ${FAILURE_WORDS[reason]}. ${took}`;
+}
+
+function screenshots(count: number): string {
+  return `${count} screenshot${count === 1 ? "" : "s"}`;
 }
 
 /** A captured route, why it was chosen, and every screenshot of it that shows a server's error page rather than the design. */
@@ -299,7 +318,7 @@ export const SIDE_WORDS: Readonly<Record<CaptureSide, string>> = { before: "Befo
 function galleryLine(url: string, { headSha, captures }: CaptureResult): string {
   const besideProduction = captures.some(({ side }) => side === "before") ? " beside the production site" : "";
   const viewports = UI_VIEWPORTS.map(({ name }) => name).filter((name) => captures.some(({ viewport }) => viewport === name));
-  return `${link("Open the gallery", url)} of ${captures.length} screenshots: this branch at \`${headSha.slice(0, 7)}\`${besideProduction}, at ${spelled(viewports, "and")} widths.`;
+  return `${link("Open the gallery", url)} of ${screenshots(captures.length)}: this branch at \`${headSha.slice(0, 7)}\`${besideProduction}, at ${spelled(viewports, "and")} ${viewports.length === 1 ? "width" : "widths"}.`;
 }
 
 function previewLine(preview: PreviewLink): string {

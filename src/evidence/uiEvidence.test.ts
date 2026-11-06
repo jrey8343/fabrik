@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { type CaptureResult, evidenceSection, isUi, parseCaptureResult, routesFor, type UiEvidence } from "./uiEvidence.ts";
+import { type CaptureFailure, type CaptureResult, evidenceSection, isUi, parseCaptureResult, routesFor, type UiEvidence } from "./uiEvidence.ts";
 
 /** The Pilot's ui block: an Astro site served from its build. */
 const ui: UiConfig = {
@@ -197,11 +197,11 @@ describe("The capture result", () => {
     ["a short head SHA", withResult({ headSha: "4f2b9c0" }), "headSha must be a full commit SHA"],
     ["captures that aren't a list", withResult({ captures: { "/book": [] } }), "captures must be a list"],
     ["a capture outcome with no captures", withResult({ captures: [] }), `captures can't be empty when the outcome is "captured"`],
-    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be server-did-not-start, timeout, no-routes or error"],
+    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be server-did-not-start, timeout, no-routes, error or no-result"],
     [
       "a failed outcome with an unknown reason",
       withResult({ outcome: "failed", reason: "flaky" }),
-      "reason must be server-did-not-start, timeout, no-routes or error",
+      "reason must be server-did-not-start, timeout, no-routes, error or no-result",
     ],
     ["a capture that isn't an object", withResult({ captures: ["after-mobile-book.png"] }), "captures[0] must be an object"],
     ["a route that isn't a path", withCapture({ route: "book" }), "captures[0].route must be a path starting with one /"],
@@ -256,7 +256,7 @@ describe("The capture result", () => {
     expect(parseCaptureResult(text)).toEqual({
       ok: false,
       errors: [
-        "reason must be server-did-not-start, timeout, no-routes or error",
+        "reason must be server-did-not-start, timeout, no-routes, error or no-result",
         "headSha must be a full commit SHA",
         "captures[1].side must be before or after",
         "captures[1].status must be an HTTP status from 100 to 599",
@@ -376,5 +376,55 @@ describe("The evidence section's routes", () => {
     };
 
     expect(routeLines(result)).toEqual(["- `/book`, named by the Ticket", "- `/book/waitlist`, named by the Implementer"]);
+  });
+});
+
+describe("The evidence section of a failed capture", () => {
+  it.each([
+    ["server-did-not-start", "**Capture failed:** the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran. There are no screenshots."],
+    ["timeout", "**Capture failed:** it ran out of time. There are no screenshots."],
+    [
+      "no-routes",
+      "**Capture failed:** there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`. There are no screenshots.",
+    ],
+    ["error", "**Capture failed:** it hit an error the Kit didn't expect, which the Implement job's log shows. There are no screenshots."],
+    // The push job's own reason, when the Implement job passed it no capture result it could read.
+    ["no-result", "**Capture failed:** it left no result the push job could read. There are no screenshots."],
+  ] satisfies [CaptureFailure, string][])("says plainly why when it failed for %s, with no gallery or routes", (reason, why) => {
+    const failed: CaptureResult = { outcome: "failed", reason, headSha: HEAD, captures: [] };
+
+    expect(evidenceSection(evidence(failed, { gallery: null, artifact: null }))).toBe(
+      [
+        "<!-- fabrik:ui-evidence-start -->",
+        "## UI evidence",
+        "",
+        why,
+        "",
+        "No preview link: Kit config declares no `preview.url`.",
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":null} -->`,
+      ].join("\n"),
+    );
+  });
+
+  it("links the gallery of the screenshots it took before it failed, and lists their routes", () => {
+    const failed: CaptureResult = { outcome: "failed", reason: "timeout", headSha: HEAD, captures: allCaptured.captures.slice(0, 1) };
+
+    expect(evidenceSection(evidence(failed))).toBe(
+      [
+        "<!-- fabrik:ui-evidence-start -->",
+        "## UI evidence",
+        "",
+        "**Capture failed:** it ran out of time. It took 1 screenshot first.",
+        "",
+        `[Open the gallery](<${GALLERY}>) of 1 screenshot: this branch at \`4f2b9c0\`, at mobile width.`,
+        "",
+        "No preview link: Kit config declares no `preview.url`.",
+        "",
+        "Captured routes:",
+        "",
+        "- `/book`, named by the Ticket",
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`,
+      ].join("\n"),
+    );
   });
 });
