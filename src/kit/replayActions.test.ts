@@ -9,7 +9,7 @@ import { REPLAY_PATCH_FILE } from "../agent/replay.ts";
 import { AGENT_RESULT_FILE } from "../agent/result.ts";
 import { JUDGE_FAILURE_FILE, JUDGE_RESULT_FILE } from "./judge.ts";
 import { REPLAY_GATES_FILE } from "./replayGates.ts";
-import { ARM_JOB_FILE, replayArtifact, type ReplayArtifactKind } from "./replayRecord.ts";
+import { ARM_JOB_FILE, replayArtifact, type ReplayArtifactKind } from "./replayArtifacts.ts";
 
 const root = new URL("../../", import.meta.url);
 const workflows = readdirSync(new URL(".github/workflows/", root)).map((name) => ({ name, text: readFileSync(new URL(`.github/workflows/${name}`, root), "utf8") }));
@@ -67,6 +67,21 @@ describe("The Replay's composite actions", () => {
   it.each(ARM_ACTIONS)("%s takes its arm as an input, baseline or variant", (name) => {
     expect(actionNamed(name).text).toMatch(/\n  arm:\n\s+description: .*baseline.*variant.*\n\s+required: true\n/);
   });
+
+  it.each(["replay-implement", "replay-review"])(
+    "%s fetches the Ticket's baseSha alone, one commit and no branch or tag, so its agent can never reach the merged result in the checkout",
+    (name) => {
+      const { text, steps } = actionNamed(name);
+      const checkouts = steps.filter((step) => step.includes("uses: actions/checkout@"));
+
+      expect(checkouts).toHaveLength(1);
+      expect(checkouts[0]).toContain("ref: ${{ inputs.base-sha }}\n");
+      expect(checkouts[0]).toContain("fetch-depth: 1\n");
+      expect(checkouts[0]).not.toContain("fetch-tags: true");
+      // Nothing fetches more once it's checked out: no default branch, no PR head, no other ref.
+      expect(text).not.toMatch(/git (?:-C \S+ )?(?:fetch|pull|remote)|fetch-depth: 0|origin\/|default_branch|refs\//);
+    },
+  );
 
   it.each(["replay-implement", "replay-review"])("%s always leaves its job's account of its run, whether the run passed, failed or was cancelled", (name) => {
     const { steps } = actionNamed(name);
@@ -245,9 +260,9 @@ describe("The replay score action", () => {
   const judge = stepWith(steps, "uses: ./kit/.github/actions/run-judge");
 
   it("runs the scoring plan on the arm's Implement run before the judge, and the judge only on a run it picks", () => {
-    expect(at(steps, "replay-plan-main.ts")).toBeLessThan(at(steps, "uses: ./kit/.github/actions/run-judge"));
-    expect(stepWith(steps, "replay-plan-main.ts")).toContain("id: plan\n");
-    expect(judge).toContain("if: steps.plan.outputs.score == 'true'");
+    expect(at(steps, "replay-scoring-plan-main.ts")).toBeLessThan(at(steps, "uses: ./kit/.github/actions/run-judge"));
+    expect(stepWith(steps, "replay-scoring-plan-main.ts")).toContain("id: scoring-plan\n");
+    expect(judge).toContain("if: steps.scoring-plan.outputs.score == 'true'");
   });
 
   it("runs the existing judge on the arm's Implement transcript, under artifact names carrying the arm", () => {
@@ -267,7 +282,7 @@ describe("The replay score action", () => {
     expect(account).toContain("if: always()");
     expect(account).toContain("FABRIK_AGENT_STEP: ${{ steps.judge.outcome }}");
     expect(account).toContain("FABRIK_SECRETS_STEP: ${{ steps.judge.outputs.secrets-step }}");
-    expect(account).toContain("FABRIK_NOT_RUN: ${{ steps.plan.outputs.score != 'true' && steps.plan.outputs.why || '' }}");
+    expect(account).toContain("FABRIK_NOT_RUN: ${{ steps.scoring-plan.outputs.score != 'true' && steps.scoring-plan.outputs.why || '' }}");
     expect(stepWith(steps, `name: ${named("score")}\n`)).toContain(`/${ARM_JOB_FILE}`);
   });
 });
@@ -332,6 +347,14 @@ describe("The replay-record action, the replay's push job", () => {
     expect(checkout).toMatch(/scores\/\$\{\{ github\.repository \}\}\n/);
     expect(checkout).toMatch(/replays\/\$\{\{ github\.repository \}\}\n/);
     expect(checkout).toContain("persist-credentials: false");
+  });
+
+  it("says how the run ended whatever a step before it came to, the store's token failing to load included, so the run can still land", () => {
+    expect(stepWith(steps, "uses: ./kit/.github/actions/store-token")).toContain("continue-on-error: true");
+    expect(record).toContain("if: always()");
+    for (const step of steps.slice(0, at(steps, "replay-record-main.ts"))) {
+      expect(step.includes("continue-on-error: true") || step.includes("uses: actions/setup-node@"), step).toBe(true);
+    }
   });
 
   it("lands the run on the replay issue through the Loop, as the Fabrik App, even when the store couldn't be written", () => {

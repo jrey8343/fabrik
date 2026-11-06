@@ -12,7 +12,7 @@
 # skills pin over the Kit first, and nothing else (src/kit/overlay.ts).
 #
 # Both arms run in one workflow run, as a matrix, so every artifact it leaves
-# carries its arm (src/kit/replayRecord.ts), and its outputs go out in its
+# carries its arm (src/kit/replayArtifacts.ts), and its outputs go out in its
 # account of the run (arm-job.json) rather than as job outputs, which the
 # matrix's legs overwrite: fabrik-implement-replay-<arm> holds the result,
 # the patch, a failure report and that account, and
@@ -60,13 +60,14 @@ inputs:
 runs:
   using: composite
   steps:
-    # A fresh clone at baseSha, detached, which the runner refuses any other commit for.
+    # A fresh clone of baseSha alone, detached, which the runner refuses any other commit for: one
+    # commit and no branch or tag, so nothing that came after it, the merged PR included, is there to read.
     - name: Check out the Product repo at the Ticket's baseSha
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         path: product
         ref: ${{ inputs.base-sha }}
-        fetch-depth: 0
+        fetch-depth: 1
         persist-credentials: false
 
     # The Ticket and its Spec, as a first Implement run reads them; for a `kit` variant, its candidate's prompts and Base skills.

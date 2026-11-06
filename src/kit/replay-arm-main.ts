@@ -1,5 +1,5 @@
 // The last step of a Replay arm's Implement, Review and judge jobs (#156):
-// writes the job's account of its run (armJobOf, src/kit/replayRecord.ts),
+// writes the job's account of its run (armJobOf, src/kit/replayArtifacts.ts),
 // which its artifact carries to the replay-record job, since the legs of the
 // arms' matrix overwrite each other's job outputs. It runs whether the run
 // passed, failed or was cancelled.
@@ -10,7 +10,7 @@
 // FABRIK_NOT_RUN (why the job never started its run, or empty).
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { armJobOf } from "./replayRecord.ts";
+import { armJobOf } from "./replayArtifacts.ts";
 
 const env = (name: string): string => process.env[name] ?? "";
 

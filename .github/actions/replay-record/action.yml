@@ -19,9 +19,11 @@
 # isn't there, or isn't private, gets nothing, and the run still lands.
 #
 # Its job runs it once both arms' jobs have ended, whatever they came to and
-# even when the workflow run was cancelled, so no Ticket stays in progress for
-# good: an arm that left no account of its run lands as an Infrastructure
-# failure, which the Ticket is retried once for. With permissions: {} and
+# even when the workflow run was cancelled: an arm that left no account of its
+# run lands as an Infrastructure failure, which the Ticket is retried once
+# for. A run it can't land at all, as when 1Password is down for run-loop, the
+# scheduled tick releases once it's past the longest a run can last
+# (src/loop/replayGate.ts), so no Ticket stays in progress for good. With permissions: {} and
 # continue-on-error, after checking out the Kit alone into kit/ at the Kit
 # job's sha:
 #   - uses: ./kit/.github/actions/replay-record
@@ -55,16 +57,20 @@ runs:
         pattern: fabrik-*-replay-*
         path: ${{ runner.temp }}/replay
 
-    # The store's token alone; empty for a store the App isn't on, and the program says nothing was written.
+    # The store's token alone; empty for a store the App isn't on, or when 1Password or the mint
+    # failed, and the program says nothing was written: the run still lands.
     - name: Mint the Fabrik App's token for the fabrik-runs store
       id: tokens
+      continue-on-error: true
       uses: ./kit/.github/actions/store-token
       with:
         op-push-token: ${{ inputs.op-push-token }}
 
-    # continue-on-error: it leaves how the run ended before it writes, so a store problem never keeps the run from landing.
+    # always() and continue-on-error: it leaves how the run ended before it reads the rubrics or
+    # writes, whatever the steps before it came to, so no store problem keeps the run from landing.
     - name: Write the replay's records
       id: record
+      if: always()
       continue-on-error: true
       shell: bash
       working-directory: ${{ github.action_path }}/../../..

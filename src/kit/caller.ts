@@ -8,6 +8,14 @@ export type CallerCheck =
   | { readonly ok: true; readonly release: string }
   | { readonly ok: false; readonly error: string };
 
+/**
+ * The Kit's own repo, as owner/name: the one every caller `uses:` line names,
+ * where a proposal to change the Kit is filed (src/loop/retroLanding.ts), and
+ * the only repo a Replay's candidate Kit sha may come from (src/kit/overlay.ts).
+ * A Kit constant, like the run store.
+ */
+export const KIT_REPO = "jrey8343/fabrik";
+
 /** A `uses:` line naming Fabrik, optionally quoted and as a list item, capturing the ref. */
 const FABRIK_USES = /^\s*(?:-\s+)?uses:\s*["']?jrey8343\/fabrik(?:\/[^@\s"']*)?@([^\s"'#]+)["']?\s*(?:#.*)?$/;
 

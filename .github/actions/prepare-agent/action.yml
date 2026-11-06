@@ -64,7 +64,7 @@ runs:
     # A Replay arm's candidate Kit sha (#156): its prompts and Base skills pin,
     # and nothing else, laid over the pinned Kit, so the fetch below and the
     # agent's prompt read the candidate's while every program stays pinned
-    # (ADR-0003). The sha must be a commit on a branch of the Fabrik repo,
+    # (ADR-0003's addendum). The sha must be a commit on a branch of the Fabrik repo,
     # checked through the read-only token, or the job fails here.
     - name: Lay the candidate Kit sha's prompts and Base skills over the Kit
       if: inputs.kit-candidate != ''

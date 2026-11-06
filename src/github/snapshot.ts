@@ -9,6 +9,7 @@ import {
   type KitConfigSources,
   SKILLS_SOURCES_LOCK_PATH,
 } from "../kit/config.ts";
+import { isOperatorsReplay } from "../kit/replay.ts";
 import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
@@ -22,6 +23,7 @@ import {
   NEEDS_DESIGN,
   READY_FOR_AGENT,
   REPLAY_LABEL,
+  REPLAY_TRIGGER_LABEL,
   RESEARCH_DECISION_LABEL,
   RETRO_LABEL,
   WEEKLY_LIMIT_LABEL,
@@ -357,6 +359,8 @@ export const PROTOTYPE_JOB_NAME = "Prototype turn";
  * Run records through `replayStore`, only while a replay issue the Operator
  * filed is open (see gatherReplaySlice). Only src/main.ts, which the tick
  * runs, passes `replayStore`; the Kit job, which never routes a tick, doesn't.
+ * agent:replay added reads every open replay issue, which a replay Ticket's
+ * claim weighs, and nothing of the store.
  */
 export async function gatherSnapshot(
   github: GitHub,
@@ -388,7 +392,10 @@ export async function gatherSnapshot(
   const replay =
     event.kind === "scheduled-tick" && replayStore !== null
       ? await gatherReplaySlice(github, repo, event.now, kitIssues, theOperator, appLogin, replayStore)
-      : null;
+      : // A replay Ticket's claim weighs every open replay issue, since one replay Ticket runs at a time across them all.
+        event.kind === "label-added" && event.label === REPLAY_TRIGGER_LABEL
+        ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
+        : null;
   return part === null
     ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps }
     : { ...part, spec, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps };
@@ -923,7 +930,7 @@ async function gatherReplaySlice(
   const maybeOpen = kitIssues.length >= KIT_ISSUES_PAGE || kitIssues.some((issue) => issue.labels.includes(REPLAY_LABEL));
   if (!maybeOpen) return { issues: [], capacity: null, acceptance: null };
   const issues = await gatherReplayIssues(github, repo, appLogin);
-  if (!issues.some((issue) => issue.author === operator)) return { issues, capacity: null, acceptance: null };
+  if (!issues.some((issue) => isOperatorsReplay(issue, operator))) return { issues, capacity: null, acceptance: null };
   const [dispatch, records] = await Promise.all([gatherDispatchCandidates(github, repo, appLogin), store.records()]);
   const acceptance = await gatherReplayAcceptance(github, repo, now, { operator, issues }, records);
   return { issues, capacity: { ...dispatch, weeklyLimits: records === null ? null : newestWeeklyLimits(records, now) }, acceptance };

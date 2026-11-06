@@ -524,9 +524,21 @@ function acceptanceOf(candidates: readonly ReplayCandidate[]): ReplayAcceptance 
   return { candidates, baseConfigs, fabrikCommits: {} };
 }
 
-/** A tick with spare capacity, these replay issues, and Tickets 7, 12 and 20 to pick from. */
+/** When the tick runs, and when a run's claim marked its Ticket in progress, an hour before. */
+const NOW = "2026-11-11T04:00:00.000Z";
+const STARTED = "2026-11-11T03:00:00.000Z";
+
+/** A tick with spare capacity, these replay issues, and Tickets 7, 12 and 20 to pick from, at NOW, a replay Ticket's run lasting up to 210 minutes. */
 function aTick(issues: readonly ReplayIssue[], overrides: Partial<ReplayTick> = {}): ReplayTick {
-  return { operator: OPERATOR, issues, capacity: { spare: true }, acceptance: acceptanceOf([aCandidate(7), aCandidate(12), aCandidate(20)]), ...overrides };
+  return {
+    operator: OPERATOR,
+    issues,
+    capacity: { spare: true },
+    acceptance: acceptanceOf([aCandidate(7), aCandidate(12), aCandidate(20)]),
+    now: NOW,
+    runLimitMinutes: 210,
+    ...overrides,
+  };
 }
 
 /** The body an accept step writes, failing the test on any other step. */
@@ -543,7 +555,7 @@ function anAcceptedIssue(number: number, overrides: Partial<ReplayIssue> = {}, a
 
 /** The issue with its Ticket `ticket` started by run `run`, failing the test when it can't start. */
 function started(issue: ReplayIssue, ticket: number, run: number): ReplayIssue {
-  const body = withTicketStarted(issue.body, ticket, run);
+  const body = withTicketStarted(issue.body, ticket, run, STARTED);
   if (body === null) throw new Error(`#${ticket} can't start on #${issue.number}`);
   return { ...issue, body };
 }
@@ -803,7 +815,7 @@ describe("A Replay's next step on the tick", () => {
 
       expect(marks?.plan).toEqual(replayMarksIn(accepted.body)?.plan);
       expect(marks?.progress).toEqual([
-        { ticket: 12, state: "in-progress", run: 9001, retrying: null },
+        { ticket: 12, state: "in-progress", run: 9001, retrying: null, startedAt: STARTED },
         { ticket: 7, state: "pending" },
       ]);
     });
@@ -824,9 +836,9 @@ describe("A Replay's next step on the tick", () => {
     it("starting only a Ticket in the plan that is waiting to run", () => {
       const accepted = anAcceptedIssue(140);
 
-      expect(withTicketStarted(started(accepted, 12, 9001).body, 12, 9002)).toBeNull();
-      expect(withTicketStarted(accepted.body, 30, 9001)).toBeNull();
-      expect(withTicketStarted(bodyWith("review.effort: high"), 12, 9001)).toBeNull();
+      expect(withTicketStarted(started(accepted, 12, 9001).body, 12, 9002, STARTED)).toBeNull();
+      expect(withTicketStarted(accepted.body, 30, 9001, STARTED)).toBeNull();
+      expect(withTicketStarted(bodyWith("review.effort: high"), 12, 9001, STARTED)).toBeNull();
     });
 
     it("marking a Ticket done once its run ends, so the next one starts", () => {
@@ -1122,7 +1134,7 @@ describe("A Replay's results", () => {
     ]);
   });
 
-  it("compares the baseline with the original's first attempt only, never a Retry, nor a past Replay's runs", () => {
+  it("compares the baseline with the original's first Implement run and its Review only, never a Retry, nor a past Replay's runs", () => {
     const outcomes = outcomesOf(anArm(12, "baseline", 9001), anArm(12, "variant", 9001), anArm(7, "baseline", 9002), anArm(7, "variant", 9002));
     const retry = { runId: 600, retry: 1, endedAt: "2026-10-01T11:00:00Z", totalCostUsd: 9 };
     const pastReplay = { ...replayOf(12, "baseline"), issue: 130 };
@@ -1149,6 +1161,19 @@ describe("A Replay's results", () => {
     expect(totalsIn(body)).toEqual(expect.arrayContaining(["| baseline | 2/2 | 2/2 | 2/2 | 0.80 | 0.90 | 0.75 | – | – | 6 min |", "| original | – | 2/2 | – | – | – | – | – | – | 6 min |"]));
     expect(visible(body)).toContain("**variant: gates 2/2 vs 2/2; pass Verdicts 2/2 vs 2/2; hidden tests 2/2 vs 2/2; duration 0%**");
     expect(totalsIn(body).at(-1)).toBe("Baseline vs original: pass Verdicts 2/2 vs 2/2; duration 0%.");
+  });
+
+  it("adds nothing for an arm's Review that never ran, as on a patch that changes a Trust-root file, so the arm's figures, totals and headline stay its Implement run's", () => {
+    const refused = anArm(12, "variant", 9001);
+    // The patch was never laid, so the arm has no gates and no Review.
+    const neverReviewed = { ...refused, records: refused.records.filter(({ role }) => role !== "review"), gates: [] };
+    const outcomes = outcomesOf(anArm(12, "baseline", 9001), neverReviewed, anArm(7, "baseline", 9002), anArm(7, "variant", 9002));
+
+    const body = resultsIn(aFinishedReplay().body, outcomes);
+
+    expect(rowsOf(body)[1]).toBe(`| #12 (merged in #112) | variant, effort high | – | – | – | 0.80 | 0.90 | 0.75 | $1.00 | 12 | 2 min | ${patchOf(12, "variant")} | – |`);
+    expect(totalsIn(body)).toContain("| variant | 1/1 | 1/1 | 1/1 | 0.80 | 0.90 | 0.75 | $3.00 | 36 | 5 min |");
+    expect(visible(body)).toContain("**variant: gates 1/1 vs 2/2; pass Verdicts 1/1 vs 2/2; hidden tests 1/1 vs 2/2; cost −25%; turns −25%; duration −25%**");
   });
 
   it("heads the results with one line of the variant's totals against the baseline's", () => {

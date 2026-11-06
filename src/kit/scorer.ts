@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { isObject } from "../agent/stream.ts";
 import { type Rubric, rubricSet } from "./rubrics.ts";
-import { type RateLimitReading, type ReplayRun, type RunRecord, type RunRecordRole, runStoreName } from "./runRecord.ts";
+import { isLive, type RateLimitReading, type ReplayRun, type RunRecord, type RunRecordRole, runStoreName } from "./runRecord.ts";
 
 /**
  * The share of live first Implement runs scored: one in four. A run is in the
@@ -17,15 +17,10 @@ export const SAMPLED_SHARE = 1 / 4;
 /**
  * The weekly-limit utilization, from 0 to 1, at or above which a run isn't
  * scored, so scoring never pushes the factory into its Subscription's limit.
+ * A Replay's own limit, REPLAY_UTILIZATION_LIMIT, sits with the replay step
+ * that weighs it (src/loop/replayGate.ts).
  */
 export const SCORING_UTILIZATION_LIMIT = 0.75;
-
-/**
- * The weekly-limit utilization, from 0 to 1, at or above which no replay
- * Ticket starts (#156), so a Replay stays in the lower half of the week's
- * budget (src/loop/replayGate.ts).
- */
-export const REPLAY_UTILIZATION_LIMIT = 0.5;
 
 /**
  * A skip the scoring plan decides from the run's record, before any judge
@@ -80,7 +75,7 @@ export function atOrOver(reading: RateLimitReading, limit: number): boolean {
  */
 function picked(record: RunRecord): boolean {
   if (record.role !== "implement") return false;
-  return record.replay !== null || record.retry > 0 || record.stepUp || record.requestChanges || sampled(record.runId);
+  return !isLive(record) || record.retry > 0 || record.stepUp || record.requestChanges || sampled(record.runId);
 }
 
 /** Whether a first Implement run is in the sample, by the SHA-256 of its run id's decimal string. */

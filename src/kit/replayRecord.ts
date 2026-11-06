@@ -1,93 +1,23 @@
-// A replay Ticket's run (#156), as its jobs leave it and its replay-record job
-// writes it. Both arms run in one workflow run, as a matrix, so each arm's
-// job passes out what it did as artifacts whose names carry the arm, never as
-// job outputs, which the legs of a matrix overwrite. The replay-record job,
-// the replay's push job (ADR-0009's shape), reads them back: each arm's
-// Implement and Review runs' Run records and transcripts, its patch and
-// gates, and the judge's record and score file, every one create-only in the
-// store. It also says how the run ended, for the Loop to land on the replay
-// issue (src/loop/replayRun.ts). Pure but for writeReplayRun, which writes
-// through the record writer (src/kit/recordWriter.ts).
+// A replay Ticket's run (#156), as its replay-record job, the replay's push
+// job (ADR-0009's shape), writes it from what each arm's jobs left as
+// artifacts (src/kit/replayArtifacts.ts): each arm's Implement and Review
+// runs' Run records and transcripts, its patch and gates, and the judge's
+// record and score file, every one create-only in the store. It also says
+// how the run ended, for the Loop to land on the replay issue
+// (src/loop/replayRun.ts), and, before the judge runs, whether it scores an
+// arm. Pure but for writeReplayRun, which writes through the record writer
+// (src/kit/recordWriter.ts).
 import { readFailureReport } from "../agent/failure.ts";
-import { isObject } from "../agent/stream.ts";
+import { isObject, parsedJson } from "../agent/stream.ts";
+import { type ArmArtifacts, type ArmRunArtifacts, readArmJob } from "./replayArtifacts.ts";
 import type { NeededJob } from "./pushJob.ts";
-import { readReplayArmGates, type ReplayArms, type ReplayArmSettings, type ReplayTicketEnd } from "./replay.ts";
+import { readReplayArmGates, readReplayArms, type ReplayArms, type ReplayTicketEnd } from "./replay.ts";
 import { type StoreApi, type StoreFile, type StoreWrite, storeCommitMessage, storeJson, writeStoreFiles } from "./recordWriter.ts";
-import { judgeRunRecordFor, type ReplayArm, replayGatesPath, replayPatchPath, type ReplayRole, replayRunRecordFor, type RunRecordFiles } from "./runRecord.ts";
+import { RUN_NAMES } from "../loop/heldRun.ts";
+import { judgeRunRecordFor, REPLAY_ARMS, REPLAY_ROLES, type ReplayArm, replayGatesPath, replayPatchPath, type ReplayRole, replayRunRecordFor, type RunRecordFiles } from "./runRecord.ts";
 import { JUDGE_MODEL } from "./runStore.ts";
 import { judgeOutcome } from "./judge.ts";
 import { type KitRubrics, scoreFileFor, scoringPlan, scoringRubrics } from "./scorer.ts";
-
-/** A Replay's two arms, in the order the replay-record job writes them. */
-export const REPLAY_ARMS: readonly ReplayArm[] = ["baseline", "variant"];
-
-/**
- * What an arm's jobs leave, each as an artifact of its own: its Implement and
- * Review runs (the job's account, the result, a failure report, and the
- * Implement run's patch) and their transcripts, its gates, and the judge's
- * account, answer, failure report and transcript, the judge's named as the
- * judge action names a live run's (.github/actions/run-judge).
- */
-export type ReplayArtifactKind =
-  | "implement"
-  | "transcript-implement"
-  | "review"
-  | "transcript-review"
-  | "gates"
-  | "score"
-  | "judge-result"
-  | "judge-failure"
-  | "transcript-score";
-
-/**
- * The name of what an arm's job leaves of `kind`, such as
- * `fabrik-implement-replay-baseline`: its arm last, so the two arms of one
- * workflow run never collide, and never `fabrik-agent-*`, the push job's.
- */
-export function replayArtifact(kind: ReplayArtifactKind, arm: ReplayArm): string {
-  return `fabrik-${kind}-replay-${arm}`;
-}
-
-/** The file each of an arm's jobs says how its run went in, beside what the run left (armJobOf). */
-export const ARM_JOB_FILE = "arm-job.json";
-
-/**
- * How one of an arm's runs went, as its job saw it: the job's result and the
- * outputs an agent job passes out (`secrets-step`, `model`, `effort`), or
- * that it never started, with why, as a Review on an arm whose Implement run
- * left no patch to judge.
- */
-export type ArmJob = { readonly ran: true; readonly job: NeededJob } | { readonly ran: false; readonly why: string };
-
-/**
- * How an arm's job's steps went, as its last step reads them from the
- * `steps` and `job` contexts: the agent step's outcome (empty when it never
- * ran), loading its secrets', the job's status, the model and effort the
- * runner passed, and why the job never started its run, or empty when it had
- * every reason to.
- */
-export interface ArmSteps {
-  readonly agent: string;
-  readonly secrets: string;
-  readonly job: string;
-  readonly model: string;
-  readonly effort: string;
-  readonly notRun: string;
-}
-
-/**
- * The arm's job's account of its run: it passed when its agent step did;
- * cancelled when the job was, by its timeout or the workflow run's, which the
- * record reads as a timeout; failed when its agent step, or any step before
- * it, failed; and never started when the job said why, as a Review with no
- * patch to judge.
- */
-export function armJobOf(steps: ArmSteps): ArmJob {
-  const ranAgent = steps.agent !== "" && steps.agent !== "skipped";
-  if (!ranAgent && steps.notRun !== "") return { ran: false, why: steps.notRun };
-  const result = steps.agent === "success" ? "success" : steps.agent === "cancelled" || steps.job === "cancelled" ? "cancelled" : "failure";
-  return { ran: true, job: { result, outputs: { "secrets-step": steps.secrets, model: steps.model, effort: steps.effort } } };
-}
 
 /** Which Replay Ticket's run this is, from the Kit job's outputs (src/kit/jobs.ts) and the Actions run. */
 export interface ReplayRunContext {
@@ -122,7 +52,7 @@ export function replayRunContextOf(
     if (!Number.isSafeInteger(value) || value < 1) throw new Error(`The Kit job's ${name} isn't an issue number: ${output(name)}`);
     return value;
   };
-  const arms = readReplayArms(output("replay-arms"));
+  const arms = readReplayArms(parsedJson(output("replay-arms")));
   if (arms === null) throw new Error("The Kit job's replay-arms don't read as each arm's settings");
   return {
     ...run,
@@ -134,52 +64,6 @@ export function replayRunContextOf(
     arms,
     subscription: output("subscription"),
   };
-}
-
-/** Each arm's settings, as the Kit job passes them out in `replay-arms`, or null for anything else. */
-function readReplayArms(text: string): ReplayArms | null {
-  const value = parsed(text);
-  if (!isObject(value)) return null;
-  const baseline = readArmSettings(value["baseline"]);
-  const variant = readArmSettings(value["variant"]);
-  return baseline === null || variant === null ? null : { baseline, variant };
-}
-
-function readArmSettings(value: unknown): ReplayArmSettings | null {
-  if (!isObject(value)) return null;
-  const implement = readRoleSettings(value["implement"]);
-  const review = readRoleSettings(value["review"]);
-  const candidateSha = value["candidateSha"];
-  if (implement === null || review === null || !(candidateSha === null || typeof candidateSha === "string")) return null;
-  return { implement, review, candidateSha };
-}
-
-function readRoleSettings(value: unknown): ReplayArmSettings["implement"] | null {
-  if (!isObject(value)) return null;
-  const { model, effort } = value;
-  return typeof model === "string" && model !== "" && (effort === null || typeof effort === "string") ? { model, effort } : null;
-}
-
-/** What one of an arm's runs left: how its job went (ARM_JOB_FILE), its result, its failure report and its transcript; null for each it left none of. */
-export interface ArmRunArtifacts {
-  readonly job: string | null;
-  readonly agentResult: string | null;
-  readonly failureReport: string | null;
-  /** The transcript's stream-json lines, and its gzip as the store keeps it. */
-  readonly transcript: readonly string[] | null;
-  readonly transcriptGzip: Uint8Array | null;
-}
-
-/** What one arm's jobs left, from its Implement run to its judge run. */
-export interface ArmArtifacts {
-  readonly implement: ArmRunArtifacts;
-  readonly review: ArmRunArtifacts;
-  /** The Implement run's patch, its diff from baseSha (empty when it committed nothing), or null when it left none. */
-  readonly patch: Uint8Array | null;
-  /** The gates job's ReplayArmGates, or null when it left none. */
-  readonly gates: string | null;
-  /** The judge's run: its job's account (ARM_JOB_FILE), its answer or failure report, and its transcript. */
-  readonly judge: Omit<ArmRunArtifacts, "agentResult" | "failureReport"> & { readonly result: string | null; readonly failure: string | null };
 }
 
 /**
@@ -203,7 +87,7 @@ export const REPLAY_RUN_ENDED_FILE = "replay-run-ended.json";
 
 /** How a replay Ticket's run ended, from the file the replay-record job left, or a throw for one that doesn't read as it writes one. */
 export function readReplayRunEnded(text: string): ReplayRunEnded {
-  const value = parsed(text);
+  const value = parsedJson(text);
   const ended = isObject(value) ? value : {};
   const { issue, ticket, run, end, subscription, resetsAt } = ended;
   const ids = [issue, ticket, run].every((id) => Number.isSafeInteger(id) && (id as number) > 0);
@@ -227,12 +111,9 @@ export interface ReplayRunFiles {
  * or the score file of a run the scoring plan skips.
  */
 export function replayRunFiles(context: ReplayRunContext, arms: Readonly<Record<ReplayArm, ArmArtifacts>>, kit: KitRubrics, endedAt: string): ReplayRunFiles {
-  const runs = REPLAY_ARMS.map((arm) => ({
-    arm,
-    implement: armRunOf(context, arm, "implement", arms[arm].implement, endedAt),
-    review: armRunOf(context, arm, "review", arms[arm].review, endedAt),
-  }));
-  const end = endOf(runs);
+  const runs = armRunsOf(context, arms, endedAt);
+  const ended = endedOf(context, runs);
+  const { end } = ended;
   const writes: { message: string; files: StoreFile[] }[] = [];
   for (const { arm, implement, review } of runs) {
     const artifacts = arms[arm];
@@ -248,17 +129,37 @@ export function replayRunFiles(context: ReplayRunContext, arms: Readonly<Record<
     if (review.kind === "ran") writes.push({ message: storeCommitMessage(review.files.record), files: runFiles(review.files, artifacts.review) });
     if (implement.kind === "ran") writes.push(...scoringFiles(implement.files, artifacts.judge, kit, endedAt));
   }
+  return { ended, writes };
+}
+
+/**
+ * How a replay Ticket's run ended, from what its arms' jobs left, as
+ * replayRunFiles says it too. It needs no rubrics and writes nothing, so the
+ * replay-record job leaves it first, before anything else can fail.
+ */
+export function replayRunEnded(context: ReplayRunContext, arms: Readonly<Record<ReplayArm, ArmArtifacts>>, endedAt: string): ReplayRunEnded {
+  return endedOf(context, armRunsOf(context, arms, endedAt));
+}
+
+/** Each arm's Implement and Review runs, in the arms' order, as their jobs left them. */
+function armRunsOf(context: ReplayRunContext, arms: Readonly<Record<ReplayArm, ArmArtifacts>>, endedAt: string): ArmRuns {
+  return REPLAY_ARMS.map((arm) => ({
+    arm,
+    implement: armRunOf(context, arm, "implement", arms[arm].implement, endedAt),
+    review: armRunOf(context, arm, "review", arms[arm].review, endedAt),
+  }));
+}
+
+/** How the run of these arms' runs ended, for the Loop to land. */
+function endedOf(context: ReplayRunContext, runs: ArmRuns): ReplayRunEnded {
   const refused = runs.flatMap(({ implement, review }) => [implement, review]).find(isWeeklyLimit);
   return {
-    ended: {
-      issue: context.issue,
-      ticket: context.ticket,
-      run: context.runId,
-      end,
-      subscription: context.subscription,
-      resetsAt: refused?.kind === "ran" && refused.failureReport !== null ? (readFailureReport(refused.failureReport).resetsAt ?? null) : null,
-    },
-    writes,
+    issue: context.issue,
+    ticket: context.ticket,
+    run: context.runId,
+    end: endOf(runs),
+    subscription: context.subscription,
+    resetsAt: refused?.kind === "ran" && refused.failureReport !== null ? (readFailureReport(refused.failureReport).resetsAt ?? null) : null,
   };
 }
 
@@ -267,6 +168,9 @@ type ArmRun =
   | { readonly kind: "ran"; readonly files: RunRecordFiles; readonly failureReport: string | null }
   | { readonly kind: "not-run"; readonly why: string }
   | { readonly kind: "missing" };
+
+/** Each arm's two runs, in the arms' order. */
+type ArmRuns = readonly { readonly arm: ReplayArm; readonly implement: ArmRun; readonly review: ArmRun }[];
 
 function armRunOf(context: ReplayRunContext, arm: ReplayArm, role: ReplayRole, artifacts: ArmRunArtifacts, endedAt: string): ArmRun {
   const job = readArmJob(artifacts.job);
@@ -279,8 +183,6 @@ function isWeeklyLimit(run: ArmRun): boolean {
   return run.kind === "ran" && run.files.record.infrastructureFailure === "weekly-limit";
 }
 
-const ROLE_NAMES: Readonly<Record<ReplayRole, string>> = { implement: "Implement", review: "Review" };
-
 /**
  * How the Ticket's run ended: a weekly-limit refusal of any arm's run first,
  * a fact about the Subscription that costs the Ticket nothing; then, in the
@@ -289,11 +191,12 @@ const ROLE_NAMES: Readonly<Record<ReplayRole, string>> = { implement: "Implement
  * have run, while its Review may never have started, as when its patch
  * wasn't laid.
  */
-function endOf(runs: readonly { readonly arm: ReplayArm; readonly implement: ArmRun; readonly review: ArmRun }[]): ReplayTicketEnd {
+function endOf(runs: ArmRuns): ReplayTicketEnd {
   if (runs.some(({ implement, review }) => isWeeklyLimit(implement) || isWeeklyLimit(review))) return { kind: "weekly-limit" };
   for (const { arm, implement, review } of runs) {
-    for (const [role, run] of [["implement", implement], ["review", review]] as const) {
-      const name = `the ${arm} arm's ${ROLE_NAMES[role]} run`;
+    for (const role of REPLAY_ROLES) {
+      const run = role === "implement" ? implement : review;
+      const name = `the ${arm} arm's ${RUN_NAMES[role]} run`;
       if (run.kind === "missing" || (run.kind === "not-run" && role === "implement")) {
         return { kind: "infrastructure", reason: `${name} left no account of how it went, as when its workflow run is cancelled` };
       }
@@ -306,7 +209,7 @@ function endOf(runs: readonly { readonly arm: ReplayArm; readonly implement: Arm
 
 /** The arm's gates file, at its path beside the patch, when its gates job left one for this run. */
 function gatesFile(context: ReplayRunContext, arm: ReplayArm, text: string | null): StoreFile[] {
-  const gates = text === null ? null : readReplayArmGates(parsed(text));
+  const gates = text === null ? null : readReplayArmGates(parsedJson(text));
   if (gates === null || gates.ticket !== context.ticket || gates.arm !== arm || gates.run !== context.runId) return [];
   return [{ path: replayGatesPath(context.repo, { issue: context.issue, ticket: context.ticket, arm }), content: storeJson(gates) }];
 }
@@ -396,17 +299,6 @@ function armRunRecord(context: ReplayRunContext, arm: ReplayArm, role: ReplayRol
   });
 }
 
-/** An arm's job's account of its run (ARM_JOB_FILE), or null when it left none that reads. */
-export function readArmJob(text: string | null): ArmJob | null {
-  const value = text === null ? null : parsed(text);
-  if (!isObject(value)) return null;
-  if (value["ran"] === false) return typeof value["why"] === "string" ? { ran: false, why: value["why"] } : null;
-  const job = value["job"];
-  if (value["ran"] !== true || !isObject(job) || typeof job["result"] !== "string" || !isObject(job["outputs"])) return null;
-  const outputs = Object.fromEntries(Object.entries(job["outputs"]).flatMap(([name, output]) => (typeof output === "string" ? [[name, output]] : [])));
-  return { ran: true, job: { result: job["result"], outputs } };
-}
-
 /**
  * Writes each group of a replay Ticket's files to the store, in order, each
  * file create-only and retrying a write a parallel commit beat: nothing when
@@ -422,12 +314,4 @@ export async function writeReplayRun(store: StoreApi, files: ReplayRunFiles, wai
     existing.push(...write.existing);
   }
   return { kind: "written", written, existing };
-}
-
-function parsed(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }

@@ -17,6 +17,7 @@ import { promisify } from "node:util";
 import { readKitConfigWith } from "./checkout.ts";
 import type { ReplayArmGates } from "./replay.ts";
 import { type HiddenTestsAt, REPLAY_GATES_FILE, runReplayGates } from "./replayGates.ts";
+import { isReplayArm } from "./runRecord.ts";
 import { testEnv } from "./secrets.ts";
 import { writeSummary } from "./stepFiles.ts";
 
@@ -75,7 +76,7 @@ async function main(productDir: string): Promise<void> {
     },
   });
   const arm = required("FABRIK_ARM");
-  if (arm !== "baseline" && arm !== "variant") throw new Error(`FABRIK_ARM is ${arm}, not an arm`);
+  if (!isReplayArm(arm)) throw new Error(`FABRIK_ARM is ${arm}, not an arm`);
   const gates: ReplayArmGates = { ticket: Number(required("FABRIK_TICKET")), arm, run: Number(required("GITHUB_RUN_ID")), ...outcome };
   const outDir = required("FABRIK_OUT_DIR");
   await mkdir(outDir, { recursive: true });

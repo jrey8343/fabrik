@@ -3,12 +3,13 @@
 // (armScoring, src/kit/replayRecord.ts), so the judge runs only on a run the
 // plan picks and a run it skips spends no judge run (#286). The replay-record
 // job writes a skip's score file itself.
-//   node src/kit/replay-plan-main.ts
+//   node src/kit/replay-scoring-plan-main.ts
 // Env: FABRIK_KIT_OUTPUTS (`toJSON(needs.kit.outputs)`), FABRIK_ARM, and
 // FABRIK_REPLAY_DIR, where the arm's Implement artifacts were downloaded, each
 // into a folder named after it. Step outputs: `score` ("true" or "false") and `why`.
 import { armRunArtifactsIn } from "./replayArtifacts.ts";
 import { armScoring, replayRunContextOf } from "./replayRecord.ts";
+import { isReplayArm } from "./runRecord.ts";
 import { writeOutputs, writeSummary } from "./stepFiles.ts";
 
 function required(name: string): string {
@@ -19,7 +20,7 @@ function required(name: string): string {
 
 async function main(): Promise<void> {
   const arm = required("FABRIK_ARM");
-  if (arm !== "baseline" && arm !== "variant") throw new Error(`FABRIK_ARM is ${arm}, not an arm`);
+  if (!isReplayArm(arm)) throw new Error(`FABRIK_ARM is ${arm}, not an arm`);
   const context = replayRunContextOf(JSON.parse(required("FABRIK_KIT_OUTPUTS")) as Record<string, string>, {
     repo: required("GITHUB_REPOSITORY"),
     runId: Number(required("GITHUB_RUN_ID")),

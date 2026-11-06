@@ -79,6 +79,22 @@ export const RUN_RECORD_SCHEMA = 4;
 /** A Replay's two arms (#156): the baseline, run as the Ticket was built, and the variant, with the one variable changed. */
 export type ReplayArm = "baseline" | "variant";
 
+/** A Replay's two arms, in the order a Replay runs, writes and shows them. */
+export const REPLAY_ARMS: readonly ReplayArm[] = ["baseline", "variant"];
+
+export function isReplayArm(value: unknown): value is ReplayArm {
+  return (REPLAY_ARMS as readonly unknown[]).includes(value);
+}
+
+/**
+ * The roles a Replay arm runs, one Implement run and then one Review of its
+ * diff: the only roles whose model or effort a Replay can change.
+ */
+export type ReplayRole = Extract<AgentRole, "implement" | "review">;
+
+/** A Replay arm's roles, in the order it runs them. */
+export const REPLAY_ROLES: readonly ReplayRole[] = ["implement", "review"];
+
 /** Which Replay a run was an arm of, and of which Ticket. */
 export interface ReplayRun {
   /** The replay issue, the `fabrik:replay` issue the Operator filed. */
@@ -291,9 +307,6 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
 }
-
-/** The roles a Replay arm runs: one Implement run, then one Review of its diff. */
-export type ReplayRole = Extract<AgentRole, "implement" | "review">;
 
 /** What the replay-record job knows when one arm's Implement or Review run, replaying a merged Ticket, ends. */
 export interface ReplayRunEnd {

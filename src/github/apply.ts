@@ -1,7 +1,7 @@
 // The adapter's apply side: carries out the plan the core returns, one action
 // at a time, as the token the job holds. It holds no Loop rules.
 import { prototypePreviewUrl, previewUrl } from "../kit/config.ts";
-import { withTicketStarted } from "../kit/replay.ts";
+import { replayResultsIn, withTicketFinished, withTicketStarted } from "../kit/replay.ts";
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { withPrototypeStarted } from "../loop/markers.ts";
@@ -55,18 +55,24 @@ export interface AppliedPlan {
   readonly preview: PreviewToLink | PrototypePreviewToLink | null;
 }
 
+/** The Actions run applying a plan, by its id, and when it applies it, as an ISO 8601 time. */
+export interface ApplyingRun {
+  readonly id: number;
+  readonly at: string;
+}
+
 /**
  * Applies each action in the plan, in order, and returns what the push job
  * hands on from it. Only the push job of an Implement run, a Researcher run or
  * a prototype turn has a branch to push. `run` is the Actions run applying
- * it, which a replay Ticket's claim marks it in progress in.
+ * it, which a replay Ticket's claim marks it in progress in, from then.
  */
 export async function applyPlan(
   github: GitHubApi,
   repo: Repo,
   plan: Plan,
   branches: BranchPusher | null = null,
-  run: number | null = null,
+  run: ApplyingRun | null = null,
 ): Promise<AppliedPlan> {
   if (plan.kind !== "act") return { preview: null };
   const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run };
@@ -85,7 +91,7 @@ interface Made {
   opened: number | null;
   preview: PreviewToLink | PrototypePreviewToLink | null;
   /** The Actions run applying the plan, or null when the job names none. */
-  readonly run: number | null;
+  readonly run: ApplyingRun | null;
 }
 
 /** A comment a plan posted: its URL for links in text, its id for an edit. */
@@ -395,11 +401,21 @@ async function applyToIssue(
       if (made.run === null) throw new Error(`This job names no Actions run to mark #${action.ticket} in progress in`);
       // Read fresh, so a run that claimed the Ticket since the plan was made keeps it.
       const { body } = (await github.rest("GET", issue)) as { body: string | null };
-      const marked = withTicketStarted(body ?? "", action.ticket, made.run);
+      const marked = withTicketStarted(body ?? "", action.ticket, made.run.id, made.run.at);
       if (marked === null) {
-        throw new Error(`#${action.ticket} isn't waiting to run on replay #${action.issue}, so run ${made.run} doesn't claim it`);
+        throw new Error(`#${action.ticket} isn't waiting to run on replay #${action.issue}, so run ${made.run.id} doesn't claim it`);
       }
       await github.rest("PATCH", issue, { body: marked });
+      return;
+    }
+    case "release-replay-ticket": {
+      // Read fresh, so a run that landed since the tick read the body keeps what it landed.
+      const { body } = (await github.rest("GET", issue)) as { body: string | null };
+      const before = body ?? "";
+      const released = withTicketFinished(before, action.ticket, action.run, { kind: "infrastructure", reason: action.reason });
+      if (released === null) return;
+      await github.rest("PATCH", issue, { body: released });
+      if (replayResultsIn(released) && !replayResultsIn(before)) await github.rest("POST", `${issue}/comments`, { body: action.resultsReady });
       return;
     }
     case "hold-agent-run":

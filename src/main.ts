@@ -94,6 +94,8 @@ function describeAction(action: Action): string {
       return `- replay #${action.ticket.ticket} of replay #${action.issue}, both arms, which the Kit job routes to its replay jobs`;
     case "mark-replay-started":
       return `- mark #${action.ticket} in progress on replay #${action.issue} in this run`;
+    case "release-replay-ticket":
+      return `- end run ${action.run} of #${action.ticket} on replay #${action.issue}, which never landed, as an Infrastructure failure`;
     case "hold-agent-run":
       return `- hold the ${action.role} run on #${action.issue}${action.until === null ? "" : ` until ${action.until}`}, starting no agent job`;
     case "drop-held-run":
@@ -416,7 +418,7 @@ async function main(): Promise<void> {
   const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
   const plan = planFor(event, snapshot, config);
   // A replay Ticket's claim marks it in progress in this run, and fails when another run claimed it first.
-  const { preview } = await applyPlan(github, repo, plan, branch, Number(required("GITHUB_RUN_ID")));
+  const { preview } = await applyPlan(github, repo, plan, branch, { id: Number(required("GITHUB_RUN_ID")), at: new Date().toISOString() });
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
   // The replay jobs run only on the Ticket this run's claim marked in progress, once it has.

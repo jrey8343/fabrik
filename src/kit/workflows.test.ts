@@ -6,11 +6,12 @@ import { kitJobOutputs } from "./jobs.ts";
 import { JUDGE_JOB } from "./judge.ts";
 import { PREVIEW_POLL_MINUTES } from "./previewLink.ts";
 import { PROTOTYPE_JOB, RETRO_EVIDENCE_JOB } from "./pushJob.ts";
-import { REPLAY_ARMS } from "./replayRecord.ts";
+import { REPLAY_ARMS } from "./runRecord.ts";
 import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { IMPLEMENT_JOB_NAME } from "../github/snapshot.ts";
+import { REPLAY_ROUTE_JOB_MINUTES } from "../loop/replayGate.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE, PROTOTYPE_GALLERY_FILE } from "../evidence/capture.ts";
 import { MAP_INPUTS_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
@@ -1964,6 +1965,12 @@ describe("loop.yml's replay jobs", () => {
     expect(readFileSync(new URL("src/main.ts", root), "utf8")).toContain("`replay-ticket=${claimed}\\n`");
   });
 
+  it("claims one replay Ticket at a time across the repo, so two replay issues' claims can't both find none in progress, and holds back no other claim", () => {
+    expect(job("implement-claim")).toContain(
+      "\n    concurrency:\n      group: ${{ needs.kit.outputs.route == 'replay' && 'fabrik-replay-claim' || format('fabrik-claim-{0}', github.run_id) }}\n      cancel-in-progress: false\n      queue: max\n",
+    );
+  });
+
   it.each(REPLAY_JOBS)("%s runs only on the Ticket the claim marked in progress in this run, once the claim has", (name) => {
     expect(needsOf(job(name))).toEqual(expect.arrayContaining(["kit", "implement-claim"]));
     expect(/\n    if: (.*)\n/.exec(job(name))?.[1]).toContain(CLAIMED);
@@ -2086,6 +2093,17 @@ describe("loop.yml's replay jobs", () => {
     expect(codeOf(score)).not.toMatch(WRITE_CREDENTIALS);
     expect(score).toContain(`\n    timeout-minutes: ${JUDGE_TIMEOUT_MINUTES}\n`);
     expect(stepsOf(score).find((one) => one.includes("uses: ./kit/.github/actions/replay-score"))).toContain("kit-outputs: ${{ toJSON(needs.kit.outputs) }}");
+  });
+
+  // The tick releases a Ticket in progress longer than these jobs can take end to end (replayRunLimitMinutes).
+  it("runs within the timeouts the tick counts a replay Ticket's run lasting at most", () => {
+    const { kit, claim, record } = REPLAY_ROUTE_JOB_MINUTES;
+
+    expect(job("kit")).toContain(`\n    timeout-minutes: ${kit}\n`);
+    expect(job("implement-claim")).toContain(`\n    timeout-minutes: ${claim}\n`);
+    expect(job("replay-record")).toContain(`\n    timeout-minutes: ${record}\n`);
+    for (const name of ["replay-implement", "replay-gates"]) expect(job(name)).toContain("\n    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}\n");
+    expect(job("replay-review")).toContain("\n    timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}\n");
   });
 
   describe("replay record, the replay's push job", () => {

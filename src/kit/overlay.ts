@@ -2,13 +2,13 @@
 // candidate Kit sha, the candidate's prompts and its Base skills pin, and
 // nothing else, are laid over the pinned Kit checkout before the agent job
 // fetches its skills and builds its prompt. The workflow code, the Kit's own
-// programs and the Scorers' rubrics stay the pinned release (ADR-0003).
+// programs and the Scorers' rubrics stay the pinned release (ADR-0003's addendum).
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { allPages, type GitHub, GitHubError } from "../github/client.ts";
 import { KIT_PROMPT_NAMES, kitPromptPath } from "../guard/trust-root.ts";
-import { KIT_REPO } from "../loop/retroLanding.ts";
 import { FULL_SHA, readSkillsLock, SKILLS_LOCK_PATH } from "../skills/lock.ts";
+import { KIT_REPO } from "./caller.ts";
 
 /** What the overlay reads of the Fabrik repo, through a read-only token. */
 export type KitReader = Pick<GitHub, "rest" | "fileText">;
