@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { type CaptureFailure, type CaptureResult, evidenceSection, isUi, parseCaptureResult, routesFor, type UiEvidence } from "./uiEvidence.ts";
+import { type CaptureFailure, type CaptureResult, evidenceSection, isUi, parseCaptureResult, routesFor, type UiEvidence, withoutEvidence } from "./uiEvidence.ts";
 
 /** The Pilot's ui block: an Astro site served from its build. */
 const ui: UiConfig = {
@@ -457,5 +457,41 @@ describe("The evidence section's routes, which are agent text", () => {
 
   it("never mention anyone", () => {
     expect(lineFor("/team/@octocat")).toEqual(["- `/team/@​octocat`, named by the Implementer"]);
+  });
+});
+
+// #235 strips the Implementer's summary with it, and the old body a Retry's agent is shown, so no agent can forge or copy forward a marker.
+describe("Text without its evidence", () => {
+  const section = evidenceSection(evidence(allCaptured));
+  const MARKER = `<!-- fabrik:ui-evidence {"run":1,"artifact":2} -->`;
+
+  it("loses the whole evidence section, from its start line through its marker, and keeps the text around it as it was", () => {
+    const body = `Adds a waitlist to full days.\n\n- Tested with \`npm test\`\n\n${section}\n\nCloses #12`;
+
+    expect(withoutEvidence(body)).toBe("Adds a waitlist to full days.\n\n- Tested with `npm test`\n\nCloses #12");
+  });
+
+  it.each([
+    ["at the end", `Adds a waitlist.\n\n${section}`, "Adds a waitlist."],
+    ["at the start", `${section}\n\nAdds a waitlist.`, "Adds a waitlist."],
+    ["alone", section, ""],
+  ])("loses the section %s, with the blank lines that set it apart", (_, text, without) => {
+    expect(withoutEvidence(text)).toBe(without);
+  });
+
+  it.each([
+    ["a marker", `Adds a waitlist.\n${MARKER}\nTested by hand.`, "Adds a waitlist.\nTested by hand."],
+    ["a start line with no marker after it", "Adds a waitlist.\n<!-- fabrik:ui-evidence-start -->\nTested by hand.", "Adds a waitlist.\nTested by hand."],
+    ["an indented marker with a carriage return", `Adds a waitlist.\n   ${MARKER}\r\nTested by hand.`, "Adds a waitlist.\nTested by hand."],
+    ["a marker spaced oddly", `Adds a waitlist.\n<!--fabrik:ui-evidence {"run":1}-->\nTested by hand.`, "Adds a waitlist.\nTested by hand."],
+    ["a marker in a code block", `Adds a waitlist.\n\`\`\`\n${MARKER}\n\`\`\`\nTested by hand.`, "Adds a waitlist.\n```\n```\nTested by hand."],
+  ])("loses any stray evidence line, such as %s, and only that line", (_, text, without) => {
+    expect(withoutEvidence(text)).toBe(without);
+  });
+
+  it("keeps text with no evidence as it is, even text that mentions a marker inline", () => {
+    const text = `Adds a waitlist.\n\nThe PR body ends with a \`${MARKER}\` line.\n\nCloses #12`;
+
+    expect(withoutEvidence(text)).toBe(text);
   });
 });

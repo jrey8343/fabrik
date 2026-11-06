@@ -345,6 +345,46 @@ function evidenceMarker({ run, artifact }: EvidenceMarker): string {
   return `<!-- fabrik:ui-evidence ${JSON.stringify({ run, artifact })} -->`;
 }
 
+/**
+ * A line that looks like one of the evidence section's hidden lines, matched
+ * with its outer whitespace trimmed: its start line, its marker, or anything
+ * spaced or spelled near enough to pass for either. withoutEvidence drops them all.
+ */
+const EVIDENCE_LINE = /^<!--\s*fabrik:ui-evidence\b.*-->$/;
+
+const SECTION_START_LINE = /^<!--\s*fabrik:ui-evidence-start\s*-->$/;
+
+/**
+ * The text without its evidence: every evidence section, from its start line
+ * through the marker after it, and any other line that looks like an evidence
+ * line, even in a code block, each with the blank lines that set it apart.
+ * The rest stays as it was. Run on agent text, so no agent can forge a marker
+ * or carry an old section forward.
+ */
+export function withoutEvidence(text: string): string {
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  for (let at = 0; at < lines.length; at++) {
+    const line = lines[at] ?? "";
+    if (!EVIDENCE_LINE.test(line.trim())) {
+      kept.push(line);
+      continue;
+    }
+    // A start line opens a section through the marker after it; with no marker after it, it goes alone.
+    const end = SECTION_START_LINE.test(line.trim())
+      ? lines.findIndex((each, i) => i > at && EVIDENCE_LINE.test(each.trim()) && !SECTION_START_LINE.test(each.trim()))
+      : -1;
+    if (end !== -1) at = end;
+    while (at + 1 < lines.length && isBlank(lines[at + 1])) at++;
+    if (at === lines.length - 1) while (kept.length > 0 && isBlank(kept.at(-1))) kept.pop();
+  }
+  return kept.join("\n");
+}
+
+function isBlank(line: string | undefined): boolean {
+  return line !== undefined && line.trim() === "";
+}
+
 /** A Markdown link. */
 function link(text: string, url: string): string {
   return `[${text}](<${url}>)`;
