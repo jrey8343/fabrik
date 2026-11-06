@@ -277,6 +277,38 @@ describe("The run the Loop action", () => {
     expect(run).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
     expect(run).toContain("FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}");
   });
+
+  describe("asked to find the fabrik-runs store, as the scheduled tick asks for the retro gate", () => {
+    const find = steps.find((step) => step.includes("id: find-store\n"));
+    const store = steps.find((step) => step.includes("id: store-metadata\n"));
+    const run = steps.find((step) => step.includes("run: node src/main.ts"))!;
+
+    it("finds it only when asked, with the record action's store finder, and goes on when that fails", () => {
+      expect(action).toMatch(/\n  find-store:\n(?:.*\n)*?\s+default: "false"\n/);
+      expect(find).toContain("if: inputs.find-store == 'true'");
+      expect(find).toContain("run: node src/kit/find-store-main.ts");
+      expect(find).toContain("continue-on-error: true");
+    });
+
+    it("mints a token for fabrik-runs alone that reads only its metadata, once it has found the Fabrik App on it", () => {
+      expect(store).toContain("uses: actions/create-github-app-token@");
+      expect(store).toContain("if: steps.find-store.outputs.installed == 'true'");
+      expect(store).toMatch(/owner: jrey8343\n/);
+      expect(store).toMatch(/repositories: fabrik-runs\n/);
+      expect([...(store ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`)).toEqual(["metadata: read"]);
+      expect(store).toContain("continue-on-error: true");
+      expect(steps.indexOf(find!)).toBeLessThan(steps.indexOf(store!));
+    });
+
+    it("hands the Loop that token, so its snapshot can say whether the store is private", () => {
+      expect(run).toContain("FABRIK_STORE_METADATA_TOKEN: ${{ steps.store-metadata.outputs.token }}");
+      expect(steps.indexOf(store!)).toBeLessThan(steps.indexOf(run));
+    });
+
+    it("loads the Fabrik App key once, for every token it mints", () => {
+      expect(steps.filter((step) => step.includes("1password/load-secrets-action@"))).toHaveLength(1);
+    });
+  });
 });
 
 describe("loop.yml's Audit job", () => {
@@ -319,6 +351,14 @@ describe("loop.yml's Audit job", () => {
 });
 
 describe("schedule.yml's tick, which opens the pending Audit", () => {
+  it("asks the run the Loop action to find the fabrik-runs store, which the retro gate weighs, and is the only job that does", () => {
+    const tick = jobIn(schedule, "tick");
+
+    expect(tick).toMatch(/uses: \.\/kit\/\.github\/actions\/run-loop\n\s+with:\n(?:\s+.*\n)*?\s+find-store: "true"\n/);
+    expect(schedule.split("find-store:")).toHaveLength(2);
+    expect(loop).not.toContain("find-store:");
+  });
+
   it("holds only the push service account, so the Auditor's run needs no change to the shim", () => {
     expect(schedule).toMatch(/on:\n {2}workflow_call:\n {4}secrets:\n {6}OP_PUSH_TOKEN:\n(?: {8}.*\n)+\n/);
     expect(schedule).not.toContain("OP_AGENT_TOKEN");

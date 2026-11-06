@@ -293,7 +293,11 @@ async function main(): Promise<void> {
   // The Fabrik App's bot login, so only the App's own issues count as its: a Design session keeps only their
   // Monitor marker, and only the App's Audits are read for their markers.
   const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
-  const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions);
+  // Only the scheduled tick's run-loop step sets it, once it has found the Fabrik App on fabrik-runs: a token
+  // that reads only the store's metadata, so the retro gate weighs whether the store is private.
+  const storeToken = process.env["FABRIK_STORE_METADATA_TOKEN"];
+  const store = storeToken === undefined || storeToken === "" ? null : new GitHub(storeToken, process.env["GITHUB_API_URL"]);
+  const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store);
   const plan = planFor(event, snapshot, config);
   await applyPlan(github, repo, plan, branch);
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.

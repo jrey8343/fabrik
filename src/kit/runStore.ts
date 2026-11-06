@@ -37,3 +37,13 @@ export async function storeInstalled(app: Pick<GitHub, "rest">): Promise<boolean
     throw error;
   }
 }
+
+/**
+ * Whether the store is private, read with a token scoped to it. Records hold
+ * Product repos' issues and transcripts their code, so a store others can
+ * read is never written to, and a Retro never reads one.
+ */
+export async function storeIsPrivate(store: Pick<GitHub, "rest">): Promise<boolean> {
+  const repo = (await store.rest("GET", `/repos/${RUN_STORE.owner}/${RUN_STORE.name}`)) as { private?: unknown };
+  return repo.private === true;
+}

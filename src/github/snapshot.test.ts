@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
-import { anIssue, aPullRequest, AUDITED_SHA, auditBody, designQueueSnapshotOf, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, AUDITED_SHA, auditBody, designQueueSnapshotOf, HEAD_SHA, kitConfig, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
@@ -692,15 +692,15 @@ describe("Gathering a Dispatch check's Tickets", () => {
 describe("Gathering a scheduled tick's audit slice", () => {
   const HEAD = "c".repeat(40);
 
-  /** The read-only API, holding this default branch head and these `fabrik:audit` issues, newest first. */
+  /** The read-only API, holding this default branch head and these `fabrik:audit` issues, newest first, and no other issue or PR. */
   function githubWith(defaultBranchRef: { target: { oid: string } } | null, nodes: unknown[]) {
     return {
       async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
         if (query.includes("defaultBranchRef")) {
-          expect(variables["label"]).toBe("fabrik:audit");
-          return { repository: { defaultBranchRef, issues: { nodes } } };
+          return { repository: { defaultBranchRef, issues: { nodes: variables["label"] === "fabrik:audit" ? nodes : [] } } };
         }
-        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+        const none = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+        return { repository: { owner: { login: "acme" }, issues: none, pullRequests: none } };
       },
     } as unknown as GitHub;
   }
@@ -740,6 +740,185 @@ describe("Gathering a scheduled tick's audit slice", () => {
     const snapshot = await gatherSnapshot(githubWith({ target: { oid: HEAD } }, []), repo, { kind: "kit-config-changed" }, null, "fabrik-app[bot]");
 
     expect(snapshot.audit).toBeNull();
+  });
+});
+
+describe("Gathering a scheduled tick's retro slice", () => {
+  /** Saturday 2026-11-07 04:00 UTC. A first Retro's window starts 7 days before: 2026-10-31 04:00 UTC. */
+  const tick = { kind: "scheduled-tick", now: "2026-11-07T04:00:00.000Z" } as const;
+
+  /** A `fabrik:retro` issue node as the query returns it: by default the App's last Retro, whose window ended 2026-11-04 04:00 UTC. */
+  function aRetroNode(overrides: Record<string, unknown> = {}) {
+    return {
+      number: 80,
+      title: "Retro: week of 2026-11-02",
+      state: "CLOSED",
+      stateReason: "COMPLETED",
+      createdAt: "2026-11-04T04:00:04Z",
+      body: retroBody("2026-11-04T04:00:00.000Z"),
+      author: { login: "fabrik-app", __typename: "Bot" },
+      ...overrides,
+    };
+  }
+
+  /** A merged or closed PR node: by default an agent PR the Fabrik App opened, merged at `closedAt`. */
+  function aClosedPullRequest(closedAt: string, overrides: Record<string, unknown> = {}) {
+    return { headRefName: "fabrik/ticket-7", closedAt, updatedAt: closedAt, author: { __typename: "Bot" }, ...overrides };
+  }
+
+  /** An issue node the Operator opened, by default with an escape marker. */
+  function anOperatorIssue(createdAt: string, body = "Make the cart module deeper\n\n<!-- fabrik:escape strong #31 -->") {
+    return { createdAt, body };
+  }
+
+  /**
+   * The read-only API, holding these `fabrik:retro` issues, these pages of
+   * merged and closed PRs, newest-updated first, and the issues the Operator
+   * opened, newest first. The queries it was asked are in `asked`.
+   */
+  function githubWith({
+    retros = [],
+    pullRequestPages = [[]],
+    operatorIssues = [],
+  }: { retros?: unknown[]; pullRequestPages?: unknown[][]; operatorIssues?: unknown[] } = {}) {
+    const asked: { query: string; variables: Record<string, unknown> }[] = [];
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        asked.push({ query, variables });
+        if (query.includes("labels: [$label]")) {
+          return { repository: { defaultBranchRef: null, issues: { nodes: variables["label"] === "fabrik:retro" ? retros : [] } } };
+        }
+        if (query.includes("states: [MERGED, CLOSED]")) {
+          const at = typeof variables["after"] === "string" ? Number(variables["after"]) : 0;
+          const hasNextPage = at + 1 < pullRequestPages.length;
+          return { repository: { pullRequests: { pageInfo: { hasNextPage, endCursor: hasNextPage ? String(at + 1) : null }, nodes: pullRequestPages[at] } } };
+        }
+        if (query.includes("createdBy: $operator")) {
+          return { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: operatorIssues } } };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+    return { github, asked };
+  }
+
+  /** The store's metadata as a token scoped to it reads it. */
+  function storeThatIs(visibility: "private" | "public") {
+    return {
+      async rest(method: string, path: string): Promise<unknown> {
+        expect([method, path]).toEqual(["GET", "/repos/jrey8343/fabrik-runs"]);
+        return { full_name: "jrey8343/fabrik-runs", private: visibility === "private" };
+      },
+    } as unknown as GitHub;
+  }
+
+  const gather = (github: GitHub, store: GitHub | null = storeThatIs("private"), operator: string | null = null) =>
+    gatherSnapshot(github, repo, tick, operator, "fabrik-app[bot]", null, store);
+
+  it("holds each Retro issue, open or closed, with its title, telling the Fabrik App's from a person's or another bot's", async () => {
+    const { github } = githubWith({
+      retros: [
+        aRetroNode({ number: 97, title: "My retro", state: "OPEN", stateReason: null, createdAt: "2026-11-07T00:05:00Z", body: "Quoting <!-- fabrik:retro-pending -->", author: { login: "jrey8343", __typename: "User" } }),
+        aRetroNode({ number: 96, state: "OPEN", stateReason: null, body: "<!-- fabrik:retro-pending -->", author: { login: "other-app", __typename: "Bot" } }),
+        aRetroNode({ number: 95, stateReason: "NOT_PLANNED", body: "failed" }),
+        aRetroNode({ number: 85, state: "OPEN", stateReason: "REOPENED", body: "", author: null }),
+      ],
+    });
+
+    const snapshot = await gather(github);
+
+    expect(snapshot.retro?.issues).toEqual([
+      { number: 97, title: "My retro", open: true, stateReason: null, createdAt: "2026-11-07T00:05:00Z", byApp: false, body: "Quoting <!-- fabrik:retro-pending -->" },
+      { number: 96, title: "Retro: week of 2026-11-02", open: true, stateReason: null, createdAt: "2026-11-04T04:00:04Z", byApp: false, body: "<!-- fabrik:retro-pending -->" },
+      { number: 95, title: "Retro: week of 2026-11-02", open: false, stateReason: "not_planned", createdAt: "2026-11-04T04:00:04Z", byApp: true, body: "failed" },
+      { number: 85, title: "Retro: week of 2026-11-02", open: true, stateReason: "reopened", createdAt: "2026-11-04T04:00:04Z", byApp: false, body: "" },
+    ]);
+  });
+
+  describe("holds the store as ready", () => {
+    it("when the Fabrik App is on fabrik-runs and it's private", async () => {
+      expect((await gather(githubWith().github, storeThatIs("private"))).retro?.storeReady).toBe(true);
+    });
+
+    it("never when it's public, since a Retro's evidence holds Product repos' issues and code", async () => {
+      expect((await gather(githubWith().github, storeThatIs("public"))).retro?.storeReady).toBe(false);
+    });
+
+    it("never when the run found no Fabrik App on fabrik-runs, and so has no token to read it with", async () => {
+      expect((await gather(githubWith().github, null)).retro?.storeReady).toBe(false);
+    });
+  });
+
+  describe("holds whether an agent PR merged or closed since the window a Retro opened now would start", () => {
+    const closed = async (options: Parameters<typeof githubWith>[0]) => (await gather(githubWith(options).github)).retro?.agentPullRequestClosed;
+
+    it("over the 7 days before the tick on a first Retro", async () => {
+      expect(await closed({ pullRequestPages: [[aClosedPullRequest("2026-10-31T04:30:00Z")]] })).toBe(true);
+      expect(await closed({ pullRequestPages: [[aClosedPullRequest("2026-10-31T03:30:00Z")]] })).toBe(false);
+    });
+
+    it("since the last Retro's window end", async () => {
+      expect(await closed({ retros: [aRetroNode()], pullRequestPages: [[aClosedPullRequest("2026-11-04T04:30:00Z")]] })).toBe(true);
+      expect(await closed({ retros: [aRetroNode()], pullRequestPages: [[aClosedPullRequest("2026-11-04T03:30:00Z")]] })).toBe(false);
+    });
+
+    it("since the window end of the Retro before a failed one, which is never the last Retro", async () => {
+      const failed = aRetroNode({ number: 85, stateReason: "NOT_PLANNED", createdAt: "2026-11-06T04:00:04Z", body: retroBody("2026-11-06T04:00:00.000Z", "failed") });
+
+      expect(await closed({ retros: [failed, aRetroNode()], pullRequestPages: [[aClosedPullRequest("2026-11-05T04:00:00Z")]] })).toBe(true);
+    });
+
+    it("since the window end of the Fabrik App's last Retro, never a person's", async () => {
+      const person = aRetroNode({ number: 86, createdAt: "2026-11-06T04:00:04Z", body: retroBody("2026-11-06T04:00:00.000Z"), author: { login: "jrey8343", __typename: "User" } });
+
+      expect(await closed({ retros: [person, aRetroNode()], pullRequestPages: [[aClosedPullRequest("2026-11-05T04:00:00Z")]] })).toBe(true);
+    });
+
+    it("counting only agent PRs, by when they closed rather than when they were last touched", async () => {
+      const window = "2026-11-02T04:00:00Z";
+      const person = aClosedPullRequest(window, { headRefName: "fix-cart", author: { __typename: "User" } });
+      const dependabot = aClosedPullRequest(window, { headRefName: "dependabot/npm_and_yarn/vite-7.1.0" });
+      const commentedOnSince = aClosedPullRequest("2026-10-20T04:00:00Z", { updatedAt: window });
+
+      expect(await closed({ pullRequestPages: [[person, dependabot, commentedOnSince]] })).toBe(false);
+    });
+
+    it("reading on to older pages until one reaches back past the window start", async () => {
+      const others = Array.from({ length: 3 }, () => aClosedPullRequest("2026-11-06T04:00:00Z", { headRefName: "fix-cart", author: { __typename: "User" } }));
+
+      expect(await closed({ pullRequestPages: [others, [aClosedPullRequest("2026-11-01T04:00:00Z")]] })).toBe(true);
+    });
+  });
+
+  describe("holds whether the Operator filed an escape since the window a Retro opened now would start", () => {
+    const filed = async (options: Parameters<typeof githubWith>[0], operator: string | null = null) =>
+      (await gather(githubWith(options).github, storeThatIs("private"), operator)).retro?.escapeFiled;
+
+    it("when an issue the Operator opened in the window has an escape marker", async () => {
+      expect(await filed({ retros: [aRetroNode()], operatorIssues: [anOperatorIssue("2026-11-05T04:00:00Z")] })).toBe(true);
+    });
+
+    it("not for one with no escape marker, or opened before the window start", async () => {
+      expect(await filed({ retros: [aRetroNode()], operatorIssues: [anOperatorIssue("2026-11-05T04:00:00Z", "The cart rounds wrong")] })).toBe(false);
+      expect(await filed({ retros: [aRetroNode()], operatorIssues: [anOperatorIssue("2026-11-03T04:00:00Z")] })).toBe(false);
+    });
+
+    it.each([
+      ["the Kit config's operator", "jrey8343", "jrey8343"],
+      ["the repo's owner by default", null, "acme"],
+    ])("reading only the issues %s opened", async (_, operator, login) => {
+      const { github, asked } = githubWith();
+
+      await gather(github, storeThatIs("private"), operator);
+
+      expect(asked.filter(({ query }) => query.includes("createdBy: $operator")).map(({ variables }) => variables["operator"])).toEqual([login]);
+    });
+  });
+
+  it("isn't gathered for any other event", async () => {
+    const snapshot = await gatherSnapshot(githubWith().github, repo, { kind: "kit-config-changed" }, null, "fabrik-app[bot]", null, storeThatIs("private"));
+
+    expect(snapshot.retro).toBeNull();
   });
 });
 

@@ -10,6 +10,7 @@ import type {
   NamedPullRequestSnapshot,
   Plan,
   PullRequestSnapshot,
+  RetroIssueSnapshot,
   Snapshot,
   TicketSnapshot,
 } from "../loop/types.ts";
@@ -38,7 +39,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, namedPullRequests: null, ...overrides };
+  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
@@ -67,7 +68,7 @@ export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
   overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, namedPullRequests: null, ...overrides };
+  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -99,6 +100,7 @@ export function dispatchSnapshotOf(
     kitIssues: [],
     startingComment: null,
     audit: null,
+    retro: null,
     namedPullRequests: null,
   };
 }
@@ -131,20 +133,21 @@ export function designQueueSnapshotOf(
     kitIssues: [],
     startingComment: null,
     audit: null,
+    retro: null,
     namedPullRequests: null,
   };
 }
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
-export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, namedPullRequests: null, ...overrides };
+export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro">> = {}): Snapshot {
+  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, namedPullRequests: null, ...overrides };
 }
 
 /**
  * A scheduled tick's snapshot: the repo's, with the audit slice every tick
  * gathers, by default an unaudited repo whose default branch is at HEAD_SHA.
  */
-export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit">> = {}): Snapshot {
+export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro">> = {}): Snapshot {
   return repoSnapshot({ audit: { head: HEAD_SHA, issues: [] }, ...overrides });
 }
 
@@ -177,6 +180,41 @@ export function anAuditIssue(overrides: Partial<AuditIssueSnapshot> = {}): Audit
     createdAt: "2026-11-01T00:05:00Z",
     byApp: true,
     body: auditBody(AUDITED_SHA),
+    ...overrides,
+  };
+}
+
+/**
+ * The window end aRetroIssue() read up to unless a test says otherwise: the
+ * Saturday 06:00 UTC tick of the week of 2026-10-26.
+ */
+export const RETRO_WINDOW_END = "2026-10-31T06:00:00.000Z";
+
+/**
+ * A Retro's body in each of its states, with its markers as the Fabrik App
+ * writes them (#151): pending on its run, filled with its proposals, or failed.
+ */
+export function retroBody(windowEnd: string, state: "pending" | "filled" | "failed" = "filled"): string {
+  switch (state) {
+    case "pending":
+      return `The Retro is reading the factory's runs, and this issue fills in when it's done.\n\n<!-- fabrik:retro ${windowEnd} -->\n<!-- fabrik:retro-pending -->`;
+    case "filled":
+      return `The Retro read the factory's runs.\n\n## Check the cart totals with a test, not a reminder\n\n<!-- fabrik:retro ${windowEnd} -->`;
+    case "failed":
+      return `The Retro's run failed: it timed out.\n\n<!-- fabrik:retro ${windowEnd} -->\n<!-- fabrik:retro-failed -->`;
+  }
+}
+
+/** A `fabrik:retro` issue the Fabrik App opened: by default last week's, filled up to RETRO_WINDOW_END, and closed by the Operator. */
+export function aRetroIssue(overrides: Partial<RetroIssueSnapshot> = {}): RetroIssueSnapshot {
+  return {
+    number: 80,
+    title: "Retro: week of 2026-10-26",
+    open: false,
+    stateReason: "completed",
+    createdAt: "2026-10-31T06:00:04Z",
+    byApp: true,
+    body: retroBody(RETRO_WINDOW_END),
     ...overrides,
   };
 }
