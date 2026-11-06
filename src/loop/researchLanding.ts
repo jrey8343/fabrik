@@ -33,11 +33,13 @@ export function landResearch(event: ResearchRunFinished, { issue, operator }: Is
   if (research === null || research.decision !== event.issue) {
     return { kind: "fail", failure: "infrastructure", reason: `\`${event.branch}\` isn't #${event.issue}'s research branch` };
   }
-  // A Decision closed, relabelled or taken off its Map during the run, or whose Map closed, is the Operator's call now.
+  // A Decision closed, relabelled or taken off its Map during the run, or whose Map closed, is the Operator's call now:
+  // nothing is posted on it or its Map. The slot the run held is free all the same, so Dispatch may fill it.
   const stale = whyNotResearchable(issue);
   const map = issue.parentIssue;
   if (stale !== null || map === null) {
-    return { kind: "nothing", reason: `${stale ?? `#${issue.number} isn't a sub-issue of a Map`}, so the Researcher's findings aren't landed` };
+    const why = `${stale ?? `#${issue.number} isn't a sub-issue of a Map`}, so the Researcher's findings aren't landed`;
+    return { kind: "act", actions: [CHECK_DISPATCH], notes: [why] };
   }
   // Every commit counts, and both ends of a rename, so nothing hides behind a later revert or a move.
   const changes = [...event.changes.net, ...event.changes.commits];
