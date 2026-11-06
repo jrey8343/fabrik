@@ -4,7 +4,7 @@
 // assignee, no mention.
 import { shortSha } from "../skills/lock.ts";
 import { isPendingAudit, TOP_RECOMMENDATION_HEADING } from "./audit.ts";
-import { failAudit } from "./auditFailure.ts";
+import { failAudit } from "./weeklyFailure.ts";
 import { type AuditCandidate, type AuditOutput, parseAuditOutput } from "./auditOutput.ts";
 import { newIssueUrl } from "./followUps.ts";
 import { auditMarker, auditMarksIn, escapeMarker, fromAuditLine } from "./markers.ts";

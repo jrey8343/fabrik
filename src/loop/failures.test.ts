@@ -204,12 +204,3 @@ describe("Failure notices", () => {
     expect(commentOf(plan)).toMatch(/^@jrey The Triage run/);
   });
 });
-
-describe("A failed Retro run, before the Kit lands one", () => {
-  it.each([
-    ["crashed", failed({ role: "retro", issue: 120 })],
-    ["timed out", failed({ role: "retro", issue: 120, jobResult: "cancelled", secretsStep: null })],
-  ])("that %s posts no failure notice and mentions nobody", (_how, event) => {
-    expect(planFor(event, snapshotOf(anIssue({ number: 120 })), kitConfig())).toMatchObject({ kind: "nothing" });
-  });
-});

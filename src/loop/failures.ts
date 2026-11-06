@@ -1,20 +1,20 @@
 // Failure notices: an agent run that fails for a reason outside the work is an
 // Infrastructure failure. It's never retried and never counts against a
 // Ticket's retries; the Operator gets one comment saying how to resume it. A
-// failed Auditor run goes to failAudit instead, which fails its Audit with no
-// trigger to re-add, since the scheduled tick opens the next one
-// (src/loop/auditFailure.ts). The Kit doesn't land a failed Retro run yet.
-import { failAudit } from "./auditFailure.ts";
+// failed Auditor or Retro run goes to failAudit or failRetro instead, which
+// fails its Audit or Retro with no trigger to re-add, since the scheduled
+// tick opens the next one (src/loop/weeklyFailure.ts).
 import { repoWideNotice } from "./kitIssues.ts";
 import { DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
 import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
+import { failAudit, failRetro } from "./weeklyFailure.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
 /**
- * A role whose failed run gets a failure notice: a failed Auditor run fails
- * its Audit instead (src/loop/auditFailure.ts), and a failed Retro run gets nothing yet.
+ * A role whose failed run gets a failure notice: a failed Auditor or Retro
+ * run fails its Audit or Retro instead (src/loop/weeklyFailure.ts).
  */
 type NoticedRole = Exclude<AgentRole, "audit" | "retro">;
 
@@ -77,14 +77,11 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
 export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig): Plan {
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
-  // The scheduled tick tries a failed Audit again, so there's no trigger label to re-add.
-  if (run.role === "audit") {
+  // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.
+  if (run.role === "audit" || run.role === "retro") {
+    const fail = run.role === "audit" ? failAudit : failRetro;
     const how = howItFailed(failure, run, config);
-    return failAudit(context, { failure, how, runUrl: run.runUrl, resetsAt: run.report?.resetsAt ?? null });
-  }
-  // Nothing opens a pending Retro yet, so no Retro run fails. Once one can, the tick tries it again, so it has no trigger label.
-  if (run.role === "retro") {
-    return { kind: "nothing", reason: `the Kit doesn't land a failed Retro run yet, so #${run.issue} stays as it is` };
+    return fail(context, { failure, how, runUrl: run.runUrl, resetsAt: run.report?.resetsAt ?? null });
   }
   const pullRequest = issue.openPullRequests[0];
   const target = pullRequest ?? run.issue;

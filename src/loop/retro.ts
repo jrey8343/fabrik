@@ -1,8 +1,9 @@
 // The Retros in a Product repo (#151), read from the `fabrik:retro` issues the
 // Fabrik App opened through their marker lines (src/loop/markers.ts). The
 // tick opens each one pending; the Retro's run fills it in or fails it.
+import { RETRO_LABEL } from "./labels.ts";
 import { retroMarksIn } from "./markers.ts";
-import type { RetroIssueSnapshot } from "./types.ts";
+import type { IssueSnapshot, RetroIssueSnapshot } from "./types.ts";
 import { byAppNewestFirst, DAY } from "./weeklyGate.ts";
 
 /** A Retro as the Kit reads it from its issue. */
@@ -49,4 +50,13 @@ export function retroWindowStart(now: string, issues: readonly RetroIssueSnapsho
   const last = lastRetro(issues);
   if (last !== null) return new Date(last.windowEnd ?? last.createdAt).toISOString();
   return new Date(Date.parse(now) - FIRST_RETRO_WINDOW_DAYS * DAY).toISOString();
+}
+
+/**
+ * Whether this issue is the Fabrik App's open Retro still waiting on its run:
+ * the only issue a Retro run starts for, or fails. A person's issue with the
+ * label or a quoted marker never is.
+ */
+export function isPendingRetro(issue: IssueSnapshot): boolean {
+  return issue.open && issue.byApp && issue.labels.includes(RETRO_LABEL) && retroMarksIn(issue.body).pending;
 }

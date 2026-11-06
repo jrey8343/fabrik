@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
-import { anIssue, aPullRequest, AUDITED_SHA, auditBody, designQueueSnapshotOf, HEAD_SHA, kitConfig, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, AUDITED_SHA, auditBody, designQueueSnapshotOf, HEAD_SHA, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
@@ -548,6 +548,14 @@ describe("Gathering who opened an issue", () => {
     const plan = planFor(opened, await gatherSnapshot(github, repo, opened, null, null), kitConfig());
 
     expect(plan).toMatchObject({ kind: "act", actions: [{ kind: "start-agent-run", role: "audit", issue: 98, commit: AUDITED_SHA }] });
+  });
+
+  it("lets the Kit job, which doesn't know the App's login, route the App's pending Retro to its Retro run", async () => {
+    const github = issueGitHub({ author: APP_BOT, body: retroBody(RETRO_WINDOW_END, "pending"), labels: ["fabrik:retro"] });
+
+    const plan = planFor(opened, await gatherSnapshot(github, repo, opened, null, null), kitConfig());
+
+    expect(plan).toMatchObject({ kind: "act", actions: [{ kind: "start-agent-run", role: "retro", issue: 98 }] });
   });
 
   // The Kit job can't tell the App's bot from another, and telling it would take a setup step (#150 rules one out).

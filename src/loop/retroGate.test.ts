@@ -314,13 +314,13 @@ describe("A tick's snapshot without the retro slice", () => {
 });
 
 describe("The pending Retro's issue", () => {
-  it("gets nothing from Intake, as a Kit-owned issue, so Triage never sorts it", () => {
+  it("starts the Retro run once the App has opened it, rather than going through Intake to Triage", () => {
     const pending = opened(tick(SATURDAY))[0];
     const issue = anIssue({ number: 98, author: "fabrik-app[bot]", byApp: true, labels: pending?.labels ?? [], body: pending?.body ?? "" });
 
     const plan = planFor({ kind: "issue-opened", issue: 98 }, snapshotOf(issue), kitConfig());
 
-    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("fabrik:retro") });
+    expect(plan).toEqual({ kind: "act", actions: [expect.objectContaining({ kind: "start-agent-run", role: "retro", issue: 98 })] });
   });
 
   it("leaves a fabrik:retro issue a person opened to them: Intake gives it nothing either", () => {
