@@ -785,9 +785,9 @@ function failedResearchOf({ openIssues }: GitHubFacts, appLogin: string, items: 
     // A closed parent isn't among the open issues, so it reads as none: no open Map either way.
     const parent = openIssues.find((issue) => issue.subIssues.includes(decision.number));
     const parentIssue = parent === undefined ? null : { number: parent.number, open: true, labels: parent.labels };
-    const byApp = decision.comments.map((comment) => ({ ...comment, byApp: comment.author === appLogin }));
-    if (whyNotResearchable({ ...decision, open: true, parentIssue }) !== null || !researchRunFailedIn(byApp)) return [];
-    const notice = byApp.findLast((comment) => comment.byApp);
+    const comments = decision.comments.map((comment) => ({ ...comment, byApp: comment.author === appLogin }));
+    if (whyNotResearchable({ ...decision, open: true, parentIssue }) !== null || !researchRunFailedIn(comments)) return [];
+    const notice = comments.findLast((comment) => comment.byApp);
     const readded = lastAdded(decision.labelEvents, RESEARCH_LABEL);
     // Re-added since, it waits on its run again, not on the Operator.
     if (notice === undefined || (readded !== null && Date.parse(readded) > Date.parse(notice.at))) return [];
