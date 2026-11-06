@@ -175,7 +175,7 @@ An Implementer run that fixes an Execution flaw on its Ticket's open pull reques
 _Avoid_: rerun, attempt
 
 **Design flaw**:
-A Verdict that the Ticket itself is wrong, so it needs a Design session.
+A Verdict that the Ticket itself, as any Request changes amended it, is wrong, so it needs a Design session. A Request changes that leaves the Ticket contradicting itself can ground one; its size alone never does.
 _Avoid_: bad spec, rejection
 
 **Follow-up**:
@@ -217,6 +217,14 @@ _Avoid_: style guide, conventions, review instructions
 **Merge gate**:
 The rule that only the Operator merges a pull request into a Product repo's main branch; agents never push to it.
 _Avoid_: approval, sign-off
+
+**Request changes**:
+The Operator's review asking for changes on an agent pull request at the Merge gate, which amends the Ticket for that pull request: the Implementer builds it, and the Reviewer judges against the Ticket as amended, a later one winning over an earlier one and over the Ticket. However large the change, it's built: sending a Ticket to a Design session instead is Send it back.
+_Avoid_: change request, revision, feedback
+
+**Send it back**:
+The Operator's move at the Merge gate that closes an agent pull request unmerged and sends its Ticket to a Design session, for a change too large or too foggy to build as a Request changes.
+_Avoid_: reject, redesign
 
 **Operator comment**:
 A comment the Operator leaves on an agent pull request, which every later agent run reading that pull request weighs as the Operator's own words, never as a request for work: a change the Operator wants built still goes through Request changes.
