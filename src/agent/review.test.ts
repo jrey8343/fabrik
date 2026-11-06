@@ -284,6 +284,31 @@ describe("A Review's UI evidence", () => {
     expect(parts.slice(parts.indexOf("## UI evidence"))).toEqual(NO_RESULT);
   });
 
+  // As when the marker names no artifact, so the Review job downloads nothing: the PR body names the reason, and so does the marker.
+  it.each<[CaptureFailure, string]>([
+    ["build-failed", "capture failed because `sandbox.build` failed, so there was no build to serve"],
+    ["no-result", "capture failed because it left no result the push job could read"],
+  ])("on a UI PR with nothing downloaded, whose marker records that capture failed with %s, says why, as the PR body does", async (failure, why) => {
+    const { productDir, pullRequestFile, specFile } = await inputs(uiPullRequest);
+    const nothing = join(await mkdtemp(join(tmpdir(), "fabrik-ui-evidence-")), "never-downloaded");
+
+    const { parts } = await reviewContext(productDir, pullRequestFile, specFile, nothing, failure);
+
+    expect(parts.slice(parts.indexOf("## UI evidence"))).toEqual([
+      "## UI evidence",
+      `This pull request changes the Product repo's UI, but ${why}. There are no screenshots, so review the code as usual.`,
+    ]);
+  });
+
+  it("on a UI PR whose download reads goes by the capture result it holds, not the marker", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(uiPullRequest);
+
+    const { parts } = await reviewContext(productDir, pullRequestFile, specFile, await downloaded(CAPTURED), "timeout");
+
+    expect(parts.join("\n")).toContain("so the Kit captured screenshots of this branch at `4f2b9c0` once the Implementer's run had ended.");
+    expect(parts.join("\n")).not.toContain("ran out of time");
+  });
+
   it.each([
     ["isn't JSON", "{ outcome: captured"],
     ["breaks the contract", JSON.stringify({ outcome: "captured", headSha: "nope", captures: [] })],

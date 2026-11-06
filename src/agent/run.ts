@@ -24,7 +24,8 @@
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
 // PR, and its result is the Reviewer's reply, a Verdict line first. A UI PR's
 // Review also takes FABRIK_UI_EVIDENCE_DIR, the folder its UI evidence was
-// downloaded into, if it was (src/agent/review.ts).
+// downloaded into, if it was, and FABRIK_UI_EVIDENCE_FAILURE, why its capture
+// failed, when the PR's marker records that (src/agent/review.ts).
 // An Auditor run is in a checkout of the default branch at its pending Audit's
 // marked commit: FABRIK_ISSUE_FILE is the Audit and FABRIK_AUDIT_FILE what the
 // agent-inputs step gathered for it (src/agent/inputs.ts), and its result
@@ -38,6 +39,7 @@ import { join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
+import { captureFailureOf } from "../evidence/uiEvidence.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
@@ -271,13 +273,15 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   // The Reviewer's result is for the PR it judged, which its push job checks against the event.
   let subject = issueNumber;
   if (spec.reviewsPullRequest === true) {
-    // Set only for a UI PR: where its Review job downloaded the UI evidence, whether or not that worked.
+    // Set only for a UI PR: where its Review job downloaded the UI evidence, whether or not that worked,
+    // and why its capture failed, as the PR's marker records it.
     const evidenceDir = process.env["FABRIK_UI_EVIDENCE_DIR"] ?? "";
     const review = await reviewContext(
       productDir,
       required("FABRIK_PULL_REQUEST_FILE"),
       required("FABRIK_SPEC_FILE"),
       evidenceDir === "" ? null : evidenceDir,
+      captureFailureOf(process.env["FABRIK_UI_EVIDENCE_FAILURE"]),
     );
     subject = review.pullRequest;
     extra.push(...review.parts);

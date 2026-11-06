@@ -9,9 +9,11 @@ import { join } from "node:path";
 import { CAPTURE_RESULT_FILE } from "../evidence/capture.ts";
 import {
   type Capture,
+  type CaptureFailure,
   type CaptureResult,
   parseCaptureResult,
   REVIEWER_IMAGES_DIR,
+  type ReviewerEvidence,
   reviewerEvidenceBlock,
   reviewerImages,
 } from "../evidence/uiEvidence.ts";
@@ -24,14 +26,16 @@ import { givenOperatorComments, operatorCommentsSection } from "./operatorCommen
  * What the Reviewer's prompt carries beyond the Ticket, the PR its result is
  * for, and the Operator comments it was given, which its result passes out.
  * A UI PR's Review is given the folder its Review job downloaded the UI
- * evidence into (src/agent/run.ts); any other PR's is given none, and its
- * prompt says nothing of UI evidence.
+ * evidence into (src/agent/run.ts), and why its capture failed when its
+ * marker records that; any other PR's is given none, and its prompt says
+ * nothing of UI evidence.
  */
 export async function reviewContext(
   productDir: string,
   pullRequestFile: string,
   specFile: string,
   evidenceDir: string | null = null,
+  recordedFailure: CaptureFailure | null = null,
 ): Promise<PullRequestRunContext> {
   const { operatorComments, ...pullRequest } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
@@ -51,7 +55,9 @@ export async function reviewContext(
       ...operatorCommentsSection(operatorComments),
       ...(await ticketContext(productDir, specFile)),
       ...(standards === null ? [] : [`## ${CODING_STANDARDS_FILE}`, standards.trimEnd()]),
-      ...(evidenceDir === null ? [] : await uiEvidenceContext(productDir, evidenceDir, headOf(pullRequest.headRefOid))),
+      ...(evidenceDir === null
+        ? []
+        : await uiEvidenceContext(productDir, evidenceDir, { head: headOf(pullRequest.headRefOid), recorded: recordedFailure })),
     ],
     operatorComments: givenOperatorComments(operatorComments),
   };
@@ -64,14 +70,19 @@ export async function reviewContext(
  * (src/evidence/capture.ts): the screenshots reviewerImages picks, copied
  * into REVIEWER_IMAGES_DIR, and the prompt's block naming them
  * (reviewerEvidenceBlock), which compares the commit captured with the PR's
- * `head`. It never fails the Review: a folder that's missing, or holds no
- * capture result that reads, is capture having left no result.
+ * head. It never fails the Review: a folder that's missing, or holds no
+ * capture result that reads, is capture having left no result, for the
+ * reason the marker `recorded`, if it recorded one.
  */
-async function uiEvidenceContext(productDir: string, evidenceDir: string, head: string | null): Promise<string[]> {
+async function uiEvidenceContext(
+  productDir: string,
+  evidenceDir: string,
+  pullRequest: Pick<ReviewerEvidence, "head" | "recorded">,
+): Promise<string[]> {
   const result = await downloadedResult(evidenceDir);
-  if (result === null) return reviewerEvidenceBlock({ result: null, given: [], head });
+  if (result === null) return reviewerEvidenceBlock({ result: null, given: [], ...pullRequest });
   const given = await copied(reviewerImages(result.captures), evidenceDir, join(productDir, REVIEWER_IMAGES_DIR));
-  return reviewerEvidenceBlock({ result, given, head });
+  return reviewerEvidenceBlock({ result, given, ...pullRequest });
 }
 
 /** The PR's head, as the Review job's PR input names it (src/agent/inputs.ts), or null when it names none. */

@@ -306,7 +306,7 @@ describe("The evidence section a UI PR's body carries", () => {
         "",
         "- `/book`, named by the Ticket",
         "- `/book/waitlist`, named by the Implementer",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null} -->`,
       ].join("\n"),
     );
   });
@@ -418,7 +418,7 @@ describe("The evidence section of a failed capture", () => {
         why,
         "",
         "No preview link: Kit config declares no `preview.url`.",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":null} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"${reason}"} -->`,
       ].join("\n"),
     );
   });
@@ -440,7 +440,7 @@ describe("The evidence section of a failed capture", () => {
         "Captured routes:",
         "",
         "- `/book`, named by the Ticket",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":"timeout"} -->`,
       ].join("\n"),
     );
   });

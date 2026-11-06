@@ -374,7 +374,7 @@ describe("A retry's branch", () => {
   });
 });
 
-/** The evidence section an earlier run, 8000, put on the PR's body. */
+/** The evidence section an earlier run, 8000, put on the PR's body, its marker from before markers recorded how capture ended. */
 const OLD_SECTION = [
   "<!-- fabrik:ui-evidence-start -->",
   "## UI evidence",
@@ -395,7 +395,7 @@ const NEW_SECTION = [
   "Captured routes:",
   "",
   "- `/waitlist`, named by the Implementer",
-  `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`,
+  `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null} -->`,
 ].join("\n");
 
 describe("The evidence section on a retry's PR", () => {

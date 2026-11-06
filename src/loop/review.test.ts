@@ -74,11 +74,11 @@ describe("Review: starting one", () => {
     });
   });
 
-  it("a Review of a UI PR whose Implement run kept no screenshots still carries where it was captured, so the Reviewer hears why there are none", () => {
-    const marked = aPullRequest({ uiEvidenceMarker: { run: 9100, artifact: null } });
+  it("a Review of a UI PR whose Implement run kept no screenshots still carries where it was captured and why capture failed, so the Reviewer hears why there are none", () => {
+    const marked = aPullRequest({ uiEvidenceMarker: { run: 9100, artifact: null, failure: "build-failed" } });
     const plan = planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(marked), kitConfig());
 
-    expect(actionsOf(plan)).toMatchObject([{ kind: "start-agent-run", role: "review", evidence: { run: 9100, artifact: null } }]);
+    expect(actionsOf(plan)).toMatchObject([{ kind: "start-agent-run", role: "review", evidence: { run: 9100, artifact: null, failure: "build-failed" } }]);
   });
 
   it("agent:review added to a UI PR starts a Review carrying where its UI evidence is kept, as a push does", () => {

@@ -450,9 +450,10 @@ describe("loop.yml's Review job on a UI PR", () => {
   const download = (): string => steps()[stepAt("uses: actions/download-artifact@")] ?? "";
   const reviewer = (): string => steps()[stepAt("id: agent\n")] ?? "";
 
-  it("gets where a UI PR's evidence is kept from the Kit job: the Implement run that captured it and its artifact", () => {
+  it("gets where a UI PR's evidence is kept from the Kit job: the Implement run that captured it, its artifact, and why its capture failed", () => {
     expect(job("kit")).toContain("ui-evidence-run: ${{ steps.route.outputs.ui-evidence-run }}");
     expect(job("kit")).toContain("ui-evidence-artifact: ${{ steps.route.outputs.ui-evidence-artifact }}");
+    expect(job("kit")).toContain("ui-evidence-failure: ${{ steps.route.outputs.ui-evidence-failure }}");
   });
 
   it("can read Actions artifacts, and holds only read permissions", () => {
@@ -487,6 +488,11 @@ describe("loop.yml's Review job on a UI PR", () => {
     expect(reviewer()).toContain(
       "FABRIK_UI_EVIDENCE_DIR: ${{ needs.kit.outputs.ui-evidence-run != '' && format('{0}/fabrik-ui-evidence', runner.temp) || '' }}\n",
     );
+  });
+
+  // The download is skipped when the marker names no artifact, so the PR body's reason is the Reviewer's only one.
+  it("tells the Reviewer why the PR's capture failed, as its marker records it, for when there's no capture result to read", () => {
+    expect(reviewer()).toContain("FABRIK_UI_EVIDENCE_FAILURE: ${{ needs.kit.outputs.ui-evidence-failure }}\n");
   });
 });
 

@@ -218,6 +218,11 @@ function repeatedCaptures(captures: readonly (Capture | null)[]): string[] {
   return problems;
 }
 
+/** The capture failure a value names, or null when it names none the Kit knows. */
+export function captureFailureOf(value: unknown): CaptureFailure | null {
+  return isOneOf(CAPTURE_FAILURES, value) ? value : null;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -267,6 +272,11 @@ export interface ReviewerEvidence {
   readonly given: readonly Capture[];
   /** The PR's head as the Review job read it, or null when its input names none. */
   readonly head: string | null;
+  /**
+   * Why the PR's capture failed, as its marker records it, or null when it
+   * records none: what the Reviewer hears when there's no capture result to read.
+   */
+  readonly recorded: CaptureFailure | null;
 }
 
 /**
@@ -277,10 +287,12 @@ export interface ReviewerEvidence {
  * evidence, so when the PR's head isn't the commit captured, the block says
  * the screenshots are of an earlier one.
  */
-export function reviewerEvidenceBlock({ result, given, head }: ReviewerEvidence): string[] {
+export function reviewerEvidenceBlock({ result, given, head, recorded }: ReviewerEvidence): string[] {
   if (result === null || given.length === 0) {
-    const failure = result?.outcome === "failed" ? result.reason : "no-result";
-    return ["## UI evidence", `${UI_PR}, but ${reviewerFailureWords(failure)}. There are no screenshots, so review the code as usual.`];
+    // With no capture result to read, the marker's reason is the one the PR body gives.
+    const failure = result === null ? recorded : result.outcome === "failed" ? result.reason : null;
+    const why = failure === null ? UNREAD : `capture failed because ${FAILURE_WORDS[failure]}`;
+    return ["## UI evidence", `${UI_PR}, but ${why}. There are no screenshots, so review the code as usual.`];
   }
   const captured = `\`${result.headSha.slice(0, 7)}\``;
   const at = `this branch at ${captured}`;
@@ -315,11 +327,12 @@ export function reviewerEvidenceBlock({ result, given, head }: ReviewerEvidence)
   ];
 }
 
+/** Why the Reviewer has no screenshots when there's no capture result to read, and nothing says why capture failed. */
+const UNREAD = "capture left no result this Review could read: the Implement run kept none, or they have expired";
+
 /** Why the Reviewer has no full set of screenshots: capture failed, or left none its Review could read. */
 function reviewerFailureWords(reason: CaptureFailure): string {
-  return reason === "no-result"
-    ? "capture left no result this Review could read: the Implement run kept none, or they have expired"
-    : `capture failed because ${FAILURE_WORDS[reason]}`;
+  return reason === "no-result" ? UNREAD : `capture failed because ${FAILURE_WORDS[reason]}`;
 }
 
 /** One screenshot the Reviewer is given: its file, then its route (agent text, so as code on one line), viewport and side. */
@@ -348,16 +361,22 @@ export type PreviewLink =
   | { readonly kind: "linked"; readonly url: string }
   | { readonly kind: "never-answered"; readonly url: string };
 
-/** Where a UI pull request's evidence is kept, as its marker records it. */
+/** Where a UI pull request's evidence is kept, and how its capture ended, as its marker records it. */
 export interface EvidenceMarker {
   /** The Actions run whose Implement job captured it. */
   readonly run: number;
   /** The id of that run's artifact holding the screenshots and the capture result, or null when it kept none. */
   readonly artifact: number | null;
+  /**
+   * Why its capture failed, or null when it captured: what the Reviewer hears
+   * when there's no capture result to read. Absent from a marker written before
+   * markers recorded it.
+   */
+  readonly failure?: CaptureFailure | null;
 }
 
 /** A UI pull request's evidence, as the push job puts it together for the PR body. */
-export interface UiEvidence extends EvidenceMarker {
+export interface UiEvidence extends Omit<EvidenceMarker, "failure"> {
   /** What capture recorded. */
   readonly result: CaptureResult;
   /** The gallery's web address, or null when the run kept none. */
@@ -466,9 +485,10 @@ function capturedRoutes(captures: readonly Capture[]): ChosenRoute[] {
   return onceEach(captures.map(({ route, reason }) => ({ route, reason })));
 }
 
-/** The marker line closing the evidence section. */
-function evidenceMarker({ run, artifact }: EvidenceMarker): string {
-  return `<!-- fabrik:ui-evidence ${JSON.stringify({ run, artifact })} -->`;
+/** The marker line closing the evidence section, which records how its capture ended. */
+function evidenceMarker({ run, artifact, result }: UiEvidence): string {
+  const failure = result.outcome === "failed" ? result.reason : null;
+  return `<!-- fabrik:ui-evidence ${JSON.stringify({ run, artifact, failure })} -->`;
 }
 
 /** The marker line, matched against a whole line with its outer whitespace trimmed. */
@@ -520,9 +540,10 @@ function markerOf(json: string | undefined): EvidenceMarker | null {
     return null;
   }
   if (!isObject(value)) return null;
-  const { run, artifact } = value;
+  const { run, artifact, failure } = value;
   if (!isId(run) || !(artifact === null || isId(artifact))) return null;
-  return { run, artifact };
+  // A capture outcome it doesn't record, or that doesn't read, leaves where the evidence is kept as it was.
+  return { run, artifact, ...(failure === null || isOneOf(CAPTURE_FAILURES, failure) ? { failure } : {}) };
 }
 
 /** A GitHub id: a whole number above zero. */

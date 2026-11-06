@@ -96,9 +96,11 @@ jobs:
       rotation: ${{ steps.route.outputs.rotation }}
       # For a Review of a UI PR: where its UI evidence marker says the evidence is kept, the
       # Implement run that captured it and that run's artifact of the screenshots (empty when
-      # it kept none), which the Review job downloads. Empty for any other run.
+      # it kept none), which the Review job downloads, and why its capture failed, as the
+      # marker records it (empty when it captured, or records no outcome). Empty for any other run.
       ui-evidence-run: ${{ steps.route.outputs.ui-evidence-run }}
       ui-evidence-artifact: ${{ steps.route.outputs.ui-evidence-artifact }}
+      ui-evidence-failure: ${{ steps.route.outputs.ui-evidence-failure }}
     steps:
       # No expression context names the commit of a called workflow, so read
       # it from the OIDC token's job_workflow_sha claim.
@@ -756,8 +758,10 @@ jobs:
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
           FABRIK_MODEL: ${{ needs.kit.outputs.model }}
           FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
-          # Only on a UI PR: where its UI evidence was downloaded, whether or not that worked.
+          # Only on a UI PR: where its UI evidence was downloaded, whether or not that worked,
+          # and why its capture failed, for when the download holds no capture result to read.
           FABRIK_UI_EVIDENCE_DIR: ${{ needs.kit.outputs.ui-evidence-run != '' && format('{0}/fabrik-ui-evidence', runner.temp) || '' }}
+          FABRIK_UI_EVIDENCE_FAILURE: ${{ needs.kit.outputs.ui-evidence-failure }}
         run: node ../kit/src/agent/run.ts review
 
       - name: Pass the Verdict to the push job

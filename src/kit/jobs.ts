@@ -32,6 +32,9 @@
 //   ui-evidence-run          for a Review of a UI PR, the Implement run its UI evidence marker names; else empty
 //   ui-evidence-artifact     for that Review, the run's artifact of the screenshots and capture result,
 //                            which the Review job downloads; empty when it kept none, or for any other run
+//   ui-evidence-failure      for that Review, why the run's capture failed, as the marker records it, which
+//                            the Reviewer hears when it has no capture result to read; empty when it captured,
+//                            when the marker records no outcome, or for any other run
 // Its step summary names that Subscription, and notes when rotation is off.
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
@@ -161,6 +164,8 @@ export function kitJobOutputs(plan: Plan | null, ticket: number | null, config: 
     // Only ever the whole-number ids the PR's marker reads as (src/evidence/uiEvidence.ts), never agent text.
     "ui-evidence-run": String(run?.evidence?.run ?? ""),
     "ui-evidence-artifact": String(run?.evidence?.artifact ?? ""),
+    // Only ever one of the CAPTURE_FAILURES the marker reads as.
+    "ui-evidence-failure": run?.evidence?.failure ?? "",
   };
 }
 
