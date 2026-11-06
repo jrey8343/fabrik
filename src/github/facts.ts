@@ -29,7 +29,14 @@ import { AUDIT_LABEL, MONITOR_LABEL, RETRO_LABEL } from "../loop/labels.ts";
 import { escapeMarkerIn, fromPullRequestIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import { type GitHub, pagesOf, type Repo } from "./client.ts";
-import { byAppOf, gatherDesignQueueSlice, loginOf } from "./snapshot.ts";
+import {
+  gatherDesignQueueSlice,
+  loginOf,
+  type RawWeeklyIssue,
+  weeklyIssueOf,
+  weeklyIssuesQuery,
+  type WeeklyIssuesQueryResult,
+} from "./snapshot.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -116,25 +123,23 @@ export interface RetroHistoryFacts {
 }
 
 /**
- * A Retro's history in one Product repo: the newest `fabrik:retro` issues, as
- * many as the tick's retro slice reads, with whether the Fabrik App, whose bot
- * login is `appLogin`, opened each (byAppOf) and their last 100 comments, and
- * every open issue with its body.
+ * A Retro's history in one Product repo: the newest `fabrik:retro` issues,
+ * read as the tick's retro slice reads them (weeklyIssuesQuery), with whether
+ * the Fabrik App, whose bot login is `appLogin`, opened each (byAppOf) and,
+ * on top, their last 100 comments; and every open issue with its body.
  */
 export async function gatherRetroHistory(github: Pick<GitHub, "graphql">, repo: Repo, appLogin: string): Promise<RetroHistoryFacts> {
   const [retros, openIssues] = await Promise.all([
-    github.graphql<RetroIssuesQueryResult>(RETRO_ISSUES_QUERY, { owner: repo.owner, name: repo.name, label: RETRO_LABEL }),
+    github.graphql<WeeklyIssuesQueryResult<RawRetroIssue>>(weeklyIssuesQuery(COMMENTS), {
+      owner: repo.owner,
+      name: repo.name,
+      label: RETRO_LABEL,
+    }),
     pagesOf<FromRetroIssueFacts>(github, OPEN_ISSUE_BODIES_QUERY, repo, {}, (data) => data.repository.issues),
   ]);
   return {
     retros: retros.repository.issues.nodes.map((issue) => ({
-      number: issue.number,
-      title: issue.title,
-      open: issue.state === "OPEN",
-      stateReason: issue.stateReason === null ? null : (issue.stateReason.toLowerCase() as RetroIssueFacts["stateReason"]),
-      createdAt: issue.createdAt,
-      byApp: byAppOf(issue.author, appLogin),
-      body: issue.body,
+      ...weeklyIssueOf(issue, appLogin),
       comments: issue.comments.nodes.map(commentOf),
     })),
     openIssues: openIssues.map(({ number, title, body }) => ({ number, title, body })),
@@ -172,17 +177,6 @@ const COMMENTS = `comments(last: 100) { nodes { body createdAt author ${ACTOR} }
 const COMMIT = "commit { oid message committedDate author { email user { login } } }";
 const REVIEWS = `reviews(first: 100) { nodes { author ${ACTOR} state submittedAt body comments(first: 50) { nodes { path line body } } } }`;
 const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
-
-// The newest 50, as the tick's retro slice reads them (src/github/snapshot.ts).
-const RETRO_ISSUES_QUERY = `
-  query ($owner: String!, $name: String!, $label: String!) {
-    repository(owner: $owner, name: $name) {
-      issues(labels: [$label], states: [OPEN, CLOSED], first: 50, orderBy: { field: CREATED_AT, direction: DESC }) {
-        nodes { number title state stateReason createdAt body author ${ACTOR} ${COMMENTS} }
-      }
-    }
-  }
-`;
 
 const OPEN_ISSUE_BODIES_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
@@ -396,22 +390,8 @@ interface RawIssue {
   subIssues: { nodes: { number: number }[] };
 }
 
-interface RetroIssuesQueryResult {
-  repository: {
-    issues: {
-      nodes: {
-        number: number;
-        title: string;
-        state: "OPEN" | "CLOSED";
-        stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
-        createdAt: string;
-        body: string;
-        author: RawActor | null;
-        comments: { nodes: RawComment[] };
-      }[];
-    };
-  };
-}
+/** A `fabrik:retro` issue as a Retro's history reads it: as the tick does, with its comments on top. */
+type RawRetroIssue = RawWeeklyIssue & { comments: { nodes: RawComment[] } };
 
 interface RawMonitorIssue {
   number: number;
