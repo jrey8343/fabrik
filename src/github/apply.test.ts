@@ -70,6 +70,27 @@ describe("Applying a plan that moves blocked-by edges onto new Tickets", () => {
 
 });
 
+describe("Applying a comment that names issues the plan created", () => {
+  it("writes each created issue as its number, and leaves the issue it comments on open", async () => {
+    const github = fakeGitHub();
+    const plan: Plan = {
+      kind: "act",
+      actions: [
+        { kind: "create-issue", key: "decision:a", title: "A?", body: "A.", labels: [], parent: 7, blockedBy: [] },
+        { kind: "create-issue", key: "decision:b", title: "B?", body: "B.", labels: [], parent: 7, blockedBy: [] },
+        { kind: "comment-linking", issue: 7, body: ["Filed ", { created: "decision:a" }, " and ", { created: "decision:b" }, "."] },
+      ],
+    };
+
+    await applyPlan(github, repo, plan);
+
+    expect(github.calls.filter((call) => call.path === `${issues}/7/comments`).map((call) => call.body)).toEqual([
+      { body: "Filed #100 and #101." },
+    ]);
+    expect(github.calls.some((call) => call.method === "PATCH")).toBe(false);
+  });
+});
+
 describe("Applying a plan that creates an issue", () => {
   it("assigns a created issue as it creates it, and assigns nobody when the action names no one", async () => {
     const github = fakeGitHub();

@@ -10,6 +10,7 @@ import {
   DISPATCH_LABEL,
   ENHANCEMENT,
   type Label as LoopLabel,
+  MAP_LABEL,
   MONITOR_LABEL,
   NEEDS_DESIGN,
   NEEDS_INFO,
@@ -524,6 +525,11 @@ const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly
   [AUDIT_LABEL]: { color: "c5def5", description: "Fabrik: the week's Audit of deepening opportunities, which the Auditor files" },
   [RETRO_LABEL]: { color: "c5def5", description: "Fabrik: the week's Retro, proposing changes to how the factory works" },
   [MONITOR_LABEL]: { color: "e99695", description: "Fabrik: filed by the Monitor for a production error or a red main" },
+  [MAP_LABEL]: { color: "fef2c0", description: "Fabrik: a Map, charting the way to a destination still in fog" },
+  "wayfinder:research": { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by research" },
+  "wayfinder:prototype": { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a prototype" },
+  "wayfinder:grilling": { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a grilling" },
+  "wayfinder:task": { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a task" },
 };
 
 /**

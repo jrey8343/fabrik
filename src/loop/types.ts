@@ -685,11 +685,11 @@ export type Action =
       readonly key?: string;
     }
   | {
-      /** Comments on an issue, linking comments posted earlier in the plan. */
+      /** Comments on an issue, linking comments posted or issues created earlier in the plan. */
       readonly kind: "comment-linking";
       readonly issue: number;
-      /** The comment's Markdown, with each posted comment written as its URL. */
-      readonly body: readonly (string | PostedComment)[];
+      /** The comment's Markdown, with each posted comment written as its URL and each created issue as its `#number`. */
+      readonly body: readonly (string | PostedComment | CreatedIssue)[];
     }
   | { readonly kind: "edit-issue-body"; readonly issue: number; readonly body: string }
   | { readonly kind: "assign"; readonly issue: number; readonly assignee: string }

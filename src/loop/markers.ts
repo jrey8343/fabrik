@@ -44,6 +44,9 @@ export const DESIGN_TURN_FAILED_MARKER = "<!-- fabrik:design-turn-failed -->";
 /** How the comment that ends a Design session starts, either way it ends. */
 export const SESSION_FINISHED = "**Design session finished.**";
 
+/** The heading of a Map body's index of resolved Decisions, which a Map's rewrite leaves empty and each resolution adds a line to. */
+export const DECISIONS_SO_FAR_HEADING = "## Decisions so far";
+
 /**
  * Opens the comment a live Design session ends with. Only the start of a
  * comment counts, so quoting it doesn't.
