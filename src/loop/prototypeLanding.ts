@@ -6,7 +6,7 @@
 import { type CaptureFailure, code } from "../evidence/uiEvidence.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { turnStartFrom, whileInSession } from "./design.ts";
-import { parsePrototypeTurnOutput, type PrototypeRoundOutput } from "./designOutput.ts";
+import { parsePrototypeTurnOutput, prototypeBranchFor, type PrototypeRoundOutput } from "./designOutput.ts";
 import {
   designRoundMarker,
   PROTOTYPE_FAILURE_ROUND_MARKER,
@@ -49,6 +49,8 @@ export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operato
       reason: `The prototype turn on #${event.issue} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
     };
   }
+  const own = prototypeBranchFor(event.issue);
+  if (event.branch !== own) return { kind: "fail", failure: "infrastructure", reason: `\`${event.branch}\` isn't #${event.issue}'s prototype branch, ${own}` };
   const notNow = whileInSession(event.issue, issue);
   if (notNow !== null) return notNow;
   // The push job reads only the Fabrik App's own requests, so a look-alike another bot posted, which

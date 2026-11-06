@@ -327,6 +327,16 @@ describe("A prototype turn's output that breaks its contract", () => {
   });
 });
 
+describe("A prototype turn's branch that isn't its issue's prototype branch", () => {
+  it.each(["prototype/8", "fabrik/ticket-7", "main"])("fails the run on %s, pushing and posting nothing", (branch) => {
+    expect(planFor(finished({ branch }), inSession(), kitConfig())).toEqual({
+      kind: "fail",
+      failure: "infrastructure",
+      reason: `\`${branch}\` isn't #7's prototype branch, prototype/7`,
+    });
+  });
+});
+
 describe("A prototype turn's result the session no longer waits on", () => {
   it.each([
     ["#7 is closed", { open: false }],
