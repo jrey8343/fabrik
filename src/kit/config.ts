@@ -637,11 +637,6 @@ class Reader {
       this.#fail(`${field} lists ${JSON.stringify(repeated)} more than once`);
       return undefined;
     }
-    // Dormant until the switch-on Ticket (#249): every repo keeps the one V1 Subscription.
-    if (value.length > 1) {
-      this.#fail(`${field} lists ${value.length} Subscriptions, but Subscription rotation isn't available yet: list one`);
-      return undefined;
-    }
     return value;
   }
 

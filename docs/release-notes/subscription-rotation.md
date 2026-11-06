@@ -1,0 +1,30 @@
+# Release notes: Subscription rotation
+
+The notes for the minor release that ships Subscription rotation ([#152](https://github.com/jrey8343/fabrik/issues/152)). Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.
+
+## What changed
+
+- The Kit config gains `subscriptions`: the Subscriptions the Kit runs agents on, each the name of an item in the `Fabrik` 1Password vault that holds a Claude account's token. The default is the one V1 item, `["Claude token"]`, so a repo that lists none, or lists one, runs exactly as before: **rotation is off**, and each Kit job's step summary says so in one quiet line.
+- **List two or more and Subscription rotation is on.** Every agent run, and the Scorers' judge, loads the token of the Subscription the Kit job chose: the first listed one with no open weekly-limit or usage-credits issue. The order is the Operator's. The Kit fails over, and never balances: the second Subscription is used only while the first is used up.
+- **A run refused on one Subscription's weekly limit is re-run quietly** on the next free one. That Subscription gets its own weekly-limit issue, opened with no mention, and the Ticket gets no failure comment. The scheduled tick closes each Subscription's issue at its own reset.
+- **While every Subscription is used up, runs are held.** The weekly-limit issue opened, or refused on, once none is free @-mentions the Operator once, naming the first reset. Each run due until then is held instead of started: its trigger label comes off, the Ticket gets no comment, and the weekly-limit issue names it. A held Auditor run leaves its Audit pending, not failed. Dispatch's `max_in_flight` and the Design session cap are unchanged by holds.
+- **At the reset, the scheduled tick resumes held runs itself**, in the order they were held: it re-adds each one's trigger label, and starts a held Auditor run on its pending Audit. A run whose issue or PR has closed, or moved on in the Loop, is dropped. The Operator re-adds nothing.
+- **Usage credits.** With rotation on, a run whose stream shows usage credits being spent is killed, and its failure report says `usage-credits`. That Subscription gets a "Turn off usage credits on the `<name>` Subscription" issue, labelled `ready-for-human` and `fabrik:usage-credits` and assigned to the Operator. The killed run is re-run on the next free Subscription, and the Kit skips that one until the Operator closes the issue.
+- A dead token's rotation issue, and the failure notice, name the Subscription whose vault item needs a new token.
+- Each Run record names the Subscription its run used, at schema 2. The Weekly summary reads a schema-1 record as the V1 `Claude token`'s, and reports usage per Subscription: one line each, with its cost and its last weekly-limit reading. With one Subscription the line reads as before.
+- `/fabrik-setup` creates the `fabrik:usage-credits` label, and gains an opt-in step, `--second-subscription`, with a wizard stage "A second Subscription". Without the flag, setup says nothing about Subscriptions. The starter Kit config now spells out `"subscriptions": ["Claude token"]`.
+- **Why a minor:** `subscriptions` is a new Kit config field with a default, and the second Subscription is an opt-in Operator setup step ([#139](https://github.com/jrey8343/fabrik/issues/139)): until it's done, the Loop runs on the one V1 Subscription and notes quietly that rotation is off. There are no shim changes, and no Kit config field is renamed or removed. So a Product repo only merges the bump PR.
+
+## To turn it on
+
+The setup step is the second Subscription: `/fabrik-setup` with `--second-subscription`, whose wizard stage "A second Subscription" walks it. Turn it on for the Pilot first.
+
+1. **The Pilot first.** Merge this release's bump PR in the Pilot only. Re-run `/fabrik-setup` at this release there, saying yes to a second Subscription. Its plan creates the `fabrik:usage-credits` label, and its wizard's "A second Subscription" stage walks the Operator through:
+   - creating a second Claude account, with its own email and its own subscription;
+   - running `claude setup-token` signed in as that account, and saving the token as the `Claude token 2` API Credential, with its expiry date, in the `Fabrik` vault;
+   - **turning usage credits off on every account, the first one included**, since usage credits would bill a used-up Subscription past its limit instead of failing over.
+2. List it in the Pilot's `.fabrik/config.json`, after the first, and merge it to the default branch: `"subscriptions": ["Claude token", "Claude token 2"]`. Re-running setup then plans nothing for it. Then check:
+   - the next agent run's Kit job step summary names `Claude token` as its Subscription;
+   - a run refused on the first Subscription's weekly limit is re-run on `Claude token 2`, quietly: a silent weekly-limit issue for `Claude token`, and no failure comment on the Ticket;
+   - with both Subscriptions used up, a run is held, the weekly-limit issue @-mentions the Operator once, and the run resumes on its own at the reset.
+3. **Then the other Product repos**, once the Pilot is healthy. In each, merge the bump PR, re-run `/fabrik-setup` and add the same `subscriptions` list. The token is already stored: keep it when the wizard's stage asks, and confirm usage credits are still off. A repo can instead keep one Subscription, and runs as before.

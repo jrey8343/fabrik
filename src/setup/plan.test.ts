@@ -511,6 +511,7 @@ describe("The starters the Product repo then owns", () => {
       monitor: { errors: null, red_main: true },
       audit: { day: "sunday" },
       operator: null,
+      subscriptions: ["Claude token"],
     });
     expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({
       ok: true,
