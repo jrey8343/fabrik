@@ -86,6 +86,11 @@ describe("Product intent in the Triage prompt", () => {
     expect(wontfix).toContain("quoting the line it conflicts with");
   });
 
+  it("quotes the Vision's line in its comment on any issue it sends to needs-design for conflicting with the Vision, test 6 included", async () => {
+    const needsDesign = lineStarting(section(await prompt("triage"), "The decision"), "- `needs-design`");
+    expect(needsDesign).toContain("When it conflicts with the Vision (test 6), your comment quotes the line it conflicts with.");
+  });
+
   it("sends an idea it would set aside for being on no Roadmap list to needs-design, and never keeps an issue off the Fast path for that alone", async () => {
     const wontfix = lineStarting(section(await prompt("triage"), "The decision"), "- `wontfix`");
     expect(wontfix).toContain(

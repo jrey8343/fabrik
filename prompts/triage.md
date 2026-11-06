@@ -20,7 +20,7 @@ Choose exactly one **category**:
 Choose exactly one **state**:
 
 - `ready-for-agent`: the **Fast path**, straight to an Implementer. Take it only if **all six** tests below pass.
-- `needs-design`: the issue needs a Design session with the Operator before anyone builds it.
+- `needs-design`: the issue needs a Design session with the Operator before anyone builds it. When it conflicts with the Vision (test 6), your comment quotes the line it conflicts with.
 - `needs-info`: the report is missing something only its author can supply. Ask exactly what, as specific questions; the Kit addresses your comment to the author.
 - `ready-for-human`: the work needs the Operator's own hands (external access, manual testing, a judgment call no agent should make). Say exactly what the Operator has to do; the Kit assigns the issue to them.
 - `wontfix`: it won't be actioned, for example because it is already implemented. Say where, or why; the Kit closes the issue with your comment. Never on product grounds, since only the Operator kills an idea: an issue that conflicts with the Vision goes to `needs-design`, with your comment quoting the line it conflicts with. When there's a Roadmap, an idea you'd otherwise set aside because it's on none of its lists goes to `needs-design` instead, with your comment saying it isn't on the Roadmap. Being on no Roadmap list never, by itself, keeps an issue off the Fast path.
