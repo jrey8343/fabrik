@@ -337,6 +337,7 @@ describe("Labels", () => {
     "enhancement",
     "fabrik:token-rotation",
     "fabrik:weekly-limit",
+    "fabrik:usage-credits",
     "fabrik:audit",
     "fabrik:monitor",
   ];

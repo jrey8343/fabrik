@@ -18,6 +18,7 @@ import {
   READY_FOR_HUMAN,
   REVIEW_LABEL,
   TOKEN_ROTATION_LABEL,
+  USAGE_CREDITS_LABEL,
   WEEKLY_LIMIT_LABEL,
   WONTFIX,
 } from "../loop/labels.ts";
@@ -418,6 +419,7 @@ const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly
   [ENHANCEMENT]: { color: "a2eeef", description: "New feature or request" },
   [TOKEN_ROTATION_LABEL]: { color: "b60205", description: "Fabrik: the Claude token needs rotating" },
   [WEEKLY_LIMIT_LABEL]: { color: "b60205", description: "Fabrik: the subscription's weekly limit is reached" },
+  [USAGE_CREDITS_LABEL]: { color: "b60205", description: "Fabrik: a Subscription spent usage credits, which must be turned off" },
   [AUDIT_LABEL]: { color: "c5def5", description: "Fabrik: the week's Audit of deepening opportunities, which the Auditor files" },
   [MONITOR_LABEL]: { color: "e99695", description: "Fabrik: filed by the Monitor for a production error or a red main" },
 };

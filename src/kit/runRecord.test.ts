@@ -567,6 +567,25 @@ describe("The Run record a run's end yields", () => {
         subscription: "Claude token 2",
       });
     });
+
+    it("a run killed for spending usage credits shows that Infrastructure failure and the Subscription it was killed on", () => {
+      const end = runEnd({
+        needs: needs("implement", { implement: job("failure") }, { ticket: "7", subscription: "Claude token 2" }),
+        eventIssue: 7,
+        subscriptions: TWO_SUBSCRIPTIONS,
+        agentResult: null,
+        failureReport: JSON.stringify({ failure: "usage-credits", detail: "stopped for spending usage credits: isUsingOverage was true" }),
+        transcript: [init],
+      });
+
+      expect(runRecordFor(end)?.record).toMatchObject({
+        role: "implement",
+        issue: 7,
+        jobResult: "failure",
+        infrastructureFailure: "usage-credits",
+        subscription: "Claude token 2",
+      });
+    });
   });
 });
 

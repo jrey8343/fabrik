@@ -3,7 +3,8 @@
 // `claude` arguments the metered-billing preflight checks and the
 // onSandboxReady hook that runs it, the Standard Schema a structured output is
 // checked with, the stream watch that keeps the transcript and stops a run
-// whose init message fails the backstop check, the failure report a failed
+// whose init message fails the backstop check, or, with rotation on, whose
+// stream shows it spending usage credits, the failure report a failed
 // run leaves, and the step summary and step outputs every agent job writes.
 import { appendFile, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
@@ -14,7 +15,7 @@ import type { FailureReport } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { failureReportFor } from "./failure.ts";
-import { readStream } from "./stream.ts";
+import { isObject, readStream, type StreamMessage, streamMessageOf } from "./stream.ts";
 import { transcriptWriter } from "./transcript.ts";
 
 export type Checked<T> = { readonly ok: true; readonly output: T } | { readonly ok: false; readonly errors: readonly string[] };
@@ -79,23 +80,51 @@ export interface StreamWatch {
   initRefused(): readonly string[] | null;
   /** Throws unless an init message arrived and passed the check. */
   checkInit(): void;
+  /** What showed the run spending usage credits, if the watch stopped it for that, or null. */
+  overage(): string | null;
   /** Sandcastle's stream handler. */
   onAgentStreamEvent(event: AgentStreamEvent): void;
+}
+
+/** How a run watches its stream. */
+export interface StreamWatchOptions {
+  /** Whether rotation is on, so that a run whose stream shows overage is stopped. Off unless told. */
+  readonly rotation: boolean;
+}
+
+/** What in one stream message shows overage, in itself or in its rate-limit info, or null. */
+function overageIn(message: StreamMessage): string | null {
+  const info = message["type"] === "rate_limit_event" ? message["rate_limit_info"] : undefined;
+  for (const fields of [message, ...(isObject(info) ? [info] : [])]) {
+    if (fields["isUsingOverage"] === true) return "isUsingOverage was true";
+    if (fields["overageInUse"] === true) return "overageInUse was true";
+  }
+  if (isObject(info) && info["rateLimitType"] === "overage") return "a rate-limit event was of the overage type";
+  return null;
 }
 
 /**
  * Watches the agent's stream: keeps every line, checks the init message
  * against metered billing and stops the run through `abort` if it refuses,
- * then appends the line to the transcript at `transcriptPath`.
+ * and, with rotation on, stops it on the first message showing overage, so a
+ * Subscription with usage credits on spends no more. Then it appends the
+ * line to the transcript at `transcriptPath`.
  */
-export function streamWatch(transcriptPath: string, abort: AbortController): StreamWatch {
+export function streamWatch(
+  transcriptPath: string,
+  abort: AbortController,
+  { rotation }: StreamWatchOptions = { rotation: false },
+): StreamWatch {
   const lines: string[] = [];
   const transcript = transcriptWriter(transcriptPath);
   // null until the init message arrives, then the routes it refused (empty when it passed).
   let refused: readonly string[] | null = null;
+  // null until a message shows overage, with rotation on.
+  let overage: string | null = null;
   return {
     lines,
     initRefused: () => refused,
+    overage: () => overage,
     checkInit() {
       if (refused === null) throw new Error("The agent's stream had no init message, so its API key source is unchecked");
       if (refused.length > 0) throw new Error(`Refused at init: ${refused.join("; ")}`);
@@ -110,7 +139,13 @@ export function streamWatch(transcriptPath: string, abort: AbortController): Str
         refused = check.kind === "refuse" ? check.routes : [];
         if (check.kind === "refuse") abort.abort(new Error(check.routes.join("; ")));
       }
-      // After the init check, so a failed write can never skip its abort.
+      const message = rotation && overage === null ? streamMessageOf(event.line) : null;
+      const shown = message === null ? null : overageIn(message);
+      if (shown !== null) {
+        overage = shown;
+        abort.abort(new Error(`Stopped for spending usage credits: ${shown}`));
+      }
+      // After the checks, so a failed write can never skip an abort.
       transcript(event.line);
     },
   };
@@ -133,7 +168,12 @@ export interface FailureFile {
  */
 export async function leaveFailureReport(error: unknown, watch: StreamWatch, file: FailureFile): Promise<void> {
   for (const route of watch.initRefused() ?? []) console.log(`::error title=Metered-billing route::${route}`);
-  const report = failureReportFor({ error, lines: watch.lines, initRefused: watch.initRefused() });
+  const report = failureReportFor({
+    error,
+    lines: watch.lines,
+    initRefused: watch.initRefused(),
+    overage: watch.overage(),
+  });
   await writeFile(file.path, file.text?.(report) ?? `${JSON.stringify(report, null, 2)}\n`);
   console.log(`::error title=${file.title} (${report.failure})::${report.detail}`);
 }
