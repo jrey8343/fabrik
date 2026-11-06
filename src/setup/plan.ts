@@ -230,7 +230,7 @@ function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, no
         : write(KIT_CONFIG_PATH, updated, "a starter Kit config with every v1 default, and Visual evidence on"),
     ];
   }
-  return updated === null ? [] : [write(KIT_CONFIG_PATH, updated, "turn on Visual evidence: the ui and preview blocks")];
+  return updated === null ? [] : [write(KIT_CONFIG_PATH, updated, "the Visual evidence step's ui and preview blocks")];
 }
 
 /**
