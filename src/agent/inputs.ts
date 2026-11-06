@@ -4,7 +4,7 @@
 //   node <kit>/src/agent/inputs.ts <out dir>
 // Run beside the Product checkout at product/, whose Kit config names the Operator.
 // Env: GH_TOKEN, GITHUB_REPOSITORY, GITHUB_API_URL, and
-//   FABRIK_ISSUE                 the issue or Ticket: writes issue.json and spec.json (its parent Spec, or null);
+//   FABRIK_ISSUE                 the issue or Ticket: writes issue.json and spec.json (its parent: a Ticket's Spec, a Decision's Map, or null);
 //                                a Ticket back in design from an agent PR carries that PR in issue.json's sentBack
 //   FABRIK_PULL_REQUEST          optional, a PR: writes pull-request.json, with the Operator's comments on it
 //                                in operatorComments (sentBack carries them too, for the closed PR)
