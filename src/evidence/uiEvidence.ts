@@ -285,7 +285,15 @@ function galleryLine(url: string, { headSha, captures }: CaptureResult): string 
 }
 
 function previewLine(preview: PreviewLink): string {
-  return "No preview link: Kit config declares no `preview.url`.";
+  switch (preview.kind) {
+    case "linked":
+      return `${link("Open the preview deployment", preview.url)}.`;
+    case "never-answered":
+      // As code, so GitHub doesn't link an address that never answered.
+      return `No preview link: the preview at ${code(preview.url)} never answered.`;
+    case "none":
+      return "No preview link: Kit config declares no `preview.url`.";
+  }
 }
 
 /** Each captured route once, in the order it was first captured, with its reason. */

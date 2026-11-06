@@ -311,3 +311,25 @@ describe("The evidence section a UI PR's body carries", () => {
     );
   });
 });
+
+describe("The evidence section's preview line", () => {
+  /** The section's lines, without the marker and start lines. */
+  const linesOf = (changes: Partial<UiEvidence>) => evidenceSection(evidence(allCaptured, changes)).split("\n");
+
+  it("links the preview deployment once it answers", () => {
+    const lines = linesOf({ preview: { kind: "linked", url: "https://pr-12.shop.example.dev/" } });
+
+    expect(lines).toContain("[Open the preview deployment](<https://pr-12.shop.example.dev/>).");
+    expect(lines).not.toContain("No preview link: Kit config declares no `preview.url`.");
+  });
+
+  it("says when the preview never answered, naming the address it polled but not linking it", () => {
+    const lines = linesOf({ preview: { kind: "never-answered", url: "https://pr-12.shop.example.dev/" } });
+
+    expect(lines).toContain("No preview link: the preview at `https://pr-12.shop.example.dev/` never answered.");
+  });
+
+  it("says when Kit config declares no preview", () => {
+    expect(linesOf({ preview: { kind: "none" } })).toContain("No preview link: Kit config declares no `preview.url`.");
+  });
+});
