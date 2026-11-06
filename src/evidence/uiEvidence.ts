@@ -1,11 +1,12 @@
 // The UI evidence module (#153): whether a pull request is UI, which routes to
 // capture and why, the capture result the Implement job's capture step
-// writes and every later reader shares, and what the Operator reads of it on
-// the PR: the evidence section, its marker, which the PR snapshot reads back,
-// and withoutEvidence, which keeps both out of agent text. The gallery is
-// beside it (src/evidence/gallery.ts). Pure, no I/O.
+// writes and every later reader shares, which of its screenshots the Reviewer
+// gets, and what the Operator reads of it on the PR: the evidence section, its
+// marker, which the PR snapshot reads back, and withoutEvidence, which keeps
+// both out of agent text. The gallery is beside it (src/evidence/gallery.ts).
+// Pure, no I/O.
 import { posix } from "node:path";
-import { UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+import { REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 import { FULL_SHA } from "../skills/lock.ts";
@@ -227,6 +228,29 @@ function isOneOf<T extends string>(options: readonly T[], value: unknown): value
 /** `a`, `a or b`, or `a, b or c`; or with `and`. */
 function spelled(options: readonly string[], conjunction: "or" | "and" = "or"): string {
   return options.length <= 1 ? options.join("") : `${options.slice(0, -1).join(", ")} ${conjunction} ${options.at(-1)}`;
+}
+
+/**
+ * The screenshots a Reviewer gets, at most REVIEWER_IMAGE_CAP so they fit in
+ * its context, the ones that matter most first: After before Before, mobile
+ * before desktop, then routes in reason order (the Ticket's, the
+ * Implementer's, the defaults), each reason's routes in the order they were
+ * captured. The Operator's gallery has them all.
+ */
+export function reviewerImages(captures: readonly Capture[]): readonly Capture[] {
+  const routes = captures.map(({ route }) => route);
+  const rank = ({ side, viewport, reason, route }: Capture): number[] => [
+    side === "after" ? 0 : 1,
+    UI_VIEWPORTS.findIndex(({ name }) => name === viewport),
+    ROUTE_REASONS.indexOf(reason),
+    routes.indexOf(route),
+  ];
+  return captures
+    .toSorted((a, b) => {
+      const [ranked, other] = [rank(a), rank(b)];
+      return ranked.reduce((order, value, at) => order || value - (other[at] ?? 0), 0);
+    })
+    .slice(0, REVIEWER_IMAGE_CAP);
 }
 
 /** How the evidence section names why each route was captured. */
