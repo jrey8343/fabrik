@@ -25,11 +25,13 @@ describe("Trust-root guard", () => {
     ["the Kit's Triage prompt", "prompts/triage.md"],
     ["the Kit's Design prompt", "prompts/design.md"],
     ["the Kit's Audit prompt", "prompts/audit.md"],
+    ["the Kit's Retro prompt", "prompts/retro.md"],
     ["the Kit's Efficiency rubric", "prompts/scorers/efficiency.md"],
     ["a new rubric beside the Kit's", "prompts/scorers/verbosity.md"],
     ["the Kit config", ".fabrik/config.yml"],
     ["a phase file", ".fabrik/implement.md"],
     ["a workflow", ".github/workflows/fabrik.yml"],
+    ["the Coding standards", "CODING_STANDARDS.md"],
   ])("refuses a change to %s", (_class, path) => {
     expect(checkTrustRoot([{ path }])).toEqual({ kind: "refuse", paths: [path] });
   });
@@ -56,6 +58,9 @@ describe("Trust-root guard", () => {
     // A Product's own prompts folder: only the Kit's role prompts are trust roots.
     "prompts/onboarding.md",
     "prompts/chatbot/system.txt",
+    // Coding standards are a Trust root only at the repo root.
+    "docs/CODING_STANDARDS.md",
+    "packages/api/CODING_STANDARDS.md",
   ])("allows %s, which only looks like a trust-root path", (path) => {
     expect(checkTrustRoot([{ path }])).toEqual({ kind: "allow" });
   });

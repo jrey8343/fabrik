@@ -7,6 +7,7 @@ const KIT_SHA = "f".repeat(40);
 const BASE_SHA = "b".repeat(40);
 const HEAD_SHA = "a".repeat(40);
 const MARKED_SHA = "c".repeat(40);
+const DEFAULT_BRANCH_SHA = "d".repeat(40);
 const roles = kitConfig().roles;
 
 const line = (message: unknown) => JSON.stringify(message);
@@ -249,6 +250,100 @@ describe("The Run record a run's end yields", () => {
         totalCostUsd: null,
         modelUsage: {},
         transcript: "transcripts/acme/widgets/2026-11/9001-1-audit.jsonl.gz",
+      });
+    });
+  });
+
+  describe("a Retro run's record is for the Retro, with no PR, starting from the default branch commit it checked out", () => {
+    /** The Retro job on the Retro #120 ended `result`; its base-sha is the default branch commit it checked out. */
+    const retro = (result: string, overrides: Partial<RunEnd> = {}) =>
+      runRecordFor(
+        runEnd({
+          needs: needs("retro", { retro: job(result, { "base-sha": DEFAULT_BRANCH_SHA }) }),
+          eventIssue: 120,
+          agentResult: result === "success" ? agentResult("retro", 120) : null,
+          ...overrides,
+        }),
+      );
+
+    it("a Retro run is for the Retro, with no PR, Retry, Step-up, Request changes or Verdict", () => {
+      const files = retro("success");
+
+      expect(files?.record).toMatchObject({
+        role: "retro",
+        issue: 120,
+        pullRequest: null,
+        model: "claude-opus-5-5",
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: DEFAULT_BRANCH_SHA,
+        verdict: null,
+        jobResult: "success",
+        infrastructureFailure: null,
+        turns: 12,
+        totalCostUsd: 1.25,
+      });
+      expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-retro.json");
+      expect(files?.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-1-retro.jsonl.gz");
+    });
+
+    it("a failed Retro run whose 1Password load failed is recorded on roles.retro's model, the agent never having started", () => {
+      const files = retro("failure", {
+        needs: needs(
+          "retro",
+          { retro: job("failure", { "secrets-step": "failure", "base-sha": "", model: "", effort: "" }) },
+          { model: "", effort: "" },
+        ),
+        roles: { ...roles, retro: { model: "claude-sonnet-5-5", effort: "high", timeoutMinutes: 45 } },
+        transcript: null,
+      });
+
+      expect(files?.record).toMatchObject({
+        role: "retro",
+        issue: 120,
+        pullRequest: null,
+        model: "claude-sonnet-5-5",
+        effort: "high",
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: null,
+        verdict: null,
+        jobResult: "failure",
+        infrastructureFailure: "unreachable-1password",
+        turns: null,
+        transcript: null,
+      });
+      expect(files?.transcriptPath).toBeNull();
+    });
+
+    it("a failed Retro run is recorded as the Infrastructure failure its report names", () => {
+      const files = retro("failure", { failureReport: JSON.stringify({ failure: "missing-output", detail: "no <retro> tag" }), transcript: [init] });
+
+      expect(files?.record).toMatchObject({ role: "retro", issue: 120, pullRequest: null, jobResult: "failure", infrastructureFailure: "missing-output" });
+    });
+
+    it("a Retro run timed out by its timeout-minutes, with its transcript, gets a record with no result fields", () => {
+      const files = retro("cancelled", { transcript: [init] });
+
+      expect(files?.record).toMatchObject({
+        role: "retro",
+        issue: 120,
+        pullRequest: null,
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: DEFAULT_BRANCH_SHA,
+        verdict: null,
+        jobResult: "cancelled",
+        infrastructureFailure: "timeout",
+        subtype: null,
+        durationMs: null,
+        turns: null,
+        totalCostUsd: null,
+        modelUsage: {},
+        transcript: "transcripts/acme/widgets/2026-11/9001-1-retro.jsonl.gz",
       });
     });
   });

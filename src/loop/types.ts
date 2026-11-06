@@ -5,9 +5,9 @@ import type { SentBack } from "./backToDesign.ts";
 import type { Label } from "./labels.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
-export type AgentRole = "triage" | "design" | "implement" | "review" | "audit";
+export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" | "retro";
 
-export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit"];
+export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit", "retro"];
 
 /** How an agent job says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
 export type ReportedFailure =
@@ -83,8 +83,11 @@ export type LoopEvent =
     }
   | {
       readonly kind: "agent-run-finished";
-      /** Implement, Review and Auditor runs finish through their own events, which carry what their push jobs hold. */
-      readonly role: Exclude<AgentRole, "implement" | "review" | "audit">;
+      /**
+       * Implement, Review and Auditor runs finish through their own events, which
+       * carry what their push jobs hold. A Retro run's result has no event yet.
+       */
+      readonly role: Exclude<AgentRole, "implement" | "review" | "audit" | "retro">;
       readonly issue: number;
       /** The text the agent emitted as its structured output, unparsed. */
       readonly output: string;

@@ -63,6 +63,11 @@ export function anAuditRunRecord(overrides: Partial<RunRecord> = {}): RunRecord 
   return aRunRecord({ role: "audit", issue: 90, pullRequest: null, ...overrides });
 }
 
+/** A Retro's run on Retro 120 in `owner/product`, costing $1. */
+export function aRetroRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
+  return aRunRecord({ role: "retro", issue: 120, pullRequest: null, ...overrides });
+}
+
 /** A run's cost fields when one of its models has an unknown cost basis: no figure for it, and no total. */
 export const UNKNOWN_COST_BASIS: Pick<RunRecord, "totalCostUsd" | "modelUsage"> = {
   totalCostUsd: null,

@@ -50,10 +50,11 @@ const FAILED = ["failure", "cancelled"];
 
 /**
  * What the push job applies. `eventIssue` is the Actions event's issue number,
- * the run's subject for Triage, Design and the Auditor (whose subject is the
- * pending Audit the App opened), and `eventComment` its comment's id
- * when a comment on that issue started the run; an Implement or Review run's
- * Ticket and PR come from the Kit job's plan, which no agent can rewrite.
+ * the run's subject for Triage, Design, the Auditor and the Retro (whose
+ * subjects are the pending Audit and the pending Retro the App opened), and
+ * `eventComment` its comment's id when a comment on that issue started the
+ * run; an Implement or Review run's Ticket and PR come from the Kit job's
+ * plan, which no agent can rewrite.
  */
 export function pushJobInput(needs: Needs, eventIssue: number | null, eventComment: number | null = null): PushJobInput {
   const kit = needs["kit"];
@@ -67,7 +68,8 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
     case "triage":
     case "design":
     case "implement":
-    case "audit": {
+    case "audit":
+    case "retro": {
       const issue = route === "implement" ? ticket : eventIssue;
       if (issue === null) return { kind: "nothing", reason: `the ${route} run names no issue` };
       const job = needs[route];
