@@ -224,6 +224,88 @@ describe("Landing a prototype turn whose build or dev server failed", () => {
   });
 });
 
+// The preview (#153's preview.url): the push job polls it once the round is posted, and links it then.
+describe("The preview of each variant, when Kit config declares preview.url", () => {
+  const PREVIEW = { url: "https://{branch_slug}--shop.netlify.app" };
+
+  it("says in the round that each variant's preview is linked beside it once it answers, and asks the push job to link it in that round once it has pushed", () => {
+    const plan = planFor(finished(), inSession(), kitConfig({ ui: UI, preview: PREVIEW }));
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "push-prototype-branch", issue: 7 },
+        {
+          kind: "comment",
+          issue: 7,
+          key: "prototype-round",
+          body: [
+            "<!-- fabrik:design-round 3 -->",
+            "<!-- fabrik:prototype-round -->",
+            "@jrey **Design session, round 3: the prototype.** Reply with the variant you'd build, and any changes to it, or `yes` to take the recommendation.",
+            "",
+            "Three ways to book a class, all on `/book`.",
+            "",
+            `[The prototype branch](${REPO}/tree/prototype/7) · [The gallery](${GALLERY}) of each variant's screenshots and videos. The gallery expires in about 30 days, so this comment is the prototype's record.`,
+            "",
+            `- **A.** One long form, every field on the page. [\`src/pages/book/LongForm.tsx\`](${blob("src/pages/book/LongForm.tsx")})`,
+            `- **B.** A stepper: class, time, then details. [\`src/pages/book/Stepper.tsx\`](${blob("src/pages/book/Stepper.tsx")})`,
+            `- **C.** A calendar first, the form beside it. [\`src/pages/book/CalendarFirst.tsx\`](${blob("src/pages/book/CalendarFirst.tsx")})`,
+            "",
+            "Each variant's preview is linked beside it once the preview deployment answers.",
+            "",
+            "**1. Which variant?**",
+            "➡️ Recommended: B, with the calendar from C on its first step.",
+          ].join("\n"),
+        },
+        { kind: "link-prototype-preview", issue: 7, round: { posted: "prototype-round" }, template: PREVIEW.url, route: "/book" },
+      ],
+    });
+  });
+
+  it("links it in the round of a prototype whose capture failed after it built too, since the variants are still there to open", () => {
+    const capture: CaptureResult = { ...CAPTURED, outcome: "failed", reason: "timeout", captures: [] };
+
+    const plan = planFor(finished({ capture, gallery: null }), inSession(), kitConfig({ ui: UI, preview: PREVIEW }));
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment", "link-prototype-preview"]);
+    expect(commentsOf(plan)[0]).toContain(
+      "\n\nEach variant's preview is linked beside it once the preview deployment answers.\n\n**1. Which variant?**\n",
+    );
+  });
+
+  it.each([
+    ["the PR's number", "https://deploy-preview-{pr}--shop.netlify.app"],
+    ["the PR's number beside the branch", "https://pr-{pr}.shop.example.dev/{branch_slug}/{sha}"],
+  ])("says there's no preview for prototypes, and asks for none, when the template names %s, which a prototype hasn't got", (_name, url) => {
+    const plan = planFor(finished(), inSession(), kitConfig({ ui: UI, preview: { url } }));
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
+    expect(commentsOf(plan)[0]).toContain(
+      "\n\nThere's no preview for prototypes: Kit config's `preview.url` names the pull request, as `{pr}`, and a prototype has none.\n\n**1. Which variant?**\n",
+    );
+  });
+
+  it("links no preview, and says nothing of one, when Kit config declares no preview.url, as before", () => {
+    const plan = planFor(finished(), inSession(), kitConfig({ ui: UI }));
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
+    expect(commentsOf(plan)[0]).not.toMatch(/preview/i);
+  });
+
+  it.each([
+    ["whose build failed", finished({ capture: { ...CAPTURED, outcome: "failed", reason: "build-failed", captures: [] }, gallery: null })],
+    ["whose dev server didn't start", finished({ capture: { ...CAPTURED, outcome: "failed", reason: "server-did-not-start", captures: [] }, gallery: null })],
+    ["that changes a Trust-root file", finished({ changes: { net: [{ path: "AGENTS.md" }], commits: [{ path: "AGENTS.md" }] } })],
+    ["that built nothing", finished({ changes: { net: [], commits: [] }, headSha: null })],
+  ])("links none in the failure round of a prototype %s, which has no variant to open", (_name, event) => {
+    const plan = planFor(event, inSession(), kitConfig({ ui: UI, preview: PREVIEW }));
+
+    expect(plan.kind === "act" && plan.actions.some(({ kind }) => kind === "link-prototype-preview")).toBe(false);
+    expect(commentsOf(plan)[0]).not.toMatch(/preview/i);
+  });
+});
+
 describe("The trust-root guard on a prototype branch (ADR-0005)", () => {
   it("pushes nothing, and posts a prototype failure round naming every Trust-root path, even one a later commit undid", () => {
     const changes = {

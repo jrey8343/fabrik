@@ -165,6 +165,11 @@ export function previewUrl(template: string, { number, branch, headSha }: Previe
   return url.href;
 }
 
+/** Whether the template names the pull request, as `{pr}`: one a branch with no PR, such as a Prototype's, can't fill in. */
+export function previewNamesPullRequest(template: string): boolean {
+  return [...template.matchAll(PLACEHOLDER)].some(([, name]) => name === "pr");
+}
+
 /**
  * The text as a slug: in lower case, with each run of characters other than a
  * letter or a digit (a to z, 0 to 9) made one `-`, and no `-` at either end.

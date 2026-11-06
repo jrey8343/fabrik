@@ -96,6 +96,8 @@ function describeAction(action: Action): string {
       return "- run a Design queue check";
     case "link-preview":
       return `- link the preview deployment of ${action.pullRequest === null ? "the PR it opens" : `#${action.pullRequest}`} once it answers, or say it never answered`;
+    case "link-prototype-preview":
+      return `- link each variant's preview in #${action.issue}'s prototype round once it answers, or say it never answered`;
     case "push-branch":
       return `- push ${action.branch}`;
     case "push-prototype-branch":

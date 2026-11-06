@@ -947,6 +947,26 @@ export type Action =
       readonly template: string;
       /** The PR's branch, which this plan pushes. */
       readonly branch: string;
+    }
+  | {
+      /**
+       * Links each variant's preview in a prototype round (#155), as
+       * `link-preview` links a UI PR's. Not a GitHub change itself: once this
+       * plan has pushed the issue's prototype branch and posted the round, the
+       * push job hands it on to its prototype preview step, which fills
+       * `template` in for the branch as the push left it, polls the route's
+       * page there, and edits the round to link it beside each variant, with
+       * `?variant=` and its letter, or to say it never answered. Never a
+       * hosting provider's API.
+       */
+      readonly kind: "link-prototype-preview";
+      readonly issue: number;
+      /** The prototype round this plan posts. */
+      readonly round: PostedComment;
+      /** Kit config's `preview.url`, which uses no `{pr}`: a prototype has no PR. */
+      readonly template: string;
+      /** The route every variant renders on. */
+      readonly route: string;
     };
 
 /**

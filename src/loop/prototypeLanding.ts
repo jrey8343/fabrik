@@ -4,6 +4,7 @@
 // prototype round is a round of the same session: it never ends it, and the
 // Operator's reply to it starts an ordinary turn.
 import { type CaptureFailure, code } from "../evidence/uiEvidence.ts";
+import { type PreviewConfig, previewNamesPullRequest } from "../kit/config.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { turnStartFrom, whileInSession } from "./design.ts";
 import { parsePrototypeTurnOutput, prototypeBranchFor, type PrototypeRoundOutput } from "./designOutput.ts";
@@ -14,19 +15,28 @@ import {
   type PrototypeRequestMarker,
 } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
-import type { Action, IssueContext, LoopEvent, Plan, StartingComment } from "./types.ts";
+import type { Action, IssueContext, LoopEvent, Plan, PostedComment, StartingComment } from "./types.ts";
 
 type PrototypeRunFinished = Extract<LoopEvent, { kind: "prototype-run-finished" }>;
 
 /** The capture failures that leave nothing to look at: the variants were never served. */
 const NOT_SERVED: readonly CaptureFailure[] = ["build-failed", "server-did-not-start"];
 
+/** The prototype round, as the plan posts it for its preview to be linked in. */
+const ROUND: PostedComment = { posted: "prototype-round" };
+
 /**
  * The push job's decision on a prototype turn's branch and round. `found` is
  * what the snapshot found of the Operator's reply that approved the
- * prototype: like any Design-session turn, one whose reply was deleted posts nothing.
+ * prototype: like any Design-session turn, one whose reply was deleted posts
+ * nothing. `preview` is Kit config's, whose link the round waits on.
  */
-export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operator }: IssueContext, found: StartingComment | null): Plan {
+export function applyPrototypeTurn(
+  event: PrototypeRunFinished,
+  { issue, operator }: IssueContext,
+  found: StartingComment | null,
+  preview: PreviewConfig | null,
+): Plan {
   const start = turnStartFrom(event.request.reply ?? undefined, found);
   if (start.kind === "unchecked-reply") {
     return {
@@ -90,7 +100,26 @@ export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operato
     const said = `The Kit pushed the variants the prototype turn wrote to [\`${event.branch}\`](${branchUrl(event)}), but ${captureFailed(capture.reason, event.runUrl)}, and nothing to look at. [The run](${event.runUrl}) has the log.`;
     return { kind: "act", actions: [push, failed(said)] };
   }
-  return { kind: "act", actions: [push, comment(prototypeRound(round, parsed.output, event, operator))] };
+  const linked = previewOfRound(preview);
+  const body = prototypeRound(round, parsed.output, event, operator, linked);
+  if (linked.kind !== "pending") return { kind: "act", actions: [push, comment(body)] };
+  // The push job polls the preview once the round is posted, and links it there only once it answers.
+  return {
+    kind: "act",
+    actions: [
+      push,
+      { kind: "comment", issue: event.issue, body, key: ROUND.posted },
+      { kind: "link-prototype-preview", issue: event.issue, round: ROUND, template: linked.template, route: event.request.request.route },
+    ],
+  };
+}
+
+/** Kit config's preview as a prototype round has it: none declared, one to link once it answers, or one only a PR can fill in. */
+type RoundPreview = { readonly kind: "none" } | { readonly kind: "pending"; readonly template: string } | { readonly kind: "needs-pull-request" };
+
+function previewOfRound(preview: PreviewConfig | null): RoundPreview {
+  if (preview === null) return { kind: "none" };
+  return previewNamesPullRequest(preview.url) ? { kind: "needs-pull-request" } : { kind: "pending", template: preview.url };
 }
 
 function sameRequest({ request: a, reply: replyA }: PrototypeRequestMarker, { request: b, reply: replyB }: PrototypeRequestMarker): boolean {
@@ -123,7 +152,13 @@ function failureRound(round: number, operator: string, said: string): string {
  * describes each variant and links its component on the branch at the head
  * the push left, which outlives it.
  */
-function prototypeRound(round: number, output: PrototypeRoundOutput, event: PrototypeRunFinished, operator: string): string {
+function prototypeRound(
+  round: number,
+  output: PrototypeRoundOutput,
+  event: PrototypeRunFinished,
+  operator: string,
+  preview: RoundPreview,
+): string {
   return [
     designRoundMarker(round),
     PROTOTYPE_ROUND_MARKER,
@@ -135,9 +170,23 @@ function prototypeRound(round: number, output: PrototypeRoundOutput, event: Prot
     "",
     ...variantLines(output, event),
     "",
+    ...(preview.kind === "none" ? [] : [previewLine(preview), ""]),
     "**1. Which variant?**",
     `➡️ Recommended: ${withoutMentions(output.recommendation)}`,
   ].join("\n");
+}
+
+/** What the round says of its preview until the push job has polled it. */
+const PREVIEW_PENDING = "Each variant's preview is linked beside it once the preview deployment answers.";
+
+/** What the round says of the preview Kit config declares. */
+function previewLine(preview: Exclude<RoundPreview, { kind: "none" }>): string {
+  switch (preview.kind) {
+    case "pending":
+      return PREVIEW_PENDING;
+    case "needs-pull-request":
+      return "There's no preview for prototypes: Kit config's `preview.url` names the pull request, as `{pr}`, and a prototype has none.";
+  }
 }
 
 /**
