@@ -47,9 +47,9 @@ export const AGENT_BUNDLE_FILE = "agent-branch.bundle";
 const BUILDS_BRANCH: readonly AgentRole[] = ["implement", "research"];
 
 /**
- * The role a run of which may pass out a branch: a Design session's
- * prototype turn (#155) does, the issue's prototype branch, and its other
- * turns don't.
+ * The roles only some of whose runs pass out a branch: a Design session's
+ * prototype turn (#155) passes out the issue's prototype branch, and its
+ * other turns none.
  */
 const MAY_BUILD_BRANCH: readonly AgentRole[] = ["design"];
 
