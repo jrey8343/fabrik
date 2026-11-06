@@ -163,6 +163,12 @@ describe("Product intent in the Design prompt", () => {
   });
 });
 
+describe("Product intent in the Implement prompt", () => {
+  it("forbids changing anything under docs/product/ at the repo root, where the Vision and Roadmap live", async () => {
+    expect(section(await prompt("implement"), "What you must not change")).toContain("- anything under `docs/product/` at the repo root");
+  });
+});
+
 describe("Questions for the Operator", () => {
   it("the Implementer is told to ask them under one fixed heading in its summary", async () => {
     expect(section(await prompt("implement"), "Your output")).toContain('"Questions for the Operator"');
