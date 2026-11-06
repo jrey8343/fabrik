@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { buildAndServeEnv, type CaptureInput, type CaptureOutcome, type Capturer, captureEvidence, captureStepFiles, captureStepOutputs, captureStepSummary } from "./capture.ts";
+import { buildAndServeEnv, type CaptureInput, type CaptureOutcome, type Capturer, captureEvidence, captureStepFiles, captureStepOutputs, captureStepSummary, implementJobTimeoutMinutes } from "./capture.ts";
 import { type Capture, type CaptureFailure, type CaptureResult, parseCaptureResult } from "./uiEvidence.ts";
 
 const HEAD = "c".repeat(40);
@@ -435,6 +435,14 @@ describe("The env sandbox.build and ui.serve run with", () => {
       NODE_ENV: "production",
       PUBLIC_SITE: "https://example.com",
     });
+  });
+});
+
+describe("The Implement job's timeout", () => {
+  // The agent step stops at the role's own timeout, so a slow capture can never cancel the job before its result uploads.
+  it("is the Implement role's timeout, plus capture's 20 minutes, plus 10 for the job's other steps", () => {
+    expect(implementJobTimeoutMinutes(60)).toBe(90);
+    expect(implementJobTimeoutMinutes(45)).toBe(75);
   });
 });
 

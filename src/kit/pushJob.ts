@@ -113,7 +113,9 @@ function failure(role: AgentRole, issue: number, job: NeededJob, kit: NeededJob)
     kind: "agent-failure",
     role,
     issue,
-    jobResult: job.result,
+    // The Implement job's agent step stops at its own timeout, failing the job, so the
+    // job notes it (loop.yml): read as V1's job timeout left it, cancelled.
+    jobResult: job.outputs["agent-timed-out"] === "true" ? "cancelled" : job.result,
     secretsStep: job.outputs["secrets-step"] ?? "",
     ...(subscription === "" ? {} : { subscription }),
   };
