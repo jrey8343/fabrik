@@ -21,7 +21,7 @@
 // A Design-session turn takes the issue's parent Spec from FABRIK_SPEC_FILE (null if none),
 // for a Ticket back in design, the agent PR it came back from in the issue's sentBack,
 // and whether it may offer a Map from FABRIK_MAP_FILE; on a repo with a `ui` block,
-// once Prototypes are switched on, it is told it may offer a Prototype.
+// it is told it may offer a Prototype.
 // A Design session's prototype turn (#155), `prototype`, is a design run with
 // prompts/prototype.md, on the Design model and effort within the Implement
 // timeout: it takes the request the Operator approved from

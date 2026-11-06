@@ -186,19 +186,14 @@ describe("What a Design-session turn's prompt says of the Map cap", () => {
 describe("What a Design-session turn's prompt says of Prototypes", () => {
   const ui: UiConfig = { paths: ["src/pages/**"], serve: "npm run dev", url: "http://localhost:3000", beforeUrl: null, defaultRoutes: [] };
   const withUi = kitConfig({ ui });
-  const switchedOn = { switchedOn: true };
-  const said = prototypeContext(withUi, 7, switchedOn).join("\n\n");
+  const said = prototypeContext(withUi, 7).join("\n\n");
 
-  it("sets out that Prototypes are available, under its own heading, for a repo with a ui block while Prototypes are switched on", () => {
-    expect(prototypeContext(withUi, 7, switchedOn)[0]).toBe(`## ${PROTOTYPES_HEADING}`);
+  it("sets out that Prototypes are available, under its own heading, for a repo with a ui block", () => {
+    expect(prototypeContext(withUi, 7)[0]).toBe(`## ${PROTOTYPES_HEADING}`);
   });
 
-  it("adds nothing to the prompt of a repo without a ui block, even with Prototypes switched on", () => {
-    expect(prototypeContext(kitConfig({ ui: null }), 7, switchedOn)).toEqual([]);
-  });
-
-  it("adds nothing to the prompt of a repo with a ui block while Prototypes are dormant", () => {
-    expect(prototypeContext(withUi, 7)).toEqual([]);
+  it("adds nothing to the prompt of a repo without a ui block, so that turn never hears of a Prototype", () => {
+    expect(prototypeContext(kitConfig({ ui: null }), 7)).toEqual([]);
   });
 
   it("lets the turn offer a Prototype in a round only when the open question is how a page looks, naming the route and the count, with a recommendation", () => {
