@@ -51,6 +51,37 @@ describe("A Design turn's prototype output: the Operator approved a Prototype", 
   });
 });
 
+describe("The Operator comments a prototype or prototype-round output weighed", () => {
+  it.each([
+    ["prototype", () => requested],
+    ["prototype-round", () => built],
+  ])("are read on a %s output, as on every kind", (_, output) => {
+    expect(turn({ ...output(), operatorCommentsConsidered: ["conversation-3"] })).toMatchObject({
+      ok: true,
+      output: { operatorCommentsConsidered: ["conversation-3"] },
+    });
+  });
+
+  it.each([
+    ["prototype", () => requested],
+    ["prototype-round", () => built],
+  ])("are left out of a %s output when they aren't a list of ids, which never fails the turn", (_, output) => {
+    const checked = turn({ ...output(), operatorCommentsConsidered: "conversation-3" });
+
+    expect(checked.ok && "operatorCommentsConsidered" in checked.output).toBe(false);
+    expect(checked.ok).toBe(true);
+  });
+});
+
+describe("A Design turn output of a kind the contract doesn't know", () => {
+  it("is refused, naming every kind it does", () => {
+    expect(turn({ kind: "mockup" })).toEqual({
+      ok: false,
+      errors: ['kind must be round, brief, spec, split, not-planned, map, prototype or prototype-round, not "mockup"'],
+    });
+  });
+});
+
 const built = {
   kind: "prototype-round",
   intro: "Three takes on `/book`, each with the bigger booking button you asked for.",

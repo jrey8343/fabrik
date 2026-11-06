@@ -489,7 +489,9 @@ function readTurn(value: unknown): DesignTurnOutputResult {
     default:
       return {
         ok: false,
-        errors: [`kind must be round, brief, spec, split, not-planned or map, not ${JSON.stringify(value.kind)}`],
+        errors: [
+          `kind must be round, brief, spec, split, not-planned, map, prototype or prototype-round, not ${JSON.stringify(value.kind)}`,
+        ],
       };
   }
 }
