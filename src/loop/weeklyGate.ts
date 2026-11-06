@@ -2,10 +2,10 @@
 // scheduled tick, each opens at most one pending issue a week, an Audit or a
 // Retro, whose opening starts its run. Each is due from 00:00 UTC on its day
 // of the ISO week, which runs from Monday 00:00 to Monday 00:00 in UTC.
-import { AUDIT_DAYS, type AuditDay } from "../kit/config.ts";
+import { WEEK_DAYS, type WeekDay } from "../kit/config.ts";
 import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { readable } from "./readable.ts";
-import type { AuditIssueSnapshot, KitIssueSnapshot } from "./types.ts";
+import type { KitIssueSnapshot, WeeklyIssueSnapshot } from "./types.ts";
 
 export const DAY = 24 * 60 * 60 * 1000;
 
@@ -16,7 +16,7 @@ const FAILED_RUNS_A_WEEK = 2;
  * The ones among a gate's issues, `fabrik:audit` or `fabrik:retro`, that
  * the Fabrik App opened, newest first: only those are read for markers.
  */
-export function byAppNewestFirst<Issue extends AuditIssueSnapshot>(issues: readonly Issue[]): Issue[] {
+export function byAppNewestFirst<Issue extends WeeklyIssueSnapshot>(issues: readonly Issue[]): Issue[] {
   return issues
     .filter((issue) => issue.byApp)
     .toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.number - a.number);
@@ -43,14 +43,14 @@ export interface WeeklyIssue {
  */
 export function heldBack(
   name: string,
-  day: AuditDay,
+  day: WeekDay,
   issues: readonly WeeklyIssue[],
   now: string,
   kitIssues: readonly KitIssueSnapshot[],
   weeklyLimitHoldsBack: boolean,
 ): string | null {
   const week = weekStart(now);
-  const due = week + AUDIT_DAYS.indexOf(day) * DAY;
+  const due = week + WEEK_DAYS.indexOf(day) * DAY;
   if (Date.parse(now) < due) return `The ${name} is due from ${readable(due)}`;
 
   const thisWeek = issues.filter(({ createdAt }) => Date.parse(createdAt) >= week && Date.parse(createdAt) < week + 7 * DAY);

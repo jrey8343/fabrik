@@ -25,7 +25,6 @@ import { escapeMarkerIn } from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
-  AuditIssueSnapshot,
   AuditSnapshot,
   DesignQueueIssue,
   DesignQueueSnapshot,
@@ -39,6 +38,7 @@ import type {
   SpecSnapshot,
   StartingComment,
   TicketSnapshot,
+  WeeklyIssueSnapshot,
 } from "../loop/types.ts";
 import { type GitHub, pagesOf, type Repo } from "./client.ts";
 import { countEmptyDiffs, designSessionOf, designTurnFailedIn, pushedSinceVerdictIn, requestChangesRunIn, verdictsIn } from "./threads.ts";
@@ -357,12 +357,12 @@ function auditSliceOf(data: WeeklyIssuesQueryResult, appLogin: string | null): A
 }
 
 /** Each issue the query read, with whether the Fabrik App, whose bot login is `appLogin`, opened it (see byAppOf). */
-function weeklyIssuesOf(data: WeeklyIssuesQueryResult, appLogin: string | null): AuditIssueSnapshot[] {
+function weeklyIssuesOf(data: WeeklyIssuesQueryResult, appLogin: string | null): WeeklyIssueSnapshot[] {
   return data.repository.issues.nodes.map((issue) => ({
     number: issue.number,
     title: issue.title,
     open: issue.state === "OPEN",
-    stateReason: issue.stateReason === null ? null : (issue.stateReason.toLowerCase() as AuditIssueSnapshot["stateReason"]),
+    stateReason: issue.stateReason === null ? null : (issue.stateReason.toLowerCase() as WeeklyIssueSnapshot["stateReason"]),
     createdAt: issue.createdAt,
     byApp: byAppOf(issue.author, appLogin),
     body: issue.body,

@@ -99,14 +99,20 @@ export interface ExtraSkill {
   readonly name: string;
 }
 
-export const AUDIT_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
+/** The UTC days of the ISO week, Monday first, that a weekly run is due from. */
+export const WEEK_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
 
-export type AuditDay = (typeof AUDIT_DAYS)[number];
+export type WeekDay = (typeof WEEK_DAYS)[number];
+
+/** The Audit runs on one of the UTC days of the week. */
+export const AUDIT_DAYS = WEEK_DAYS;
+
+export type AuditDay = WeekDay;
 
 /** The Retro runs on one of the same UTC days of the week as the Audit. */
-export const RETRO_DAYS = AUDIT_DAYS;
+export const RETRO_DAYS = WEEK_DAYS;
 
-export type RetroDay = (typeof RETRO_DAYS)[number];
+export type RetroDay = WeekDay;
 
 export type Phase = "triage" | "design" | "implement" | "review";
 

@@ -517,10 +517,13 @@ export interface AuditSnapshot {
   readonly issues: readonly AuditIssueSnapshot[];
 }
 
-/** A `fabrik:audit` issue, open or closed, as the adapter read it (src/loop/audit.ts). */
-export interface AuditIssueSnapshot {
+/**
+ * A weekly run's issue, a `fabrik:audit` or `fabrik:retro` issue, open or
+ * closed, as the adapter read it through one query (src/github/snapshot.ts).
+ */
+export interface WeeklyIssueSnapshot {
   readonly number: number;
-  /** Its title, which an Auditor run's inputs name each closed Audit by (src/agent/inputs.ts). */
+  /** Its title, which an Auditor or Retro run's inputs name each closed one by. */
   readonly title: string;
   readonly open: boolean;
   /** Why it was last closed, or reopened, as GitHub records it; null when it never was. */
@@ -534,6 +537,9 @@ export interface AuditIssueSnapshot {
   readonly byApp: boolean;
   readonly body: string;
 }
+
+/** A `fabrik:audit` issue, open or closed, as the adapter read it (src/loop/audit.ts). */
+export type AuditIssueSnapshot = WeeklyIssueSnapshot;
 
 /** What the retro gate weighs on a scheduled tick (src/loop/retroGate.ts). */
 export interface RetroSnapshot {
@@ -554,11 +560,8 @@ export interface RetroSnapshot {
   readonly escapeFiled: boolean;
 }
 
-/**
- * A `fabrik:retro` issue, open or closed, as the adapter read it
- * (src/loop/retro.ts), through the same query and in the same shape as an Audit's.
- */
-export type RetroIssueSnapshot = AuditIssueSnapshot;
+/** A `fabrik:retro` issue, open or closed, as the adapter read it (src/loop/retro.ts). */
+export type RetroIssueSnapshot = WeeklyIssueSnapshot;
 
 /** The Operator's reply that started a Design-session turn, as the adapter found it when the turn finished. */
 export interface StartingComment {
