@@ -3,8 +3,23 @@
 // Capturer, which does what capture does to the runner. The Playwright shell
 // (src/evidence/capture-main.ts) is the real Capturer, and tests fake it. Pure, no I/O.
 import { UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+import { parseImplementOutput } from "../loop/implementOutput.ts";
 import { gallery, type GalleryShot } from "./gallery.ts";
 import { type Capture, type CaptureFailure, type CaptureResult, type CaptureSide, type ChosenRoute, isUi, routesFor } from "./uiEvidence.ts";
+
+/**
+ * Where the capture step writes, in the agent's output directory: this
+ * folder holds the screenshots and the capture result, kept zipped for the
+ * Reviewer, and the gallery sits beside it, kept unzipped (loop.yml). Not
+ * `fabrik-agent-*`, which the push job downloads.
+ */
+export const EVIDENCE_DIR = "ui-evidence";
+
+/** The capture result's file, in EVIDENCE_DIR beside the screenshots. */
+export const CAPTURE_RESULT_FILE = "capture-result.json";
+
+/** The gallery's file, beside EVIDENCE_DIR; its unzipped artifact is named after it. */
+export const GALLERY_FILE = "fabrik-ui-gallery.html";
 
 /** What capture is given: Kit config's blocks, the branch the Implementer left, and what names routes. */
 export interface CaptureInput {
@@ -257,5 +272,17 @@ export function buildAndServeEnv(
       (entry): entry is [string, string] => entry[1] !== undefined && !WITHHELD.test(entry[0]),
     ),
   );
+}
+
+/** The routes the Implementer's output names, as its agent result carries it: none when it names none, or doesn't read. */
+export function implementerRoutesIn(output: string): readonly string[] {
+  const read = parseImplementOutput(output);
+  return read.ok ? (read.output.routes ?? []) : [];
+}
+
+/** The host and port a URL is served on, its scheme's default when it names none. */
+export function servedAt(url: string): { readonly host: string; readonly port: number } {
+  const { hostname, port, protocol } = new URL(url);
+  return { host: hostname.replace(/^\[|\]$/g, ""), port: port === "" ? (protocol === "https:" ? 443 : 80) : Number(port) };
 }
 

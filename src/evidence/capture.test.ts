@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { buildAndServeEnv, type CaptureInput, type CaptureOutcome, type Capturer, captureEvidence, captureStepFiles, captureStepOutputs, captureStepSummary, implementJobTimeoutMinutes } from "./capture.ts";
+import { buildAndServeEnv, type CaptureInput, type CaptureOutcome, type Capturer, captureEvidence, captureStepFiles, captureStepOutputs, captureStepSummary, implementerRoutesIn, implementJobTimeoutMinutes, servedAt } from "./capture.ts";
 import { type Capture, type CaptureFailure, type CaptureResult, parseCaptureResult } from "./uiEvidence.ts";
 
 const HEAD = "c".repeat(40);
@@ -443,6 +443,26 @@ describe("The Implement job's timeout", () => {
   it("is the Implement role's timeout, plus capture's 20 minutes, plus 10 for the job's other steps", () => {
     expect(implementJobTimeoutMinutes(60)).toBe(90);
     expect(implementJobTimeoutMinutes(45)).toBe(75);
+  });
+});
+
+describe("What capture reads before it starts", () => {
+  it("takes the Implementer's routes from its output, and none from output that names none or doesn't read", () => {
+    const output = (routes: unknown) => JSON.stringify({ title: "Waitlist", summary: "Adds a waitlist.", routes });
+
+    expect(implementerRoutesIn(output(["/book", "/book/waitlist"]))).toEqual(["/book", "/book/waitlist"]);
+    expect(implementerRoutesIn(JSON.stringify({ title: "Waitlist", summary: "Adds a waitlist." }))).toEqual([]);
+    expect(implementerRoutesIn(output(["book"]))).toEqual([]);
+    expect(implementerRoutesIn("not JSON")).toEqual([]);
+  });
+
+  it.each([
+    ["http://127.0.0.1:4321", { host: "127.0.0.1", port: 4321 }],
+    ["http://localhost/clinic/", { host: "localhost", port: 80 }],
+    ["https://localhost", { host: "localhost", port: 443 }],
+    ["http://[::1]:8080", { host: "::1", port: 8080 }],
+  ])("finds the port ui.url %s serves on, to free it of a leftover server", (url, served) => {
+    expect(servedAt(url)).toEqual(served);
   });
 });
 
