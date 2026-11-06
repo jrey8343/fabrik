@@ -316,7 +316,7 @@ export function evidenceSection(evidence: UiEvidence): string {
 }
 
 /** Why capture failed, in plain words. */
-const FAILURE_WORDS: Readonly<Record<CaptureFailure, string>> = {
+export const FAILURE_WORDS: Readonly<Record<CaptureFailure, string>> = {
   "server-did-not-start": "the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran",
   timeout: "it ran out of time",
   "no-routes": "there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`",
@@ -470,7 +470,7 @@ function link(text: string, url: string): string {
  * break or other control character shows as U+FFFD, so agent text can never
  * start a line of its own, and the span's backticks outnumber any run of them inside.
  */
-function code(text: string): string {
+export function code(text: string): string {
   const oneLine = text.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, "\uFFFD");
   const longest = Math.max(0, ...[...oneLine.matchAll(/`+/g)].map(([run]) => run.length));
   const fence = "`".repeat(longest + 1);
