@@ -818,7 +818,7 @@ function rewrittenBody(rewritten: string, issue: IssueSnapshot, marker: MonitorM
 }
 
 /** Why a session on this issue can't take a turn now, or null when it can. */
-function whileInSession(issueNumber: number, issue: IssueSnapshot): Plan | null {
+export function whileInSession(issueNumber: number, issue: IssueSnapshot): Plan | null {
   if (!issue.open) return { kind: "nothing", reason: `#${issueNumber} is closed` };
   if (!issue.labels.includes(NEEDS_DESIGN)) {
     return { kind: "nothing", reason: `#${issueNumber} no longer has ${NEEDS_DESIGN}` };

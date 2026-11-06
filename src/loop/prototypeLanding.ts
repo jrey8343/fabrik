@@ -5,9 +5,14 @@
 // Operator's reply to it starts an ordinary turn.
 import { type CaptureFailure, code } from "../evidence/uiEvidence.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
-import { turnStartFrom } from "./design.ts";
+import { turnStartFrom, whileInSession } from "./design.ts";
 import { parsePrototypeTurnOutput, type PrototypeRoundOutput } from "./designOutput.ts";
-import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "./markers.ts";
+import {
+  designRoundMarker,
+  PROTOTYPE_FAILURE_ROUND_MARKER,
+  PROTOTYPE_ROUND_MARKER,
+  type PrototypeRequestMarker,
+} from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { Action, IssueContext, LoopEvent, Plan, StartingComment } from "./types.ts";
 
@@ -44,6 +49,13 @@ export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operato
       reason: `The prototype turn on #${event.issue} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
     };
   }
+  const notNow = whileInSession(event.issue, issue);
+  if (notNow !== null) return notNow;
+  // The push job reads only the Fabrik App's own requests, so a look-alike another bot posted, which
+  // the Kit job took for the App's, isn't pending here; nor is one a round has answered since.
+  if (issue.pendingPrototype === null || !sameRequest(issue.pendingPrototype, event.request)) {
+    return { kind: "nothing", reason: `#${event.issue}'s Design session isn't waiting on the prototype request this turn built, so its result is stale` };
+  }
   const round = issue.designRounds + 1;
   const comment = (body: string): Action => ({ kind: "comment", issue: event.issue, body });
   const failed = (said: string): Action => comment(failureRound(round, operator, said));
@@ -72,6 +84,10 @@ export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operato
     return { kind: "act", actions: [push, failed(said)] };
   }
   return { kind: "act", actions: [push, comment(prototypeRound(round, parsed.output, event, operator))] };
+}
+
+function sameRequest({ request: a, reply: replyA }: PrototypeRequestMarker, { request: b, reply: replyB }: PrototypeRequestMarker): boolean {
+  return a.route === b.route && a.variants === b.variants && a.brief === b.brief && replyA === replyB;
 }
 
 /**

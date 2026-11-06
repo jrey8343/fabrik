@@ -307,3 +307,38 @@ describe("The Operator's reply that approved the prototype", () => {
     expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
   });
 });
+
+describe("A prototype turn's output that breaks its contract", () => {
+  it.each([
+    ["an ordinary round", { kind: "round", intro: "Where we are.", questions: [{ question: "Which?", recommendation: "This." }] }, 'a prototype turn ends only in a prototype-round, not "round"'],
+    ["a session outcome", { kind: "not-planned", comment: "Not building it." }, 'a prototype turn ends only in a prototype-round, not "not-planned"'],
+    ["another prototype request", { kind: "prototype", route: "/book", variants: 3, brief: "Again.", comment: "Again." }, 'a prototype turn ends only in a prototype-round, not "prototype"'],
+    ["a prototype-round of one variant", { ...ROUND, variants: [ROUND.variants[0]] }, "a prototype-round needs from 2 to 5 variants"],
+  ])("fails as a broken contract on %s, changing nothing", (_name, output, error) => {
+    const plan = planFor(finished({ output: JSON.stringify(output) }), inSession(), kitConfig());
+
+    expect(plan.kind).toBe("fail");
+    expect(plan.kind === "fail" && plan.reason).toContain(`The prototype turn on #7 emitted output that breaks its contract: ${error}`);
+  });
+});
+
+describe("A prototype turn's result the session no longer waits on", () => {
+  it.each([
+    ["#7 is closed", { open: false }],
+    ["#7 no longer has needs-design", { labels: ["enhancement"] }],
+  ])("posts and pushes nothing when %s", (reason, issue) => {
+    expect(planFor(finished(), inSession(issue), kitConfig())).toEqual({ kind: "nothing", reason });
+  });
+
+  // The Kit job routes on any bot's request marker; the push job, which knows the App's login, reads only the App's (src/github/snapshot.ts's byAppOf).
+  it.each([
+    ["the session has no pending request: another bot's look-alike started it, or a round already answered it", null],
+    ["the session's pending request is another one", { ...REQUEST, request: { ...REQUEST.request, route: "/checkout" } }],
+    ["the session's pending request names another reply", { ...REQUEST, reply: 9002 }],
+  ])("drops the result as stale, changing nothing, when %s", (_name, pendingPrototype) => {
+    expect(planFor(finished(), inSession({ pendingPrototype }), kitConfig())).toEqual({
+      kind: "nothing",
+      reason: "#7's Design session isn't waiting on the prototype request this turn built, so its result is stale",
+    });
+  });
+});
