@@ -311,6 +311,16 @@ describe("The evidence section on a first run's draft PR", () => {
     expect(openedBody(planFor(event, snapshotOf(readyTicket()), config))).toBe("Adds a waitlist to full days.\n\nCloses #7");
   });
 
+  it("isn't there while capture is gated off in a repo with no ui block, so the PR opens exactly as it did before UI evidence", () => {
+    const gatedOff = uiRun(anEvidence(undefined, { artifact: null, gallery: null }));
+    const { evidence: _, ...beforeUiEvidence } = gatedOff;
+
+    const plan = planFor(gatedOff, snapshotOf(readyTicket()), kitConfig());
+
+    expect(plan).toEqual(planFor(beforeUiEvidence, snapshotOf(readyTicket()), kitConfig()));
+    expect(openedBody(plan)).toBe("Adds a waitlist to full days.\n\nCloses #7");
+  });
+
   it.each([
     ["a UI run's", uiRun(), [`<!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`]],
     ["a non-UI run's", finished({ evidence: anEvidence(CAPTURED) }), []],
