@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { isUi } from "./uiEvidence.ts";
+import { isUi, routesFor } from "./uiEvidence.ts";
 
 /** The Pilot's ui block: an Astro site served from its build. */
 const ui: UiConfig = {
@@ -30,5 +30,76 @@ describe("Whether a pull request is UI", () => {
 
   it("is false without a ui block, whatever changed", () => {
     expect(isUi(["src/pages/book.astro", "src/components/Header.astro"], null)).toBe(false);
+  });
+});
+
+/** A Ticket body in the shape a Design session writes, naming these routes. */
+const ticket = (whatToBuild: string) =>
+  ["## Parent", "", "#12", "", "## What to build", "", whatToBuild, "", "## Acceptance criteria", "", "- [ ] It works"].join("\n");
+
+describe("The routes UI evidence captures", () => {
+  it("are the routes the Ticket names, as paths in backticks, each with its reason", () => {
+    const body = ticket("Add a waitlist to full days on `/book`, and link it from `/services/physio`.");
+
+    expect(routesFor(body, [], ["/"])).toEqual([
+      { route: "/book", reason: "ticket" },
+      { route: "/services/physio", reason: "ticket" },
+    ]);
+  });
+
+  it("count only a code span that is one path starting with a single /, never other code or a bare path", () => {
+    const body = ticket(
+      [
+        "Change `src/pages/book.astro` so /book shows a waitlist, then run `npm run build`.",
+        "Don't load `//cdn.example.com/widget.js`, keep `GET /api/slots` as it is, and leave `/book now` alone.",
+        "The home page, `/`, links to it.",
+      ].join("\n"),
+    );
+
+    expect(routesFor(body, [], [])).toEqual([{ route: "/", reason: "ticket" }]);
+  });
+
+  it("go on with the Implementer's routes after the Ticket's, and leave out the defaults", () => {
+    const body = ticket("Add a waitlist to full days on `/book`.");
+
+    expect(routesFor(body, ["/book/waitlist", "/"], ["/services", "/contact"])).toEqual([
+      { route: "/book", reason: "ticket" },
+      { route: "/book/waitlist", reason: "implementer" },
+      { route: "/", reason: "implementer" },
+    ]);
+  });
+
+  it("are the Implementer's alone when the Ticket names none", () => {
+    expect(routesFor(ticket("Add a waitlist to full days."), ["/book"], ["/"])).toEqual([
+      { route: "/book", reason: "implementer" },
+    ]);
+  });
+
+  it("fall back to ui.default_routes when neither the Ticket nor the Implementer names any", () => {
+    expect(routesFor(ticket("Tighten the spacing in the footer."), [], ["/", "/book", "/services"])).toEqual([
+      { route: "/", reason: "default" },
+      { route: "/book", reason: "default" },
+      { route: "/services", reason: "default" },
+    ]);
+  });
+
+  it("hold each route once, with the reason it was first named for", () => {
+    const body = ticket("Add a waitlist to `/book`. The waitlist shows on `/book` only when the day is full.");
+
+    expect(routesFor(body, ["/book", "/book/waitlist", "/book/waitlist"], ["/"])).toEqual([
+      { route: "/book", reason: "ticket" },
+      { route: "/book/waitlist", reason: "implementer" },
+    ]);
+  });
+
+  it("hold each default route once", () => {
+    expect(routesFor(ticket("Tighten the footer."), [], ["/", "/book", "/"])).toEqual([
+      { route: "/", reason: "default" },
+      { route: "/book", reason: "default" },
+    ]);
+  });
+
+  it("are none at all when nothing names a route and there are no defaults, which capture records as no-routes", () => {
+    expect(routesFor(ticket("Tighten the spacing in the footer."), [], [])).toEqual([]);
   });
 });
