@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, AUDITED_SHA, auditBody, kitConfig, notificationsOf, tickSnapshot } from "../__fixtures__/snapshots.ts";
+import { anIssue, AUDITED_SHA, auditBody, kitConfig, notificationsOf, snapshotOf, tickSnapshot } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AgentRole, HeldTargetSnapshot, KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
@@ -177,6 +177,56 @@ describe("A run held twice", () => {
     expect(labelsAdded(plan)).toEqual([
       { kind: "add-labels", issue: 8, labels: ["needs-triage"] },
       { kind: "add-labels", issue: 7, labels: ["needs-triage"] },
+    ]);
+  });
+});
+
+describe("A run held twice, once the issue its first held marker was on has closed", () => {
+  const LATEST = "2026-11-10T04:00:00.000Z";
+
+  /** The issue with the comments this plan leaves on it. */
+  function commentedOn(issue: KitIssueSnapshot, plan: Plan): KitIssueSnapshot {
+    const added = actionsOf(plan).flatMap((action) => (action.kind === "comment" && action.issue === issue.number ? [action.body] : []));
+    return { ...issue, comments: [...issue.comments, ...added] };
+  }
+
+  function holdOn(kitIssues: KitIssueSnapshot[], issue: number, label: "needs-triage" | "agent:implement"): Plan {
+    const labels = label === "needs-triage" ? [label] : ["enhancement", "ready-for-agent", label];
+    return planFor(
+      { kind: "label-added", issue, label },
+      snapshotOf(anIssue({ number: issue, labels }), { kitIssues }),
+      TWO_SUBSCRIPTIONS,
+    );
+  }
+
+  it("keeps its original place, ahead of a run first held while it was running", () => {
+    // Both used up: #40 buzzed and resets first, so the held runs' markers are on the issue the tick closes.
+    let first = weeklyLimitIssue(40, "Claude token 2", EARLIER, [], true);
+    let quiet = weeklyLimitIssue(41, "Claude token", LATER);
+    first = commentedOn(first, holdOn([first, quiet], 7, "needs-triage"));
+    first = commentedOn(first, holdOn([first, quiet], 9, "agent:implement"));
+
+    const reset = planFor(PAST_EARLIER, tickSnapshot({ kitIssues: [first, quiet], held: [anIssueHeld(7, []), anIssueHeld(9, ["ready-for-agent"])] }), TWO_SUBSCRIPTIONS);
+    expect(actionsOf(reset)).toContainEqual({ kind: "close", issue: 40, reason: "completed" });
+    quiet = commentedOn(quiet, reset);
+
+    // The reset was wrong: Claude token 2 is used up again, and a new run, #12, is held before #9 and #7 are refused again.
+    let again = weeklyLimitIssue(42, "Claude token 2", LATEST, [], true);
+    again = commentedOn(again, holdOn([quiet, again], 12, "needs-triage"));
+    again = commentedOn(again, holdOn([quiet, again], 9, "agent:implement"));
+    again = commentedOn(again, holdOn([quiet, again], 7, "needs-triage"));
+
+    const plan = planFor(
+      tick("2026-11-09T05:00:00.000Z"),
+      tickSnapshot({ kitIssues: [quiet, again], held: [anIssueHeld(7, []), anIssueHeld(9, ["ready-for-agent"]), anIssueHeld(12, [])] }),
+      TWO_SUBSCRIPTIONS,
+    );
+
+    expect(actionsOf(plan)).toContainEqual({ kind: "close", issue: 41, reason: "completed" });
+    expect(labelsAdded(plan)).toEqual([
+      { kind: "add-labels", issue: 7, labels: ["needs-triage"] },
+      { kind: "add-labels", issue: 9, labels: ["agent:implement"] },
+      { kind: "add-labels", issue: 12, labels: ["needs-triage"] },
     ]);
   });
 });

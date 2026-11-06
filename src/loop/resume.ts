@@ -8,19 +8,17 @@
 // moved on in the Loop, since it was held is dropped instead. A weekly-limit
 // issue that stays open gets a resumed marker for each run dealt with, so
 // that only a later held marker, if the resumed run is refused again, holds
-// it again, in its first place. Pure, no I/O.
+// it again; the marker carries the run's place in the order, so that held
+// again it keeps its first place even once the issue its first held marker
+// was on has closed. Only when every weekly-limit issue closes in one tick is
+// no open issue left to carry it, and a run held again then takes a new place.
+// Pure, no I/O.
 import { auditMarksIn } from "./markers.ts";
 import { startAuditorRun } from "./audit.ts";
-import { type HeldRun, heldRunsIn, RUN_NAMES, resumedMarker, resumedRunsIn } from "./heldRun.ts";
+import { type HeldRun, RUN_NAMES, resumedMarker, type Waiting, waitingHeldRuns } from "./heldRun.ts";
 import { AUDIT_LABEL, isStateLabel, NEEDS_DESIGN, READY_FOR_AGENT, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { rotationIsOn } from "./subscriptions.ts";
-import type { Action, HeldTargetSnapshot, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
-
-/** A held run still waiting, and how many held markers for it each open weekly-limit issue carries. */
-interface Waiting {
-  readonly run: HeldRun;
-  readonly markers: ReadonlyMap<number, number>;
-}
+import type { Action, HeldTargetSnapshot, KitConfig, Plan, Snapshot } from "./types.ts";
 
 /**
  * The scheduled tick's Plan, with every held run resumed or dropped when it
@@ -36,7 +34,7 @@ export function resumingHeldRuns(tick: Plan, snapshot: Snapshot, config: KitConf
     ),
   );
   if (closing.size === 0) return tick;
-  const waiting = waitingIn(limits);
+  const waiting = waitingHeldRuns(limits);
   if (waiting.length === 0) return tick;
   if (snapshot.held === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the issues and PRs held runs are on" };
@@ -62,64 +60,19 @@ export function resumingHeldRuns(tick: Plan, snapshot: Snapshot, config: KitConf
     }
     dealtWith.push(entry);
   }
+  // On every weekly-limit issue that stays open, so that a run held again keeps
+  // its place even once the issue its held markers were on has closed.
   const markers = limits
     .filter((issue) => !closing.has(issue.number))
     .flatMap((issue): Action[] => {
-      const here = dealtWith.flatMap(({ run, markers: counts }) => {
-        const held = counts.get(issue.number);
-        return held === undefined ? [] : [resumedMarker({ role: run.role, issue: run.issue, held })];
-      });
+      const here = dealtWith.map(({ run, markers: counts }) =>
+        resumedMarker({ role: run.role, issue: run.issue, held: counts.get(issue.number) ?? 0, order: run.order ?? null }),
+      );
       if (here.length === 0) return [];
       const body = ["A Subscription's weekly limit reset, so the Kit has dealt with the runs held here.", "", ...here].join("\n");
       return [{ kind: "comment", issue: issue.number, body }];
     });
   return { kind: "act", actions: [...tick.actions, ...resumes, ...markers] };
-}
-
-/**
- * The held runs still waiting on these weekly-limit issues, in the order each
- * was first held: an issue's held markers for a run past the count its last
- * resumed marker covers still hold it. Issues are read oldest first, each
- * body before its comments.
- */
-function waitingIn(limits: readonly KitIssueSnapshot[]): Waiting[] {
-  const first = new Map<string, HeldRun>();
-  const counts = new Map<string, Map<number, { held: number; resumed: number }>>();
-  for (const issue of limits) {
-    for (const text of [issue.body, ...issue.comments]) {
-      for (const run of heldRunsIn(text)) {
-        const key = keyOf(run);
-        if (!first.has(key)) first.set(key, run);
-        const count = countOn(counts, key, issue.number);
-        count.held += 1;
-      }
-      for (const run of resumedRunsIn(text)) {
-        const count = countOn(counts, keyOf(run), issue.number);
-        count.resumed = Math.max(count.resumed, run.held);
-      }
-    }
-  }
-  return [...first].flatMap(([key, run]) => {
-    const onIssues = [...(counts.get(key) ?? new Map<number, { held: number; resumed: number }>())];
-    if (!onIssues.some(([, count]) => count.held > count.resumed)) return [];
-    return [{ run, markers: new Map(onIssues.map(([number, count]) => [number, count.held])) }];
-  });
-}
-
-function keyOf({ role, issue }: Pick<HeldRun, "role" | "issue">): string {
-  return `${role}:${issue}`;
-}
-
-function countOn(
-  counts: Map<string, Map<number, { held: number; resumed: number }>>,
-  key: string,
-  issue: number,
-): { held: number; resumed: number } {
-  const byIssue = counts.get(key) ?? new Map<number, { held: number; resumed: number }>();
-  counts.set(key, byIssue);
-  const count = byIssue.get(issue) ?? { held: 0, resumed: 0 };
-  byIssue.set(issue, count);
-  return count;
 }
 
 /**

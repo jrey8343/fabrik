@@ -110,8 +110,8 @@ function actionsOf(plan: Plan): readonly Action[] {
 }
 
 /** The held marker a weekly-limit issue's comment carries for a held run. */
-function heldMarker(issue: number, role: AgentRole, label: string | null): string {
-  return `<!-- fabrik:held ${JSON.stringify({ issue, role, label })} -->`;
+function heldMarker(issue: number, role: AgentRole, label: string | null, order = 1): string {
+  return `<!-- fabrik:held ${JSON.stringify({ issue, role, label, order })} -->`;
 }
 
 describe("A run due while every Subscription is used up, with rotation on", () => {

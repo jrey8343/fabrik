@@ -8,7 +8,7 @@
 // carry the marker or resume the run, so it isn't held: a run due starts on
 // the first listed Subscription, whose stream watch kills it on overage, and a
 // killed run gets the usual failure comment. Pure, no I/O.
-import { heldMarker, type HeldRun, heldRunOf, holding, RUN_NAMES } from "./heldRun.ts";
+import { heldInOrder, heldMarker, type HeldRun, heldRunOf, holding, RUN_NAMES } from "./heldRun.ts";
 import { earliestOf, notified, resetsAtOf } from "./kitIssueMarks.ts";
 import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { readable } from "./readable.ts";
@@ -45,16 +45,19 @@ export function heldWhileUsedUp(
   const { until, on } = holdingOn(kitIssues);
   // Every Subscription unusable through usage-credits issues alone: nowhere holds its marker, so the run starts.
   if (on === undefined) return plan;
-  const comments: Action[] = [];
-  const actions = plan.actions.flatMap((action): Action[] => {
-    if (action.kind !== "start-agent-run") return [action];
-    const held = heldRunOf(action);
-    comments.push({ kind: "comment", issue: on.number, body: heldLine(held, until) });
+  const { actions: planned } = plan;
+  const starts = planned.filter((action) => action.kind === "start-agent-run");
+  // Each in its place in the order held runs resume in.
+  const held = heldInOrder(starts.map(heldRunOf), kitIssues);
+  const comments: Action[] = held.map((run) => ({ kind: "comment", issue: on.number, body: heldLine(run, until) }));
+  const actions = planned.flatMap((action): Action[] => {
+    const run = action.kind === "start-agent-run" ? held[starts.indexOf(action)] : undefined;
+    if (run === undefined) return [action];
     // A Plan that already takes the trigger label off, as a Design-session turn's does, takes it off once.
-    const removed = plan.actions.some(
-      (other) => other.kind === "remove-label" && other.issue === held.issue && other.label === held.label,
+    const removed = planned.some(
+      (other) => other.kind === "remove-label" && other.issue === run.issue && other.label === run.label,
     );
-    return holding(held, until).filter((step) => step.kind !== "remove-label" || !removed);
+    return holding(run, until).filter((step) => step.kind !== "remove-label" || !removed);
   });
   return { kind: "act", actions: [...actions, ...comments] };
 }

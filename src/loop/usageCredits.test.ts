@@ -170,8 +170,8 @@ const ROLES: readonly (readonly [Exclude<AgentRole, "audit">, Partial<IssueSnaps
 ];
 
 /** The held marker a Kit-owned issue carries for a held run. */
-function heldMarker(issue: number, role: AgentRole, label: string | null): string {
-  return `<!-- fabrik:held ${JSON.stringify({ issue, role, label })} -->`;
+function heldMarker(issue: number, role: AgentRole, label: string | null, order = 1): string {
+  return `<!-- fabrik:held ${JSON.stringify({ issue, role, label, order })} -->`;
 }
 
 const PENDING_AUDIT = anIssue({ number: 98, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "pending") });

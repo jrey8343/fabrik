@@ -12,7 +12,7 @@
 // Subscription's usage-credits issue keeps the Kit off that Subscription.
 import { isPendingAudit } from "./audit.ts";
 import { failAudit } from "./auditFailure.ts";
-import { type HeldRun, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
+import { type HeldRun, heldInOrder, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
 import { canHold, heldAfterKill } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
@@ -104,8 +104,10 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   const failure = infrastructureFailureOf(run);
   const ranOn = ranOnOf(run, config);
   const failedRun = `The ${RUN_NAMES[run.role]} run on #${run.issue}`;
-  const held = heldOnRefusal(run, failure, context, ranOn);
-  if (held !== null) {
+  const refused = heldOnRefusal(run, failure, context, ranOn);
+  if (refused !== null) {
+    // Its place in the order: a run held before, resumed and refused again, keeps the one it had.
+    const [held = refused] = heldInOrder([refused], context.kitIssues);
     // A kill says nothing of when the limit resets: the held run waits for the first weekly-limit issue's.
     const killed = failure === "usage-credits";
     const repoWide = repoWideNotice(failure, context, {

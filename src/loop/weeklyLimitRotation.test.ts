@@ -202,7 +202,7 @@ describe("A run refused while no other Subscription is free, with rotation on", 
         "",
         "The Implement run on #8 is held until 2026-11-08 10:00 UTC, when the first Subscription's weekly limit resets. The Kit re-adds `agent:implement` on #8 then, to run it again.",
         "",
-        '<!-- fabrik:held {"issue":8,"role":"implement","label":"agent:implement"} -->',
+        '<!-- fabrik:held {"issue":8,"role":"implement","label":"agent:implement","order":2} -->',
       ].join("\n"),
     });
   });
