@@ -930,8 +930,10 @@ function kitPartAt(body: string): number | null {
 
 /** The body with its Kit's part written for `marks`, the Operator's part above it as it was. */
 export function replayBody(body: string, marks: ReplayMarks): string {
-  const operatorPart = body.slice(0, kitPartAt(body) ?? body.length);
-  const separator = operatorPart === "" ? "" : operatorPart.endsWith("\n") ? "\n" : "\n\n";
+  const at = kitPartAt(body);
+  const operatorPart = body.slice(0, at ?? body.length);
+  // A blank line sets the Kit's part apart, put in once, when it's first written.
+  const separator = at !== null || operatorPart === "" ? "" : operatorPart.endsWith("\n") ? "\n" : "\n\n";
   const markers = [
     `<!-- fabrik:replay-plan ${markerJson(storedPlan(marks.plan))} -->`,
     ...marks.progress.map((progress) => `<!-- fabrik:replay-ticket ${markerJson(progress)} -->`),

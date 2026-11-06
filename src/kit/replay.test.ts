@@ -913,9 +913,13 @@ describe("A Replay's next step on the tick", () => {
     it("never changing the Operator's text above the Kit's part, however often the Kit rewrites its own", () => {
       const body = "Does Review hold up at a higher effort?  \r\n\r\n```replay\r\nreview.effort: high\r\ntickets: 12\r\n```\r\nThanks!";
 
-      const done = finished(started(anAcceptedIssue(140, { body }), 12, 9001), 12, 9001, { kind: "done" });
+      const accepted = anAcceptedIssue(140, { body });
+      const done = finished(started(accepted, 12, 9001), 12, 9001, { kind: "done" });
 
       expect(done.body.startsWith(body)).toBe(true);
+      // Nor anything between it and the Kit's part, which the Kit put there once.
+      const above = (each: string) => each.slice(0, each.indexOf("<!-- fabrik:replay-start -->"));
+      expect(above(done.body)).toBe(above(accepted.body));
       expect(replayMarksIn(done.body)?.progress).toEqual([{ ticket: 12, state: "done", run: 9001 }]);
     });
   });
