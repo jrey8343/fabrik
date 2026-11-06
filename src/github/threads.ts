@@ -170,17 +170,43 @@ export function pendingPrototypeIn(
   return pending !== null && pending.reply !== null && !existing.has(pending.reply) ? null : pending;
 }
 
+/**
+ * The prototype requests a prototype turn's result may still land on (#155),
+ * from an issue's current Design session's comments oldest first: each the
+ * Fabrik App posted that no prototype round or prototype failure round has
+ * answered, oldest first. A session's turns build its requests in turn, so a
+ * round answers the oldest one before it. Unlike the pending request, a failed
+ * turn's notice, or the Map cap's refusal, which opens like one, leaves a
+ * request unanswered: a prototype turn that was already building it still
+ * lands its round. A second landing of a request a round answered is stale,
+ * and the session's end or return answers every one.
+ */
+export function unansweredPrototypesIn(comments: readonly Pick<ThreadComment, "body" | "byApp">[]): PrototypeRequestMarker[] {
+  let unanswered: PrototypeRequestMarker[] = [];
+  for (const { body, byApp } of comments) {
+    if (!byApp) continue;
+    const request = prototypeRequestIn(body);
+    if (request !== null) unanswered = [...unanswered, request];
+    else if (isPrototypeRound(body)) unanswered = unanswered.slice(1);
+    else if (endsDesignSession(body)) unanswered = [];
+  }
+  return unanswered;
+}
+
 /** Whether the App's comment ends a pending prototype request: the round that answers it, a failed turn, or the session's end or return. */
 function endsPrototypeRequest(body: string): boolean {
+  return isPrototypeRound(body) || body.startsWith(DESIGN_TURN_FAILED_MARKER) || endsDesignSession(body);
+}
+
+/** Whether the App's comment is a prototype round or prototype failure round: a round whose marker line has the prototype's right under it. */
+function isPrototypeRound(body: string): boolean {
   const [first = "", second] = body.split("\n", 2);
-  const prototypeRound = DESIGN_ROUND_MARKER.test(first) && (second === PROTOTYPE_ROUND_MARKER || second === PROTOTYPE_FAILURE_ROUND_MARKER);
-  return (
-    prototypeRound ||
-    body.startsWith(DESIGN_TURN_FAILED_MARKER) ||
-    body.startsWith(SESSION_FINISHED) ||
-    LIVE_OUTCOME_MARKER.test(body) ||
-    sentBackIn(body) !== null
-  );
+  return DESIGN_ROUND_MARKER.test(first) && (second === PROTOTYPE_ROUND_MARKER || second === PROTOTYPE_FAILURE_ROUND_MARKER);
+}
+
+/** Whether the App's comment ends the Design session, async or live, or notes the return that starts a new one. */
+function endsDesignSession(body: string): boolean {
+  return body.startsWith(SESSION_FINISHED) || LIVE_OUTCOME_MARKER.test(body) || sentBackIn(body) !== null;
 }
 
 /**

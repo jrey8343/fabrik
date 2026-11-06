@@ -20,9 +20,12 @@ import type {
  * An issue with these labels and this parent; everything else is plain. The
  * adapter fills `parent` and `parentIssue` from the one GitHub parent, so
  * they always agree here too: give either, and the other follows (a parent
- * given by number alone is open, with no labels); give both only as one.
+ * given by number alone is open, with no labels); give both only as one. A
+ * pending prototype request is unanswered too, unless a test says otherwise,
+ * as the adapter reads them from the one thread.
  */
 export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
+  const pending = overrides.pendingPrototype ?? null;
   return {
     number: 1,
     title: "An issue",
@@ -36,6 +39,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     turnFailed: false,
     firstTurnClaimed: false,
     pendingPrototype: null,
+    unansweredPrototypes: pending === null ? [] : [{ request: pending.request, reply: pending.reply }],
     sentBack: null,
     emptyDiffs: 0,
     openBlockers: [],

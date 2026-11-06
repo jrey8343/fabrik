@@ -3,7 +3,7 @@ import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import type { CaptureResult } from "../evidence/uiEvidence.ts";
-import { designSessionOf, designTurnFailedIn, pendingPrototypeIn } from "../github/threads.ts";
+import { designSessionOf, designTurnFailedIn, pendingPrototypeIn, unansweredPrototypesIn } from "../github/threads.ts";
 import type { PrototypeRequestMarker } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { IssueSnapshot, LoopEvent, Plan, Snapshot } from "./types.ts";
@@ -526,11 +526,39 @@ describe("A prototype turn's result the session no longer waits on", () => {
 
   // The Kit job routes on any bot's request marker; the push job, which knows the App's login, reads only the App's (src/github/snapshot.ts's byAppOf).
   it.each([
-    ["the session has no pending request: another bot's look-alike started it, or a round already answered it", null],
-    ["the session's pending request is another one", { ...REQUEST, request: { ...REQUEST.request, route: "/checkout" } }],
-    ["the session's pending request names another reply", { ...REQUEST, reply: 9002 }],
-  ])("drops the result as stale, changing nothing, when %s", (_name, pendingPrototype) => {
-    expect(planFor(finished(), inSession({ pendingPrototype }), kitConfig())).toEqual({
+    ["the session holds no unanswered request: another bot's look-alike started it, or a round already answered it", []],
+    ["the session's unanswered request is another one", [{ ...REQUEST, request: { ...REQUEST.request, route: "/checkout" } }]],
+    ["the session's unanswered request names another reply", [{ ...REQUEST, reply: 9002 }]],
+  ])("drops the result as stale, changing nothing, when %s", (_name, unansweredPrototypes) => {
+    expect(planFor(finished(), inSession({ unansweredPrototypes }), kitConfig())).toEqual({
+      kind: "nothing",
+      reason: "#7's Design session isn't waiting on the prototype request this turn built, so its result is stale",
+    });
+  });
+
+  /** #7 as the push job reads it from this thread: its rounds, and its requests pending and unanswered. */
+  const readFrom = (thread: readonly { id: number; body: string; byApp: boolean }[]) =>
+    inSession({ pendingPrototype: pendingPrototypeIn(thread), unansweredPrototypes: unansweredPrototypesIn(thread) });
+
+  it("lands its round though another turn's failure notice ended the request as pending first, since no round has answered it", () => {
+    const otherTurnFailed = planFor(
+      { kind: "agent-run-failed", role: "design", issue: 7, runUrl: RUN, jobResult: "failure", secretsStep: "success", report: null },
+      inSession(),
+      kitConfig(),
+    );
+    const thread = requestThen(otherTurnFailed);
+    expect(pendingPrototypeIn(thread)).toBeNull();
+
+    const plan = planFor(finished(), readFrom(thread), kitConfig());
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
+    expect(commentsOf(plan)[0]).toContain("**Design session, round 3: the prototype.**");
+  });
+
+  it("drops a second landing of the request as stale once a round answered it, as when a restarted turn built it twice", () => {
+    const thread = requestThen(planFor(finished(), inSession(), kitConfig()));
+
+    expect(planFor(finished(), readFrom(thread), kitConfig())).toEqual({
       kind: "nothing",
       reason: "#7's Design session isn't waiting on the prototype request this turn built, so its result is stale",
     });

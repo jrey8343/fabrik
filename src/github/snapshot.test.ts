@@ -1010,6 +1010,15 @@ describe("Gathering an issue's Design session", () => {
       const issue = await gatheredIssue([approval, { body: requestComment(), author: app }]);
 
       expect(issue?.pendingPrototype).toMatchObject({ request: { route: "/book", variants: 3, brief }, reply: 9001 });
+      expect(issue?.unansweredPrototypes).toEqual([{ request: { route: "/book", variants: 3, brief }, reply: 9001 }]);
+    });
+
+    it("reads a request another turn's failure notice followed as unanswered, though no longer pending, so its prototype turn still lands", async () => {
+      const failed = { body: `${DESIGN_TURN_FAILED_MARKER}\n@operator The Design-session turn run on #6 failed.`, author: app };
+      const issue = await gatheredIssue([approval, { body: requestComment(), author: app }, failed], [], "fabrik-app[bot]");
+
+      expect(issue?.pendingPrototype).toBeNull();
+      expect(issue?.unansweredPrototypes).toEqual([{ request: { route: "/book", variants: 3, brief }, reply: 9001 }]);
     });
 
     it("reads a request whose approving reply isn't among the comments it read, deleted or older than them, as not pending", async () => {

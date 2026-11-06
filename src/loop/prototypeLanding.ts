@@ -58,9 +58,10 @@ export function applyPrototypeTurn(
   }
   const notNow = whileInSession(event.issue, issue);
   if (notNow !== null) return notNow;
-  // The push job reads only the Fabrik App's own requests, so a look-alike another bot posted, which
-  // the Kit job took for the App's, isn't pending here; nor is one a round has answered since.
-  if (issue.pendingPrototype === null || !sameRequest(issue.pendingPrototype, event.request)) {
+  // The push job reads only the Fabrik App's own requests, so a look-alike another bot posted, which the Kit
+  // job took for the App's, isn't one here; nor is one a round has answered since. One another turn's failure
+  // notice ended as pending still is: its prototype turn was already building it.
+  if (!issue.unansweredPrototypes.some((request) => sameRequest(request, event.request))) {
     return {
       kind: "nothing",
       reason: `#${event.issue}'s Design session isn't waiting on the prototype request this turn built, so its result is stale`,

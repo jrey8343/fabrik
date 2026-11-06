@@ -7,7 +7,7 @@ import { UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "../loop/rules.ts";
 import type { LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
-import { countEmptyDiffs, designSessionOf, designTurnFailedIn, pendingPrototypeIn, requestChangesRunIn, verdictsIn } from "./threads.ts";
+import { countEmptyDiffs, designSessionOf, designTurnFailedIn, pendingPrototypeIn, requestChangesRunIn, unansweredPrototypesIn, verdictsIn } from "./threads.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const VERDICT_URL = "https://github.com/acme/shop/pull/50#issuecomment-9001";
@@ -328,5 +328,59 @@ describe("Reading an issue's pending prototype request in the current session", 
     const quoting = app([designRoundMarker(2), "@jrey **Design session, round 2.**", "", PROTOTYPE_ROUND_MARKER].join("\n"));
 
     expect(pendingPrototypeIn([requested(), quoting, app(PROTOTYPE_FAILURE_ROUND_MARKER)])).not.toBeNull();
+  });
+
+  describe("and the requests a prototype turn's result may still land on", () => {
+    const again = { route: "/checkout", variants: 3, brief: "Three checkouts." };
+
+    /** The Map cap's refusal of a turn's Map, which opens like a failed turn's notice. */
+    function mapRefused() {
+      const output = JSON.stringify({
+        kind: "map",
+        comment: "Too foggy for one session, so it's a Map.",
+        destination: "Patients book group classes online.",
+        notes: "Notes.",
+        notYetSpecified: "- How classes are priced",
+        outOfScope: "- Video classes",
+        decisions: [{ key: "provider", title: "Group classes: provider?", body: "## Question\n\nWhich provider?", type: "research", blockedBy: [] }],
+      });
+      const plan = planFor(
+        { kind: "agent-run-finished", role: "design", issue: 7, output },
+        snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: 1 }), { openMaps: [12] }),
+        kitConfig({ caps: { ...kitConfig().caps, maps: 1 } }),
+      );
+      return app(commentsOf(plan)[0] ?? "");
+    }
+
+    it("reads a request no prototype round has answered as one, though another turn's failure notice or the Map cap's refusal ended it as pending", () => {
+      for (const ended of [turnFailed(), mapRefused()]) {
+        const thread = [requested(), other("Keep the header."), ended];
+
+        expect(pendingPrototypeIn(thread)).toBeNull();
+        expect(unansweredPrototypesIn(thread)).toEqual([{ request: asked, reply: null }]);
+      }
+    });
+
+    it.each([
+      ["a prototype round", PROTOTYPE_ROUND_MARKER],
+      ["a prototype failure round", PROTOTYPE_FAILURE_ROUND_MARKER],
+    ])("reads a request %s answered as answered, so a second landing of it is stale", (_, marker) => {
+      expect(unansweredPrototypesIn([requested(), prototypeRound(2, marker)])).toEqual([]);
+    });
+
+    it("reads each round as answering the oldest request it follows, as the session's turns build them in turn", () => {
+      const thread = [requested(), requested(again), prototypeRound(2, PROTOTYPE_ROUND_MARKER)];
+
+      expect(unansweredPrototypesIn(thread)).toEqual([{ request: again, reply: null }]);
+      expect(unansweredPrototypesIn([...thread, prototypeRound(3, PROTOTYPE_ROUND_MARKER)])).toEqual([]);
+    });
+
+    it("reads none once the session ends, from anyone but the Fabrik App, or a round's marker anywhere but under its round marker", () => {
+      expect(unansweredPrototypesIn([requested(), app("**Design session finished.** This issue is now its agent brief.")])).toEqual([]);
+      expect(unansweredPrototypesIn([requested(), app(note(50).body)])).toEqual([]);
+      expect(unansweredPrototypesIn([other(requested().body)])).toEqual([]);
+      expect(unansweredPrototypesIn([requested(), other(prototypeRound(2, PROTOTYPE_ROUND_MARKER).body)])).toHaveLength(1);
+      expect(unansweredPrototypesIn([requested(), app([designRoundMarker(2), "@jrey **Round 2.**", PROTOTYPE_ROUND_MARKER].join("\n"))])).toHaveLength(1);
+    });
   });
 });

@@ -51,6 +51,7 @@ import {
   designSessionOf,
   designTurnFailedIn,
   pendingPrototypeIn,
+  unansweredPrototypesIn,
   pushedSinceVerdictIn,
   requestChangesRunIn,
   researchRunFailedIn,
@@ -988,6 +989,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       firstTurnClaimed: firstTurnClaimed(timeline),
       // Every comment read counts for whether the reply that approved the request is still there, not only this session's.
       pendingPrototype: pendingPrototypeIn(thisSession, new Set(comments.map(({ id }) => id))),
+      unansweredPrototypes: unansweredPrototypesIn(thisSession),
       emptyDiffs: countEmptyDiffs(comments.map((comment) => comment.body)),
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),

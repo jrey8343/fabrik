@@ -273,9 +273,9 @@ export type LoopEvent =
       readonly output: string;
       /**
        * The prototype request the turn built, as the Kit job's plan passed it
-       * out, never from the agent: what the push job checks is still the
-       * session's pending request, and, in it, the Operator's reply that
-       * approved it, which must still exist for the round to post.
+       * out, never from the agent: what the push job checks is still one of
+       * the session's unanswered requests, and, in it, the Operator's reply
+       * that approved it, which must still exist for the round to post.
        */
       readonly request: PrototypeRequestMarker;
       /** The issue's prototype branch (prototypeBranchFor). */
@@ -412,11 +412,20 @@ export interface IssueSnapshot {
   /**
    * Its current Design session's pending prototype request (#155): the
    * latest prototype request with no prototype round, prototype failure
-   * round or failed turn since, read from the Fabrik App's comments
-   * (src/github/threads.ts); null when there is none. While one is pending,
-   * agent:design starts the session's prototype turn (src/loop/design.ts).
+   * round or failed turn since, whose approving reply, if one approved it, is
+   * still there, read from the Fabrik App's comments (src/github/threads.ts);
+   * null when there is none. While one is pending, agent:design starts the
+   * session's prototype turn (src/loop/design.ts).
    */
   readonly pendingPrototype: PrototypeRequestMarker | null;
+  /**
+   * Its current Design session's prototype requests that no prototype round
+   * or prototype failure round has answered (#155), oldest first, read from
+   * the Fabrik App's comments: what a prototype turn's result may still land
+   * on (src/loop/prototypeLanding.ts), though another turn's failure notice
+   * has ended its request as pending.
+   */
+  readonly unansweredPrototypes: readonly PrototypeRequestMarker[];
   /**
    * The agent PR whose Verdict sent this Ticket back to design, read from the
    * Kit's note on it (src/loop/backToDesign.ts), while the Design session that
