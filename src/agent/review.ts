@@ -35,6 +35,7 @@ export async function reviewContext(
 ): Promise<PullRequestRunContext> {
   const { operatorComments, ...pullRequest } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
+    headRefOid?: unknown;
     operatorComments?: unknown;
   };
   const number = pullRequest.number;
@@ -50,7 +51,7 @@ export async function reviewContext(
       ...operatorCommentsSection(operatorComments),
       ...(await ticketContext(productDir, specFile)),
       ...(standards === null ? [] : [`## ${CODING_STANDARDS_FILE}`, standards.trimEnd()]),
-      ...(evidenceDir === null ? [] : await uiEvidenceContext(productDir, evidenceDir)),
+      ...(evidenceDir === null ? [] : await uiEvidenceContext(productDir, evidenceDir, headOf(pullRequest.headRefOid))),
     ],
     operatorComments: givenOperatorComments(operatorComments),
   };
@@ -62,14 +63,20 @@ export async function reviewContext(
  * beside the screenshots as the capture step wrote them
  * (src/evidence/capture.ts): the screenshots reviewerImages picks, copied
  * into REVIEWER_IMAGES_DIR, and the prompt's block naming them
- * (reviewerEvidenceBlock). It never fails the Review: a folder that's
- * missing, or holds no capture result that reads, is capture having left no result.
+ * (reviewerEvidenceBlock), which compares the commit captured with the PR's
+ * `head`. It never fails the Review: a folder that's missing, or holds no
+ * capture result that reads, is capture having left no result.
  */
-async function uiEvidenceContext(productDir: string, evidenceDir: string): Promise<string[]> {
+async function uiEvidenceContext(productDir: string, evidenceDir: string, head: string | null): Promise<string[]> {
   const result = await downloadedResult(evidenceDir);
-  if (result === null) return reviewerEvidenceBlock(null, []);
+  if (result === null) return reviewerEvidenceBlock({ result: null, given: [], head });
   const given = await copied(reviewerImages(result.captures), evidenceDir, join(productDir, REVIEWER_IMAGES_DIR));
-  return reviewerEvidenceBlock(result, given);
+  return reviewerEvidenceBlock({ result, given, head });
+}
+
+/** The PR's head, as the Review job's PR input names it (src/agent/inputs.ts), or null when it names none. */
+function headOf(headRefOid: unknown): string | null {
+  return typeof headRefOid === "string" && headRefOid !== "" ? headRefOid : null;
 }
 
 async function downloadedResult(dir: string): Promise<CaptureResult | null> {

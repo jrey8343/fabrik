@@ -259,30 +259,47 @@ export const REVIEWER_IMAGES_DIR = "fabrik-ui-evidence";
 
 const UI_PR = "This pull request changes the Product repo's UI";
 
+/** What a UI PR's Reviewer is given of its UI evidence, for its prompt's block. */
+export interface ReviewerEvidence {
+  /** The capture result the Review job downloaded, or null when it read none. */
+  readonly result: CaptureResult | null;
+  /** The captures whose screenshots are in REVIEWER_IMAGES_DIR. */
+  readonly given: readonly Capture[];
+  /** The PR's head as the Review job read it, or null when its input names none. */
+  readonly head: string | null;
+}
+
 /**
  * The UI evidence block of a UI PR's review prompt: the screenshots it was
  * given, each by route, viewport and side, and what to judge in them; or,
  * when capture failed or left no result, why, and to review the code as
- * usual. `result` is the capture result the Review job downloaded, or null
- * when it read none, and `given` the captures whose screenshots are in
- * REVIEWER_IMAGES_DIR.
+ * usual. Any push to the PR starts a Review with the last Implement run's
+ * evidence, so when the PR's head isn't the commit captured, the block says
+ * the screenshots are of an earlier one.
  */
-export function reviewerEvidenceBlock(result: CaptureResult | null, given: readonly Capture[]): string[] {
+export function reviewerEvidenceBlock({ result, given, head }: ReviewerEvidence): string[] {
   if (result === null || given.length === 0) {
     const failure = result?.outcome === "failed" ? result.reason : "no-result";
     return ["## UI evidence", `${UI_PR}, but ${reviewerFailureWords(failure)}. There are no screenshots, so review the code as usual.`];
   }
-  const at = `this branch at \`${result.headSha.slice(0, 7)}\``;
+  const captured = `\`${result.headSha.slice(0, 7)}\``;
+  const at = `this branch at ${captured}`;
   const opening =
     result.outcome === "captured"
       ? `${UI_PR}, so the Kit captured screenshots of ${at} once the Implementer's run had ended.`
       : `${UI_PR}, but ${reviewerFailureWords(result.reason)}. Review the code as usual, and judge the ${screenshots(given.length)} it took first, of ${at}, as below.`;
+  const [they, show] = given.length === 1 ? ["It was", "it shows"] : ["They were", "they show"];
+  const stale =
+    head === null || head === result.headSha
+      ? []
+      : [`${they} captured at ${captured}, before the PR's current head \`${head.slice(0, 7)}\`, so later commits may change what ${show}.`];
   const where = given.length === 1 ? "It's" : `These ${given.length} are`;
   const of = given.length < result.captures.length ? ` They're the ${given.length} that matter most of the ${result.captures.length} it took.` : "";
   return [
     "## UI evidence",
     [
       opening,
+      ...stale,
       "After is this branch, served in the Implement run's Sandbox; Before, where there is one, is the production site.",
       "Each shows one screen of the page from its top, not the whole page, so content below its bottom edge is out of view rather than cut off.",
       `${where} in \`${REVIEWER_IMAGES_DIR}/\` in your working directory: open each with your Read tool to see it.${of}`,
