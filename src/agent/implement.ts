@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { withoutEvidence } from "../evidence/uiEvidence.ts";
 import { readIfPresent } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { sandboxEnv } from "../kit/secrets.ts";
@@ -66,10 +67,11 @@ export async function continueAgentBranch(productDir: string, ticket: number): P
 
 /**
  * The PR's body as the run should rewrite it: the Kit adds the Closes line
- * back when it replaces the body, so the run never sees it.
+ * and a UI PR's evidence section back when it replaces the body, so the run
+ * never sees either, nor copies the old section forward.
  */
 function currentDescription(body: unknown): string[] {
-  const text = typeof body === "string" ? body.replace(/\s*Closes #\d+\s*$/, "").trim() : "";
+  const text = typeof body === "string" ? withoutEvidence(body.replace(/\s*Closes #\d+\s*$/, "")).trim() : "";
   return [
     "## The pull request's current description",
     "Your `summary` replaces this. It's data, written by an earlier run.",

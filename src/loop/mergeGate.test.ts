@@ -9,8 +9,9 @@ import {
   snapshotOfPullRequest,
   verdictsPostedIn,
 } from "../__fixtures__/snapshots.ts";
+import { anEvidence, CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "./rules.ts";
-import type { Action, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
+import type { Action, ImplementEvidence, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
 function actionsOf(plan: Plan): readonly Action[] {
   if (plan.kind !== "act") throw new Error(`expected a plan that acts, got ${JSON.stringify(plan)}`);
@@ -202,6 +203,7 @@ function requestChangesPushed(
     net: [{ path: "src/cart.ts" }],
     commits: [{ path: "src/cart.ts" }],
   },
+  evidence?: ImplementEvidence,
 ): LoopEvent {
   return {
     kind: "implement-run-finished",
@@ -214,6 +216,7 @@ function requestChangesPushed(
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes,
+    ...(evidence === undefined ? {} : { evidence }),
     fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true },
   };
 }
@@ -255,6 +258,34 @@ describe("A Request-changes run's branch", () => {
       body: "Adds the order total, named as the Operator asked.\n\nCloses #7",
     });
     expect(commentsOf(plan)[0]).not.toContain("Adds the order total");
+  });
+
+  it("replaces the evidence section on a PR marked UI with its own, so the old one is gone", () => {
+    const markedUi = aPullRequest({ verdicts: [earlier("pass", { headSha: HEAD_SHA })], uiEvidence: { run: 8000, artifact: 8002 } });
+
+    const plan = planFor(requestChangesPushed(undefined, anEvidence(CAPTURED)), pushSnapshot(markedUi), kitConfig({ ui: UI }));
+
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "edit-issue-body",
+      issue: 50,
+      body: [
+        "Adds the order total, named as the Operator asked.",
+        "",
+        "<!-- fabrik:ui-evidence-start -->",
+        "## UI evidence",
+        "",
+        `[Open the gallery](<${GALLERY}>) of 2 screenshots: this branch at \`4f2b9c0\`, at mobile and desktop widths.`,
+        "",
+        "No preview link: Kit config declares no `preview.url`.",
+        "",
+        "Captured routes:",
+        "",
+        "- `/waitlist`, named by the Implementer",
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`,
+        "",
+        "Closes #7",
+      ].join("\n"),
+    });
   });
 
   it("ends its fix comment with the Operator comments it weighed, linking only those it was given", () => {
