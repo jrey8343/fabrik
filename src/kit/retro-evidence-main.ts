@@ -3,7 +3,8 @@
 // no Product code, and it holds no write credential. It refuses a store that
 // isn't private, reads this Product repo's Run records, score files and
 // transcripts from the store's sparse checkout, gathers the repo's GitHub
-// facts and its Retros' history, builds the pending Retro's evidence bundle
+// facts, its Retros' history and the Tickets of the PRs the evidence carries,
+// builds the pending Retro's evidence bundle
 // (src/kit/retroEvidence.ts) and writes it as RETRO_EVIDENCE_FILE for the
 // action to upload, for the Retro job and the push job to read. It writes one
 // step-summary line saying what it gathered. Any failure fails the job, and the
@@ -16,13 +17,13 @@
 // bundle goes. The pending Retro is the Actions event's issue.
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { gatherRetroFacts, gatherRetroHistory } from "../github/facts.ts";
+import { gatherRetroFacts, gatherRetroHistory, gatherTickets } from "../github/facts.ts";
 import { GitHub, type Repo } from "../github/client.ts";
 import { readKitConfigSources } from "../github/snapshot.ts";
 import { retroMarksIn } from "../loop/markers.ts";
 import { retroWindowEnd } from "../loop/retro.ts";
 import { resolveKitConfig } from "./config.ts";
-import { type EvidenceBundle, evidenceBundle, evidenceReachOf, RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
+import { type EvidenceBundle, evidenceBundle, evidenceReachOf, evidenceTicketsOf, RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { RUN_STORE_REPO, storeIsPrivate } from "./runStore.ts";
 import { readStoreRunRecords, readStoreScoreFiles, readStoreTranscripts } from "./storeCheckout.ts";
 
@@ -72,7 +73,7 @@ async function main(): Promise<string> {
     gatherRetroFacts(product, repo, Date.now(), operator, reach),
   ]);
 
-  const bundle = evidenceBundle({
+  const input = {
     records: Object.values(records),
     readTranscript,
     scoreFiles,
@@ -82,7 +83,10 @@ async function main(): Promise<string> {
     windowEnd,
     retros: history.retros,
     fromRetroIssues: history.openIssues,
-  });
+  };
+  // The facts hold each PR's Ticket by number: the bundle carries the escaped and sampled PRs' as written.
+  const tickets = await gatherTickets(product, repo, evidenceTicketsOf(input));
+  const bundle = evidenceBundle({ ...input, tickets });
   // Compact, as the budget measures it.
   const text = JSON.stringify(bundle);
   const outDir = required("FABRIK_OUT_DIR");

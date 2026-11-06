@@ -14,11 +14,11 @@ You work in a read-only checkout of this repo's default branch. "The pending Ret
 
 "The window" says what the evidence covers: from the last Retro's end, or the 7 days before this one on a first Retro, to when this one opened. Every item the Kit gathered carries a **ref**, a Run record or score path, `#<pr>` or `#<issue>`, which is how you cite it.
 
-- "Architectural escapes": each Audit candidate the Operator filed as an issue in the window that traces back to merged agent PRs, structural decay that passed Review. Each has its kept PRs, each PR's Ticket and Run records, and the last passing Review run on the PR with its transcript digest.
+- "Architectural escapes": each Audit candidate the Operator filed as an issue in the window that traces back to merged agent PRs, structural decay that passed Review. Each has its kept PRs, each PR's Ticket, with its title and body as it stands now, and its Run records, and the last passing Review run on the PR with its transcript digest.
 - "Operator feedback": for each agent PR with activity in the window, merged, closed or still open, the Operator's Request changes reviews with their inline comments, each run of the Operator's own commits to the agent branch with their messages and patch, and the Operator's comments.
 - "Follow-ups on passing Verdicts": each Follow-up the Reviewer named on a passing Verdict of a PR merged in the window, and whether the Operator opened it as an issue.
 - "Low-scoring runs": each run in the window a Scorer failed, with every entry's scorer, score, label and rationale, and the run's transcript digest. It's empty when the repo has no scores yet.
-- "The sample": a fixed one-in-ten sample of the window's merged agent PRs, each with its Ticket, Verdicts, Run records and transcript digests, so ordinary runs get read too.
+- "The sample": a fixed one-in-ten sample of the window's merged agent PRs, each with its Ticket, with its title and body as it stands now, its Verdicts, Run records and transcript digests, so ordinary runs get read too.
 - "The streak table": every agent PR merged in the last 90 days, with the paths it changed and three flags: named in an escape, reverted, and sent back with Request changes. A loosening counts its streak from it.
 - "The last closed Retros" and "Open issues filed from Retros": see **Earlier Retros**.
 - "The Kit's role prompts and rubrics": the Kit's prompt for each role and each Scorer's rubric, under its path in the Kit. A proposal that changes one must quote the exact text it changes from here.
@@ -38,7 +38,7 @@ Never propose a pattern you saw once outside an escape. One escape is enough on 
 
 ## Tracing an escape
 
-For each escape, read the passing Review run's transcript digest beside the PR's Ticket and Run records, and trace which gate should have caught it:
+For each escape, read the passing Review run's transcript digest beside the PR's Ticket and Run records, and trace which gate should have caught it. The Ticket is as it stands now, which may have changed since its runs:
 
 - the Ticket, when it asked for the structure that decayed or left it open: the Design session or Triage;
 - the Implementer, when the Ticket was right and the code went wrong: the implement prompt, `AGENTS.md`, `.fabrik/implement.md` or the skills it had;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { gatherGitHubFacts, gatherRetroFacts, productReposOf } from "./facts.ts";
+import { GitHubError } from "./client.ts";
+import { gatherGitHubFacts, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
 
 const CALLER = "jobs:\n  fabrik:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v1.2.0\n";
 
@@ -687,5 +688,48 @@ describe("Gathering a Product repo's GitHub facts for a Retro", () => {
     await gatherRetroFacts(watched, repo, NOW, OPERATOR.login, Date.parse("2026-10-01T00:00:00Z"));
 
     expect(asked).toEqual(["2026-08-03T20:00:00.000Z"]);
+  });
+});
+
+describe("Reading the Tickets a Retro's evidence carries", () => {
+  /** A REST API holding these issues by number; GitHub has no other, and any other call fails. */
+  function issuesWith(issues: Record<number, { title: string; body: string | null }>) {
+    const read: number[] = [];
+    return {
+      read,
+      github: {
+        async rest(method: string, path: string): Promise<unknown> {
+          expect(method).toBe("GET");
+          const number = Number(/^\/repos\/jrey8343\/shop\/issues\/(\d+)$/.exec(path)?.[1]);
+          if (Number.isNaN(number)) throw new Error(`Unexpected call: ${path}`);
+          read.push(number);
+          const issue = issues[number];
+          if (issue === undefined) throw new GitHubError(`GitHub GET ${path} failed: 404`, 404);
+          return { number, ...issue };
+        },
+      },
+    };
+  }
+
+  it("reads each one's title and body, once each, and leaves out one GitHub no longer has", async () => {
+    const { github, read } = issuesWith({ 7: { title: "Build the cart", body: "A cart that totals its lines." }, 9: { title: "Build the till", body: null } });
+
+    const tickets = await gatherTickets(github, repo, [7, 9, 7, 11]);
+
+    expect(tickets).toEqual([
+      { number: 7, title: "Build the cart", body: "A cart that totals its lines." },
+      { number: 9, title: "Build the till", body: "" },
+    ]);
+    expect(read.toSorted((a, b) => a - b)).toEqual([7, 9, 11]);
+  });
+
+  it("fails on any other error, rather than give the Retro a Ticket it couldn't read", async () => {
+    const github = {
+      async rest(): Promise<unknown> {
+        throw new GitHubError("GitHub GET failed: 502", 502);
+      },
+    };
+
+    await expect(gatherTickets(github, repo, [7])).rejects.toThrow("502");
   });
 });

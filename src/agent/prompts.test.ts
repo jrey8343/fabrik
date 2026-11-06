@@ -209,6 +209,13 @@ describe("The Retro's prompt", () => {
     expect(ranking).toContain("at least two distinct PRs");
   });
 
+  it("gives each escaped and sampled PR's Ticket with its title and body, as it stands now, to trace what it asked for", async () => {
+    const evidence = section(await prompt("retro"), "The evidence");
+    const escapes = evidence.split("\n").find((line) => line.startsWith(`- "${RETRO_SECTIONS.escapes}"`)) ?? "";
+    const sample = evidence.split("\n").find((line) => line.startsWith(`- "${RETRO_SECTIONS.sample}"`)) ?? "";
+    for (const line of [escapes, sample]) expect(line).toContain("Ticket, with its title and body as it stands now");
+  });
+
   it("traces each escape, from its passing Review run's transcript, to the gate that should have caught it", async () => {
     const tracing = section(await prompt("retro"), "Tracing an escape");
     expect(tracing).toContain("transcript");

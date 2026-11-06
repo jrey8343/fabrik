@@ -36,6 +36,7 @@ import {
   escapesIn,
   evidenceBundle,
   evidenceReachOf,
+  evidenceTicketsOf,
   mergedAgentPullRequestsIn,
   refsOf,
   type RetroIssueFacts,
@@ -389,7 +390,7 @@ describe("the evidence bundle", () => {
       expect(escapes.map(({ number, pullRequests }) => [number, pullRequests.map((pr) => pr.number)])).toEqual([[82, [50]]]);
     });
 
-    it("carries each PR's Ticket, the Run records on it and the last passing Review record on the PR, each by its record path", () => {
+    it("carries each PR's Ticket with its title and body, the Run records on it and the last passing Review record on the PR, each by its record path", () => {
       const implement = aRunRecord({ runId: 1000, endedAt: "2026-10-30T12:00:00Z" });
       const firstPass = aRunRecord({ runId: 1001, role: "review", verdict: "pass", endedAt: "2026-10-31T06:00:00Z" });
       const retry = aRunRecord({ runId: 1002, retry: 1, endedAt: "2026-11-01T00:00:00Z" });
@@ -404,6 +405,7 @@ describe("the evidence bundle", () => {
             ],
             escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #51 -->")],
           }),
+          tickets: [{ number: 7, title: "Build the cart", body: "## What to build\n\nA cart that totals its lines." }],
         }),
       );
       expect(escapes[0]?.pullRequests).toEqual([
@@ -411,7 +413,7 @@ describe("the evidence bundle", () => {
           ref: "#50",
           number: 50,
           title: "Build the thing",
-          ticket: 7,
+          ticket: { ref: "#7", number: 7, title: "Build the cart", body: "## What to build\n\nA cart that totals its lines." },
           records: [
             { ref: "runs/owner/product/2026-10/1000-1-implement.json", record: implement },
             { ref: "runs/owner/product/2026-10/1001-1-review.json", record: firstPass },
@@ -422,6 +424,39 @@ describe("the evidence bundle", () => {
         },
         { ref: "#51", number: 51, title: "Build the thing", ticket: null, records: [], lastPassingReview: null },
       ]);
+    });
+
+    it("carries a Ticket GitHub no longer has, as the evidence job found it, by its number alone", () => {
+      const { escapes } = evidenceBundle(
+        aRetroEvidenceInput({
+          facts: factsOf({
+            pullRequests: [aMergedPullRequest("2026-11-02T00:00:00Z", { number: 50, ticket: 7 })],
+            escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->")],
+          }),
+        }),
+      );
+      expect(escapes[0]?.pullRequests[0]?.ticket).toEqual({ ref: "#7", number: 7, title: null, body: null });
+    });
+
+    it("names the Tickets the evidence job reads for it: each escaped PR's and each sampled PR's, once each", () => {
+      // #12 and #28 are in the sample, and #13 isn't.
+      const input = aRetroEvidenceInput({
+        facts: factsOf({
+          pullRequests: [
+            aMergedPullRequest("2026-11-03T00:00:00Z", { number: 50, ticket: 7 }),
+            aMergedPullRequest("2026-11-03T00:00:00Z", { number: 51, ticket: null }),
+            aMergedPullRequest("2026-11-03T00:00:00Z", { number: 12, ticket: 7 }),
+            aMergedPullRequest("2026-11-03T00:00:00Z", { number: 13, ticket: 9 }),
+            aMergedPullRequest("2026-11-03T00:00:00Z", { number: 28, ticket: 10 }),
+          ],
+          escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #51 -->")],
+        }),
+      });
+      const { escapes, sample } = evidenceBundle(input);
+
+      expect(sample.map(({ number }) => number)).toEqual([12, 28]);
+      expect(escapes.flatMap(({ pullRequests }) => pullRequests.map(({ number }) => number))).toEqual([50, 51]);
+      expect(evidenceTicketsOf(input).toSorted((a, b) => a - b)).toEqual([7, 10]);
     });
 
     it("carries the last passing Review record's transcript digest, the one the judge reads, or none when the store has no transcript", () => {
@@ -736,7 +771,7 @@ describe("the evidence bundle", () => {
       expect(sampled).toBeLessThan(250);
     });
 
-    it("carries each sampled PR's Ticket, its Verdicts as the Fabrik App posted them, and the agent runs on its Ticket with their transcripts' digests", () => {
+    it("carries each sampled PR's Ticket with its title and body, its Verdicts as the Fabrik App posted them, and the agent runs on its Ticket with their transcripts' digests", () => {
       const transcript = aTranscript({ "src/cart.ts": "export const cart = [];" });
       const implement = aRecordWithTranscript({ runId: 1000, issue: 7, pullRequest: 12, endedAt: "2026-11-01T00:00:00Z" });
       const review = aRecordWithTranscript({ runId: 1001, role: "review", issue: 7, pullRequest: 12, verdict: "pass", endedAt: "2026-11-02T00:00:00Z" });
@@ -761,6 +796,7 @@ describe("the evidence bundle", () => {
               }),
             ],
           }),
+          tickets: [{ number: 7, title: "Build the cart", body: "A cart that totals its lines." }],
         }),
       );
       expect(sample).toEqual([
@@ -769,7 +805,7 @@ describe("the evidence bundle", () => {
           number: 12,
           title: "Build the cart",
           mergedAt: "2026-11-03T00:00:00Z",
-          ticket: 7,
+          ticket: { ref: "#7", number: 7, title: "Build the cart", body: "A cart that totals its lines." },
           verdicts: [{ verdict: "pass", source: "reviewer", at: "2026-11-02T00:00:00Z", body: verdict.body }],
           records: [
             { ref: "runs/owner/product/2026-10/999-1-implement.json", record: untranscribed, digest: null },

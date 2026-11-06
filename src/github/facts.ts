@@ -6,7 +6,7 @@
 // the open issues with their bodies. Read-only. It holds no summary, metric or evidence rules;
 // those all live in those two modules.
 import { fabrikRefsIn } from "../kit/caller.ts";
-import type { FromRetroIssueFacts, RetroIssueFacts } from "../kit/retroEvidence.ts";
+import type { FromRetroIssueFacts, RetroIssueFacts, TicketTextFacts } from "../kit/retroEvidence.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import type {
   AgentPullRequestFacts,
@@ -28,7 +28,7 @@ import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest
 import { AUDIT_LABEL, MONITOR_LABEL, RETRO_LABEL } from "../loop/labels.ts";
 import { escapeMarkerIn, fromPullRequestIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
-import { type GitHub, pagesOf, type Repo } from "./client.ts";
+import { type GitHub, GitHubError, pagesOf, type Repo } from "./client.ts";
 import {
   gatherDesignQueueSlice,
   loginOf,
@@ -159,6 +159,28 @@ export async function gatherRetroHistory(github: Pick<GitHub, "graphql">, repo: 
     })),
     openIssues: openIssues.map(({ number, title, body }) => ({ number, title, body })),
   };
+}
+
+/**
+ * The title and body of each of these Tickets, as GitHub has them now, one
+ * call per Ticket, as the judge reads the Ticket it scores against
+ * (src/kit/judge-ticket-main.ts): what a Retro's evidence carries for each
+ * escaped and sampled PR (evidenceTicketsOf, src/kit/retroEvidence.ts). One
+ * GitHub no longer has, deleted or gone, is left out; any other failure fails.
+ */
+export async function gatherTickets(github: Pick<GitHub, "rest">, repo: Repo, numbers: readonly number[]): Promise<TicketTextFacts[]> {
+  const tickets = await Promise.all(
+    [...new Set(numbers)].map(async (number): Promise<TicketTextFacts | null> => {
+      try {
+        const issue = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/issues/${number}`)) as { title?: unknown; body?: unknown };
+        return { number, title: typeof issue.title === "string" ? issue.title : "", body: typeof issue.body === "string" ? issue.body : "" };
+      } catch (error) {
+        if (error instanceof GitHubError && (error.status === 404 || error.status === 410)) return null;
+        throw error;
+      }
+    }),
+  );
+  return tickets.filter((ticket) => ticket !== null);
 }
 
 /** What a commit changed, as a diff file by file; a file GitHub shows no patch for is named with a note. */

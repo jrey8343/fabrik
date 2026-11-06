@@ -26,6 +26,7 @@ export function aRetroEvidenceInput(overrides: Partial<RetroEvidenceInput> = {})
     windowEnd: "2026-11-07T00:00:00Z",
     retros: [aPastRetro({ body: retroBody("2026-10-31T00:00:00.000Z") }), theRetroBeingFilled("2026-11-07T00:00:00.000Z")],
     fromRetroIssues: [],
+    tickets: [],
     ...overrides,
   };
 }
