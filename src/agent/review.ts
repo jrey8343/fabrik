@@ -5,6 +5,7 @@
 // Reviewer holds no GitHub credential and runs none of the PR's code.
 import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { CAPTURE_RESULT_FILE } from "../evidence/capture.ts";
 import {
   type Capture,
   type CaptureFailure,
@@ -57,15 +58,14 @@ export async function reviewContext(
 /** Where in its working directory a UI PR's Reviewer finds the screenshots it's given. */
 export const REVIEWER_IMAGES_DIR = "fabrik-ui-evidence";
 
-/** The capture result's file in the evidence artifact, beside the screenshots, as the capture step writes it. */
-const CAPTURE_RESULT_FILE = "capture-result.json";
-
 /**
  * A UI PR's evidence for its Reviewer, from the folder its Review job
- * downloaded the evidence artifact into: the screenshots reviewerImages
- * picks, copied into REVIEWER_IMAGES_DIR, and the prompt's block naming
- * them. It never fails the Review: a folder that's missing, or holds no
- * capture result that reads, is capture having left no result.
+ * downloaded the evidence artifact into, which holds the capture result
+ * beside the screenshots as the capture step wrote them
+ * (src/evidence/capture.ts): the screenshots reviewerImages picks, copied
+ * into REVIEWER_IMAGES_DIR, and the prompt's block naming them. It never
+ * fails the Review: a folder that's missing, or holds no capture result
+ * that reads, is capture having left no result.
  */
 async function uiEvidenceContext(productDir: string, evidenceDir: string): Promise<string[]> {
   const result = await downloadedResult(evidenceDir);

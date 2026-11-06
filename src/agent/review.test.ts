@@ -179,6 +179,7 @@ describe("A Review's UI evidence", () => {
   });
 
   it.each<[CaptureFailure, string]>([
+    ["build-failed", "capture failed because `sandbox.build` failed, so there was no build to serve"],
     ["server-did-not-start", "capture failed because the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran"],
     ["timeout", "capture failed because it ran out of time"],
     ["no-routes", "capture failed because there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`"],
