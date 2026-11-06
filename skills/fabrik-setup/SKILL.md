@@ -43,19 +43,22 @@ Setup also sets up `fabrik-runs`, the private repo every Product repo shares for
 
 Ask the Operator to confirm it or give another IANA time zone name, such as `Europe/London`. If they'd rather not set up the store yet, leave `--time-zone` off both setup commands below: the Loop runs as before, and each run's step summary has one line saying no Run record was written.
 
+Then ask whether they want a second Subscription: a second Claude account the Kit fails over to when the first reaches its weekly limit, so runs wait only once both are used up. If they do, add `--second-subscription` to both setup commands below. It's opt-in: without it setup says nothing about Subscriptions.
+
 ## 4. Show the plan
 
 ```sh
-node "$FABRIK/src/setup/main.ts" . <release> --time-zone=<their time zone>
+node "$FABRIK/src/setup/main.ts" . <release> --time-zone=<their time zone> [--second-subscription]
 ```
 
-This only reads: the repo's files, its labels, its Actions secret names, its branch protection and rulesets, your 1Password vault names, and whether `fabrik-runs` exists, is private, and has its caller workflow, Dependabot entry and Actions secret. Show the Operator its output as it is, then explain anything they'd want to know before saying yes:
+This only reads: the repo's files, its labels, its Actions secret names, its branch protection and rulesets, your 1Password vault names and the `Fabrik` vault's item names, and whether `fabrik-runs` exists, is private, and has its caller workflow, Dependabot entry and Actions secret. Show the Operator its output as it is, then explain anything they'd want to know before saying yes:
 
 - **Files**: the caller workflow and the stable shims (`.claude/settings.json`'s `SessionStart` hook entry and plugin switch, the `.gitignore` lines, the Dependabot entry) are Kit-owned, and setup puts them back when they drift. The starter Kit config (`.fabrik/config.json`), `docs/agents/*` and the `## Agent skills` block are written once and are the Product's from then on.
 - **Service accounts**: each is read-only, has no expiry, and its token goes straight into its Actions secret. 1Password shows a token only once, so a missing secret is repaired with a new account. When the plan replaces one, tell the Operator to delete the old account of the same name in 1Password afterwards (Developer → Service accounts).
 - **Branch protection** replaces the default branch's current protection: a PR and the gating checks required, with no bypass allowance for anyone. It requires no approving review, on purpose: the Operator works alone and can't approve their own PRs, and a required review would only make them bypass protection on every PR they open.
 - **The Merge gate ruleset** (`Fabrik Merge gate`) is what keeps the Fabrik App from merging: on the default branch, only its bypass actors may update the branch, merging a PR included, and its one bypass actor is the repo admin role. The Operator owns the repo, so they're its admin and can merge; the Fabrik App is never an admin, so it can push agent branches but never merge to the default branch. If GitHub's merge button offers to bypass the ruleset, that's this rule recognising the Operator as its bypass actor.
 - **The `fabrik-runs` store** holds a Run record for every agent run in every Product repo: what ran, how it ended, the Verdict, the tokens and cost, and the run's gzipped transcript. Each Monday morning a workflow there files one Weekly summary issue covering the whole factory, which mentions the Operator once, and closes last week's. The plan creates it as a private repo when it's missing, because a transcript can hold whatever an agent echoed; it never makes a public one private, and leaves a note instead. It writes the store's caller workflow (the Weekly summary's schedule in the Operator's time zone, pinned to this release, and runnable by hand from its Actions tab) and its Dependabot entry, and creates a read-only service account for the `Fabrik App` vault, stored as the store's `FABRIK_OP_PUSH_TOKEN` secret. It's set up once and shared by every Product repo, so on a second Product repo the plan changes nothing there. Records start landing once the Fabrik App is installed on `fabrik-runs`, which is a wizard stage.
+- **A second Subscription** is all the Operator's to do, so the plan gives it as a note: the wizard's "A second Subscription" stage creates the second account's token with `claude setup-token`, saves it as the `Claude token 2` API Credential with its expiry date in the `Fabrik` vault, and checks usage credits are off on every account; then the Operator lists it in `subscriptions` in `.fabrik/config.json`, after `Claude token`. It needs no new service account: the agent and implement accounts already read the `Fabrik` vault. Once the item exists and is listed, the plan says nothing more about it.
 - **For the Operator** lines are things setup couldn't do itself. Pass each one on.
 
 If the plan says there's nothing to do and has no notes, tell the Operator the install is complete, skip to step 6 if they haven't walked the wizard yet, and stop.
@@ -65,13 +68,13 @@ Ask the Operator to confirm before you go on.
 ## 5. Apply it and open the setup PR
 
 1. Create a branch: `git switch -c fabrik/setup-<release>`.
-2. Apply the plan, with the same time zone: `node "$FABRIK/src/setup/main.ts" . <release> --time-zone=<their time zone> --apply`. If it fails partway, tell the Operator what it printed and run step 4 again: it plans only what's still missing. The store's files are committed straight to `fabrik-runs`, not in the setup PR.
+2. Apply the plan, with the same time zone and opt-ins: `node "$FABRIK/src/setup/main.ts" . <release> --time-zone=<their time zone> [--second-subscription] --apply`. If it fails partway, tell the Operator what it printed and run step 4 again: it plans only what's still missing. The store's files are committed straight to `fabrik-runs`, not in the setup PR.
 3. If it wrote any files, commit them (`git add -A && git commit -m "Set up Fabrik <release>"`), push the branch and open a PR to the default branch with `gh pr create`. Its body lists what setup did, and the notes for the Operator.
 4. Tell the Operator to merge that PR themselves, once its gating checks pass: no approving review is required, and as the repo's admin they're the Merge gate ruleset's one bypass actor. The Loop starts once the caller workflow is on the default branch.
 
 ## 6. Hand over the wizard
 
-Some steps only the Operator can take: installing the Fabrik App on this repo and on `fabrik-runs`, with Checks: read accepted; storing the App's key, the `claude setup-token` token and, when the repo reports to Sentry, a Sentry token in 1Password; setting GitHub mobile to push only when it's their move, and watching the repo on All activity. The wizard walks them through each, and is safe to re-run.
+Some steps only the Operator can take: installing the Fabrik App on this repo and on `fabrik-runs`, with Checks: read accepted; storing the App's key, the `claude setup-token` token and, when the repo reports to Sentry, a Sentry token in 1Password; when they want one, a second Subscription's token, with usage credits off on every account; setting GitHub mobile to push only when it's their move, and watching the repo on All activity. The wizard walks them through each, and is safe to re-run.
 
 It's interactive, so the Operator runs it in their own terminal, from this checkout:
 
