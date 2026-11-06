@@ -5,6 +5,7 @@
 // capture step reads the images and videos and writes the page.
 import { Buffer } from "node:buffer";
 import { UI_VIEWPORTS } from "../kit/config.ts";
+import type { PrototypeVariant } from "../loop/designOutput.ts";
 import {
   type Capture,
   CAPTURE_SIDES,
@@ -14,7 +15,6 @@ import {
   SIDE_WORDS,
   VARIANT_LETTERS,
   type VariantCapture,
-  type VariantLetter,
 } from "./uiEvidence.ts";
 
 /** A capture with its image's bytes, a PNG. */
@@ -100,10 +100,7 @@ export interface VariantShot extends VariantCapture {
 }
 
 /** A Prototype's variant as its prototype round names it: its letter and one-line summary. */
-export interface GalleryVariant {
-  readonly letter: VariantLetter;
-  readonly summary: string;
-}
+export type GalleryVariant = Pick<PrototypeVariant, "letter" | "summary">;
 
 /** What a prototype gallery is of: the Design session's issue, the route prototyped, and the commit captured. */
 export interface PrototypeGalleryMeta {
@@ -162,7 +159,7 @@ export function prototypeGallery(captures: readonly VariantShot[], variants: rea
 }
 
 /** A variant's heading and summary, then its screenshots and videos, mobile beside desktop; none for a letter neither names. */
-function variantSection(letter: VariantLetter, variants: readonly GalleryVariant[], captures: readonly VariantShot[]): string[] {
+function variantSection(letter: string, variants: readonly GalleryVariant[], captures: readonly VariantShot[]): string[] {
   const variant = variants.find((each) => each.letter === letter);
   const shots = UI_VIEWPORTS.flatMap(({ name }) => captures.filter((capture) => capture.variant === letter && capture.viewport === name));
   if (variant === undefined && shots.length === 0) return [];

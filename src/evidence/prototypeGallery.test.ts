@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { type GalleryVariant, prototypeGallery, type VariantShot } from "./gallery.ts";
+import type { PrototypeVariant } from "../loop/designOutput.ts";
+import { prototypeGallery, type VariantShot } from "./gallery.ts";
 import type { VariantCapture } from "./uiEvidence.ts";
 
 const HEAD = "4f2b9c0d1e3a5b7c9d0e1f2a3b4c5d6e7f8a9b0c";
@@ -24,11 +25,11 @@ const shots: VariantShot[] = captures.map((capture, at) => ({
   ...(capture.video === undefined ? {} : { webm: bytes(at, 2) }),
 }));
 
-/** The variants as the prototype round names them. */
-const variants: GalleryVariant[] = [
-  { letter: "A", summary: "The calendar first, times below it" },
-  { letter: "B", summary: "A list of the next free times, no calendar" },
-  { letter: "C", summary: "Practitioner first, then their times" },
+/** The variants as the prototype round's output names them, passed in as they are. */
+const variants: PrototypeVariant[] = [
+  { letter: "A", summary: "The calendar first, times below it", component: "src/prototypes/book/VariantA.astro" },
+  { letter: "B", summary: "A list of the next free times, no calendar", component: "src/prototypes/book/VariantB.astro" },
+  { letter: "C", summary: "Practitioner first, then their times", component: "src/prototypes/book/VariantC.astro" },
 ];
 
 const meta = { issue: 12, route: "/book", headSha: HEAD };

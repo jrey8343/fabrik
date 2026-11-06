@@ -10,6 +10,7 @@
 // are beside it (src/evidence/gallery.ts). Pure, no I/O.
 import { posix } from "node:path";
 import { isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+import { PROTOTYPE_VARIANT_CAP, variantLetter } from "../loop/designOutput.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 import { spelled } from "../loop/readable.ts";
@@ -110,10 +111,8 @@ export interface Capture {
   readonly image: string;
 }
 
-/** The letters a Prototype's variants go by, in order, one for each up to the Kit's cap of five: A is the first. */
-export const VARIANT_LETTERS = ["A", "B", "C", "D", "E"] as const;
-
-export type VariantLetter = (typeof VARIANT_LETTERS)[number];
+/** The letters a Prototype's variants go by, in order, one for each up to PROTOTYPE_VARIANT_CAP: A is the first (variantLetter). */
+export const VARIANT_LETTERS: readonly string[] = Array.from({ length: PROTOTYPE_VARIANT_CAP }, (_, at) => variantLetter(at));
 
 /**
  * One capture of a Prototype's variant, served at `route?variant=<letter>`:
@@ -123,7 +122,8 @@ export type VariantLetter = (typeof VARIANT_LETTERS)[number];
  * so it has no reason.
  */
 export interface VariantCapture extends Omit<Capture, "reason" | "side"> {
-  readonly variant: VariantLetter;
+  /** One of VARIANT_LETTERS. */
+  readonly variant: string;
   /** The video's file name, a plain name beside the image. */
   readonly video?: string;
 }
@@ -240,7 +240,7 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | Va
   if (ofVariant) {
     return {
       route: route as string,
-      variant: variant as VariantLetter,
+      variant: variant as string,
       viewport: viewport as Viewport["name"],
       status: status as number,
       image: image as string,
