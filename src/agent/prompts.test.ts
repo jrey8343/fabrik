@@ -149,6 +149,8 @@ describe("Product intent in the Design prompt", () => {
     expect(spec).toContain("opening with a `## Product intent` section above `## Problem Statement` and its technical sections");
     expect(spec).toContain("who it serves, why, how its success is measured, and what it deliberately doesn't do");
     expect(spec).toContain("State the success measure only: nothing tracks it.");
+    // The glossary's Spec avoids "plan".
+    expect(spec).not.toMatch(/\bplan\b/);
   });
 
   it("opens every agent brief with a Who and why line", async () => {
