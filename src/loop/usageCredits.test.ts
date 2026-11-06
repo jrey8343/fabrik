@@ -259,7 +259,8 @@ describe("The killed run, with rotation on", () => {
     expect(actions).toContainEqual(expect.objectContaining({ kind: "open-issue", labels: ["ready-for-human", "fabrik:usage-credits"] }));
   });
 
-  it("a killed Retro run is held, its Retro left pending, when no other Subscription is free", () => {
+  // The scheduled tick can't start a Retro run at the reset, so a Retro run is never held.
+  it("a killed Retro run fails its Retro too when no other Subscription is free, holding nothing", () => {
     const actions = actionsOf(
       planFor(
         killed("retro", { issue: 120 }),
@@ -268,9 +269,15 @@ describe("The killed run, with rotation on", () => {
       ),
     );
 
-    expect(actions.filter((action) => "issue" in action && action.issue === 120 && action.kind !== "hold-agent-run")).toEqual([]);
-    expect(actions).toContainEqual({ kind: "hold-agent-run", role: "retro", issue: 120, label: null, until: RESETS_AT });
-    expect(actions).toContainEqual({ kind: "comment", issue: 41, body: expect.stringContaining(heldMarker(120, "retro", null)) });
+    expect(actions).toContainEqual({ kind: "close", issue: 120, reason: "not_planned" });
+    expect(actions).toContainEqual({
+      kind: "edit-issue-body",
+      issue: 120,
+      body: expect.stringContaining("The Retro's run failed: its stream showed usage credits being spent on the `Claude token` Subscription"),
+    });
+    expect(actions).toContainEqual(expect.objectContaining({ kind: "open-issue", labels: ["ready-for-human", "fabrik:usage-credits"] }));
+    expect(actions.filter((action) => action.kind === "hold-agent-run")).toEqual([]);
+    expect(JSON.stringify(actions)).not.toContain("fabrik:held");
   });
 });
 

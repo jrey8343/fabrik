@@ -9,9 +9,9 @@ import type { Action, AgentRole, KitIssueSnapshot } from "./types.ts";
 /** A run the Kit holds. */
 export interface HeldRun {
   readonly role: AgentRole;
-  /** The issue or PR its trigger label lives on, or the pending Audit or Retro for an Auditor or Retro run. */
+  /** The issue or PR its trigger label lives on, or the pending Audit for an Auditor run. */
   readonly issue: number;
-  /** The trigger label that resumes it, or null for an Auditor or Retro run, which has none. */
+  /** The trigger label that resumes it, or null for an Auditor run, which has none. */
   readonly label: Label | null;
   /**
    * Its place in the order held runs resume in, from the first time it was
@@ -33,8 +33,8 @@ export function heldMarker({ issue, role, label, order = null }: HeldRun): strin
 /**
  * The label whose adding starts each role's run again: its trigger label, and
  * agent:design for a Design-session turn, whichever round it was
- * (src/loop/design.ts). An Auditor or Retro run has none: its pending Audit
- * or pending Retro is all it needs.
+ * (src/loop/design.ts). An Auditor run has none: its pending Audit is all it needs.
+ * Nor has a Retro run, which is never held: its Retro fails instead (src/loop/failures.ts).
  */
 export const RESUME_LABELS = {
   triage: NEEDS_TRIAGE,

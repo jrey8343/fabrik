@@ -31,6 +31,7 @@ import { checkDesignQueue } from "./designQueue.ts";
 import { isPendingRetro } from "./retro.ts";
 import { retroGate } from "./retroGate.ts";
 import { landRetro } from "./retroLanding.ts";
+import { startRetroRun } from "./weeklyFailure.ts";
 import { scheduledTickWith } from "./weeklyGate.ts";
 import { dispatch } from "./dispatch.ts";
 import { applyRedChecks, applyReview, startReview } from "./review.ts";
@@ -66,12 +67,12 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     case "issue-opened":
       // The App opens a pending Audit for the Auditor to fill in, and a pending
       // Retro for the Retro run, on roles.retro; Intake never sorts either.
-      return withIssue(snapshot, ({ issue }) =>
-        isPendingAudit(issue)
-          ? startAuditorRun(issue, config)
-          : isPendingRetro(issue)
-            ? startAgentRun("retro", issue.number, config)
-            : intake(event.issue, issue),
+      return withIssue(snapshot, (context) =>
+        isPendingAudit(context.issue)
+          ? startAuditorRun(context.issue, config)
+          : isPendingRetro(context.issue)
+            ? startRetroRun(context, config)
+            : intake(event.issue, context.issue),
       );
     case "label-added":
       return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, snapshot.pullRequest, config));

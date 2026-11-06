@@ -43,8 +43,7 @@ function heldIn(plan: Plan): Hold[] {
 function heldSummaryLine(hold: Hold, why: string): string {
   const until =
     hold.until === null ? "a Subscription's weekly limit resets, which isn't known" : readable(hold.until);
-  // Only an Auditor or Retro run has no trigger label, and its pending Audit or Retro waits for it.
-  const where = hold.label === null ? `Its ${RUN_NAMES[hold.role]} stays pending.` : `Its \`${hold.label}\` label came off.`;
+  const where = hold.label === null ? "Its Audit stays pending." : `Its \`${hold.label}\` label came off.`;
   return `The ${RUN_NAMES[hold.role]} run on #${hold.issue} was held until ${until}: ${why} ${where}`;
 }
 

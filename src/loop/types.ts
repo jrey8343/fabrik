@@ -705,9 +705,9 @@ export type Action =
        */
       readonly kind: "hold-agent-run";
       readonly role: AgentRole;
-      /** The issue or PR the run is on: the one its trigger label lives on, or the pending Audit or Retro. */
+      /** The issue or PR the run is on: the one its trigger label lives on, or the pending Audit. */
       readonly issue: number;
-      /** The trigger label that resumes it, or null for an Auditor or Retro run, which has none. */
+      /** The trigger label that resumes it, or null for an Auditor run, which has none. */
       readonly label: Label | null;
       /** When the first weekly-limit issue's limit resets, if known. */
       readonly until: string | null;

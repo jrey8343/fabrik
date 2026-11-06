@@ -2,23 +2,26 @@
 // pending Audit or pending Retro the scheduled tick opened, closed as not
 // planned, with one line on how it failed. The tick tries it again, so unlike
 // a Ticket's failure there's no trigger label to re-add and nobody to tell,
-// unless the failure stalls the whole repo. A held run the tick can't start at
-// the reset, with no weekly-limit issue left open to hold it again, leaves its
-// issue the same way (src/loop/resume.ts).
+// unless the failure stalls the whole repo. A Retro run is never held, since
+// the tick can't start one at a reset: one due while every Subscription is
+// used up leaves its Retro the same way.
 import { isPendingAudit } from "./audit.ts";
 import { RUN_NAMES } from "./heldRun.ts";
+import { runsDueAreHeld } from "./hold.ts";
 import { repoWideNotice } from "./kitIssues.ts";
 import { AUDIT_FAILED_MARKER, auditMarker, auditMarksIn, RETRO_FAILED_MARKER, retroMarker, retroMarksIn } from "./markers.ts";
 import { isPendingRetro } from "./retro.ts";
+import { startAgentRun } from "./runs.ts";
 import type { RanOn } from "./subscriptions.ts";
-import type { Action, AgentRole, InfrastructureFailure, IssueContext, IssueSnapshot, Plan } from "./types.ts";
+import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, Plan } from "./types.ts";
 
 /** How an Auditor run or a Retro run failed. */
 export interface WeeklyRunFailure {
   readonly failure: InfrastructureFailure;
   /** How it failed, as the issue's one line says it, such as "it crashed". */
   readonly how: string;
-  readonly runUrl: string;
+  /** The Actions run the issue's line links to, or null for a run that never started. */
+  readonly runUrl: string | null;
   /** For the weekly limit, when it resets, if known. */
   readonly resetsAt: string | null;
   /**
@@ -67,23 +70,22 @@ export function failRetro(context: IssueContext, run: WeeklyRunFailure): Plan {
 }
 
 /**
- * The actions failing a pending Audit or Retro whose held run the scheduled
- * tick couldn't start at the reset, nor hold again, because it started the
- * other held run with no trigger label and no weekly-limit issue stays open
- * (src/loop/resume.ts): its body becomes one line on why, keeping its marker,
- * with the failed marker in place of the pending one, and it closes as not
- * planned, mentioning nobody, as a failed run leaves it, so the tick opens
- * the next one.
+ * The plan for the App's pending Retro, once it's opened: a Retro run on
+ * roles.retro's model, effort and timeout. With rotation on, while every
+ * listed Subscription is used up, a run of any other role would be held
+ * (src/loop/hold.ts), but the scheduled tick can't start a Retro run at the
+ * reset, so the Retro fails instead, as a failed run leaves it, and a later
+ * tick opens the next one. Its weekly-limit issues already say so, so it gives
+ * no repo-wide notice.
  */
-export function failUnstarted(role: WeeklyRole, pending: Pick<IssueSnapshot, "number" | "body">, why: string): Action[] {
-  return [
-    {
-      kind: "edit-issue-body",
-      issue: pending.number,
-      body: [`${RUNS[role]} failed: ${why}.`, "", ...failedMarkers(role, pending.body)].join("\n"),
-    },
-    { kind: "close", issue: pending.number, reason: "not_planned" },
-  ];
+export function startRetroRun(context: IssueContext, config: KitConfig): Plan {
+  if (!runsDueAreHeld(context.kitIssues, config)) return startAgentRun("retro", context.issue.number, config);
+  return failRetro(context, {
+    failure: "weekly-limit",
+    how: "it was due to start while every listed Subscription was used up",
+    runUrl: null,
+    resetsAt: null,
+  });
 }
 
 /** The roles whose run is for a pending issue the scheduled tick opened, and which have no trigger label. */
@@ -126,7 +128,7 @@ function failPending(
     return { kind: "nothing", reason: `#${issue.number} is no longer a pending ${pending.name}, so its failed run changes nothing` };
   }
   const repoWide =
-    ranOn === undefined
+    ranOn === undefined || runUrl === null
       ? null
       : repoWideNotice(failure, context, { run: `${pending.stalled} on #${issue.number}`, runUrl, resetsAt, ...ranOn });
   return {
@@ -135,7 +137,7 @@ function failPending(
       {
         kind: "edit-issue-body",
         issue: issue.number,
-        body: [`${pending.run} failed: ${how}. [The run](${runUrl})`, "", ...pending.markers].join("\n"),
+        body: [`${pending.run} failed: ${how}.${runUrl === null ? "" : ` [The run](${runUrl})`}`, "", ...pending.markers].join("\n"),
       },
       { kind: "close", issue: issue.number, reason: "not_planned" },
       ...(repoWide?.actions ?? []),

@@ -21,10 +21,9 @@ export function heldLine(held: HeldRun, until: string | null): string {
     until === null
       ? "a Subscription's weekly limit resets, which isn't known"
       : `${readable(until)}, when the first Subscription's weekly limit resets`;
-  // Only an Auditor or Retro run has no trigger label: its pending Audit or Retro is what it's started on.
   const resume =
     held.label === null
-      ? `The Kit starts it again on that pending ${RUN_NAMES[held.role]} then.`
+      ? "The Kit starts it again on that pending Audit then."
       : `The Kit re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
   return [`The ${RUN_NAMES[held.role]} run on #${held.issue} is held until ${when}. ${resume}`, "", heldMarker(held)].join("\n");
 }
@@ -41,10 +40,9 @@ export function heldWhileUsedUp(
   kitIssues: readonly KitIssueSnapshot[],
   config: Pick<KitConfig, "subscriptions">,
 ): Plan {
-  if (plan.kind !== "act" || !rotationIsOn(config) || freeSubscriptions(kitIssues, config).length > 0) return plan;
+  if (plan.kind !== "act" || !runsDueAreHeld(kitIssues, config)) return plan;
   if (!plan.actions.some((action) => action.kind === "start-agent-run")) return plan;
   const { until, on } = holdingOn(kitIssues);
-  // Every Subscription unusable through usage-credits issues alone: nowhere holds its marker, so the run starts.
   if (on === undefined) return plan;
   const { actions: planned } = plan;
   const starts = planned.filter((action) => action.kind === "start-agent-run");
@@ -64,13 +62,23 @@ export function heldWhileUsedUp(
 }
 
 /**
+ * Whether a run due now is held rather than started (heldWhileUsedUp): with
+ * rotation on, while every listed Subscription is used up and a weekly-limit
+ * issue is open to carry its held marker. With every Subscription unusable
+ * through usage-credits issues alone, nowhere holds its marker, so it starts.
+ * A Retro run is never held: its pending Retro fails instead
+ * (src/loop/weeklyFailure.ts).
+ */
+export function runsDueAreHeld(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): boolean {
+  return rotationIsOn(config) && freeSubscriptions(kitIssues, config).length === 0 && canHold(kitIssues);
+}
+
+/**
  * Where a run held while no Subscription is free is named: the weekly-limit
  * issue that buzzed the Operator, else the first to reset, else the first
- * open; and when it is held until, the earliest reset across them. A held
- * Auditor or Retro run the scheduled tick can't start at a reset is held
- * again on whichever of these stays open (src/loop/resume.ts).
+ * open; and when it is held until, the earliest reset across them.
  */
-export function holdingOn(kitIssues: readonly KitIssueSnapshot[]): { until: string | null; on: KitIssueSnapshot | undefined } {
+function holdingOn(kitIssues: readonly KitIssueSnapshot[]): { until: string | null; on: KitIssueSnapshot | undefined } {
   const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
   const until = earliestOf(limits.map(resetsAtOf));
   const on = limits.find(notified) ?? limits.find((issue) => until !== null && resetsAtOf(issue) === until) ?? limits[0];
