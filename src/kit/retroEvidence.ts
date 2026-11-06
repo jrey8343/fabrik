@@ -441,7 +441,7 @@ export interface FromRetroIssueFacts {
 
 /**
  * What a Retro reads. Every item in it carries the ref the Retro cites it by:
- * a Run record's path in the store, `#<pr>` or `#<issue>`.
+ * a Run record's or score file's path in the store, `#<pr>` or `#<issue>`.
  */
 export interface EvidenceBundle {
   /** The span the Retro covers, from `start` (inclusive) to `end` (exclusive), ISO 8601. */
@@ -678,8 +678,8 @@ export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
 /** A ref the Retro may cite, and what it cites. */
 export interface EvidenceRef {
   readonly ref: string;
-  /** An escape's issue, an agent PR, any other issue, or a Run record. */
-  readonly kind: "escape" | "pull-request" | "issue" | "record";
+  /** An escape's issue, an agent PR, any other issue, a Run record, or a score file. */
+  readonly kind: "escape" | "pull-request" | "issue" | "record" | "score";
 }
 
 /**
@@ -702,6 +702,12 @@ export function refsOf(bundle: EvidenceBundle): EvidenceRef[] {
     ]),
     ...bundle.feedback.map(({ ref }) => pullRequest(ref)),
     ...bundle.followUps.flatMap((followUp) => [pullRequest(followUp.ref), ...(followUp.openedAs === null ? [] : [issue(followUp.openedAs)])]),
+    ...bundle.lowScores.flatMap((low) => [{ ref: low.ref, kind: "score" as const }, ...(low.run === null ? [] : [record(low.run)])]),
+    ...bundle.sample.flatMap((sampled) => [
+      pullRequest(sampled.ref),
+      ...(sampled.ticket === null ? [] : [issue(sampled.ticket)]),
+      ...sampled.records.map(record),
+    ]),
     ...bundle.streakTable.map(({ ref }) => pullRequest(ref)),
     ...bundle.history.retros.map(({ number }) => issue(number)),
     ...bundle.history.filed.map(({ number }) => issue(number)),

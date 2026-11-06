@@ -902,5 +902,26 @@ describe("the evidence bundle", () => {
         { ref: "#130", kind: "issue" },
       ]);
     });
+
+    it("lists each low score by its score path, with its run's record, and each sampled PR with its Ticket and records", () => {
+      const implement = aRunRecord({ runId: 1000, issue: 7, pullRequest: 12, endedAt: "2026-11-01T00:00:00Z" });
+      const review = aRunRecord({ runId: 1001, role: "review", issue: 7, pullRequest: 12, verdict: "pass", endedAt: "2026-11-02T00:00:00Z" });
+      const bundle = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [implement, review],
+          scoreFiles: { "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json": aScoreFile({ runId: 1000, entries: [aScoreEntry({ score: 0.2, pass: false })] }) },
+          // #12 is in the sample.
+          facts: factsOf({ pullRequests: [aMergedPullRequest("2026-11-03T00:00:00Z", { number: 12, ticket: 7 })] }),
+        }),
+      );
+      expect(refsOf(bundle)).toEqual([
+        { ref: "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json", kind: "score" },
+        { ref: "runs/owner/product/2026-11/1000-1-implement.json", kind: "record" },
+        { ref: "#12", kind: "pull-request" },
+        { ref: "#7", kind: "issue" },
+        { ref: "runs/owner/product/2026-11/1001-1-review.json", kind: "record" },
+        { ref: "#80", kind: "issue" }, // the last Retro
+      ]);
+    });
   });
 });
