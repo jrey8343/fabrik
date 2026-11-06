@@ -669,11 +669,12 @@ export function loginOf(actor: { readonly login: string; readonly __typename: st
  * Whether this author is the Fabrik App, whose bot login is `appLogin`: its
  * slug with `[bot]`. A run that doesn't know the login (null), as the Kit
  * job, which only routes, doesn't, takes any bot for the App, which is how
- * the App's pending Audit routes to its Auditor run. Every run that writes
- * knows the login, so there only the App's own issues count as its. So
- * another bot's look-alike pending Audit still costs one Auditor run, whose
- * result the push job drops as stale (src/loop/auditLanding.ts), or whose
- * failure changes nothing. Telling the Kit job the App's slug would take a
+ * the App's pending Audit routes to its Auditor run, and its pending Retro
+ * to its Retro run. Every run that writes knows the login, so there only the
+ * App's own issues count as its. So another bot's look-alike pending Audit
+ * or Retro still costs one run, whose result the push job drops as stale
+ * (src/loop/auditLanding.ts, src/loop/retroLanding.ts), or whose failure
+ * changes nothing. Telling the Kit job the App's slug would take a
  * setup step, which #150 rules out. An Auditor run's inputs, which don't know
  * the login either, take the bot that opened their pending Audit for the App
  * (gatherAuditSliceFor).

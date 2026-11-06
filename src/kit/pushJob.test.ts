@@ -65,6 +65,11 @@ describe("What the push job applies", () => {
     });
   });
 
+  // Dormant until the switch-on (#151) adds the Retro's jobs to loop.yml and to the push job's needs.
+  it("applies nothing for a Retro route while the push job needs no Retro job, so no Retro run's result lands yet", () => {
+    expect(pushJobInput(needs("retro"), 120)).toEqual({ kind: "nothing", reason: "the retro job ended unknown" });
+  });
+
   it("applies an Implement run's result for the Ticket the Kit job's plan named, with a retry's PR and a Request-changes run's review", () => {
     const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", review: "900" }), 50);
 

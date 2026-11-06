@@ -580,6 +580,28 @@ describe("Gathering who opened an issue", () => {
       reason: "#98 is no longer a pending Audit, so its Auditor's result is stale",
     });
   });
+
+  it("takes another bot's pending Retro for the App's only where the login isn't known: the Kit job starts its Retro run, whose result the push job drops", async () => {
+    const github = issueGitHub({ author: { login: "other-app", __typename: "Bot" }, body: retroBody(RETRO_WINDOW_END, "pending"), labels: ["fabrik:retro"] });
+    const finished = {
+      kind: "retro-run-finished",
+      issue: 98,
+      output: JSON.stringify({ proposals: [] }),
+      evidence: { window: { start: "2026-10-24T06:00:00.000Z", end: RETRO_WINDOW_END }, refs: [], streakTable: [], transcripts: {} },
+      runUrl: "https://github.com/acme/shop/actions/runs/1",
+      repoUrl: "https://github.com/acme/shop",
+    } as const;
+
+    const kitJob = await gatherSnapshot(github, repo, opened, null, null);
+    const pushJob = await gatherSnapshot(github, repo, finished, null, APP_LOGIN);
+
+    expect([kitJob.issue?.byApp, pushJob.issue?.byApp]).toEqual([true, false]);
+    expect(planFor(opened, kitJob, kitConfig())).toMatchObject({ kind: "act", actions: [{ kind: "start-agent-run", role: "retro", issue: 98 }] });
+    expect(planFor(finished, pushJob, kitConfig())).toEqual({
+      kind: "nothing",
+      reason: "#98 is no longer a pending Retro, so its Retro run's result is stale",
+    });
+  });
 });
 
 describe("Gathering an issue's Design session", () => {
