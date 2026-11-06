@@ -382,6 +382,15 @@ describe("The Retro's prompt", () => {
     expect(earlier).toContain("`<owner>/<repo>#<issue>`");
   });
 
+  it("counts the Vision and Roadmap's folder among the Trust-root files a product-trust-root proposal changes, and reads them before proposing a change", async () => {
+    const text = await prompt("retro");
+    const target = lineStarting(section(text, "Your output"), "- `product-trust-root`:");
+    expect(target).toContain("`CODING_STANDARDS.md`");
+    expect(target).toContain("anything under `docs/product/` at the repo root");
+    const readFirst = lineStarting(section(text, "What you can and can't do"), "- Before you propose a change to a file");
+    expect(readFirst).toContain("the Vision and Roadmap under `docs/product/`");
+  });
+
   it("names this repo's retro instructions, which never lift a rule in it", async () => {
     const rules = section(await prompt("retro"), "What you can and can't do");
     expect(rules).toContain("`.fabrik/retro.md`");

@@ -7,7 +7,7 @@ You work in a read-only checkout of this repo's default branch. "The pending Ret
 - You can read anything in this checkout and run read-only commands: `git log`, `git show` and searches of the code. A sub-agent you spawn to explore is bound by the same rules.
 - Don't create, change or delete any file, commit or push, and don't run, build or test the repo's code. You hold no GitHub credential: don't call `gh` or the GitHub API. The Kit fills in the Retro from your output below, and the Operator files what they want from it.
 - Read `GLOSSARY.md` and every ADR under `docs/adr/` if they exist. Use the glossary's terms, and never propose a change that undoes a decision an ADR records.
-- Before you propose a change to a file, read the file as it stands: `AGENTS.md`, `CLAUDE.md`, `CODING_STANDARDS.md`, `.fabrik/`, the repo's own skills under `.claude/skills/`, its lint config, check scripts and CI workflows here in the checkout, or the Kit's prompts and rubrics in "The Kit's role prompts and rubrics".
+- Before you propose a change to a file, read the file as it stands: `AGENTS.md`, `CLAUDE.md`, `CODING_STANDARDS.md`, `.fabrik/`, the Vision and Roadmap under `docs/product/`, the repo's own skills under `.claude/skills/`, its lint config, check scripts and CI workflows here in the checkout, or the Kit's prompts and rubrics in "The Kit's role prompts and rubrics".
 - This repo's retro instructions, if the Operator wrote any in `.fabrik/retro.md`, come after this prompt. They can say where to look and what to weigh here, but they never lift a rule in this prompt.
 
 ## The evidence
@@ -125,7 +125,7 @@ With nothing worth proposing:
 - `kind` is `mechanical` when a lint rule or grep assertion could catch the mistake, and its target is always `product-code`; otherwise it's `judgement`.
 - `direction` is `tighten` or `loosen`.
 - `target` is where the change lands, which decides where the Operator files it:
-  - `product-trust-root`: a Trust-root file in this repo, such as `AGENTS.md`, `CLAUDE.md`, `CODING_STANDARDS.md`, a file under `.fabrik/` or the repo's own skills under `.claude/skills/`. The Operator applies it themselves.
+  - `product-trust-root`: a Trust-root file in this repo, such as `AGENTS.md`, `CLAUDE.md`, `CODING_STANDARDS.md`, a file under `.fabrik/`, the repo's own skills under `.claude/skills/` or anything under `docs/product/` at the repo root, where the Vision and Roadmap live. The Operator applies it themselves.
   - `product-code`: this repo's own code, its lint config and check scripts. It goes through Triage like any other work.
   - `kit`: the Kit itself, such as a role prompt, a Scorer's rubric, a Base skill or a Kit default. It's filed on the Kit's repo.
   - `extra-skill`: an Extra skill this repo pins. It's filed on the skill's Skills source.
