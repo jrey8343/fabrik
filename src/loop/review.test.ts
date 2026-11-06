@@ -51,6 +51,50 @@ describe("Review: starting one", () => {
     });
   });
 
+  // The Kit job passes it out for the Review job, which downloads the screenshots (#153).
+  it("a push to a UI PR, whose body marks where its UI evidence is kept, starts a Review carrying that, and otherwise the same", () => {
+    const config = kitConfig();
+    const marked = aPullRequest({ uiEvidenceMarker: { run: 9100, artifact: 9202 } });
+    const plan = planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(marked), config);
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "start-agent-run",
+          role: "review",
+          issue: 50,
+          evidence: { run: 9100, artifact: 9202 },
+          model: config.roles.review.model,
+          effort: config.roles.review.effort,
+          timeoutMinutes: 30,
+          subscription: "Claude token",
+        },
+      ],
+    });
+  });
+
+  it("a Review of a UI PR whose Implement run kept no screenshots still carries where it was captured and why capture failed, so the Reviewer hears why there are none", () => {
+    const marked = aPullRequest({ uiEvidenceMarker: { run: 9100, artifact: null, failure: "build-failed" } });
+    const plan = planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(marked), kitConfig());
+
+    expect(actionsOf(plan)).toMatchObject([{ kind: "start-agent-run", role: "review", evidence: { run: 9100, artifact: null, failure: "build-failed" } }]);
+  });
+
+  it("agent:review added to a UI PR starts a Review carrying where its UI evidence is kept, as a push does", () => {
+    const marked = aPullRequest({ labels: ["agent:review"], uiEvidenceMarker: { run: 9100, artifact: 9202 } });
+    const plan = planFor({ kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" }, snapshotOfPullRequest(marked), kitConfig());
+
+    expect(actionsOf(plan)).toMatchObject([{ kind: "start-agent-run", role: "review", evidence: { run: 9100, artifact: 9202 } }]);
+  });
+
+  it("a Review of a PR with no UI evidence marker carries no evidence", () => {
+    const plan = planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(aPullRequest()), kitConfig());
+
+    expect(actionsOf(plan)).toHaveLength(1);
+    expect(actionsOf(plan)[0]).not.toHaveProperty("evidence");
+  });
+
   it("agent:review added to an agent draft PR starts a Review again", () => {
     const plan = planFor(
       { kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" },

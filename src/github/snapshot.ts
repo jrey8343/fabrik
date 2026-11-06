@@ -1,6 +1,7 @@
 // The adapter's snapshot side: reads the current GitHub state a Loop event
 // needs, fresh rather than from the event payload, into the snapshot the core
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
+import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
 import {
   INSTRUCTED_ROLES,
   instructionsPath,
@@ -116,7 +117,8 @@ const PULL_REQUEST_QUERY = `
         isDraft
         headRefName
         headRefOid
-        author { __typename }
+        author { login __typename }
+        body
         labels(first: 100) { nodes { name } }
         comments(last: 100) { nodes { body author { __typename } } }
         reviews(last: 1, states: [CHANGES_REQUESTED]) { nodes { databaseId author { login __typename } commit { oid } } }
@@ -134,7 +136,8 @@ interface PullRequestQueryResult {
       isDraft: boolean;
       headRefName: string;
       headRefOid: string;
-      author: { __typename: string } | null;
+      author: { login: string; __typename: string } | null;
+      body: string;
       labels: { nodes: { name: string }[] };
       comments: { nodes: { body: string; author: { __typename: string } | null }[] };
       reviews: {
@@ -609,7 +612,7 @@ async function gatherEventPart(
     case "pull-request-closed":
     case "pull-request-changes-requested":
     case "pull-request-commented":
-      return gatherPullRequest(github, repo, event.pullRequest, operator);
+      return gatherPullRequest(github, repo, event.pullRequest, operator, appLogin);
     case "dispatch-check":
       if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");
       return gatherDispatch(github, actions, repo, operator);
@@ -622,7 +625,7 @@ async function gatherEventPart(
       const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
       if (event.fixes === undefined) return ticket;
       // A retry's push job weighs the Ticket and the PR it fixes.
-      const { pullRequest } = await gatherPullRequest(github, repo, event.fixes.pullRequest, operator);
+      const { pullRequest } = await gatherPullRequest(github, repo, event.fixes.pullRequest, operator, appLogin);
       return { ...ticket, pullRequest };
     }
     case "label-added": {
@@ -630,7 +633,7 @@ async function gatherEventPart(
       const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
       const open = ticket.issue?.openPullRequests[0];
       if (open === undefined) return ticket;
-      const { pullRequest } = await gatherPullRequest(github, repo, open, operator);
+      const { pullRequest } = await gatherPullRequest(github, repo, open, operator, appLogin);
       return { ...ticket, pullRequest };
     }
     default:
@@ -875,6 +878,7 @@ async function gatherPullRequest(
   repo: Repo,
   number: number,
   operator: string | null,
+  appLogin: string | null,
 ): Promise<EventPart> {
   const data = await github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, {
     owner: repo.owner,
@@ -906,6 +910,8 @@ async function gatherPullRequest(
       requestChangesRun: requestChangesRunIn(botComments),
       pushedSinceVerdict: pushedSinceVerdictIn(botComments),
       changesRequested: changesRequestedOf(pullRequest.reviews.nodes[0]),
+      // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
+      uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
     },
     dispatch: null,
     designQueue: null,

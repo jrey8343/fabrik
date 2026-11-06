@@ -18,6 +18,11 @@ const run = promisify(execFile);
 
 export interface AgentBranchGit {
   readonly changes: BranchChanges;
+  /**
+   * The commit its push leaves the branch at: the run's own tip, or where its
+   * commits were rebased onto a branch that moved; null when there's nothing to push.
+   */
+  readonly head: string | null;
   /** Pushes the rebuilt branch to the Product repo, replacing the agent branch of that name. */
   push(branch: string): Promise<void>;
 }
@@ -71,6 +76,7 @@ export async function rebuildAgentBranch(
   if (branch.head === null) {
     return {
       changes: { net: [], commits: [], updatedFromMain: false },
+      head: null,
       push: () => Promise.reject(new Error(`${branch.name} has no commits to push`)),
     };
   }
@@ -125,6 +131,7 @@ async function cutFromMain(git: Git, url: string, branch: BuiltBranch, bundlePat
       commits: await commitsIn(git, `${branch.base.sha}..${tip}`),
       updatedFromMain: false,
     },
+    head: tip,
     async push(name) {
       if (name !== branch.name) throw new Error(`Asked to push ${name}, but the bundle holds ${branch.name}`);
       await git("push", "--quiet", "--force", url, `${ref}:${ref}`);
@@ -158,6 +165,7 @@ async function onItsOwnBranch(git: Git, url: string, branch: BuiltBranch, bundle
     if (rebased === null) {
       return {
         changes: { net: [], commits: [], updatedFromMain: false, rebase: { onto: head, conflicted: true } },
+        head: null,
         push: () => Promise.reject(new Error(`${branch.name} conflicts with ${head}, so there's nothing to push`)),
       };
     }
@@ -178,6 +186,7 @@ async function onItsOwnBranch(git: Git, url: string, branch: BuiltBranch, bundle
       updatedFromMain: !(await isAncestor(git, main, head)) && (await isAncestor(git, main, tip)),
       ...(moved ? { rebase: { onto: head, conflicted: false } } : {}),
     },
+    head: tip,
     async push(name) {
       if (name !== branch.name) throw new Error(`Asked to push ${name}, but the bundle holds ${branch.name}`);
       await git("push", "--quiet", `--force-with-lease=${ref}:${head}`, url, `${ref}:${ref}`);

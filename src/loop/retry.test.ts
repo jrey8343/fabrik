@@ -9,6 +9,7 @@ import {
   snapshotOfPullRequest,
   verdictsPostedIn,
 } from "../__fixtures__/snapshots.ts";
+import { anEvidence, CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, Snapshot, VerdictRecord } from "./types.ts";
 
@@ -50,6 +51,15 @@ describe("An Execution flaw starts a retry", () => {
       const plan = planFor(reviewed(output), snapshotOfPullRequest(aPullRequest()), kitConfig());
       expect(actionsOf(plan)).not.toContainEqual(RETRY_TRIGGER);
     }
+  });
+
+  // A visual failure the Reviewer saw in the screenshots is an Execution flaw like any other (#153).
+  it("an Execution flaw on a UI PR, naming a route and screenshot, starts a retry exactly as one on any PR", () => {
+    const flaw = reviewed("verdict: execution-flaw\n\n- `/waitlist` spills off the side at mobile width (`after-mobile-waitlist.png`).");
+    const marked = aPullRequest({ uiEvidenceMarker: { run: 9100, artifact: 9202 } });
+
+    expect(planFor(flaw, snapshotOfPullRequest(marked), kitConfig())).toEqual(planFor(flaw, snapshotOfPullRequest(aPullRequest()), kitConfig()));
+    expect(actionsOf(planFor(flaw, snapshotOfPullRequest(marked), kitConfig()))).toContainEqual(RETRY_TRIGGER);
   });
 });
 
@@ -97,6 +107,13 @@ describe("Starting a retry", () => {
     const plan = planFor(retryLabeled, resumeSnapshot(), kitConfig({ maxInFlight: 0 }));
 
     expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", pullRequest: 50 }));
+  });
+
+  // Its Implement job captures again from its own diff (#153), so the run carries no evidence of its own.
+  it("on a UI PR starts exactly the retry it would on any PR", () => {
+    const marked = { ...flawedPullRequest(), uiEvidenceMarker: { run: 9100, artifact: 9202 } };
+
+    expect(planFor(retryLabeled, resumeSnapshot(marked), kitConfig())).toEqual(planFor(retryLabeled, resumeSnapshot(), kitConfig()));
   });
 
   it("the second Execution flaw starts a Step-up, on the Step-up model", () => {
@@ -264,6 +281,19 @@ describe("A retry's branch", () => {
   });
 
   it.each([
+    ["names the routes its change shows on", ["/cart"]],
+    ["names routes that aren't paths", ["cart"]],
+  ])("lands as any retry does when its output %s", (_, routes) => {
+    const output = JSON.stringify({ title: "Handle the empty cart", summary: "Shows the empty state.", fix: "Guards the empty cart.", routes });
+
+    const actions = actionsOf(planFor(retried({ output }), retrySnapshot(), kitConfig()));
+
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(actions[0]).toEqual({ kind: "edit-issue-body", issue: 50, body: "Shows the empty state.\n\nCloses #7" });
+    expect(actions[1]).toHaveProperty("body", expect.stringMatching(/\n\nGuards the empty cart\.$/));
+  });
+
+  it.each([
     ["no fix", { title: "Handle the empty cart", summary: "Shows the empty state." }],
     ["an empty fix", { title: "Handle the empty cart", summary: "Shows the empty state.", fix: "  " }],
   ])("output with %s breaks the contract on a retry: an Infrastructure failure that pushes nothing", (_, output) => {
@@ -341,6 +371,86 @@ describe("A retry's branch", () => {
     const plan = planFor(retried({ output: "{}" }), retrySnapshot(), kitConfig());
 
     expect(plan).toMatchObject({ kind: "fail", failure: "infrastructure" });
+  });
+});
+
+/** The evidence section an earlier run, 8000, put on the PR's body, its marker from before markers recorded how capture ended. */
+const OLD_SECTION = [
+  "<!-- fabrik:ui-evidence-start -->",
+  "## UI evidence",
+  "",
+  "[Open the gallery](<https://github.com/acme/shop/actions/runs/8000/artifacts/8001>) of 2 screenshots: this branch at `0000000`, at mobile and desktop widths.",
+  `<!-- fabrik:ui-evidence {"run":8000,"artifact":8002} -->`,
+].join("\n");
+
+/** This retry's evidence section: run 9100's capture of /waitlist. */
+const NEW_SECTION = [
+  "<!-- fabrik:ui-evidence-start -->",
+  "## UI evidence",
+  "",
+  `[Open the gallery](<${GALLERY}>) of 2 screenshots: this branch at \`4f2b9c0\`, at mobile and desktop widths.`,
+  "",
+  "No preview link: Kit config declares no `preview.url`.",
+  "",
+  "Captured routes:",
+  "",
+  "- `/waitlist`, named by the Implementer",
+  `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null} -->`,
+].join("\n");
+
+describe("The evidence section on a retry's PR", () => {
+  /** A retry whose summary copies the old section forward, which only the Kit may write. */
+  const copyingForward = (overrides: Partial<Extract<LoopEvent, { kind: "implement-run-finished" }>> = {}) =>
+    retried({
+      output: JSON.stringify({ title: "Handle the empty cart", summary: `Shows the empty state.\n\n${OLD_SECTION}`, fix: "Guards the empty cart." }),
+      evidence: anEvidence(CAPTURED),
+      ...overrides,
+    });
+  const markedUi = () => aPullRequest({ verdicts: flawedPullRequest().verdicts, uiEvidenceMarker: { run: 8000, artifact: 8002 } });
+
+  it("replaces the old one on a PR marked UI, though the retry's own changes match no ui.paths, so the old one is gone", () => {
+    const actions = actionsOf(planFor(copyingForward(), retrySnapshot(markedUi()), kitConfig({ ui: UI })));
+
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(actions[0]).toEqual({ kind: "edit-issue-body", issue: 50, body: `Shows the empty state.\n\n${NEW_SECTION}\n\nCloses #7` });
+  });
+
+  it("is new on a PR the retry's own changes make UI", () => {
+    const event = copyingForward({ changes: { net: [{ path: "src/components/Cart.astro" }], commits: [{ path: "src/components/Cart.astro" }] } });
+
+    const actions = actionsOf(planFor(event, retrySnapshot(), kitConfig({ ui: UI })));
+
+    expect(actions[0]).toEqual({ kind: "edit-issue-body", issue: 50, body: `Shows the empty state.\n\n${NEW_SECTION}\n\nCloses #7` });
+  });
+
+  it("isn't on a PR that isn't UI, nor is the one the summary copied", () => {
+    const actions = actionsOf(planFor(copyingForward(), retrySnapshot(), kitConfig({ ui: UI })));
+
+    expect(actions[0]).toEqual({ kind: "edit-issue-body", issue: 50, body: "Shows the empty state.\n\nCloses #7" });
+  });
+});
+
+describe("The preview deployment of a retry's PR", () => {
+  const PREVIEW = { url: "https://{branch_slug}.shop.pages.dev" };
+  const uiRetry = (overrides: Partial<Extract<LoopEvent, { kind: "implement-run-finished" }>> = {}) =>
+    retried({ evidence: anEvidence(CAPTURED), ...overrides });
+  const markedUi = () => aPullRequest({ verdicts: flawedPullRequest().verdicts, uiEvidenceMarker: { run: 8000, artifact: 8002 } });
+
+  it.each([
+    ["a retry", uiRetry()],
+    ["a Request-changes run", uiRetry({ fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true } })],
+  ])("is linked on %s's UI PR once the push job has pushed, from Kit config's template and the PR's branch", (_, event) => {
+    const actions = actionsOf(planFor(event, retrySnapshot(markedUi()), kitConfig({ ui: UI, preview: PREVIEW })));
+
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch", "link-preview"]);
+    expect(actions[3]).toEqual({ kind: "link-preview", pullRequest: 50, template: "https://{branch_slug}.shop.pages.dev", branch: "fabrik/ticket-7" });
+  });
+
+  it.each([
+    ["Kit config declares no preview.url", retrySnapshot(markedUi()), kitConfig({ ui: UI })],
+    ["the PR isn't UI", retrySnapshot(), kitConfig({ ui: UI, preview: PREVIEW })],
+  ])("isn't polled when %s", (_, snapshot, config) => {
+    expect(actionsOf(planFor(uiRetry(), snapshot, config)).map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
   });
 });
 

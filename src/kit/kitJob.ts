@@ -1,8 +1,9 @@
 // What the Kit job's step summary says about the run it routes: which
 // Subscription the run was given, or, with rotation on and every Subscription
-// used up, that it was held, until when and why; and, with one Subscription
-// listed, a quiet note that rotation is off until a second is listed. Pure,
-// no I/O.
+// used up, that it was held, until when and why; with one Subscription
+// listed, a quiet note that rotation is off until a second is listed; and on
+// an Implement run without a ui block, a quiet note that Visual evidence is
+// off (#153). Pure, no I/O.
 import { agentRunIn } from "../github/apply.ts";
 import { RUN_NAMES } from "../loop/heldRun.ts";
 import { readable } from "../loop/readable.ts";
@@ -15,7 +16,7 @@ import type { Action, KitConfig, KitIssueSnapshot, Plan } from "../loop/types.ts
  */
 export function kitJobSummary(
   plan: Plan,
-  config: Pick<KitConfig, "subscriptions">,
+  config: Pick<KitConfig, "subscriptions" | "ui">,
   kitIssues: readonly KitIssueSnapshot[],
 ): string | null {
   const run = agentRunIn(plan);
@@ -29,6 +30,10 @@ export function kitJobSummary(
   if (lines.length === 0) return null;
   if (!rotationIsOn(config)) {
     lines.push("Subscription rotation is off until a second Subscription is listed in Kit config's `subscriptions`.");
+  }
+  // Said here, from the Kit config this job checked, so it's said whether or not the Implement job captures.
+  if (run?.role === "implement" && config.ui === null) {
+    lines.push("Visual evidence is off until Kit config has a `ui` block: `/fabrik-setup` turns it on.");
   }
   return `### Fabrik Kit job\n\n${lines.join("\n\n")}\n`;
 }

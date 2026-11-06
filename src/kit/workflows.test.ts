@@ -3,9 +3,11 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { JUDGE_JOB } from "./judge.ts";
+import { PREVIEW_POLL_MINUTES } from "./previewLink.ts";
 import { RETRO_EVIDENCE_JOB } from "./pushJob.ts";
 import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
+import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE } from "../evidence/capture.ts";
 
 const root = new URL("../../", import.meta.url);
 const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml", ".github/workflows/weekly-summary.yml"].map((path) => ({
@@ -88,6 +90,36 @@ describe("The Kit's workflows", () => {
     expect(kit).toContain("retry: ${{ steps.route.outputs.retry }}");
     expect(kit).toContain("step-up: ${{ steps.route.outputs.step-up }}");
     expect(kit).toContain("request-changes: ${{ steps.route.outputs.request-changes }}");
+  });
+
+  // The preview link (#153): bounded and never failing, so a slow or broken host costs the push job nothing.
+  describe("loop.yml's push job's preview step", () => {
+    const push = jobIn(loop, "push");
+    const steps = stepsOf(push);
+    const at = (text: string) => steps.findIndex((step) => step.includes(text));
+    const preview = steps[at("uses: ./kit/.github/actions/link-preview")] ?? "";
+
+    it("runs after Run the Loop and before the Run record, only when the Loop's plan asked to link a UI PR's preview", () => {
+      expect(at("uses: ./kit/.github/actions/link-preview"), "the push job has no preview step").toBeGreaterThan(at("name: Run the Loop"));
+      expect(at("uses: ./kit/.github/actions/link-preview")).toBeLessThan(at("uses: ./kit/.github/actions/write-run-record"));
+      expect(preview).toContain("if: steps.loop.outputs.preview-url != ''");
+    });
+
+    it("can't fail the push job: it goes on past any error, and its own timeout outlasts the Kit's poll budget but leaves the job time for the Run record", () => {
+      const stepTimeout = Number(/timeout-minutes: (\d+)\n/.exec(preview)?.[1]);
+      const jobTimeout = Number(/\n    timeout-minutes: (\d+)\n/.exec(push)?.[1]);
+
+      expect(preview).toContain("continue-on-error: true");
+      expect(stepTimeout).toBeGreaterThan(PREVIEW_POLL_MINUTES);
+      expect(stepTimeout).toBeLessThan(jobTimeout);
+      expect(jobTimeout).toBe(10);
+    });
+
+    it("polls the URL Run the Loop filled in for the PR it named, as the Fabrik App through the push service account", () => {
+      expect(preview).toContain("url: ${{ steps.loop.outputs.preview-url }}");
+      expect(preview).toContain("pull-request: ${{ steps.loop.outputs.preview-pull-request }}");
+      expect(preview).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
+    });
   });
 
   it.each(["triage", "design", "implement", "review", "audit"])(
@@ -291,6 +323,14 @@ describe("The run the Loop action", () => {
     expect(run).toContain("FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}");
   });
 
+  it("passes out the preview its plan asked to link, for the push job's preview step", () => {
+    const run = steps.find((step) => step.includes("run: node src/main.ts"))!;
+
+    expect(run).toContain("id: loop");
+    expect(action).toMatch(/\n  preview-url:\n.*\n\s+value: \$\{\{ steps\.loop\.outputs\.preview-url \}\}\n/);
+    expect(action).toMatch(/\n  preview-pull-request:\n.*\n\s+value: \$\{\{ steps\.loop\.outputs\.preview-pull-request \}\}\n/);
+  });
+
   describe("asked to find the fabrik-runs store, as the scheduled tick asks for the retro gate", () => {
     const find = steps.find((step) => step.includes("id: find-store\n"));
     const store = steps.find((step) => step.includes("id: store-metadata\n"));
@@ -321,6 +361,43 @@ describe("The run the Loop action", () => {
     it("loads the Fabrik App key once, for every token it mints", () => {
       expect(steps.filter((step) => step.includes("1password/load-secrets-action@"))).toHaveLength(1);
     });
+  });
+});
+
+describe("The link-preview action, which the push job's preview step runs", () => {
+  const { text: action, steps } = actionNamed("link-preview");
+  const mint = steps.find((step) => step.includes("uses: actions/create-github-app-token@"));
+  const program = steps.find((step) => step.includes("run: node src/kit/preview-main.ts"));
+
+  it("loads the Fabrik App key through the push service account, and nothing else", () => {
+    const secrets = steps.filter((step) => step.includes("1password/load-secrets-action@"));
+
+    expect(secrets).toHaveLength(1);
+    expect(secrets[0]).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}");
+    expect([...secrets[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual([
+      "op://Fabrik App/Fabrik App/client-id",
+      "op://Fabrik App/Fabrik App/private-key",
+    ]);
+  });
+
+  it("mints a Fabrik App token for the Product repo alone that can edit a PR's body and do nothing else", () => {
+    expect(steps.filter((step) => step.includes("uses: actions/create-github-app-token@"))).toHaveLength(1);
+    expect(mint).toContain("id: app");
+    expect(mint).not.toMatch(/owner:|repositories:/);
+    expect(permissionsOf(mint)).toEqual(["pull-requests: write"]);
+  });
+
+  it("polls and edits with the Kit's Node program, given the URL and the PR through its env, never in its command line", () => {
+    expect(program, "no step runs src/kit/preview-main.ts").toBeDefined();
+    expect(program).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
+    expect(program).toContain("FABRIK_PREVIEW_URL: ${{ inputs.url }}");
+    expect(program).toContain("FABRIK_PREVIEW_PULL_REQUEST: ${{ inputs.pull-request }}");
+    expect(/run: (.*)/.exec(program ?? "")?.[1]).toBe("node src/kit/preview-main.ts");
+    expect(steps.indexOf(mint!)).toBeLessThan(steps.indexOf(program!));
+  });
+
+  it("checks nothing out, so it runs no Product code", () => {
+    expect(action).not.toContain("actions/checkout@");
   });
 });
 
@@ -360,6 +437,61 @@ describe("loop.yml's Audit job", () => {
     const needs = /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ");
 
     expect(needs).toContain("audit");
+  });
+});
+
+// A UI PR's Review (#153): the Kit job passes out where its marker says the
+// UI evidence is kept, and the Review job downloads it for the Reviewer.
+describe("loop.yml's Review job on a UI PR", () => {
+  const review = (): string => job("review");
+  const steps = (): readonly string[] => stepsOf(review());
+  const stepAt = (pattern: string): number => steps().findIndex((step) => step.includes(pattern));
+  const download = (): string => steps()[stepAt("uses: actions/download-artifact@")] ?? "";
+  const reviewer = (): string => steps()[stepAt("id: agent\n")] ?? "";
+
+  it("gets where a UI PR's evidence is kept from the Kit job: the Implement run that captured it, its artifact, and why its capture failed", () => {
+    expect(job("kit")).toContain("ui-evidence-run: ${{ steps.route.outputs.ui-evidence-run }}");
+    expect(job("kit")).toContain("ui-evidence-artifact: ${{ steps.route.outputs.ui-evidence-artifact }}");
+    expect(job("kit")).toContain("ui-evidence-failure: ${{ steps.route.outputs.ui-evidence-failure }}");
+  });
+
+  it("can read Actions artifacts, and holds only read permissions", () => {
+    const permissions = /\n    permissions:\n((?: {6}.*\n)+)/.exec(review())?.[1] ?? "";
+
+    expect(
+      permissions
+        .trim()
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => !line.startsWith("#")),
+    ).toEqual(["contents: read", "issues: read", "pull-requests: read", "actions: read"]);
+  });
+
+  it("downloads the evidence only when given an artifact, from the run that kept it, with its own read-only token", () => {
+    expect(download()).toContain("uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2");
+    expect(download()).toContain("if: needs.kit.outputs.ui-evidence-artifact != ''\n");
+    expect(download()).toContain("run-id: ${{ needs.kit.outputs.ui-evidence-run }}\n");
+    expect(download()).toContain("artifact-ids: ${{ needs.kit.outputs.ui-evidence-artifact }}\n");
+    expect(download()).toContain("github-token: ${{ github.token }}\n");
+  });
+
+  // Retention can lapse before a late Review; the Reviewer is then told capture left no result.
+  it("never fails the Review on the download, which comes before any secret loads and lands outside the working directory", () => {
+    expect(download()).toContain("continue-on-error: true\n");
+    expect(download()).toContain("path: ${{ runner.temp }}/fabrik-ui-evidence\n");
+    expect(stepAt("uses: actions/download-artifact@")).toBeGreaterThan(stepAt("uses: ./kit/.github/actions/prepare-agent"));
+    expect(stepAt("uses: actions/download-artifact@")).toBeLessThan(stepAt("id: op\n"));
+  });
+
+  it("tells the Reviewer where the evidence was downloaded only on a UI PR, so any other PR's prompt says nothing of it", () => {
+    expect(reviewer()).toContain(
+      "FABRIK_UI_EVIDENCE_DIR: ${{ needs.kit.outputs.ui-evidence-run != '' && format('{0}/fabrik-ui-evidence', runner.temp) || '' }}\n",
+    );
+  });
+
+  // The download is skipped when the marker names no artifact, so the PR body's reason is the Reviewer's only one.
+  it("tells the Reviewer why the PR's capture failed, as its marker records it, for when there's no capture result to read", () => {
+    expect(reviewer()).toContain("FABRIK_UI_EVIDENCE_FAILURE: ${{ needs.kit.outputs.ui-evidence-failure }}\n");
   });
 });
 
@@ -480,6 +612,109 @@ describe("loop.yml's scoring jobs", () => {
   it.each([JUDGE_JOB, "score-record"])("%s leaves reading and writing GitHub to the Kit's actions, never inline gh calls or shell steps", (name) => {
     expect(job(name)).not.toMatch(/\bgh (api|issue|pr|repo|release|run|workflow) /);
     expect(job(name)).not.toMatch(/\n\s+run: /);
+  });
+});
+
+describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
+  const implement = () => job("implement");
+  const steps = () => stepsOf(implement());
+  const stepAt = (pattern: string) => steps().findIndex((step) => step.includes(pattern));
+  const step = (pattern: string) => steps()[stepAt(pattern)] ?? "";
+  const capture = () => step("name: Capture UI evidence");
+  const evidence = () => step("name: Keep the UI evidence\n");
+  const gallery = () => step("name: Keep the UI evidence gallery");
+
+  it("captures after the Implementer's agent has ended and before its result goes to the push job, from the Kit's program", () => {
+    expect(stepAt("name: Capture UI evidence")).toBeGreaterThan(stepAt("id: agent\n"));
+    expect(stepAt("name: Capture UI evidence")).toBeLessThan(stepAt("name: fabrik-agent-result"));
+    expect(stepAt("id: agent\n")).toBeGreaterThan(-1);
+    expect(capture()).toContain("id: capture\n");
+    expect(capture()).toMatch(/working-directory: product\n(?:.*\n)*?\s+run: node \.\.\/kit\/src\/evidence\/capture-main\.ts\n/);
+  });
+
+  it("can't fail the job: it goes on when capture fails, and stops at the Kit's capture timeout", () => {
+    expect(capture()).toContain("continue-on-error: true");
+    expect(capture()).toContain(`timeout-minutes: ${CAPTURE_TIMEOUT_MINUTES}\n`);
+  });
+
+  it("hands capture no secret: neither the 1Password step's outputs nor any GitHub token", () => {
+    expect(capture()).not.toMatch(/FABRIK_SECRETS|steps\.op\.|secrets\.|github\.token|GH_TOKEN|GITHUB_TOKEN/);
+  });
+
+  it("keeps the gallery unzipped, so it opens in one click, and the screenshots and capture result zipped, both for 30 days", () => {
+    expect(gallery()).toContain("uses: actions/upload-artifact@");
+    expect(gallery()).toContain("id: gallery\n");
+    expect(gallery()).toContain(`path: \${{ runner.temp }}/fabrik-out/${GALLERY_FILE}\n`);
+    expect(gallery()).toContain("archive: false\n");
+    expect(gallery()).toContain("retention-days: 30\n");
+
+    expect(evidence()).toContain("uses: actions/upload-artifact@");
+    expect(evidence()).toContain("id: evidence\n");
+    expect(evidence()).toContain("name: fabrik-ui-evidence\n");
+    expect(evidence()).toContain(`path: \${{ runner.temp }}/fabrik-out/${EVIDENCE_DIR}/\n`);
+    expect(evidence()).not.toContain("archive:");
+    expect(evidence()).toContain("retention-days: 30\n");
+  });
+
+  // The push job downloads fabrik-agent-* and reads an empty download as a timeout.
+  it("keeps the evidence only when capture recorded a result, apart from the push job's artifacts, never failing the job", () => {
+    for (const upload of [evidence(), gallery()]) {
+      expect(upload).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
+      expect(upload).toContain("continue-on-error: true");
+      expect(upload).toContain("if-no-files-found: ignore");
+      expect(upload).not.toMatch(/name: fabrik-agent-/);
+    }
+    expect(GALLERY_FILE).not.toMatch(/^fabrik-agent-/);
+    expect(stepAt("name: Keep the UI evidence\n")).toBeGreaterThan(stepAt("name: Capture UI evidence"));
+    expect(stepAt("name: Keep the UI evidence gallery")).toBeGreaterThan(stepAt("name: Capture UI evidence"));
+  });
+
+  it("passes out the capture result and the ids of both evidence artifacts, for the push job", () => {
+    expect(implement()).toContain("ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}");
+    expect(implement()).toContain("ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}");
+    expect(implement()).toContain("ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}");
+  });
+
+  // Switched on (#239): no gate is left, so every UI PR in a repo with a ui block captures evidence.
+  it("is active: capture runs on every Implement run whose agent ended well, and both uploads whenever it recorded a result", () => {
+    expect(capture()).toContain("if: success()\n");
+    expect(evidence()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
+    expect(gallery()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
+    expect(implement()).not.toMatch(/if: false\b/);
+  });
+
+  it("stops the job at the Kit job's Implement job timeout, and its agent step at the Implement role's own", () => {
+    expect(job("kit")).toContain("implement-job-timeout-minutes: ${{ steps.route.outputs.implement-job-timeout-minutes }}");
+    expect(implement()).toMatch(/\n    timeout-minutes: \$\{\{ fromJSON\(needs\.kit\.outputs\.implement-job-timeout-minutes\) \}\}\n/);
+    expect(step("id: agent\n")).toContain("timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}\n");
+  });
+
+  // V1's job timeout cancelled the job; the agent step's own fails it, so the job notes it for the push job (src/kit/pushJob.ts).
+  it("notes an agent step its timeout stopped, and leaves that run no failure report, so the push job reads it as a timeout", () => {
+    const started = stepAt("id: started\n");
+    const timedOut = step("id: agent-time\n");
+
+    expect(started).toBeGreaterThan(-1);
+    expect(started).toBeLessThan(stepAt("id: agent\n"));
+    expect(stepAt("id: agent-time\n")).toBeGreaterThan(stepAt("id: agent\n"));
+    expect(timedOut).toContain("if: failure() && steps.agent.outcome == 'failure'\n");
+    expect(timedOut).toContain("STARTED_AT: ${{ steps.started.outputs.at }}");
+    expect(timedOut).toContain("TIMEOUT_MINUTES: ${{ needs.kit.outputs.implement-timeout-minutes }}");
+    expect(implement()).toContain("agent-timed-out: ${{ steps.agent-time.outputs.timed-out }}");
+    expect(step("name: fabrik-agent-failure")).toContain("if: failure() && steps.agent-time.outputs.timed-out != 'true'\n");
+  });
+
+  // The Kit job installs nothing, so its program, which reads capture's timeout, may import no package.
+  it("leaves the Kit job's program importing no package at run time", () => {
+    expect(job("kit")).toContain("run: node kit/src/kit/jobs.ts product");
+    expect(packagesReachedBy("src/kit/jobs.ts")).toEqual([]);
+  });
+
+  // Only the capture program imports Playwright, and it runs after prepare-agent's npm ci.
+  it("runs capture after the Kit is installed, the only program that imports Playwright", () => {
+    expect(stepAt("name: Capture UI evidence")).toBeGreaterThan(stepAt("uses: ./kit/.github/actions/prepare-agent"));
+    expect(packagesReachedBy("src/evidence/capture-main.ts")).toContain("src/evidence/capture-main.ts imports playwright-core");
+    expect(packagesReachedBy("src/evidence/capture.ts")).toEqual([]);
   });
 });
 

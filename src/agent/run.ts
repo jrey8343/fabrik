@@ -22,7 +22,10 @@
 // and, for a Ticket back in design, the agent PR it came back from in the issue's sentBack.
 // A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
-// PR, and its result is the Reviewer's reply, a Verdict line first.
+// PR, and its result is the Reviewer's reply, a Verdict line first. A UI PR's
+// Review also takes FABRIK_UI_EVIDENCE_DIR, the folder its UI evidence was
+// downloaded into, if it was, and FABRIK_UI_EVIDENCE_FAILURE, why its capture
+// failed, when the PR's marker records that (src/agent/review.ts).
 // An Auditor run is in a checkout of the default branch at its pending Audit's
 // marked commit: FABRIK_ISSUE_FILE is the Audit and FABRIK_AUDIT_FILE what the
 // agent-inputs step gathered for it (src/agent/inputs.ts), and its result
@@ -36,9 +39,11 @@ import { join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
+import { captureFailureOf } from "../evidence/uiEvidence.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
+import { writeOutputs, writeSummary } from "../kit/stepFiles.ts";
 import { type DesignTurnOutput, readDesignTurnOutput } from "../loop/designOutput.ts";
 import { rotationIsOn } from "../loop/subscriptions.ts";
 import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
@@ -62,7 +67,7 @@ import {
 import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { sentBackContext } from "./design.ts";
-import { claudeArgs, leaveFailureReport, readyHook, schemaOf, setAgentEnv, streamWatch, writeOutputs, writeSummary } from "./launch.ts";
+import { claudeArgs, leaveFailureReport, readyHook, schemaOf, setAgentEnv, streamWatch } from "./launch.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
@@ -269,7 +274,16 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   // The Reviewer's result is for the PR it judged, which its push job checks against the event.
   let subject = issueNumber;
   if (spec.reviewsPullRequest === true) {
-    const review = await reviewContext(productDir, required("FABRIK_PULL_REQUEST_FILE"), required("FABRIK_SPEC_FILE"));
+    // Set only for a UI PR: where its Review job downloaded the UI evidence, whether or not that worked,
+    // and why its capture failed, as the PR's marker records it.
+    const evidenceDir = process.env["FABRIK_UI_EVIDENCE_DIR"] ?? "";
+    const review = await reviewContext(
+      productDir,
+      required("FABRIK_PULL_REQUEST_FILE"),
+      required("FABRIK_SPEC_FILE"),
+      evidenceDir === "" ? null : evidenceDir,
+      captureFailureOf(process.env["FABRIK_UI_EVIDENCE_FAILURE"]),
+    );
     subject = review.pullRequest;
     extra.push(...review.parts);
     given = review.operatorComments;

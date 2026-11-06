@@ -1,5 +1,6 @@
 // Implementation rules: when an Implementer starts on a Ticket, and how the
 // branch it built lands as one draft PR, or doesn't.
+import { evidenceSection, isUi, withoutEvidence } from "../evidence/uiEvidence.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { consideredSection } from "./considered.ts";
 import { parseImplementOutput } from "./implementOutput.ts";
@@ -78,7 +79,7 @@ export function startImplementer(
  * branch that touches a trust root goes to the Operator unpushed, one that
  * changes nothing is an Execution flaw, and any other opens one draft PR.
  */
-export function applyImplementation(event: ImplementRunFinished, { issue, operator }: IssueContext): Plan {
+export function applyImplementation(event: ImplementRunFinished, { issue, operator }: IssueContext, config: KitConfig): Plan {
   const { issue: issueNumber, changes, branch, base } = event;
   const parsed = parseImplementOutput(event.output);
   if (!parsed.ok) {
@@ -98,6 +99,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
   if (changes.net.length === 0) return emptyDiff(issueNumber, issue);
 
   const { title, summary } = parsed.output;
+  const evidence = evidenceFor(event, config, false);
   return {
     kind: "act",
     actions: [
@@ -108,10 +110,10 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
         head: branch,
         base,
         title: withoutMentions(title),
-        // Closes, so merging the PR closes the Ticket and starts the next Dispatch check.
-        body: `${withoutMentions(summary)}\n\nCloses #${issueNumber}`,
+        body: pullRequestBody(summary, issueNumber, evidence),
         draft: true,
       },
+      ...previewToLink(evidence, config, branch, null),
     ],
   };
 }
@@ -123,7 +125,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
  * ones having passed it already. One that changes nothing is an Execution flaw
  * on the PR, which starts the next retry if one is left. All of it is silent.
  */
-export function applyRetryImplementation(event: ImplementRunFinished, snapshot: Snapshot): Plan {
+export function applyRetryImplementation(event: ImplementRunFinished, snapshot: Snapshot, config: KitConfig): Plan {
   const { issue: issueNumber, changes, branch, fixes } = event;
   const { issue, pullRequest, operator } = snapshot;
   if (fixes === undefined) throw new Error("A first Implement run lands through applyImplementation");
@@ -163,17 +165,15 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       ),
     };
   }
+  const evidence = evidenceFor(event, config, pullRequest.uiEvidenceMarker !== null);
   // The body and the note go first: the push starts a Review, which must see the run's outcome (or it posts no
   // Verdict) and the body as it now stands.
   return {
     kind: "act",
     actions: [
       // The body says what the PR as a whole now does, so the next Review, which reads the body, never judges a stale one.
-      {
-        kind: "edit-issue-body",
-        issue: pullRequest.number,
-        body: `${withoutMentions(parsed.output.summary)}\n\nCloses #${issueNumber}`,
-      },
+      // Its evidence section is this run's, never an earlier run's, so the evidence matches the PR's new head.
+      { kind: "edit-issue-body", issue: pullRequest.number, body: pullRequestBody(parsed.output.summary, issueNumber, evidence) },
       {
         kind: "comment",
         issue: pullRequest.number,
@@ -190,8 +190,52 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         ].join("\n"),
       },
       { kind: "push-branch", branch },
+      ...previewToLink(evidence, config, branch, pullRequest.number),
     ],
   };
+}
+
+/**
+ * An agent PR's body: the Implementer's summary, then the evidence section
+ * when the run was UI, then the Closes line, so merging the PR closes the
+ * Ticket and starts the next Dispatch check. The summary is agent text, so it
+ * keeps no evidence section or marker of its own: only the Kit's says where
+ * the evidence is kept.
+ */
+function pullRequestBody(summary: string, issueNumber: number, evidence: string | null): string {
+  return [withoutEvidence(withoutMentions(summary)), ...(evidence === null ? [] : [evidence]), `Closes #${issueNumber}`].join("\n\n");
+}
+
+/**
+ * The evidence section for the run's PR, or null when the run isn't UI. The
+ * push job decides that, never the agent job, whose runner the agent could
+ * have changed: the run is UI when its changes match `ui.paths`, or when its
+ * PR is `marked` UI already, a retry's changes holding only its own commits.
+ */
+function evidenceFor(event: ImplementRunFinished, config: KitConfig, marked: boolean): string | null {
+  const { evidence } = event;
+  if (evidence === undefined) return null;
+  if (!marked && !isUi(event.changes.net.map(({ path }) => path), config.ui)) return null;
+  const { result, headSha, run, artifact, gallery } = evidence;
+  return evidenceSection({
+    result: result ?? { outcome: "failed", reason: "no-result", headSha, captures: [] },
+    run,
+    artifact,
+    gallery,
+    // The push job polls a declared preview once it has pushed, and links it if it answers.
+    preview: config.preview === null ? { kind: "none" } : { kind: "pending" },
+  });
+}
+
+/**
+ * The preview deployment to link once the push job has pushed: a UI PR's,
+ * when Kit config declares `preview.url`, which its evidence section says is
+ * linked once it answers. A PR with no evidence section gets none, and nor
+ * does one in a repo that declares no preview, so the push job polls nothing.
+ */
+function previewToLink(evidence: string | null, config: KitConfig, branch: string, pullRequest: number | null): Action[] {
+  if (evidence === null || config.preview === null) return [];
+  return [{ kind: "link-preview", pullRequest, template: config.preview.url, branch }];
 }
 
 /** Why a retry's branch can't land on this PR now, or null when it can. */

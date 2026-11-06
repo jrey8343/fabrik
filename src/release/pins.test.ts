@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { checkUpstreamPins } from "./pins.ts";
 
 const pinned = {
-  dependencies: { "@ai-hero/sandcastle": "0.12.0", "@anthropic-ai/claude-code": "2.1.316" },
+  dependencies: { "@ai-hero/sandcastle": "0.12.0", "@anthropic-ai/claude-code": "2.1.316", "playwright-core": "1.65.0" },
   allowScripts: { "@anthropic-ai/claude-code": true },
 };
 
@@ -11,7 +11,7 @@ const STALE_APPROVAL =
   "allowScripts must name @anthropic-ai/claude-code without a version, so its install script still runs after a Dependabot bump";
 
 describe("a release's upstream pins", () => {
-  it("accepts Sandcastle and the Claude Code CLI at exact versions", () => {
+  it("accepts Sandcastle, the Claude Code CLI and Playwright at exact versions", () => {
     expect(checkUpstreamPins(JSON.stringify(pinned))).toEqual([]);
   });
 
@@ -26,8 +26,15 @@ describe("a release's upstream pins", () => {
     },
   );
 
+  // UI evidence capture drives a headless browser with it (#153).
+  it("refuses Playwright at a range, which is not one exact version", () => {
+    const packageJson = { ...pinned, dependencies: { ...pinned.dependencies, "playwright-core": "^1.65.0" } };
+
+    expect(checkUpstreamPins(JSON.stringify(packageJson))).toEqual(['playwright-core must be pinned at an exact version, not "^1.65.0"']);
+  });
+
   it("refuses a release that doesn't depend on the Claude Code CLI at all", () => {
-    const packageJson = { ...pinned, dependencies: { "@ai-hero/sandcastle": "0.12.0" } };
+    const packageJson = { ...pinned, dependencies: { "@ai-hero/sandcastle": "0.12.0", "playwright-core": "1.65.0" } };
 
     expect(checkUpstreamPins(JSON.stringify(packageJson))).toEqual([
       "@anthropic-ai/claude-code must be a runtime dependency pinned at an exact version",

@@ -10,7 +10,8 @@
 //                            "none" when the plan is to do nothing
 //   triage-timeout-minutes   the Triage role's Kit config timeout
 //   design-timeout-minutes   the Design-session turn's Kit config timeout
-//   implement-timeout-minutes the Implement role's Kit config timeout
+//   implement-timeout-minutes the Implement role's Kit config timeout, which its agent step stops at
+//   implement-job-timeout-minutes the Implement job's: that, plus UI evidence capture's and room for its other steps
 //   review-timeout-minutes   the Review role's Kit config timeout
 //   audit-timeout-minutes    the Auditor's Kit config timeout
 //   retro-timeout-minutes    the Retro's Kit config timeout
@@ -28,6 +29,12 @@
 //   subscription             the Subscription the plan's agent run is given: the `Fabrik` vault item
 //                            its job loads the Claude token from; empty when it starts none
 //   rotation                 "true" when two or more Subscriptions are listed, so rotation is on; else "false"
+//   ui-evidence-run          for a Review of a UI PR, the Implement run its UI evidence marker names; else empty
+//   ui-evidence-artifact     for that Review, the run's artifact of the screenshots and capture result,
+//                            which the Review job downloads; empty when it kept none, or for any other run
+//   ui-evidence-failure      for that Review, why the run's capture failed, as the marker records it, which
+//                            the Reviewer hears when it has no capture result to read; empty when it captured,
+//                            when the marker records no outcome, or for any other run
 // Its step summary names that Subscription, and notes when rotation is off.
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
@@ -46,6 +53,7 @@ import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
 import type { KitConfig } from "./config.ts";
 import { kitJobSummary, subscriptionOf } from "./kitJob.ts";
 import { rotationIsOn } from "../loop/subscriptions.ts";
+import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -129,6 +137,7 @@ export function kitJobOutputs(plan: Plan | null, ticket: number | null, config: 
     "triage-timeout-minutes": String(config.roles.triage.timeoutMinutes),
     "design-timeout-minutes": String(config.roles.design.timeoutMinutes),
     "implement-timeout-minutes": String(config.roles.implement.timeoutMinutes),
+    "implement-job-timeout-minutes": String(implementJobTimeoutMinutes(config.roles.implement.timeoutMinutes)),
     "review-timeout-minutes": String(config.roles.review.timeoutMinutes),
     "audit-timeout-minutes": String(config.roles.audit.timeoutMinutes),
     // Both of a Retro run's jobs, its evidence job and its Retro job, run within it.
@@ -152,6 +161,11 @@ export function kitJobOutputs(plan: Plan | null, ticket: number | null, config: 
     subscription: run === null ? "" : subscriptionOf(run),
     // For the judge, which reads no Kit config: whether its stream watch kills it on overage.
     rotation: String(rotationIsOn(config)),
+    // Only ever the whole-number ids the PR's marker reads as (src/evidence/uiEvidence.ts), never agent text.
+    "ui-evidence-run": String(run?.evidence?.run ?? ""),
+    "ui-evidence-artifact": String(run?.evidence?.artifact ?? ""),
+    // Only ever one of the CAPTURE_FAILURES the marker reads as.
+    "ui-evidence-failure": run?.evidence?.failure ?? "",
   };
 }
 

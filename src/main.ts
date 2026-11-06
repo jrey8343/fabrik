@@ -82,6 +82,8 @@ function describeAction(action: Action): string {
       return "- run a Dispatch check";
     case "check-design-queue":
       return "- run a Design queue check";
+    case "link-preview":
+      return `- link the preview deployment of ${action.pullRequest === null ? "the PR it opens" : `#${action.pullRequest}`} once it answers, or say it never answered`;
     case "push-branch":
       return `- push ${action.branch}`;
     case "open-pull-request":
@@ -194,7 +196,10 @@ async function agentResultEvent(
     repo,
     token: required("FABRIK_APP_TOKEN"),
   });
-  return { event: agentRunEventFrom(result, branch.changes, retry), source, branch };
+  // The capture result and artifact ids come from the Implement job's outputs; the core decides whether the run is UI.
+  const capture = input.capture ?? { result: null, artifact: null, galleryArtifact: null };
+  const evidence = { ...capture, run: Number(required("GITHUB_RUN_ID")), repoUrl: thisRepoUrl() };
+  return { event: agentRunEventFrom(result, branch.changes, retry, null, evidence), source, branch };
 }
 
 /** The routed agent job failed or was cancelled. Its failure report is missing when its timeout cancelled it. */
@@ -312,11 +317,15 @@ async function main(): Promise<void> {
   const store = storeToken === undefined || storeToken === "" ? null : new GitHub(storeToken, process.env["GITHUB_API_URL"]);
   const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store);
   const plan = planFor(event, snapshot, config);
-  await applyPlan(github, repo, plan, branch);
+  const { preview } = await applyPlan(github, repo, plan, branch);
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
   // The Design queue job runs the check likewise, once this plan has landed.
   if (wantsDesignQueueCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "design-queue=true\n");
+  // The push job's preview step polls it and links it, once this plan has pushed (src/kit/previewLink.ts).
+  if (preview !== null) {
+    await appendFile(required("GITHUB_OUTPUT"), `preview-url=${preview.url}\npreview-pull-request=${preview.pullRequest}\n`);
+  }
   await report(describe(plan));
   if (plan.kind === "fail") {
     console.log(`::error title=Infrastructure failure::${plan.reason}`);

@@ -515,6 +515,8 @@ describe("The starters the Product repo then owns", () => {
       retro: { day: "saturday" },
       operator: null,
       subscriptions: ["Claude token"],
+      ui: null,
+      preview: { url: null },
     });
     expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({
       ok: true,
@@ -734,6 +736,200 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     const { notes } = planSetup(withConfig(oneListed, ["Claude token"]), kit);
 
     expect(notes.join("\n")).not.toContain("Subscription");
+  });
+});
+
+describe("Visual evidence, the opt-in step for UI evidence on UI pull requests", () => {
+  const operator = {
+    visualEvidence: {
+      paths: ["src/pages/**", "src/components/**/*.{astro,tsx}"],
+      serve: "npm run preview",
+      url: "http://localhost:4321",
+      beforeUrl: "https://clinic.example.com",
+      defaultRoutes: ["/", "/book"],
+      previewUrl: "https://deploy-preview-{pr}--clinic.netlify.app",
+    },
+  };
+  const theirs = '{ "max_in_flight": 1, "operator": "jrey8343" }\n';
+
+  function withConfig(config: string): ProductState {
+    return aCleanProduct({ files: { ".fabrik/config.json": config } });
+  }
+
+  it("writes the ui and preview blocks into the Kit config, keeping what it already holds", () => {
+    const { actions } = planSetup(withConfig(theirs), kit, operator);
+
+    expect(JSON.parse(written(actions, ".fabrik/config.json") ?? "{}")).toEqual({
+      max_in_flight: 1,
+      operator: "jrey8343",
+      ui: {
+        paths: ["src/pages/**", "src/components/**/*.{astro,tsx}"],
+        serve: "npm run preview",
+        url: "http://localhost:4321",
+        before_url: "https://clinic.example.com",
+        default_routes: ["/", "/book"],
+      },
+      preview: { url: "https://deploy-preview-{pr}--clinic.netlify.app" },
+    });
+  });
+
+  // The Kit config is the Operator's file: setup adds its two blocks and changes nothing else, not even a space.
+  it("adds the blocks before the Kit config's closing brace, leaving every other byte of the Operator's file as it was", () => {
+    const formatted = [
+      "{",
+      '  "roles": { "implement": { "model": "claude-sonnet-5-5", "effort": null, "timeout_minutes": 90 } },',
+      '  "operator": "jrey8343"',
+      "}",
+      "",
+    ].join("\n");
+    const only = { visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } };
+
+    expect(written(planSetup(withConfig(formatted), kit, only).actions, ".fabrik/config.json")).toBe(
+      [
+        "{",
+        '  "roles": { "implement": { "model": "claude-sonnet-5-5", "effort": null, "timeout_minutes": 90 } },',
+        '  "operator": "jrey8343",',
+        '  "ui": {',
+        '    "paths": [',
+        '      "src/**"',
+        "    ],",
+        '    "serve": "npm run preview",',
+        '    "url": "http://localhost:4321",',
+        '    "before_url": null,',
+        '    "default_routes": []',
+        "  },",
+        '  "preview": {',
+        '    "url": null',
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("adds only the block a Kit config lacks when the one it has already holds the answers", () => {
+    const withPreview = '{\n\t"operator": "jrey8343",\n\t"preview": { "url": "https://deploy-preview-{pr}--clinic.netlify.app" }\n}\n';
+    const answers = {
+      visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", previewUrl: "https://deploy-preview-{pr}--clinic.netlify.app" },
+    };
+
+    expect(written(planSetup(withConfig(withPreview), kit, answers).actions, ".fabrik/config.json")).toBe(
+      [
+        "{",
+        '\t"operator": "jrey8343",',
+        '\t"preview": { "url": "https://deploy-preview-{pr}--clinic.netlify.app" },',
+        '\t"ui": {',
+        '\t\t"paths": [',
+        '\t\t\t"src/**"',
+        "\t\t],",
+        '\t\t"serve": "npm run preview",',
+        '\t\t"url": "http://localhost:4321",',
+        '\t\t"before_url": null,',
+        '\t\t"default_routes": []',
+        "\t}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("rewrites the whole Kit config, with two-space indents, only when a block it already has must change", () => {
+    const off = '{ "operator": "jrey8343", "ui": null }\n';
+    const only = { visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } };
+
+    expect(written(planSetup(withConfig(off), kit, only).actions, ".fabrik/config.json")).toBe(
+      [
+        "{",
+        '  "operator": "jrey8343",',
+        '  "ui": {',
+        '    "paths": [',
+        '      "src/**"',
+        "    ],",
+        '    "serve": "npm run preview",',
+        '    "url": "http://localhost:4321",',
+        '    "before_url": null,',
+        '    "default_routes": []',
+        "  },",
+        '  "preview": {',
+        '    "url": null',
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("writes them into the starter Kit config on a repo that has none, which resolves with every v1 default and Visual evidence on", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, operator);
+
+    expect(actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toHaveLength(1);
+    expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULT_KIT_CONFIG,
+        ui: {
+          paths: ["src/pages/**", "src/components/**/*.{astro,tsx}"],
+          serve: "npm run preview",
+          url: "http://localhost:4321",
+          beforeUrl: "https://clinic.example.com",
+          defaultRoutes: ["/", "/book"],
+        },
+        preview: { url: "https://deploy-preview-{pr}--clinic.netlify.app" },
+      },
+    });
+  });
+
+  it("leaves the Kit config alone until the Operator answers the step, so Visual evidence stays opt-in", () => {
+    expect(written(planSetup(withConfig(theirs), kit).actions, ".fabrik/config.json")).toBeUndefined();
+    expect(written(planSetup(aCleanProduct(), kit).actions, ".fabrik/config.json")).toBe(kit.templates.kitConfig);
+  });
+
+  it("plans nothing once the Kit config holds those blocks, however the Operator has formatted it", () => {
+    const setUp = afterApplying(withConfig(theirs), planSetup(withConfig(theirs), kit, operator));
+    const reformatted = JSON.stringify(JSON.parse(setUp.files[".fabrik/config.json"] ?? "{}"));
+
+    expect(planSetup(setUp, kit, operator)).toEqual(planSetup(setUp, kit));
+    expect(written(planSetup(withConfig(reformatted), kit, operator).actions, ".fabrik/config.json")).toBeUndefined();
+  });
+
+  it("spells out no Before, no default routes and no preview when the Operator gives none", () => {
+    const only = { visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } };
+
+    const config = written(planSetup(withConfig(theirs), kit, only).actions, ".fabrik/config.json") ?? null;
+
+    expect(JSON.parse(config ?? "{}")).toMatchObject({
+      ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", before_url: null, default_routes: [] },
+      preview: { url: null },
+    });
+    const resolved = resolveKitConfig({ config });
+    expect(resolved.ok && [resolved.config.ui, resolved.config.preview]).toEqual([
+      { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", beforeUrl: null, defaultRoutes: [] },
+      null,
+    ]);
+  });
+
+  it("writes nothing for answers the Kit config would refuse, naming every problem for the Operator", () => {
+    const wrong = {
+      visualEvidence: { paths: [], serve: "npm run preview", url: "localhost:4321", defaultRoutes: ["book"], previewUrl: "https://pr-{number}.clinic.dev" },
+    };
+
+    const plan = planSetup(withConfig(theirs), kit, wrong);
+
+    expect(written(plan.actions, ".fabrik/config.json")).toBeUndefined();
+    const note = plan.notes.find((n) => n.includes("Visual evidence")) ?? "";
+    expect(note).toContain("ui.paths is empty");
+    expect(note).toContain('ui.url is "localhost:4321"');
+    expect(note).toContain('ui.default_routes[0] is "book"');
+    expect(note).toContain("{number} is not a placeholder");
+  });
+
+  it.each(["{ oops", "[]\n"])("leaves a Kit config that isn't a JSON object (%j) for the Operator to fix, rather than overwrite it", (broken) => {
+    const plan = planSetup(withConfig(broken), kit, operator);
+
+    expect(written(plan.actions, ".fabrik/config.json")).toBeUndefined();
+    expect(plan.notes).toContainEqual(
+      ".fabrik/config.json isn't a JSON object, so the Visual evidence answers weren't written to it: fix it and run setup again.",
+    );
   });
 });
 

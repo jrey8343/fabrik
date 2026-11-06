@@ -3,12 +3,14 @@
 // It holds no Loop rules; those all live in src/loop/rules.ts.
 import type { AgentRunResult } from "../agent/result.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
+import type { CaptureOutputs } from "../kit/pushJob.ts";
 import { type EvidenceBundle, retroEvidenceOf } from "../kit/retroEvidence.ts";
 import type {
   AgentRole,
   BranchChanges,
   FailureReport,
   GivenOperatorComment,
+  ImplementEvidence,
   LoopEvent,
   PullRequestCommentPlace,
 } from "../loop/types.ts";
@@ -115,16 +117,28 @@ function changesKitConfig(payload: Record<string, unknown>): boolean {
 }
 
 /**
+ * What an Implement run's push job knows of its UI evidence: what the
+ * Implement job passed out, and the push job's own Actions run, which the
+ * Implement job shared, in the Product repo at `repoUrl`.
+ */
+export interface PushJobEvidence extends CaptureOutputs {
+  readonly run: number;
+  readonly repoUrl: string;
+}
+
+/**
  * Turns the result an agent job passed out as an artifact (src/agent/result.ts)
  * into the Loop event its push job applies. `startedBy` is the Operator's
  * reply that started a Design-session turn, which the push job reads from its
- * own Actions event, never from the agent's result.
+ * own Actions event, never from the agent's result; `evidence` is an
+ * Implement run's UI evidence, which the push job always passes.
  */
 export function agentRunEventFrom(
   result: AgentRunResult,
   changes: BranchChanges | null = null,
   retry: { readonly pullRequest: number; readonly runUrl: string; readonly requestChanges?: boolean } | null = null,
   startedBy: number | null = null,
+  evidence: PushJobEvidence | null = null,
 ): LoopEvent {
   if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
   if (result.role === "audit") throw new Error("An Auditor's result is applied through auditEventFrom");
@@ -149,6 +163,8 @@ export function agentRunEventFrom(
     branch: result.branch.name,
     base: result.branch.base.ref,
     changes,
+    // A branch with no commits has no head of its own, but changes nothing, so its evidence reaches no PR.
+    ...(evidence === null ? {} : { evidence: implementEvidence(evidence, result.branch.head ?? result.branch.base.sha) }),
     // A retry's branch starts at the PR head it built on, which the core checks is still the PR's.
     ...(retry === null
       ? {}
@@ -159,6 +175,21 @@ export function agentRunEventFrom(
             ...givenTo(result),
           },
         }),
+  };
+}
+
+/**
+ * An Implement run's UI evidence, at `headSha`, the head the run built. Its
+ * gallery is linked from the push job's own run, never from an address the
+ * agent's runner passed out: an unzipped artifact opens in the browser.
+ */
+function implementEvidence({ result, artifact, galleryArtifact, run, repoUrl }: PushJobEvidence, headSha: string): ImplementEvidence {
+  return {
+    ...(result === null ? {} : { result }),
+    headSha,
+    run,
+    artifact,
+    gallery: galleryArtifact === null ? null : `${repoUrl}/actions/runs/${run}/artifacts/${galleryArtifact}`,
   };
 }
 

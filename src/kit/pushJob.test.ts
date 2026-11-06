@@ -73,7 +73,61 @@ describe("What the push job applies", () => {
   it("applies an Implement run's result for the Ticket the Kit job's plan named, with a retry's PR and a Request-changes run's review", () => {
     const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", review: "900" }), 50);
 
-    expect(input).toEqual({ kind: "agent-result", role: "implement", issue: 7, pullRequest: 50, review: 900, startedBy: null });
+    expect(input).toEqual({
+      kind: "agent-result",
+      role: "implement",
+      issue: 7,
+      pullRequest: 50,
+      review: 900,
+      startedBy: null,
+      capture: { result: null, artifact: null, galleryArtifact: null },
+    });
+  });
+
+  describe("An Implement run's UI evidence", () => {
+    const HEAD = "4f2b9c0e1d3a5b7c9e0f2a4b6c8d0e1f3a5b7c9d";
+    const captured = {
+      outcome: "captured",
+      headSha: HEAD,
+      captures: [{ route: "/book", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-book.png" }],
+    };
+    /** The push job's input when the Implement job passed out these outputs. */
+    const withOutputs = (outputs: Record<string, string>) =>
+      pushJobInput(needs("implement", { implement: ok(outputs) }, { ticket: "7" }), null);
+
+    it("is the capture result and artifact ids the Implement job passed out", () => {
+      const input = withOutputs({ "ui-capture-result": JSON.stringify(captured), "ui-evidence-artifact": "9202", "ui-gallery-artifact": "9201" });
+
+      expect(input).toMatchObject({ kind: "agent-result", capture: { result: captured, artifact: 9202, galleryArtifact: 9201 } });
+    });
+
+    it("is none when capture recorded nothing, as in a repo without a ui block, the Implement job passing out empty outputs", () => {
+      const input = withOutputs({ "ui-capture-result": "", "ui-evidence-artifact": "", "ui-gallery-artifact": "" });
+
+      expect(input).toMatchObject({ kind: "agent-result", capture: { result: null, artifact: null, galleryArtifact: null } });
+    });
+
+    it.each([
+      ["isn't JSON", "{ outcome: captured"],
+      ["breaks the capture result's contract", JSON.stringify({ ...captured, headSha: "4f2b9c0" })],
+      ["isn't an object", "[]"],
+    ])("has no capture result when the one passed out %s, and that's never a failure", (_, text) => {
+      const input = withOutputs({ "ui-capture-result": text, "ui-evidence-artifact": "9202", "ui-gallery-artifact": "9201" });
+
+      expect(input).toMatchObject({ kind: "agent-result", capture: { result: null, artifact: 9202, galleryArtifact: 9201 } });
+    });
+
+    it.each(["", "abc", "0", "-3", "9.5"])("has no artifact id when the one passed out is %j", (id) => {
+      const input = withOutputs({ "ui-capture-result": JSON.stringify(captured), "ui-evidence-artifact": id, "ui-gallery-artifact": id });
+
+      expect(input).toMatchObject({ kind: "agent-result", capture: { result: captured, artifact: null, galleryArtifact: null } });
+    });
+
+    it("isn't read for a run other than Implement", () => {
+      const input = pushJobInput(needs("triage", { triage: ok({ "ui-capture-result": JSON.stringify(captured) }) }), 12);
+
+      expect(input).not.toHaveProperty("capture");
+    });
   });
 
   it("applies red checks as such: the Reviewer didn't run", () => {
@@ -149,6 +203,26 @@ describe("What the push job applies", () => {
 
     expect(implement).toMatchObject({ kind: "agent-failure", role: "implement", issue: 7, jobResult: "failure", secretsStep: "" });
     expect(checks).toMatchObject({ kind: "agent-failure", role: "review", issue: 7, jobResult: "cancelled" });
+  });
+
+  // The Implement job's agent step has a timeout of its own (#153), which fails the job where V1's job timeout
+  // cancelled it, so its job notes it, and the push job reads it as V1 did: an Infrastructure failure by timeout, never of another kind.
+  it("reads an Implement job whose agent step its timeout stopped as cancelled, as its job timeout left it", () => {
+    const input = pushJobInput(
+      needs("implement", { implement: { result: "failure", outputs: { "secrets-step": "success", "agent-timed-out": "true" } } }, { ticket: "7" }),
+      7,
+    );
+
+    expect(input).toEqual({ kind: "agent-failure", role: "implement", issue: 7, jobResult: "cancelled", secretsStep: "success" });
+  });
+
+  it("names the Implement job's result as it ended when its agent step didn't time out", () => {
+    const input = pushJobInput(
+      needs("implement", { implement: { result: "failure", outputs: { "secrets-step": "success", "agent-timed-out": "" } } }, { ticket: "7" }),
+      7,
+    );
+
+    expect(input).toMatchObject({ kind: "agent-failure", jobResult: "failure" });
   });
 
   it("names a failed Reviewer, after green checks, as the Review's failure", () => {

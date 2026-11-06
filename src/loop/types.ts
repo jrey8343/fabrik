@@ -1,5 +1,6 @@
 // The Loop rules core's interface: a Loop event, a snapshot of GitHub state and
 // the resolved Kit config go in; a plan comes out.
+import type { CaptureResult, EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { SentBack } from "./backToDesign.ts";
@@ -55,6 +56,25 @@ export interface BranchChanges {
    * the run's own changes, as rebased; with one, there's nothing to push.
    */
   readonly rebase?: { readonly onto: string; readonly conflicted: boolean };
+}
+
+/**
+ * What an Implement run's push job knows of its UI evidence (#153): what the
+ * Implement job's capture step recorded, when it passed out a result, and
+ * where the run keeps it, as its PR's marker will record it, the run being
+ * the push job's own. The core puts it on the PR only when it finds the run
+ * UI (src/loop/implement.ts).
+ */
+export interface ImplementEvidence extends Pick<EvidenceMarker, "run" | "artifact"> {
+  /**
+   * What capture recorded, read from the Implement job's outputs; absent when
+   * the job passed out none the push job could read, as when it captured nothing.
+   */
+  readonly result?: CaptureResult;
+  /** The head the Implement run built, which capture is of. */
+  readonly headSha: string;
+  /** The gallery's web address, or null when the run kept none. */
+  readonly gallery: string | null;
 }
 
 /**
@@ -116,6 +136,8 @@ export type LoopEvent =
       readonly base: string;
       /** What the branch changes, read from the bundle the agent job passed out. */
       readonly changes: BranchChanges;
+      /** Its UI evidence, which the push job always passes; the core decides whether the run is UI. */
+      readonly evidence?: ImplementEvidence;
       /**
        * For a retry: the agent PR it fixes, and the head it built on, which is
        * its branch's base, so `changes` holds only the retry's own commits;
@@ -355,6 +377,11 @@ export interface PullRequestSnapshot {
   readonly pushedSinceVerdict: boolean;
   /** The latest review that requested changes on it, if any: what a stalled Request-changes run resumes from. */
   readonly changesRequested: ChangesRequestedReview | null;
+  /**
+   * Where its UI evidence is kept, read from the marker in the body the Fabrik
+   * App wrote (src/evidence/uiEvidence.ts), or null when it has none: not a UI PR.
+   */
+  readonly uiEvidenceMarker: EvidenceMarker | null;
 }
 
 /** A review requesting changes on a PR, as GitHub records it. */
@@ -688,6 +715,11 @@ export type Action =
       readonly stepUp?: boolean;
       /** For an Auditor run: the pending Audit's marked commit, which its job checks out and reads up to. */
       readonly commit?: string;
+      /**
+       * For a Review of a UI PR: where its marker says the UI evidence is kept,
+       * which the Review job downloads for the Reviewer. A PR with no marker gets none.
+       */
+      readonly evidence?: EvidenceMarker;
       readonly model: string;
       readonly effort: string | null;
       readonly timeoutMinutes: number;
@@ -761,7 +793,23 @@ export type Action =
   /** Run a Dispatch check, in the Dispatch job, once the rest of this plan has landed. */
   | { readonly kind: "check-dispatch" }
   /** Run a Design queue check, in the Design queue job, once the rest of this plan has landed (#147). */
-  | { readonly kind: "check-design-queue" };
+  | { readonly kind: "check-design-queue" }
+  | {
+      /**
+       * Links a UI PR's preview deployment in its evidence section (#153). Not
+       * a GitHub change itself: once this plan has pushed, the push job hands
+       * it on to its preview step, which fills `template` in for the PR as the
+       * push left it, polls that URL, and edits the section to link it, or to
+       * say it never answered. Never a hosting provider's API.
+       */
+      readonly kind: "link-preview";
+      /** The PR, or null for the one this plan opens. */
+      readonly pullRequest: number | null;
+      /** Kit config's `preview.url`. */
+      readonly template: string;
+      /** The PR's branch, which this plan pushes. */
+      readonly branch: string;
+    };
 
 /**
  * What the core decided: actions to apply, nothing (with the reason why), or

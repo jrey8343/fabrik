@@ -32,6 +32,12 @@ outputs:
   design-queue:
     description: '"true" when the plan asked for a Design queue check.'
     value: ${{ steps.loop.outputs.design-queue }}
+  preview-url:
+    description: For a UI PR whose Kit config declares preview.url, the preview deployment the plan asked to link, filled in for the PR as its push left it; empty otherwise.
+    value: ${{ steps.loop.outputs.preview-url }}
+  preview-pull-request:
+    description: The PR whose preview-url to link.
+    value: ${{ steps.loop.outputs.preview-pull-request }}
 
 runs:
   using: composite

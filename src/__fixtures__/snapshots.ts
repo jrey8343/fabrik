@@ -59,6 +59,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     requestChangesRun: false,
     pushedSinceVerdict: false,
     changesRequested: null,
+    uiEvidenceMarker: null,
     ...overrides,
   };
 }

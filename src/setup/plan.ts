@@ -1,7 +1,7 @@
 // The setup skill's planner. Pure, no I/O: given what a Product repo holds now
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
-import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig, type UiConfig } from "../kit/config.ts";
 import {
   ALL_LABELS,
   AUDIT_LABEL,
@@ -90,7 +90,24 @@ export interface SetupAnswers {
    * about Subscriptions, so the second stays an opt-in step.
    */
   readonly secondSubscription?: boolean;
+  /**
+   * The Visual evidence step (Spec #153): which files make a pull request UI,
+   * how the Sandbox serves the branch, and where the production site and
+   * preview deployments are. Without it setup leaves the Kit config's `ui` and
+   * `preview` blocks alone, so Visual evidence stays an opt-in step.
+   */
+  readonly visualEvidence?: VisualEvidenceAnswers;
 }
+
+/**
+ * The Operator's answers to the Visual evidence step, which setup writes as
+ * the Kit config's `ui` and `preview` blocks: the `ui` block's, with
+ * `before_url` and `default_routes` left out when the Operator gives none,
+ * and `preview.url`, a template that may use `{pr}`, `{branch_slug}` and
+ * `{sha}` (src/kit/config.ts), left out when no preview is linked.
+ */
+export type VisualEvidenceAnswers = Pick<UiConfig, "paths" | "serve" | "url"> &
+  Partial<Pick<UiConfig, "beforeUrl" | "defaultRoutes">> & { readonly previewUrl?: string };
 
 export interface BranchProtection {
   readonly requiredChecks: readonly string[];
@@ -177,6 +194,7 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
     if ("note" in update) notes.push(update.note);
     else actions.push(write(path, update.content, why));
   }
+  actions.push(...kitConfig(state, kit, answers, notes));
   actions.push(...starters(state, kit));
   const present = new Set(state.labels.map((label) => label.toLowerCase()));
   for (const name of ALL_LABELS) {
@@ -188,6 +206,88 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
   actions.push(...runStore(state.store, kit, answers, notes));
   notes.push(...subscriptions(state, kit, answers));
   return { actions, notes };
+}
+
+/**
+ * The Kit config is the Product's: setup writes the starter once, when the repo
+ * lacks one, and otherwise changes only what the Operator's answers to an
+ * opt-in step ask for. Visual evidence is that step: its `ui` and `preview`
+ * blocks go into the starter, or into the Kit config the repo already has.
+ */
+function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, notes: string[]): SetupAction[] {
+  const existing = state.files[KIT_CONFIG_PATH] ?? null;
+  const text = existing ?? kit.templates.kitConfig;
+  const updated = answers.visualEvidence === undefined ? null : withVisualEvidence(text, answers.visualEvidence, notes);
+  if (existing === null) {
+    return [
+      updated === null
+        ? write(KIT_CONFIG_PATH, text, "a starter Kit config with every v1 default")
+        : write(KIT_CONFIG_PATH, updated, "a starter Kit config with every v1 default, and Visual evidence on"),
+    ];
+  }
+  return updated === null ? [] : [write(KIT_CONFIG_PATH, updated, "the Visual evidence step's ui and preview blocks")];
+}
+
+/**
+ * The Kit config with its `ui` and `preview` blocks as the Visual evidence
+ * step's answers spell them, or null when it already holds them or the
+ * answers are ones the Kit config would refuse. The file is the Operator's:
+ * a block it lacks is added before its closing brace, every other byte kept,
+ * and only when a block it has must change is the whole file rewritten.
+ */
+function withVisualEvidence(text: string, answers: VisualEvidenceAnswers, notes: string[]): string | null {
+  const blocks = {
+    ui: {
+      paths: answers.paths,
+      serve: answers.serve,
+      url: answers.url,
+      before_url: answers.beforeUrl ?? null,
+      default_routes: answers.defaultRoutes ?? [],
+    },
+    preview: { url: answers.previewUrl ?? null },
+  };
+  const checked = resolveKitConfig({ config: JSON.stringify(blocks) });
+  if (!checked.ok) {
+    notes.push(
+      `The Visual evidence answers weren't written to ${KIT_CONFIG_PATH}, because the Kit config would refuse them: ${checked.errors.join("; ")}. Run setup again with them fixed.`,
+    );
+    return null;
+  }
+  const config = jsonObject(text);
+  if (config === null) {
+    notes.push(`${KIT_CONFIG_PATH} isn't a JSON object, so the Visual evidence answers weren't written to it: fix it and run setup again.`);
+    return null;
+  }
+  const entries = Object.entries(blocks);
+  const changes = entries.some(([key, value]) => Object.hasOwn(config, key) && JSON.stringify(config[key]) !== JSON.stringify(value));
+  if (changes) return `${JSON.stringify({ ...config, ...blocks }, null, 2)}\n`;
+  const absent = entries.filter(([key]) => !Object.hasOwn(config, key));
+  return absent.length === 0 ? null : withMembers(text, absent);
+}
+
+/**
+ * A JSON object's text with these members added before its closing brace,
+ * indented as its own members are, and every byte of it kept as it was.
+ */
+function withMembers(text: string, members: readonly (readonly [string, unknown])[]): string {
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  // Everything up to the end of its last member, then the closing brace with whatever whitespace is around it.
+  const head = text.slice(0, text.lastIndexOf("}")).trimEnd();
+  const tail = text.slice(head.length);
+  const indent = /\n([ \t]+)"/.exec(head)?.[1] ?? "  ";
+  const added = members.map(
+    ([key, value]) => `${indent}${JSON.stringify(key)}: ${JSON.stringify(value, null, indent).replaceAll("\n", `${eol}${indent}`)}`,
+  );
+  return `${head}${head.endsWith("{") ? "" : ","}${eol}${added.join(`,${eol}`)}${tail.startsWith(eol) ? "" : eol}${tail}`;
+}
+
+function jsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The `Fabrik` vault item the wizard saves the second Subscription's token in. */
@@ -432,9 +532,6 @@ const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly
  */
 function starters(state: ProductState, kit: SetupKit): SetupAction[] {
   const actions: SetupAction[] = [];
-  if (state.files[KIT_CONFIG_PATH] == null) {
-    actions.push(write(KIT_CONFIG_PATH, kit.templates.kitConfig, "a starter Kit config with every v1 default"));
-  }
   for (const [name, content] of Object.entries(kit.templates.docsAgents)) {
     const path = `docs/agents/${name}`;
     if (state.files[path] == null) actions.push(write(path, content, "Fabrik's fixed answers for the skills"));

@@ -4,9 +4,9 @@
 // onSandboxReady hook that runs it, the Standard Schema a structured output is
 // checked with, the stream watch that keeps the transcript and stops a run
 // whose init message fails the backstop check, or, with rotation on, whose
-// stream shows it spending usage credits, the failure report a failed
-// run leaves, and the step summary and step outputs every agent job writes.
-import { appendFile, writeFile } from "node:fs/promises";
+// stream shows it spending usage credits, and the failure report a failed
+// run leaves. The step summary and outputs it writes are src/kit/stepFiles.ts's.
+import { writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import type { AgentStreamEvent } from "@ai-hero/sandcastle";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
@@ -176,17 +176,4 @@ export async function leaveFailureReport(error: unknown, watch: StreamWatch, fil
   });
   await writeFile(file.path, file.text?.(report) ?? `${JSON.stringify(report, null, 2)}\n`);
   console.log(`::error title=${file.title} (${report.failure})::${report.detail}`);
-}
-
-export async function writeSummary(text: string): Promise<void> {
-  console.log(text);
-  const path = process.env["GITHUB_STEP_SUMMARY"];
-  if (path !== undefined && path !== "") await appendFile(path, text);
-}
-
-/** Appends step outputs, when the runner gives a file for them. */
-export async function writeOutputs(outputs: Readonly<Record<string, string>>): Promise<void> {
-  const path = process.env["GITHUB_OUTPUT"];
-  if (path === undefined || path === "") return;
-  await appendFile(path, Object.entries(outputs).map(([key, value]) => `${key}=${value}\n`).join(""));
 }

@@ -1,5 +1,6 @@
 // The Kit config: loaded from a Product repo's .fabrik/ folder, with every v1
 // default filled in, and validated at the start of every run. Pure, no I/O.
+import { spelled } from "../loop/readable.ts";
 import { AGENT_ROLES, type AgentRole as AgentRoleName } from "../loop/types.ts";
 import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
 
@@ -68,6 +69,109 @@ export interface KitConfig {
   readonly skillsSources: readonly SkillsSource[];
   /** Each role's Extra skills, picked from those sources; a Step-up run uses implement's. */
   readonly extraSkills: Readonly<Record<Phase, readonly ExtraSkill[]>>;
+  /** What makes a pull request UI and how the Sandbox serves it for UI evidence (#153); null never captures. */
+  readonly ui: UiConfig | null;
+  /** Where a pull request's preview deployment appears (#153); null links none. */
+  readonly preview: PreviewConfig | null;
+}
+
+/** The `ui` block: which changed files make a pull request UI, and how the Sandbox serves the branch to capture it. */
+export interface UiConfig {
+  /** Globs of the files whose change makes a pull request UI; never empty. */
+  readonly paths: readonly string[];
+  /** The command the Sandbox runs in the background after `sandbox.build` to serve the branch. */
+  readonly serve: string;
+  /** The local base URL the Kit polls until it answers, then captures routes under. */
+  readonly url: string;
+  /** The production base URL Before is captured from; null skips Before. */
+  readonly beforeUrl: string | null;
+  /** The routes captured when neither the Ticket nor the Implementer names any, each starting with `/`. */
+  readonly defaultRoutes: readonly string[];
+}
+
+/**
+ * Whether a value is a route: a path on the site captured under `ui.url`,
+ * starting with exactly one `/`, since `//host/...` would leave it for another
+ * host. Kit config's `ui.default_routes`, the Implementer's routes, a Ticket's
+ * and the capture result's are all routes by this one rule.
+ */
+export function isRoute(value: unknown): value is string {
+  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//");
+}
+
+/** A browser viewport UI evidence is captured at. */
+export interface Viewport {
+  readonly name: "mobile" | "desktop";
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The viewports UI evidence is captured at, mobile first: a Kit constant, not
+ * Kit config, so every Product repo's evidence covers phones and desktops alike.
+ */
+export const UI_VIEWPORTS: readonly Viewport[] = [
+  { name: "mobile", width: 390, height: 844 },
+  { name: "desktop", width: 1440, height: 900 },
+];
+
+/**
+ * The most routes UI evidence captures, so capture stays fast: a Kit constant,
+ * not Kit config. A route the Ticket names is captured even past it.
+ */
+export const UI_ROUTE_CAP = 4;
+
+/**
+ * The most UI evidence images a Reviewer gets, so the ones that matter most fit
+ * in its context: a Kit constant, not Kit config. The Operator's gallery is uncapped.
+ */
+export const REVIEWER_IMAGE_CAP = 8;
+
+/** The `preview` block: a URL template the Kit fills in and polls, never calling a host's API. */
+export interface PreviewConfig {
+  /** An http(s) URL that may use only the PREVIEW_PLACEHOLDERS, such as `https://pr-{pr}.example.dev`. */
+  readonly url: string;
+}
+
+/** The placeholders a `preview.url` template may use, filled in from the pull request after the push. */
+export const PREVIEW_PLACEHOLDERS = ["pr", "branch_slug", "sha"] as const;
+
+export type PreviewPlaceholder = (typeof PREVIEW_PLACEHOLDERS)[number];
+
+/** A pull request whose preview deployment the Kit links, as its push left it: what fills each placeholder in. */
+export interface PreviewOf {
+  readonly number: number;
+  /** Its head branch, such as fabrik/ticket-12. */
+  readonly branch: string;
+  /** The commit the push left that branch at. */
+  readonly headSha: string;
+}
+
+/**
+ * The pull request's preview deployment: `template` with `{pr}` its number,
+ * `{branch_slug}` its branch's slug and `{sha}` its full head commit, written
+ * out as a parsed URL, so it is one line that can't break out of a link. So
+ * the agent branch fabrik/ticket-12 is fabrik-ticket-12, a name that fits in
+ * a hostname, as hosts name a branch's preview. The Kit never shortens it,
+ * though a host may shorten a long one.
+ */
+export function previewUrl(template: string, { number, branch, headSha }: PreviewOf): string {
+  const url = URL.parse(fillPlaceholders(template, { pr: String(number), branch_slug: slug(branch), sha: headSha }));
+  if (url === null) throw new Error(`The preview.url template ${template} doesn't fill in to a URL`);
+  return url.href;
+}
+
+/**
+ * The text as a slug: in lower case, with each run of characters other than a
+ * letter or a digit (a to z, 0 to 9) made one `-`, and no `-` at either end.
+ * A preview's `{branch_slug}` is its branch's, and a screenshot's file name
+ * holds its route's (src/evidence/capture.ts).
+ */
+export function slug(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 /** The Sentry project the Monitor reads a Product repo's production errors from. */
@@ -189,6 +293,9 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
+  // Visual evidence is off until a Product repo turns it on with /fabrik-setup.
+  ui: null,
+  preview: null,
 };
 
 /** Where the Kit config lives in a Product repo (ADR-0005). */
@@ -391,6 +498,8 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     retro: readRetro(file.object("retro"), defaults.retro),
     operator: orDefault(file.nullableString("operator", checkLogin), defaults.operator),
     subscriptions: file.subscriptions("subscriptions") ?? defaults.subscriptions,
+    ui: readUi(file.nullableObject("ui")),
+    preview: readPreview(file.nullableObject("preview")),
   };
 }
 
@@ -467,6 +576,72 @@ function checkSentrySlug(slug: string): string | null {
 
 function checkHttpsUrl(url: string): string | null {
   return URL.parse(url)?.protocol === "https:" ? null : "the Sentry token is sent there, so it must be an https:// URL";
+}
+
+/** The `ui` block; left out or null, Visual evidence never captures. */
+function readUi(ui: Reader | null | undefined): UiConfig | null {
+  if (ui === undefined || ui === null) return null;
+  const paths = ui.requiredList("paths", "list at least one glob of the files that make a pull request UI", checkGlob);
+  const serve = ui.requiredString("serve", checkServe);
+  const url = ui.requiredString("url", checkHttpOrHttpsUrl);
+  const beforeUrl = ui.nullableString("before_url", checkHttpOrHttpsUrl);
+  const defaultRoutes = ui.stringList("default_routes", checkRoute);
+  if (paths === undefined || serve === undefined || url === undefined) return null;
+  return { paths, serve, url, beforeUrl: beforeUrl ?? null, defaultRoutes: defaultRoutes ?? [] };
+}
+
+function checkGlob(glob: string): string | null {
+  return glob.trim() === "" ? "a glob can't be blank" : null;
+}
+
+function checkServe(command: string): string | null {
+  return command.trim() === "" ? "the command that serves the branch can't be blank" : null;
+}
+
+function checkRoute(route: string): string | null {
+  return isRoute(route) ? null : "a route must be a path starting with one /, such as /book";
+}
+
+function checkHttpOrHttpsUrl(url: string): string | null {
+  const protocol = URL.parse(url)?.protocol;
+  return protocol === "http:" || protocol === "https:" ? null : "a URL must start with http:// or https://";
+}
+
+/** The `preview` block; left out, null, or with no `url`, the pull request links no preview. */
+function readPreview(preview: Reader | null | undefined): PreviewConfig | null {
+  if (preview === undefined || preview === null) return null;
+  const url = preview.nullableString("url", checkPreviewTemplate);
+  return url === undefined || url === null ? null : { url };
+}
+
+/** A stand-in for each placeholder, so a template can be checked as the URL it fills in to. */
+const PLACEHOLDER_STAND_INS: Readonly<Record<PreviewPlaceholder, string>> = {
+  pr: "1",
+  branch_slug: "branch",
+  sha: "0".repeat(40),
+};
+
+const PLACEHOLDER = /\{([^{}]*)\}/g;
+
+/** The template with each placeholder filled in; one that isn't a placeholder stays as it is. */
+function fillPlaceholders(template: string, values: Readonly<Record<PreviewPlaceholder, string>>): string {
+  return template.replace(PLACEHOLDER, (token, name: string) => (isPreviewPlaceholder(name) ? values[name] : token));
+}
+
+function isPreviewPlaceholder(name: string): name is PreviewPlaceholder {
+  return (PREVIEW_PLACEHOLDERS as readonly string[]).includes(name);
+}
+
+function checkPreviewTemplate(template: string): string | null {
+  const only = `a preview URL may use only ${spelled(PREVIEW_PLACEHOLDERS.map((name) => `{${name}}`), "and")}`;
+  const unknown = [...template.matchAll(PLACEHOLDER)].filter(([, name = ""]) => !isPreviewPlaceholder(name));
+  if (unknown.length > 0) {
+    const tokens = spelled(unknown.map(([token]) => token), "and");
+    return `${tokens} ${unknown.length === 1 ? "is not a placeholder" : "are not placeholders"}; ${only}`;
+  }
+  const filled = fillPlaceholders(template, PLACEHOLDER_STAND_INS);
+  if (/[{}]/.test(filled)) return `it has a { or } that isn't part of a placeholder; ${only}`;
+  return checkHttpOrHttpsUrl(filled);
 }
 
 function readAudit(audit: Reader, defaults: KitConfig["audit"]): KitConfig["audit"] {
@@ -648,14 +823,35 @@ class Reader {
     return this.string(key, check);
   }
 
-  stringList(key: string): readonly string[] | undefined {
+  /** A list of strings, each refused, by its place in the list, when `check` returns a reason. */
+  stringList(key: string, check?: (value: string) => string | null): readonly string[] | undefined {
     const value = this.#take(key);
     if (value === undefined) return undefined;
     if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
       this.#fail(`${this.#field(key)} must be a list of strings`);
       return undefined;
     }
-    return value;
+    let refused = false;
+    value.forEach((item, i) => {
+      const refusal = check?.(item) ?? null;
+      if (refusal === null) return;
+      refused = true;
+      this.#fail(`${this.#field(key)}[${i}] is ${JSON.stringify(item)}: ${refusal}`);
+    });
+    return refused ? undefined : value;
+  }
+
+  /** A list of strings that must be there and hold at least one; `empty` says what to list. */
+  requiredList(key: string, empty: string, check?: (value: string) => string | null): readonly string[] | undefined {
+    if (!Object.hasOwn(this.#value, key)) {
+      this.#take(key);
+      this.#fail(`${this.#field(key)} is missing`);
+      return undefined;
+    }
+    const list = this.stringList(key, check);
+    if (list === undefined || list.length > 0) return list;
+    this.#fail(`${this.#field(key)} is empty: ${empty}`);
+    return undefined;
   }
 
   /** The Subscriptions: an ordered, non-empty list of distinct `Fabrik` vault item names. */

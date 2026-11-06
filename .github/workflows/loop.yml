@@ -64,6 +64,7 @@ jobs:
       triage-timeout-minutes: ${{ steps.route.outputs.triage-timeout-minutes }}
       design-timeout-minutes: ${{ steps.route.outputs.design-timeout-minutes }}
       implement-timeout-minutes: ${{ steps.route.outputs.implement-timeout-minutes }}
+      implement-job-timeout-minutes: ${{ steps.route.outputs.implement-job-timeout-minutes }}
       review-timeout-minutes: ${{ steps.route.outputs.review-timeout-minutes }}
       audit-timeout-minutes: ${{ steps.route.outputs.audit-timeout-minutes }}
       # Both of a Retro run's jobs, its evidence job and its Retro job, run within it.
@@ -93,6 +94,13 @@ jobs:
       subscription: ${{ steps.route.outputs.subscription }}
       # "true" when Subscription rotation is on, for the judge, which reads no Kit config.
       rotation: ${{ steps.route.outputs.rotation }}
+      # For a Review of a UI PR: where its UI evidence marker says the evidence is kept, the
+      # Implement run that captured it and that run's artifact of the screenshots (empty when
+      # it kept none), which the Review job downloads, and why its capture failed, as the
+      # marker records it (empty when it captured, or records no outcome). Empty for any other run.
+      ui-evidence-run: ${{ steps.route.outputs.ui-evidence-run }}
+      ui-evidence-artifact: ${{ steps.route.outputs.ui-evidence-artifact }}
+      ui-evidence-failure: ${{ steps.route.outputs.ui-evidence-failure }}
     steps:
       # No expression context names the commit of a called workflow, so read
       # it from the OIDC token's job_workflow_sha claim.
@@ -390,7 +398,10 @@ jobs:
     needs: kit
     if: needs.kit.outputs.route == 'implement'
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
+    # Its agent step stops at the Implement role's own timeout; this leaves room
+    # for UI evidence capture after it, so capture never cancels the job before
+    # its result uploads (implementJobTimeoutMinutes in src/evidence/capture.ts).
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-job-timeout-minutes) }}
     # One Implement run per Ticket at a time, so two never race on one branch.
     # A retry starts from a PR event, so the Ticket comes from the Kit job.
     concurrency:
@@ -409,6 +420,14 @@ jobs:
       model: ${{ steps.agent.outputs.model }}
       effort: ${{ steps.agent.outputs.effort }}
       base-sha: ${{ steps.base.outputs.sha }}
+      # "true" when the agent step's own timeout stopped it, which the push job reads as a timeout (src/kit/pushJob.ts).
+      agent-timed-out: ${{ steps.agent-time.outputs.timed-out }}
+      # UI evidence (#153), for the push job: the capture result as one compact
+      # JSON line, empty when nothing was captured, and the numeric ids of the
+      # zipped screenshots-and-result artifact and the unzipped gallery's.
+      ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}
+      ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}
+      ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}
     steps:
       # A fresh clone: no working directory or .env* files carried over. A first
       # run starts from main; a retry from its PR's branch (the Kit job names it).
@@ -460,9 +479,16 @@ jobs:
           OP_ENV_FILE: ${{ runner.temp }}/fabrik-secrets.env
           CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential
 
+      # So an agent step its timeout stopped can be told from one that failed for any other reason.
+      - name: Note when the Implementer starts
+        id: started
+        run: echo "at=$(date +%s)" >>"$GITHUB_OUTPUT"
+
       - name: Run the Implementer
         id: agent
         working-directory: product
+        # The Implement role's own timeout, on the step rather than the job, so capture can run after it.
+        timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
         env:
           # Every value the 1Password step resolved, in this step's env only.
           FABRIK_SECRETS: ${{ toJSON(steps.op.outputs) }}
@@ -475,6 +501,42 @@ jobs:
           FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
         run: node ../kit/src/agent/run.ts implement
 
+      # The agent step's own timeout fails the job, where a job timeout cancels
+      # it: note it, so the push job reads it as a timeout all the same.
+      - name: Note whether the Implementer ran out of time
+        id: agent-time
+        if: failure() && steps.agent.outcome == 'failure'
+        env:
+          STARTED_AT: ${{ steps.started.outputs.at }}
+          TIMEOUT_MINUTES: ${{ needs.kit.outputs.implement-timeout-minutes }}
+        run: |
+          if [ "$(( $(date +%s) - STARTED_AT ))" -ge "$(( TIMEOUT_MINUTES * 60 ))" ]; then
+            echo "timed-out=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      # UI evidence (#153), once the agent has ended: with a ui block, and a
+      # branch that changes a ui.paths file against the default branch, it
+      # builds and serves the branch, screenshots its routes, and writes the
+      # screenshots, the capture result and the gallery under fabrik-out
+      # (src/evidence/capture-main.ts). It records every failure in the capture
+      # result, never the job's: continue-on-error, and its own timeout, the
+      # Kit's CAPTURE_TIMEOUT_MINUTES (src/evidence/capture.ts; a test holds the
+      # two together). No secret reaches it, nor the build and server it runs.
+      # Without a ui block it captures nothing and passes out no result, so
+      # neither upload below runs; the Kit job's step summary says Visual
+      # evidence is off (src/kit/kitJob.ts).
+      - name: Capture UI evidence
+        id: capture
+        if: success()
+        continue-on-error: true
+        timeout-minutes: 20
+        working-directory: product
+        env:
+          FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node ../kit/src/evidence/capture-main.ts
+
       # The result and the bundle of the Implementer's commits (none if it made none).
       - name: Pass the Implementer's output and commits to the push job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -486,16 +548,45 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # src/agent/run.ts writes this when it catches a failure. A run cancelled
-      # by its timeout leaves none, and the push job reads that as a timeout.
+      # src/agent/run.ts writes this when it catches a failure. A run its
+      # timeout stopped leaves none, and the push job reads that as a timeout.
       - name: Pass the failure report to the push job
-        if: failure()
+        if: failure() && steps.agent-time.outputs.timed-out != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fabrik-agent-failure
           path: ${{ runner.temp }}/fabrik-out/agent-failure.json
           if-no-files-found: ignore
           retention-days: 7
+
+      # The UI evidence capture recorded, whether it captured or failed: the
+      # screenshots and the capture result, zipped, for the Reviewer. Not
+      # fabrik-agent-*: the push job downloads those and reads none as a timeout.
+      # continue-on-error: keeping evidence must never fail a run that passed.
+      - name: Keep the UI evidence
+        id: evidence
+        if: steps.capture.outputs.ui-capture-result != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-ui-evidence
+          path: ${{ runner.temp }}/fabrik-out/ui-evidence/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # The gallery, unzipped, so it opens in the browser in one click. An
+      # unzipped artifact is one file, named after it; a capture that took no
+      # screenshot leaves none.
+      - name: Keep the UI evidence gallery
+        id: gallery
+        if: steps.capture.outputs.ui-capture-result != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/fabrik-out/fabrik-ui-gallery.html
+          archive: false
+          if-no-files-found: ignore
+          retention-days: 30
 
       # The agent's stream-json transcript (src/agent/transcript.ts), written line by
       # line as it ran, so it's kept when the run passed, failed or timed out. Not
@@ -574,7 +665,8 @@ jobs:
   # The Reviewer (ADR-0002). Read-only: a checkout of the PR's head at the
   # commit its checks passed on, no GitHub write credential, and only the
   # agent service account. It runs none of the PR's code, and passes its
-  # Verdict out as an artifact for the push job to post.
+  # Verdict out as an artifact for the push job to post. On a UI PR it also
+  # downloads the screenshots its Implement run captured, for the Reviewer to see.
   review:
     name: Review
     needs: [kit, review-checks]
@@ -590,6 +682,8 @@ jobs:
       contents: read
       issues: read
       pull-requests: read
+      # To download a UI PR's UI evidence from the Implement run that captured it.
+      actions: read
     outputs:
       # Read by the push job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}
@@ -629,6 +723,21 @@ jobs:
           issue: ${{ needs.kit.outputs.ticket }}
           pull-request: ${{ needs.kit.outputs.pull-request }}
 
+      # A UI PR's UI evidence (#153): the screenshots and capture result its marker
+      # names, from the Implement run that kept them, read as data and never run.
+      # Outside the working directory: the Reviewer's runner copies in the ones it
+      # gets (src/agent/review.ts). continue-on-error: retention can lapse before a
+      # late Review, which the Reviewer then hears as capture having left no result.
+      - name: Download the UI evidence
+        if: needs.kit.outputs.ui-evidence-artifact != ''
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          run-id: ${{ needs.kit.outputs.ui-evidence-run }}
+          artifact-ids: ${{ needs.kit.outputs.ui-evidence-artifact }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/fabrik-ui-evidence
+
       - name: Load the Claude token
         id: op
         uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
@@ -649,6 +758,10 @@ jobs:
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
           FABRIK_MODEL: ${{ needs.kit.outputs.model }}
           FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
+          # Only on a UI PR: where its UI evidence was downloaded, whether or not that worked,
+          # and why its capture failed, for when the download holds no capture result to read.
+          FABRIK_UI_EVIDENCE_DIR: ${{ needs.kit.outputs.ui-evidence-run != '' && format('{0}/fabrik-ui-evidence', runner.temp) || '' }}
+          FABRIK_UI_EVIDENCE_FAILURE: ${{ needs.kit.outputs.ui-evidence-failure }}
         run: node ../kit/src/agent/run.ts review
 
       - name: Pass the Verdict to the push job
@@ -951,6 +1064,22 @@ jobs:
         uses: ./kit/.github/actions/run-loop
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+
+      # A UI PR's preview deployment (#153): when the plan pushed a UI PR whose
+      # Kit config declares preview.url, polls the URL it filled in, for a few
+      # minutes at most (src/kit/previewLink.ts), and links it in the PR's
+      # evidence section, or says it never answered. continue-on-error, and a
+      # timeout of its own inside the job's, so a slow or broken host never
+      # fails the push job, and the Run record step still runs.
+      - name: Link the preview deployment
+        if: steps.loop.outputs.preview-url != ''
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: ./kit/.github/actions/link-preview
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          url: ${{ steps.loop.outputs.preview-url }}
+          pull-request: ${{ steps.loop.outputs.preview-pull-request }}
 
       # The run's Run record and transcript, to the fabrik-runs store (ADR-0009).
       # always(), so a Loop that failed still leaves its record; continue-on-error,

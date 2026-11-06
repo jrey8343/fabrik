@@ -1,6 +1,7 @@
 // The Implementer output contract: alongside its commits (passed out as a git
 // bundle), an Implement agent job emits the title and summary of the draft PR
 // its push job opens. Both sides check it, so a malformed output never half-applies.
+import { isRoute } from "../kit/config.ts";
 import { isCommentIdList } from "./considered.ts";
 
 export interface ImplementOutput {
@@ -20,6 +21,12 @@ export interface ImplementOutput {
    * Left out when the run gave anything but a list of ids: a bad list never fails the run.
    */
   readonly operatorCommentsConsidered?: readonly string[];
+  /**
+   * When the change touched UI: the routes it shows on, each a path starting
+   * with `/`, so UI evidence is captured where the change is. Left out when
+   * the run gave anything but a list of paths: a bad list never fails the run.
+   */
+  readonly routes?: readonly string[];
 }
 
 export type ImplementOutputResult =
@@ -28,6 +35,11 @@ export type ImplementOutputResult =
 
 /** GitHub caps PR titles at 256 characters. */
 const MAX_TITLE = 256;
+
+/** Whether a run's routes are a list of paths starting with `/`; anything else reads as none named. */
+function isRouteList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(isRoute);
+}
 
 function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
@@ -38,7 +50,7 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return { ok: false, errors: ["Implementer output must be a JSON object"] };
   }
-  const { title, summary, fix, operatorCommentsConsidered: considered } = value as Record<string, unknown>;
+  const { title, summary, fix, operatorCommentsConsidered: considered, routes } = value as Record<string, unknown>;
   const errors: string[] = [];
   if (!isText(title) || title.includes("\n") || title.length > MAX_TITLE) {
     errors.push(`title must be one non-empty line of at most ${MAX_TITLE} characters`);
@@ -54,6 +66,8 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
       ...(fix === undefined ? {} : { fix: (fix as string).trim() }),
       // A malformed list never fails the run: it reads as none weighed.
       ...(isCommentIdList(considered) ? { operatorCommentsConsidered: considered } : {}),
+      // Nor does a malformed list of routes: it reads as none named.
+      ...(isRouteList(routes) ? { routes } : {}),
     },
   };
 }
