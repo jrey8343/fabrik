@@ -334,21 +334,12 @@ export async function readReview(github: Reader, repo: Repo, pullRequest: number
 export const MAP_INPUTS_FILE = "map.json";
 
 /**
- * Whether a Design-session turn may offer a Map at all. Off until Ideas and
- * Maps is switched on (#263): until then a turn's inputs always say it can't,
- * so no turn asks to chart a Map. Only tests pass `switchedOn`.
- */
-export const MAPS_SWITCHED_ON = false;
-
-/**
  * What a Design-session turn is told of the Map cap: it may offer a Map; or
- * the cap is full, at `cap` (0 stops new Maps), and these open Maps hold it;
- * or Maps aren't switched on yet.
+ * the cap is full, at `cap` (0 stops new Maps), and these open Maps hold it.
  */
 export type MapOffer =
   | { readonly kind: "may-offer" }
-  | { readonly kind: "cap-full"; readonly cap: number; readonly openMaps: readonly OpenMap[] }
-  | { readonly kind: "switched-off" };
+  | { readonly kind: "cap-full"; readonly cap: number; readonly openMaps: readonly OpenMap[] };
 
 /**
  * Whether this turn may offer a Map, counting the open Maps as the push job's
@@ -359,9 +350,7 @@ export async function readMapOffer(
   github: Pick<Reader, "graphql">,
   repo: Repo,
   config: Pick<KitConfig, "caps">,
-  { switchedOn = MAPS_SWITCHED_ON }: { readonly switchedOn?: boolean } = {},
 ): Promise<MapOffer> {
-  if (!switchedOn) return { kind: "switched-off" };
   const openMaps = await gatherOpenMaps(github, repo);
   return mapCapFull(openMaps, config) ? { kind: "cap-full", cap: config.caps.maps, openMaps } : { kind: "may-offer" };
 }

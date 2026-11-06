@@ -24,8 +24,6 @@ function mapCapSaid(offer: MapOffer): string {
   switch (offer.kind) {
     case "may-offer":
       return "The Map cap has room, so this session may offer to chart the issue as a Map.";
-    case "switched-off":
-      return "This Kit doesn't chart Maps yet. Don't offer a Map, and never end in `map`.";
     case "cap-full": {
       if (offer.cap === 0) {
         return `\`caps.maps\` is 0, so this repo charts no new Map. ${refuse} If the Operator asks for one, say in your next round's intro that the Kit config stops new Maps.`;
@@ -45,7 +43,7 @@ function mapCapSaid(offer: MapOffer): string {
 /** The inputs step's MapOffer, or a failed turn: a turn never guesses whether it may offer a Map. */
 function readOffer(value: unknown): MapOffer {
   const offer = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
-  if (offer["kind"] === "may-offer" || offer["kind"] === "switched-off") return { kind: offer["kind"] };
+  if (offer["kind"] === "may-offer") return { kind: "may-offer" };
   const { cap, openMaps } = offer;
   if (offer["kind"] === "cap-full" && typeof cap === "number" && Array.isArray(openMaps)) {
     return { kind: "cap-full", cap, openMaps: openMaps.map((map: { number?: unknown; title?: unknown }) => ({ number: Number(map.number), title: text(map.title) })) };
