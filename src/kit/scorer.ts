@@ -72,8 +72,17 @@ function picked(record: RunRecord): boolean {
 
 /** Whether a first Implement run is in the sample, by the SHA-256 of its run id's decimal string. */
 function sampled(runId: number): boolean {
-  const digest = createHash("sha256").update(String(runId)).digest();
-  return digest.readUInt32BE(0) < SAMPLED_SHARE * 2 ** 32;
+  return inSample(String(runId), SAMPLED_SHARE);
+}
+
+/**
+ * Whether `key` is in a sample of `share` of all keys: whether its SHA-256
+ * falls in the lowest `share` of the range. The same key always gets the same
+ * answer, whatever other keys there are.
+ */
+export function inSample(key: string, share: number): boolean {
+  const digest = createHash("sha256").update(key).digest();
+  return digest.readUInt32BE(0) < share * 2 ** 32;
 }
 
 /** One rubric's answer in the judge's structured output. */

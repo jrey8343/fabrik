@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { aPastRetro, aRetroEvidenceInput, aVerdictWithFollowUps, theRetroBeingFilled } from "../__fixtures__/retroEvidence.ts";
+import {
+  aPastRetro,
+  aRecordWithTranscript,
+  aRetroEvidenceInput,
+  aTranscript,
+  aVerdictWithFollowUps,
+  theRetroBeingFilled,
+  transcriptsOf,
+} from "../__fixtures__/retroEvidence.ts";
 import { retroBody } from "../__fixtures__/snapshots.ts";
 import {
   aComment,
@@ -11,6 +19,9 @@ import {
   anOpenPullRequest,
   aReview,
   aRunRecord,
+  aScoreEntry,
+  aScoreFile,
+  aSkippedScoreFile,
   aTicketTimeline,
   aVerdictComment,
   factsOf,
@@ -20,6 +31,8 @@ import type { Verdict } from "../loop/types.ts";
 import {
   type AgentPullRequestFacts,
   type CommentFacts,
+  EVIDENCE_BUDGET,
+  type EvidenceBundle,
   escapesIn,
   evidenceBundle,
   mergedAgentPullRequestsIn,
@@ -27,6 +40,15 @@ import {
   type RetroIssueFacts,
   verdictsOn,
 } from "./retroEvidence.ts";
+import { judgePrompt } from "./scorerPrompt.ts";
+
+/** The digest of `transcript` that the judge reads in its prompt: the body of the prompt's one fenced transcript block. */
+function theJudgesDigestOf(transcript: readonly string[]): string {
+  const { prompt } = judgePrompt({ transcript, ticket: { title: "A Ticket", body: "" }, rubrics: [] });
+  const [block] = [...prompt.matchAll(/^(`{3,})text\n([\s\S]*?)\n\1$/gm)];
+  if (block?.[2] === undefined) throw new Error("The judge prompt holds no transcript block");
+  return block[2];
+}
 
 // A week in UTC: Monday 2 November 2026 00:00 to Monday 9 November 00:00.
 const WINDOW = { start: Date.parse("2026-11-02T00:00:00Z"), end: Date.parse("2026-11-09T00:00:00Z") };
@@ -362,10 +384,32 @@ describe("the evidence bundle", () => {
             { ref: "runs/owner/product/2026-11/1002-1-implement.json", record: retry },
             { ref: "runs/owner/product/2026-11/1003-1-review.json", record: lastPass },
           ],
-          lastPassingReview: { ref: "runs/owner/product/2026-11/1003-1-review.json", record: lastPass },
+          lastPassingReview: { ref: "runs/owner/product/2026-11/1003-1-review.json", record: lastPass, digest: null },
         },
         { ref: "#51", number: 51, title: "Build the thing", ticket: null, records: [], lastPassingReview: null },
       ]);
+    });
+
+    it("carries the last passing Review record's transcript digest, the one the judge reads, or none when the store has no transcript", () => {
+      const transcript = aTranscript({ "src/cart.ts": "export const cart = [];" });
+      const review = aRecordWithTranscript({ runId: 1001, role: "review", pullRequest: 50, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
+      const untranscribed = aRunRecord({ runId: 1002, role: "review", pullRequest: 51, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
+      const lost = aRecordWithTranscript({ runId: 1003, role: "review", pullRequest: 52, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
+      const { escapes } = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [review, untranscribed, lost],
+          transcripts: transcriptsOf([review, transcript]),
+          facts: factsOf({
+            pullRequests: [50, 51, 52].map((number) => aMergedPullRequest("2026-11-02T00:00:00Z", { number })),
+            escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #51 #52 -->")],
+          }),
+        }),
+      );
+      const [withDigest, withNone, withLost] = escapes[0]?.pullRequests ?? [];
+      expect(withDigest?.lastPassingReview?.digest).toBe(theJudgesDigestOf(transcript));
+      expect(withDigest?.lastPassingReview?.digest).toContain('#1 Read {"file_path":"src/cart.ts"}\n#1 result: export const cart = [];');
+      expect(withNone?.lastPassingReview?.digest).toBeNull();
+      expect(withLost?.lastPassingReview?.digest).toBeNull();
     });
 
     it("never holds another repo's Run records, though they name the same Ticket and PR", () => {
@@ -572,6 +616,137 @@ describe("the evidence bundle", () => {
     });
   });
 
+  describe("low scores", () => {
+    const failing = aScoreEntry({ score: 0.4, pass: false, label: "re-reads", rationale: "Read src/cart.ts four times (#2, #5, #9, #12)." });
+    const passing = aScoreEntry({ scorer: "ticket-compliance", threshold: 0.8, score: 0.9, label: "compliant", rationale: "Built what was asked." });
+
+    it("holds each score file whose run ended in the window with a failing entry, by its score path, with every entry and the run's transcript digest", () => {
+      const transcript = aTranscript({ "src/cart.ts": "export const cart = [];" });
+      const flailed = aRecordWithTranscript({ runId: 1000, endedAt: "2026-11-03T00:00:00Z" });
+      const clean = aRecordWithTranscript({ runId: 1001, endedAt: "2026-11-03T00:00:00Z" });
+      const lastWeeks = aRecordWithTranscript({ runId: 1002, endedAt: "2026-10-30T23:00:00Z" });
+      const skipped = aRecordWithTranscript({ runId: 1003, endedAt: "2026-11-03T00:00:00Z" });
+      const theirs = aRecordWithTranscript({ repo: "owner/other", runId: 1004, endedAt: "2026-11-03T00:00:00Z" });
+      const { lowScores } = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [flailed, clean, lastWeeks, skipped, theirs],
+          transcripts: transcriptsOf([flailed, transcript], [clean, transcript], [lastWeeks, transcript], [skipped, transcript], [theirs, transcript]),
+          scoreFiles: {
+            "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json": aScoreFile({ runId: 1000, entries: [failing, passing] }),
+            "scores/owner/product/2026-11/1001-1-implement-a1b2c3.json": aScoreFile({ runId: 1001, entries: [passing] }),
+            // Scored the morning after it ended, inside the window: it's the run's end that counts.
+            "scores/owner/product/2026-10/1002-1-implement-a1b2c3.json": aScoreFile({ runId: 1002, scoredAt: "2026-10-31T09:00:00Z", entries: [failing] }),
+            "scores/owner/product/2026-11/1003-1-implement-a1b2c3.json": aSkippedScoreFile({ reason: "judge-failed" }, { runId: 1003 }),
+            "scores/owner/other/2026-11/1004-1-implement-a1b2c3.json": aScoreFile({ repo: "owner/other", runId: 1004, entries: [failing] }),
+          },
+        }),
+      );
+      expect(lowScores).toEqual([
+        {
+          ref: "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json",
+          run: { ref: "runs/owner/product/2026-11/1000-1-implement.json", record: flailed, digest: theJudgesDigestOf(transcript) },
+          entries: [
+            { scorer: "efficiency", score: 0.4, pass: false, label: "re-reads", rationale: "Read src/cart.ts four times (#2, #5, #9, #12)." },
+            { scorer: "ticket-compliance", score: 0.9, pass: true, label: "compliant", rationale: "Built what was asked." },
+          ],
+        },
+      ]);
+    });
+
+    it("goes by when a run was scored when the store holds no record of it, and gives it no digest", () => {
+      const { lowScores } = evidenceBundle(
+        aRetroEvidenceInput({
+          scoreFiles: {
+            "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json": aScoreFile({ runId: 1000, scoredAt: "2026-11-03T00:05:00Z", entries: [failing] }),
+            "scores/owner/product/2026-10/1001-1-implement-a1b2c3.json": aScoreFile({ runId: 1001, scoredAt: "2026-10-30T00:05:00Z", entries: [failing] }),
+          },
+        }),
+      );
+      expect(lowScores.map(({ ref, run }) => ({ ref, run }))).toEqual([{ ref: "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json", run: null }]);
+    });
+
+    it("holds none when the repo has no score files", () => {
+      const run = aRecordWithTranscript({ runId: 1000, endedAt: "2026-11-03T00:00:00Z" });
+      const { lowScores } = evidenceBundle(aRetroEvidenceInput({ records: [run], transcripts: transcriptsOf([run, aTranscript()]), scoreFiles: {} }));
+      expect(lowScores).toEqual([]);
+    });
+  });
+
+  describe("the sample", () => {
+    // Of owner/product's PRs 1 to 110, the SHA-256 of `owner/product#<n>` falls in the lowest tenth of the range for 12, 28, 33, 40, 68, 81 and 102 alone.
+    const merged = (numbers: readonly number[], mergedAt = "2026-11-03T00:00:00Z") =>
+      numbers.map((number) => aMergedPullRequest(mergedAt, { number, ticket: number + 1000, title: `Build thing ${number}` }));
+    const sampleOf = (pullRequests: readonly AgentPullRequestFacts[]) =>
+      evidenceBundle(aRetroEvidenceInput({ facts: factsOf({ pullRequests }) })).sample.map(({ number }) => number);
+    const upTo = (last: number) => Array.from({ length: last }, (_, i) => i + 1);
+
+    it("holds the agent PRs merged in the window whose SHA-256 of owner/repo#n falls in the lowest tenth of the range", () => {
+      const pullRequests = [
+        ...merged(upTo(60)),
+        ...merged([68], "2026-10-30T23:59:59Z"), // before the window
+        ...merged([81], "2026-11-07T00:00:00Z"), // at its end: after it
+        aMergedPullRequest("2026-11-03T00:00:00Z", { number: 102, mergedAt: null, mergeSha: null }), // closed unmerged
+      ];
+      expect(sampleOf(pullRequests)).toEqual([12, 28, 33, 40]);
+    });
+
+    it("samples the same PRs however often it's computed, in whatever order the facts come, whatever else merged", () => {
+      const first = sampleOf(merged(upTo(200)));
+      expect(sampleOf(merged(upTo(200)))).toEqual(first);
+      expect(sampleOf(merged(upTo(400).toReversed())).filter((number) => number <= 200)).toEqual(first);
+    });
+
+    it("samples about one in ten over a large set", () => {
+      const sampled = sampleOf(merged(upTo(2000))).length;
+      expect(sampled).toBeGreaterThan(150);
+      expect(sampled).toBeLessThan(250);
+    });
+
+    it("carries each sampled PR's Ticket, its Verdicts as the Fabrik App posted them, and the agent runs on its Ticket with their transcripts' digests", () => {
+      const transcript = aTranscript({ "src/cart.ts": "export const cart = [];" });
+      const implement = aRecordWithTranscript({ runId: 1000, issue: 7, pullRequest: 12, endedAt: "2026-11-01T00:00:00Z" });
+      const review = aRecordWithTranscript({ runId: 1001, role: "review", issue: 7, pullRequest: 12, verdict: "pass", endedAt: "2026-11-02T00:00:00Z" });
+      const judge = aRecordWithTranscript({ runId: 1000, role: "score", issue: 7, pullRequest: 12, endedAt: "2026-11-01T00:05:00Z" });
+      const untranscribed = aRunRecord({ runId: 999, issue: 7, pullRequest: 12, endedAt: "2026-10-31T12:00:00Z" });
+      const verdict = aVerdictComment("pass", "a".repeat(40), "2026-11-02T00:00:00Z");
+      const { sample } = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [review, judge, implement, untranscribed, aRunRecord({ runId: 1002, issue: 8, pullRequest: 13 })],
+          transcripts: transcriptsOf([implement, transcript], [review, transcript], [judge, transcript]),
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-03T00:00:00Z", {
+                number: 12,
+                ticket: 7,
+                title: "Build the cart",
+                comments: [
+                  verdict,
+                  aVerdictComment("design-flaw", "a".repeat(40), "2026-11-02T01:00:00Z", { author: "operator", byBot: false }), // a person's quote of one
+                  aComment("Please rename this.", "2026-11-02T02:00:00Z", { author: "operator", byBot: false }),
+                ],
+              }),
+            ],
+          }),
+        }),
+      );
+      expect(sample).toEqual([
+        {
+          ref: "#12",
+          number: 12,
+          title: "Build the cart",
+          mergedAt: "2026-11-03T00:00:00Z",
+          ticket: 7,
+          verdicts: [{ verdict: "pass", source: "reviewer", at: "2026-11-02T00:00:00Z", body: verdict.body }],
+          records: [
+            { ref: "runs/owner/product/2026-10/999-1-implement.json", record: untranscribed, digest: null },
+            { ref: "runs/owner/product/2026-11/1000-1-implement.json", record: implement, digest: theJudgesDigestOf(transcript) },
+            { ref: "runs/owner/product/2026-11/1001-1-review.json", record: review, digest: theJudgesDigestOf(transcript) },
+          ],
+        },
+      ]);
+    });
+  });
+
   describe("the streak table", () => {
     it("lists every agent PR merged in the 90 days to the window's end, oldest first, with the paths it changed", () => {
       const { streakTable } = evidenceBundle(
@@ -696,6 +871,111 @@ describe("the evidence bundle", () => {
     });
   });
 
+  describe("the budget", () => {
+    // Four things the budget may cut, each 60,000 characters long: a sampled PR's run's transcript, a low-scoring run's,
+    // an Operator push's patch and an escape's passing Review run's. A Request changes body, which it never cuts, makes the rest.
+    const bulk = (char: string) => char.repeat(60_000);
+    const sampled = aRecordWithTranscript({ runId: 1000, issue: 7, pullRequest: 12, endedAt: "2026-11-01T00:00:00Z" });
+    const lowScoring = aRecordWithTranscript({ runId: 2000, issue: 9, pullRequest: 13, endedAt: "2026-11-01T00:00:00Z" });
+    const passingReview = aRecordWithTranscript({ runId: 3000, role: "review", issue: 10, pullRequest: 14, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
+    const patch = `diff --git a/src/cart.ts b/src/cart.ts\n${bulk("p")}`;
+    const inline = [{ path: "src/cart.ts", line: 12, body: "This belongs in the pricing module." }];
+    const verdict = aVerdictComment("pass", "a".repeat(40), "2026-11-02T00:00:00Z");
+
+    function evidenceWith(requestChanges: string): EvidenceBundle {
+      return evidenceBundle(
+        aRetroEvidenceInput({
+          records: [sampled, lowScoring, passingReview],
+          transcripts: transcriptsOf(
+            [sampled, aTranscript({ "src/sampled.ts": bulk("s") })],
+            [lowScoring, aTranscript({ "src/low.ts": bulk("l") })],
+            [passingReview, aTranscript({ "src/escaped.ts": bulk("e") })],
+          ),
+          scoreFiles: { "scores/owner/product/2026-11/2000-1-implement-a1b2c3.json": aScoreFile({ runId: 2000, entries: [aScoreEntry({ score: 0.2, pass: false })] }) },
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-03T00:00:00Z", { number: 12, ticket: 7, comments: [verdict] }), // in the sample
+              aMergedPullRequest("2026-11-03T00:00:00Z", {
+                number: 13,
+                ticket: 9,
+                commits: [aCommit("2026-11-02T00:00:00Z", { message: "Move pricing out of the cart", patch })],
+                reviews: [aReview("2026-11-02T01:00:00Z", { body: requestChanges, comments: inline })],
+              }),
+              aMergedPullRequest("2026-11-03T00:00:00Z", { number: 14, ticket: 10 }),
+            ],
+            escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #14 -->", { number: 81 })],
+          }),
+        }),
+      );
+    }
+
+    // The bundle whole, as JSON, `over` characters over the budget.
+    const whole = evidenceWith("");
+    const overBy = (over: number) => evidenceWith("r".repeat(EVIDENCE_BUDGET - JSON.stringify(whole).length + over));
+
+    const CUT = /\[… \d+ characters cut …\]/;
+    const GONE = /^\[… \d+ characters cut …\]$/;
+    type Left = "whole" | "cut" | "gone" | "missing";
+    const leftOfDigest = (digest: string | null | undefined): Left =>
+      digest == null ? "missing" : GONE.test(digest) ? "gone" : CUT.test(digest) ? (digest.includes('#1 Read {"file_path":') ? "cut" : "gone") : "whole";
+    const leftOfPatch = (cut: string | undefined): Left => (cut === patch ? "whole" : cut !== undefined && GONE.test(cut) ? "gone" : "cut");
+    function leftIn(bundle: EvidenceBundle) {
+      const push = bundle.feedback.flatMap(({ items }) => items).find((item) => item.kind === "push");
+      return {
+        sample: leftOfDigest(bundle.sample[0]?.records[0]?.digest),
+        lowScores: leftOfDigest(bundle.lowScores[0]?.run?.digest),
+        patches: leftOfPatch(push?.kind === "push" ? push.patch : undefined),
+        escapes: leftOfDigest(bundle.escapes[0]?.pullRequests[0]?.lastPassingReview?.digest),
+      };
+    }
+
+    it("gives the bundle whole when it's within the budget, and says it wasn't trimmed", () => {
+      const bundle = overBy(0);
+      expect(JSON.stringify(bundle).length).toBe(EVIDENCE_BUDGET);
+      expect(leftIn(bundle)).toEqual({ sample: "whole", lowScores: "whole", patches: "whole", escapes: "whole" });
+      expect(bundle.trimmed).toBe(false);
+    });
+
+    it.each([
+      { over: 30_000, left: { sample: "cut", lowScores: "whole", patches: "whole", escapes: "whole" } },
+      { over: 90_000, left: { sample: "gone", lowScores: "cut", patches: "whole", escapes: "whole" } },
+      { over: 150_000, left: { sample: "gone", lowScores: "gone", patches: "cut", escapes: "whole" } },
+      { over: 210_000, left: { sample: "gone", lowScores: "gone", patches: "gone", escapes: "cut" } },
+    ])("$over characters over, cuts the sample's transcripts first and escapes' last, each cut marked in place, until it fits", ({ over, left }) => {
+      const bundle = overBy(over);
+      expect(leftIn(bundle)).toEqual(left);
+      expect(JSON.stringify(bundle).length).toBeLessThanOrEqual(EVIDENCE_BUDGET);
+      expect(bundle.trimmed).toBe(true);
+    });
+
+    it("keeps a cut transcript's tool calls, as the judge's digest does, until it has to cut the transcript whole", () => {
+      const digest = overBy(30_000).sample[0]?.records[0]?.digest ?? "";
+      expect(digest).toMatch(/^#1 Read \{"file_path":"src\/sampled.ts"\}\n#1 result: s+\[… \d+ characters cut …\]s+$/m);
+    });
+
+    it("never cuts refs, Verdicts, review comments or the streak table, however far over it is", () => {
+      const requestChanges = "r".repeat(EVIDENCE_BUDGET);
+      const bundle = evidenceWith(requestChanges);
+      expect(leftIn(bundle)).toEqual({ sample: "gone", lowScores: "gone", patches: "gone", escapes: "gone" });
+      expect(bundle.trimmed).toBe(true);
+      expect(refsOf(bundle)).toEqual(refsOf(whole));
+      expect(bundle.sample[0]?.verdicts).toEqual([{ verdict: "pass", source: "reviewer", at: "2026-11-02T00:00:00Z", body: verdict.body }]);
+      expect(bundle.feedback[0]?.items).toContainEqual({ kind: "request-changes", at: "2026-11-02T01:00:00Z", body: requestChanges, inline });
+      expect(bundle.streakTable).toEqual(whole.streakTable);
+      expect(bundle.streakTable.map(({ number }) => number)).toEqual([12, 13, 14]);
+    });
+
+    it("says it was trimmed only when it cut something: over the budget with nothing it may cut, it isn't", () => {
+      const requestChanges = "r".repeat(EVIDENCE_BUDGET);
+      const bundle = evidenceBundle(
+        aRetroEvidenceInput({ facts: factsOf({ pullRequests: [aMergedPullRequest("2026-11-03T00:00:00Z", { number: 13, reviews: [aReview("2026-11-02T01:00:00Z", { body: requestChanges })] })] }) }),
+      );
+      expect(JSON.stringify(bundle).length).toBeGreaterThan(EVIDENCE_BUDGET);
+      expect(bundle.feedback[0]?.items[0]).toMatchObject({ body: requestChanges });
+      expect(bundle.trimmed).toBe(false);
+    });
+  });
+
   describe("refs", () => {
     it("lists every ref the bundle's items carry, once each, by what it cites", () => {
       const review = aRunRecord({ runId: 1001, role: "review", verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
@@ -727,6 +1007,27 @@ describe("the evidence bundle", () => {
         { ref: "#90", kind: "issue" },
         { ref: "#100", kind: "issue" },
         { ref: "#130", kind: "issue" },
+      ]);
+    });
+
+    it("lists each low score by its score path, with its run's record, and each sampled PR with its Ticket and records", () => {
+      const implement = aRunRecord({ runId: 1000, issue: 7, pullRequest: 12, endedAt: "2026-11-01T00:00:00Z" });
+      const review = aRunRecord({ runId: 1001, role: "review", issue: 7, pullRequest: 12, verdict: "pass", endedAt: "2026-11-02T00:00:00Z" });
+      const bundle = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [implement, review],
+          scoreFiles: { "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json": aScoreFile({ runId: 1000, entries: [aScoreEntry({ score: 0.2, pass: false })] }) },
+          // #12 is in the sample.
+          facts: factsOf({ pullRequests: [aMergedPullRequest("2026-11-03T00:00:00Z", { number: 12, ticket: 7 })] }),
+        }),
+      );
+      expect(refsOf(bundle)).toEqual([
+        { ref: "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json", kind: "score" },
+        { ref: "runs/owner/product/2026-11/1000-1-implement.json", kind: "record" },
+        { ref: "#12", kind: "pull-request" },
+        { ref: "#7", kind: "issue" },
+        { ref: "runs/owner/product/2026-11/1001-1-review.json", kind: "record" },
+        { ref: "#80", kind: "issue" }, // the last Retro
       ]);
     });
   });
