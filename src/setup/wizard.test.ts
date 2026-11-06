@@ -304,3 +304,36 @@ describe("The setup wizard's second Subscription stage", () => {
     expect(w.stdout).toContain(".fabrik/config.json lists both Subscriptions.");
   });
 });
+
+describe("The setup wizard's Visual evidence stage", () => {
+  /** Past the Sentry and second Subscription stages, skipping both, to Visual evidence's opt-in. */
+  const TO_VISUAL_EVIDENCE = [...TO_THE_SENTRY_STAGE, "n", "", "n", ""];
+  const UI_ON = JSON.stringify({ ui: { paths: ["src/pages/**"], serve: "npm run preview", url: "http://localhost:4321" } });
+
+  it("is skipped unless the Operator asks for it, which still finishes setup", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_VISUAL_EVIDENCE);
+
+    expect(w.status).toBe(0);
+    expect(w.stdout).toContain("Turn on Visual evidence for acme/clinic?");
+    expect(w.stdout).toContain("Skipping Visual evidence.");
+    expect(w.stdout).not.toContain("still to do by hand");
+    expect(w.stdout).toContain("Setup complete");
+  });
+
+  it("sends an Operator who wants it to /fabrik-setup's Visual evidence step, which writes the Kit config, and lists it to do", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, [...TO_VISUAL_EVIDENCE, "y"]);
+
+    expect(w.status).toBe(0);
+    expect(w.stdout).toContain("ui.paths");
+    expect(w.stdout).toMatch(/still to do by hand:\n.*run \/fabrik-setup again and answer its Visual evidence step/);
+  });
+
+  it("says Visual evidence is on, and asks nothing, once .fabrik/config.json has a ui block", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_VISUAL_EVIDENCE, UI_ON);
+
+    expect(w.status).toBe(0);
+    expect(w.stdout).toContain(".fabrik/config.json has a ui block, so UI pull requests get Visual evidence.");
+    expect(w.stdout).not.toContain("Turn on Visual evidence");
+    expect(w.stdout).not.toContain("still to do by hand");
+  });
+});

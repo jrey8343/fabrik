@@ -210,7 +210,7 @@ finish() {
 
 run_wizard() {
 
-TOTAL_STAGES=7
+TOTAL_STAGES=8
 
 for tool in gh op; do
   command -v "$tool" >/dev/null 2>&1 || { warn "$tool isn't installed; install it and sign in, then re-run."; exit 1; }
@@ -439,6 +439,31 @@ if (( SECOND_EXISTS || ADDING_SECOND )); then
   pause
 else
   say "Skipping the second Subscription. Re-run the wizard to add one later."
+  pause
+fi
+
+# ── 4c. Visual evidence ───────────────────────────────────────────────────
+# Opt-in: the ui block in the Kit config turns it on. /fabrik-setup writes it,
+# and the preview block, from the Operator's answers in its setup PR, so this
+# stage writes nothing: it explains the step and checks for the block.
+stage "Visual evidence"
+say "On a pull request that changes your UI, the Implement job screenshots the routes it"
+say "touched at mobile and desktop widths, the PR links a gallery of them, and the Reviewer sees them."
+if node -e '
+  const { ui } = JSON.parse(require("node:fs").readFileSync(".fabrik/config.json", "utf8"));
+  process.exit(ui !== null && typeof ui === "object" && Array.isArray(ui.paths) && ui.paths.length > 0 ? 0 : 1);' 2>/dev/null; then
+  say "${GREEN}✓${RESET} .fabrik/config.json has a ui block, so UI pull requests get Visual evidence."
+  pause
+elif confirm "Turn on Visual evidence for $REPO?"; then
+  step "Run /fabrik-setup again and answer its Visual evidence step. It asks for the files that"
+  step "make a PR UI (ui.paths), how the Sandbox serves the branch (ui.serve and ui.url), and,"
+  step "if you have them, your production site (ui.before_url), the routes to capture by default"
+  step "(ui.default_routes) and your preview deployments' URL (preview.url), and writes them"
+  step "into .fabrik/config.json in its setup PR."
+  SKIPPED+=("turn on Visual evidence: run /fabrik-setup again and answer its Visual evidence step")
+  pause
+else
+  say "Skipping Visual evidence. Re-run /fabrik-setup to turn it on later."
   pause
 fi
 
