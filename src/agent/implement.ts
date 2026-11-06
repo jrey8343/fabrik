@@ -228,6 +228,38 @@ export async function ticketContext(productDir: string, specFile: string): Promi
   return parts;
 }
 
+/** What an Implement run works from: the branch it builds on, and what its prompt carries beyond the Ticket. */
+export interface ImplementInput {
+  readonly branch: BuiltBranch;
+  readonly parts: string[];
+  /** Whether it works on an existing PR (a retry or a Request-changes run), whose output owes a fix too. */
+  readonly onPullRequest: boolean;
+  /** For a run on an existing PR, the Operator comments it was given; null for a first run. */
+  readonly operatorComments: GivenOperatorComment[] | null;
+}
+
+/**
+ * An Implement run's input, from the Product checkout and the input files the
+ * agent-inputs step wrote (src/agent/inputs.ts): the Ticket's Spec, and for a
+ * run on an existing PR that PR (`pullRequest`, "" for a first run) and a
+ * Request-changes run's review (`review`, "" otherwise). A first run cuts the
+ * Ticket's agent branch from the checkout's commit; a run on a PR carries on
+ * the PR's branch with the findings to fix, or the Operator's review.
+ */
+export async function implementInput(
+  productDir: string,
+  ticket: number,
+  config: KitConfig,
+  files: { readonly spec: string; readonly pullRequest: string; readonly review: string },
+): Promise<ImplementInput> {
+  const onPullRequest = files.pullRequest !== "";
+  const branch = onPullRequest ? await continueAgentBranch(productDir, ticket) : await startAgentBranch(productDir, ticket);
+  const parts = await implementContext(productDir, files.spec, config);
+  if (!onPullRequest) return { branch, parts, onPullRequest, operatorComments: null };
+  const context = files.review === "" ? await retryContext(files.pullRequest) : await requestChangesContext(files.pullRequest, files.review);
+  return { branch, parts: [...parts, ...context.parts], onPullRequest, operatorComments: context.operatorComments };
+}
+
 /**
  * What the Implementer's prompt carries beyond the Ticket: its parent Spec,
  * the repo's glossary and ADRs, and the Sandbox's commands.

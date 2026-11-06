@@ -258,6 +258,23 @@ describe("The Kit's workflows", () => {
     expect(prepareAgent).not.toContain("load-secrets-action");
   });
 
+  it("prepare-agent lays a replay arm's candidate Kit sha over the Kit through its read-only token, before it fetches the skills, and only when given one", () => {
+    const steps = prepareAgent.split(/\n(?=    - )/);
+    const overlay = steps.findIndex((step) => step.includes("src/kit/overlay-main.ts"));
+    const fetch = steps.findIndex((step) => step.includes("src/skills/fetch.ts"));
+
+    expect(prepareAgent).toMatch(/\n  kit-candidate:\n\s+description: .*\n\s+required: false\n\s+default: ""\n/);
+    expect(overlay).toBeGreaterThan(steps.findIndex((step) => step.includes("npm ci")));
+    expect(overlay).toBeLessThan(fetch);
+    expect(steps[overlay]).toContain("if: inputs.kit-candidate != ''");
+    expect(steps[overlay]).toContain("GH_TOKEN: ${{ inputs.github-token }}");
+    expect(steps[overlay]).toContain('run: node kit/src/kit/overlay-main.ts kit "$FABRIK_KIT_CANDIDATE"');
+  });
+
+  it("no live job lays a candidate Kit sha over its Kit", () => {
+    for (const { text } of workflows) expect(text).not.toContain("kit-candidate");
+  });
+
   describe("schedule.yml's weekly skills bump job", () => {
     const bump = jobIn(schedule, "skills-bump");
     const steps = stepsOf(bump);
