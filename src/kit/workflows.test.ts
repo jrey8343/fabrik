@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { JUDGE_JOB } from "./judge.ts";
 import { PREVIEW_POLL_MINUTES } from "./previewLink.ts";
-import { RETRO_EVIDENCE_JOB } from "./pushJob.ts";
+import { PROTOTYPE_JOB, RETRO_EVIDENCE_JOB } from "./pushJob.ts";
 import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE, PROTOTYPE_GALLERY_FILE } from "../evidence/capture.ts";
@@ -562,7 +562,8 @@ describe("loop.yml's Research job", () => {
 // A Design session's prototype turn (#155): the Kit job's plan says whether the
 // Design run is one, and the prototype job runs it in the design job's place.
 describe("loop.yml's prototype job", () => {
-  const prototype = (): string => job("prototype");
+  // Keyed as the push job and the Run record pick it by (src/kit/pushJob.ts).
+  const prototype = (): string => job(PROTOTYPE_JOB);
   // A step's lines past its `- name:` line, without the comments over the next step or job.
   const unnamed = (step: string | undefined) =>
     step
@@ -762,7 +763,7 @@ describe("loop.yml's prototype job", () => {
     const needs = /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ");
 
     expect(prototype()).toContain("\n    if: false && needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype == 'true'\n");
-    expect(needs).not.toContain("prototype");
+    expect(needs).not.toContain(PROTOTYPE_JOB);
   });
 });
 
