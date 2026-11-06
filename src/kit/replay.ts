@@ -10,17 +10,23 @@
 // and the hidden tests, the merged PR's own, that each arm is measured by.
 // Where it stands: the plan and each Ticket's progress, in hidden markers in
 // the Kit's part of the replay issue's body, below the Operator's request.
-// And the scheduled tick's next step: accept or reject a waiting request, or
-// start the next pending Ticket. Pure, no I/O.
+// The scheduled tick's next step: accept or reject a waiting request, or
+// start the next pending Ticket. And what the Operator reads: the results,
+// each arm of each Ticket in a row from what the store holds of it, totals
+// per arm, the baseline's gap from the original runs, and a headline line
+// computed from the totals. Pure, no I/O.
 import { type ChangedPath, checkTrustRoot } from "../guard/trust-root.ts";
 import { newIssueUrl } from "../loop/followUps.ts";
 import { REPLAY_LABEL } from "../loop/labels.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 import { spelled } from "../loop/readable.ts";
-import type { AgentRole } from "../loop/types.ts";
+import type { AgentRole, Verdict } from "../loop/types.ts";
 import { FULL_SHA, shortSha } from "../skills/lock.ts";
 import { checkEffort, type KitConfig, refuseFable } from "./config.ts";
-import type { ReplayArm, RunRecord } from "./runRecord.ts";
+import { SCORERS } from "./rubrics.ts";
+import { type ReplayArm, replayPatchPath, type RunRecord } from "./runRecord.ts";
+import { storeFileUrl } from "./runStore.ts";
+import type { ScoreFile } from "./scorer.ts";
 
 /** A role whose model or effort a Replay can change. */
 export type ReplayRole = Extract<AgentRole, "implement" | "review">;
@@ -707,10 +713,11 @@ function alreadyRuns(base: Pick<KitConfig, "roles">, variable: ReplayVariable): 
 }
 
 // The Kit's part of a replay issue's body: below the Operator's request, from
-// a hidden start line to the end of the body, the plan listed for the
-// Operator to read, then the hidden markers that hold it: the plan, written
-// once when the request is accepted, and each Ticket's progress. The Kit only
-// ever rewrites its own part, so the Operator's text above it stays theirs.
+// a hidden start line to the end of the body, the results for the Operator to
+// read, then the hidden markers that hold them: the plan, written once when
+// the request is accepted, the results last shown, and each Ticket's
+// progress. The Kit only ever rewrites its own part, so the Operator's text
+// above it stays theirs.
 
 /** What a Replay runs: the variable, and each picked Ticket with its arms. */
 export interface ReplayPlan {
@@ -942,45 +949,486 @@ function kitPartAt(body: string): number | null {
   return starts.at(-1)?.index ?? null;
 }
 
-/** The body with its Kit's part written for `marks`, the Operator's part above it as it was. */
+/**
+ * The body with its Kit's part written for `marks`, the Operator's part
+ * above it as it was, and the results it last showed (withReplayResults)
+ * still shown for each Ticket done.
+ */
 export function replayBody(body: string, marks: ReplayMarks): string {
+  return withKitPart(body, marks, shownResultsIn(body), true);
+}
+
+// A Replay's results: each done Ticket's arms, as the store holds their runs,
+// beside the original runs of the Ticket they replay.
+
+/**
+ * How an arm's gates ended: the Sandbox's setup, build and tests, from Kit
+ * config at the Ticket's baseSha, run in turn on the arm's diff. Kit config
+ * with no test command tests nothing, which is never a pass.
+ */
+export type ReplayGates = "passed" | "setup-failed" | "build-failed" | "tests-failed" | "no-test-command";
+
+/**
+ * How the merged PR's tests did, laid over an arm's diff: never a pass when
+ * the PR has none, Kit config has no test command, or they never ran because
+ * the arm's setup or build failed first, which counts as failing them.
+ */
+export type ReplayHiddenTests = "passed" | "failed" | "no-hidden-tests" | "no-test-command" | "not-run";
+
+/** One arm's gates and hidden tests in one run, as its replay gates job passed them out. */
+export interface ReplayArmGates {
+  readonly ticket: number;
+  readonly arm: ReplayArm;
+  /** The workflow run the arm ran in. */
+  readonly run: number;
+  readonly gates: ReplayGates;
+  readonly hiddenTests: ReplayHiddenTests;
+}
+
+/** What a Replay's results are read from: its arms' outcomes, and the original runs they replay. */
+export interface ReplayOutcomes {
+  /** Whether the replay issue is open: closing it cancels every Ticket not yet finished. */
+  readonly open: boolean;
+  /**
+   * The store's Run records of the Product repo whose subject is one of the
+   * plan's Tickets, of every role and Replay: each arm's Implement and Review
+   * runs, and the original runs they're compared with.
+   */
+  readonly records: readonly RunRecord[];
+  /** The store's score files of those runs. */
+  readonly scoreFiles: readonly ScoreFile[];
+  /** Each done Ticket's arms' gates. */
+  readonly gates: readonly ReplayArmGates[];
+}
+
+/**
+ * The body with its Kit's part rewritten to show the Replay's results from
+ * `outcomes`, or null when it holds no plan: each arm of each Ticket in a row
+ * of its own, a Ticket not done showing where it stands. Its Operator's part,
+ * the request at the top, stays as it was.
+ */
+export function withReplayResults(body: string, outcomes: ReplayOutcomes): string | null {
+  const marks = replayMarksIn(body);
+  if (marks === null) return null;
+  const results = marks.progress.flatMap((progress) => (progress.state === "done" ? [ticketResultOf(progress.ticket, progress.run, outcomes)] : []));
+  return withKitPart(body, marks, results, outcomes.open);
+}
+
+/** Whether a replay issue's results are in: its request accepted, and every Ticket in its plan done or failed. */
+export function replayResultsIn(body: string): boolean {
+  const marks = replayMarksIn(body);
+  return marks !== null && marks.progress.length > 0 && marks.progress.every(({ state }) => state === "done" || state === "failed");
+}
+
+/** What one arm of a done Ticket measured; null for what the store holds nothing of. */
+interface ArmResult {
+  readonly gates: ReplayGates | null;
+  readonly hiddenTests: ReplayHiddenTests | null;
+  /** Its Review's Verdict, `none` when the Review gave none. */
+  readonly verdict: Verdict | "none" | null;
+  /** Its Implement run's score under each Scorer, in SCORERS' order. */
+  readonly scores: readonly (number | null)[];
+  /** What its Implement and Review runs spent together. */
+  readonly costUsd: number | null;
+  readonly turns: number | null;
+  readonly durationMs: number | null;
+  /** Its patch's store path. */
+  readonly patch: string | null;
+}
+
+/** What a Ticket's original run measured: its first Implement run and that run's Review, which the arms replay. */
+type OriginalResult = Pick<ArmResult, "verdict" | "costUsd" | "turns" | "durationMs">;
+
+/** What a done Ticket's arms measured, in the run they ran in, and what its original run did. */
+interface TicketResult {
+  readonly ticket: number;
+  readonly run: number;
+  readonly arms: Readonly<Record<ReplayArm, ArmResult>>;
+  readonly original: OriginalResult;
+}
+
+/** What Ticket `ticket`'s arms measured in run `run`, from `outcomes`. */
+function ticketResultOf(ticket: number, run: number, outcomes: ReplayOutcomes): TicketResult {
+  const armResult = (arm: ReplayArm): ArmResult => {
+    const ofArm = (each: Pick<RunRecord, "runId" | "role" | "replay">, role: ReplayRole) =>
+      each.role === role && each.runId === run && each.replay?.ticket === ticket && each.replay.arm === arm;
+    const implement = latest(outcomes.records.filter((record) => ofArm(record, "implement")));
+    const review = latest(outcomes.records.filter((record) => ofArm(record, "review")));
+    const scored = outcomes.scoreFiles.filter((file) => ofArm(file, "implement")).toSorted((a, b) => Date.parse(a.scoredAt) - Date.parse(b.scoredAt)).at(-1);
+    const gates = outcomes.gates.find((each) => each.ticket === ticket && each.arm === arm && each.run === run);
+    return {
+      gates: gates?.gates ?? null,
+      hiddenTests: gates?.hiddenTests ?? null,
+      verdict: review === undefined ? null : (review.verdict ?? "none"),
+      scores: SCORERS.map((scorer) => scored?.entries?.find((entry) => entry.scorer === scorer)?.score ?? null),
+      ...spentBy([implement, review]),
+      patch: implement?.replay == null ? null : replayPatchPath(implement.repo, implement.replay),
+    };
+  };
+  return { ticket, run, arms: { baseline: armResult("baseline"), variant: armResult("variant") }, original: originalOf(ticket, outcomes.records) };
+}
+
+/**
+ * What Ticket `ticket`'s original run did: its first Implement run, the one
+ * the arms replay, and the first Review after it, never a Retry or a past
+ * Replay's runs.
+ */
+function originalOf(ticket: number, records: readonly RunRecord[]): OriginalResult {
+  const original = records.filter((record) => record.replay === null && record.issue === ticket);
+  const first = firstRunOf(original.filter((record) => record.role === "implement"));
+  const review =
+    first === undefined
+      ? undefined
+      : original
+          .filter((record) => record.role === "review" && Date.parse(record.endedAt) > Date.parse(first.endedAt))
+          .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))[0];
+  return { verdict: review === undefined ? null : (review.verdict ?? "none"), ...spentBy([first, review]) };
+}
+
+/** The last of a run's records, by attempt, then by when it ended. */
+function latest(records: readonly RunRecord[]): RunRecord | undefined {
+  return records.toSorted((a, b) => a.runAttempt - b.runAttempt || Date.parse(a.endedAt) - Date.parse(b.endedAt)).at(-1);
+}
+
+/** What runs spent together: their cost, turns and duration, each unknown when any run's is, or a run is missing. */
+function spentBy(runs: readonly (RunRecord | undefined)[]): Pick<ArmResult, "costUsd" | "turns" | "durationMs"> {
+  const sum = (figure: (record: RunRecord) => number | null) =>
+    runs.reduce<number | null>((total, run) => {
+      const value = run === undefined ? null : figure(run);
+      return total === null || value === null ? null : total + value;
+    }, 0);
+  return { costUsd: sum((run) => run.totalCostUsd), turns: sum((run) => run.turns), durationMs: sum((run) => run.durationMs) };
+}
+
+/** The body with its Kit's part written for `marks`, showing `results` for its done Tickets, the Operator's part above it as it was. */
+function withKitPart(body: string, marks: ReplayMarks, results: readonly TicketResult[], open: boolean): string {
   const at = kitPartAt(body);
   const operatorPart = body.slice(0, at ?? body.length);
   // A blank line sets the Kit's part apart, put in once, when it's first written.
   const separator = at !== null || operatorPart === "" ? "" : operatorPart.endsWith("\n") ? "\n" : "\n\n";
   const markers = [
     `<!-- fabrik:replay-plan ${markerJson(storedPlan(marks.plan))} -->`,
+    ...(results.length === 0 ? [] : [`<!-- fabrik:replay-results ${markerJson(results)} -->`]),
     ...marks.progress.map((progress) => `<!-- fabrik:replay-ticket ${markerJson(progress)} -->`),
   ];
-  return `${operatorPart}${separator}${[KIT_PART_START, ...planLines(marks), ...markers].join("\n")}\n`;
+  return `${operatorPart}${separator}${[KIT_PART_START, ...resultsLines(marks, results, open), ...markers].join("\n")}\n`;
 }
 
-/** The plan as the Operator reads it: each Ticket with its progress, baseline and flags, then each one left out. */
-function planLines({ plan, progress }: ReplayMarks): string[] {
+/**
+ * The results the body last showed, from its results marker, so a rewrite
+ * for a Ticket's progress keeps them until withReplayResults reads them from
+ * the store again. A result that doesn't read as the Kit writes one is left
+ * out, its Ticket showing no figure: the marker only ever shows a figure,
+ * never runs anything.
+ */
+function shownResultsIn(body: string): TicketResult[] {
+  const json = body
+    .slice(kitPartAt(body) ?? body.length)
+    .split("\n")
+    .map((line) => RESULTS_MARKER.exec(line.trim())?.[1])
+    .find((each) => each !== undefined);
+  const stored = json === undefined ? undefined : parsed(json);
+  return Array.isArray(stored) ? stored.flatMap((each) => readTicketResult(each) ?? []) : [];
+}
+
+/** The results marker line, carrying the results shown as JSON. */
+const RESULTS_MARKER = /^<!-- fabrik:replay-results (\[.*\]) -->$/;
+
+function readTicketResult(value: unknown): TicketResult | null {
+  if (!isObject(value) || !isId(value.ticket) || !isId(value.run) || !isObject(value.arms)) return null;
+  const baseline = readArmResult(value.arms.baseline);
+  const variant = readArmResult(value.arms.variant);
+  const original = readOriginalResult(value.original);
+  if (baseline === null || variant === null || original === null) return null;
+  return { ticket: value.ticket, run: value.run, arms: { baseline, variant }, original };
+}
+
+function readArmResult(value: unknown): ArmResult | null {
+  const original = readOriginalResult(value);
+  if (original === null || !isObject(value)) return null;
+  const { gates, hiddenTests, scores, patch } = value;
+  if (!(gates === null || isKeyOf(GATES_WORDS, gates)) || !(hiddenTests === null || isKeyOf(HIDDEN_TESTS_WORDS, hiddenTests))) return null;
+  if (!Array.isArray(scores) || scores.length !== SCORERS.length || !scores.every((score) => score === null || isScore(score))) return null;
+  if (!(patch === null || (typeof patch === "string" && PATCH_PATH.test(patch)))) return null;
+  return { ...original, gates, hiddenTests, scores, patch };
+}
+
+function readOriginalResult(value: unknown): OriginalResult | null {
+  if (!isObject(value)) return null;
+  const { verdict, costUsd, turns, durationMs } = value;
+  if (!(verdict === null || isKeyOf(VERDICT_WORDS, verdict))) return null;
+  if (![costUsd, durationMs].every((figure) => figure === null || (typeof figure === "number" && Number.isFinite(figure) && figure >= 0))) return null;
+  if (!(turns === null || (Number.isSafeInteger(turns) && (turns as number) >= 0))) return null;
+  return { verdict, costUsd: costUsd as number | null, turns: turns as number | null, durationMs: durationMs as number | null };
+}
+
+function isKeyOf<K extends string>(words: Readonly<Record<K, string>>, value: unknown): value is K {
+  return typeof value === "string" && Object.hasOwn(words, value);
+}
+
+function isScore(value: unknown): value is number {
+  return typeof value === "number" && value >= 0 && value <= 1;
+}
+
+/** An arm's patch's store path as replayPatchPath gives it, which a link can hold as it is. */
+const PATCH_PATH = /^replays\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/[1-9][0-9]*\/[1-9][0-9]*-(?:baseline|variant)\.patch$/;
+
+/**
+ * The Replay as the Operator reads it: a headline line of the variant's
+ * totals against the baseline's, a row for each arm of each Ticket, in the
+ * plan's order, the totals and the baseline's gap from the original runs,
+ * then each Ticket left out. The totals and headline wait for a Ticket done.
+ */
+function resultsLines({ plan, progress }: ReplayMarks, results: readonly TicketResult[], open: boolean): string[] {
   const { variable } = plan;
+  const rows = plan.tickets.map((planned) => {
+    const state = progress.find(({ ticket }) => ticket === planned.ticket) ?? { state: "pending" };
+    const result = state.state === "done" ? results.find(({ ticket, run }) => ticket === planned.ticket && run === state.run) : undefined;
+    return { planned, state, result };
+  });
+  const done = rows.flatMap(({ result }) => (result === undefined ? [] : [result]));
+  const totals = done.length === 0 ? null : totalsOf(done);
+  const headline = totals === null ? [] : comparison(totals.variant, totals.baseline);
   return [
-    "## Replay plan",
+    "## Replay results",
     "",
-    `Each Ticket runs twice from the commit its first Implement run started from: a baseline as it was built, and a variant with \`${variableLine(variable)}\`.`,
+    ...(headline.length === 0 ? [] : [`**variant: ${headline.join("; ")}**`, ""]),
+    `Each Ticket runs twice from the commit its first Implement run started from: a baseline as it was built, and a variant with \`${variableLine(variable)}\`. Cost, turns and duration are its Implement and Review runs' together.`,
     "",
-    ...plan.tickets.map((planned) => {
-      const flags = planned.flags.length === 0 ? "" : ` Flags: ${planned.flags.map((flag) => FLAG_WORDS[flag]).join(", ")}.`;
-      const state = progress.find(({ ticket }) => ticket === planned.ticket) ?? { state: "pending" };
-      return `- #${planned.ticket}, merged in #${planned.pullRequest} from \`${shortSha(planned.baseSha)}\`: ${progressWords(state)}.${baselineWords(planned.arms.baseline, variable)}${flags}`;
-    }),
+    ...tableHead(["Ticket", "Arm", "Gates", "Verdict", "Hidden tests", ...SCORERS.map(scorerWords), "Cost", "Turns", "Duration", "Patch", "Flags"]),
+    ...rows.flatMap(({ planned, state, result }) => ARMS.map((arm) => armRow(planned, arm, variable, result?.arms[arm] ?? null, state, open))),
+    ...(totals === null ? [] : ["", ...totalsLines(totals, done.length)]),
     ...(plan.leftOut.length === 0 ? [] : ["", "Left out:", "", ...plan.leftOut.map(leftOutLine)]),
     "",
   ];
 }
 
-/** How the plan names each flag. */
+/** How many of some arms' measures passed, of those measured. */
+interface Tally {
+  readonly passed: number;
+  readonly of: number;
+}
+
+/** An arm's totals over the Tickets done, or the original runs': these have no gates, hidden tests or scores. */
+interface Totals {
+  readonly gates: Tally | null;
+  readonly verdicts: Tally;
+  readonly hiddenTests: Tally | null;
+  /** The mean score under each Scorer, in SCORERS' order, over the runs it scored. */
+  readonly scores: readonly (number | null)[] | null;
+  /** What every run spent together, unknown when any run's is. */
+  readonly costUsd: number | null;
+  readonly turns: number | null;
+  readonly durationMs: number | null;
+}
+
+/**
+ * Each arm's totals over the Tickets done, and the original runs': a gate,
+ * Verdict or hidden test counts only where it was measured, so no test
+ * command, no hidden tests and a Review with no Verdict are never passes,
+ * nor failures. Hidden tests never run because the setup or build failed
+ * first count as failed.
+ */
+function totalsOf(done: readonly TicketResult[]): Readonly<Record<ReplayArm | "original", Totals>> {
+  const verdicts = (each: readonly OriginalResult[]) => tally(each.map(({ verdict }) => verdict), ["pass"], ["none"]);
+  const spent = (each: readonly OriginalResult[]) => ({
+    costUsd: sumOf(each.map(({ costUsd }) => costUsd)),
+    turns: sumOf(each.map(({ turns }) => turns)),
+    durationMs: sumOf(each.map(({ durationMs }) => durationMs)),
+  });
+  const armTotals = (arm: ReplayArm): Totals => {
+    const arms = done.map((result) => result.arms[arm]);
+    return {
+      gates: tally(arms.map(({ gates }) => gates), ["passed"], ["no-test-command"]),
+      verdicts: verdicts(arms),
+      hiddenTests: tally(arms.map(({ hiddenTests }) => hiddenTests), ["passed"], ["no-hidden-tests", "no-test-command"]),
+      scores: SCORERS.map((_, i) => meanOf(arms.flatMap(({ scores }) => scores[i] ?? []))),
+      ...spent(arms),
+    };
+  };
+  const originals = done.map(({ original }) => original);
+  return { baseline: armTotals("baseline"), variant: armTotals("variant"), original: { gates: null, verdicts: verdicts(originals), hiddenTests: null, scores: null, ...spent(originals) } };
+}
+
+/** How many of `values` are among `passes`, of those that were measured: neither null nor among `unmeasured`. */
+function tally<T>(values: readonly (T | null)[], passes: readonly T[], unmeasured: readonly T[]): Tally {
+  const measured = values.filter((value): value is T => value !== null && !unmeasured.includes(value));
+  return { passed: measured.filter((value) => passes.includes(value)).length, of: measured.length };
+}
+
+/** The sum of figures, unknown when any is: never a guessed total. */
+function sumOf(figures: readonly (number | null)[]): number | null {
+  return figures.reduce<number | null>((total, figure) => (total === null || figure === null ? null : total + figure), 0);
+}
+
+function meanOf(values: readonly number[]): number | null {
+  return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+/** The Totals section: a row for each arm and the original runs, then the baseline's gap from the original. */
+function totalsLines(totals: Readonly<Record<ReplayArm | "original", Totals>>, done: number): string[] {
+  const row = (name: string, { gates, verdicts, hiddenTests, scores, costUsd, turns, durationMs }: Totals) =>
+    tableRow([
+      name,
+      tallyWords(gates),
+      tallyWords(verdicts),
+      tallyWords(hiddenTests),
+      ...SCORERS.map((_, i) => orNone(scores?.[i] ?? null, (score) => score.toFixed(2))),
+      orNone(costUsd, dollars),
+      orNone(turns, String),
+      orNone(durationMs, minutes),
+    ]);
+  const gap = comparison(totals.baseline, totals.original);
+  return [
+    "### Totals",
+    "",
+    `Over the ${done === 1 ? "1 Ticket" : `${done} Tickets`} done, beside the original: each one's first Implement run and its Review.`,
+    "",
+    ...tableHead(["Arm", "Gates", "Pass Verdicts", "Hidden tests", ...SCORERS.map(scorerWords), "Cost", "Turns", "Duration"]),
+    row("baseline", totals.baseline),
+    row("variant", totals.variant),
+    row("original", totals.original),
+    "",
+    `Baseline vs original: ${gap.length === 0 ? "the store holds nothing of the original runs to compare." : `${gap.join("; ")}.`}`,
+  ];
+}
+
+function tallyWords(tally: Tally | null): string {
+  return tally === null || tally.of === 0 ? NONE : `${tally.passed}/${tally.of}`;
+}
+
+/**
+ * How `these` totals compare with `those`, measure by measure, from the
+ * totals alone: each count both have measured something of, then each
+ * figure's change where both are known.
+ */
+function comparison(these: Totals, those: Totals): string[] {
+  const counts: [string, Tally | null, Tally | null][] = [
+    ["gates", these.gates, those.gates],
+    ["pass Verdicts", these.verdicts, those.verdicts],
+    ["hidden tests", these.hiddenTests, those.hiddenTests],
+  ];
+  const figures: [string, number | null, number | null][] = [
+    ["cost", these.costUsd, those.costUsd],
+    ["turns", these.turns, those.turns],
+    ["duration", these.durationMs, those.durationMs],
+  ];
+  return [
+    ...counts.flatMap(([name, a, b]) => (a === null || b === null || (a.of === 0 && b.of === 0) ? [] : [`${name} ${a.passed}/${a.of} vs ${b.passed}/${b.of}`])),
+    ...figures.flatMap(([name, a, b]) => (a === null || b === null || b === 0 ? [] : [`${name} ${percentChange(a, b)}`])),
+  ];
+}
+
+/** The change from `from` to `to`, in whole percent, signed: `+12%`, `−38%` or `0%`. */
+function percentChange(to: number, from: number): string {
+  const change = Math.round(((to - from) / from) * 100);
+  return change === 0 ? "0%" : change > 0 ? `+${change}%` : `−${-change}%`;
+}
+
+/** The two arms, in the order the results show them. */
+const ARMS: readonly ReplayArm[] = ["baseline", "variant"];
+
+/** One arm of a planned Ticket as a row: what it measured, or where its Ticket stands while it has no result. */
+function armRow(planned: PlannedTicket, arm: ReplayArm, variable: ReplayVariable, result: ArmResult | null, progress: ReplayProgress, open: boolean): string {
+  const ticket = `#${planned.ticket} (merged in #${planned.pullRequest})`;
+  const flags = planned.flags.length === 0 ? NONE : planned.flags.map((flag) => FLAG_WORDS[flag]).join(", ");
+  const settings = armWords(arm, planned.arms[arm], variable);
+  if (result === null) {
+    const state = open || progress.state === "done" || progress.state === "failed" ? progressWords(progress) : "cancelled";
+    // A failure's reason is the one cell not of the Kit's own words, so a pipe in it can't split the row.
+    return tableRow([ticket, settings, state.replaceAll("|", "\\|"), ...Array.from({ length: 6 + SCORERS.length }, () => NONE), flags]);
+  }
+  return tableRow([
+    ticket,
+    settings,
+    result.gates === null ? NONE : GATES_WORDS[result.gates],
+    result.verdict === null ? NONE : VERDICT_WORDS[result.verdict],
+    result.hiddenTests === null ? NONE : HIDDEN_TESTS_WORDS[result.hiddenTests],
+    ...result.scores.map((score) => orNone(score, (value) => value.toFixed(2))),
+    orNone(result.costUsd, dollars),
+    orNone(result.turns, String),
+    orNone(result.durationMs, minutes),
+    result.patch === null ? NONE : `[patch](${storeFileUrl(result.patch)})`,
+    flags,
+  ]);
+}
+
+function tableRow(cells: readonly string[]): string {
+  return `| ${cells.join(" | ")} |`;
+}
+
+/** A table's heading row, and the delimiter row under it, a cell for each heading. */
+function tableHead(headings: readonly string[]): string[] {
+  return [tableRow(headings), tableRow(headings.map(() => "---"))];
+}
+
+/** What a cell shows for a figure the store holds nothing of. */
+const NONE = "–";
+
+function orNone(value: number | null, format: (value: number) => string): string {
+  return value === null ? NONE : format(value);
+}
+
+function dollars(usd: number): string {
+  return `$${usd.toFixed(2)}`;
+}
+
+/** A run's time in whole minutes. */
+function minutes(ms: number): string {
+  return ms < 60_000 ? "under 1 min" : `${Math.round(ms / 60_000)} min`;
+}
+
+/** A Scorer's name as a column heading: `ticket-compliance` as Ticket compliance. */
+function scorerWords(scorer: string): string {
+  const words = scorer.replaceAll("-", " ");
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+/** An arm, with how it runs what the variable changes: a candidate Kit's baseline is always the pinned release. */
+function armWords(arm: ReplayArm, settings: ReplayArmSettings, variable: ReplayVariable): string {
+  switch (variable.kind) {
+    case "model":
+      return `${arm}, ${settings[variable.role].model}`;
+    case "effort": {
+      const { effort } = settings[variable.role];
+      return `${arm}, ${effort === null ? "default effort" : `effort ${effort}`}`;
+    }
+    case "kit":
+      return settings.candidateSha === null ? arm : `${arm}, Kit ${shortSha(settings.candidateSha)}`;
+  }
+}
+
+const GATES_WORDS: Readonly<Record<ReplayGates, string>> = {
+  passed: "passed",
+  "setup-failed": "setup failed",
+  "build-failed": "build failed",
+  "tests-failed": "tests failed",
+  "no-test-command": "no test command",
+};
+
+const HIDDEN_TESTS_WORDS: Readonly<Record<ReplayHiddenTests, string>> = {
+  passed: "passed",
+  failed: "failed",
+  "no-hidden-tests": "no hidden tests",
+  "no-test-command": "no test command",
+  "not-run": "not run",
+};
+
+const VERDICT_WORDS: Readonly<Record<Verdict | "none", string>> = {
+  pass: "pass",
+  "execution-flaw": "Execution flaw",
+  "design-flaw": "Design flaw",
+  none: "none",
+};
+
+/** How the results name each flag. */
 const FLAG_WORDS: Readonly<Record<ReplayFlag, string>> = {
   "human-touches": "Human touches",
   "edited-input": "edited input",
   "no-hidden-tests": "no hidden tests",
 };
 
-/** A Ticket's progress, as the plan shows it. */
+/** A Ticket's progress, as its rows show it while it has no result. */
 function progressWords(progress: ReplayProgress): string {
   switch (progress.state) {
     case "pending":
@@ -999,20 +1447,6 @@ function progressWords(progress: ReplayProgress): string {
 /** A failure's reason on one line, mentioning nobody. */
 function shownReason(reason: string): string {
   return withoutMentions(reason.replace(/\s+/g, " ").trim());
-}
-
-/** How a Ticket's baseline runs what the variable changes, a sentence to show after its progress; none for a candidate Kit, whose baseline is always the pinned release. */
-function baselineWords(baseline: ReplayArmSettings, variable: ReplayVariable): string {
-  switch (variable.kind) {
-    case "model":
-      return ` Its baseline runs ${ROLE_WORDS[variable.role]} on ${baseline[variable.role].model}.`;
-    case "effort": {
-      const { effort } = baseline[variable.role];
-      return ` Its baseline runs ${ROLE_WORDS[variable.role]} at ${effort === null ? "the default effort" : `effort ${effort}`}.`;
-    }
-    case "kit":
-      return "";
-  }
 }
 
 const ROLE_WORDS: Readonly<Record<ReplayRole, string>> = { implement: "Implement", review: "Review" };

@@ -10,6 +10,7 @@ import {
   type ReplayRunEnd,
   type ReplayRun,
   readRunRecord,
+  replayPatchPath,
   replayRunRecordFor,
   type RunEnd,
   runRecordFor,
@@ -1092,6 +1093,15 @@ describe("A Replay arm's record", () => {
       "transcripts/acme/widgets/2026-11/9001-1-implement-replay-variant.jsonl.gz",
       "transcripts/acme/widgets/2026-11/9001-1-review-replay-baseline.jsonl.gz",
       "transcripts/acme/widgets/2026-11/9001-1-review-replay-variant.jsonl.gz",
+    ]);
+  });
+
+  it("each arm of each Ticket has its own patch path, by the replay issue, the Ticket and the arm", () => {
+    const variant = { issue: REPLAY_ISSUE, arm: "variant", ticket: TICKET } as const;
+
+    expect([replayPatchPath("acme/widgets", { ...variant, arm: "baseline" }), replayPatchPath("acme/widgets", variant)]).toEqual([
+      `replays/acme/widgets/${REPLAY_ISSUE}/${TICKET}-baseline.patch`,
+      `replays/acme/widgets/${REPLAY_ISSUE}/${TICKET}-variant.patch`,
     ]);
   });
 

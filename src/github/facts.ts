@@ -25,7 +25,7 @@ import type {
   TicketFacts,
 } from "../kit/weeklySummary.ts";
 import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest.ts";
-import { AUDIT_LABEL, MONITOR_LABEL, RETRO_LABEL } from "../loop/labels.ts";
+import { AUDIT_LABEL, MONITOR_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/labels.ts";
 import { escapeMarkerIn, fromPullRequestIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import { type GitHub, GitHubError, pagesOf, type Repo } from "./client.ts";
@@ -64,7 +64,7 @@ export function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, n
 async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(reach).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, openMaps] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, openMaps, openReplays] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
@@ -79,6 +79,7 @@ async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: num
     pagesOf<RawOpenKitIssue>(github, OPEN_KIT_ISSUES_QUERY, repo, { label: RETRO_LABEL }, (data) => data.repository.issues),
     // The Map cap's own read, so Held and the cap can't disagree.
     gatherOpenMaps(github, repo),
+    pagesOf<RawOpenReplay>(github, OPEN_REPLAYS_QUERY, repo, { replay: REPLAY_LABEL }, (data) => data.repository.issues),
   ]);
   const issues = [...new Map([...updatedIssues, ...openIssues].map((issue) => [issue.number, issue])).values()];
   return {
@@ -98,6 +99,7 @@ async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: num
       .map(({ number, title, author, body }) => ({ number, title, author: loginOf(author), body })),
     openAudits: openAudits.map(openKitIssueOf),
     openRetros: openRetros.map(openKitIssueOf),
+    openReplays: openReplays.map(({ number, title, createdAt, lastEditedAt, body, author }) => ({ number, title, author: loginOf(author), createdAt, lastEditedAt, body })),
     openMaps: openMaps.map((map) => map.number),
   };
 }
@@ -368,6 +370,18 @@ const OPEN_KIT_ISSUES_QUERY = `
   }
 `;
 
+// Each open replay issue's body, whose markers say whether its results are in.
+const OPEN_REPLAYS_QUERY = `
+  query ($owner: String!, $name: String!, $after: String, $replay: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, labels: [$replay], first: 25, after: $after) {
+        ${PAGE_INFO}
+        nodes { number title createdAt lastEditedAt body author ${ACTOR} }
+      }
+    }
+  }
+`;
+
 const DEFAULT_BRANCH_QUERY = `
   query ($owner: String!, $name: String!, $after: String, $since: GitTimestamp!) {
     repository(owner: $owner, name: $name) {
@@ -483,6 +497,11 @@ interface RawOpenKitIssue {
   title: string;
   createdAt: string;
   author: RawActor | null;
+}
+
+interface RawOpenReplay extends RawOpenKitIssue {
+  lastEditedAt: string | null;
+  body: string;
 }
 
 interface RawDefaultBranchCommit {
