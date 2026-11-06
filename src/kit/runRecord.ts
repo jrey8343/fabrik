@@ -352,11 +352,15 @@ function readingOf(info: StreamMessage | null): RateLimitReading | null {
 
 /** Where a record and its transcript go, by the run's name in the store. */
 function pathsFor(run: StoredRun, withTranscript: boolean): { recordPath: string; transcriptPath: string | null } {
-  const name = runStoreName(run);
   return {
-    recordPath: `runs/${name}.json`,
-    transcriptPath: withTranscript ? `transcripts/${name}.jsonl.gz` : null,
+    recordPath: recordPathOf(run),
+    transcriptPath: withTranscript ? `transcripts/${runStoreName(run)}.jsonl.gz` : null,
   };
+}
+
+/** Where a run's record sits in the store. */
+export function recordPathOf(run: StoredRun): string {
+  return `runs/${runStoreName(run)}.json`;
 }
 
 /**
