@@ -108,14 +108,23 @@ export function prototypeContext(
         "The Kit then posts a comment saying what is being built, and the prototype round follows when the variants are ready.",
         "Never end in `prototype` without the Operator's yes.",
       ].join(" "),
+      [
+        "- **Read the Operator's reply to a prototype round as an ordinary answer**, such as \"B, with the bigger booking button from C\":",
+        "the variant they chose and any tweaks to it. Carry on the session from there.",
+      ].join(" "),
+      [
+        `- **When you finish after a prototype round, record the Prototype in the outcome**: the variant the Operator chose, their tweaks, and links to the branch ${branch} and to that variant's component, as the prototype round gives them.`,
+        "Put it in the brief, or in the Spec and in each Ticket that builds the page.",
+        "Say that the Implementer rewrites the Prototype as a reference, never merging or cherry-picking it.",
+      ].join(" "),
     ].join("\n"),
     "To ask for the Prototype the Operator approved:",
     `<design>\n${JSON.stringify(PROTOTYPE_EXAMPLE, null, 2)}\n</design>`,
     [
       "- `route` is the one route every variant renders on, a path starting with `/`, never a full URL.",
       `- \`variants\` is how many to build, a whole number from ${PROTOTYPE_MIN_VARIANTS} to ${PROTOTYPE_VARIANT_CAP}.`,
-      "- `brief` says what each variant explores, so they differ properly from one another rather than tweak one layout, and carries anything the Operator asked for.",
-      "- `comment` is one line. The Kit's comment names the route and the count and says the round follows, so don't.",
+      "- `brief` says what each variant explores, so the variants are properly different from one another, not small tweaks of one layout, and carries anything the Operator asked for.",
+      "- `comment` is one line leading into the Kit's comment, which names the route and the count itself and says the round follows.",
     ].join("\n"),
   ];
 }

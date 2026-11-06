@@ -218,6 +218,18 @@ describe("What a Design-session turn's prompt says of Prototypes", () => {
     expect(said).toContain("Never end in `prototype` without the Operator's yes.");
   });
 
+  it("reads the Operator's reply to a prototype round as an ordinary answer", () => {
+    expect(said).toContain("- **Read the Operator's reply to a prototype round as an ordinary answer**");
+    expect(said).toContain("the variant they chose and any tweaks to it. Carry on the session from there.");
+  });
+
+  it("records the chosen variant, the tweaks and links to the branch and the variant's component when it finishes, for the Implementer to rewrite", () => {
+    expect(said).toContain(
+      "- **When you finish after a prototype round, record the Prototype in the outcome**: the variant the Operator chose, their tweaks, and links to the branch `prototype/7` and to that variant's component",
+    );
+    expect(said).toContain("Say that the Implementer rewrites the Prototype as a reference, never merging or cherry-picking it.");
+  });
+
   it("describes the prototype output with an example the Kit accepts", () => {
     const example: unknown = JSON.parse(/<design>\n([\s\S]*?)\n<\/design>/.exec(said)?.[1] ?? "null");
 
