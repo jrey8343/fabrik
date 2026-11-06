@@ -114,10 +114,48 @@ describe("Landing a captured prototype turn", () => {
     });
   });
 
+  it("says so when the prototype job kept no gallery, the round still the record", () => {
+    const [round] = commentsOf(planFor(finished({ gallery: null }), inSession(), kitConfig()));
+
+    expect(round).toContain(
+      `\n[The prototype branch](${REPO}/tree/prototype/7) · The Kit kept no gallery of the captures, so this comment is the prototype's record.\n`,
+    );
+  });
+
   it("notifies the Operator once, by the round's one @-mention, and never ends the Design session", () => {
     const plan = planFor(finished(), inSession(), kitConfig());
 
     expect(notificationsOf(plan, "jrey")).toEqual(["mention on #7"]);
     expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
+  });
+});
+
+describe("Landing a prototype turn whose capture failed after it built", () => {
+  const failed = (reason: string): CaptureResult => ({ ...CAPTURED, outcome: "failed", reason, captures: [] }) as CaptureResult;
+
+  it.each([
+    ["timeout", "capture ran out of time"],
+    ["error", `capture hit an error the Kit didn't expect, which [the run](${RUN}) shows`],
+    ["no-variants", "capture found no variant to capture in the turn's output"],
+  ])("still pushes the branch and asks \"Which variant?\", giving the reason in place of the gallery, when it failed with %s", (reason, words) => {
+    const plan = planFor(finished({ capture: failed(reason), gallery: null }), inSession(), kitConfig());
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
+    const [round] = commentsOf(plan);
+    expect(round).toMatch(/^<!-- fabrik:design-round 3 -->\n<!-- fabrik:prototype-round -->\n@jrey \*\*Design session, round 3: the prototype\.\*\*/);
+    expect(round).toContain(
+      `\n[The prototype branch](${REPO}/tree/prototype/7) · There's no gallery: ${words}. The branch holds the variants, and this comment is the prototype's record.\n`,
+    );
+    expect(round).toContain(`- **B.** A stepper: class, time, then details. [\`src/pages/book/Stepper.tsx\`](${blob("src/pages/book/Stepper.tsx")})`);
+    expect(round).toMatch(/\n\*\*1\. Which variant\?\*\*\n➡️ Recommended: B, with the calendar from C on its first step\.$/);
+  });
+
+  it("gives the reason as no capture result when the prototype job passed out none the push job could read", () => {
+    const [round] = commentsOf(planFor(finished({ capture: undefined, gallery: null }), inSession(), kitConfig()));
+
+    expect(round).toContain(
+      "There's no gallery: the prototype job passed out no capture result the push job could read. The branch holds the variants,",
+    );
+    expect(round).toContain("**1. Which variant?**");
   });
 });
