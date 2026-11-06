@@ -7,11 +7,13 @@
 // Subscription's weekly limit is re-run once, quietly, through its trigger
 // label while another Subscription is free, so the Operator hears nothing.
 // Once none is free it is held instead, with no failure comment, and so is a
-// refused Auditor run, whose Audit stays pending (src/loop/heldRun.ts).
+// refused Auditor run, whose Audit stays pending (src/loop/heldRun.ts). A run
+// killed for spending usage credits is re-run or held the same way, while its
+// Subscription's usage-credits issue keeps the Kit off that Subscription.
 import { isPendingAudit } from "./audit.ts";
 import { failAudit } from "./auditFailure.ts";
 import { type HeldRun, holding } from "./heldRun.ts";
-import { anotherSubscriptionFree, refusedToken, repoWideNotice, type StalledRun } from "./kitIssues.ts";
+import { anotherSubscriptionFree, heldAfterKill, refusedToken, repoWideNotice, type StalledRun } from "./kitIssues.ts";
 import { DESIGN_LABEL, DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
 import { rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
@@ -41,6 +43,13 @@ const TRIGGER_LABELS: Readonly<Record<Exclude<NoticedRole, "design">, Label>> = 
  * Design-session turn, which starts the turn again (src/loop/design.ts).
  */
 const RERUN_LABELS: Readonly<Record<NoticedRole, Label>> = { ...TRIGGER_LABELS, design: DESIGN_LABEL };
+
+/**
+ * With rotation on, the failures that leave the run's Subscription unusable,
+ * so the Kit re-runs the run on the next free one, or holds it while none is:
+ * the weekly limit, and a kill for spending usage credits.
+ */
+const RERUN_FAILURES: readonly InfrastructureFailure[] = ["weekly-limit", "usage-credits"];
 
 const ROLE_NAMES: Readonly<Record<NoticedRole, string>> = {
   triage: "Triage",
@@ -82,6 +91,8 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
       return "it hit the weekly usage limit";
     case "metered-billing":
       return "the preflight found a route that would bill metered API usage, so it refused to start the agent";
+    case "usage-credits":
+      return `its stream showed usage credits being spent on the \`${subscriptionOfRun(run, config)}\` Subscription, so the Kit killed it`;
   }
 }
 
@@ -98,8 +109,10 @@ function heldOnRefusal(
   { issue, kitIssues }: IssueContext,
   ranOn: Pick<StalledRun, "subscription" | "rotation" | "subscriptions">,
 ): HeldRun | null {
-  if (failure !== "weekly-limit" || !ranOn.rotation) return null;
-  if (run.role === "audit") return isPendingAudit(issue) ? { role: "audit", issue: run.issue, label: null } : null;
+  if (!ranOn.rotation || !RERUN_FAILURES.includes(failure)) return null;
+  // A killed Auditor run is held only while none is free: else its Audit fails, for the tick to try again.
+  const auditHeld = failure === "weekly-limit" || !anotherSubscriptionFree(kitIssues, ranOn);
+  if (run.role === "audit") return auditHeld && isPendingAudit(issue) ? { role: "audit", issue: run.issue, label: null } : null;
   if (anotherSubscriptionFree(kitIssues, ranOn)) return null;
   // The review trigger lives on the PR; every other role's on the issue.
   const labelled = run.role === "review" ? (issue.openPullRequests[0] ?? run.issue) : run.issue;
@@ -120,6 +133,15 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     subscriptions: config.subscriptions,
   };
   const held = heldOnRefusal(run, failure, context, ranOn);
+  if (held !== null && failure === "usage-credits") {
+    const repoWide = repoWideNotice(failure, context, {
+      run: run.role === "audit" ? `The Audit run on #${run.issue}` : `The ${ROLE_NAMES[run.role]} run on #${run.issue}`,
+      runUrl: run.runUrl,
+      resetsAt: null,
+      ...ranOn,
+    });
+    return { kind: "act", actions: [...heldAfterKill(held, context.kitIssues), ...(repoWide?.actions ?? [])] };
+  }
   if (held !== null) {
     const repoWide = repoWideNotice(failure, context, {
       run: run.role === "audit" ? `The Audit run on #${run.issue}` : `The ${ROLE_NAMES[run.role]} run on #${run.issue}`,
@@ -161,7 +183,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   });
   // Another Subscription is free: the new Loop run's Kit job starts the run on it,
   // as an Infrastructure failure's resumption that never counts against retries.
-  if (failure === "weekly-limit" && anotherSubscriptionFree(context.kitIssues, ranOn)) {
+  if (RERUN_FAILURES.includes(failure) && anotherSubscriptionFree(context.kitIssues, ranOn)) {
     const rerun = RERUN_LABELS[run.role];
     return {
       kind: "act",

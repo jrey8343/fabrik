@@ -8,10 +8,18 @@
 // another Subscription is free: only the one opened, or refused on, once none
 // is free @-mentions the Operator. While none is free, each run due is held
 // instead of started, and the buzzing weekly-limit issue names it with a held
-// marker (src/loop/heldRun.ts).
+// marker (src/loop/heldRun.ts). A run killed for spending usage credits gets
+// a "Turn off usage credits" issue for its Subscription, assigned to the
+// Operator, and the Kit skips that Subscription until the issue is closed.
 import { type HeldRun, heldMarker, heldRunOf, holding, RUN_NAMES } from "./heldRun.ts";
-import { READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
-import { freeSubscriptions, rotationIsOn, subscriptionMarker, weeklyLimitSubscriptionOf } from "./subscriptions.ts";
+import { READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
+import {
+  freeSubscriptions,
+  rotationIsOn,
+  subscriptionMarker,
+  subscriptionNamedBy,
+  weeklyLimitSubscriptionOf,
+} from "./subscriptions.ts";
 import type { Action, InfrastructureFailure, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
 
 /** The repo-wide part of any snapshot: who the Operator is and which Kit-owned issues are open. */
@@ -88,6 +96,9 @@ export function repoWideNotice(
       return deadToken(snapshot, stalled);
     case "weekly-limit":
       return stalled.rotation ? subscriptionWeeklyLimit(snapshot, stalled) : weeklyLimit(snapshot, stalled);
+    // Only with rotation on does the stream watch kill a run for spending usage credits.
+    case "usage-credits":
+      return stalled.rotation ? usageCredits(snapshot, stalled) : null;
     default:
       return null;
   }
@@ -223,7 +234,9 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
   const newWindow =
     mine !== undefined && mineResetsAt !== null && resetsAt !== null && Date.parse(resetsAt) > Date.parse(mineResetsAt);
   const stayingOpen = mine !== undefined && !newWindow ? [...others, mine] : others;
-  const buzz = !anotherSubscriptionFree(others, stalled) && !stayingOpen.some(notified);
+  // A Subscription with an open usage-credits issue isn't free either.
+  const unusable = kitIssues.filter((issue) => issue !== mine);
+  const buzz = !anotherSubscriptionFree(unusable, stalled) && !stayingOpen.some(notified);
   const earliest = earliestOf([...others.map(resetsAtOf), mine !== undefined && !newWindow ? mineResetsAt : resetsAt]);
   const allUsedUp = [
     `${stalled.run} hit the weekly usage limit of the \`${subscription}\` Subscription, and every listed Subscription has now hit its limit.`,
@@ -332,9 +345,7 @@ export function heldWhileUsedUp(
 ): Plan {
   if (plan.kind !== "act" || !rotationIsOn(config) || freeSubscriptions(kitIssues, config).length > 0) return plan;
   if (!plan.actions.some((action) => action.kind === "start-agent-run")) return plan;
-  const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
-  const until = earliestOf(limits.map(resetsAtOf));
-  const on = limits.find(notified) ?? limits.find((issue) => until !== null && resetsAtOf(issue) === until) ?? limits[0];
+  const { until, on } = holdingOn(kitIssues);
   const comments: Action[] = [];
   const actions = plan.actions.flatMap((action): Action[] => {
     if (action.kind !== "start-agent-run") return [action];
@@ -349,10 +360,88 @@ export function heldWhileUsedUp(
   return { kind: "act", actions: [...actions, ...comments] };
 }
 
+/**
+ * Where a run held while no Subscription is free is named: the weekly-limit
+ * issue that buzzed the Operator, else the first to reset, else the first
+ * open; and when it is held until, the earliest reset across them.
+ */
+function holdingOn(kitIssues: readonly KitIssueSnapshot[]): { until: string | null; on: KitIssueSnapshot | undefined } {
+  const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
+  const until = earliestOf(limits.map(resetsAtOf));
+  const on = limits.find(notified) ?? limits.find((issue) => until !== null && resetsAtOf(issue) === until) ?? limits[0];
+  return { until, on };
+}
+
+/**
+ * With rotation on, a run killed for spending usage credits while no other
+ * Subscription is free, held: its trigger label off, and a quiet comment
+ * naming it on the weekly-limit issue a run held now is named on.
+ */
+export function heldAfterKill(held: HeldRun, kitIssues: readonly KitIssueSnapshot[]): Action[] {
+  const { until, on } = holdingOn(kitIssues);
+  return [
+    ...holding(held, until),
+    ...(on === undefined ? [] : [{ kind: "comment" as const, issue: on.number, body: heldLine(held, until) }]),
+  ];
+}
+
 /** The earliest of these reset times, or null when none is known. */
 function earliestOf(resets: readonly (string | null)[]): string | null {
   const known = resets.filter((reset): reset is string => reset !== null);
   return known.length === 0 ? null : known.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a));
+}
+
+/**
+ * With rotation on: the killed run's Subscription's usage-credits issue,
+ * opened assigned to the Operator, its one notification, or commented on
+ * quietly when it's already open. The Kit skips that Subscription until the
+ * Operator closes it (src/loop/subscriptions.ts).
+ */
+function usageCredits({ kitIssues, operator }: RepoContext, stalled: StalledRun): RepoWideNotice {
+  const { subscription } = stalled;
+  const open = kitIssues.find(
+    (issue) => issue.labels.includes(USAGE_CREDITS_LABEL) && subscriptionNamedBy(issue) === subscription,
+  );
+  if (open !== undefined) {
+    return {
+      actions: [
+        {
+          kind: "comment",
+          issue: open.number,
+          body: `${stalled.run} was killed for spending usage credits too. [The run](${stalled.runUrl})`,
+        },
+      ],
+      pointer: `The Kit is tracking this in #${open.number}.`,
+    };
+  }
+  const title = `Turn off usage credits on the \`${subscription}\` Subscription`;
+  return {
+    actions: [
+      {
+        kind: "open-issue",
+        title,
+        body: [
+          `${stalled.run} showed usage credits being spent on the \`${subscription}\` Subscription, so the Kit killed it. Until this issue is closed the Kit runs no agent on that Subscription, and comments here about each other run killed on it.`,
+          "",
+          "## Steps",
+          "",
+          `- [ ] Turn usage credits off on the Claude account whose token is the \`${subscription}\` item in the Fabrik 1Password vault.`,
+          "- [ ] Close this issue, so that the Kit runs agents on that Subscription again.",
+          "",
+          "Run `/fabrik-pair` on this issue to work through these steps with an agent.",
+          "",
+          `[The killed run](${stalled.runUrl})`,
+          "",
+          NOTIFIED,
+          subscriptionMarker(subscription),
+        ].join("\n"),
+        labels: [READY_FOR_HUMAN, USAGE_CREDITS_LABEL],
+        // The assignment is this issue's one notification.
+        assignees: [operator],
+      },
+    ],
+    pointer: `The Kit has opened a ${title} issue for the Operator.`,
+  };
 }
 
 function deadToken({ kitIssues, operator }: RepoContext, stalled: StalledRun): RepoWideNotice {
