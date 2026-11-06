@@ -27,6 +27,19 @@ export interface StalledRun {
   readonly runUrl: string;
   /** When the weekly limit resets, if known. */
   readonly resetsAt: string | null;
+  /** The Subscription it ran on: the `Fabrik` vault item its Claude token came from. */
+  readonly subscription: string;
+  /** Whether rotation is on, so the Kit's issues say which Subscription they're about. */
+  readonly rotation: boolean;
+}
+
+/** The token a dead-token notice says was refused: with rotation on, the Subscription's. */
+export function refusedToken({ subscription, rotation }: Pick<StalledRun, "subscription" | "rotation">): string {
+  return rotation ? `the Claude token of the \`${subscription}\` Subscription` : "the Claude token";
+}
+
+function capitalised(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
 
 export interface RepoWideNotice {
@@ -155,18 +168,24 @@ function weeklyLimit({ kitIssues, operator }: RepoContext, stalled: StalledRun):
 
 function deadToken({ kitIssues, operator }: RepoContext, stalled: StalledRun): RepoWideNotice {
   const open = kitIssues.find((issue) => issue.labels.includes(TOKEN_ROTATION_LABEL));
+  const token = capitalised(refusedToken(stalled));
   if (open === undefined) {
+    const title = stalled.rotation
+      ? `Rotate the Claude token of the \`${stalled.subscription}\` Subscription`
+      : "Rotate the Claude token";
     return {
       actions: [
         {
           kind: "open-issue",
-          title: "Rotate the Claude token",
+          title,
           body: [
-            `The Claude token that every Fabrik run in this repo uses was refused (\`authentication_failed\`). ${stalled.run} was the first to fail, and no agent run can start until the token is rotated.`,
+            stalled.rotation
+              ? `${token} was refused (\`authentication_failed\`). ${stalled.run} was the first to fail, and no agent run on it can start until the token is rotated.`
+              : `The Claude token that every Fabrik run in this repo uses was refused (\`authentication_failed\`). ${stalled.run} was the first to fail, and no agent run can start until the token is rotated.`,
             "",
             "## Steps",
             "",
-            "- [ ] Run `claude setup-token` and save the new token, with its expiry date, in the `Claude token` item in the Fabrik 1Password vault.",
+            `- [ ] Run \`claude setup-token\` and save the new token, with its expiry date, in the \`${stalled.subscription}\` item in the Fabrik 1Password vault.`,
             "- [ ] Re-add the trigger label on each Ticket the Kit commented on, to run it again.",
             "",
             "Then close this issue, so that the next dead token opens a fresh one. Run `/fabrik-pair` on this issue to work through these steps with an agent.",
@@ -180,13 +199,14 @@ function deadToken({ kitIssues, operator }: RepoContext, stalled: StalledRun): R
           assignees: [operator],
         },
       ],
-      pointer: "The Kit has opened a Rotate the Claude token issue for the Operator.",
+      pointer: `The Kit has opened a ${title} issue for the Operator.`,
     };
   }
+  const on = stalled.rotation ? `, on the \`${stalled.subscription}\` Subscription` : "";
   const body = notified(open)
-    ? `${stalled.run} was refused too. [The run](${stalled.runUrl})`
+    ? `${stalled.run} was refused too${on}. [The run](${stalled.runUrl})`
     : [
-        `@${operator} The Claude token was refused (\`authentication_failed\`), so no agent run in this repo can start until it's rotated. ${stalled.run} was the first to fail. [The run](${stalled.runUrl})`,
+        `@${operator} ${token} was refused (\`authentication_failed\`), so no agent run in this repo can start ${stalled.rotation ? "on it " : ""}until it's rotated. ${stalled.run} was the first to fail. [The run](${stalled.runUrl})`,
         "",
         NOTIFIED,
       ].join("\n");

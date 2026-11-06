@@ -3,7 +3,7 @@
 // a Ticket's failure there's no trigger label to re-add and nobody to tell,
 // unless the failure stalls the whole repo.
 import { isPendingAudit } from "./audit.ts";
-import { repoWideNotice } from "./kitIssues.ts";
+import { repoWideNotice, type StalledRun } from "./kitIssues.ts";
 import { AUDIT_FAILED_MARKER, auditMarker, auditMarksIn } from "./markers.ts";
 import type { InfrastructureFailure, IssueContext, Plan } from "./types.ts";
 
@@ -15,6 +15,12 @@ export interface AuditRunFailure {
   readonly runUrl: string;
   /** For the weekly limit, when it resets, if known. */
   readonly resetsAt: string | null;
+  /**
+   * The Subscription it ran on, and whether rotation is on, for the repo-wide
+   * notice; absent when the Auditor's own reply failed it, which stalls no
+   * other run.
+   */
+  readonly ranOn?: Pick<StalledRun, "subscription" | "rotation">;
 }
 
 /**
@@ -25,13 +31,19 @@ export interface AuditRunFailure {
  * repo-wide notice, as for any run. An Audit that's no longer pending (the
  * Operator closed it, say) changes nothing.
  */
-export function failAudit(context: IssueContext, { failure, how, runUrl, resetsAt }: AuditRunFailure): Plan {
+export function failAudit(
+  context: IssueContext,
+  { failure, how, runUrl, resetsAt, ranOn }: AuditRunFailure,
+): Plan {
   const { issue } = context;
   if (!isPendingAudit(issue)) {
     return { kind: "nothing", reason: `#${issue.number} is no longer a pending Audit, so its failed run changes nothing` };
   }
   const { commit } = auditMarksIn(issue.body);
-  const repoWide = repoWideNotice(failure, context, { run: `The Audit run on #${issue.number}`, runUrl, resetsAt });
+  const repoWide =
+    ranOn === undefined
+      ? null
+      : repoWideNotice(failure, context, { run: `The Audit run on #${issue.number}`, runUrl, resetsAt, ...ranOn });
   return {
     kind: "act",
     actions: [
