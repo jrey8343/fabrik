@@ -81,12 +81,12 @@ export const CAPTURE_SIDES = ["before", "after"] as const;
 export type CaptureSide = (typeof CAPTURE_SIDES)[number];
 
 /**
- * Why capture failed: the server never answered at `ui.url`, capture ran out
- * of time, there was no route to capture, or anything else it caught. The
- * push job records the last, `no-result`, itself: a UI pull request whose
- * Implement job passed it no capture result it could read.
+ * Why capture failed: `sandbox.build` failed, the server never answered at
+ * `ui.url`, capture ran out of time, there was no route to capture, or
+ * anything else it caught. The push job records the last, `no-result`,
+ * itself: a UI pull request whose Implement job passed it no capture result it could read.
  */
-export const CAPTURE_FAILURES = ["server-did-not-start", "timeout", "no-routes", "error", "no-result"] as const;
+export const CAPTURE_FAILURES = ["build-failed", "server-did-not-start", "timeout", "no-routes", "error", "no-result"] as const;
 
 export type CaptureFailure = (typeof CAPTURE_FAILURES)[number];
 
@@ -288,6 +288,7 @@ export function evidenceSection(evidence: UiEvidence): string {
 
 /** Why capture failed, in plain words. */
 const FAILURE_WORDS: Readonly<Record<CaptureFailure, string>> = {
+  "build-failed": "`sandbox.build` failed, so there was no build to serve",
   "server-did-not-start": "the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran",
   timeout: "it ran out of time",
   "no-routes": "there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`",

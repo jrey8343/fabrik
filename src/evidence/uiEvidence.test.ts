@@ -197,11 +197,11 @@ describe("The capture result", () => {
     ["a short head SHA", withResult({ headSha: "4f2b9c0" }), "headSha must be a full commit SHA"],
     ["captures that aren't a list", withResult({ captures: { "/book": [] } }), "captures must be a list"],
     ["a capture outcome with no captures", withResult({ captures: [] }), `captures can't be empty when the outcome is "captured"`],
-    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be server-did-not-start, timeout, no-routes, error or no-result"],
+    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be build-failed, server-did-not-start, timeout, no-routes, error or no-result"],
     [
       "a failed outcome with an unknown reason",
       withResult({ outcome: "failed", reason: "flaky" }),
-      "reason must be server-did-not-start, timeout, no-routes, error or no-result",
+      "reason must be build-failed, server-did-not-start, timeout, no-routes, error or no-result",
     ],
     ["a capture that isn't an object", withResult({ captures: ["after-mobile-book.png"] }), "captures[0] must be an object"],
     ["a route that isn't a path", withCapture({ route: "book" }), "captures[0].route must be a path starting with one /"],
@@ -256,7 +256,7 @@ describe("The capture result", () => {
     expect(parseCaptureResult(text)).toEqual({
       ok: false,
       errors: [
-        "reason must be server-did-not-start, timeout, no-routes, error or no-result",
+        "reason must be build-failed, server-did-not-start, timeout, no-routes, error or no-result",
         "headSha must be a full commit SHA",
         "captures[1].side must be before or after",
         "captures[1].status must be an HTTP status from 100 to 599",
@@ -390,6 +390,7 @@ describe("The evidence section's routes", () => {
 
 describe("The evidence section of a failed capture", () => {
   it.each([
+    ["build-failed", "**Capture failed:** `sandbox.build` failed, so there was no build to serve. There are no screenshots."],
     ["server-did-not-start", "**Capture failed:** the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran. There are no screenshots."],
     ["timeout", "**Capture failed:** it ran out of time. There are no screenshots."],
     [
