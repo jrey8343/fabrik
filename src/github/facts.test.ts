@@ -89,6 +89,8 @@ interface RawRepo {
   openRetros?: unknown[];
   /** The open issues with the wayfinder:map label. */
   openMaps?: unknown[];
+  /** The open issues with the fabrik:replay label. */
+  openReplays?: unknown[];
 }
 
 /** A read-only GraphQL API over `raw`, answering each facts query with one page. */
@@ -112,6 +114,11 @@ function repoWith(raw: RawRepo) {
       if (query.includes("labels: [$map]")) {
         expect(variables["map"]).toBe("wayfinder:map");
         return answer({ repository: { issues: page(raw.openMaps) } });
+      }
+      if (query.includes("labels: [$replay]")) {
+        expect(variables["replay"]).toBe("fabrik:replay");
+        expect(query).toContain("issues(states: OPEN, labels: [$replay]");
+        return answer({ repository: { issues: page(raw.openReplays) } });
       }
       if (query.includes("labels: [$label]")) {
         if (variables["label"] === "fabrik:audit") return answer({ repository: { issues: page(raw.openAudits) } });
@@ -523,6 +530,22 @@ describe("Gathering a Product repo's GitHub facts", () => {
     expect(facts.openRetros).toEqual([
       { number: 120, title: "Retro: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-07T00:00:00Z" },
       { number: 121, title: "My own retro", author: "jrey8343", createdAt: "2026-11-08T00:00:00Z" },
+    ]);
+  });
+
+  it("holds the open fabrik:replay issues, with who filed them, when, when their body was last edited, and the body", async () => {
+    const github = repoWith({
+      openReplays: [
+        { number: 140, title: "Replay review.effort: high", createdAt: "2026-11-01T00:00:00Z", lastEditedAt: "2026-11-06T20:00:00Z", body: "The results", author: OPERATOR },
+        { number: 141, title: "Replay kit", createdAt: "2026-11-07T00:00:00Z", lastEditedAt: null, body: "", author: null },
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(facts.openReplays).toEqual([
+      { number: 140, title: "Replay review.effort: high", author: "jrey8343", createdAt: "2026-11-01T00:00:00Z", lastEditedAt: "2026-11-06T20:00:00Z", body: "The results" },
+      { number: 141, title: "Replay kit", author: "ghost", createdAt: "2026-11-07T00:00:00Z", lastEditedAt: null, body: "" },
     ]);
   });
 
