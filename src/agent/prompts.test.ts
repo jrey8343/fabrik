@@ -132,6 +132,21 @@ describe("Product intent in the Design prompt", () => {
     expect(intent).toContain("Ask a priority question only when the issue conflicts with what the Roadmap lists under Now");
     expect(intent).toContain("The Roadmap gates nothing");
   });
+
+  it("opens every Spec with a Product intent section above its technical sections, its success measure stated, not tracked", async () => {
+    const turn = section(await prompt("design"), "Your turn");
+    const spec = turn.split("\n").find((line) => line.includes("**Finish with a Spec and its Tickets**")) ?? "";
+    expect(spec).toContain("opening with a `## Product intent` section above `## Problem Statement` and its technical sections");
+    expect(spec).toContain("who it serves, why, how its success is measured, and what it deliberately doesn't do");
+    expect(spec).toContain("State the success measure only: nothing tracks it.");
+  });
+
+  it("opens every agent brief with a Who and why line", async () => {
+    const turn = section(await prompt("design"), "Your turn");
+    const brief = turn.split("\n").find((line) => line.includes("**Finish with an agent brief**")) ?? "";
+    expect(brief).toContain('It opens with a "Who and why" line, which starts `**Who and why**:`');
+    expect(brief).toContain("the End users it serves and why it matters to them");
+  });
 });
 
 describe("Questions for the Operator", () => {
