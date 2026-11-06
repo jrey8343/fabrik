@@ -479,7 +479,7 @@ jobs:
           OP_ENV_FILE: ${{ runner.temp }}/fabrik-secrets.env
           CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential
 
-      # So an agent step its timeout stopped can be told from one that crashed.
+      # So an agent step its timeout stopped can be told from one that failed for any other reason.
       - name: Note when the Implementer starts
         id: started
         run: echo "at=$(date +%s)" >>"$GITHUB_OUTPUT"

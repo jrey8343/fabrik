@@ -206,7 +206,7 @@ describe("What the push job applies", () => {
   });
 
   // The Implement job's agent step has a timeout of its own (#153), which fails the job where V1's job timeout
-  // cancelled it, so its job notes it, and the push job reads it as V1 did: a timeout, never a crash.
+  // cancelled it, so its job notes it, and the push job reads it as V1 did: an Infrastructure failure by timeout, never of another kind.
   it("reads an Implement job whose agent step its timeout stopped as cancelled, as its job timeout left it", () => {
     const input = pushJobInput(
       needs("implement", { implement: { result: "failure", outputs: { "secrets-step": "success", "agent-timed-out": "true" } } }, { ticket: "7" }),

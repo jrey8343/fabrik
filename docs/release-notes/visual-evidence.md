@@ -24,7 +24,7 @@ The notes for the minor release that ships Visual evidence on UI pull requests (
     - `timeout`: capture ran out of time;
     - `no-routes`: neither the Ticket nor the Implementer named a route, and `ui.default_routes` is empty;
     - `error`: anything else capture caught, such as the browser failing to install or `ui.url`'s port not freeing, which the Implement job's log shows;
-    - `no-result`: the push job found the PR is UI but got no capture result it could read, as when the capture step hit its own timeout or crashed.
+    - `no-result`: the push job found the PR is UI but got no capture result it could read, as when the capture step hit its own timeout or failed before writing one.
 - **The Kit's section is the only one.** Any evidence section or marker in the Implementer's own summary is stripped before the body is built, so no agent can forge where evidence is kept, and a Retry's agent never sees the old section. Routes are agent text, so they show as code and mention nobody.
 - **Capture never blocks a pull request and never uses up a Retry.** Every failure is caught and named in the evidence section, and is never an Infrastructure failure. The PR still opens.
 - **Every Retry and Request-changes run on a UI pull request captures again** and replaces the evidence section, so the evidence always matches the PR's head.
