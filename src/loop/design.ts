@@ -252,6 +252,7 @@ function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: Issue
       actions: [{ kind: "comment", issue: issueNumber, body: roundComment(round, output, snapshot.operator, sentBack) }],
     };
   }
+  if (output.kind === "prototype") return wrongOutcome(issueNumber, "Prototypes are off in this Kit, so a turn can't ask for one");
   // Every outcome but a round ends the session and frees its slot, so the next waiting issue can start.
   if (output.kind === "not-planned") {
     // Nothing new is ready, so there is nothing for Dispatch to check.

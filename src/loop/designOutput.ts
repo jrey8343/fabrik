@@ -82,6 +82,21 @@ type DesignTurnOutcome =
       readonly outOfScope: string;
       /** Each Decision, with the keys of the Decisions that block it. Any order. */
       readonly decisions: readonly MapDecision[];
+    }
+  | {
+      /**
+       * Not an outcome: the Operator approved a Prototype, so the Kit posts a
+       * prototype request and starts a prototype turn of the same session.
+       */
+      readonly kind: "prototype";
+      /** The one route every variant renders on, starting with `/`. */
+      readonly route: string;
+      /** How many variants to build. */
+      readonly variants: number;
+      /** Markdown: what each variant explores, and anything the Operator asked for. */
+      readonly brief: string;
+      /** A one-line lead-in for the prototype request comment. */
+      readonly comment: string;
     };
 
 /** A Decision as a Design session writes it, before it is a sub-issue of its Map. */
@@ -365,6 +380,17 @@ function readTurn(value: unknown): DesignTurnOutputResult {
         },
       };
     }
+    case "prototype":
+      return {
+        ok: true,
+        output: {
+          kind: "prototype",
+          route: value.route as string,
+          variants: value.variants as number,
+          brief: value.brief as string,
+          comment: value.comment as string,
+        },
+      };
     default:
       return {
         ok: false,
