@@ -27,6 +27,7 @@ import { scheduledTick } from "./kitIssues.ts";
 import { resumingHeldRuns } from "./resume.ts";
 import { heldWhileUsedUp } from "./hold.ts";
 import { startResearcher } from "./research.ts";
+import { landResearch } from "./researchLanding.ts";
 import { startAgentRun } from "./runs.ts";
 import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
@@ -145,6 +146,9 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withIssue(snapshot, (context) => landAudit(event, context, snapshot.namedPullRequests));
     case "retro-run-finished":
       return withIssue(snapshot, (context) => landRetro(event, context, config));
+    // Nothing raises it until the research job passes its branch to the push job (#260).
+    case "research-run-finished":
+      return withIssue(snapshot, (context) => landResearch(event, context));
     case "pull-request-changes-requested":
       return requestChanges(event, snapshot, config);
     // Context for the next run that reads the PR, never a trigger (ADR-0007).

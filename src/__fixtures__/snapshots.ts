@@ -20,6 +20,7 @@ import type {
 export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
   return {
     number: 1,
+    title: "An issue",
     open: true,
     author: "someone",
     byApp: false,
@@ -291,6 +292,10 @@ export function notificationsOf(plan: Plan, operator = "operator"): string[] {
       case "comment-linking": {
         const text = action.body.map((part) => (typeof part === "string" ? part : "https://github.com/x")).join("");
         return mention.test(text) ? [`mention on #${action.issue}`] : [];
+      }
+      case "append-to-decisions-so-far": {
+        const text = action.line.map((part) => (typeof part === "string" ? part : "https://github.com/x")).join("");
+        return mention.test(text) ? [`mention in the Map #${action.issue}`] : [];
       }
       case "create-issue":
         return action.assignees?.includes(operator) ? [`assign new "${action.title}"`] : [];
