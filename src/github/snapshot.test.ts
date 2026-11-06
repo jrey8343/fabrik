@@ -1687,6 +1687,39 @@ describe("Gathering a Design-session turn's starting reply", () => {
     expect(snapshot.startingComment).toBeNull();
     expect(reads).toEqual([]);
   });
+
+  // A prototype turn is started by agent:design, so the reply it answers is the one that approved its request (#155).
+  const prototypeTurn = (reply: number | null) =>
+    ({
+      kind: "prototype-run-finished",
+      issue: 7,
+      output: "{}",
+      request: { request: { route: "/book", variants: 3, brief: "Three ways." }, reply },
+      branch: "prototype/7",
+      changes: { net: [], commits: [] },
+      headSha: null,
+      gallery: null,
+      runUrl: "https://github.com/acme/shop/actions/runs/9100/attempts/1",
+      repoUrl: "https://github.com/acme/shop",
+    }) as const;
+
+  it("reads whether a prototype turn's approving reply, which its request names, is still there", async () => {
+    const { github, reads } = githubWhere(() => null);
+
+    const snapshot = await gatherSnapshot(github, repo, prototypeTurn(9001), null, "fabrik-app[bot]");
+
+    expect(snapshot.startingComment).toEqual({ id: 9001, exists: false });
+    expect(reads).toEqual(["GET /repos/acme/shop/issues/comments/9001"]);
+  });
+
+  it("reads no reply for a prototype turn whose request agent:design started, which names none", async () => {
+    const { github, reads } = githubWhere(() => ({ id: 1 }));
+
+    const snapshot = await gatherSnapshot(github, repo, prototypeTurn(null), null, "fabrik-app[bot]");
+
+    expect(snapshot.startingComment).toBeNull();
+    expect(reads).toEqual([]);
+  });
 });
 
 describe("Reading the Kit config folder through the API", () => {

@@ -636,13 +636,14 @@ export async function gatherOpenMaps(github: Pick<GitHub, "graphql">, repo: Repo
 }
 
 /**
- * For a Design-session turn the Operator's reply started: whether that reply
- * is still on the issue. Only a 404 means it was deleted; any other failed
- * read fails the run, as every failed read does, and never counts as deleted.
+ * For a Design-session turn the Operator's reply started, or a prototype turn
+ * whose request their reply approved (#155): whether that reply is still on
+ * the issue. Only a 404 means it was deleted; any other failed read fails the
+ * run, as every failed read does, and never counts as deleted.
  */
 async function gatherStartingComment(github: GitHub, repo: Repo, event: LoopEvent): Promise<StartingComment | null> {
-  if (event.kind !== "agent-run-finished" || event.startedBy === undefined) return null;
-  const id = event.startedBy;
+  const id = event.kind === "agent-run-finished" ? event.startedBy : event.kind === "prototype-run-finished" ? event.request.reply : null;
+  if (id === undefined || id === null) return null;
   const comment = await github.rest("GET", `/repos/${repo.owner}/${repo.name}/issues/comments/${id}`, undefined, {
     allowNotFound: true,
   });
