@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseDesignTurnOutput } from "./designOutput.ts";
+import { resolveKitConfig } from "../kit/config.ts";
+import { PROTOTYPE_DEFAULT_VARIANTS, PROTOTYPE_MIN_VARIANTS, PROTOTYPE_VARIANT_CAP, parseDesignTurnOutput } from "./designOutput.ts";
 
 const turn = (value: unknown) => parseDesignTurnOutput(JSON.stringify(value));
 
@@ -177,5 +178,20 @@ describe("A prototype turn's prototype-round output: the variants it built", () 
         "a prototype-round needs non-empty recommendation text",
       ],
     });
+  });
+});
+
+describe("A Prototype's variant counts, Kit constants no Kit config can change", () => {
+  it("builds 3 variants by default, at least 2 and never more than 5", () => {
+    expect([PROTOTYPE_MIN_VARIANTS, PROTOTYPE_DEFAULT_VARIANTS, PROTOTYPE_VARIANT_CAP]).toEqual([2, 3, 5]);
+  });
+
+  it.each([
+    [{ prototype: { variants: 4 } }, "prototype is not a Kit config field"],
+    [{ prototypes: { max_variants: 4 } }, "prototypes is not a Kit config field"],
+    [{ ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", variants: 4 } }, "ui.variants is not a Kit config field"],
+    [{ roles: { design: { variants: 4 } } }, "roles.design.variants is not a Kit config field"],
+  ])("refuses %j as an unknown field", (config, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify(config) })).toEqual({ ok: false, errors: [error] });
   });
 });
