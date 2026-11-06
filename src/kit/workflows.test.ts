@@ -473,7 +473,7 @@ describe("The link-preview action, which the push job's preview step runs", () =
 describe("The link-prototype-preview action, which the push job's prototype preview step runs", () => {
   const { text: action, steps } = actionNamed("link-prototype-preview");
   const mint = steps.find((step) => step.includes("uses: actions/create-github-app-token@"));
-  const program = steps.find((step) => step.includes("run: node src/kit/prototype-preview-main.ts"));
+  const program = steps.find((step) => step.includes("run: node src/kit/preview-main.ts"));
 
   it("loads the Fabrik App key through the push service account, and nothing else", () => {
     const secrets = steps.filter((step) => step.includes("1password/load-secrets-action@"));
@@ -495,11 +495,12 @@ describe("The link-prototype-preview action, which the push job's prototype prev
   });
 
   it("polls and edits with the Kit's Node program, given the URL and the round through its env, never in its command line", () => {
-    expect(program, "no step runs src/kit/prototype-preview-main.ts").toBeDefined();
+    expect(program, "no step runs src/kit/preview-main.ts").toBeDefined();
     expect(program).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
     expect(program).toContain("FABRIK_PREVIEW_URL: ${{ inputs.url }}");
     expect(program).toContain("FABRIK_PREVIEW_ROUND: ${{ inputs.round }}");
-    expect(/run: (.*)/.exec(program ?? "")?.[1]).toBe("node src/kit/prototype-preview-main.ts");
+    expect(program).not.toContain("FABRIK_PREVIEW_PULL_REQUEST");
+    expect(/run: (.*)/.exec(program ?? "")?.[1]).toBe("node src/kit/preview-main.ts");
     expect(steps.indexOf(mint!)).toBeLessThan(steps.indexOf(program!));
   });
 

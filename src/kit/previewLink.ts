@@ -45,47 +45,31 @@ export interface PreviewToPoll extends PreviewToLink {
 export type PreviewLinkOutcome = { readonly kind: "linked" } | { readonly kind: "never-answered" } | { readonly kind: "unchanged" };
 
 /**
- * Polls the preview until it answers, then edits the PR's body, read once the
- * polling is done, so its evidence section links the preview, or says it never
- * answered. Only the section `run` wrote changes, and only while it still
- * waits on the preview; the rest of the body stays as it was.
+ * Polls the preview until it answers, then edits the text that waits on it,
+ * read once the polling is done, to link it or to say it never answered: a UI
+ * PR's body, whose evidence section `run` wrote links the preview, or a
+ * prototype round, each of whose variants' lines links it. Only the part the
+ * Kit wrote to wait on the preview changes, and only while it still waits;
+ * the rest stays as it was.
  */
 export async function linkPreview(
   github: Pick<GitHub, "rest">,
   repo: Repo,
-  { pullRequest, url, run }: PreviewToPoll,
+  preview: PreviewToPoll | PrototypePreviewToLink,
   poller: PreviewPoller,
 ): Promise<PreviewLinkOutcome> {
+  const { url } = preview;
   const answered = await answersWithin(url, PREVIEW_POLL_MINUTES * 60_000, poller);
-  const path = `/repos/${repo.owner}/${repo.name}/pulls/${pullRequest}`;
+  const path =
+    "round" in preview
+      ? `/repos/${repo.owner}/${repo.name}/issues/comments/${preview.round}`
+      : `/repos/${repo.owner}/${repo.name}/pulls/${preview.pullRequest}`;
   const { body } = (await github.rest("GET", path)) as { body: string | null };
-  const preview: PreviewLink = answered ? { kind: "linked", url } : { kind: "never-answered", url };
-  const edited = withPreviewLink(body ?? "", run, preview);
+  const came: Extract<PreviewLink, { kind: "linked" | "never-answered" }> = answered ? { kind: "linked", url } : { kind: "never-answered", url };
+  const edited = "round" in preview ? withVariantPreviews(body ?? "", came) : withPreviewLink(body ?? "", preview.run, came);
   if (edited === null) return { kind: "unchanged" };
   await github.rest("PATCH", path, { body: edited });
-  return { kind: answered ? "linked" : "never-answered" };
-}
-
-/**
- * Polls a prototype round's preview until it answers, then edits the round,
- * read once the polling is done, so each variant's line links its preview, or
- * the round says the preview never answered. Only the line the Kit wrote to
- * say the previews are linked once it answers changes it, and only while the
- * round still says so; the rest of the round stays as it was.
- */
-export async function linkPrototypePreview(
-  github: Pick<GitHub, "rest">,
-  repo: Repo,
-  { round, url }: PrototypePreviewToLink,
-  poller: PreviewPoller,
-): Promise<PreviewLinkOutcome> {
-  const answered = await answersWithin(url, PREVIEW_POLL_MINUTES * 60_000, poller);
-  const path = `/repos/${repo.owner}/${repo.name}/issues/comments/${round}`;
-  const { body } = (await github.rest("GET", path)) as { body: string | null };
-  const edited = withVariantPreviews(body ?? "", answered ? { kind: "linked", url } : { kind: "never-answered", url });
-  if (edited === null) return { kind: "unchanged" };
-  await github.rest("PATCH", path, { body: edited });
-  return { kind: answered ? "linked" : "never-answered" };
+  return { kind: came.kind };
 }
 
 /**
