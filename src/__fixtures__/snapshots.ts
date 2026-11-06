@@ -16,7 +16,12 @@ import type {
   TicketSnapshot,
 } from "../loop/types.ts";
 
-/** An issue with these labels and this parent; everything else is plain. */
+/**
+ * An issue with these labels and this parent; everything else is plain. The
+ * adapter fills `parent` and `parentIssue` from the one GitHub parent, so
+ * they always agree here too: give either, and the other follows (a parent
+ * given by number alone is open, with no labels); give both only as one.
+ */
 export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
   return {
     number: 1,
@@ -26,8 +31,6 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     byApp: false,
     body: "",
     labels: [],
-    parent: null,
-    parentIssue: null,
     openPullRequests: [],
     designRounds: 0,
     turnFailed: false,
@@ -37,7 +40,21 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     openBlockers: [],
     openBlocking: [],
     ...overrides,
+    ...parentOf(overrides),
   };
+}
+
+/** An issue's parent, by number and as it stands, from whichever of the two a test gave. */
+function parentOf({ parent, parentIssue }: Partial<IssueSnapshot>): Pick<IssueSnapshot, "parent" | "parentIssue"> {
+  if (parentIssue === undefined) {
+    const number = parent ?? null;
+    return { parent: number, parentIssue: number === null ? null : { number, open: true, labels: [] } };
+  }
+  const number = parentIssue?.number ?? null;
+  if (parent !== undefined && parent !== number) {
+    throw new Error(`anIssue was given parent ${parent} but parentIssue ${number === null ? "null" : `#${number}`}: give one, or both as the same parent`);
+  }
+  return { parent: number, parentIssue };
 }
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
