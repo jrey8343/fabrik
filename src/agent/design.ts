@@ -2,7 +2,15 @@
 // Ticket came back to design from an agent PR, that PR as src/agent/inputs.ts
 // read it into the issue's `sentBack`, set out as Markdown, and the Operator
 // comments on that PR it gives the run, which the run's result passes out;
-// and what the inputs say of the Map cap.
+// what the inputs say of the Map cap; and, on a repo the Kit can prototype,
+// that Prototypes are available.
+import type { KitConfig } from "../kit/config.ts";
+import {
+  PROTOTYPE_DEFAULT_VARIANTS,
+  PROTOTYPE_MIN_VARIANTS,
+  PROTOTYPE_VARIANT_CAP,
+  PROTOTYPES_SWITCHED_ON,
+} from "../loop/designOutput.ts";
 import { spelled } from "../loop/readable.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 import { MAP_INPUTS_FILE, type MapOffer } from "./inputs.ts";
@@ -54,6 +62,74 @@ function readOffer(value: unknown): MapOffer {
     return { kind: "cap-full", cap, openMaps: openMaps.map((map: { number?: unknown; title?: unknown }) => ({ number: Number(map.number), title: text(map.title) })) };
   }
   throw new Error(`${MAP_INPUTS_FILE} doesn't say whether this turn may offer a Map`);
+}
+
+/** The heading a Design-session turn is told Prototypes are available under. */
+export const PROTOTYPES_HEADING = "Prototypes";
+
+/** The `prototype` output a Design-session turn is shown, which the Kit accepts as it stands. */
+const PROTOTYPE_EXAMPLE = {
+  kind: "prototype",
+  comment: "The Operator chose to see the booking page before settling its layout.",
+  route: "/book",
+  variants: PROTOTYPE_DEFAULT_VARIANTS,
+  brief: "Markdown: what each variant explores, and anything the Operator asked for.",
+};
+
+/**
+ * What a Design-session turn is told of Prototypes: when and how it may offer
+ * one, ask for the one the Operator approved, read the Operator's choice, and
+ * record it in the outcome. Nothing at all on a repo without a `ui` block,
+ * which the Kit can't serve and capture, or while Prototypes are dormant, so
+ * the turn's prompt is then just as it was. The Kit config decides, never an
+ * agent. Only tests pass `switchedOn`.
+ */
+export function prototypeContext(
+  config: Pick<KitConfig, "ui">,
+  issue: number,
+  { switchedOn = PROTOTYPES_SWITCHED_ON }: { readonly switchedOn?: boolean } = {},
+): string[] {
+  if (!switchedOn || config.ui === null) return [];
+  const branch = `\`prototype/${issue}\``;
+  return [
+    `## ${PROTOTYPES_HEADING}`,
+    [
+      `This Product repo has a \`ui\` block, so this session may offer a **Prototype**: throwaway variants of one route, built on the branch ${branch}, which is never merged, so the Operator can choose how a page looks by looking at it.`,
+      'A prototype turn of this session builds the variants and the Kit captures each one. Then the Kit posts a prototype round: a round numbered like the others, whose one question is "Which variant?".',
+    ].join(" "),
+    [
+      [
+        "- **Offer a Prototype only when the open question is how a page looks**: its layout, what it shows first, how its parts sit together.",
+        "Never offer one for a question of logic, data or behaviour, which an ordinary round settles.",
+        `Ask it as one question of a round, naming the route and how many variants it builds, with your recommendation, such as "Prototype the booking page (\`${PROTOTYPE_EXAMPLE.route}\`) as ${PROTOTYPE_DEFAULT_VARIANTS} variants first?".`,
+        `Offer ${PROTOTYPE_DEFAULT_VARIANTS} variants unless the Operator asked for another count, never fewer than ${PROTOTYPE_MIN_VARIANTS} or more than ${PROTOTYPE_VARIANT_CAP}.`,
+        "Nothing is built until the Operator says yes.",
+      ].join(" "),
+      [
+        "- **End in `prototype` on the Operator's yes.** Their reply may change the route or the count, such as \"yes, but 4 variants\" or \"prototype /checkout instead\": ask for what they approved.",
+        "A reply asking for another prototype round, or to try again after one failed, is a yes too.",
+        "The Kit then posts a comment saying what is being built, and the prototype round follows when the variants are ready.",
+        "Never end in `prototype` without the Operator's yes.",
+      ].join(" "),
+      [
+        "- **Read the Operator's reply to a prototype round as an ordinary answer**, such as \"B, with the bigger booking button from C\":",
+        "the variant they chose and any tweaks to it. Carry on the session from there.",
+      ].join(" "),
+      [
+        `- **When you finish after a prototype round, record the Prototype in the outcome**: the variant the Operator chose, their tweaks, and links to the branch ${branch} and to that variant's component, as the prototype round gives them.`,
+        "Put it in the brief, or in the Spec and in each Ticket that builds the page.",
+        "Say that the Implementer rewrites the Prototype as a reference, never merging or cherry-picking it.",
+      ].join(" "),
+    ].join("\n"),
+    "To ask for the Prototype the Operator approved:",
+    `<design>\n${JSON.stringify(PROTOTYPE_EXAMPLE, null, 2)}\n</design>`,
+    [
+      "- `route` is the one route every variant renders on, a path starting with `/`, never a full URL.",
+      `- \`variants\` is how many to build, a whole number from ${PROTOTYPE_MIN_VARIANTS} to ${PROTOTYPE_VARIANT_CAP}.`,
+      "- `brief` says what each variant explores, so the variants are properly different from one another, not small tweaks of one layout, and carries anything the Operator asked for.",
+      "- `comment` is one line leading into the Kit's comment, which names the route and the count itself and says the round follows.",
+    ].join("\n"),
+  ];
 }
 
 interface SentBackInput {
