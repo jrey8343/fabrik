@@ -20,7 +20,8 @@ import { GitHub } from "../github/client.ts";
 import { loadRubrics } from "./kitFiles.ts";
 import { recordWriteSummary } from "./recordWriter.ts";
 import { armArtifactsIn } from "./replayArtifacts.ts";
-import { REPLAY_ARMS, REPLAY_RUN_ENDED_FILE, replayRunContextOf, replayRunEnded, replayRunFiles, writeReplayRun } from "./replayRecord.ts";
+import { REPLAY_RUN_ENDED_FILE, replayRunContextOf, replayRunEnded, replayRunFiles, writeReplayRun } from "./replayRecord.ts";
+import { REPLAY_ARMS } from "./runRecord.ts";
 import { writeOutputs, writeSummary } from "./stepFiles.ts";
 
 function required(name: string): string {

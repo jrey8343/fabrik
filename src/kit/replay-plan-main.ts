@@ -9,6 +9,7 @@
 // into a folder named after it. Step outputs: `score` ("true" or "false") and `why`.
 import { armRunArtifactsIn } from "./replayArtifacts.ts";
 import { armScoring, replayRunContextOf } from "./replayRecord.ts";
+import { isReplayArm } from "./runRecord.ts";
 import { writeOutputs, writeSummary } from "./stepFiles.ts";
 
 function required(name: string): string {
@@ -19,7 +20,7 @@ function required(name: string): string {
 
 async function main(): Promise<void> {
   const arm = required("FABRIK_ARM");
-  if (arm !== "baseline" && arm !== "variant") throw new Error(`FABRIK_ARM is ${arm}, not an arm`);
+  if (!isReplayArm(arm)) throw new Error(`FABRIK_ARM is ${arm}, not an arm`);
   const context = replayRunContextOf(JSON.parse(required("FABRIK_KIT_OUTPUTS")) as Record<string, string>, {
     repo: required("GITHUB_REPOSITORY"),
     runId: Number(required("GITHUB_RUN_ID")),

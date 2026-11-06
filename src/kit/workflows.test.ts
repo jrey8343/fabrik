@@ -6,7 +6,7 @@ import { kitJobOutputs } from "./jobs.ts";
 import { JUDGE_JOB } from "./judge.ts";
 import { PREVIEW_POLL_MINUTES } from "./previewLink.ts";
 import { PROTOTYPE_JOB, RETRO_EVIDENCE_JOB } from "./pushJob.ts";
-import { REPLAY_ARMS } from "./replayRecord.ts";
+import { REPLAY_ARMS } from "./runRecord.ts";
 import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";

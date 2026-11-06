@@ -67,6 +67,7 @@ import { captureFailureOf } from "../evidence/uiEvidence.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
+import type { ReplayRole } from "../kit/runRecord.ts";
 import { writeOutputs, writeSummary } from "../kit/stepFiles.ts";
 import { prototypeRole } from "../loop/design.ts";
 import { type DesignTurnOutput, type PrototypeRoundOutput, readDesignTurnOutput, readPrototypeTurnOutput } from "../loop/designOutput.ts";
@@ -154,7 +155,7 @@ interface RoleSpec<T> {
    * that change, a commit on baseSha, with the Ticket and its Spec in place of
    * a PR, and its result is for the Ticket.
    */
-  readonly replay?: "implement" | "review";
+  readonly replay?: ReplayRole;
   /**
    * The Auditor reads the Product repo up to its pending Audit's marked
    * commit, with the inputs in FABRIK_AUDIT_FILE; its result names the

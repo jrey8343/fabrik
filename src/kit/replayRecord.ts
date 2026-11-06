@@ -13,13 +13,11 @@ import { isObject } from "../agent/stream.ts";
 import type { NeededJob } from "./pushJob.ts";
 import { readReplayArmGates, type ReplayArms, type ReplayArmSettings, type ReplayTicketEnd } from "./replay.ts";
 import { type StoreApi, type StoreFile, type StoreWrite, storeCommitMessage, storeJson, writeStoreFiles } from "./recordWriter.ts";
-import { judgeRunRecordFor, type ReplayArm, replayGatesPath, replayPatchPath, type ReplayRole, replayRunRecordFor, type RunRecordFiles } from "./runRecord.ts";
+import { RUN_NAMES } from "../loop/heldRun.ts";
+import { judgeRunRecordFor, REPLAY_ARMS, REPLAY_ROLES, type ReplayArm, replayGatesPath, replayPatchPath, type ReplayRole, replayRunRecordFor, type RunRecordFiles } from "./runRecord.ts";
 import { JUDGE_MODEL } from "./runStore.ts";
 import { judgeOutcome } from "./judge.ts";
 import { type KitRubrics, scoreFileFor, scoringPlan, scoringRubrics } from "./scorer.ts";
-
-/** A Replay's two arms, in the order the replay-record job writes them. */
-export const REPLAY_ARMS: readonly ReplayArm[] = ["baseline", "variant"];
 
 /**
  * What an arm's jobs leave, each as an artifact of its own: its Implement and
@@ -299,8 +297,6 @@ function isWeeklyLimit(run: ArmRun): boolean {
   return run.kind === "ran" && run.files.record.infrastructureFailure === "weekly-limit";
 }
 
-const ROLE_NAMES: Readonly<Record<ReplayRole, string>> = { implement: "Implement", review: "Review" };
-
 /**
  * How the Ticket's run ended: a weekly-limit refusal of any arm's run first,
  * a fact about the Subscription that costs the Ticket nothing; then, in the
@@ -312,8 +308,9 @@ const ROLE_NAMES: Readonly<Record<ReplayRole, string>> = { implement: "Implement
 function endOf(runs: ArmRuns): ReplayTicketEnd {
   if (runs.some(({ implement, review }) => isWeeklyLimit(implement) || isWeeklyLimit(review))) return { kind: "weekly-limit" };
   for (const { arm, implement, review } of runs) {
-    for (const [role, run] of [["implement", implement], ["review", review]] as const) {
-      const name = `the ${arm} arm's ${ROLE_NAMES[role]} run`;
+    for (const role of REPLAY_ROLES) {
+      const run = role === "implement" ? implement : review;
+      const name = `the ${arm} arm's ${RUN_NAMES[role]} run`;
       if (run.kind === "missing" || (run.kind === "not-run" && role === "implement")) {
         return { kind: "infrastructure", reason: `${name} left no account of how it went, as when its workflow run is cancelled` };
       }

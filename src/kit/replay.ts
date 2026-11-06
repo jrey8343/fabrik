@@ -18,18 +18,16 @@
 import { type ChangedPath, checkTrustRoot } from "../guard/trust-root.ts";
 import { newIssueUrl } from "../loop/followUps.ts";
 import { REPLAY_LABEL } from "../loop/labels.ts";
+import { RUN_NAMES } from "../loop/heldRun.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 import { spelled } from "../loop/readable.ts";
-import type { AgentRole, Verdict } from "../loop/types.ts";
+import type { Verdict } from "../loop/types.ts";
 import { FULL_SHA, shortSha } from "../skills/lock.ts";
 import { checkEffort, type KitConfig, refuseFable } from "./config.ts";
 import { SCORERS } from "./rubrics.ts";
-import { type ReplayArm, replayPatchPath, type RunRecord } from "./runRecord.ts";
+import { isReplayArm, REPLAY_ARMS, REPLAY_ROLES, type ReplayArm, type ReplayRole, replayPatchPath, type RunRecord } from "./runRecord.ts";
 import { storeFileUrl } from "./runStore.ts";
 import type { ScoreFile } from "./scorer.ts";
-
-/** A role whose model or effort a Replay can change. */
-export type ReplayRole = Extract<AgentRole, "implement" | "review">;
 
 /**
  * The one thing a Replay's variant arm changes from its baseline: a role's
@@ -168,9 +166,6 @@ function readTickets(value: string, errors: string[]): number[] | null {
 
 /** A Ticket's number, with or without its #. */
 const TICKET = /^#?[1-9][0-9]*$/;
-
-/** The roles whose model or effort a Replay can change. */
-const REPLAY_ROLES: readonly ReplayRole[] = ["implement", "review"];
 
 /** The field that names a candidate Kit as the variable. */
 const KIT_FIELD = "kit";
@@ -761,9 +756,9 @@ function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): { readonl
 function alreadyRuns(base: Pick<KitConfig, "roles">, variable: ReplayVariable): string | null {
   switch (variable.kind) {
     case "model":
-      return base.roles[variable.role].model === variable.model ? `${ROLE_WORDS[variable.role]} on ${variable.model}` : null;
+      return base.roles[variable.role].model === variable.model ? `${RUN_NAMES[variable.role]} on ${variable.model}` : null;
     case "effort":
-      return base.roles[variable.role].effort === variable.effort ? `${ROLE_WORDS[variable.role]} at effort ${variable.effort}` : null;
+      return base.roles[variable.role].effort === variable.effort ? `${RUN_NAMES[variable.role]} at effort ${variable.effort}` : null;
     case "kit":
       // The baseline loads the pinned release's prompts, never a candidate's.
       return null;
@@ -1051,7 +1046,7 @@ export interface ReplayArmGates {
 export function readReplayArmGates(value: unknown): ReplayArmGates | null {
   if (!isObject(value)) return null;
   const { ticket, arm, run, gates, hiddenTests } = value;
-  if (!isId(ticket) || !isId(run) || !(arm === "baseline" || arm === "variant")) return null;
+  if (!isId(ticket) || !isId(run) || !isReplayArm(arm)) return null;
   if (!isKeyOf(GATES_WORDS, gates) || !isKeyOf(HIDDEN_TESTS_WORDS, hiddenTests)) return null;
   return { ticket, arm, run, gates, hiddenTests };
 }
@@ -1281,7 +1276,7 @@ function resultsLines({ plan, progress }: ReplayMarks, results: readonly TicketR
     `Each Ticket runs twice from the commit its first Implement run started from: a baseline as it was built, and a variant with \`${variableLine(variable)}\`. Cost, turns and duration are its Implement and Review runs' together.`,
     "",
     ...tableHead(["Ticket", "Arm", "Gates", "Verdict", "Hidden tests", ...SCORERS.map(scorerWords), "Cost", "Turns", "Duration", "Patch", "Flags"]),
-    ...rows.flatMap(({ planned, state, result }) => ARMS.map((arm) => armRow(planned, arm, variable, result?.arms[arm] ?? null, state, open))),
+    ...rows.flatMap(({ planned, state, result }) => REPLAY_ARMS.map((arm) => armRow(planned, arm, variable, result?.arms[arm] ?? null, state, open))),
     ...(totals === null ? [] : ["", ...totalsLines(totals, done.length)]),
     ...(plan.leftOut.length === 0 ? [] : ["", "Left out:", "", ...plan.leftOut.map(leftOutLine)]),
     "",
@@ -1410,9 +1405,6 @@ function percentChange(to: number, from: number): string {
   return change === 0 ? "0%" : change > 0 ? `+${change}%` : `−${-change}%`;
 }
 
-/** The two arms, in the order the results show them. */
-const ARMS: readonly ReplayArm[] = ["baseline", "variant"];
-
 /** One arm of a planned Ticket as a row: what it measured, or where its Ticket stands while it has no result. */
 function armRow(planned: PlannedTicket, arm: ReplayArm, variable: ReplayVariable, result: ArmResult | null, progress: ReplayProgress, open: boolean): string {
   const ticket = `#${planned.ticket} (merged in #${planned.pullRequest})`;
@@ -1533,5 +1525,3 @@ function progressWords(progress: ReplayProgress): string {
 function shownReason(reason: string): string {
   return withoutMentions(reason.replace(/\s+/g, " ").trim());
 }
-
-const ROLE_WORDS: Readonly<Record<ReplayRole, string>> = { implement: "Implement", review: "Review" };
