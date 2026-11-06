@@ -670,6 +670,81 @@ describe("the evidence bundle", () => {
     });
   });
 
+  describe("the sample", () => {
+    // Of owner/product's PRs 1 to 110, the SHA-256 of `owner/product#<n>` falls in the lowest tenth of the range for 12, 28, 33, 40, 68, 81 and 102 alone.
+    const merged = (numbers: readonly number[], mergedAt = "2026-11-03T00:00:00Z") =>
+      numbers.map((number) => aMergedPullRequest(mergedAt, { number, ticket: number + 1000, title: `Build thing ${number}` }));
+    const sampleOf = (pullRequests: readonly AgentPullRequestFacts[]) =>
+      evidenceBundle(aRetroEvidenceInput({ facts: factsOf({ pullRequests }) })).sample.map(({ number }) => number);
+    const upTo = (last: number) => Array.from({ length: last }, (_, i) => i + 1);
+
+    it("holds the agent PRs merged in the window whose SHA-256 of owner/repo#n falls in the lowest tenth of the range", () => {
+      const pullRequests = [
+        ...merged(upTo(60)),
+        ...merged([68], "2026-10-30T23:59:59Z"), // before the window
+        ...merged([81], "2026-11-07T00:00:00Z"), // at its end: after it
+        aMergedPullRequest("2026-11-03T00:00:00Z", { number: 102, mergedAt: null, mergeSha: null }), // closed unmerged
+      ];
+      expect(sampleOf(pullRequests)).toEqual([12, 28, 33, 40]);
+    });
+
+    it("samples the same PRs however often it's computed, in whatever order the facts come, whatever else merged", () => {
+      const first = sampleOf(merged(upTo(200)));
+      expect(sampleOf(merged(upTo(200)))).toEqual(first);
+      expect(sampleOf(merged(upTo(400).toReversed())).filter((number) => number <= 200)).toEqual(first);
+    });
+
+    it("samples about one in ten over a large set", () => {
+      const sampled = sampleOf(merged(upTo(2000))).length;
+      expect(sampled).toBeGreaterThan(150);
+      expect(sampled).toBeLessThan(250);
+    });
+
+    it("carries each sampled PR's Ticket, its Verdicts as the Fabrik App posted them, and the agent runs on its Ticket with their transcripts' digests", () => {
+      const transcript = aTranscript({ "src/cart.ts": "export const cart = [];" });
+      const implement = aRecordWithTranscript({ runId: 1000, issue: 7, pullRequest: 12, endedAt: "2026-11-01T00:00:00Z" });
+      const review = aRecordWithTranscript({ runId: 1001, role: "review", issue: 7, pullRequest: 12, verdict: "pass", endedAt: "2026-11-02T00:00:00Z" });
+      const judge = aRecordWithTranscript({ runId: 1000, role: "score", issue: 7, pullRequest: 12, endedAt: "2026-11-01T00:05:00Z" });
+      const untranscribed = aRunRecord({ runId: 999, issue: 7, pullRequest: 12, endedAt: "2026-10-31T12:00:00Z" });
+      const verdict = aVerdictComment("pass", "a".repeat(40), "2026-11-02T00:00:00Z");
+      const { sample } = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [review, judge, implement, untranscribed, aRunRecord({ runId: 1002, issue: 8, pullRequest: 13 })],
+          transcripts: transcriptsOf([implement, transcript], [review, transcript], [judge, transcript]),
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-03T00:00:00Z", {
+                number: 12,
+                ticket: 7,
+                title: "Build the cart",
+                comments: [
+                  verdict,
+                  aVerdictComment("design-flaw", "a".repeat(40), "2026-11-02T01:00:00Z", { author: "operator", byBot: false }), // a person's quote of one
+                  aComment("Please rename this.", "2026-11-02T02:00:00Z", { author: "operator", byBot: false }),
+                ],
+              }),
+            ],
+          }),
+        }),
+      );
+      expect(sample).toEqual([
+        {
+          ref: "#12",
+          number: 12,
+          title: "Build the cart",
+          mergedAt: "2026-11-03T00:00:00Z",
+          ticket: 7,
+          verdicts: [{ verdict: "pass", source: "reviewer", at: "2026-11-02T00:00:00Z", body: verdict.body }],
+          records: [
+            { ref: "runs/owner/product/2026-10/999-1-implement.json", record: untranscribed, digest: null },
+            { ref: "runs/owner/product/2026-11/1000-1-implement.json", record: implement, digest: theJudgesDigestOf(transcript) },
+            { ref: "runs/owner/product/2026-11/1001-1-review.json", record: review, digest: theJudgesDigestOf(transcript) },
+          ],
+        },
+      ]);
+    });
+  });
+
   describe("the streak table", () => {
     it("lists every agent PR merged in the 90 days to the window's end, oldest first, with the paths it changed", () => {
       const { streakTable } = evidenceBundle(

@@ -12,9 +12,9 @@ import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts
 import { followUpsIn } from "../loop/followUps.ts";
 import { escapeMarkerIn, fromPullRequestIn, fromRetroIn } from "../loop/markers.ts";
 import { retrosIn, retroWindowStart } from "../loop/retro.ts";
-import { type RetroIssueSnapshot, STRENGTHS, type Strength, type VerdictRecord } from "../loop/types.ts";
+import { type RetroIssueSnapshot, STRENGTHS, type Strength, type Verdict, type VerdictRecord } from "../loop/types.ts";
 import { recordPathOf, type RunRecord, runKey } from "./runRecord.ts";
-import type { ScoreFile } from "./scorer.ts";
+import { inSample, type ScoreFile } from "./scorer.ts";
 import { digestOf, type TranscriptDigest } from "./transcriptDigest.ts";
 
 // The GitHub facts the metrics read of one Product repo.
@@ -386,6 +386,13 @@ export const ESCAPE_WINDOW_MS = 90 * DAY_MS;
 /** How far back the streak table reaches: long enough to count a streak a loosening can rest on. */
 export const STREAK_WINDOW_MS = 90 * DAY_MS;
 
+/**
+ * The share of the window's merged agent PRs a Retro reads in depth: one in
+ * ten, by the SHA-256 of `<owner>/<repo>#<number>`, so every attempt at a
+ * Retro reads the same ones.
+ */
+export const SAMPLE_SHARE = 1 / 10;
+
 /** How many closed Retros a Retro reads the Operator's verdicts on its proposals from. */
 export const HISTORY_DEPTH = 3;
 
@@ -447,6 +454,8 @@ export interface EvidenceBundle {
   readonly followUps: readonly FollowUpEvidence[];
   /** The runs that ended in the window that a Scorer failed, oldest first: none until the repo has score files. */
   readonly lowScores: readonly LowScoreEvidence[];
+  /** The sample of the agent PRs merged in the window, oldest first: ordinary runs, read in depth. */
+  readonly sample: readonly SampledPullRequestEvidence[];
   /** Every agent PR merged in the 90 days to the window's end, oldest first: the counts a loosening's streak rests on. */
   readonly streakTable: readonly StreakRow[];
   /** What the Operator made of earlier Retros: what not to propose again without new evidence. */
@@ -568,6 +577,33 @@ export interface ScoreEvidence {
   readonly rationale: string;
 }
 
+/** A sampled agent PR: its Ticket, its Verdicts and the agent runs on its Ticket. */
+export interface SampledPullRequestEvidence {
+  /** `#<pr>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  /** ISO 8601. */
+  readonly mergedAt: string;
+  /** The Ticket its `Closes #n` names, or null. */
+  readonly ticket: number | null;
+  /** Its Verdicts, oldest first. */
+  readonly verdicts: readonly VerdictEvidence[];
+  /** The Run record of every agent run on its Ticket, oldest first, each with its transcript's digest. */
+  readonly records: readonly DigestedRecordEvidence[];
+}
+
+/** A Verdict, in the comment the Fabrik App posted it in. */
+export interface VerdictEvidence {
+  readonly verdict: Verdict;
+  /** The Reviewer gave it; or red required checks, or a Retry whose branch changed nothing, made it an Execution flaw. */
+  readonly source: VerdictRecord["source"];
+  /** ISO 8601. */
+  readonly at: string;
+  /** The Verdict comment, its findings and Follow-ups included. */
+  readonly body: string;
+}
+
 /** An agent PR in the streak table, and whatever breaks a streak it's counted in. */
 export interface StreakRow {
   /** `#<pr>`. */
@@ -633,6 +669,7 @@ export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
     feedback: feedbackOf(window, input),
     followUps: followUpsOf(window, input),
     lowScores: lowScoresOf(window, records, input, digested),
+    sample: sampleOf(window, metrics, digested),
     streakTable: streakTableOf({ start: window.end - STREAK_WINDOW_MS, end: window.end }, metrics),
     history: historyOf(earlier, input),
   };
@@ -802,6 +839,31 @@ function lowScoresOf(window: Window, records: readonly RunRecord[], { facts, sco
     })
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
     .map(({ evidence }) => evidence);
+}
+
+/**
+ * The agent PRs merged in the window that are in the sample, oldest first,
+ * with the agent runs on each one's Ticket: a judge's run scoring one of
+ * them is left out, as the low scores give what it found.
+ */
+function sampleOf(window: Window, metrics: MetricsInput, digested: Digested): SampledPullRequestEvidence[] {
+  return mergedAgentPullRequestsIn(window, metrics)
+    .filter(({ repo, pullRequest }) => inSample(`${repo}#${pullRequest.number}`, SAMPLE_SHARE))
+    .toSorted((a, b) => Date.parse(a.mergedAt) - Date.parse(b.mergedAt) || a.pullRequest.number - b.pullRequest.number)
+    .map(({ pullRequest: { number, title, ticket, comments }, mergedAt }) => ({
+      ref: `#${number}`,
+      number,
+      title,
+      mergedAt,
+      ticket,
+      verdicts: comments.flatMap((comment) =>
+        verdictsOn([comment]).map(({ record: { verdict, source }, at }) => ({ verdict, source, at, body: comment.body })),
+      ),
+      records: metrics.records
+        .filter((record) => ticket !== null && record.issue === ticket && record.role !== "score")
+        .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
+        .map(digested),
+    }));
 }
 
 /** The agent PRs merged in the streak window, oldest first, each flagged for what breaks a streak in the same window. */
