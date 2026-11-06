@@ -5,20 +5,13 @@ import { RETRO_PENDING_MARKER, retroMarker } from "./markers.ts";
 import { readable } from "./readable.ts";
 import { retrosIn, retroWindowStart } from "./retro.ts";
 import type { Action, KitConfig, Plan, Snapshot } from "./types.ts";
-import { dateOf, heldBack, scheduledTickWith, weekStart } from "./weeklyGate.ts";
+import { dateOf, heldBack, weekStart } from "./weeklyGate.ts";
 
 /**
- * The scheduled tick with the retro gate: closes each weekly-limit issue
- * after its reset, as scheduledTick does, and resumes held runs then,
- * alongside opening a pending Retro when one is due. Nothing calls it until
- * the switch-on Ticket (#228), which runs the retro gate beside the audit
- * gate (scheduledTickWith).
+ * The retro gate: a pending Retro to open, or why there's none this tick. The
+ * scheduled-tick rule runs it on every tick, after the audit gate
+ * (scheduledTickWith).
  */
-export function scheduledTickWithRetroGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
-  return scheduledTickWith([retroGate], now, snapshot, config);
-}
-
-/** The retro gate on its own: a pending Retro to open, or why there's none this tick. */
 export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   const { day } = config.retro;
   if (day === null) return { kind: "nothing", reason: "The Retro is off: retro.day is null" };

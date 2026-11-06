@@ -1,31 +1,32 @@
 import { describe, expect, it } from "vitest";
 import {
+  anAuditIssue,
   anIssue,
   aRetroIssue,
+  AUDITED_SHA,
   kitConfig,
   notificationsOf,
-  repoSnapshot,
   retroBody,
   RETRO_WINDOW_END,
   snapshotOf,
   tickSnapshot,
 } from "../__fixtures__/snapshots.ts";
-import { auditGate } from "./auditGate.ts";
-import { retroGate, scheduledTickWithRetroGate } from "./retroGate.ts";
 import { planFor } from "./rules.ts";
-import type { Action, KitConfig, KitIssueSnapshot, Plan, RetroIssueSnapshot } from "./types.ts";
-import { scheduledTickWith } from "./weeklyGate.ts";
-
-// The retro gate is dormant: the scheduled-tick rule doesn't call it until the
-// switch-on Ticket (#228), so these tests run the tick as it will be then.
+import type { Action, AuditSnapshot, KitConfig, KitIssueSnapshot, Plan, RetroIssueSnapshot } from "./types.ts";
 
 /** Saturday 2026-11-07 04:00 UTC: on the default retro.day, in the week of Monday 2026-11-02. */
 const SATURDAY = "2026-11-07T04:00:00.000Z";
 
 /**
- * The tick's plan, with these `fabrik:retro` issues and these open Kit-owned
- * issues, in a repo whose store is ready and where, by default, an agent PR
- * merged or closed since the last Retro's window end.
+ * An audit slice whose default branch hasn't moved since last week's Audit,
+ * so the audit gate the tick also runs opens nothing, whatever the day.
+ */
+const AUDITED: AuditSnapshot = { head: AUDITED_SHA, issues: [anAuditIssue()] };
+
+/**
+ * The scheduled tick's plan, with these `fabrik:retro` issues and these open
+ * Kit-owned issues, in a repo whose store is ready and where, by default, an
+ * agent PR merged or closed since the last Retro's window end.
  */
 function tick(
   now: string,
@@ -45,7 +46,7 @@ function tick(
   config: KitConfig = kitConfig(),
 ): Plan {
   const retro = { storeReady, issues, agentPullRequestClosed, escapeFiled };
-  return scheduledTickWithRetroGate(now, repoSnapshot({ kitIssues, retro }), config);
+  return planFor({ kind: "scheduled-tick", now }, tickSnapshot({ kitIssues, audit: AUDITED, retro }), config);
 }
 
 /** The Kit's open weekly-limit issue, for a limit that resets at `resetsAt`. */
@@ -157,8 +158,8 @@ describe("The retro gate opens a pending Retro", () => {
   });
 });
 
-/** A tick that opens no Retro and closes or posts nothing. */
-const OPENS_NOTHING: Plan = { kind: "nothing", reason: expect.any(String) };
+/** A tick that opens no Retro and closes or posts nothing: it only asks for the Design queue check every tick ends with. */
+const OPENS_NOTHING: Plan = { kind: "act", actions: [{ kind: "check-design-queue" }] };
 
 describe("The retro gate opens nothing", () => {
   it("when retro.day is null, which turns the Retro off", () => {
@@ -275,6 +276,7 @@ describe("The tick's other rules", () => {
         { kind: "comment", issue: 41, body: expect.stringMatching(/^The weekly usage limit reset at 2026-11-07 03:00 UTC/) },
         { kind: "close", issue: 41, reason: "completed" },
         expect.objectContaining({ kind: "open-issue", title: "Retro: week of 2026-11-02", labels: ["fabrik:retro"], assignees: [] }),
+        { kind: "check-design-queue" },
       ],
     });
     expect(notificationsOf(plan)).toEqual([]);
@@ -285,19 +287,25 @@ describe("The tick's other rules", () => {
 
     expect(plan).toEqual({
       kind: "act",
-      actions: [expect.objectContaining({ kind: "comment", issue: 41 }), { kind: "close", issue: 41, reason: "completed" }],
+      actions: [
+        expect.objectContaining({ kind: "comment", issue: 41 }),
+        { kind: "close", issue: 41, reason: "completed" },
+        { kind: "check-design-queue" },
+      ],
     });
   });
 
-  it("still open the week's Audit alongside the Retro, once both gates run on the tick", () => {
-    const snapshot = repoSnapshot({
+  it("still open the week's Audit when it's due on the same tick, before the Retro", () => {
+    const snapshot = tickSnapshot({
       audit: { head: "c".repeat(40), issues: [] },
       retro: { storeReady: true, issues: [], agentPullRequestClosed: true, escapeFiled: false },
     });
 
-    const plan = scheduledTickWith([auditGate, retroGate], SATURDAY, snapshot, kitConfig({ audit: { day: "saturday" } }));
+    const plan = planFor({ kind: "scheduled-tick", now: SATURDAY }, snapshot, kitConfig({ audit: { day: "saturday" } }));
 
     expect(opened(plan).map((issue) => issue.labels)).toEqual([["fabrik:audit"], ["fabrik:retro"]]);
+    expect(plan).toMatchObject({ kind: "act", actions: [{ kind: "open-issue" }, { kind: "open-issue" }, { kind: "check-design-queue" }] });
+    expect(notificationsOf(plan)).toEqual([]);
   });
 });
 
@@ -332,13 +340,15 @@ describe("The Retro due while a Subscription's weekly-limit issue is open, with 
 
 describe("A tick's snapshot without the retro slice", () => {
   it("fails rather than guess, and changes nothing", () => {
-    const plan = scheduledTickWithRetroGate(SATURDAY, repoSnapshot(), kitConfig());
+    const plan = planFor({ kind: "scheduled-tick", now: SATURDAY }, tickSnapshot({ audit: AUDITED, retro: null }), kitConfig());
 
     expect(plan).toEqual({ kind: "fail", failure: "infrastructure", reason: expect.stringContaining("retro") });
   });
 
   it("opens nothing and fails nothing while the Retro is off", () => {
-    expect(scheduledTickWithRetroGate(SATURDAY, repoSnapshot(), kitConfig({ retro: { day: null } }))).toEqual(OPENS_NOTHING);
+    const snapshot = tickSnapshot({ audit: AUDITED, retro: null });
+
+    expect(planFor({ kind: "scheduled-tick", now: SATURDAY }, snapshot, kitConfig({ retro: { day: null } }))).toEqual(OPENS_NOTHING);
   });
 });
 
@@ -361,11 +371,11 @@ describe("The pending Retro's issue", () => {
   });
 });
 
-describe("Until the Retro is switched on (#228)", () => {
-  it("the scheduled-tick rule opens no Retro, even with one due, and does only what it did before", () => {
+describe("The scheduled-tick rule", () => {
+  it("opens the pending Retro on retro day, with the store ready and something new, alongside closing the weekly-limit issue, then asks for a Design queue check", () => {
     const snapshot = tickSnapshot({
       kitIssues: [weeklyLimitIssue("2026-11-07T03:00:00.000Z")],
-      retro: { storeReady: true, issues: [], agentPullRequestClosed: true, escapeFiled: true },
+      retro: { storeReady: true, issues: [aRetroIssue()], agentPullRequestClosed: true, escapeFiled: false },
     });
 
     const plan = planFor({ kind: "scheduled-tick", now: SATURDAY }, snapshot, kitConfig());
@@ -375,8 +385,18 @@ describe("Until the Retro is switched on (#228)", () => {
       actions: [
         expect.objectContaining({ kind: "comment", issue: 41 }),
         { kind: "close", issue: 41, reason: "completed" },
+        expect.objectContaining({ kind: "open-issue", title: "Retro: week of 2026-11-02", labels: ["fabrik:retro"], assignees: [] }),
         { kind: "check-design-queue" },
       ],
     });
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("opens no Retro with retro.day null, and does only what it did before the Retro", () => {
+    const snapshot = tickSnapshot({ retro: { storeReady: true, issues: [], agentPullRequestClosed: true, escapeFiled: true } });
+
+    const plan = planFor({ kind: "scheduled-tick", now: SATURDAY }, snapshot, kitConfig({ retro: { day: null } }));
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
   });
 });

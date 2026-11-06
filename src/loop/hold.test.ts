@@ -10,11 +10,11 @@ import {
   dispatchSnapshotOf,
   kitConfig,
   notificationsOf,
-  repoSnapshot,
   RETRO_WINDOW_END,
   retroBody,
   snapshotOf,
   snapshotOfPullRequest,
+  tickSnapshot,
 } from "../__fixtures__/snapshots.ts";
 import { agentRunIn } from "../github/apply.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
@@ -431,7 +431,7 @@ describe("The Audit due while a Subscription's weekly-limit issue is open, with 
   const HEAD = "c0ffee5".padEnd(40, "0");
   const opened = (kitIssues: KitIssueSnapshot[], config = TWO_SUBSCRIPTIONS) =>
     actionsOf(
-      planFor({ kind: "scheduled-tick", now: SUNDAY }, repoSnapshot({ kitIssues, audit: { head: HEAD, issues: [] } }), config),
+      planFor({ kind: "scheduled-tick", now: SUNDAY }, tickSnapshot({ kitIssues, audit: { head: HEAD, issues: [] } }), config),
     ).filter((action) => action.kind === "open-issue");
 
   it("opens while another Subscription is free, so its Auditor run starts there", () => {

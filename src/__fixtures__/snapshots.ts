@@ -146,11 +146,18 @@ export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kit
 }
 
 /**
- * A scheduled tick's snapshot: the repo's, with the audit slice every tick
- * gathers, by default an unaudited repo whose default branch is at HEAD_SHA.
+ * A scheduled tick's snapshot: the repo's, with the audit and retro slices
+ * every tick gathers. By default the repo is unaudited, with its default
+ * branch at HEAD_SHA, and has had no Retro, with its store ready but nothing
+ * new to read, so the retro gate opens nothing.
  */
 export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "held">> = {}): Snapshot {
-  return repoSnapshot({ audit: { head: HEAD_SHA, issues: [] }, held: [], ...overrides });
+  return repoSnapshot({
+    audit: { head: HEAD_SHA, issues: [] },
+    retro: { storeReady: true, issues: [], agentPullRequestClosed: false, escapeFiled: false },
+    held: [],
+    ...overrides,
+  });
 }
 
 /** The commit anAuditIssue() audited unless a test says otherwise. */

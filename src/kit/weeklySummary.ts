@@ -379,25 +379,12 @@ export interface SubscriptionUsage {
   readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
 }
 
-/**
- * The Kit-internal switch for the Weekly summary's Retro line (#151). While
- * it's off, an open Retro waits on nobody: it neither shows in Waiting on you
- * nor keeps a quiet week from being skipped, so a release cut before
- * switch-on reads as if the Retro didn't exist.
- */
-export const RETRO_SWITCHED_ON = false;
-
-export interface WeeklySummaryOptions {
-  /** Overrides the switch; only tests pass it. */
-  readonly retro?: boolean;
-}
-
 /** The summary to file for the week that just ended, or skip. */
-export function weeklySummary(input: WeeklySummaryInput, { retro = RETRO_SWITCHED_ON }: WeeklySummaryOptions = {}): WeeklySummaryResult {
+export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
-  const repos = input.facts.map((facts) => repoSectionOf(facts, input, retro));
+  const repos = input.facts.map((facts) => repoSectionOf(facts, input));
   // Held work counts too, so a queue never sits unseen through a week nothing ran.
   const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null);
   if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && quiet) return { kind: "skip" };
@@ -714,15 +701,13 @@ function hasUnknownCostBasis(record: RunRecord): boolean {
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
-function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: WeeklySummaryInput, retro: boolean): RepoSection {
+function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: WeeklySummaryInput): RepoSection {
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
-  // Until switch-on an open Retro waits on nobody, so it neither shows nor keeps a quiet week from being skipped.
-  const retros = retro ? openRetrosOf(facts, appLogin, items) : [];
   return {
     repo: facts.repo,
     // An open Audit or Retro waits on the Operator, so it also keeps a quiet week from being skipped.
-    waitingOnYou: oldestFirst([...waitingOnYou(facts, items), ...openAuditsOf(facts, appLogin, items), ...retros]),
+    waitingOnYou: oldestFirst([...waitingOnYou(facts, items), ...openAuditsOf(facts, appLogin, items), ...openRetrosOf(facts, appLogin, items)]),
     stuck: stuck(facts, records, items, now),
     held: heldIn(facts, appLogin, now),
   };
@@ -947,7 +932,7 @@ function localTime(time: number, timeZone: string): string {
 
 // Rendering. Only shipped features get a section: the Map and Monitor issues
 // add theirs when their Specs ship. The open Retro gets no section, only its
-// line in Waiting on you, which waits for RETRO_SWITCHED_ON. Scores shows
+// line in Waiting on you. Scores shows
 // only in a week with score files, and never a run's own scores. Held shows
 // what the Design-session and Monitor caps hold, until the Ideas and Maps
 // caps add their lines.

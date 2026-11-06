@@ -661,6 +661,13 @@ describe("The Kit config template", () => {
     });
   });
 
+  it("spells out retro.day and roles.retro at their Kit defaults", () => {
+    expect(JSON.parse(template)).toMatchObject({
+      retro: { day: "saturday" },
+      roles: { retro: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 } },
+    });
+  });
+
   it("spells out subscriptions at its Kit default, the one V1 Subscription", () => {
     expect(JSON.parse(template)).toMatchObject({ subscriptions: ["Claude token"] });
   });

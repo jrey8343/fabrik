@@ -65,8 +65,8 @@ describe("What the push job applies", () => {
     });
   });
 
-  // Dormant until the switch-on (#151) adds the Retro's jobs to loop.yml and to the push job's needs.
-  it("applies nothing for a Retro route while the push job needs no Retro job, so no Retro run's result lands yet", () => {
+  // loop.yml's push job needs both of a Retro run's jobs (src/kit/workflows.test.ts), so this is only ever a miswiring.
+  it("applies nothing for a Retro route whose needs name neither of the Retro's jobs, rather than guess at a result", () => {
     expect(pushJobInput(needs("retro"), 120)).toEqual({ kind: "nothing", reason: "the retro job ended unknown" });
   });
 

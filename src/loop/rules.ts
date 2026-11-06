@@ -1,5 +1,5 @@
 import { isPendingAudit, startAuditorRun } from "./audit.ts";
-import { scheduledTickWithAuditGate } from "./auditGate.ts";
+import { auditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom } from "./design.ts";
 import { failureNotice } from "./failures.ts";
@@ -29,7 +29,9 @@ import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
 import { isPendingRetro } from "./retro.ts";
+import { retroGate } from "./retroGate.ts";
 import { landRetro } from "./retroLanding.ts";
+import { scheduledTickWith } from "./weeklyGate.ts";
 import { dispatch } from "./dispatch.ts";
 import { applyRedChecks, applyReview, startReview } from "./review.ts";
 import type {
@@ -155,11 +157,11 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // above it, so see what can start now.
       return { kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] };
     case "scheduled-tick":
-      // The tick closes the weekly-limit issue after its reset and opens the
-      // week's pending Audit when it's due. It also catches a Design session
-      // slot freed by an event the Loop doesn't watch, such as needs-design
-      // coming off by hand.
-      return thenCheckDesignQueue(scheduledTickWithAuditGate(event.now, snapshot, config));
+      // The tick closes each weekly-limit issue after its reset, resuming the
+      // runs held until then, and opens the week's pending Audit and pending
+      // Retro when each is due. It also catches a Design session slot freed by
+      // an event the Loop doesn't watch, such as needs-design coming off by hand.
+      return thenCheckDesignQueue(scheduledTickWith([auditGate, retroGate], event.now, snapshot, config));
   }
 }
 
