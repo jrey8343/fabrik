@@ -31,6 +31,7 @@ import {
   type MonitorMarker,
   monitorMarkerIn,
   monitorMarkerLine,
+  prototypeRequestMarker,
   SESSION_FINISHED,
 } from "./markers.ts";
 import { spelled } from "./readable.ts";
@@ -188,12 +189,25 @@ export function turnStartFrom(comment: number | undefined, found: StartingCommen
 }
 
 /**
+ * Why a turn can't ask for a Prototype in this Kit, or null when it can: UI
+ * prototypes are dormant until switched on (#282), and only a Product repo
+ * with a `ui` block takes one, since its prototype turn serves and captures
+ * the variants through that block. Kit config decides, never an agent.
+ */
+export function whyNoPrototype({ ui }: Pick<KitConfig, "ui">, switchedOn: boolean): string | null {
+  if (!switchedOn) return "Prototypes are off in this Kit, so a turn can't ask for one";
+  if (ui === null) return "this Product repo's Kit config has no `ui` block, so the Kit can't serve or capture a Prototype";
+  return null;
+}
+
+/**
  * A finished turn posts the next round, or ends the session with its outcome.
  * A turn whose starting reply the Operator deleted posts nothing: it answered
  * a reply that is no longer there. A Map is weighed against `mapCap`, the
- * Map cap over the open Maps the snapshot holds. Whichever comment it posts ends
- * with the Operator comments it weighed, among those on the PR it came back
- * from that it was `given` (ADR-0007).
+ * Map cap over the open Maps the snapshot holds, and a Prototype is refused
+ * for `noPrototype`, why this Kit can't take one, when that isn't null.
+ * Whichever comment it posts ends with the Operator comments it weighed,
+ * among those on the PR it came back from that it was `given` (ADR-0007).
  */
 export function applyTurn(
   issueNumber: number,
@@ -201,6 +215,7 @@ export function applyTurn(
   snapshot: IssueContext,
   start: TurnStart,
   mapCap: MapCap | null,
+  noPrototype: string | null,
   given: readonly GivenOperatorComment[] = [],
 ): Plan {
   if (start.kind === "unchecked-reply") {
@@ -224,7 +239,8 @@ export function applyTurn(
       reason: `The Design-session turn on #${issueNumber} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
     };
   }
-  const plan = landTurn(issueNumber, parsed.output, snapshot, mapCap);
+  const reply = start.kind === "reply" ? start.comment.id : null;
+  const plan = landTurn(issueNumber, parsed.output, snapshot, mapCap, noPrototype, reply);
   if (plan.kind !== "act") return plan;
   const considered = consideredSection(parsed.output.operatorCommentsConsidered ?? [], given);
   return considered.length === 0 ? plan : { ...plan, actions: plan.actions.map((action) => endedWith(action, considered)) };
@@ -239,7 +255,14 @@ function endedWith(action: Action, lines: readonly string[]): Action {
   return action;
 }
 
-function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: IssueContext, mapCap: MapCap | null): Plan {
+function landTurn(
+  issueNumber: number,
+  output: DesignTurnOutput,
+  snapshot: IssueContext,
+  mapCap: MapCap | null,
+  noPrototype: string | null,
+  reply: number | null,
+): Plan {
   const notNow = whileInSession(issueNumber, snapshot.issue);
   if (notNow !== null) return notNow;
 
@@ -252,7 +275,10 @@ function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: Issue
       actions: [{ kind: "comment", issue: issueNumber, body: roundComment(round, output, snapshot.operator, sentBack) }],
     };
   }
-  if (output.kind === "prototype") return wrongOutcome(issueNumber, "Prototypes are off in this Kit, so a turn can't ask for one");
+  if (output.kind === "prototype") {
+    if (noPrototype !== null) return wrongOutcome(issueNumber, noPrototype);
+    return { kind: "act", actions: requestPrototype(issueNumber, output, reply) };
+  }
   if (output.kind === "prototype-round") {
     return wrongOutcome(issueNumber, "only a prototype turn ends in a prototype-round, and this was an ordinary turn");
   }
@@ -349,6 +375,37 @@ function heldByMapCap(issueNumber: number, { openMaps, cap }: Extract<MapCap, { 
       ? `This turn ended in a Map, but \`caps.maps\` is 0, so the Kit charts no new Map in this repo. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way.`
       : `This turn ended in a Map, but the Map cap is full: ${spelled(maps, "and")} ${maps.length === 1 ? "is the open Map" : "are the open Maps"}, and \`caps.maps\` is ${cap}. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way, or close ${maps.length === 1 ? maps[0] : "an open Map"} first and ask for the Map again.`;
   return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body: [DESIGN_TURN_FAILED_MARKER, said].join("\n") }] };
+}
+
+/**
+ * The Operator approved a Prototype, in their `reply` when one started this
+ * turn, so the Kit posts its prototype request, whose marker holds what the
+ * prototype turn builds and that reply, then adds agent:design afresh, on the
+ * App token, as it does to restart a turn refused on its weekly limit, to
+ * start that turn. The request is no round, so it carries no round marker
+ * and the round count stays where it was, and it mentions nobody: only the
+ * prototype round that follows notifies.
+ */
+function requestPrototype(
+  issueNumber: number,
+  output: Extract<DesignTurnOutput, { kind: "prototype" }>,
+  reply: number | null,
+): Action[] {
+  const { route, variants, brief } = output;
+  return [
+    {
+      kind: "comment",
+      issue: issueNumber,
+      body: [
+        prototypeRequestMarker({ request: { route, variants, brief }, reply }),
+        `**Prototype requested.** ${withoutMentions(output.comment)}`,
+        "",
+        `The Kit is building ${variants} variants of \`${withoutMentions(route)}\`. The prototype round follows when they're ready.`,
+      ].join("\n"),
+    },
+    { kind: "remove-label", issue: issueNumber, label: DESIGN_LABEL },
+    { kind: "add-labels", issue: issueNumber, labels: [DESIGN_LABEL] },
+  ];
 }
 
 /**

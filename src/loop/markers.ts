@@ -6,6 +6,8 @@
 // comments back through them into the snapshot (src/github/threads.ts), and
 // the body lines are read from the issues themselves, so the Loop's history
 // lives on GitHub alone.
+import { isRoute } from "../kit/config.ts";
+import { isVariantCount, type PrototypeRequest } from "./designOutput.ts";
 import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
@@ -60,6 +62,59 @@ export const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 
 /** The first line of the Kit's note that a Ticket came back to design from an agent PR. */
 export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
+
+/**
+ * A prototype request's first line (#155), carrying as JSON what the Operator
+ * approved and, when a reply of theirs started the turn, that reply.
+ */
+const PROTOTYPE_REQUEST_MARKER = /^<!-- fabrik:prototype-request (\{.*\}) -->(?:\n|$)/;
+
+/** What a prototype request's marker says. */
+export interface PrototypeRequestMarker {
+  /** What the prototype turn of the session builds. */
+  readonly request: PrototypeRequest;
+  /**
+   * The id of the Operator's reply that started the turn which asked for it,
+   * so the prototype turn posts nothing once the Operator deleted it; null
+   * when agent:design started that turn.
+   */
+  readonly reply: number | null;
+}
+
+/** How a prototype request's marker spells the characters that could end its HTML comment early or mention someone. */
+const ESCAPED: Readonly<Record<string, string>> = { "<": "\\u003c", ">": "\\u003e", "@": "\\u0040" };
+
+/**
+ * The marker a prototype request opens with, on one line, which
+ * prototypeRequestIn reads back. Its JSON spells `<`, `>` and `@` as escapes,
+ * so a brief can neither end the HTML comment early nor mention anyone.
+ */
+export function prototypeRequestMarker({ request: { route, variants, brief }, reply }: PrototypeRequestMarker): string {
+  const json = JSON.stringify({ route, variants, brief, reply }).replace(/[<>@]/g, (c) => ESCAPED[c] ?? c);
+  return `<!-- fabrik:prototype-request ${json} -->`;
+}
+
+/**
+ * What a prototype request's marker says, read from the comment's first line,
+ * so quoting one further down doesn't count; null when the comment opens with
+ * no marker, or with one whose request the Design turn output contract
+ * wouldn't take.
+ */
+export function prototypeRequestIn(body: string): PrototypeRequestMarker | null {
+  const json = PROTOTYPE_REQUEST_MARKER.exec(body)?.[1];
+  if (json === undefined) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const { route, variants, brief, reply = null } = value as Record<string, unknown>;
+  if (!isRoute(route) || !isVariantCount(variants) || typeof brief !== "string" || brief.trim() === "") return null;
+  if (reply !== null && !(Number.isSafeInteger(reply) && (reply as number) > 0)) return null;
+  return { request: { route, variants, brief }, reply: reply as number | null };
+}
 
 /** The heading of a Map's Decisions so far: one line under it per Decision resolved. */
 export const DECISIONS_SO_FAR_HEADING = "## Decisions so far";

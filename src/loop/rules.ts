@@ -1,6 +1,7 @@
 import { auditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
-import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom } from "./design.ts";
+import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
+import { PROTOTYPES_SWITCHED_ON } from "./designOutput.ts";
 import { failureNotice } from "./failures.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
@@ -49,11 +50,24 @@ import type {
   Snapshot,
 } from "./types.ts";
 
+export interface PlanOptions {
+  /**
+   * Overrides PROTOTYPES_SWITCHED_ON; only tests pass it. The switch-on
+   * Ticket (#282) deletes the switch and this option.
+   */
+  readonly prototypes?: boolean;
+}
+
 /** The Loop rules core: decides what the Kit does about one Loop event. Pure, no I/O. */
-export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
+export function planFor(
+  event: LoopEvent,
+  snapshot: Snapshot,
+  config: KitConfig,
+  { prototypes = PROTOTYPES_SWITCHED_ON }: PlanOptions = {},
+): Plan {
   // Every run the Plan starts is given its Subscription here, whichever role it is,
   // or held, with rotation on, while every Subscription is used up.
-  const planned = planOnAnySubscription(event, snapshot, config);
+  const planned = planOnAnySubscription(event, snapshot, config, prototypes);
   // A Kit-owned issue the Plan closes, as the scheduled tick closes a weekly-limit
   // issue at its reset, no longer stands in the way of the runs it starts.
   const kitIssues = snapshot.kitIssues.filter((issue) => !closes(planned, issue.number));
@@ -65,7 +79,7 @@ function closes(plan: Plan, issue: number): boolean {
 }
 
 /** What the Kit does about one Loop event, before the runs it starts are given a Subscription. */
-function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
+function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: KitConfig, prototypes: boolean): Plan {
   switch (event.kind) {
     case "issue-opened":
       // The App opens a pending Audit for the Auditor to fill in, and a pending
@@ -95,6 +109,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
               context,
               turnStartFrom(event.startedBy, snapshot.startingComment),
               snapshot.openMaps === null ? null : mapCapOf(snapshot.openMaps, config),
+              whyNoPrototype(config, prototypes),
               event.operatorComments,
             ),
           );
