@@ -19,6 +19,7 @@ import { type ChangedPath, checkTrustRoot } from "../guard/trust-root.ts";
 import { newIssueUrl } from "../loop/followUps.ts";
 import { REPLAY_LABEL } from "../loop/labels.ts";
 import { RUN_NAMES } from "../loop/heldRun.ts";
+import { markerJson } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 import { spelled } from "../loop/readable.ts";
 import type { Verdict } from "../loop/types.ts";
@@ -864,14 +865,6 @@ const KIT_PART_START = "<!-- fabrik:replay-start -->";
 
 /** The plan's marker line, carrying it as JSON. */
 const PLAN_MARKER = /^<!-- fabrik:replay-plan (\{.*\}) -->$/;
-
-/** How a marker's JSON spells the characters that could end its HTML comment early or mention someone. */
-const MARKER_ESCAPES: Readonly<Record<string, string>> = { "<": "\\u003c", ">": "\\u003e", "@": "\\u0040" };
-
-/** A marker's value as one line of JSON that can neither end its HTML comment early nor mention anyone. */
-function markerJson(value: unknown): string {
-  return JSON.stringify(value).replace(/[<>@]/g, (c) => MARKER_ESCAPES[c] ?? c);
-}
 
 /**
  * What the markers in a replay issue's body hold, read only from the Kit's
