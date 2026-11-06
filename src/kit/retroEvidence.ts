@@ -13,7 +13,9 @@ import { followUpsIn } from "../loop/followUps.ts";
 import { escapeMarkerIn, fromPullRequestIn, fromRetroIn } from "../loop/markers.ts";
 import { retrosIn, retroWindowStart } from "../loop/retro.ts";
 import { type RetroIssueSnapshot, STRENGTHS, type Strength, type VerdictRecord } from "../loop/types.ts";
-import { recordPathOf, type RunRecord } from "./runRecord.ts";
+import { recordPathOf, type RunRecord, runKey } from "./runRecord.ts";
+import type { ScoreFile } from "./scorer.ts";
+import { digestOf, type TranscriptDigest } from "./transcriptDigest.ts";
 
 // The GitHub facts the metrics read of one Product repo.
 
@@ -396,6 +398,13 @@ export interface RetroIssueFacts extends RetroIssueSnapshot {
 export interface RetroEvidenceInput {
   /** The store's Run records. */
   readonly records: readonly RunRecord[];
+  /**
+   * The store's transcripts, each by its path in the store, as a Run record's
+   * `transcript` names it: every stdout line of the run's stream-json.
+   */
+  readonly transcripts: Readonly<Record<string, readonly string[]>>;
+  /** The store's score files, each by its path in the store. */
+  readonly scoreFiles: Readonly<Record<string, ScoreFile>>;
   /** The Product repo's GitHub facts, as the facts adapter gathers them for a Retro (gatherRetroFacts, src/github/facts.ts). */
   readonly facts: MetricFacts;
   /** The Operator's GitHub login. */
@@ -436,6 +445,8 @@ export interface EvidenceBundle {
   readonly feedback: readonly FeedbackEvidence[];
   /** The Follow-ups on the pass Verdicts of the agent PRs merged in the window, PR by PR. */
   readonly followUps: readonly FollowUpEvidence[];
+  /** The runs that ended in the window that a Scorer failed, oldest first: none until the repo has score files. */
+  readonly lowScores: readonly LowScoreEvidence[];
   /** Every agent PR merged in the 90 days to the window's end, oldest first: the counts a loosening's streak rests on. */
   readonly streakTable: readonly StreakRow[];
   /** What the Operator made of earlier Retros: what not to propose again without new evidence. */
@@ -447,6 +458,15 @@ export interface RecordEvidence {
   /** The record's path in the store. */
   readonly ref: string;
   readonly record: RunRecord;
+}
+
+/** A Run record with its transcript's digest. */
+export interface DigestedRecordEvidence extends RecordEvidence {
+  /**
+   * The run's transcript read through the transcript digest (src/kit/transcriptDigest.ts),
+   * as the judge reads it: null when the store holds no transcript of the run.
+   */
+  readonly digest: string | null;
 }
 
 /** An Architectural escape: the Operator's issue, and the agent PRs it counts against. */
@@ -471,8 +491,8 @@ export interface EscapedPullRequestEvidence {
   readonly ticket: number | null;
   /** Every Run record on its Ticket, oldest first. */
   readonly records: readonly RecordEvidence[];
-  /** The last Review record on the PR with a pass Verdict, the gate that missed the escape, or null when the store holds none. */
-  readonly lastPassingReview: RecordEvidence | null;
+  /** The last Review record on the PR with a pass Verdict, the gate that missed the escape, with its transcript's digest, or null when the store holds none. */
+  readonly lastPassingReview: DigestedRecordEvidence | null;
 }
 
 /**
@@ -526,6 +546,26 @@ export interface FollowUpEvidence {
   readonly body: string;
   /** The issue the Operator opened it as through its Open as issue link, still titled as the link prefilled it, or null. */
   readonly openedAs: number | null;
+}
+
+/** A run a Scorer failed: its score file, and the run as the store holds it. */
+export interface LowScoreEvidence {
+  /** The score file's path in the store. */
+  readonly ref: string;
+  /** The scored run's Run record, by its path, with its transcript's digest, or null when the store holds no record of it. */
+  readonly run: DigestedRecordEvidence | null;
+  /** Every rubric's score of the run, the failing ones and the rest, in the rubrics' order. */
+  readonly entries: readonly ScoreEvidence[];
+}
+
+/** One rubric's score of a run, as its score file gives it. */
+export interface ScoreEvidence {
+  readonly scorer: string;
+  readonly score: number;
+  /** Whether the score is at or above the rubric's threshold: the Kit's call, never the judge's. */
+  readonly pass: boolean;
+  readonly label: string;
+  readonly rationale: string;
 }
 
 /** An agent PR in the streak table, and whatever breaks a streak it's counted in. */
@@ -586,11 +626,13 @@ export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
   // Only this repo's records, whatever the store gave.
   const records = input.records.filter((record) => record.repo === input.facts.repo);
   const metrics: MetricsInput = { records, facts: [input.facts], operator: input.operator };
+  const digested = digestedBy(input.transcripts);
   return {
     window: { start: new Date(window.start).toISOString(), end: new Date(window.end).toISOString() },
-    escapes: escapesOf(window, metrics),
+    escapes: escapesOf(window, metrics, digested),
     feedback: feedbackOf(window, input),
     followUps: followUpsOf(window, input),
+    lowScores: lowScoresOf(window, records, input, digested),
     streakTable: streakTableOf({ start: window.end - STREAK_WINDOW_MS, end: window.end }, metrics),
     history: historyOf(earlier, input),
   };
@@ -632,8 +674,24 @@ export function refsOf(bundle: EvidenceBundle): EvidenceRef[] {
   return [...once.values()];
 }
 
+/** A Run record with its transcript's digest, from the store's transcripts. */
+type Digested = (record: RunRecord) => DigestedRecordEvidence;
+
+/** How a record gets its digest from the store's transcripts: each transcript read once, however often it's digested. */
+function digestedBy(transcripts: RetroEvidenceInput["transcripts"]): Digested {
+  const read = new Map<string, (budget: number) => TranscriptDigest>();
+  return (record) => {
+    const path = record.transcript;
+    const lines = path === null ? undefined : transcripts[path];
+    if (path === null || lines === undefined) return { ...recordEvidenceOf(record), digest: null };
+    const digest = read.get(path) ?? digestOf(lines);
+    read.set(path, digest);
+    return { ...recordEvidenceOf(record), digest: digest(Infinity).digest };
+  };
+}
+
 /** The escapes opened in the window, each counted against the agent PRs merged in the 90 days to its end. */
-function escapesOf(window: Window, metrics: MetricsInput): EscapeEvidence[] {
+function escapesOf(window: Window, metrics: MetricsInput, digested: Digested): EscapeEvidence[] {
   return escapesIn({ start: window.end - ESCAPE_WINDOW_MS, end: window.end }, metrics)
     .filter(({ issue }) => within(window, issue.createdAt))
     .map(({ issue, strength, pullRequests }) => ({
@@ -648,7 +706,7 @@ function escapesOf(window: Window, metrics: MetricsInput): EscapeEvidence[] {
         title: pullRequest.title,
         ticket: pullRequest.ticket,
         records: records.map(recordEvidenceOf),
-        lastPassingReview: lastPassingReview === null ? null : recordEvidenceOf(lastPassingReview),
+        lastPassingReview: lastPassingReview === null ? null : digested(lastPassingReview),
       })),
     }));
 }
@@ -723,6 +781,27 @@ function followUpsOf(window: Window, { facts, operator }: RetroEvidenceInput): F
         return { ref: `#${number}`, pullRequest: number, title, body, openedAs: opened?.number ?? null };
       }),
   );
+}
+
+/**
+ * The repo's score files with a failing entry whose run ended in the window,
+ * oldest first. A score file whose record the store doesn't hold goes by when
+ * it was scored, minutes after its run ended, as the Weekly summary does.
+ */
+function lowScoresOf(window: Window, records: readonly RunRecord[], { facts, scoreFiles }: RetroEvidenceInput, digested: Digested): LowScoreEvidence[] {
+  const byRun = new Map(records.map((record) => [runKey(record), record]));
+  return Object.entries(scoreFiles)
+    .flatMap(([ref, file]) => {
+      const entries = file.entries ?? [];
+      if (file.repo !== facts.repo || entries.every((entry) => entry.pass)) return [];
+      const record = byRun.get(runKey(file));
+      const endedAt = record?.endedAt ?? file.scoredAt;
+      if (!within(window, endedAt)) return [];
+      const scores = entries.map(({ scorer, score, pass, label, rationale }) => ({ scorer, score, pass, label, rationale }));
+      return [{ endedAt, evidence: { ref, run: record === undefined ? null : digested(record), entries: scores } }];
+    })
+    .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
+    .map(({ evidence }) => evidence);
 }
 
 /** The agent PRs merged in the streak window, oldest first, each flagged for what breaks a streak in the same window. */

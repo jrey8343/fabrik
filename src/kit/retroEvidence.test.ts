@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { aPastRetro, aRetroEvidenceInput, aVerdictWithFollowUps, theRetroBeingFilled } from "../__fixtures__/retroEvidence.ts";
+import {
+  aPastRetro,
+  aRecordWithTranscript,
+  aRetroEvidenceInput,
+  aTranscript,
+  aVerdictWithFollowUps,
+  theRetroBeingFilled,
+  transcriptsOf,
+} from "../__fixtures__/retroEvidence.ts";
 import { retroBody } from "../__fixtures__/snapshots.ts";
 import {
   aComment,
@@ -11,6 +19,9 @@ import {
   anOpenPullRequest,
   aReview,
   aRunRecord,
+  aScoreEntry,
+  aScoreFile,
+  aSkippedScoreFile,
   aTicketTimeline,
   aVerdictComment,
   factsOf,
@@ -27,6 +38,15 @@ import {
   type RetroIssueFacts,
   verdictsOn,
 } from "./retroEvidence.ts";
+import { judgePrompt } from "./scorerPrompt.ts";
+
+/** The digest of `transcript` that the judge reads in its prompt: the body of the prompt's one fenced transcript block. */
+function theJudgesDigestOf(transcript: readonly string[]): string {
+  const { prompt } = judgePrompt({ transcript, ticket: { title: "A Ticket", body: "" }, rubrics: [] });
+  const [block] = [...prompt.matchAll(/^(`{3,})text\n([\s\S]*?)\n\1$/gm)];
+  if (block?.[2] === undefined) throw new Error("The judge prompt holds no transcript block");
+  return block[2];
+}
 
 // A week in UTC: Monday 2 November 2026 00:00 to Monday 9 November 00:00.
 const WINDOW = { start: Date.parse("2026-11-02T00:00:00Z"), end: Date.parse("2026-11-09T00:00:00Z") };
@@ -362,10 +382,32 @@ describe("the evidence bundle", () => {
             { ref: "runs/owner/product/2026-11/1002-1-implement.json", record: retry },
             { ref: "runs/owner/product/2026-11/1003-1-review.json", record: lastPass },
           ],
-          lastPassingReview: { ref: "runs/owner/product/2026-11/1003-1-review.json", record: lastPass },
+          lastPassingReview: { ref: "runs/owner/product/2026-11/1003-1-review.json", record: lastPass, digest: null },
         },
         { ref: "#51", number: 51, title: "Build the thing", ticket: null, records: [], lastPassingReview: null },
       ]);
+    });
+
+    it("carries the last passing Review record's transcript digest, the one the judge reads, or none when the store has no transcript", () => {
+      const transcript = aTranscript({ "src/cart.ts": "export const cart = [];" });
+      const review = aRecordWithTranscript({ runId: 1001, role: "review", pullRequest: 50, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
+      const untranscribed = aRunRecord({ runId: 1002, role: "review", pullRequest: 51, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
+      const lost = aRecordWithTranscript({ runId: 1003, role: "review", pullRequest: 52, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
+      const { escapes } = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [review, untranscribed, lost],
+          transcripts: transcriptsOf([review, transcript]),
+          facts: factsOf({
+            pullRequests: [50, 51, 52].map((number) => aMergedPullRequest("2026-11-02T00:00:00Z", { number })),
+            escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #51 #52 -->")],
+          }),
+        }),
+      );
+      const [withDigest, withNone, withLost] = escapes[0]?.pullRequests ?? [];
+      expect(withDigest?.lastPassingReview?.digest).toBe(theJudgesDigestOf(transcript));
+      expect(withDigest?.lastPassingReview?.digest).toContain('#1 Read {"file_path":"src/cart.ts"}\n#1 result: export const cart = [];');
+      expect(withNone?.lastPassingReview?.digest).toBeNull();
+      expect(withLost?.lastPassingReview?.digest).toBeNull();
     });
 
     it("never holds another repo's Run records, though they name the same Ticket and PR", () => {
@@ -569,6 +611,62 @@ describe("the evidence bundle", () => {
         }),
       );
       expect(followUps).toEqual([]);
+    });
+  });
+
+  describe("low scores", () => {
+    const failing = aScoreEntry({ score: 0.4, pass: false, label: "re-reads", rationale: "Read src/cart.ts four times (#2, #5, #9, #12)." });
+    const passing = aScoreEntry({ scorer: "ticket-compliance", threshold: 0.8, score: 0.9, label: "compliant", rationale: "Built what was asked." });
+
+    it("holds each score file whose run ended in the window with a failing entry, by its score path, with every entry and the run's transcript digest", () => {
+      const transcript = aTranscript({ "src/cart.ts": "export const cart = [];" });
+      const flailed = aRecordWithTranscript({ runId: 1000, endedAt: "2026-11-03T00:00:00Z" });
+      const clean = aRecordWithTranscript({ runId: 1001, endedAt: "2026-11-03T00:00:00Z" });
+      const lastWeeks = aRecordWithTranscript({ runId: 1002, endedAt: "2026-10-30T23:00:00Z" });
+      const skipped = aRecordWithTranscript({ runId: 1003, endedAt: "2026-11-03T00:00:00Z" });
+      const theirs = aRecordWithTranscript({ repo: "owner/other", runId: 1004, endedAt: "2026-11-03T00:00:00Z" });
+      const { lowScores } = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [flailed, clean, lastWeeks, skipped, theirs],
+          transcripts: transcriptsOf([flailed, transcript], [clean, transcript], [lastWeeks, transcript], [skipped, transcript], [theirs, transcript]),
+          scoreFiles: {
+            "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json": aScoreFile({ runId: 1000, entries: [failing, passing] }),
+            "scores/owner/product/2026-11/1001-1-implement-a1b2c3.json": aScoreFile({ runId: 1001, entries: [passing] }),
+            // Scored the morning after it ended, inside the window: it's the run's end that counts.
+            "scores/owner/product/2026-10/1002-1-implement-a1b2c3.json": aScoreFile({ runId: 1002, scoredAt: "2026-10-31T09:00:00Z", entries: [failing] }),
+            "scores/owner/product/2026-11/1003-1-implement-a1b2c3.json": aSkippedScoreFile({ reason: "judge-failed" }, { runId: 1003 }),
+            "scores/owner/other/2026-11/1004-1-implement-a1b2c3.json": aScoreFile({ repo: "owner/other", runId: 1004, entries: [failing] }),
+          },
+        }),
+      );
+      expect(lowScores).toEqual([
+        {
+          ref: "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json",
+          run: { ref: "runs/owner/product/2026-11/1000-1-implement.json", record: flailed, digest: theJudgesDigestOf(transcript) },
+          entries: [
+            { scorer: "efficiency", score: 0.4, pass: false, label: "re-reads", rationale: "Read src/cart.ts four times (#2, #5, #9, #12)." },
+            { scorer: "ticket-compliance", score: 0.9, pass: true, label: "compliant", rationale: "Built what was asked." },
+          ],
+        },
+      ]);
+    });
+
+    it("goes by when a run was scored when the store holds no record of it, and gives it no digest", () => {
+      const { lowScores } = evidenceBundle(
+        aRetroEvidenceInput({
+          scoreFiles: {
+            "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json": aScoreFile({ runId: 1000, scoredAt: "2026-11-03T00:05:00Z", entries: [failing] }),
+            "scores/owner/product/2026-10/1001-1-implement-a1b2c3.json": aScoreFile({ runId: 1001, scoredAt: "2026-10-30T00:05:00Z", entries: [failing] }),
+          },
+        }),
+      );
+      expect(lowScores.map(({ ref, run }) => ({ ref, run }))).toEqual([{ ref: "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json", run: null }]);
+    });
+
+    it("holds none when the repo has no score files", () => {
+      const run = aRecordWithTranscript({ runId: 1000, endedAt: "2026-11-03T00:00:00Z" });
+      const { lowScores } = evidenceBundle(aRetroEvidenceInput({ records: [run], transcripts: transcriptsOf([run, aTranscript()]), scoreFiles: {} }));
+      expect(lowScores).toEqual([]);
     });
   });
 
