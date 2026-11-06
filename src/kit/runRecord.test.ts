@@ -492,8 +492,8 @@ describe("The Run record a run's end yields", () => {
       });
     });
 
-    // Until switch-on (#263) the push job doesn't need the Research job, so a run it routed to leaves no record.
-    it("no record is written for a research route whose needs don't name the Research job", () => {
+    // loop.yml's push job needs the Research job (src/kit/workflows.test.ts), so this is only ever a miswiring.
+    it("no record is written for a research route whose needs don't name the Research job, rather than guess at one", () => {
       expect(runRecordFor(runEnd({ needs: needs("research"), eventIssue: 42, agentResult: null, transcript: null }))).toBeNull();
     });
   });

@@ -76,8 +76,8 @@ describe("What the push job applies", () => {
     });
   });
 
-  // Until switch-on (#263) the push job doesn't need the Research job, so the route reaches it like this, and lands nothing.
-  it("applies nothing for a research route whose needs don't name the Research job", () => {
+  // loop.yml's push job needs the Research job (src/kit/workflows.test.ts), so this is only ever a miswiring.
+  it("applies nothing for a research route whose needs don't name the Research job, rather than guess at a result", () => {
     expect(pushJobInput(needs("research"), 42)).toEqual({ kind: "nothing", reason: "the research job ended unknown" });
   });
 

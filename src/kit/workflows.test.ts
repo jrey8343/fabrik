@@ -477,9 +477,9 @@ describe("loop.yml's Research job", () => {
     expect(checkout()).toContain("persist-credentials: false");
   });
 
-  it("would run only when the Kit job routed to it, within the Researcher's timeout", () => {
+  it("runs only when the Kit job routed to it, within the Researcher's timeout", () => {
     expect(research()).toMatch(/\n    needs: kit\n/);
-    expect(research()).toMatch(/\n    if: (?:false && )?needs\.kit\.outputs\.route == 'research'\n/);
+    expect(research()).toContain("\n    if: needs.kit.outputs.route == 'research'\n");
     expect(research()).toContain("timeout-minutes: ${{ fromJSON(needs.kit.outputs.research-timeout-minutes) }}");
     expect(job("kit")).toContain("research-timeout-minutes: ${{ steps.route.outputs.research-timeout-minutes }}");
   });
@@ -532,13 +532,10 @@ describe("loop.yml's Research job", () => {
     );
   });
 
-  // Dormant until Ideas and Maps' switch-on (#263), which drops the gate and adds the job to the push job's needs and the claim job.
-  it("is gated off until switch-on, and nothing waits on it: not the push job, nor the claim job", () => {
+  it("is in the push job's needs, so the push job lands the findings or posts the failure notice once it has ended", () => {
     const needs = /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ");
 
-    expect(research()).toContain("if: false && needs.kit.outputs.route == 'research'\n");
-    expect(needs).not.toContain("research");
-    expect(job("implement-claim")).not.toContain("research");
+    expect(needs).toContain("research");
   });
 });
 
@@ -821,9 +818,9 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
 });
 
 describe("loop.yml's claim job", () => {
-  it("takes agent:design off as the Design session's first turn starts, as it takes agent:implement off", () => {
+  it("takes agent:design off as the Design session's first turn starts, and agent:research as a Research run starts, as it takes agent:implement off", () => {
     expect(job("implement-claim")).toContain(
-      "if: needs.kit.outputs.route == 'implement' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')",
+      "if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')",
     );
   });
 });

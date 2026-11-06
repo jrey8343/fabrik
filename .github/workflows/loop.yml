@@ -366,14 +366,15 @@ jobs:
 
   # Takes agent:implement off the Ticket as its Implement run starts, so the
   # label never claims work that isn't running (the open draft PR does that),
-  # and agent:design off an issue as its Design session's first turn starts
-  # (the running turn, then its round, hold the slot). It applies the same plan
-  # the Kit job routed on; the run itself is the agent job's. Like the push
-  # job, it never touches Product code.
+  # agent:research off a research Decision as its Research run starts (the
+  # running job holds the slot), and agent:design off an issue as its Design
+  # session's first turn starts (the running turn, then its round, hold the
+  # slot). It applies the same plan the Kit job routed on; the run itself is
+  # the agent job's. Like the push job, it never touches Product code.
   implement-claim:
     name: Claim the Ticket
     needs: kit
-    if: needs.kit.outputs.route == 'implement' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')
+    if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions: {}
@@ -386,7 +387,7 @@ jobs:
           path: kit
           persist-credentials: false
 
-      - name: Take agent:implement off the Ticket
+      - name: Take the trigger label off as the run starts
         uses: ./kit/.github/actions/run-loop
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
@@ -1012,13 +1013,11 @@ jobs:
   # runner cuts the research Decision's throwaway branch, commits the findings
   # file the agent wrote to it as the Fabrik Researcher, and passes it out as a
   # bundle beside its result, as the Implement job does, for the push job to
-  # land. Gated off, and absent from the push job's needs, until Ideas and
-  # Maps' switch-on Ticket (#263) drops the `false && ` and adds it there.
-  # Named as Dispatch counts Research runs by (RESEARCH_JOB_NAME in src/github/snapshot.ts).
+  # land. Named as Dispatch counts Research runs by (RESEARCH_JOB_NAME in src/github/snapshot.ts).
   research:
     name: Research
     needs: kit
-    if: false && needs.kit.outputs.route == 'research'
+    if: needs.kit.outputs.route == 'research'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.research-timeout-minutes) }}
     # One Researcher run per Decision at a time, so two never race on one branch.
@@ -1132,13 +1131,14 @@ jobs:
   # The push job, after whichever agent job the Kit job routed to, or straight
   # after the Kit job when it routed here. What it applies, src/main.ts decides
   # from how those jobs ended (src/kit/pushJob.ts): the agent job's result (for
-  # an Implement run, after the trust-root guard on its branch), a Review's red
-  # checks or Verdict, or, when the agent job failed or was cancelled (its
+  # an Implement run, after the trust-root guard on its branch; for a Research
+  # run, once its branch changes only its findings file), a Review's red checks
+  # or Verdict, or, when the agent job failed or was cancelled (its
   # timeout-minutes included), the failure notice. always(), so it still runs
   # after a cancelled agent job.
   push:
     name: Push
-    needs: [kit, triage, design, implement, review-checks, review, audit, retro-evidence, retro]
+    needs: [kit, triage, design, implement, review-checks, review, audit, retro-evidence, retro, research]
     if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1237,7 +1237,7 @@ jobs:
       group: fabrik-dispatch
       cancel-in-progress: false
     permissions:
-      # Only to count Implement runs in flight; the Fabrik App has no Actions permission.
+      # Only to count Implement and Research runs in flight; the Fabrik App has no Actions permission.
       actions: read
     env:
       FABRIK_DISPATCH_CHECK: "true"
@@ -1250,7 +1250,7 @@ jobs:
           path: kit
           persist-credentials: false
 
-      # The App token adds agent:implement, so the label starts the Implement run.
+      # The App token adds agent:implement or agent:research, so the label starts the Implement or Research run.
       - name: Run a Dispatch check
         uses: ./kit/.github/actions/run-loop
         with:
