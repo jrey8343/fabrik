@@ -203,7 +203,7 @@ An Implementer run on a stronger model than its role's default, after a failed r
 _Avoid_: escalation, upgrade
 
 **Sandbox**:
-An isolated environment where an Implementer does its work on a branch, holding no production secrets.
+An isolated environment where an Implementer, or a Design session building a Prototype, does its work on a branch, holding no production secrets.
 _Avoid_: container, VM, workspace
 
 **Trust-root file**:
