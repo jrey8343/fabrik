@@ -243,6 +243,43 @@ describe("The killed run, with rotation on", () => {
   });
 });
 
+// Held markers live only on weekly-limit issues, and closing a usage-credits
+// issue resumes nothing, so with no weekly-limit issue open there's nowhere
+// to hold a run: the Kit never takes its trigger label off without one.
+describe("Every Subscription unusable only through usage-credits issues, with rotation on", () => {
+  const BOTH_KILLED = () => [usageCreditsIssue(60, "Claude token"), usageCreditsIssue(61, "Claude token 2")];
+
+  it("a run due is started, on the first listed Subscription, rather than held where nothing would resume it", () => {
+    const plan = planFor(
+      { kind: "label-added", issue: 7, label: "needs-triage" },
+      snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] }), { kitIssues: BOTH_KILLED() }),
+      TWO_SUBSCRIPTIONS,
+    );
+
+    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", subscription: "Claude token" }));
+    expect(actionsOf(plan).filter((action) => action.kind === "hold-agent-run" || action.kind === "remove-label")).toEqual([]);
+  });
+
+  it("a killed run gets the usual failure comment, naming its trigger label to re-add, rather than a hold", () => {
+    const plan = planFor(
+      killed("implement"),
+      snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"] }), {
+        kitIssues: [usageCreditsIssue(61, "Claude token 2")],
+      }),
+      TWO_SUBSCRIPTIONS,
+    );
+
+    const actions = actionsOf(plan);
+    expect(actions.filter((action) => action.kind === "hold-agent-run")).toEqual([]);
+    expect(actions).toContainEqual({ kind: "remove-label", issue: 7, label: "agent:implement" });
+    expect(actions).toContainEqual({
+      kind: "comment",
+      issue: 7,
+      body: expect.stringContaining("Re-add the `agent:implement` label to run it again."),
+    });
+  });
+});
+
 describe("A run killed for spending usage credits, with one Subscription listed", () => {
   it("gets a V1 failure comment that @-mentions the Operator, and no Kit-owned issue", () => {
     const plan = planFor(killed("triage"), snapshotOf(anIssue({ number: 7 })), kitConfig());

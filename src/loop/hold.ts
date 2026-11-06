@@ -3,7 +3,11 @@
 // a run refused, or killed, while none is free is held instead of re-run. The
 // held marker naming it goes, quietly, on the weekly-limit issue that buzzed
 // the Operator, else on the first to reset, and it is held until the earliest
-// reset across them. Pure, no I/O.
+// reset across them. With no weekly-limit issue open, as when every
+// Subscription is unusable through usage-credits issues alone, nothing could
+// carry the marker or resume the run, so it isn't held: a run due starts on
+// the first listed Subscription, whose stream watch kills it on overage, and a
+// killed run gets the usual failure comment. Pure, no I/O.
 import { heldMarker, type HeldRun, heldRunOf, holding, RUN_NAMES } from "./heldRun.ts";
 import { earliestOf, notified, resetsAtOf } from "./kitIssueMarks.ts";
 import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
@@ -39,11 +43,13 @@ export function heldWhileUsedUp(
   if (plan.kind !== "act" || !rotationIsOn(config) || freeSubscriptions(kitIssues, config).length > 0) return plan;
   if (!plan.actions.some((action) => action.kind === "start-agent-run")) return plan;
   const { until, on } = holdingOn(kitIssues);
+  // Every Subscription unusable through usage-credits issues alone: nowhere holds its marker, so the run starts.
+  if (on === undefined) return plan;
   const comments: Action[] = [];
   const actions = plan.actions.flatMap((action): Action[] => {
     if (action.kind !== "start-agent-run") return [action];
     const held = heldRunOf(action);
-    if (on !== undefined) comments.push({ kind: "comment", issue: on.number, body: heldLine(held, until) });
+    comments.push({ kind: "comment", issue: on.number, body: heldLine(held, until) });
     // A Plan that already takes the trigger label off, as a Design-session turn's does, takes it off once.
     const removed = plan.actions.some(
       (other) => other.kind === "remove-label" && other.issue === held.issue && other.label === held.label,
@@ -66,14 +72,23 @@ function holdingOn(kitIssues: readonly KitIssueSnapshot[]): { until: string | nu
 }
 
 /**
+ * Whether a run can be held now: held markers live only on weekly-limit
+ * issues, and only a weekly-limit issue's close resumes them, so a run is
+ * never held while none is open, as when every Subscription is unusable
+ * through usage-credits issues alone.
+ */
+export function canHold(kitIssues: readonly KitIssueSnapshot[]): boolean {
+  return holdingOn(kitIssues).on !== undefined;
+}
+
+/**
  * With rotation on, a run killed for spending usage credits while no other
  * Subscription is free, held: its trigger label off, and a quiet comment
- * naming it on the weekly-limit issue a run held now is named on.
+ * naming it on the weekly-limit issue a run held now is named on. Only while
+ * one is open (canHold).
  */
 export function heldAfterKill(held: HeldRun, kitIssues: readonly KitIssueSnapshot[]): Action[] {
   const { until, on } = holdingOn(kitIssues);
-  return [
-    ...holding(held, until),
-    ...(on === undefined ? [] : [{ kind: "comment" as const, issue: on.number, body: heldLine(held, until) }]),
-  ];
+  if (on === undefined) throw new Error(`The ${RUN_NAMES[held.role]} run on #${held.issue} has no weekly-limit issue to be held on`);
+  return [...holding(held, until), { kind: "comment", issue: on.number, body: heldLine(held, until) }];
 }

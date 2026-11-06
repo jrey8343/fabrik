@@ -13,7 +13,7 @@
 import { isPendingAudit } from "./audit.ts";
 import { failAudit } from "./auditFailure.ts";
 import { type HeldRun, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
-import { heldAfterKill } from "./hold.ts";
+import { canHold, heldAfterKill } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
@@ -83,6 +83,8 @@ function heldOnRefusal(
   ranOn: RanOn,
 ): HeldRun | null {
   if (!ranOn.rotation || !RERUN_FAILURES.includes(failure)) return null;
+  // A kill opens no weekly-limit issue, and only one can hold the run: with none open it fails as usual.
+  if (failure === "usage-credits" && !canHold(kitIssues)) return null;
   // A killed Auditor run is held only while none is free: else its Audit fails, for the tick to try again.
   const auditHeld = failure === "weekly-limit" || !anotherSubscriptionFree(kitIssues, ranOn);
   if (run.role === "audit") return auditHeld && isPendingAudit(issue) ? { role: "audit", issue: run.issue, label: null } : null;
