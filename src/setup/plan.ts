@@ -236,8 +236,10 @@ function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, no
 
 /**
  * The Kit config with its `ui` and `preview` blocks as the Visual evidence
- * step's answers spell them, every other key kept where it is, or null when
- * it already holds them or the answers are ones the Kit config would refuse.
+ * step's answers spell them, or null when it already holds them or the
+ * answers are ones the Kit config would refuse. The file is the Operator's:
+ * a block it lacks is added before its closing brace, every other byte kept,
+ * and only when a block it has must change is the whole file rewritten.
  */
 function withVisualEvidence(text: string, answers: VisualEvidenceAnswers, notes: string[]): string | null {
   const blocks = {
@@ -262,8 +264,27 @@ function withVisualEvidence(text: string, answers: VisualEvidenceAnswers, notes:
     notes.push(`${KIT_CONFIG_PATH} isn't a JSON object, so the Visual evidence answers weren't written to it: fix it and run setup again.`);
     return null;
   }
-  const merged = { ...config, ...blocks };
-  return JSON.stringify(merged) === JSON.stringify(config) ? null : `${JSON.stringify(merged, null, 2)}\n`;
+  const entries = Object.entries(blocks);
+  const changes = entries.some(([key, value]) => Object.hasOwn(config, key) && JSON.stringify(config[key]) !== JSON.stringify(value));
+  if (changes) return `${JSON.stringify({ ...config, ...blocks }, null, 2)}\n`;
+  const absent = entries.filter(([key]) => !Object.hasOwn(config, key));
+  return absent.length === 0 ? null : withMembers(text, absent);
+}
+
+/**
+ * A JSON object's text with these members added before its closing brace,
+ * indented as its own members are, and every byte of it kept as it was.
+ */
+function withMembers(text: string, members: readonly (readonly [string, unknown])[]): string {
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  // Everything up to the end of its last member, then the closing brace with whatever whitespace is around it.
+  const head = text.slice(0, text.lastIndexOf("}")).trimEnd();
+  const tail = text.slice(head.length);
+  const indent = /\n([ \t]+)"/.exec(head)?.[1] ?? "  ";
+  const added = members.map(
+    ([key, value]) => `${indent}${JSON.stringify(key)}: ${JSON.stringify(value, null, indent).replaceAll("\n", `${eol}${indent}`)}`,
+  );
+  return `${head}${head.endsWith("{") ? "" : ","}${eol}${added.join(`,${eol}`)}${tail.startsWith(eol) ? "" : eol}${tail}`;
 }
 
 function jsonObject(text: string): Record<string, unknown> | null {

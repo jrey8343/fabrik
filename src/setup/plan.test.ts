@@ -773,6 +773,92 @@ describe("Visual evidence, the opt-in step for UI evidence on UI pull requests",
     });
   });
 
+  // The Kit config is the Operator's file: setup adds its two blocks and changes nothing else, not even a space.
+  it("adds the blocks before the Kit config's closing brace, leaving every other byte of the Operator's file as it was", () => {
+    const formatted = [
+      "{",
+      '  "roles": { "implement": { "model": "claude-sonnet-5-5", "effort": null, "timeout_minutes": 90 } },',
+      '  "operator": "jrey8343"',
+      "}",
+      "",
+    ].join("\n");
+    const only = { visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } };
+
+    expect(written(planSetup(withConfig(formatted), kit, only).actions, ".fabrik/config.json")).toBe(
+      [
+        "{",
+        '  "roles": { "implement": { "model": "claude-sonnet-5-5", "effort": null, "timeout_minutes": 90 } },',
+        '  "operator": "jrey8343",',
+        '  "ui": {',
+        '    "paths": [',
+        '      "src/**"',
+        "    ],",
+        '    "serve": "npm run preview",',
+        '    "url": "http://localhost:4321",',
+        '    "before_url": null,',
+        '    "default_routes": []',
+        "  },",
+        '  "preview": {',
+        '    "url": null',
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("adds only the block a Kit config lacks when the one it has already holds the answers", () => {
+    const withPreview = '{\n\t"operator": "jrey8343",\n\t"preview": { "url": "https://deploy-preview-{pr}--clinic.netlify.app" }\n}\n';
+    const answers = {
+      visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", previewUrl: "https://deploy-preview-{pr}--clinic.netlify.app" },
+    };
+
+    expect(written(planSetup(withConfig(withPreview), kit, answers).actions, ".fabrik/config.json")).toBe(
+      [
+        "{",
+        '\t"operator": "jrey8343",',
+        '\t"preview": { "url": "https://deploy-preview-{pr}--clinic.netlify.app" },',
+        '\t"ui": {',
+        '\t\t"paths": [',
+        '\t\t\t"src/**"',
+        "\t\t],",
+        '\t\t"serve": "npm run preview",',
+        '\t\t"url": "http://localhost:4321",',
+        '\t\t"before_url": null,',
+        '\t\t"default_routes": []',
+        "\t}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("rewrites the whole Kit config, with two-space indents, only when a block it already has must change", () => {
+    const off = '{ "operator": "jrey8343", "ui": null }\n';
+    const only = { visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } };
+
+    expect(written(planSetup(withConfig(off), kit, only).actions, ".fabrik/config.json")).toBe(
+      [
+        "{",
+        '  "operator": "jrey8343",',
+        '  "ui": {',
+        '    "paths": [',
+        '      "src/**"',
+        "    ],",
+        '    "serve": "npm run preview",',
+        '    "url": "http://localhost:4321",',
+        '    "before_url": null,',
+        '    "default_routes": []',
+        "  },",
+        '  "preview": {',
+        '    "url": null',
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("writes them into the starter Kit config on a repo that has none, which resolves with every v1 default and Visual evidence on", () => {
     const { actions } = planSetup(aCleanProduct(), kit, operator);
 
