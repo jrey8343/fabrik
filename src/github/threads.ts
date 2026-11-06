@@ -131,13 +131,14 @@ export function designTurnFailedIn(comments: readonly { readonly body: string; r
 
 /**
  * Whether the Kit's research failure notice is a Decision's latest run's word,
- * from its comments oldest first: the notice is the last bot comment on it,
- * with no later run's word, such as a resolution, since. Only a bot's comment
- * counts, so nobody can fake a failure by quoting the notice, and a person's
- * reply after it leaves it standing.
+ * from its comments oldest first: the notice is the Fabrik App's last comment
+ * on it, with no later run's word, such as a resolution, since. Only the App's
+ * own comments count (`byApp`), so nobody, another bot included, can fake a
+ * failure by quoting the notice, and a reply after it, a person's or another
+ * bot's, leaves it standing.
  */
-export function researchRunFailedIn(comments: readonly { readonly body: string; readonly byBot: boolean }[]): boolean {
-  const latest = comments.filter(({ byBot }) => byBot).at(-1);
+export function researchRunFailedIn(comments: readonly { readonly body: string; readonly byApp: boolean }[]): boolean {
+  const latest = comments.filter(({ byApp }) => byApp).at(-1);
   return latest !== undefined && latest.body.startsWith(RESEARCH_RUN_FAILED_MARKER);
 }
 

@@ -735,7 +735,7 @@ function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: 
       ...openAuditsOf(facts, appLogin, items),
       ...openRetrosOf(facts, appLogin, items),
       ...openMapsOf(facts, items),
-      ...failedResearchOf(facts, items),
+      ...failedResearchOf(facts, appLogin, items),
     ]),
     stuck: stuck(facts, records, items, now),
     held: heldIn(facts, appLogin, now),
@@ -777,15 +777,18 @@ function openMapsOf({ openIssues, openMaps }: GitHubFacts, items: Items): Waitin
  * Kit's failure notice: by the Kit's own rules for which Decisions the
  * Researcher may run on (whyNotResearchable) and whose last run failed
  * (researchRunFailedIn), so the summary lists just the Decisions Dispatch
- * won't run again until the Operator re-adds agent:research.
+ * won't run again until the Operator re-adds agent:research. As Dispatch
+ * does, it reads only the comments of the Fabrik App, whose bot login is
+ * `appLogin`.
  */
-function failedResearchOf({ openIssues }: GitHubFacts, items: Items): WaitingItem[] {
+function failedResearchOf({ openIssues }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
   return openIssues.flatMap((decision): WaitingItem[] => {
     // A closed parent isn't among the open issues, so it reads as none: no open Map either way.
     const parent = openIssues.find((issue) => issue.subIssues.includes(decision.number));
     const parentIssue = parent === undefined ? null : { number: parent.number, open: true, labels: parent.labels };
-    if (whyNotResearchable({ ...decision, open: true, parentIssue }) !== null || !researchRunFailedIn(decision.comments)) return [];
-    const notice = decision.comments.findLast((comment) => comment.byBot);
+    const byApp = decision.comments.map((comment) => ({ ...comment, byApp: comment.author === appLogin }));
+    if (whyNotResearchable({ ...decision, open: true, parentIssue }) !== null || !researchRunFailedIn(byApp)) return [];
+    const notice = byApp.findLast((comment) => comment.byApp);
     const readded = lastAdded(decision.labelEvents, RESEARCH_LABEL);
     // Re-added since, it waits on its run again, not on the Operator.
     if (notice === undefined || (readded !== null && Date.parse(readded) > Date.parse(notice.at))) return [];

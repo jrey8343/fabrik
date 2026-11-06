@@ -512,6 +512,32 @@ describe("the Weekly summary", () => {
         ]);
       });
 
+      it("reads a research Decision's last run from the Fabrik App's comments alone, so another bot's comment neither clears the failure nor fakes one", () => {
+        const otherBot = { author: "dependabot[bot]", byBot: true };
+        const waiting = waitingWith({
+          openIssues: [
+            mapOf(30, [31, 32]),
+            // Another bot's comment after the notice leaves it standing, and the age still runs from the notice.
+            anOpenIssue({
+              number: 31,
+              labels: ["wayfinder:research"],
+              comments: [failureNotice(31, "2026-11-06T20:00:00Z"), aComment("Bumped a dependency.", "2026-11-07T08:00:00Z", otherBot)],
+            }),
+            // Another bot's look-alike notice is no failure.
+            anOpenIssue({
+              number: 32,
+              labels: ["wayfinder:research"],
+              comments: [aComment(`${RESEARCH_RUN_FAILED_MARKER}\nA look-alike.`, "2026-11-06T20:00:00Z", otherBot)],
+            }),
+          ],
+          openMaps: [30],
+        });
+        expect(waiting).toEqual([
+          expect.objectContaining({ kind: "research-failed", number: 31, since: "2026-11-06T20:00:00Z" }),
+          expect.objectContaining({ kind: "map", number: 30 }),
+        ]);
+      });
+
       it("never lists a failed research Decision the Operator has re-added agent:research to since, or one on no open Map", () => {
         const failed = (number: number, overrides: Parameters<typeof anOpenIssue>[0] = {}) =>
           anOpenIssue({ number, labels: ["wayfinder:research"], comments: [failureNotice(number, "2026-11-06T20:00:00Z")], ...overrides });
