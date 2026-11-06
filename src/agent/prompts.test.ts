@@ -62,6 +62,26 @@ describe("The prompts of the runs that read an agent PR", () => {
   });
 });
 
+describe("The Coding standards", () => {
+  it("review judges against CODING_STANDARDS.md if the repo has one, in place of its review instructions", async () => {
+    const how = section(await prompt("review"), "How to review");
+    expect(how).toContain("then against `CODING_STANDARDS.md` if the repo has one.");
+    expect(how).not.toContain("review instructions");
+  });
+
+  it("triage's fifth Fast-path test counts a Ticket touching CODING_STANDARDS.md as touching a trust root", async () => {
+    const fifth = /^5\. .*$/m.exec(section(await prompt("triage"), "The decision"))?.[0] ?? "";
+    expect(fifth).toContain("trust-root file");
+    expect(fifth).toContain("`CODING_STANDARDS.md` at the repo root");
+  });
+
+  it("design names CODING_STANDARDS.md among the trust-root files an Implementer can't change", async () => {
+    const turn = section(await prompt("design"), "Your turn");
+    const list = turn.split("the trust-root files, which are ")[1]?.split(" The Kit refuses")[0] ?? "";
+    expect(list).toContain("`CODING_STANDARDS.md` at the repo root");
+  });
+});
+
 describe("Questions for the Operator", () => {
   it("the Implementer is told to ask them under one fixed heading in its summary", async () => {
     expect(section(await prompt("implement"), "Your output")).toContain('"Questions for the Operator"');

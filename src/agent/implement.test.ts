@@ -2,8 +2,9 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { verdictMarker } from "../loop/markers.ts";
-import { requestChangesContext, retryContext } from "./implement.ts";
+import { implementContext, requestChangesContext, retryContext } from "./implement.ts";
 
 async function fileOf(value: unknown): Promise<string> {
   const path = join(await mkdtemp(join(tmpdir(), "fabrik-implement-")), "file.json");
@@ -128,5 +129,19 @@ describe("A run on an existing PR is shown the Operator's comments on it, apart 
     const { parts } = await retryContext(await fileOf({ ...pullRequest, operatorComments: [] }));
 
     expect(parts.join("\n")).toContain(`${OWN_SECTION}\n(The Operator hasn't commented on it.)`);
+  });
+});
+
+describe("The Implementer's context", () => {
+  it("never carries the repo's CODING_STANDARDS.md, which only the Reviewer reads", async () => {
+    const productDir = await mkdtemp(join(tmpdir(), "fabrik-implement-"));
+    await writeFile(join(productDir, "GLOSSARY.md"), "**Waitlist**:\nPatients waiting for a cancelled slot.\n");
+    await writeFile(join(productDir, "CODING_STANDARDS.md"), "# Coding standards\n\n- Name a test for the behaviour it checks.\n");
+
+    const text = (await implementContext(productDir, await fileOf(null), kitConfig())).join("\n");
+
+    expect(text).toContain("Patients waiting for a cancelled slot.");
+    expect(text).not.toContain("CODING_STANDARDS.md");
+    expect(text).not.toContain("Name a test for the behaviour it checks.");
   });
 });
