@@ -9,6 +9,7 @@ import {
   snapshotOfPullRequest,
   verdictsPostedIn,
 } from "../__fixtures__/snapshots.ts";
+import { anEvidence, CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, Snapshot, VerdictRecord } from "./types.ts";
 
@@ -354,6 +355,62 @@ describe("A retry's branch", () => {
     const plan = planFor(retried({ output: "{}" }), retrySnapshot(), kitConfig());
 
     expect(plan).toMatchObject({ kind: "fail", failure: "infrastructure" });
+  });
+});
+
+/** The evidence section an earlier run, 8000, put on the PR's body. */
+const OLD_SECTION = [
+  "<!-- fabrik:ui-evidence-start -->",
+  "## UI evidence",
+  "",
+  "[Open the gallery](<https://github.com/acme/shop/actions/runs/8000/artifacts/8001>) of 2 screenshots: this branch at `0000000`, at mobile and desktop widths.",
+  `<!-- fabrik:ui-evidence {"run":8000,"artifact":8002} -->`,
+].join("\n");
+
+/** This retry's evidence section: run 9100's capture of /waitlist. */
+const NEW_SECTION = [
+  "<!-- fabrik:ui-evidence-start -->",
+  "## UI evidence",
+  "",
+  `[Open the gallery](<${GALLERY}>) of 2 screenshots: this branch at \`4f2b9c0\`, at mobile and desktop widths.`,
+  "",
+  "No preview link: Kit config declares no `preview.url`.",
+  "",
+  "Captured routes:",
+  "",
+  "- `/waitlist`, named by the Implementer",
+  `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`,
+].join("\n");
+
+describe("The evidence section on a retry's PR", () => {
+  /** A retry whose summary copies the old section forward, which only the Kit may write. */
+  const copyingForward = (overrides: Partial<Extract<LoopEvent, { kind: "implement-run-finished" }>> = {}) =>
+    retried({
+      output: JSON.stringify({ title: "Handle the empty cart", summary: `Shows the empty state.\n\n${OLD_SECTION}`, fix: "Guards the empty cart." }),
+      evidence: anEvidence(CAPTURED),
+      ...overrides,
+    });
+  const markedUi = () => aPullRequest({ verdicts: flawedPullRequest().verdicts, uiEvidence: { run: 8000, artifact: 8002 } });
+
+  it("replaces the old one on a PR marked UI, though the retry's own changes match no ui.paths, so the old one is gone", () => {
+    const actions = actionsOf(planFor(copyingForward(), retrySnapshot(markedUi()), kitConfig({ ui: UI })));
+
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(actions[0]).toEqual({ kind: "edit-issue-body", issue: 50, body: `Shows the empty state.\n\n${NEW_SECTION}\n\nCloses #7` });
+  });
+
+  it("is new on a PR the retry's own changes make UI", () => {
+    const event = copyingForward({ changes: { net: [{ path: "src/components/Cart.astro" }], commits: [{ path: "src/components/Cart.astro" }] } });
+
+    const actions = actionsOf(planFor(event, retrySnapshot(), kitConfig({ ui: UI })));
+
+    expect(actions[0]).toEqual({ kind: "edit-issue-body", issue: 50, body: `Shows the empty state.\n\n${NEW_SECTION}\n\nCloses #7` });
+  });
+
+  it("isn't on a PR that isn't UI, nor is the one the summary copied", () => {
+    const actions = actionsOf(planFor(copyingForward(), retrySnapshot(), kitConfig({ ui: UI })));
+
+    expect(actions[0]).toEqual({ kind: "edit-issue-body", issue: 50, body: "Shows the empty state.\n\nCloses #7" });
   });
 });
 

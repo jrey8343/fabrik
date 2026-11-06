@@ -3,6 +3,7 @@
 // its own: the Actions event itself, an agent job's result, a Review's red
 // checks or Verdict, or, when the routed agent job failed or was cancelled,
 // its failure notice. Pure, no I/O.
+import { type CaptureResult, parseCaptureResult } from "../evidence/uiEvidence.ts";
 import type { AgentRole } from "../loop/types.ts";
 
 /** One job's `needs.<job>`: its result and its outputs. */
@@ -12,6 +13,20 @@ export interface NeededJob {
 }
 
 export type Needs = Readonly<Record<string, NeededJob>>;
+
+/**
+ * What an Implement job passed out about UI evidence (#153), read leniently:
+ * anything missing or malformed is none, never a failure. The core decides
+ * whether the run is UI, and so whether any of it reaches the PR.
+ */
+export interface CaptureOutputs {
+  /** The capture step's result (`ui-evidence`), or null when it passed out none that reads. */
+  readonly result: CaptureResult | null;
+  /** The id of the zipped artifact of the screenshots and the capture result (`ui-evidence-artifact`). */
+  readonly artifact: number | null;
+  /** The id of the unzipped gallery artifact (`ui-gallery-artifact`). */
+  readonly galleryArtifact: number | null;
+}
 
 export type PushJobInput =
   | { readonly kind: "actions-event" }
@@ -26,6 +41,8 @@ export type PushJobInput =
       readonly review: number | null;
       /** For a Design-session turn the Operator's reply started: that comment, which must still exist for the turn to post. */
       readonly startedBy: number | null;
+      /** For an Implement run: what its job passed out about UI evidence. */
+      readonly capture?: CaptureOutputs;
     }
   | {
       readonly kind: "review";
@@ -83,6 +100,7 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
         review: route === "implement" ? numberOr(kit.outputs["review"]) : null,
         // A Design turn routed from a comment answers that reply (src/loop/design.ts).
         startedBy: route === "design" ? eventComment : null,
+        ...(route === "implement" ? { capture: captureOutputs(job.outputs) } : {}),
       };
     }
     case "review": {
@@ -118,6 +136,16 @@ function failure(role: AgentRole, issue: number, job: NeededJob, kit: NeededJob)
     jobResult: job.outputs["agent-timed-out"] === "true" ? "cancelled" : job.result,
     secretsStep: job.outputs["secrets-step"] ?? "",
     ...(subscription === "" ? {} : { subscription }),
+  };
+}
+
+function captureOutputs(outputs: NeededJob["outputs"]): CaptureOutputs {
+  const text = outputs["ui-evidence"] ?? "";
+  const read = text === "" ? null : parseCaptureResult(text);
+  return {
+    result: read?.ok === true ? read.result : null,
+    artifact: numberOr(outputs["ui-evidence-artifact"]),
+    galleryArtifact: numberOr(outputs["ui-gallery-artifact"]),
   };
 }
 

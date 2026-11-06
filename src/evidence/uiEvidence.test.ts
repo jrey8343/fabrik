@@ -338,6 +338,13 @@ describe("The evidence section's preview line", () => {
     expect(lines).toContain("No preview link: the preview at `https://pr-12.shop.example.dev/` never answered.");
   });
 
+  it("says the preview deployment is linked once it answers, before the push job has polled it", () => {
+    const lines = linesOf({ preview: { kind: "pending" } });
+
+    expect(lines).toContain("The preview deployment is linked here once it answers.");
+    expect(lines.some((line) => line.startsWith("No preview link"))).toBe(false);
+  });
+
   it("says when Kit config declares no preview", () => {
     expect(linesOf({ preview: { kind: "none" } })).toContain("No preview link: Kit config declares no `preview.url`.");
   });

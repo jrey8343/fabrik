@@ -1,6 +1,6 @@
 // The Loop rules core's interface: a Loop event, a snapshot of GitHub state and
 // the resolved Kit config go in; a plan comes out.
-import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
+import type { CaptureResult, EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { Label } from "./labels.ts";
@@ -55,6 +55,28 @@ export interface BranchChanges {
    * the run's own changes, as rebased; with one, there's nothing to push.
    */
   readonly rebase?: { readonly onto: string; readonly conflicted: boolean };
+}
+
+/**
+ * What an Implement run's push job knows of its UI evidence (#153): what the
+ * Implement job's capture step recorded, when it passed out a result, and
+ * where the run keeps it. The core puts it on the PR only when it finds the
+ * run UI (src/loop/implement.ts).
+ */
+export interface ImplementEvidence {
+  /**
+   * What capture recorded, read from the Implement job's outputs; absent when
+   * the job passed out none the push job could read, as when it captured nothing.
+   */
+  readonly result?: CaptureResult;
+  /** The head the Implement run built, which capture is of. */
+  readonly headSha: string;
+  /** The Actions run whose Implement job captured it: the push job's own. */
+  readonly run: number;
+  /** The id of that run's artifact holding the screenshots and the capture result, or null when it kept none. */
+  readonly artifact: number | null;
+  /** The gallery's web address, or null when the run kept none. */
+  readonly gallery: string | null;
 }
 
 /**
@@ -113,6 +135,8 @@ export type LoopEvent =
       readonly base: string;
       /** What the branch changes, read from the bundle the agent job passed out. */
       readonly changes: BranchChanges;
+      /** Its UI evidence, which the push job always passes; the core decides whether the run is UI. */
+      readonly evidence?: ImplementEvidence;
       /**
        * For a retry: the agent PR it fixes, and the head it built on, which is
        * its branch's base, so `changes` holds only the retry's own commits;

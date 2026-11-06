@@ -33,6 +33,27 @@ describe("A run on an existing PR is shown the PR's current description, to rewr
     expect(text).not.toContain("Closes #7");
   });
 
+  it("a run on a UI PR sees it without the evidence section, which the Kit writes itself, so it never copies the old one forward", async () => {
+    const body = [
+      "Shows the empty state.",
+      "",
+      "<!-- fabrik:ui-evidence-start -->",
+      "## UI evidence",
+      "",
+      "[Open the gallery](<https://github.com/acme/shop/actions/runs/8000/artifacts/8001>) of 2 screenshots.",
+      `<!-- fabrik:ui-evidence {"run":8000,"artifact":8002} -->`,
+      "",
+      "Closes #7",
+    ].join("\n");
+
+    const { parts } = await retryContext(await fileOf({ ...pullRequest, body }));
+
+    const description = parts.slice(parts.indexOf("## The pull request's current description"), parts.indexOf("## The findings to fix"));
+    expect(description.at(-1)).toBe("Shows the empty state.");
+    expect(parts.join("\n")).not.toContain("fabrik:ui-evidence");
+    expect(parts.join("\n")).not.toContain("UI evidence");
+  });
+
   it("a Request-changes run sees it too", async () => {
     const review = await fileOf({ review: { state: "CHANGES_REQUESTED", body: "Rename the total." }, comments: [] });
 

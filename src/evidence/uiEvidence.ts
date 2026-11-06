@@ -236,9 +236,14 @@ export const ROUTE_REASON_WORDS: Readonly<Record<RouteReason, string>> = {
   default: "a default route",
 };
 
-/** Whether a pull request's preview deployment is linked: none is declared, it answered and is linked, or it never answered. */
+/**
+ * Whether a pull request's preview deployment is linked: none is declared,
+ * one is declared but not yet polled (the push job polls it once it has
+ * pushed), it answered and is linked, or it never answered.
+ */
 export type PreviewLink =
   | { readonly kind: "none" }
+  | { readonly kind: "pending" }
   | { readonly kind: "linked"; readonly url: string }
   | { readonly kind: "never-answered"; readonly url: string };
 
@@ -339,6 +344,8 @@ function previewLine(preview: PreviewLink): string {
     case "never-answered":
       // As code, so GitHub doesn't link an address that never answered.
       return `No preview link: the preview at ${code(preview.url)} never answered.`;
+    case "pending":
+      return "The preview deployment is linked here once it answers.";
     case "none":
       return "No preview link: Kit config declares no `preview.url`.";
   }
