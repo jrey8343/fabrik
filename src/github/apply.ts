@@ -37,7 +37,10 @@ export interface AppliedPlan {
   readonly preview: PreviewToLink | null;
 }
 
-/** Applies each action in the plan, in order. Only an Implement run's push job has a branch to push. */
+/**
+ * Applies each action in the plan, in order, and returns what the push job
+ * hands on from it. Only an Implement run's push job has a branch to push.
+ */
 export async function applyPlan(
   github: GitHubApi,
   repo: Repo,

@@ -13,11 +13,14 @@ const URL_ = "https://deploy-preview-51--shop.netlify.app/";
 const bodySaying = (preview: PreviewLink, run = 9100) =>
   `Adds a waitlist to full days.\n\n${evidenceSection({ result: CAPTURED, run, artifact: 9202, gallery: GALLERY, preview })}\n\nCloses #7`;
 
-/** A GitHub holding PR #51 with this body, recording every REST call. */
+/** A GitHub holding PR #51 with this body, which `edit` changes, recording every REST call. */
 function pullRequestWith(body: string | null) {
   const calls: { method: string; path: string; body?: unknown }[] = [];
   return {
     calls,
+    edit(edited: string) {
+      body = edited;
+    },
     async rest(method: string, path: string, sent?: unknown): Promise<unknown> {
       calls.push({ method, path, ...(sent === undefined ? {} : { body: sent }) });
       if (method === "GET" && path === PULL) return { number: 51, body };
@@ -89,19 +92,18 @@ describe("Linking a UI PR's preview deployment", () => {
     expect(polled.every(({ at }) => at <= BUDGET_MS)).toBe(true);
   });
 
-  it("reads the body only once it has polled, so it edits the body as it then stands", async () => {
+  it("edits the body as it stands once the polling is done, keeping what the Operator changed while it polled", async () => {
     const github = pullRequestWith(bodySaying({ kind: "pending" }));
     const { poller } = pollerAnswering(404, 200);
     const status = poller.status;
-    let readBeforeAnswer = false;
     poller.status = async (url) => {
-      readBeforeAnswer ||= github.calls.length > 0;
+      github.edit(`${bodySaying({ kind: "pending" })}\n\nThe Operator's note.`);
       return status(url);
     };
 
     await linkPreview(github, repo, { pullRequest: 51, url: URL_, run: 9100 }, poller);
 
-    expect(readBeforeAnswer).toBe(false);
+    expect(github.calls.at(-1)?.body).toEqual({ body: `${bodySaying({ kind: "linked", url: URL_ })}\n\nThe Operator's note.` });
   });
 
   it.each([
