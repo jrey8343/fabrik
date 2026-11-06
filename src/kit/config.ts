@@ -51,6 +51,11 @@ export interface KitConfig {
   };
   /** The Operator's GitHub login; null means the Product repo's owner. */
   readonly operator: string | null;
+  /**
+   * The Subscriptions the Kit runs agents on, in the order it uses them: each
+   * the name of a `Fabrik` vault item holding that Subscription's token.
+   */
+  readonly subscriptions: readonly string[];
   /** Each role's own instructions from .fabrik/<role>.md, the Auditor's included. */
   readonly instructions: Readonly<Record<InstructedRole, string | null>>;
   /** The Product repo's own Skills sources, from .fabrik/skills.lock.json. */
@@ -153,6 +158,8 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   // Sunday, so a fresh Audit is open by Monday's Weekly summary and misses the Monday skills bump.
   audit: { day: "sunday" },
   operator: null,
+  // The V1 vault item, so a repo that lists none keeps the one Subscription it always ran on.
+  subscriptions: ["Claude token"],
   instructions: { triage: null, design: null, implement: null, review: null, audit: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
@@ -355,6 +362,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     monitor: readMonitor(file.object("monitor"), defaults.monitor),
     audit: readAudit(file.object("audit"), defaults.audit),
     operator: orDefault(file.nullableString("operator", checkLogin), defaults.operator),
+    subscriptions: file.subscriptions("subscriptions") ?? defaults.subscriptions,
   };
 }
 
@@ -606,6 +614,32 @@ class Reader {
     if (value === undefined) return undefined;
     if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
       this.#fail(`${this.#field(key)} must be a list of strings`);
+      return undefined;
+    }
+    return value;
+  }
+
+  /** The Subscriptions: an ordered, non-empty list of distinct `Fabrik` vault item names. */
+  subscriptions(key: string): readonly string[] | undefined {
+    const value = this.#take(key);
+    if (value === undefined) return undefined;
+    const field = this.#field(key);
+    if (!Array.isArray(value) || !value.every((item) => typeof item === "string" && item.trim() !== "")) {
+      this.#fail(`${field} must be a list of Fabrik vault item names`);
+      return undefined;
+    }
+    if (value.length === 0) {
+      this.#fail(`${field} is empty: list at least one Subscription`);
+      return undefined;
+    }
+    const repeated = value.find((name, i) => value.indexOf(name) !== i);
+    if (repeated !== undefined) {
+      this.#fail(`${field} lists ${JSON.stringify(repeated)} more than once`);
+      return undefined;
+    }
+    // Dormant until the switch-on Ticket (#249): every repo keeps the one V1 Subscription.
+    if (value.length > 1) {
+      this.#fail(`${field} lists ${value.length} Subscriptions, but Subscription rotation isn't available yet: list one`);
       return undefined;
     }
     return value;
