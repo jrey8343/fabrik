@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MAX_AUDIT_CANDIDATES, readAuditOutput } from "../loop/auditOutput.ts";
 import { readDesignTurnOutput } from "../loop/designOutput.ts";
 import { readPullRequestRunOutput } from "../loop/implementOutput.ts";
+import { readTriageOutput } from "../loop/triageOutput.ts";
 import { STRENGTHS } from "../loop/types.ts";
 import { CONSIDERED_PREFIX, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
@@ -13,6 +14,9 @@ const prompt = (role: string) => readFile(join(import.meta.dirname, "..", "..", 
 
 /** The body of a prompt's `## <heading>` section, up to the next `## ` heading. */
 const section = (text: string, heading: string) => text.split(`\n## ${heading}\n`)[1]?.split("\n## ")[0] ?? "";
+
+/** The first line of a prompt's text that starts with `start`, after its indent. */
+const lineStarting = (text: string, start: string) => text.split("\n").find((line) => line.trimStart().startsWith(start)) ?? "";
 
 describe("The prompts of the runs that read an agent PR", () => {
   it.each(["review", "implement", "design"])("%s names the section the Operator's comments arrive under", async (role) => {
@@ -62,6 +66,121 @@ describe("The prompts of the runs that read an agent PR", () => {
   });
 });
 
+describe("Product intent in the Triage prompt", () => {
+  it("takes the Fast path only on all six tests, the sixth being that it changes no product intent", async () => {
+    const decision = section(await prompt("triage"), "The decision");
+    expect(decision).toContain("**all six** tests");
+    expect(decision).toContain("### The six Fast-path tests");
+    expect(decision).not.toMatch(/\bfive\b/);
+    expect(decision).toContain("It changes no product intent");
+    for (const door of ["public names", "URLs", "data shapes", "pricing", "anything an End user is told"]) expect(decision).toContain(door);
+    expect(decision).toContain("the Vision says the product deliberately doesn't do");
+    expect(decision).toContain("**Any doubt on any test sends the issue to `needs-design`.**");
+  });
+
+  it("never sets an issue aside as wontfix on product grounds, sending a Vision conflict to needs-design", async () => {
+    const decision = section(await prompt("triage"), "The decision");
+    const wontfix = lineStarting(decision, "- `wontfix`");
+    expect(wontfix).toContain("Never on product grounds");
+    expect(wontfix).toContain("conflicts with the Vision goes to `needs-design`");
+    expect(wontfix).toContain("quoting the line it conflicts with");
+  });
+
+  it("quotes the Vision's line in its comment on any issue it sends to needs-design for conflicting with the Vision, test 6 included", async () => {
+    const needsDesign = lineStarting(section(await prompt("triage"), "The decision"), "- `needs-design`");
+    expect(needsDesign).toContain("When it conflicts with the Vision (test 6), your comment quotes the line it conflicts with.");
+  });
+
+  it("sends an idea it would set aside for being on no Roadmap list to needs-design, and never keeps an issue off the Fast path for that alone", async () => {
+    const wontfix = lineStarting(section(await prompt("triage"), "The decision"), "- `wontfix`");
+    expect(wontfix).toContain(
+      "an idea you'd otherwise set aside because it's on none of its lists goes to `needs-design` instead, with your comment saying it isn't on the Roadmap",
+    );
+    expect(wontfix).toContain("Being on no Roadmap list never, by itself, keeps an issue off the Fast path.");
+  });
+
+  it("counts the Vision and Roadmap's folder among the trust roots of test 5", async () => {
+    const decision = section(await prompt("triage"), "The decision");
+    const test5 = lineStarting(decision, "5. ");
+    expect(test5).toContain("anything under `docs/product/` at the repo root");
+  });
+
+  it("reads the Vision and the Roadmap if they exist, and lets the Roadmap gate nothing", async () => {
+    const rules = section(await prompt("triage"), "What you can and can't do");
+    expect(rules).toContain("`docs/product/vision.md`");
+    expect(rules).toContain("`docs/product/roadmap.md`");
+    expect(rules).toContain("The Roadmap gates nothing");
+  });
+});
+
+describe("Product intent in the Design prompt", () => {
+  it("reads the Vision and the Roadmap if they exist", async () => {
+    const rules = section(await prompt("design"), "What you can and can't do");
+    expect(rules).toContain("`docs/product/vision.md`");
+    expect(rules).toContain("`docs/product/roadmap.md`");
+  });
+
+  it("opens with a product-intent block only for an issue that touches Product intent, its recommendations drawn from the Vision", async () => {
+    const intent = section(await prompt("design"), "Product intent");
+    for (const door of ["a public name", "a URL", "a data shape", "pricing", "anything an End user is told"]) expect(intent).toContain(door);
+    expect(intent).toContain("**Open with a product-intent block** when the issue touches Product intent");
+    expect(intent).toContain("who the change serves, why, how its success is measured, and what it deliberately leaves out");
+    expect(intent).toContain("Skip any of these the Vision or the thread already answers");
+    expect(intent).toContain("Draw each recommendation from the Vision");
+    expect(intent).toContain("With no Vision, ask the questions directly");
+  });
+
+  it("skips the product-intent block for a Ticket back from its pull request and for internal or technical work", async () => {
+    const intent = section(await prompt("design"), "Product intent");
+    const skip = lineStarting(intent, "- **Skip the block**");
+    expect(skip).toContain("`<!-- fabrik:back-to-design`");
+    expect(skip).toContain("an internal or technical issue");
+  });
+
+  it("judges priority from the Roadmap, asking only when the issue conflicts with Now, and lets it gate nothing", async () => {
+    const intent = section(await prompt("design"), "Product intent");
+    expect(intent).toContain("Ask a priority question only when the issue conflicts with what the Roadmap lists under Now");
+    expect(intent).toContain("The Roadmap gates nothing");
+  });
+
+  it("opens every Spec with a Product intent section above its technical sections, its success measure stated, not tracked", async () => {
+    const turn = section(await prompt("design"), "Your turn");
+    const spec = lineStarting(turn, "- **Finish with a Spec and its Tickets**");
+    expect(spec).toContain("opening with a `## Product intent` section above `## Problem Statement` and its technical sections");
+    expect(spec).toContain("who it serves, why, how its success is measured, and what it deliberately doesn't do");
+    expect(spec).toContain("State the success measure only: nothing tracks it.");
+    // The glossary's Spec avoids "plan".
+    expect(spec).not.toMatch(/\bplan\b/);
+  });
+
+  it("opens every agent brief with a Who and why line", async () => {
+    const turn = section(await prompt("design"), "Your turn");
+    const brief = lineStarting(turn, "- **Finish with an agent brief**");
+    expect(brief).toContain('It opens with a "Who and why" line, which starts `**Who and why**:`');
+    expect(brief).toContain("the End users it serves and why it matters to them");
+  });
+
+  it("turns a decision the Vision doesn't yet say into an Update vision.md Operator step carrying the exact lines", async () => {
+    const intent = section(await prompt("design"), "Product intent");
+    expect(intent).toContain('an Operator step titled "Update `vision.md`"');
+    expect(intent).toContain("the exact lines to add to `docs/product/vision.md`, or to change in it");
+    expect(intent).toContain("finishes as a small Spec instead: one Ticket and that Operator step");
+    expect(intent).toContain("With no Vision, add no such step.");
+  });
+
+  it("counts the Vision and Roadmap's folder among the trust-root files an Implementer can't change", async () => {
+    const turn = section(await prompt("design"), "Your turn");
+    const trustRoots = lineStarting(turn, "Keep in mind what an Implementer can't change: the trust-root files");
+    expect(trustRoots).toContain("anything under `docs/product/` at the repo root");
+  });
+});
+
+describe("Product intent in the Implement prompt", () => {
+  it("forbids changing anything under docs/product/ at the repo root, where the Vision and Roadmap live", async () => {
+    expect(section(await prompt("implement"), "What you must not change")).toContain("- anything under `docs/product/` at the repo root");
+  });
+});
+
 describe("Questions for the Operator", () => {
   it("the Implementer is told to ask them under one fixed heading in its summary", async () => {
     expect(section(await prompt("implement"), "Your output")).toContain('"Questions for the Operator"');
@@ -73,6 +192,13 @@ describe("Questions for the Operator", () => {
 
   it("the Reviewer is told an Operator comment may answer them", async () => {
     expect(section(await prompt("review"), "The Operator's comments")).toContain('"Questions for the Operator"');
+  });
+});
+
+describe("The Triage agent's prompt", () => {
+  it("keeps its example output, which the Kit still reads", async () => {
+    const example: unknown = JSON.parse(/<triage>\n([\s\S]*?)\n<\/triage>/.exec(await prompt("triage"))?.[1] ?? "null");
+    expect(readTriageOutput(example)).toMatchObject({ ok: true, output: { state: "needs-design" } });
   });
 });
 

@@ -187,7 +187,7 @@ describe("What triggers a Dispatch check", () => {
     const output = JSON.stringify({
       category: "bug",
       state: "ready-for-agent",
-      comment: "All five Fast-path tests pass.",
+      comment: "All six Fast-path tests pass.",
       brief: { summary: "Fix the typo.", acceptanceCriteria: ["The heading reads Physiotherapy"] },
     });
 

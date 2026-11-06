@@ -149,7 +149,7 @@ describe("Applying Triage output", () => {
       triaged({
         category: "bug",
         state: "ready-for-agent",
-        comment: "All five Fast-path tests pass.",
+        comment: "All six Fast-path tests pass.",
         brief: {
           summary: "The booking form rejects valid Medicare numbers.",
           acceptanceCriteria: ["A 10-digit Medicare number is accepted", "An 9-digit one is refused"],
@@ -166,7 +166,7 @@ describe("Applying Triage output", () => {
           kind: "comment",
           issue: 7,
           body: [
-            "All five Fast-path tests pass.",
+            "All six Fast-path tests pass.",
             "",
             "## Agent brief",
             "",

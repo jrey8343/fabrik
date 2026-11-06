@@ -30,6 +30,9 @@ describe("Trust-root guard", () => {
     ["the Kit config", ".fabrik/config.yml"],
     ["a phase file", ".fabrik/implement.md"],
     ["a workflow", ".github/workflows/fabrik.yml"],
+    ["the Vision", "docs/product/vision.md"],
+    ["the Roadmap", "docs/product/roadmap.md"],
+    ["another file beside the Vision", "docs/product/end-users/clinic-owners.md"],
   ])("refuses a change to %s", (_class, path) => {
     expect(checkTrustRoot([{ path }])).toEqual({ kind: "refuse", paths: [path] });
   });
@@ -56,22 +59,22 @@ describe("Trust-root guard", () => {
     // A Product's own prompts folder: only the Kit's role prompts are trust roots.
     "prompts/onboarding.md",
     "prompts/chatbot/system.txt",
+    // Only the docs/product/ folder at the repo root holds the Vision and Roadmap.
+    "packages/web/docs/product/vision.md",
+    "docs/products/vision.md",
+    "docs/product.md",
+    "src/product/vision.ts",
   ])("allows %s, which only looks like a trust-root path", (path) => {
     expect(checkTrustRoot([{ path }])).toEqual({ kind: "allow" });
   });
 
-  it("refuses a rename out of a trust-root path, naming where it came from", () => {
-    expect(checkTrustRoot([{ from: "CLAUDE.md", path: "docs/old-claude.md" }])).toEqual({
-      kind: "refuse",
-      paths: ["CLAUDE.md"],
-    });
-  });
-
-  it("refuses a rename into a trust-root path", () => {
-    expect(checkTrustRoot([{ from: "docs/draft-review.md", path: "prompts/review.md" }])).toEqual({
-      kind: "refuse",
-      paths: ["prompts/review.md"],
-    });
+  it.each([
+    ["out of a trust-root path, naming where it came from", "CLAUDE.md", "docs/old-claude.md", "CLAUDE.md"],
+    ["into a trust-root path, naming where it went", "docs/draft-review.md", "prompts/review.md", "prompts/review.md"],
+    ["out of docs/product/, naming where it came from", "docs/product/vision.md", "docs/vision-draft.md", "docs/product/vision.md"],
+    ["into docs/product/, naming where it went", "docs/roadmap-draft.md", "docs/product/roadmap.md", "docs/product/roadmap.md"],
+  ])("refuses a rename %s", (_rename, from, path, refused) => {
+    expect(checkTrustRoot([{ from, path }])).toEqual({ kind: "refuse", paths: [refused] });
   });
 
   it("allows a rename between two ordinary paths", () => {

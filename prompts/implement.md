@@ -45,6 +45,7 @@ The Kit refuses, and hands to the Operator, any branch that changes a file that 
 - anything under `.claude/settings*` or `.claude/skills/`, in any folder
 - the Kit's role prompts, `prompts/triage.md`, `prompts/design.md`, `prompts/implement.md` and `prompts/review.md`, and anything under `prompts/scorers/` (a repo's other `prompts/` files are fine)
 - anything under `.fabrik/` or `.github/workflows/`
+- anything under `docs/product/` at the repo root, where the Vision and Roadmap live (a `docs/product/` folder elsewhere is fine)
 
 If the Ticket can't be built without changing one of these, make no commits and say so in your summary.
 
