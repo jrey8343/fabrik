@@ -6,7 +6,10 @@
 // failure comment names the trigger label to re-add. With rotation on, each
 // Subscription gets its own weekly-limit issue, which stays quiet while
 // another Subscription is free: only the one opened, or refused on, once none
-// is free @-mentions the Operator.
+// is free @-mentions the Operator. While none is free, each run due is held
+// instead of started, and the buzzing weekly-limit issue names it with a held
+// marker (src/loop/heldRun.ts).
+import { type HeldRun, heldMarker, heldRunOf, holding, RUN_NAMES } from "./heldRun.ts";
 import { READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { freeSubscriptions, rotationIsOn, subscriptionMarker, weeklyLimitSubscriptionOf } from "./subscriptions.ts";
 import type { Action, InfrastructureFailure, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
@@ -37,6 +40,8 @@ export interface StalledRun {
   readonly rotation: boolean;
   /** Every listed Subscription, in the listed order, so a weekly-limit notice knows whether another is free. */
   readonly subscriptions: readonly string[];
+  /** With rotation on, the run the Kit holds rather than fails, which the weekly-limit notice names. */
+  readonly held?: HeldRun;
 }
 
 /**
@@ -64,6 +69,8 @@ export interface RepoWideNotice {
   readonly actions: readonly Action[];
   /** A line for the Ticket's failure comment, saying where the Operator hears about it. */
   readonly pointer: string;
+  /** With rotation on, for the weekly limit: when the first open weekly-limit issue's limit resets, if known. */
+  readonly firstReset?: string | null;
 }
 
 function notified(issue: KitIssueSnapshot): boolean {
@@ -223,13 +230,25 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
     earliest === null ? "When the first resets isn't known." : `The first resets at ${readable(earliest)}.`,
     "Until then every agent run in this repo stalls",
   ].join(" ");
+  // A held run is named on the issue that buzzed, or buzzes now; else on this Subscription's own.
+  const buzzed = buzz ? undefined : stayingOpen.find(notified);
+  const elsewhere = buzzed !== undefined && buzzed !== mine;
+  const heldHere = stalled.held === undefined || elsewhere ? [] : ["", heldLine(stalled.held, earliest)];
+  const heldThere =
+    stalled.held === undefined || buzzed === undefined || !elsewhere
+      ? []
+      : [{ kind: "comment" as const, issue: buzzed.number, body: heldLine(stalled.held, earliest) }];
   if (mine !== undefined && !newWindow) {
-    const body = buzz
-      ? [`@${operator} ${allUsedUp}. [The run](${stalled.runUrl})`, "", NOTIFIED].join("\n")
-      : `${stalled.run} was refused on the limit too. [The run](${stalled.runUrl})`;
+    const body = [
+      buzz
+        ? [`@${operator} ${allUsedUp}. [The run](${stalled.runUrl})`, "", NOTIFIED].join("\n")
+        : `${stalled.run} was refused on the limit too. [The run](${stalled.runUrl})`,
+      ...heldHere,
+    ].join("\n");
     return {
-      actions: [{ kind: "comment", issue: mine.number, body }],
+      actions: [{ kind: "comment", issue: mine.number, body }, ...heldThere],
       pointer: `The Kit is tracking this in #${mine.number}.`,
+      firstReset: earliest,
     };
   }
   const title =
@@ -271,6 +290,7 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
         title,
         body: [
           ...body,
+          ...heldHere,
           "",
           subscriptionMarker(subscription),
           ...(resetsAt === null ? [] : [`${RESETS_AT_MARKER} ${resetsAt} -->`]),
@@ -278,9 +298,55 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
         labels: [WEEKLY_LIMIT_LABEL],
         assignees: [],
       },
+      ...heldThere,
     ],
     pointer: "The Kit has opened a weekly-limit issue for the Operator.",
+    firstReset: earliest,
   };
+}
+
+/** The line naming a held run, with its held marker, for a weekly-limit issue. */
+function heldLine(held: HeldRun, until: string | null): string {
+  const when =
+    until === null
+      ? "a Subscription's weekly limit resets, which isn't known"
+      : `${readable(until)}, when the first Subscription's weekly limit resets`;
+  const resume =
+    held.label === null
+      ? "The Kit starts it again on that pending Audit then."
+      : `The Kit re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
+  return [`The ${RUN_NAMES[held.role]} run on #${held.issue} is held until ${when}. ${resume}`, "", heldMarker(held)].join("\n");
+}
+
+/**
+ * With rotation on and every listed Subscription used up, the Plan with each
+ * run it would start held instead: its trigger label off, and a quiet comment
+ * naming it on the weekly-limit issue that buzzed the Operator, or else on the
+ * first to reset. No comment on the Ticket, and no @-mention. Every other
+ * action, and every Plan that starts no run, is left as it is.
+ */
+export function heldWhileUsedUp(
+  plan: Plan,
+  kitIssues: readonly KitIssueSnapshot[],
+  config: Pick<KitConfig, "subscriptions">,
+): Plan {
+  if (plan.kind !== "act" || !rotationIsOn(config) || freeSubscriptions(kitIssues, config).length > 0) return plan;
+  if (!plan.actions.some((action) => action.kind === "start-agent-run")) return plan;
+  const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
+  const until = earliestOf(limits.map(resetsAtOf));
+  const on = limits.find(notified) ?? limits.find((issue) => until !== null && resetsAtOf(issue) === until) ?? limits[0];
+  const comments: Action[] = [];
+  const actions = plan.actions.flatMap((action): Action[] => {
+    if (action.kind !== "start-agent-run") return [action];
+    const held = heldRunOf(action);
+    if (on !== undefined) comments.push({ kind: "comment", issue: on.number, body: heldLine(held, until) });
+    // A Plan that already takes the trigger label off, as a Design-session turn's does, takes it off once.
+    const removed = plan.actions.some(
+      (other) => other.kind === "remove-label" && other.issue === held.issue && other.label === held.label,
+    );
+    return holding(held, until).filter((step) => step.kind !== "remove-label" || !removed);
+  });
+  return { kind: "act", actions: [...actions, ...comments] };
 }
 
 /** The earliest of these reset times, or null when none is known. */

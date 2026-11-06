@@ -151,7 +151,7 @@ describe("A run refused on its Subscription's weekly limit, with rotation on", (
 });
 
 describe("A run refused while no other Subscription is free, with rotation on", () => {
-  it("keeps the Ticket's V1 failure comment, and the refused Subscription's new issue @-mentions the Operator once, naming the earliest reset", () => {
+  it("holds the run with no Ticket comment, and the refused Subscription's new issue @-mentions the Operator once, naming the earliest reset", () => {
     const other = quietIssue(40, "Claude token 2", EARLIER);
 
     const plan = planFor(refused("implement"), snapshotOf(anIssue({ number: 7 }), { kitIssues: [other] }), TWO_SUBSCRIPTIONS);
@@ -161,11 +161,7 @@ describe("A run refused while no other Subscription is free, with rotation on", 
     ]);
     expect(actionsOf(plan)).toEqual([
       { kind: "remove-label", issue: 7, label: "agent:implement" },
-      {
-        kind: "comment",
-        issue: 7,
-        body: expect.stringMatching(/^The Implement run on #7 failed: it hit the weekly usage limit\./),
-      },
+      { kind: "hold-agent-run", role: "implement", issue: 7, label: "agent:implement", until: EARLIER },
       {
         kind: "open-issue",
         title: "The weekly usage limit of the `Claude token` Subscription is reached until 2026-11-09 04:00 UTC",
@@ -201,7 +197,13 @@ describe("A run refused while no other Subscription is free, with rotation on", 
     expect(actionsOf(plan)).toContainEqual({
       kind: "comment",
       issue: 41,
-      body: `The Implement run on #8 was refused on the limit too. [The run](${RUN})`,
+      body: [
+        `The Implement run on #8 was refused on the limit too. [The run](${RUN})`,
+        "",
+        "The Implement run on #8 is held until 2026-11-08 10:00 UTC, when the first Subscription's weekly limit resets. The Kit re-adds `agent:implement` on #8 then, to run it again.",
+        "",
+        '<!-- fabrik:held {"issue":8,"role":"implement","label":"agent:implement"} -->',
+      ].join("\n"),
     });
   });
 });

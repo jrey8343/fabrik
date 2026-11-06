@@ -283,5 +283,8 @@ async function applyToIssue(
     case "start-agent-run":
       // The workflow starts agent runs by routing to the role's agent job (src/kit/jobs.ts).
       return;
+    case "hold-agent-run":
+      // Nor is a hold a GitHub change: the Plan's label and comment actions carry it out.
+      return;
   }
 }
