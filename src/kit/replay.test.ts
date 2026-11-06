@@ -342,7 +342,12 @@ describe("Picking a Replay's Tickets", () => {
       [
         "whose merged PR changed Trust-root files",
         [aCandidate(12, { merged: { ...merged, files: [...merged.files, { path: ".fabrik/config.json", removed: false }, { path: "AGENTS.md", removed: false }] } })],
-        "its merged PR #112 changed .fabrik/config.json and AGENTS.md, which steer agents, so no agent may build it",
+        "its merged PR #112 changed Trust-root files, .fabrik/config.json and AGENTS.md, which no agent may change",
+      ],
+      [
+        "whose merged PR moved a Trust-root file",
+        [aCandidate(12, { merged: { ...merged, files: [{ path: "docs/old-coding-standards.md", from: "CODING_STANDARDS.md", removed: false }] } })],
+        "its merged PR #112 changed a Trust-root file, CODING_STANDARDS.md, which no agent may change",
       ],
       [
         "no Implement run built",

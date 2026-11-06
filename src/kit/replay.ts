@@ -5,7 +5,10 @@
 // `kit` for a candidate Fabrik commit) and, if the Operator likes, `tickets`:
 // up to 10 Ticket numbers to replay in place of the default pick. A model or
 // effort is held to Kit config's own rules. The "Replay this" link files a
-// replay issue whose request names one variable. Pure, no I/O.
+// replay issue whose request names one variable. What the experiment runs:
+// the Tickets it picks from the merged ones, each picked Ticket's two arms,
+// and the hidden tests, the merged PR's own, that each arm is measured by.
+// Pure, no I/O.
 import { type ChangedPath, checkTrustRoot } from "../guard/trust-root.ts";
 import { newIssueUrl } from "../loop/followUps.ts";
 import { REPLAY_LABEL } from "../loop/labels.ts";
@@ -334,7 +337,8 @@ function eligibilityOf(candidate: ReplayCandidate | undefined): Eligible | strin
   if (merged.reverted) return `its merged PR #${merged.number} was reverted`;
   const guard = checkTrustRoot(merged.files);
   if (guard.kind === "refuse") {
-    return `its merged PR #${merged.number} changed ${spelled(guard.paths, "and")}, which steer agents, so no agent may build it`;
+    const files = guard.paths.length === 1 ? "a Trust-root file" : "Trust-root files";
+    return `its merged PR #${merged.number} changed ${files}, ${spelled(guard.paths, "and")}, which no agent may change`;
   }
   // A past Replay's runs on the Ticket are never the original's.
   const originalRuns = candidate.records.filter((record) => record.replay === null && (record.role === "implement" || record.role === "review"));
