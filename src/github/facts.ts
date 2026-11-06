@@ -1,7 +1,8 @@
 // The Weekly summary's GitHub side, beside the Loop's snapshot gatherer: which
 // Product repos the summary covers, and the GitHub facts it reads of each
-// (src/kit/weeklySummary.ts). Read-only. It holds no summary rules; those all
-// live in the Weekly summary module.
+// (src/kit/weeklySummary.ts), the metrics' among them (src/kit/retroEvidence.ts).
+// Read-only. It holds no summary or metric rules; those all live in those two
+// modules.
 import { fabrikRefsIn } from "../kit/caller.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import type {
