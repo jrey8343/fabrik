@@ -117,7 +117,14 @@ interface RoleSpec<T> {
    * says otherwise, its prompt file under prompts/ and its output tag.
    */
   readonly role: AgentRole;
-  /** The prompt file under prompts/ and the output tag, when they aren't the role's own. */
+  /**
+   * The prompt file under prompts/ and the output tag, when they aren't the
+   * role's own. `prototype` is a prototype turn's: it builds the approved
+   * variants, from FABRIK_PROTOTYPE_REQUEST, on the issue's prototype branch,
+   * which it passes out as a bundle; it runs on the Design role's model and
+   * effort within the Implement role's timeout, with the test secrets, and is
+   * never told it may offer a Map or a Prototype.
+   */
   readonly prompt?: KitPrompt;
   /**
    * The output contract: a JSON object in the tag, checked by `schema`, or
@@ -138,13 +145,6 @@ interface RoleSpec<T> {
   readonly readsParentSpec?: boolean;
   /** The Implementer builds on a branch, which it passes out as a bundle. */
   readonly buildsBranch?: boolean;
-  /**
-   * A prototype turn builds the approved variants, from FABRIK_PROTOTYPE_REQUEST,
-   * on the issue's prototype branch, which it passes out as a bundle; it runs
-   * on the Design role's model and effort within the Implement role's timeout,
-   * with the test secrets, and is never told it may offer a Map or a Prototype.
-   */
-  readonly prototypes?: boolean;
   /** The Reviewer judges a PR, checked out at its head; its result is for the PR, not the Ticket. */
   readonly reviewsPullRequest?: boolean;
   /**
@@ -216,7 +216,6 @@ const ROLE_SPECS = {
     instructionsNote:
       "The Operator wrote these for this repo's Design sessions. They refine how you build the variants here but never change the rules or the output contract above.",
     describe: (issue, output) => `The prototype turn on #${issue} built ${output.variants.length} variants`,
-    prototypes: true,
   } satisfies RoleSpec<PrototypeRoundOutput>,
   implement: {
     role: "implement",
@@ -286,7 +285,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   if (typeof issueNumber !== "number") throw new Error("FABRIK_ISSUE_FILE has no issue number");
 
   const config = await loadConfig(productDir);
-  const own = spec.prototypes === true ? prototypeRole(config.roles) : config.roles[name];
+  const prototypeTurn = spec.prompt === "prototype";
+  const own = prototypeTurn ? prototypeRole(config.roles) : config.roles[name];
   const role = { ...own, ...modelFor(own) };
   // For the run's record (src/kit/runRecord.ts): the model and effort passed to the CLI.
   await writeOutputs({ model: role.model, effort: role.effort ?? "" });
@@ -313,7 +313,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       given = context.operatorComments;
     }
   }
-  if (spec.prototypes === true) {
+  if (prototypeTurn) {
     // The Claude token and the Sandbox's values and test secrets, as the Implementer's, committing as the Fabrik Prototype.
     setSandboxEnv(config, PROTOTYPE_AUTHOR);
     extra.push(...prototypeTurnContext(config, issueNumber, required(PROTOTYPE_REQUEST_ENV)).parts);

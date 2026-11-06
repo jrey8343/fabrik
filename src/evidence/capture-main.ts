@@ -348,10 +348,11 @@ function listening(host: string, port: number): Promise<boolean> {
 
 /**
  * The default branch's commit, which a pull request's branch is diffed
- * against, and its Kit config, or null when that no longer reads, which it
- * warns of and passes out as nothing captured.
+ * against, and its Kit config; or, when that Kit config no longer reads,
+ * null, once it has warned of it and written the step's outputs as nothing
+ * captured, so the caller stops there.
  */
-async function defaultBranch(productDir: string): Promise<{ readonly base: string; readonly config: KitConfig } | null> {
+async function defaultBranchKitOrSkip(productDir: string): Promise<{ readonly base: string; readonly config: KitConfig } | null> {
   const base = await commitOf(productDir, `origin/${required("FABRIK_DEFAULT_BRANCH")}`);
   const resolved = await readKitConfigWith((path) => fileAt(productDir, base, path));
   if (resolved.ok) return { base, config: resolved.config };
@@ -380,7 +381,7 @@ async function main(): Promise<void> {
   await rm(evidenceDir, { recursive: true, force: true });
   await rm(join(outDir, GALLERY_FILE), { force: true });
 
-  const known = await defaultBranch(productDir);
+  const known = await defaultBranchKitOrSkip(productDir);
   if (known === null) return;
   const { base, config } = known;
   const result = readAgentRunResult(await readFile(join(outDir, AGENT_RESULT_FILE), "utf8"));
@@ -421,7 +422,7 @@ async function prototypeMain(): Promise<void> {
   await rm(evidenceDir, { recursive: true, force: true });
   await rm(join(outDir, PROTOTYPE_GALLERY_FILE), { force: true });
 
-  const known = await defaultBranch(productDir);
+  const known = await defaultBranchKitOrSkip(productDir);
   if (known === null) return;
   const { base, config } = known;
   const request = parsePrototypeRequest(required(PROTOTYPE_REQUEST_ENV));
