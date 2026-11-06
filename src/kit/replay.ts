@@ -503,11 +503,38 @@ export type ReplayStep =
 export function nextReplayStep(tick: ReplayTick): ReplayStep {
   const issues = operatorsOpenIssues(tick);
   if (issues.length === 0) return { kind: "nothing", reason: "No open replay issue is the Operator's" };
+  const accepted: { readonly issue: number; readonly marks: ReplayMarks }[] = [];
   for (const issue of issues) {
+    const marks = replayMarksIn(issue.body);
+    if (marks !== null) {
+      accepted.push({ issue: issue.number, marks });
+      continue;
+    }
     const step = requestStep(issue, tick.acceptance);
     if (step !== null) return step;
   }
-  return { kind: "nothing", reason: "No replay request is waiting" };
+  for (const { issue, marks } of accepted) {
+    const running = marks.progress.find(({ state }) => state === "in-progress");
+    if (running !== undefined) {
+      return { kind: "nothing", reason: `#${running.ticket} is in progress on replay #${issue}, and one replay Ticket runs at a time` };
+    }
+  }
+  const next = accepted.flatMap(({ issue, marks }) => {
+    const planned = nextReplayTicket(marks);
+    return planned === null ? [] : [{ issue, ticket: planned.ticket }];
+  })[0];
+  if (next === undefined) return { kind: "nothing", reason: "No replay Ticket is waiting to run" };
+  if (!tick.capacity.spare) return { kind: "nothing", reason: tick.capacity.why };
+  return { kind: "start", ...next };
+}
+
+/** The Ticket a Replay runs next: the first in its plan still waiting to run, or null when none is. */
+export function nextReplayTicket({ plan, progress }: ReplayMarks): PlannedTicket | null {
+  const waiting = (ticket: number) => {
+    const state = progress.find((each) => each.ticket === ticket)?.state;
+    return state === "pending" || state === "retried";
+  };
+  return plan.tickets.find(({ ticket }) => waiting(ticket)) ?? null;
 }
 
 /** The open replay issues the Operator filed, oldest first: no one else's count, nor a closed one. */
@@ -587,8 +614,68 @@ export interface PlannedTicket extends PickedTicket {
   readonly arms: ReplayArms;
 }
 
-/** Where a planned Ticket's replay stands. */
-export type ReplayProgress = { readonly state: "pending" };
+/**
+ * Where a planned Ticket's replay stands: waiting to run, the first time or
+ * again after one Infrastructure failure; in progress in a run, which retries
+ * one when `retrying` names it; or finished, done or failed.
+ */
+export type ReplayProgress =
+  | { readonly state: "pending" }
+  | { readonly state: "retried"; readonly reason: string }
+  | { readonly state: "in-progress"; readonly run: number; readonly retrying: string | null }
+  | { readonly state: "done"; readonly run: number }
+  | { readonly state: "failed"; readonly run: number; readonly reason: string };
+
+/** How a Ticket's run ended, as its replay-record job saw it. */
+export type ReplayTicketEnd =
+  /** Both arms ran, whatever their gates and Verdicts. */
+  | { readonly kind: "done" }
+  /** It was refused on a Subscription's weekly limit, which costs the Replay time, never the Ticket. */
+  | { readonly kind: "weekly-limit" }
+  /** Any other Infrastructure failure, with why. */
+  | { readonly kind: "infrastructure"; readonly reason: string };
+
+/**
+ * The body with Ticket `ticket` marked in progress in run `run`, or null
+ * when it isn't in the body's plan waiting to run, as when another run
+ * claimed it first.
+ */
+export function withTicketStarted(body: string, ticket: number, run: number): string | null {
+  return withProgress(body, ticket, (progress): ReplayProgress | null => {
+    if (progress.state === "pending") return { state: "in-progress", run, retrying: null };
+    if (progress.state === "retried") return { state: "in-progress", run, retrying: progress.reason };
+    return null;
+  });
+}
+
+/**
+ * The body with run `run` of Ticket `ticket` ended so: done; back to pending
+ * after a weekly-limit refusal; after any other Infrastructure failure,
+ * waiting to run again the first time and failed the second. Null when the
+ * Ticket isn't in progress in that run.
+ */
+export function withTicketFinished(body: string, ticket: number, run: number, end: ReplayTicketEnd): string | null {
+  return withProgress(body, ticket, (progress): ReplayProgress | null => {
+    if (progress.state !== "in-progress" || progress.run !== run) return null;
+    const { retrying } = progress;
+    switch (end.kind) {
+      case "done":
+        return { state: "done", run };
+      case "weekly-limit":
+        return retrying === null ? { state: "pending" } : { state: "retried", reason: retrying };
+      case "infrastructure":
+        return retrying === null ? { state: "retried", reason: end.reason } : { state: "failed", run, reason: end.reason };
+    }
+  });
+}
+
+/** The body with Ticket `ticket`'s progress changed by `next`, or null when it has no plan holding that Ticket, or `next` changes nothing. */
+function withProgress(body: string, ticket: number, next: (progress: ReplayProgress) => ReplayProgress | null): string | null {
+  const marks = replayMarksIn(body);
+  const at = marks?.progress.findIndex((each) => each.ticket === ticket) ?? -1;
+  const changed = marks === null || at === -1 ? null : next(marks.progress[at]!);
+  return marks === null || changed === null ? null : replayBody(body, { ...marks, progress: marks.progress.with(at, { ticket, ...changed }) });
+}
 
 /** A planned Ticket's progress. */
 export type TicketProgress = { readonly ticket: number } & ReplayProgress;
@@ -621,8 +708,17 @@ export function replayMarksIn(body: string): ReplayMarks | null {
   const planJson = lines.map((line) => PLAN_MARKER.exec(line)?.[1]).find((json) => json !== undefined);
   if (planJson === undefined) return null;
   const plan = JSON.parse(planJson) as ReplayPlan;
-  return { plan, progress: plan.tickets.map(({ ticket }): TicketProgress => ({ ticket, state: "pending" })) };
+  const marked = lines.flatMap((line) => {
+    const json = PROGRESS_MARKER.exec(line)?.[1];
+    return json === undefined ? [] : [JSON.parse(json) as TicketProgress];
+  });
+  // A Ticket with no progress marker of its own hasn't started.
+  const progress = plan.tickets.map(({ ticket }): TicketProgress => marked.find((each) => each.ticket === ticket) ?? { ticket, state: "pending" });
+  return { plan, progress };
 }
+
+/** A planned Ticket's progress marker line, carrying it as JSON. */
+const PROGRESS_MARKER = /^<!-- fabrik:replay-ticket (\{.*\}) -->$/;
 
 /** Where the Kit's part of the body starts: its start line, the last one. */
 function kitPartAt(body: string): number | null {
@@ -652,7 +748,7 @@ function planLines({ plan, progress }: ReplayMarks): string[] {
     ...plan.tickets.map((planned) => {
       const flags = planned.flags.length === 0 ? "" : ` Flags: ${planned.flags.map((flag) => FLAG_WORDS[flag]).join(", ")}.`;
       const state = progress.find(({ ticket }) => ticket === planned.ticket) ?? { state: "pending" };
-      return `- #${planned.ticket}, merged in #${planned.pullRequest} from \`${shortSha(planned.baseSha)}\`: ${PROGRESS_WORDS[state.state]}.${baselineWords(planned.arms.baseline, variable)}${flags}`;
+      return `- #${planned.ticket}, merged in #${planned.pullRequest} from \`${shortSha(planned.baseSha)}\`: ${progressWords(state)}.${baselineWords(planned.arms.baseline, variable)}${flags}`;
     }),
     ...(plan.leftOut.length === 0 ? [] : ["", "Left out:", "", ...plan.leftOut.map(leftOutLine)]),
     "",
@@ -666,8 +762,26 @@ const FLAG_WORDS: Readonly<Record<ReplayFlag, string>> = {
   "no-hidden-tests": "no hidden tests",
 };
 
-/** How the plan names each state of a Ticket's progress. */
-const PROGRESS_WORDS: Readonly<Record<ReplayProgress["state"], string>> = { pending: "pending" };
+/** A Ticket's progress, as the plan shows it. */
+function progressWords(progress: ReplayProgress): string {
+  switch (progress.state) {
+    case "pending":
+      return "pending";
+    case "retried":
+      return `pending, to run again after an Infrastructure failure: ${shownReason(progress.reason)}`;
+    case "in-progress":
+      return progress.retrying === null ? `in progress in run ${progress.run}` : `in progress in run ${progress.run}, its one retry`;
+    case "done":
+      return "done";
+    case "failed":
+      return `failed: ${shownReason(progress.reason)}`;
+  }
+}
+
+/** A failure's reason on one line, mentioning nobody. */
+function shownReason(reason: string): string {
+  return withoutMentions(reason.replace(/\s+/g, " ").trim());
+}
 
 /** How a Ticket's baseline runs what the variable changes, a sentence to show after its progress; none for a candidate Kit, whose baseline is always the pinned release. */
 function baselineWords(baseline: ReplayArmSettings, variable: ReplayVariable): string {

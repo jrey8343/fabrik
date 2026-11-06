@@ -14,8 +14,11 @@ import {
   replayMarksIn,
   type ReplayStep,
   type ReplayTick,
+  type ReplayTicketEnd,
   type ReplayVariable,
   replayThisUrl,
+  withTicketFinished,
+  withTicketStarted,
 } from "./replay.ts";
 import type { RunRecord } from "./runRecord.ts";
 
@@ -633,6 +636,140 @@ describe("A Replay's next step on the tick", () => {
       ["a closed issue's invalid request", { open: false, body: bodyWith("review.effort: highest") }],
     ])("gives %s nothing, not even a comment", (_, overrides) => {
       expect(nextReplayStep(aTick([aReplayIssue(140, overrides)]))).toMatchObject({ kind: "nothing" });
+    });
+  });
+
+  /** Replay issue `number` once the tick accepted its request, review.effort: high on Tickets 12 and 7, both pending. */
+  function anAcceptedIssue(number: number, overrides: Partial<ReplayIssue> = {}): ReplayIssue {
+    const issue = aReplayIssue(number, overrides);
+    return { ...issue, body: acceptedBody(nextReplayStep(aTick([{ ...issue, open: true }]))) };
+  }
+
+  describe("starts the next pending Ticket", () => {
+    it("of an accepted request, the first in its plan", () => {
+      expect(nextReplayStep(aTick([anAcceptedIssue(140)]))).toEqual({ kind: "start", issue: 140, ticket: 12 });
+    });
+
+    it("on the oldest accepted issue first", () => {
+      const newer = anAcceptedIssue(150, { body: bodyWith("implement.effort: max", "tickets: 7") });
+
+      expect(nextReplayStep(aTick([newer, anAcceptedIssue(140)]))).toEqual({ kind: "start", issue: 140, ticket: 12 });
+    });
+
+    it("but nothing without spare capacity, saying why", () => {
+      const step = nextReplayStep(aTick([anAcceptedIssue(140)], { capacity: { spare: false, why: "Ticket #31 is waiting for Dispatch" } }));
+
+      expect(step).toEqual({ kind: "nothing", reason: "Ticket #31 is waiting for Dispatch" });
+    });
+
+    it("never on a closed issue", () => {
+      expect(nextReplayStep(aTick([anAcceptedIssue(140, { open: false })]))).toMatchObject({ kind: "nothing" });
+    });
+  });
+
+  /** The issue with its Ticket `ticket` started by run `run`, failing the test when it can't start. */
+  function started(issue: ReplayIssue, ticket: number, run: number): ReplayIssue {
+    const body = withTicketStarted(issue.body, ticket, run);
+    if (body === null) throw new Error(`#${ticket} can't start on #${issue.number}`);
+    return { ...issue, body };
+  }
+
+  /** The issue with run `run` of its Ticket `ticket` ended so, failing the test when it can't end. */
+  function finished(issue: ReplayIssue, ticket: number, run: number, end: ReplayTicketEnd): ReplayIssue {
+    const body = withTicketFinished(issue.body, ticket, run, end);
+    if (body === null) throw new Error(`#${ticket}'s run ${run} can't end on #${issue.number}`);
+    return { ...issue, body };
+  }
+
+  describe("keeps each Ticket's progress in the body", () => {
+    it("marking a Ticket its run starts in progress with the run's id, the plan reading back unchanged", () => {
+      const accepted = anAcceptedIssue(140);
+
+      const marks = replayMarksIn(started(accepted, 12, 9001).body);
+
+      expect(marks?.plan).toEqual(replayMarksIn(accepted.body)?.plan);
+      expect(marks?.progress).toEqual([
+        { ticket: 12, state: "in-progress", run: 9001, retrying: null },
+        { ticket: 7, state: "pending" },
+      ]);
+    });
+
+    it("starting nothing while a replay Ticket is in progress on any issue", () => {
+      const [older, newer] = [anAcceptedIssue(140), anAcceptedIssue(150, { body: bodyWith("implement.effort: max", "tickets: 7") })];
+
+      expect(nextReplayStep(aTick([started(older, 12, 9001), newer]))).toMatchObject({ kind: "nothing" });
+      expect(nextReplayStep(aTick([older, started(newer, 7, 9001)]))).toMatchObject({ kind: "nothing" });
+    });
+
+    it("but not for a closed issue's Ticket, which no longer counts", () => {
+      const cancelled = { ...started(anAcceptedIssue(140), 12, 9001), open: false };
+
+      expect(nextReplayStep(aTick([cancelled, anAcceptedIssue(150)]))).toEqual({ kind: "start", issue: 150, ticket: 12 });
+    });
+
+    it("starting only a Ticket in the plan that is waiting to run", () => {
+      const accepted = anAcceptedIssue(140);
+
+      expect(withTicketStarted(started(accepted, 12, 9001).body, 12, 9002)).toBeNull();
+      expect(withTicketStarted(accepted.body, 30, 9001)).toBeNull();
+      expect(withTicketStarted(bodyWith("review.effort: high"), 12, 9001)).toBeNull();
+    });
+
+    it("marking a Ticket done once its run ends, so the next one starts", () => {
+      const done = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "done" });
+
+      expect(replayMarksIn(done.body)?.progress[0]).toEqual({ ticket: 12, state: "done", run: 9001 });
+      expect(nextReplayStep(aTick([done]))).toEqual({ kind: "start", issue: 140, ticket: 7 });
+    });
+
+    it("ending only the run its Ticket is in progress with", () => {
+      const running = started(anAcceptedIssue(140), 12, 9001);
+
+      expect(withTicketFinished(running.body, 12, 9002, { kind: "done" })).toBeNull();
+      expect(withTicketFinished(running.body, 7, 9001, { kind: "done" })).toBeNull();
+    });
+
+    it("returning a Ticket whose run was refused on a weekly limit to pending, to start again", () => {
+      const refused = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "weekly-limit" });
+
+      expect(replayMarksIn(refused.body)?.progress[0]).toEqual({ ticket: 12, state: "pending" });
+      expect(nextReplayStep(aTick([refused]))).toEqual({ kind: "start", issue: 140, ticket: 12 });
+    });
+
+    it("retrying a Ticket once after any other Infrastructure failure, then marking it failed with its reason", () => {
+      const once = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
+
+      expect(replayMarksIn(once.body)?.progress[0]).toEqual({ ticket: 12, state: "retried", reason: "the model provider failed" });
+      expect(nextReplayStep(aTick([once]))).toEqual({ kind: "start", issue: 140, ticket: 12 });
+
+      const twice = finished(started(once, 12, 9002), 12, 9002, { kind: "infrastructure", reason: "the Sandbox timed out" });
+
+      expect(replayMarksIn(twice.body)?.progress[0]).toEqual({ ticket: 12, state: "failed", run: 9002, reason: "the Sandbox timed out" });
+      expect(nextReplayStep(aTick([twice]))).toEqual({ kind: "start", issue: 140, ticket: 7 });
+    });
+
+    it("keeping a retried Ticket's one retry through a weekly-limit refusal", () => {
+      const once = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
+      const refused = finished(started(once, 12, 9002), 12, 9002, { kind: "weekly-limit" });
+
+      expect(replayMarksIn(refused.body)?.progress[0]).toEqual({ ticket: 12, state: "retried", reason: "the model provider failed" });
+    });
+
+    it("starting nothing once every Ticket is done or failed", () => {
+      const once = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
+      const failed = finished(started(once, 12, 9002), 12, 9002, { kind: "infrastructure", reason: "the Sandbox timed out" });
+      const finishedAll = finished(started(failed, 7, 9003), 7, 9003, { kind: "done" });
+
+      expect(nextReplayStep(aTick([finishedAll]))).toMatchObject({ kind: "nothing" });
+    });
+
+    it("never changing the Operator's text above the Kit's part, however often the Kit rewrites its own", () => {
+      const body = "Does Review hold up at a higher effort?  \r\n\r\n```replay\r\nreview.effort: high\r\ntickets: 12\r\n```\r\nThanks!";
+
+      const done = finished(started(anAcceptedIssue(140, { body }), 12, 9001), 12, 9001, { kind: "done" });
+
+      expect(done.body.startsWith(body)).toBe(true);
+      expect(replayMarksIn(done.body)?.progress).toEqual([{ ticket: 12, state: "done", run: 9001 }]);
     });
   });
 });
