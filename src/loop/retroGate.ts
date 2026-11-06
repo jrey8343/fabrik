@@ -10,7 +10,7 @@ import { dateOf, heldBack, weekStart } from "./weeklyGate.ts";
 /**
  * The retro gate: a pending Retro to open, or why there's none this tick. The
  * scheduled-tick rule runs it on every tick, after the audit gate
- * (scheduledTickWith).
+ * (scheduledTickWith in src/loop/rules.ts).
  */
 export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   const { day } = config.retro;

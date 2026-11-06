@@ -12,7 +12,7 @@ import { dateOf, heldBack, weekStart } from "./weeklyGate.ts";
  * The audit gate: a pending Audit to open, or why there's none this tick. The
  * scheduled-tick rule runs it on every tick, beside the retro gate, after
  * closing each weekly-limit issue past its reset and resuming held runs then
- * (scheduledTickWith).
+ * (scheduledTickWith in src/loop/rules.ts).
  */
 export function auditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   const { day } = config.audit;

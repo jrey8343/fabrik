@@ -3,47 +3,14 @@
 // Retro, whose opening starts its run. Each is due from 00:00 UTC on its day
 // of the ISO week, which runs from Monday 00:00 to Monday 00:00 in UTC.
 import { AUDIT_DAYS, type AuditDay } from "../kit/config.ts";
-import { scheduledTick } from "./kitIssues.ts";
 import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { readable } from "./readable.ts";
-import { resumingHeldRuns } from "./resume.ts";
-import type { Action, AuditIssueSnapshot, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
+import type { AuditIssueSnapshot, KitIssueSnapshot } from "./types.ts";
 
 export const DAY = 24 * 60 * 60 * 1000;
 
 /** How many failed runs a week a gate retries before waiting for the next week. */
 const FAILED_RUNS_A_WEEK = 2;
-
-/** A gate the scheduled tick runs: what it opens this tick, or why it opens nothing. */
-export type TickGate = (now: string, snapshot: Snapshot, config: KitConfig) => Plan;
-
-/**
- * The scheduled tick with these gates: closes each weekly-limit issue after
- * its reset, as scheduledTick does, and resumes held runs then, alongside
- * each gate's plan.
- */
-export function scheduledTickWith(gates: readonly TickGate[], now: string, snapshot: Snapshot, config: KitConfig): Plan {
-  // With rotation on, a weekly-limit issue it closes resumes the held runs.
-  const tick = resumingHeldRuns(scheduledTick(now, snapshot, config), snapshot, config);
-  // A weekly-limit issue this tick closes after its reset no longer holds a gate back.
-  const closing = actionsOf(tick).flatMap((action) => (action.kind === "close" ? [action.issue] : []));
-  const kitIssues = snapshot.kitIssues.filter((issue) => !closing.includes(issue.number));
-  return gates.reduce((plan, gate) => alongside(plan, gate(now, { ...snapshot, kitIssues }, config)), tick);
-}
-
-/** Both plans' actions, or why neither acts. */
-function alongside(first: Plan, second: Plan): Plan {
-  if (first.kind === "fail") return first;
-  if (second.kind === "fail") return second;
-  if (first.kind === "nothing" && second.kind === "nothing") {
-    return { kind: "nothing", reason: `${first.reason}; ${second.reason}` };
-  }
-  return { kind: "act", actions: [...actionsOf(first), ...actionsOf(second)] };
-}
-
-function actionsOf(plan: Plan): readonly Action[] {
-  return plan.kind === "act" ? plan.actions : [];
-}
 
 /**
  * The ones among a gate's issues, `fabrik:audit` or `fabrik:retro`, that
