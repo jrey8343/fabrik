@@ -145,7 +145,10 @@ describe("Installing a Product repo's Extra skills", () => {
   });
 
   // ADR-0008: only triage, design, implement and review take picks.
-  it("installs only the Base skills for an Auditor run, and downloads no Skills source, whatever the roles pick", async () => {
+  it.each([
+    ["an Auditor", "audit"],
+    ["a Retro", "retro"],
+  ] as const)("installs only the Base skills for %s run, and downloads no Skills source, whatever the roles pick", async (_run, role) => {
     const product = await aProductCheckout(PINS, {
       design: ["jrey8343/skills/event-storming"],
       implement: ["jrey8343/skills/deciders"],
@@ -153,7 +156,7 @@ describe("Installing a Product repo's Extra skills", () => {
     });
     const { urls, download } = servingEach(await upstream());
 
-    const installed = await fetchSkills(await aKitCheckout(), product, download, { install: "audit" });
+    const installed = await fetchSkills(await aKitCheckout(), product, download, { install: role });
 
     expect(installed).toMatchObject({ skills: ["tdd"], extraSkills: [], errors: [] });
     expect(urls).toEqual([BASE_URL]);

@@ -4,7 +4,8 @@
 // agent starts on an invalid Kit; asks the Loop rules core what this event
 // calls for; and tells the workflow which job it routes to and the settings its jobs
 // need before they start, such as their timeout-minutes. Writes step outputs:
-//   route                    "triage", "design", "implement", "review" or "audit" when the plan starts that agent run,
+//   route                    "triage", "design", "implement", "review", "audit" or "retro" when the plan starts
+//                            that agent run (a Retro run's evidence job, then its Retro job),
 //                            "push" when the push job has something to apply,
 //                            "none" when the plan is to do nothing
 //   triage-timeout-minutes   the Triage role's Kit config timeout
@@ -12,6 +13,7 @@
 //   implement-timeout-minutes the Implement role's Kit config timeout
 //   review-timeout-minutes   the Review role's Kit config timeout
 //   audit-timeout-minutes    the Auditor's Kit config timeout
+//   retro-timeout-minutes    the Retro's Kit config timeout
 //   pull-request, ticket     for a Review or a retry, the agent PR and the Ticket its branch was cut for;
 //                            for a first Implement run, an empty PR and its Ticket; else empty
 //   branch                   for a retry, the agent branch it builds on; else empty
@@ -41,6 +43,7 @@ import type { Plan } from "../loop/types.ts";
 import { kitConfigErrors } from "../skills/pinnedManifests.ts";
 import { callerWorkflowPath, checkKit } from "./caller.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
+import type { KitConfig } from "./config.ts";
 import { kitJobSummary, subscriptionOf } from "./kitJob.ts";
 import { rotationIsOn } from "../loop/subscriptions.ts";
 
@@ -82,8 +85,7 @@ async function main(productDir: string): Promise<void> {
   const eventName = required("GITHUB_EVENT_NAME");
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
   const event = loopEventFrom(eventName, payload);
-  let route = "none";
-  let run: ReturnType<typeof agentRunIn> = null;
+  let plan: Plan | null = null;
   let ticket: number | null = null;
   let summary: string | null = null;
   if (event === null) {
@@ -91,29 +93,48 @@ async function main(productDir: string): Promise<void> {
   } else {
     const github = new GitHub(required("GH_TOKEN"), process.env["GITHUB_API_URL"]);
     // This job only routes, with no Fabrik App token, so it doesn't know the App's login and takes any bot's
-    // issue for the App's, so the App's pending Audit routes to its Auditor run: the push job's plan is the one applied.
-    // Another bot's look-alike pending Audit so costs one Auditor run, whose result the push job drops (byAppOf).
+    // issue for the App's, so the App's pending Audit or Retro routes to its run: the push job's plan is the one applied.
+    // Another bot's look-alike pending Audit or Retro so costs one run, whose result the push job drops (byAppOf).
     const snapshot = await gatherSnapshot(github, repo, event, config.operator, null);
-    const plan = planFor(event, snapshot, config);
+    plan = planFor(event, snapshot, config);
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
-    route = routeOf(plan);
-    run = agentRunIn(plan);
     summary = kitJobSummary(plan, config, snapshot.kitIssues);
     ticket = snapshot.pullRequest?.ticket ?? null;
   }
+  const outputs = kitJobOutputs(plan, ticket, config);
+  await appendFile(
+    required("GITHUB_OUTPUT"),
+    Object.entries(outputs)
+      .map(([key, value]) => `${key}=${value}\n`)
+      .join(""),
+  );
+  console.log(`Route: ${outputs["route"]}`);
+  const summaryPath = process.env["GITHUB_STEP_SUMMARY"];
+  if (summary !== null && summaryPath !== undefined && summaryPath !== "") await appendFile(summaryPath, summary);
+}
+
+/**
+ * The Kit job's step outputs, as the header lists them: where `plan` routes
+ * (null for an event the Loop doesn't act on), every role's timeout, and what
+ * the routed agent job needs before it starts. `ticket` is the Ticket the
+ * snapshot's PR was cut for, if it has one.
+ */
+export function kitJobOutputs(plan: Plan | null, ticket: number | null, config: KitConfig): Readonly<Record<string, string>> {
+  const run = plan === null ? null : agentRunIn(plan);
   // A Review's subject is the PR itself; a retry is an Implement run on the Ticket that fixes its PR.
   const pullRequest = run?.role === "review" ? run.issue : (run?.pullRequest ?? null);
-  if (run?.role === "implement") ticket = run.issue;
-
-  const outputs = {
-    route,
+  const builds = run?.role === "implement" ? run.issue : ticket;
+  return {
+    route: plan === null ? "none" : routeOf(plan),
     "triage-timeout-minutes": String(config.roles.triage.timeoutMinutes),
     "design-timeout-minutes": String(config.roles.design.timeoutMinutes),
     "implement-timeout-minutes": String(config.roles.implement.timeoutMinutes),
     "review-timeout-minutes": String(config.roles.review.timeoutMinutes),
     "audit-timeout-minutes": String(config.roles.audit.timeoutMinutes),
+    // Both of a Retro run's jobs, its evidence job and its Retro job, run within it.
+    "retro-timeout-minutes": String(config.roles.retro.timeoutMinutes),
     "pull-request": pullRequest === null ? "" : String(pullRequest),
-    ticket: (run?.role === "review" || run?.role === "implement") && ticket !== null ? String(ticket) : "",
+    ticket: (run?.role === "review" || run?.role === "implement") && builds !== null ? String(builds) : "",
     // A retry checks out its PR's branch; a first Implement run cuts it from the default branch.
     branch: run?.role === "implement" && run.pullRequest !== undefined ? agentBranchFor(run.issue) : "",
     // A Request-changes run's input: the Operator's review on the PR.
@@ -132,24 +153,17 @@ async function main(productDir: string): Promise<void> {
     // For the judge, which reads no Kit config: whether its stream watch kills it on overage.
     rotation: String(rotationIsOn(config)),
   };
-  await appendFile(
-    required("GITHUB_OUTPUT"),
-    Object.entries(outputs)
-      .map(([key, value]) => `${key}=${value}\n`)
-      .join(""),
-  );
-  console.log(`Route: ${route}`);
-  const summaryPath = process.env["GITHUB_STEP_SUMMARY"];
-  if (summary !== null && summaryPath !== undefined && summaryPath !== "") await appendFile(summaryPath, summary);
 }
 
-const productDir = process.argv[2];
-if (productDir === undefined) {
-  console.error("Usage: node src/kit/jobs.ts <product checkout>");
-  process.exitCode = 2;
-} else {
-  main(productDir).catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
+if (import.meta.main) {
+  const productDir = process.argv[2];
+  if (productDir === undefined) {
+    console.error("Usage: node src/kit/jobs.ts <product checkout>");
+    process.exitCode = 2;
+  } else {
+    main(productDir).catch((error: unknown) => {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    });
+  }
 }

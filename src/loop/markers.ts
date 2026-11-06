@@ -1,10 +1,11 @@
 // The markers the Kit's comments open with, and the marker lines it puts in
 // issue bodies: a Monitor issue's marker line and the Monitor's note closing
-// its red-main issue (#148), an Audit's own, and the `From audit #n` line and
-// escape marker an Audit candidate's filed issue ends with (#150). The core
-// writes them; the adapter reads a thread's comments back through them into
-// the snapshot (src/github/threads.ts), and the body lines are read from the
-// issues themselves, so the Loop's history lives on GitHub alone.
+// its red-main issue (#148), an Audit's own, the `From audit #n` line and
+// escape marker an Audit candidate's filed issue ends with (#150), and a
+// Retro's own (#151). The core writes them; the adapter reads a thread's
+// comments back through them into the snapshot (src/github/threads.ts), and
+// the body lines are read from the issues themselves, so the Loop's history
+// lives on GitHub alone.
 import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
@@ -141,10 +142,71 @@ export function fromAuditLine(audit: number): string {
  * none. A line quoted as code isn't one (see linesOutsideCode).
  */
 export function fromAuditIn(body: string): number | null {
-  const line = linesOutsideCode(body)
-    .map((each) => FROM_AUDIT_LINE.exec(each.trim()))
-    .find((match) => match !== null);
-  return line === undefined || line === null ? null : Number(line[1]);
+  return numberOnFirstLineIn(body, FROM_AUDIT_LINE);
+}
+
+/**
+ * The line a Follow-up's filed issue ends with, naming the PR whose pass
+ * listed it (src/loop/followUps.ts), matched against a whole line with its
+ * outer whitespace trimmed.
+ */
+export const FROM_PULL_REQUEST_LINE = /^From PR #([1-9][0-9]*)$/;
+
+/** The `From PR #n` line for a Follow-up on PR #`pullRequest`'s pass, which fromPullRequestIn reads back. */
+export function fromPullRequestLine(pullRequest: number): string {
+  return `From PR #${pullRequest}`;
+}
+
+/** The PR the first `From PR #n` line in `body` names, or null if it has none. A line quoted as code isn't one. */
+export function fromPullRequestIn(body: string): number | null {
+  return numberOnFirstLineIn(body, FROM_PULL_REQUEST_LINE);
+}
+
+/**
+ * The line an issue filed from a Retro's proposal ends with, naming the Retro
+ * it came from (#151), matched against a whole line with its outer whitespace
+ * trimmed: `From retro #n` on an issue in the Retro's own Product repo, and
+ * `From retro <owner>/<repo>#n`, naming that repo, on one filed anywhere else,
+ * the Kit's repo or a Skills source, where a bare #n would link to that repo's
+ * own issue. The next Retro skips a proposal while its issue is open.
+ */
+export const FROM_RETRO_LINE = /^From retro (?:([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+))?#([1-9][0-9]*)$/;
+
+/**
+ * The `From retro` line for a proposal filed from Retro #`retro`, which
+ * fromRetroIn reads back: bare on an issue in the Retro's own Product repo,
+ * and naming that repo, `repo` as owner/name, on one filed anywhere else.
+ */
+export function fromRetroLine(retro: number, repo: string | null = null): string {
+  return `From retro ${repo ?? ""}#${retro}`;
+}
+
+/** The Retro a `From retro` line names: its number, and its Product repo, as owner/name, when the line names one. */
+export interface FromRetro {
+  readonly retro: number;
+  /** Null for the bare `From retro #n`, which names a Retro in the repo the issue is on. */
+  readonly repo: string | null;
+}
+
+/** The Retro the first `From retro` line in `body` names, in either form, or null if it has none. A line quoted as code isn't one. */
+export function fromRetroIn(body: string): FromRetro | null {
+  const match = firstLineIn(body, FROM_RETRO_LINE);
+  return match === null ? null : { retro: Number(match[2]), repo: match[1] ?? null };
+}
+
+/** The number `line` captures from the first line outside code in `body` it matches, its outer whitespace trimmed, or null. */
+function numberOnFirstLineIn(body: string, line: RegExp): number | null {
+  const match = firstLineIn(body, line);
+  return match === null ? null : Number(match[1]);
+}
+
+/** What `line` matches on the first line outside code in `body` it matches, its outer whitespace trimmed, or null. */
+function firstLineIn(body: string, line: RegExp): RegExpExecArray | null {
+  return (
+    linesOutsideCode(body)
+      .map((each) => line.exec(each.trim()))
+      .find((each) => each !== null) ?? null
+  );
 }
 
 /**
@@ -157,16 +219,43 @@ export function fromAuditIn(body: string): number | null {
  * can leave one open above the trailer it ends with.
  */
 export function linesOutsideCode(body: string): string[] {
+  return fencedRunsOf(body).runs.flatMap(({ code, lines }) => (code ? [] : lines));
+}
+
+/** A run of a Markdown body's lines: one fenced code block, its fence lines included, or lines outside any. */
+export interface MarkdownRun {
+  readonly code: boolean;
+  readonly lines: readonly string[];
+}
+
+/**
+ * A Markdown body's lines in runs, each one fenced code block or the lines
+ * between them, as linesOutsideCode reads them. A fence that never closes
+ * quotes nothing there, but GitHub renders everything after it as code:
+ * `open` is the first such fence, or null when every fence closes.
+ */
+export function fencedRunsOf(body: string): { readonly runs: readonly MarkdownRun[]; readonly open: string | null } {
   const lines = body.split("\n");
-  const outside: string[] = [];
+  const runs: { code: boolean; lines: string[] }[] = [];
+  const add = (code: boolean, added: readonly string[]) => {
+    const last = runs.at(-1);
+    if (last !== undefined && !last.code && !code) last.lines.push(...added);
+    else runs.push({ code, lines: [...added] });
+  };
+  let open: string | null = null;
   for (let at = 0; at < lines.length; at++) {
     const line = lines[at] ?? "";
     const fence = fenceOpenedBy(line);
     const closing = fence === null ? -1 : lines.findIndex((each, i) => i > at && closesFence(fence, each));
-    if (closing === -1) outside.push(line);
-    else at = closing;
+    if (closing === -1) {
+      open ??= fence;
+      add(false, [line]);
+    } else {
+      add(true, lines.slice(at, closing + 1));
+      at = closing;
+    }
   }
-  return outside;
+  return { runs, open };
 }
 
 /** The fence a line opens a fenced code block with, as CommonMark reads it, or null when it opens none. */
@@ -211,7 +300,51 @@ export interface AuditMarks {
 
 /** The Audit marker lines in `body`, each matched against a whole line with its outer whitespace trimmed. */
 export function auditMarksIn(body: string): AuditMarks {
+  const { value: commit, pending, failed } = weeklyMarksIn(body, AUDIT_MARKER, AUDIT_PENDING_MARKER, AUDIT_FAILED_MARKER);
+  return { commit, pending, failed };
+}
+
+/**
+ * A Retro's marker line (#151): `<!-- fabrik:retro <window-end> -->`, the end
+ * of the window the Retro reads, which is the time of the tick that opened
+ * it, so the next Retro's window starts where this one's ended. Its body
+ * keeps the line through every state.
+ */
+export function retroMarker(windowEnd: string): string {
+  return `<!-- fabrik:retro ${new Date(windowEnd).toISOString()} -->`;
+}
+
+/** The marker line on a Retro still waiting on its run. */
+export const RETRO_PENDING_MARKER = "<!-- fabrik:retro-pending -->";
+
+/** The marker line on a Retro whose run failed, in place of the pending one. */
+export const RETRO_FAILED_MARKER = "<!-- fabrik:retro-failed -->";
+
+const RETRO_MARKER = /^<!-- fabrik:retro (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z) -->$/;
+
+/** What a Retro's body says through its marker lines. Only a body the Fabrik App wrote is read for them. */
+export interface RetroMarks {
+  /** The end of the window it reads, as an ISO 8601 time, from its retro marker; null when it has none. */
+  readonly windowEnd: string | null;
+  readonly pending: boolean;
+  readonly failed: boolean;
+}
+
+/** The Retro marker lines in `body`, each matched against a whole line with its outer whitespace trimmed. */
+export function retroMarksIn(body: string): RetroMarks {
+  const { value, pending, failed } = weeklyMarksIn(body, RETRO_MARKER, RETRO_PENDING_MARKER, RETRO_FAILED_MARKER);
+  const windowEnd = value === null || Number.isNaN(Date.parse(value)) ? null : value;
+  return { windowEnd, pending, failed };
+}
+
+/**
+ * The marker lines in `body` of an issue a weekly gate opens pending for its
+ * run (src/loop/weeklyGate.ts), an Audit or a Retro: the value its own
+ * `marker` captures, and whether it has the pending or the failed line. Each
+ * is matched against a whole line with its outer whitespace trimmed.
+ */
+function weeklyMarksIn(body: string, marker: RegExp, pending: string, failed: string) {
   const lines = body.split("\n").map((line) => line.trim());
-  const commit = lines.map((line) => AUDIT_MARKER.exec(line)?.[1]).find((sha) => sha !== undefined) ?? null;
-  return { commit, pending: lines.includes(AUDIT_PENDING_MARKER), failed: lines.includes(AUDIT_FAILED_MARKER) };
+  const value = lines.map((line) => marker.exec(line)?.[1]).find((each) => each !== undefined) ?? null;
+  return { value, pending: lines.includes(pending), failed: lines.includes(failed) };
 }

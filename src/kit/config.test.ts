@@ -14,6 +14,7 @@ const DEFAULTS = {
     implement: { model: "claude-sonnet-5-5", effort: null, timeoutMinutes: 60 },
     review: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
     audit: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 45 },
+    retro: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 45 },
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: "claude-opus-5-5", effort: null },
   },
@@ -21,9 +22,10 @@ const DEFAULTS = {
   caps: { designSessions: 2, monitorIssues: 5 },
   monitor: { errors: null, redMain: true },
   audit: { day: "sunday" },
+  retro: { day: "saturday" },
   operator: null,
   subscriptions: ["Claude token"],
-  instructions: { triage: null, design: null, implement: null, review: null, audit: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
 };
@@ -214,6 +216,7 @@ describe("Kit config", () => {
       implement: "Use the repo's money helpers.\n",
       review: "Check the booking flow.\n",
       audit: null,
+      retro: null,
     });
   });
 
@@ -221,6 +224,13 @@ describe("Kit config", () => {
     const result = resolveKitConfig({ config: null, instructions: { audit: "Look at the booking module first.\n" } });
 
     expect(result.ok && result.config.instructions.audit).toBe("Look at the booking module first.\n");
+    expect(result.ok && Object.keys(result.config.extraSkills)).toEqual(["triage", "design", "implement", "review"]);
+  });
+
+  it("carries the Retro's instructions from .fabrik/retro.md, though the Retro picks no Extra skills", () => {
+    const result = resolveKitConfig({ config: null, instructions: { retro: "Weigh the billing escapes first.\n" } });
+
+    expect(result.ok && result.config.instructions.retro).toBe("Weigh the billing escapes first.\n");
     expect(result.ok && Object.keys(result.config.extraSkills)).toEqual(["triage", "design", "implement", "review"]);
   });
 
@@ -239,6 +249,7 @@ describe("Kit config", () => {
         implement: { model: "claude-sonnet-5-5", effort: null, timeout_minutes: 60 },
         review: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
         audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
+        retro: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
         dispatch: { timeout_minutes: 10 },
         step_up: { model: "claude-opus-5-5", effort: null },
       },
@@ -246,6 +257,7 @@ describe("Kit config", () => {
       caps: { design_sessions: 2, monitor_issues: 5 },
       monitor: { errors: null, red_main: true },
       audit: { day: "sunday" },
+      retro: { day: "saturday" },
       operator: null,
     };
 
@@ -551,6 +563,88 @@ describe("The Audit's Kit config", () => {
   });
 });
 
+describe("The Retro's Kit config", () => {
+  it("gives a repo that sets nothing a Saturday Retro on the Reviewer's model with a 45-minute timeout", () => {
+    const result = resolveKitConfig({ config: `{ "max_in_flight": 1 }` });
+
+    expect(result.ok && result.config.retro).toEqual({ day: "saturday" });
+    expect(result.ok && result.config.roles.retro).toEqual({
+      model: "claude-opus-5-5",
+      effort: null,
+      timeoutMinutes: 45,
+    });
+  });
+
+  it.each(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", null])(
+    "reads retro.day %j as written",
+    (day) => {
+      const result = resolveKitConfig({ config: JSON.stringify({ retro: { day } }) });
+
+      expect(result).toEqual({ ok: true, config: { ...DEFAULTS, retro: { day } } });
+    },
+  );
+
+  it.each(["Saturday", "sat", "weekly", ""])("refuses %j as retro.day, naming the field and the days it takes", (day) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ retro: { day } }) });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        `retro.day is ${JSON.stringify(day)}: the Retro day must be one of monday, tuesday, wednesday, thursday, friday, saturday, sunday, or null to turn the Retro off`,
+      ],
+    });
+  });
+
+  it.each([
+    [`{ "retro": { "day": 6 } }`, "retro.day must be a string"],
+    [`{ "retro": { "day": true } }`, "retro.day must be a string"],
+    [`{ "retro": "saturday" }`, "retro must be an object"],
+    [`{ "retro": null }`, "retro must be an object"],
+  ])("fails a mistyped retro field, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [`{ "retro": { "days": "saturday" } }`, "retro.days is not a Kit config field"],
+    [`{ "retro": { "day": "saturday", "proposals": 5 } }`, "retro.proposals is not a Kit config field"],
+    [`{ "retro": { "window_days": 14 } }`, "retro.window_days is not a Kit config field"],
+  ])("fails an unknown field under retro, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("honours overrides of the Retro's model, effort and timeout", () => {
+    const result = resolveKitConfig({
+      config: `{ "roles": { "retro": { "model": "claude-sonnet-5-5", "effort": "high", "timeout_minutes": 20 } } }`,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        roles: { ...DEFAULTS.roles, retro: { model: "claude-sonnet-5-5", effort: "high", timeoutMinutes: 20 } },
+      },
+    });
+  });
+
+  it.each([
+    [`{ "roles": { "retro": { "model": "fable" } } }`, `roles.retro.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role`],
+    [`{ "roles": { "retro": { "effort": "extreme" } } }`, `roles.retro.effort is "extreme": effort must be one of low, medium, high, xhigh, max`],
+    [`{ "roles": { "retro": { "timeout_minutes": 0 } } }`, "roles.retro.timeout_minutes must be a whole number of at least 1"],
+    [`{ "roles": { "retro": { "proposals": 3 } } }`, "roles.retro.proposals is not a Kit config field"],
+  ])("fails a bad roles.retro field, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("refuses roles.retro.skills, naming the field, because only triage, design, implement and review take Extra skills", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ roles: { retro: { skills: ["jrey8343/skills/event-storming"] } } }),
+      skillsLock: null,
+    });
+
+    expect(result).toEqual({ ok: false, errors: ["roles.retro.skills is not a Kit config field"] });
+  });
+});
+
 describe("The Kit config template", () => {
   it("spells out caps.design_sessions at its Kit default", () => {
     expect(JSON.parse(template)).toMatchObject({ caps: { design_sessions: 2 } });
@@ -564,6 +658,13 @@ describe("The Kit config template", () => {
     expect(JSON.parse(template)).toMatchObject({
       audit: { day: "sunday" },
       roles: { audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 } },
+    });
+  });
+
+  it("spells out retro.day and roles.retro at their Kit defaults", () => {
+    expect(JSON.parse(template)).toMatchObject({
+      retro: { day: "saturday" },
+      roles: { retro: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 } },
     });
   });
 

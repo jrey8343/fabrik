@@ -4,6 +4,7 @@
 import { AUDIT_LABEL } from "./labels.ts";
 import { auditMarksIn } from "./markers.ts";
 import type { AuditIssueSnapshot, IssueSnapshot, KitConfig, Plan } from "./types.ts";
+import { byAppNewestFirst } from "./weeklyGate.ts";
 
 /** An Audit as the Kit reads it from its issue. */
 export interface Audit {
@@ -33,14 +34,11 @@ export const TOP_RECOMMENDATION_HEADING = "## Top recommendation";
  * marker counts for nothing.
  */
 export function auditsIn(issues: readonly AuditIssueSnapshot[]): Audit[] {
-  return issues
-    .filter((issue) => issue.byApp)
-    .map(({ number, open, createdAt, body }) => {
-      const marks = auditMarksIn(body);
-      const filled = !marks.pending && !marks.failed && body.split("\n").some((line) => line.trim() === TOP_RECOMMENDATION_HEADING);
-      return { number, open, createdAt, ...marks, filled };
-    })
-    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.number - a.number);
+  return byAppNewestFirst(issues).map(({ number, open, createdAt, body }) => {
+    const marks = auditMarksIn(body);
+    const filled = !marks.pending && !marks.failed && body.split("\n").some((line) => line.trim() === TOP_RECOMMENDATION_HEADING);
+    return { number, open, createdAt, ...marks, filled };
+  });
 }
 
 /**

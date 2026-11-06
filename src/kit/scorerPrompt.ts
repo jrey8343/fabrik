@@ -1,13 +1,13 @@
 // The judge prompt, the Scorer module's third entry point: the one prompt the
 // judge reads to score a finished Implementer run on every rubric at once. It
-// gives the Ticket and a compact digest of the run's transcript, read through
-// the stream reader and held to a character budget, as fenced data; then the
-// rubrics; then the answer the judge owes, one per rubric, in one tag and
-// against a schema the rubrics make. The judge job builds it in
+// gives the Ticket and a compact digest of the run's transcript
+// (src/kit/transcriptDigest.ts), held to the judge's budget, as fenced data;
+// then the rubrics; then the answer the judge owes, one per rubric, in one tag
+// and against a schema the rubrics make. The judge job builds it in
 // src/kit/judge-main.ts. Pure, no I/O.
-import { readStream, type StreamMessage, type StreamStep } from "../agent/stream.ts";
 import type { Rubric } from "./rubrics.ts";
 import type { JudgeAnswer, JudgeOutput } from "./scorer.ts";
+import { cutMarker, digestOf } from "./transcriptDigest.ts";
 
 /** The tag the judge's answer comes in, as the runner's structured output reads it: the judge's role. */
 export const JUDGE_OUTPUT_TAG = "score";
@@ -80,157 +80,7 @@ function fenced(body: string, info: string): string {
   return `${fence}${info}\n${body}\n${fence}`;
 }
 
-/** What the budget may cut, in the order it cuts them: tool results, then assistant text. */
-type Cuttable = "result" | "text";
-
-/** One line of the digest: a head kept whole, then a body the budget may cut. */
-interface DigestLine {
-  readonly head: string;
-  readonly body?: { readonly kind: Cuttable; readonly text: string };
-}
-
-/** How long each kind of body may be; Infinity leaves that kind whole. */
-type Caps = Readonly<Record<Cuttable, number>>;
-
-const WHOLE: Caps = { result: Infinity, text: Infinity };
-
-const cutMarker = (characters: number): string => `[… ${characters} characters cut …]`;
-
-/** How long a body of `length` characters is once cut to `cap`, its marker included; a cut that saves nothing isn't made. */
-function cutLength(length: number, cap: number): number {
-  return length <= cap ? length : Math.min(length, cap + cutMarker(length - cap).length);
-}
-
-/** The body cut to `cap` characters, keeping its start and its end around the marker. */
-function cutTo(text: string, cap: number): string {
-  if (cutLength(text.length, cap) === text.length) return text;
-  const start = Math.ceil(cap / 2);
-  return `${text.slice(0, start)}${cutMarker(text.length - cap)}${text.slice(text.length - (cap - start))}`;
-}
-
-const bodyCap = (line: DigestLine, caps: Caps): number => (line.body === undefined ? Infinity : caps[line.body.kind]);
-
-/** The largest cap from 0 to `max` that `fits`, or null when not even 0 does. Longer caps never make the digest shorter. */
-function largestCap(fits: (cap: number) => boolean, max: number): number | null {
-  if (!fits(0)) return null;
-  let low = 0;
-  let high = max;
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    if (fits(mid)) low = mid;
-    else high = mid - 1;
-  }
-  return low;
-}
-
-/**
- * The digest's lines held to `budget` characters: whole if they fit, else
- * with the longest tool results cut to one shared cap, and only when even
- * cutting every result can't make them fit, every result cut and the longest
- * assistant text cut too. Heads, and so every tool call, are never cut.
- */
-function fitted(lines: readonly DigestLine[], budget: number): { readonly digest: string; readonly trimmed: boolean } {
-  const length = (caps: Caps) =>
-    lines.reduce((sum, line) => sum + line.head.length + (line.body === undefined ? 0 : cutLength(line.body.text.length, bodyCap(line, caps))), lines.length - 1);
-  const longest = (kind: Cuttable) => lines.reduce((max, line) => (line.body?.kind === kind ? Math.max(max, line.body.text.length) : max), 0);
-  const fits = (caps: Caps) => length(caps) <= budget;
-
-  let caps = WHOLE;
-  if (!fits(caps)) {
-    const result = largestCap((cap) => fits({ ...WHOLE, result: cap }), longest("result"));
-    caps =
-      result !== null
-        ? { ...WHOLE, result }
-        : { result: 0, text: largestCap((cap) => fits({ result: 0, text: cap }), longest("text")) ?? 0 };
-  }
-  const trimmed = lines.some((line) => line.body !== undefined && cutLength(line.body.text.length, bodyCap(line, caps)) < line.body.text.length);
-  const digest = lines.map((line) => line.head + (line.body === undefined ? "" : cutTo(line.body.text, bodyCap(line, caps)))).join("\n");
-  return { digest, trimmed };
-}
-
 const quoted = (names: readonly string[]): string => names.map((name) => `\`${name}\``).join(", ");
-
-/** Each step as digest lines: tool calls numbered `#n` in order, each followed by its result, and a subagent's steps marked with the call that started it. */
-function stepLines(steps: readonly StreamStep[]): DigestLine[] {
-  const numbers = new Map<string, number>();
-  let calls = 0;
-  return steps.flatMap((step): DigestLine[] => {
-    const parent = step.parentToolUseId === null ? undefined : numbers.get(step.parentToolUseId);
-    const by = step.parentToolUseId === null ? "" : `[subagent${parent === undefined ? "" : ` of #${parent}`}] `;
-    if (step.kind === "text") return [{ head: `${by}Assistant: `, body: { kind: "text", text: step.text } }];
-    const n = ++calls;
-    if (step.id !== null) numbers.set(step.id, n);
-    const call = { head: `${by}#${n} ${step.name} ${JSON.stringify(step.input ?? {})}` };
-    if (step.result === null) return [call, { head: `${by}#${n}: no result came back` }];
-    return [call, { head: `${by}#${n} ${step.isError ? "error" : "result"}: `, body: { kind: "result", text: step.result } }];
-  });
-}
-
-/** The skills a Skill call loaded, in order. */
-function skillLoads(steps: readonly StreamStep[]): string[] {
-  return steps.flatMap((step) => {
-    if (step.kind !== "tool-call" || step.name !== "Skill") return [];
-    const input = step.input;
-    const skill = typeof input === "object" && input !== null && "skill" in input ? input.skill : undefined;
-    return typeof skill === "string" ? [skill] : [];
-  });
-}
-
-function headerLines(init: StreamMessage | null, steps: readonly StreamStep[]): string[] {
-  const model = init?.["model"];
-  const had = init?.["skills"];
-  const skills = Array.isArray(had) ? had.filter((skill): skill is string => typeof skill === "string") : [];
-  const loaded = skillLoads(steps);
-  return [
-    `Model: ${typeof model === "string" ? model : init === null ? "unknown (no init message)" : "unknown"}`,
-    `Skills it had: ${skills.length === 0 ? "none reported" : quoted(skills)}`,
-    `Skills it loaded, in order: ${loaded.length === 0 ? "none" : quoted(loaded)}`,
-  ];
-}
-
-function retryLine(retries: readonly StreamMessage[]): string {
-  if (retries.length === 0) return "API retries: none";
-  const each = retries.map((retry) => `${String(retry["error"] ?? "unknown error")}, status ${String(retry["error_status"] ?? "unknown")}`);
-  return `API retries: ${retries.length} (${each.join("; ")})`;
-}
-
-function denialLines(result: StreamMessage | null): string[] {
-  const reported = result?.["permission_denials"];
-  const denials = Array.isArray(reported) ? reported.filter((denial): denial is StreamMessage => typeof denial === "object" && denial !== null) : [];
-  if (denials.length === 0) return ["Permission denials: none"];
-  return [
-    `Permission denials: ${denials.length}`,
-    ...denials.map((denial) => `- ${String(denial["tool_name"] ?? "unknown tool")} ${JSON.stringify(denial["tool_input"] ?? {})}`),
-  ];
-}
-
-function resultLine(result: StreamMessage | null): string {
-  if (result === null) return "Result: none; the run never reached its result message";
-  const { subtype, is_error: isError, num_turns: turns, duration_ms: ms, terminal_reason: reason } = result;
-  return `Result: ${[
-    String(subtype ?? "unknown"),
-    isError === true ? "an error" : "not an error",
-    ...(typeof turns === "number" ? [`${turns} turns`] : []),
-    ...(typeof ms === "number" ? [`${Math.round(ms / 1000)}s`] : []),
-    ...(typeof reason === "string" ? [`terminal reason ${reason}`] : []),
-  ].join(", ")}`;
-}
-
-/** The transcript, read through the stream reader, as the compact digest the judge reads, held to the budget. */
-function digestOf(transcript: readonly string[]): { readonly digest: string; readonly trimmed: boolean } {
-  const stream = readStream(transcript);
-  const fixed = (lines: readonly string[]): DigestLine[] => lines.map((head) => ({ head }));
-  return fitted(
-    [
-      ...fixed(headerLines(stream.init, stream.steps)),
-      { head: "" },
-      ...stepLines(stream.steps),
-      { head: "" },
-      ...fixed([retryLine(stream.apiRetries), ...denialLines(stream.result), resultLine(stream.result)]),
-    ],
-    DIGEST_BUDGET,
-  );
-}
 
 function rubricSection(rubric: Rubric): string {
   return [`### \`${rubric.name}\`, version ${rubric.version}`, `Labels: ${quoted(rubric.labels)}.`, rubric.text].join("\n\n");
@@ -245,7 +95,7 @@ const TRIMMED = `The transcript was too long to give whole, so it is trimmed: it
 
 /** The judge prompt for one run: the Ticket and its transcript's digest as data, then the rubrics and the answer it owes. */
 export function judgePrompt({ transcript, ticket, rubrics }: JudgePromptInput): JudgePrompt {
-  const { digest, trimmed } = digestOf(transcript);
+  const { digest, trimmed } = digestOf(transcript)(DIGEST_BUDGET);
   const parts = [
     OPENING,
     "## The Ticket",

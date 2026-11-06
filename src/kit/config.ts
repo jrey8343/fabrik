@@ -26,6 +26,8 @@ export interface KitConfig {
     readonly review: AgentRole;
     /** The Auditor; it takes no Extra skills (ADR-0008). */
     readonly audit: AgentRole;
+    /** The Retro; it takes no Extra skills (ADR-0008). */
+    readonly retro: AgentRole;
     readonly dispatch: { readonly timeoutMinutes: number };
     readonly stepUp: { readonly model: string; readonly effort: string | null };
   };
@@ -49,6 +51,10 @@ export interface KitConfig {
     /** The UTC day of the week the Audit runs; null turns the Audit off. */
     readonly day: AuditDay | null;
   };
+  readonly retro: {
+    /** The UTC day of the week the Retro runs; null turns the Retro off. */
+    readonly day: RetroDay | null;
+  };
   /** The Operator's GitHub login; null means the Product repo's owner. */
   readonly operator: string | null;
   /**
@@ -56,7 +62,7 @@ export interface KitConfig {
    * the name of a `Fabrik` vault item holding that Subscription's token.
    */
   readonly subscriptions: readonly string[];
-  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's included. */
+  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's and the Retro's included. */
   readonly instructions: Readonly<Record<InstructedRole, string | null>>;
   /** The Product repo's own Skills sources, from .fabrik/skills.lock.json. */
   readonly skillsSources: readonly SkillsSource[];
@@ -93,18 +99,34 @@ export interface ExtraSkill {
   readonly name: string;
 }
 
-export const AUDIT_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
+/** The UTC days of the ISO week, Monday first, that a weekly run is due from. */
+export const WEEK_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
 
-export type AuditDay = (typeof AUDIT_DAYS)[number];
+export type WeekDay = (typeof WEEK_DAYS)[number];
+
+/** The Audit runs on one of the UTC days of the week. */
+export const AUDIT_DAYS = WEEK_DAYS;
+
+export type AuditDay = WeekDay;
+
+/** The Retro runs on one of the same UTC days of the week as the Audit. */
+export const RETRO_DAYS = WEEK_DAYS;
+
+export type RetroDay = WeekDay;
 
 export type Phase = "triage" | "design" | "implement" | "review";
 
 export const PHASES: readonly Phase[] = ["triage", "design", "implement", "review"];
 
+/** Whether an AFK role is a Phase, and so takes Extra skills: the Auditor and the Retro take none (ADR-0008). */
+export function isPhase(role: AgentRoleName): role is Phase {
+  return (PHASES as readonly AgentRoleName[]).includes(role);
+}
+
 /**
  * The roles a Product repo can give its own instructions in .fabrik/<role>.md:
- * every AFK role, so every Phase and the Auditor, which takes no Extra skills
- * (ADR-0008) and so is no Phase.
+ * every AFK role, so every Phase, the Auditor and the Retro, which take no
+ * Extra skills (ADR-0008) and so are no Phase.
  */
 export type InstructedRole = AgentRoleName;
 
@@ -149,6 +171,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     implement: { model: SONNET, effort: null, timeoutMinutes: 60 },
     review: { model: OPUS, effort: null, timeoutMinutes: 30 },
     audit: { model: OPUS, effort: null, timeoutMinutes: 45 },
+    retro: { model: OPUS, effort: null, timeoutMinutes: 45 },
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: OPUS, effort: null },
   },
@@ -157,10 +180,13 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   monitor: { errors: null, redMain: true },
   // Sunday, so a fresh Audit is open by Monday's Weekly summary and misses the Monday skills bump.
   audit: { day: "sunday" },
+  // Saturday, a day before the Audit's Sunday, so the two frontier runs never share an
+  // hour and both are open by Monday's Weekly summary.
+  retro: { day: "saturday" },
   operator: null,
   // The V1 vault item, so a repo that lists none keeps the one Subscription it always ran on.
   subscriptions: ["Claude token"],
-  instructions: { triage: null, design: null, implement: null, review: null, audit: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
 };
@@ -354,6 +380,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
       implement: readPickingRole(roles.object("implement"), defaults.roles.implement, picks, "implement"),
       review: readPickingRole(roles.object("review"), defaults.roles.review, picks, "review"),
       audit: readAgentRole(roles.object("audit"), defaults.roles.audit),
+      retro: readAgentRole(roles.object("retro"), defaults.roles.retro),
       dispatch: readDispatch(roles.object("dispatch"), defaults.roles.dispatch),
       stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp),
     },
@@ -361,6 +388,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     caps: readCaps(file.object("caps"), defaults.caps),
     monitor: readMonitor(file.object("monitor"), defaults.monitor),
     audit: readAudit(file.object("audit"), defaults.audit),
+    retro: readRetro(file.object("retro"), defaults.retro),
     operator: orDefault(file.nullableString("operator", checkLogin), defaults.operator),
     subscriptions: file.subscriptions("subscriptions") ?? defaults.subscriptions,
   };
@@ -450,6 +478,17 @@ function readAudit(audit: Reader, defaults: KitConfig["audit"]): KitConfig["audi
 function checkAuditDay(day: string): string | null {
   if ((AUDIT_DAYS as readonly string[]).includes(day)) return null;
   return `the Audit day must be one of ${AUDIT_DAYS.join(", ")}, or null to turn the Audit off`;
+}
+
+function readRetro(retro: Reader, defaults: KitConfig["retro"]): KitConfig["retro"] {
+  // checkRetroDay refuses anything but a day, so the string is a RetroDay.
+  const day = retro.nullableString("day", checkRetroDay) as RetroDay | null | undefined;
+  return { day: orDefault(day, defaults.day) };
+}
+
+function checkRetroDay(day: string): string | null {
+  if ((RETRO_DAYS as readonly string[]).includes(day)) return null;
+  return `the Retro day must be one of ${RETRO_DAYS.join(", ")}, or null to turn the Retro off`;
 }
 
 function readStepUp(role: Reader, defaults: KitConfig["roles"]["stepUp"]): KitConfig["roles"]["stepUp"] {

@@ -100,5 +100,8 @@ function movedOn(run: HeldRun, on: HeldTargetSnapshot): string | null {
       return on.byApp && on.labels.includes(AUDIT_LABEL) && auditMarksIn(on.body).pending
         ? null
         : `${name} #${on.number} is no longer a pending Audit`;
+    case "retro":
+      // A Retro run fails rather than wait for a reset, since the tick can't start one (src/loop/failures.ts).
+      return `The Kit never holds a Retro run, so it starts none on #${on.number}`;
   }
 }

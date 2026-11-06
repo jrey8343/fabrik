@@ -3,6 +3,8 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { JUDGE_JOB } from "./judge.ts";
+import { RETRO_EVIDENCE_JOB } from "./pushJob.ts";
+import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 
 const root = new URL("../../", import.meta.url);
@@ -28,6 +30,17 @@ function jobIn(workflow: string, job: string): string {
 /** A job's steps, each from its `- ` line to the next one's. */
 function stepsOf(job: string): readonly string[] {
   return job.split(/\n(?=      - )/).slice(1);
+}
+
+/** A composite action's text and its steps, each from its `- ` line to the next one's. */
+function actionNamed(name: string): { readonly text: string; readonly steps: readonly string[] } {
+  const text = readFileSync(new URL(`.github/actions/${name}/action.yml`, root), "utf8");
+  return { text, steps: text.split(/\n(?=    - )/).slice(1) };
+}
+
+/** Each `permission-<name>: <level>` a token step asks for, in name order. */
+function permissionsOf(step: string | undefined): string[] {
+  return [...(step ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`).sort();
 }
 
 describe("The Kit's workflows", () => {
@@ -277,6 +290,38 @@ describe("The run the Loop action", () => {
     expect(run).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
     expect(run).toContain("FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}");
   });
+
+  describe("asked to find the fabrik-runs store, as the scheduled tick asks for the retro gate", () => {
+    const find = steps.find((step) => step.includes("id: find-store\n"));
+    const store = steps.find((step) => step.includes("id: store-metadata\n"));
+    const run = steps.find((step) => step.includes("run: node src/main.ts"))!;
+
+    it("finds it only when asked, with the record action's store finder, and goes on when that fails", () => {
+      expect(action).toMatch(/\n  find-store:\n(?:.*\n)*?\s+default: "false"\n/);
+      expect(find).toContain("if: inputs.find-store == 'true'");
+      expect(find).toContain("run: node src/kit/find-store-main.ts");
+      expect(find).toContain("continue-on-error: true");
+    });
+
+    it("mints a token for fabrik-runs alone that reads only its metadata, once it has found the Fabrik App on it", () => {
+      expect(store).toContain("uses: actions/create-github-app-token@");
+      expect(store).toContain("if: steps.find-store.outputs.installed == 'true'");
+      expect(store).toMatch(/owner: jrey8343\n/);
+      expect(store).toMatch(/repositories: fabrik-runs\n/);
+      expect(permissionsOf(store)).toEqual(["metadata: read"]);
+      expect(store).toContain("continue-on-error: true");
+      expect(steps.indexOf(find!)).toBeLessThan(steps.indexOf(store!));
+    });
+
+    it("hands the Loop that token, so its snapshot can say whether the store is private", () => {
+      expect(run).toContain("FABRIK_STORE_METADATA_TOKEN: ${{ steps.store-metadata.outputs.token }}");
+      expect(steps.indexOf(store!)).toBeLessThan(steps.indexOf(run));
+    });
+
+    it("loads the Fabrik App key once, for every token it mints", () => {
+      expect(steps.filter((step) => step.includes("1password/load-secrets-action@"))).toHaveLength(1);
+    });
+  });
 });
 
 describe("loop.yml's Audit job", () => {
@@ -318,8 +363,16 @@ describe("loop.yml's Audit job", () => {
   });
 });
 
-describe("schedule.yml's tick, which opens the pending Audit", () => {
-  it("holds only the push service account, so the Auditor's run needs no change to the shim", () => {
+describe("schedule.yml's tick, which opens the pending Audit and the pending Retro", () => {
+  it("asks the run the Loop action to find the fabrik-runs store, which the retro gate weighs, and is the only job that does", () => {
+    const tick = jobIn(schedule, "tick");
+
+    expect(tick).toMatch(/uses: \.\/kit\/\.github\/actions\/run-loop\n\s+with:\n(?:\s+.*\n)*?\s+find-store: "true"\n/);
+    expect(schedule.split("find-store:")).toHaveLength(2);
+    expect(loop).not.toContain("find-store:");
+  });
+
+  it("holds only the push service account, so neither the Auditor's run nor the Retro's needs a change to the shim", () => {
     expect(schedule).toMatch(/on:\n {2}workflow_call:\n {4}secrets:\n {6}OP_PUSH_TOKEN:\n(?: {8}.*\n)+\n/);
     expect(schedule).not.toContain("OP_AGENT_TOKEN");
     expect(schedule).not.toContain("OP_IMPLEMENT_TOKEN");
@@ -468,7 +521,6 @@ describe("The store-token action, which the record actions share", () => {
   const steps = action.split(/\n(?=    - )/);
   const storeToken = steps.find((step) => step.includes("id: store\n"));
   const kitConfigToken = steps.find((step) => step.includes("id: kit-config\n"));
-  const permissionsOf = (step: string | undefined) => [...(step ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`);
 
   it("loads the Fabrik App key through the push service account, and nothing else", () => {
     const secrets = steps.filter((step) => step.includes("1password/load-secrets-action@"));
@@ -567,8 +619,6 @@ describe("The weekly summary workflow", () => {
   const action = readFileSync(new URL(".github/actions/file-weekly-summary/action.yml", root), "utf8");
   const steps = action.split(/\n(?=    - )/);
   const tokens = steps.filter((step) => step.includes("uses: actions/create-github-app-token@"));
-  const permissionsOf = (step: string | undefined) =>
-    [...(step ?? "").matchAll(/permission-([a-z-]+): (\S+)/g)].map((m) => `${m[1]}: ${m[2]}`).sort();
 
   it("is called from the fabrik-runs caller with its push service account, and runs the Kit's composite action", () => {
     expect(weekly).toMatch(/on:\n {2}workflow_call:\n {4}secrets:\n {6}OP_PUSH_TOKEN:/);
@@ -658,8 +708,9 @@ describe("The Kit's composite actions", () => {
     for (const program of programs) expect(existsSync(new URL(program, root)), program).toBe(true);
   });
 
-  // Push-job-shaped programs (src/main.ts, the record writers) run without `npm ci`: only the agent's actions install Sandcastle.
-  it.each(actions.filter(({ text }) => !text.includes("run: npm ci")))(
+  // Push-job-shaped programs (src/main.ts, the record writers) run without `npm ci`: only the agent's actions install
+  // Sandcastle, themselves or through prepare-agent.
+  it.each(actions.filter(({ text }) => !text.includes("run: npm ci") && !text.includes("uses: ./kit/.github/actions/prepare-agent")))(
     "$name, which installs nothing, runs only programs that import no package at run time",
     ({ text }) => {
       const programs = [...text.matchAll(/run: node (?:kit\/)?(src\/\S+)/g)].map((match) => match[1]!);
@@ -765,6 +816,334 @@ describe("The score-record action", () => {
   });
 });
 
+// The Retro evidence job's (#151), the first of a Retro run. Kit-only like the push job, and read-only: ADR-0009's addendum.
+describe("The Retro evidence action", () => {
+  const { text, steps } = actionNamed("gather-retro-evidence");
+  const tokens = steps.filter((step) => step.includes("uses: actions/create-github-app-token@"));
+  const checkout = steps.find((step) => step.includes("uses: actions/checkout@"));
+  const gather = steps.find((step) => step.includes("run: node src/kit/retro-evidence-main.ts"));
+  const upload = steps.find((step) => step.includes("uses: actions/upload-artifact@"));
+
+  it("runs no agent and no Product code: it checks out only the store, loads no Claude token and installs nothing", () => {
+    expect(steps.filter((step) => step.includes("uses: actions/checkout@"))).toEqual([checkout]);
+    expect(checkout).toContain("repository: jrey8343/fabrik-runs");
+    expect(text).not.toMatch(/CLAUDE_CODE_OAUTH_TOKEN|OP_AGENT_TOKEN|op-agent-token|prepare-agent|npm ci|src\/agent\/run\.ts/);
+  });
+
+  it("loads the Fabrik App key through the push service account, and nothing else", () => {
+    const secrets = steps.filter((step) => step.includes("1password/load-secrets-action@"));
+
+    expect(secrets).toHaveLength(1);
+    expect(secrets[0]).toContain("id: op\n");
+    expect(secrets[0]).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}");
+    expect([...secrets[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual([
+      "op://Fabrik App/Fabrik App/client-id",
+      "op://Fabrik App/Fabrik App/private-key",
+    ]);
+  });
+
+  it("holds no write credential: one token with Contents read on fabrik-runs alone, and one read-only on this Product repo", () => {
+    const store = tokens.find((step) => step.includes("repositories: fabrik-runs"));
+    const product = tokens.find((step) => step !== store);
+
+    expect(tokens).toHaveLength(2);
+    expect(store).toMatch(/owner: jrey8343\n/);
+    expect(permissionsOf(store)).toEqual(["contents: read"]);
+    // With no owner or repositories, the token is for the repository the workflow runs in.
+    expect(product).not.toMatch(/owner:|repositories:/);
+    expect(permissionsOf(product)).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
+    expect(text).not.toMatch(/: write\b/);
+    expect(text).not.toMatch(/uses: \.\/kit\/\.github\/actions\/store-token|id-token/);
+  });
+
+  it("reads only this repo's Run records, score files and transcripts, from a sparse checkout of the store with no credential left behind", () => {
+    const store = tokens.find((step) => step.includes("repositories: fabrik-runs"))!;
+
+    expect(checkout).toContain(`token: \${{ steps.${/id: (\S+)/.exec(store)?.[1]}.outputs.token }}`);
+    expect(checkout).toMatch(
+      /sparse-checkout: \|\n {10}runs\/\$\{\{ github\.repository \}\}\n {10}scores\/\$\{\{ github\.repository \}\}\n {10}transcripts\/\$\{\{ github\.repository \}\}\n {8}\S/,
+    );
+    expect(checkout).toContain("sparse-checkout-cone-mode: true");
+    expect(checkout).toContain("persist-credentials: false");
+  });
+
+  it("builds the bundle with the Kit's program, from those tokens, the Fabrik App's slug and the store's checkout", () => {
+    const store = /id: (\S+)/.exec(tokens.find((step) => step.includes("repositories: fabrik-runs"))!)?.[1];
+    const product = /id: (\S+)/.exec(tokens.find((step) => !step.includes("repositories: fabrik-runs"))!)?.[1];
+
+    expect(gather).toContain(`FABRIK_STORE_TOKEN: \${{ steps.${store}.outputs.token }}`);
+    expect(gather).toContain(`FABRIK_PRODUCT_TOKEN: \${{ steps.${product}.outputs.token }}`);
+    expect(gather).toContain(`FABRIK_APP_SLUG: \${{ steps.${product}.outputs.app-slug }}`);
+    expect(gather).toContain("FABRIK_STORE_DIR: ${{ github.workspace }}/store");
+    expect(checkout).toContain("path: store\n");
+    expect(steps.indexOf(checkout!)).toBeLessThan(steps.indexOf(gather!));
+  });
+
+  it("leaves the bundle for the Retro job and the push job as fabrik-retro-evidence, and fails when there's none", () => {
+    const outDir = /FABRIK_OUT_DIR: (.+)\n/.exec(gather ?? "")?.[1];
+
+    expect(outDir).toBe("${{ runner.temp }}/fabrik-retro-evidence");
+
+    expect(upload).toContain("name: fabrik-retro-evidence\n");
+    expect(upload).toContain(`path: ${outDir}/${RETRO_EVIDENCE_FILE}\n`);
+    expect(upload).toContain("if-no-files-found: error");
+    expect(upload).toContain("retention-days: 7");
+    expect(steps.indexOf(gather!)).toBeLessThan(steps.indexOf(upload!));
+  });
+
+  it("writes no Run record, and passes out how its secrets loaded, which the push job weighs when it fails", () => {
+    expect(text).not.toMatch(/write-run-record|record-main/);
+    expect(text).toMatch(/\n  secrets-step:\n.*\n\s+value: \$\{\{ steps\.op\.outcome \}\}\n/);
+  });
+});
+
+// The Retro job's (#151), shaped like the Audit job: read-only, with only the Claude token.
+describe("The Retro action", () => {
+  const { text, steps } = actionNamed("run-retro");
+  const step = (pattern: string) => steps.findIndex((candidate) => candidate.includes(pattern));
+  const checkout = steps.find((candidate) => candidate.includes("uses: actions/checkout@"));
+  const agent = steps.find((candidate) => candidate.includes("id: agent\n"));
+
+  it("checks out only the Product repo's default branch, with its full history and no credential left behind", () => {
+    expect(steps.filter((candidate) => candidate.includes("uses: actions/checkout@"))).toEqual([checkout]);
+    expect(checkout).not.toContain("repository:");
+    expect(checkout).toContain("path: product");
+    expect(checkout).toContain("ref: ${{ github.event.repository.default_branch }}");
+    expect(checkout).toContain("fetch-depth: 0");
+    expect(checkout).toContain("persist-credentials: false");
+  });
+
+  // Before the secrets load, so a run whose agent never started still names it.
+  it("notes the commit it checked out, before any secret loads", () => {
+    expect(steps[step("id: base\n")]).toMatch(/run: echo "sha=\$\(git -C product rev-parse HEAD\)" >>"\$GITHUB_OUTPUT"/);
+    expect(step("id: base\n")).toBeLessThan(step("1password/load-secrets-action@"));
+  });
+
+  it("holds no write credential: no Fabrik App token, and only the Claude token, through the agent service account", () => {
+    const secrets = steps.filter((candidate) => candidate.includes("1password/load-secrets-action@"));
+
+    expect(text).not.toMatch(/create-github-app-token|OP_PUSH_TOKEN|OP_IMPLEMENT_TOKEN|op-push-token|id-token/);
+    expect(secrets).toHaveLength(1);
+    expect(secrets[0]).toContain("id: op\n");
+    expect(secrets[0]).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-agent-token }}");
+    expect([...secrets[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual(["op://Fabrik/${{ inputs.subscription }}/credential"]);
+  });
+
+  // As every agent job's, the Claude token is the one of the Subscription the Kit job's routing chose.
+  it("loads the Claude token of the Subscription it's given, which its job passes in from the Kit job", () => {
+    expect(text).toMatch(/\n  subscription:\n\s+description: .*\n\s+required: true\n/);
+    expect(text).toContain("#       subscription: ${{ needs.kit.outputs.subscription }}\n");
+  });
+
+  it("gives the agent no GitHub token: only prepare-agent reads the pending Retro, with the job's read-only token", () => {
+    const prepare = steps[step("uses: ./kit/.github/actions/prepare-agent")];
+
+    expect(prepare).toContain("github-token: ${{ inputs.github-token }}");
+    expect(prepare).toContain("issue: ${{ github.event.issue.number }}");
+    expect([...text.matchAll(/inputs\.github-token/g)]).toHaveLength(1);
+    expect(agent).not.toMatch(/GH_TOKEN|GITHUB_TOKEN|github-token/);
+  });
+
+  // The Base skills alone: the Retro takes no Extra skills (ADR-0008, src/skills/fetch.ts).
+  it("passes its role to prepare-agent, which fetches the skills before any secret loads", () => {
+    expect(steps[step("uses: ./kit/.github/actions/prepare-agent")]).toMatch(/\n\s+role: retro\n/);
+    expect(step("uses: ./kit/.github/actions/prepare-agent")).toBeLessThan(step("1password/load-secrets-action@"));
+  });
+
+  it("takes the evidence job's bundle before the agent runs, where the push job takes it too, and hands it to the agent", () => {
+    const download = steps[step("actions/download-artifact@")];
+
+    expect(download).toContain("name: fabrik-retro-evidence\n");
+    expect(download).toContain("path: ${{ runner.temp }}/retro-evidence\n");
+    expect(download).not.toContain("continue-on-error");
+    expect(agent).toContain(`FABRIK_RETRO_EVIDENCE_FILE: \${{ runner.temp }}/retro-evidence/${RETRO_EVIDENCE_FILE}`);
+    expect(step("actions/download-artifact@")).toBeLessThan(steps.indexOf(agent!));
+  });
+
+  it("runs the Retro from the Product checkout, on the model and effort the Kit job's plan chose", () => {
+    const program = /run: node \.\.\/kit\/(src\/\S+) retro\n?/.exec(agent ?? "")?.[1];
+
+    expect(agent).toMatch(/\n\s+working-directory: product\n/);
+    expect(program).toBe("src/agent/run.ts");
+    expect(existsSync(new URL(program!, root))).toBe(true);
+    expect(agent).toContain("CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}");
+    expect(agent).toContain("FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json");
+    expect(agent).toContain("FABRIK_MODEL: ${{ inputs.model }}");
+    expect(agent).toContain("FABRIK_EFFORT: ${{ inputs.effort }}");
+  });
+
+  it("leaves its result or failure report for the push job, and keeps fabrik-transcript-retro apart from them, whether it passed, failed or timed out", () => {
+    const result = steps[step("name: fabrik-agent-result\n")]!;
+    const failure = steps[step("name: fabrik-agent-failure\n")]!;
+    const transcript = steps[step("name: fabrik-transcript-retro\n")]!;
+
+    expect(result).toMatch(/path: \$\{\{ runner\.temp \}\}\/fabrik-out\/agent-result\.json\n/);
+    expect(result).toContain("if-no-files-found: error");
+    expect(failure).toContain("if: failure()");
+    expect(failure).toMatch(/path: \$\{\{ runner\.temp \}\}\/fabrik-out\/agent-failure\.json\n/);
+    expect(failure).toContain("if-no-files-found: ignore");
+    expect(transcript).toContain("if: always()");
+    expect(transcript).toContain("continue-on-error: true");
+    expect(transcript).toMatch(/path: .*transcript\.jsonl\.gz/);
+    expect(transcript).toContain("if-no-files-found: ignore");
+    expect(transcript).toContain("retention-days: 7");
+    expect(text).toMatch(/if: always\(\)\n\s+continue-on-error: true\n\s+shell: bash\n\s+run: .*gzip.*transcript\.jsonl/);
+    expect(agent).toContain("FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out");
+  });
+
+  // The push job's record step takes the transcript the Kit job's route names: `retro` for a Retro run.
+  it("keeps its transcript under the name the write the Run record action takes for the retro route", () => {
+    const record = actionNamed("write-run-record").steps.find((candidate) => candidate.includes("actions/download-artifact@"));
+
+    expect(record).toContain("name: fabrik-transcript-${{ inputs.role }}\n");
+    expect(steps[step("name: fabrik-transcript-retro\n")]).toBeDefined();
+  });
+
+  it("passes out how its secrets loaded, the model and effort it ran and the commit it started from, for the push job and the Run record", () => {
+    expect(text).toMatch(/\n  secrets-step:\n.*\n\s+value: \$\{\{ steps\.op\.outcome \}\}\n/);
+    expect(text).toMatch(/\n  model:\n.*\n\s+value: \$\{\{ steps\.agent\.outputs\.model \}\}\n/);
+    expect(text).toMatch(/\n  effort:\n.*\n\s+value: \$\{\{ steps\.agent\.outputs\.effort \}\}\n/);
+    expect(text).toMatch(/\n  base-sha:\n.*\n\s+value: \$\{\{ steps\.base\.outputs\.sha \}\}\n/);
+  });
+});
+
+/** A job's `permissions:` block, one `name: level` per entry, or `{}` for none. */
+function permissionsIn(body: string): readonly string[] {
+  if (/\n    permissions: \{\}\n/.test(body)) return ["{}"];
+  const block = /\n    permissions:\n((?: {6}.*\n)+)/.exec(body)?.[1] ?? "";
+  return block.trim().split("\n").map((line) => line.trim()).filter((line) => !line.startsWith("#"));
+}
+
+/** The push job's `needs`. */
+const pushNeeds = (): readonly string[] => /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ") ?? [];
+
+// A Retro run's first job (#151): Kit-only like the push job, and read-only (ADR-0009's addendum).
+describe("loop.yml's Retro evidence job", () => {
+  const evidence = (): string => job(RETRO_EVIDENCE_JOB);
+  const steps = (): readonly string[] => stepsOf(evidence());
+  const gather = (): string | undefined => steps().find((step) => step.includes("uses: ./kit/.github/actions/gather-retro-evidence"));
+
+  it("checks out only the Kit, at its pinned commit, and never the Product repo", () => {
+    const checkouts = steps().filter((step) => step.includes("uses: actions/checkout@"));
+
+    expect(checkouts).toHaveLength(1);
+    expect(checkouts[0]).toContain("repository: jrey8343/fabrik\n");
+    expect(checkouts[0]).toContain("ref: ${{ needs.kit.outputs.sha }}");
+    expect(checkouts[0]).toContain("path: kit\n");
+    expect(checkouts[0]).toContain("persist-credentials: false");
+  });
+
+  it("holds no GitHub permission of its own, and only the push service account, which loads the Fabrik App key", () => {
+    expect(permissionsIn(evidence())).toEqual(["{}"]);
+    expect(gather()).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
+    expect(evidence()).not.toMatch(/OP_AGENT_TOKEN|OP_IMPLEMENT_TOKEN|id-token|github\.token|GH_TOKEN/);
+  });
+
+  it("mints a Contents-read token on fabrik-runs and no write token, through its action alone", () => {
+    const { text, steps: actionSteps } = actionNamed("gather-retro-evidence");
+    const tokens = actionSteps.filter((step) => step.includes("uses: actions/create-github-app-token@"));
+    const store = tokens.filter((step) => step.includes("repositories: fabrik-runs"));
+
+    expect(evidence()).not.toContain("create-github-app-token");
+    expect(store).toHaveLength(1);
+    expect(permissionsOf(store[0])).toEqual(["contents: read"]);
+    expect(tokens.flatMap(permissionsOf).every((permission) => permission.endsWith(": read"))).toBe(true);
+    expect(text).not.toMatch(/: write\b/);
+  });
+
+  it("inlines no gh calls, nor any other command: its action runs the Kit's program", () => {
+    expect(evidence()).not.toMatch(/\n\s+run: /);
+    expect(evidence()).not.toMatch(/\bgh /);
+  });
+
+  it("runs only when the Kit job routed to the Retro, within the Retro's timeout", () => {
+    expect(evidence()).toContain("needs: kit\n");
+    expect(evidence()).toContain("if: needs.kit.outputs.route == 'retro'");
+    expect(evidence()).toContain("timeout-minutes: ${{ fromJSON(needs.kit.outputs.retro-timeout-minutes) }}");
+    expect(job("kit")).toContain("retro-timeout-minutes: ${{ steps.route.outputs.retro-timeout-minutes }}");
+  });
+
+  it("passes out how its secrets loaded, which the push job weighs when it fails", () => {
+    expect(gather()).toContain("id: evidence\n");
+    expect(evidence()).toContain("secrets-step: ${{ steps.evidence.outputs.secrets-step }}");
+  });
+});
+
+// A Retro run's second job (#151), shaped like the Audit job: read-only, with only the Claude token.
+describe("loop.yml's Retro job", () => {
+  const retro = (): string => job("retro");
+  const steps = (): readonly string[] => stepsOf(retro());
+  const run = (): string | undefined => steps().find((step) => step.includes("uses: ./kit/.github/actions/run-retro"));
+
+  it("holds only read permissions", () => {
+    expect(permissionsIn(retro())).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
+  });
+
+  it("holds only the agent service account, which loads the Claude token, and no GitHub write credential", () => {
+    expect(run()).toContain("op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}");
+    expect(run()).toContain("github-token: ${{ github.token }}");
+    expect(retro()).not.toMatch(/OP_PUSH_TOKEN|OP_IMPLEMENT_TOKEN|id-token|GH_TOKEN|create-github-app-token/);
+  });
+
+  it("checks out the Kit alone, and runs the Retro through its action on the model and effort the Kit job's plan chose", () => {
+    const checkouts = steps().filter((step) => step.includes("uses: actions/checkout@"));
+
+    expect(checkouts).toHaveLength(1);
+    expect(checkouts[0]).toContain("repository: jrey8343/fabrik\n");
+    expect(checkouts[0]).toContain("path: kit\n");
+    expect(run()).toContain("id: retro\n");
+    expect(run()).toContain("model: ${{ needs.kit.outputs.model }}");
+    expect(run()).toContain("effort: ${{ needs.kit.outputs.effort }}");
+    expect(steps().indexOf(checkouts[0]!)).toBeLessThan(steps().indexOf(run()!));
+  });
+
+  it("keeps fabrik-transcript-retro, which the push job's record step takes on the retro route", () => {
+    const keep = actionNamed("run-retro").steps.find((step) => step.includes("name: fabrik-transcript-retro\n"));
+
+    expect(keep).toContain("if: always()");
+    expect(keep).toContain("continue-on-error: true");
+    expect(stepsOf(job("push")).find((step) => step.includes("uses: ./kit/.github/actions/write-run-record"))).toContain(
+      "role: ${{ needs.kit.outputs.route }}",
+    );
+  });
+
+  it("runs only after the evidence job, when the Kit job routed to the Retro, within the Retro's timeout", () => {
+    expect(retro()).toContain(`needs: [kit, ${RETRO_EVIDENCE_JOB}]\n`);
+    expect(retro()).toContain("if: needs.kit.outputs.route == 'retro'");
+    expect(retro()).toContain("timeout-minutes: ${{ fromJSON(needs.kit.outputs.retro-timeout-minutes) }}");
+  });
+
+  it("runs one Retro per repo at a time, queueing the next", () => {
+    expect(retro()).toMatch(/\n    concurrency:\n {6}group: fabrik-retro\n {6}cancel-in-progress: false\n {6}queue: max\n/);
+  });
+
+  it("passes out how its secrets loaded, the model and effort it ran and the commit it started from, for the push job and the Run record", () => {
+    for (const output of ["secrets-step", "model", "effort", "base-sha"]) {
+      expect(retro()).toContain(`${output}: \${{ steps.retro.outputs.${output} }}`);
+    }
+  });
+});
+
+describe("loop.yml's push job, after a Retro run", () => {
+  it("needs both the Retro evidence job and the Retro job, so it fills in or fails the Retro once they've ended", () => {
+    expect(pushNeeds()).toEqual(expect.arrayContaining([RETRO_EVIDENCE_JOB, "retro"]));
+  });
+
+  // src/main.ts reads the evidence from $RUNNER_TEMP/retro-evidence, never from the agent's output.
+  it("takes the evidence job's bundle on the retro route, before the Loop runs, and goes on without one", () => {
+    const steps = stepsOf(job("push"));
+    const download = steps.findIndex((step) => step.includes("name: fabrik-retro-evidence\n"));
+    const loopStep = steps.findIndex((step) => step.includes("name: Run the Loop"));
+
+    expect(download).toBeGreaterThan(-1);
+    expect(steps[download]).toContain("uses: actions/download-artifact@");
+    expect(steps[download]).toContain("if: needs.kit.outputs.route == 'retro'");
+    expect(steps[download]).toContain("continue-on-error: true");
+    expect(steps[download]).toContain("path: ${{ runner.temp }}/retro-evidence\n");
+    expect(download).toBeLessThan(loopStep);
+  });
+});
+
 // Which Subscription an agent run is on: the Kit job's routing chooses it, and
 // every job that loads a Claude token loads that one's, and only that one.
 describe("The Subscription each agent job runs on", () => {
@@ -788,6 +1167,20 @@ describe("The Subscription each agent job runs on", () => {
       expect(claudeTokensIn(job)).toHaveLength(1);
     },
   );
+
+  // The Retro job loads its token in its action, so the job's own text names none.
+  it("a Retro run loads one Claude token: the Kit job's Subscription's, which its Retro job passes in, and its evidence job none", () => {
+    const { text: runRetro } = actionNamed("run-retro");
+    const retro = jobIn(loop, "retro");
+
+    expect(stepsOf(retro).find((step) => step.includes("uses: ./kit/.github/actions/run-retro"))).toContain(
+      "subscription: ${{ needs.kit.outputs.subscription }}",
+    );
+    expect(claudeTokensIn(retro)).toEqual([]);
+    expect(runRetro).toMatch(/\n  subscription:\n\s+description: .*\n\s+required: true\n/);
+    expect(claudeTokensIn(runRetro)).toEqual(["op://Fabrik/${{ inputs.subscription }}/credential"]);
+    expect(claudeTokensIn(jobIn(loop, RETRO_EVIDENCE_JOB))).toEqual([]);
+  });
 
   it("the judge loads one Claude token: the Kit job's Subscription's, which its Score job passes in", () => {
     expect(jobIn(loop, "score")).toContain("subscription: ${{ needs.kit.outputs.subscription }}");

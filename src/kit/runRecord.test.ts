@@ -9,6 +9,7 @@ const KIT_SHA = "f".repeat(40);
 const BASE_SHA = "b".repeat(40);
 const HEAD_SHA = "a".repeat(40);
 const MARKED_SHA = "c".repeat(40);
+const DEFAULT_BRANCH_SHA = "d".repeat(40);
 const roles = kitConfig().roles;
 
 const line = (message: unknown) => JSON.stringify(message);
@@ -253,6 +254,149 @@ describe("The Run record a run's end yields", () => {
         totalCostUsd: null,
         modelUsage: {},
         transcript: "transcripts/acme/widgets/2026-11/9001-1-audit.jsonl.gz",
+      });
+    });
+  });
+
+  describe("a Retro run's record is for the Retro, with no PR, starting from the default branch commit it checked out", () => {
+    /** The Retro job on the Retro #120 ended `result`; its base-sha is the default branch commit it checked out. */
+    const retro = (result: string, overrides: Partial<RunEnd> = {}) =>
+      runRecordFor(
+        runEnd({
+          needs: needs("retro", { retro: job(result, { "base-sha": DEFAULT_BRANCH_SHA }) }),
+          eventIssue: 120,
+          agentResult: result === "success" ? agentResult("retro", 120) : null,
+          ...overrides,
+        }),
+      );
+
+    it("a Retro run is for the Retro, with no PR, Retry, Step-up, Request changes or Verdict", () => {
+      const files = retro("success");
+
+      expect(files?.record).toMatchObject({
+        role: "retro",
+        issue: 120,
+        pullRequest: null,
+        model: "claude-opus-5-5",
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: DEFAULT_BRANCH_SHA,
+        verdict: null,
+        jobResult: "success",
+        infrastructureFailure: null,
+        turns: 12,
+        totalCostUsd: 1.25,
+      });
+      expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-retro.json");
+      expect(files?.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-1-retro.jsonl.gz");
+    });
+
+    it("a failed Retro run whose 1Password load failed is recorded on roles.retro's model, the agent never having started", () => {
+      const files = retro("failure", {
+        needs: needs(
+          "retro",
+          { retro: job("failure", { "secrets-step": "failure", "base-sha": "", model: "", effort: "" }) },
+          { model: "", effort: "" },
+        ),
+        roles: { ...roles, retro: { model: "claude-sonnet-5-5", effort: "high", timeoutMinutes: 45 } },
+        transcript: null,
+      });
+
+      expect(files?.record).toMatchObject({
+        role: "retro",
+        issue: 120,
+        pullRequest: null,
+        model: "claude-sonnet-5-5",
+        effort: "high",
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: null,
+        verdict: null,
+        jobResult: "failure",
+        infrastructureFailure: "unreachable-1password",
+        turns: null,
+        transcript: null,
+      });
+      expect(files?.transcriptPath).toBeNull();
+    });
+
+    // The Retro job never started, so there's no transcript or base commit, and only the Kit job's plan names the model.
+    it.each([
+      ["failed", "failure", "success", "crash"],
+      ["failed to load the Fabrik App key", "failure", "failure", "unreachable-1password"],
+      ["was cancelled", "cancelled", "success", "timeout"],
+    ])("a Retro run whose evidence job %s is recorded as that job's end, its agent never having started", (_, result, secretsStep, failure) => {
+      const files = runRecordFor(
+        runEnd({
+          needs: needs("retro", { "retro-evidence": { result, outputs: { "secrets-step": secretsStep } }, retro: { result: "skipped", outputs: {} } }),
+          eventIssue: 120,
+          agentResult: null,
+          transcript: null,
+        }),
+      );
+
+      expect(files?.record).toMatchObject({
+        role: "retro",
+        issue: 120,
+        pullRequest: null,
+        model: "claude-opus-5-5",
+        baseSha: null,
+        jobResult: result,
+        infrastructureFailure: failure,
+        turns: null,
+        transcript: null,
+      });
+      expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-retro.json");
+    });
+
+    it("a Retro run names the Subscription the Kit job gave it, at schema 2, its evidence job's failure included", () => {
+      const subscriptions = ["Claude token", "Claude token 2"];
+      const passed = retro("success", {
+        needs: needs("retro", { retro: job("success", { "base-sha": DEFAULT_BRANCH_SHA }) }, { subscription: "Claude token 2" }),
+        subscriptions,
+      });
+      const evidenceFailed = retro("failure", {
+        needs: needs(
+          "retro",
+          { "retro-evidence": { result: "failure", outputs: { "secrets-step": "success" } }, retro: { result: "skipped", outputs: {} } },
+          { subscription: "Claude token 2" },
+        ),
+        subscriptions,
+        transcript: null,
+      });
+
+      expect(passed?.record).toMatchObject({ schema: 2, role: "retro", subscription: "Claude token 2" });
+      expect(evidenceFailed?.record).toMatchObject({ schema: 2, role: "retro", infrastructureFailure: "crash", subscription: "Claude token 2" });
+    });
+
+    it("a failed Retro run is recorded as the Infrastructure failure its report names", () => {
+      const files = retro("failure", { failureReport: JSON.stringify({ failure: "missing-output", detail: "no <retro> tag" }), transcript: [init] });
+
+      expect(files?.record).toMatchObject({ role: "retro", issue: 120, pullRequest: null, jobResult: "failure", infrastructureFailure: "missing-output" });
+    });
+
+    it("a Retro run timed out by its timeout-minutes, with its transcript, gets a record with no result fields", () => {
+      const files = retro("cancelled", { transcript: [init] });
+
+      expect(files?.record).toMatchObject({
+        role: "retro",
+        issue: 120,
+        pullRequest: null,
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: DEFAULT_BRANCH_SHA,
+        verdict: null,
+        jobResult: "cancelled",
+        infrastructureFailure: "timeout",
+        subtype: null,
+        durationMs: null,
+        turns: null,
+        totalCostUsd: null,
+        modelUsage: {},
+        transcript: "transcripts/acme/widgets/2026-11/9001-1-retro.jsonl.gz",
       });
     });
   });

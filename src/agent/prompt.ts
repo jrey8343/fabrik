@@ -1,7 +1,7 @@
 // An AFK role's prompt: the Kit's prompt for the role, the line naming its
 // Extra skills (if it has any), the Product's instructions for the role, then
 // the issue thread and anything else the role is given. Pure, no I/O.
-import type { ExtraSkill, InstructedRole, KitConfig, Phase } from "../kit/config.ts";
+import { type ExtraSkill, type InstructedRole, isPhase, type KitConfig, type Phase } from "../kit/config.ts";
 
 /** `a`, `a` and `b`, or `a`, `b` and `c`. */
 function listed(names: readonly string[]): string {
@@ -42,11 +42,11 @@ export interface PromptParts {
 /**
  * The Kit's prompt for the role, then the line naming its Extra skills, then
  * the Product's instructions for the role, then the issue thread, then
- * anything else the role is given. The Auditor takes no Extra skills (ADR-0008).
+ * anything else the role is given. The Auditor and the Retro take no Extra skills (ADR-0008).
  */
 export function promptFor({ template, role, note, config, issue, heading, extra }: PromptParts): string {
   const parts = [template.trimEnd()];
-  const skills = role === "audit" ? null : extraSkillsLine(role, config.extraSkills[role]);
+  const skills = isPhase(role) ? extraSkillsLine(role, config.extraSkills[role]) : null;
   if (skills !== null) parts.push(skills);
   const instructions = config.instructions[role];
   if (instructions !== null) {

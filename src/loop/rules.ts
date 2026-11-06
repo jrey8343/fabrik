@@ -1,5 +1,4 @@
-import { isPendingAudit, startAuditorRun } from "./audit.ts";
-import { scheduledTickWithAuditGate } from "./auditGate.ts";
+import { auditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom } from "./design.ts";
 import { failureNotice } from "./failures.ts";
@@ -23,11 +22,16 @@ import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
 import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
 import { heldOf } from "./heldRun.ts";
+import { scheduledTick } from "./kitIssues.ts";
+import { resumingHeldRuns } from "./resume.ts";
 import { heldWhileUsedUp } from "./hold.ts";
 import { startAgentRun } from "./runs.ts";
 import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
+import { retroGate } from "./retroGate.ts";
+import { landRetro } from "./retroLanding.ts";
+import { WEEKLY_RUNS, weeklyRoleOf } from "./weeklyRuns.ts";
 import { dispatch } from "./dispatch.ts";
 import { applyRedChecks, applyReview, startReview } from "./review.ts";
 import type {
@@ -60,10 +64,12 @@ function closes(plan: Plan, issue: number): boolean {
 function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
   switch (event.kind) {
     case "issue-opened":
-      // The App opens a pending Audit for the Auditor to fill in; Intake never sorts it.
-      return withIssue(snapshot, ({ issue }) =>
-        isPendingAudit(issue) ? startAuditorRun(issue, config) : intake(event.issue, issue),
-      );
+      // The App opens a pending Audit for the Auditor to fill in, and a pending
+      // Retro for the Retro run, on roles.retro; Intake never sorts either.
+      return withIssue(snapshot, (context) => {
+        const weekly = weeklyRoleOf(context.issue);
+        return weekly === null ? intake(event.issue, context.issue) : WEEKLY_RUNS[weekly].start(context, config);
+      });
     case "label-added":
       return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, snapshot.pullRequest, config));
     case "issue-comment-created":
@@ -120,6 +126,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return applyReview(event, snapshot);
     case "audit-run-finished":
       return withIssue(snapshot, (context) => landAudit(event, context, snapshot.namedPullRequests));
+    case "retro-run-finished":
+      return withIssue(snapshot, (context) => landRetro(event, context, config));
     case "pull-request-changes-requested":
       return requestChanges(event, snapshot, config);
     // Context for the next run that reads the PR, never a trigger (ADR-0007).
@@ -146,11 +154,11 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // above it, so see what can start now.
       return { kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] };
     case "scheduled-tick":
-      // The tick closes the weekly-limit issue after its reset and opens the
-      // week's pending Audit when it's due. It also catches a Design session
-      // slot freed by an event the Loop doesn't watch, such as needs-design
-      // coming off by hand.
-      return thenCheckDesignQueue(scheduledTickWithAuditGate(event.now, snapshot, config));
+      // The tick closes each weekly-limit issue after its reset, resuming the
+      // runs held until then, and opens the week's pending Audit and pending
+      // Retro when each is due. It also catches a Design session slot freed by
+      // an event the Loop doesn't watch, such as needs-design coming off by hand.
+      return thenCheckDesignQueue(scheduledTickWith([auditGate, retroGate], event.now, snapshot, config));
   }
 }
 
@@ -167,6 +175,37 @@ function thenCheckDesignQueue(plan: Plan): Plan {
     case "fail":
       return plan;
   }
+}
+
+/** A gate the scheduled tick runs, the audit gate or the retro gate: what it opens this tick, or why it opens nothing. */
+type TickGate = (now: string, snapshot: Snapshot, config: KitConfig) => Plan;
+
+/**
+ * The scheduled tick with these gates: closes each weekly-limit issue after
+ * its reset, as scheduledTick does, and resumes held runs then, alongside
+ * each gate's plan.
+ */
+function scheduledTickWith(gates: readonly TickGate[], now: string, snapshot: Snapshot, config: KitConfig): Plan {
+  // With rotation on, a weekly-limit issue it closes resumes the held runs.
+  const tick = resumingHeldRuns(scheduledTick(now, snapshot, config), snapshot, config);
+  // A weekly-limit issue this tick closes after its reset no longer holds a gate back.
+  const closing = actionsOf(tick).flatMap((action) => (action.kind === "close" ? [action.issue] : []));
+  const kitIssues = snapshot.kitIssues.filter((issue) => !closing.includes(issue.number));
+  return gates.reduce((plan, gate) => alongside(plan, gate(now, { ...snapshot, kitIssues }, config)), tick);
+}
+
+/** Both plans' actions, or why neither acts. */
+function alongside(first: Plan, second: Plan): Plan {
+  if (first.kind === "fail") return first;
+  if (second.kind === "fail") return second;
+  if (first.kind === "nothing" && second.kind === "nothing") {
+    return { kind: "nothing", reason: `${first.reason}; ${second.reason}` };
+  }
+  return { kind: "act", actions: [...actionsOf(first), ...actionsOf(second)] };
+}
+
+function actionsOf(plan: Plan): readonly Action[] {
+  return plan.kind === "act" ? plan.actions : [];
 }
 
 /** Decides an issue event, which needs the issue in the snapshot. */

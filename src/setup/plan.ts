@@ -16,6 +16,7 @@ import {
   NEEDS_TRIAGE,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
+  RETRO_LABEL,
   REVIEW_LABEL,
   TOKEN_ROTATION_LABEL,
   USAGE_CREDITS_LABEL,
@@ -421,6 +422,7 @@ const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly
   [WEEKLY_LIMIT_LABEL]: { color: "b60205", description: "Fabrik: the subscription's weekly limit is reached" },
   [USAGE_CREDITS_LABEL]: { color: "b60205", description: "Fabrik: a Subscription spent usage credits, which must be turned off" },
   [AUDIT_LABEL]: { color: "c5def5", description: "Fabrik: the week's Audit of deepening opportunities, which the Auditor files" },
+  [RETRO_LABEL]: { color: "c5def5", description: "Fabrik: the week's Retro, proposing changes to how the factory works" },
   [MONITOR_LABEL]: { color: "e99695", description: "Fabrik: filed by the Monitor for a production error or a red main" },
 };
 
