@@ -36,7 +36,7 @@ import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
 import { REPLAY_SWITCHED_ON, replayGate } from "./replayGate.ts";
-import { startReplay } from "./replayRun.ts";
+import { landReplayRun, startReplay } from "./replayRun.ts";
 import { retroGate } from "./retroGate.ts";
 import { landRetro } from "./retroLanding.ts";
 import { WEEKLY_RUNS, weeklyRoleOf } from "./weeklyRuns.ts";
@@ -153,6 +153,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withIssue(snapshot, (context) => landRetro(event, context, config));
     case "research-run-finished":
       return withIssue(snapshot, (context) => landResearch(event, context));
+    case "replay-run-finished":
+      return withIssue(snapshot, (context) => landReplayRun(event, context, config));
     case "prototype-run-finished":
       return withIssue(snapshot, (context) => applyPrototypeTurn(event, context, snapshot.startingComment, config.preview));
     case "pull-request-changes-requested":

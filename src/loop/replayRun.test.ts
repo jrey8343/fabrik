@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { acceptedBody } from "../__fixtures__/replay.ts";
-import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
-import { replayMarksIn } from "../kit/replay.ts";
+import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { replayMarksIn, type ReplayTicketEnd } from "../kit/replay.ts";
 import { planFor } from "./rules.ts";
 import type { IssueSnapshot, KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
@@ -74,6 +74,76 @@ describe("agent:replay on a replay issue", () => {
     ["has no Ticket left to run", { body: acceptedBody([12], [{ ticket: 12, state: "done", run: 9001 }]) }, "No Ticket of #140 waits to run"],
   ])("starts nothing on an issue that %s, saying why", (_, overrides, reason) => {
     expect(planFor(ADDED, snapshotOf(aReplay(overrides)), kitConfig())).toEqual({ kind: "nothing", reason });
+  });
+});
+
+describe("A replay Ticket's run ending, as its replay-record job lands it", () => {
+  const RUN = "https://github.com/acme/shop/actions/runs/9001/attempts/1";
+  const RESETS_AT = "2026-11-12T04:00:00.000Z";
+  /** Replay #140 with Ticket 12 in progress in run 9001. */
+  const running = aReplay({ labels: ["fabrik:replay"], body: acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null }]) });
+
+  function ended(end: ReplayTicketEnd, subscription = "Claude token"): LoopEvent {
+    return { kind: "replay-run-finished", issue: 140, ticket: 12, run: 9001, end, runUrl: RUN, subscription, ...(end.kind === "weekly-limit" ? { resetsAt: RESETS_AT } : {}) };
+  }
+
+  /** Ticket 12's progress in the body the plan writes. */
+  function progressIn(plan: Plan) {
+    const edit = actionsOf(plan).find((action) => action.kind === "edit-issue-body");
+    return edit?.kind === "edit-issue-body" ? replayMarksIn(edit.body)?.progress[0] : undefined;
+  }
+
+  it("marks the Ticket done once both arms ran", () => {
+    const plan = planFor(ended({ kind: "done" }), snapshotOf(running), kitConfig());
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "edit-issue-body", issue: 140, body: expect.any(String) }] });
+    expect(progressIn(plan)).toEqual({ ticket: 12, state: "done", run: 9001 });
+  });
+
+  it("marks it to run again after an Infrastructure failure", () => {
+    expect(progressIn(planFor(ended({ kind: "infrastructure", reason: "it crashed" }), snapshotOf(running), kitConfig()))).toEqual({
+      ticket: 12,
+      state: "retried",
+      reason: "it crashed",
+    });
+  });
+
+  describe("refused on its Subscription's weekly limit", () => {
+    it("puts the Ticket back to pending and opens the weekly-limit issue, as any refused run does", () => {
+      const plan = planFor(ended({ kind: "weekly-limit" }), snapshotOf(running), kitConfig());
+
+      expect(progressIn(plan)).toEqual({ ticket: 12, state: "pending" });
+      expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "open-issue", labels: ["fabrik:weekly-limit"] }));
+    });
+
+    it("with rotation on and another Subscription free, opens that Subscription's issue quietly and never re-runs it on the other", () => {
+      const plan = planFor(ended({ kind: "weekly-limit" }, "Claude token"), snapshotOf(running), TWO_SUBSCRIPTIONS);
+
+      expect(actionsOf(plan).map((action) => action.kind)).toEqual(["edit-issue-body", "open-issue"]);
+      expect(actionsOf(plan)[1]).toMatchObject({ body: expect.stringContaining("<!-- fabrik:subscription Claude token -->") });
+      expect(notificationsOf(plan)).toEqual([]);
+    });
+
+    it("with rotation on and every Subscription used up, buzzes the Operator but never holds it", () => {
+      const plan = planFor(ended({ kind: "weekly-limit" }, "Claude token"), snapshotOf(running, { kitIssues: [weeklyLimitIssue(42, "Claude token 2")] }), TWO_SUBSCRIPTIONS);
+
+      expect(actionsOf(plan).some((action) => action.kind === "hold-agent-run" || action.kind === "add-labels")).toBe(false);
+      expect(JSON.stringify(plan)).not.toContain("fabrik:held");
+      expect(progressIn(plan)).toEqual({ ticket: 12, state: "pending" });
+    });
+  });
+
+  it("leaves a closed replay issue's body as it is, its Replay cancelled, but still opens the weekly-limit issue", () => {
+    const plan = planFor(ended({ kind: "weekly-limit" }), snapshotOf({ ...running, open: false }), kitConfig());
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["open-issue"]);
+  });
+
+  it("changes nothing when the Ticket isn't in progress in that run", () => {
+    expect(planFor(ended({ kind: "done" }), snapshotOf(aReplay()), kitConfig())).toEqual({
+      kind: "nothing",
+      reason: "#12 isn't in progress in run 9001 on replay #140, so its run's end changes nothing there",
+    });
   });
 });
 

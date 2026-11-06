@@ -2,7 +2,7 @@
 // the resolved Kit config go in; a plan comes out.
 import type { CaptureResult, EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
-import type { PlannedTicket, ReplayAcceptance, ReplayIssue } from "../kit/replay.ts";
+import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayTicketEnd } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { SentBack } from "./backToDesign.ts";
@@ -318,6 +318,27 @@ export type LoopEvent =
       readonly commenterIsBot: boolean;
       /** Where it was made: a conversation comment, or a review, whose inline comments carry its reactions. */
       readonly on: PullRequestCommentPlace;
+    }
+  | {
+      /**
+       * A replay Ticket's run ended (#156): its replay-record job, the
+       * replay's push job, saw how both arms went and lands it on the replay
+       * issue (src/loop/replayRun.ts).
+       */
+      readonly kind: "replay-run-finished";
+      /** The replay issue. */
+      readonly issue: number;
+      /** The Ticket the run replayed. */
+      readonly ticket: number;
+      /** The Actions run its claim marked the Ticket in progress in. */
+      readonly run: number;
+      readonly end: ReplayTicketEnd;
+      /** The Actions run, which a weekly-limit issue links to. */
+      readonly runUrl: string;
+      /** The Subscription both arms ran on, from the Kit job's `subscription` output. Absent, it is read as the first listed. */
+      readonly subscription?: string;
+      /** For a weekly-limit refusal, when the limit resets (an ISO 8601 time), if the stream said. */
+      readonly resetsAt?: string;
     }
   | { readonly kind: "pull-request-left-draft"; readonly pullRequest: number }
   | { readonly kind: "pull-request-closed"; readonly pullRequest: number }
