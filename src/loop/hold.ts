@@ -67,7 +67,7 @@ export function heldWhileUsedUp(
  * issue is open to carry its held marker. With every Subscription unusable
  * through usage-credits issues alone, nowhere holds its marker, so it starts.
  * A Retro run is never held: its pending Retro fails instead
- * (src/loop/weeklyFailure.ts).
+ * (src/loop/weeklyRuns.ts).
  */
 export function runsDueAreHeld(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): boolean {
   return rotationIsOn(config) && freeSubscriptions(kitIssues, config).length === 0 && canHold(kitIssues);

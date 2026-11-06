@@ -12,7 +12,7 @@ import { readable } from "./readable.ts";
 import { isPendingRetro } from "./retro.ts";
 import { LOOSENING_STREAK_MINIMUM, type LooseningProposal, parseRetroOutput, type ProposalDirection, type ProposalKind, type RetroProposal, type Streak } from "./retroOutput.ts";
 import type { Action, IssueContext, LoopEvent, Plan, RetroEvidence } from "./types.ts";
-import { failRetro } from "./weeklyFailure.ts";
+import { failWeekly } from "./weeklyRuns.ts";
 
 type RetroFinished = Extract<LoopEvent, { kind: "retro-run-finished" }>;
 
@@ -34,7 +34,7 @@ export function landRetro(event: RetroFinished, context: IssueContext, config: K
     // The failed Retro's one line may quote the reply, so it mentions nobody and stays one line.
     const errors = withoutMentions(parsed.errors.join("; ").replace(/\s+/g, " "));
     const how = `its reply broke the Retro output contract (${errors})`;
-    return failRetro(context, { failure: "missing-output", how, runUrl: event.runUrl, resetsAt: null });
+    return failWeekly("retro", context, { failure: "missing-output", how, runUrl: event.runUrl, resetsAt: null });
   }
   const windowEnd = retroMarksIn(issue.body).windowEnd ?? event.evidence.window.end;
   const checks = parsed.output.proposals.map((proposal) => checked(silenced(proposal), event.evidence));

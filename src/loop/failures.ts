@@ -1,9 +1,9 @@
 // Failure notices: an agent run that fails for a reason outside the work is an
 // Infrastructure failure. It's never retried and never counts against a
 // Ticket's retries; the Operator gets one comment saying how to resume it. A
-// failed Auditor or Retro run goes to failAudit or failRetro instead, which
-// fails its Audit or Retro with no trigger to re-add, since the scheduled
-// tick opens the next one (src/loop/weeklyFailure.ts). With rotation on, a
+// failed Auditor or Retro run fails its Audit or Retro instead, with no
+// trigger to re-add, since the scheduled tick opens the next one
+// (src/loop/weeklyRuns.ts). With rotation on, a
 // run refused on its Subscription's weekly limit is re-run once, quietly,
 // through its trigger label while another Subscription is free, so the
 // Operator hears nothing. Once none is free it is held instead, with no
@@ -19,7 +19,7 @@ import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssu
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
 import type { InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
-import { failAudit, failRetro } from "./weeklyFailure.ts";
+import { failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
@@ -125,10 +125,9 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     return { kind: "act", actions: [...holds, ...(repoWide?.actions ?? [])] };
   }
   // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.
-  if (run.role === "audit" || run.role === "retro") {
-    const fail = run.role === "audit" ? failAudit : failRetro;
+  if (isWeeklyRole(run.role)) {
     const how = howItFailed(failure, run, config);
-    return fail(context, {
+    return failWeekly(run.role, context, {
       failure,
       how,
       runUrl: run.runUrl,
