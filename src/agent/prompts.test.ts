@@ -15,6 +15,9 @@ const prompt = (role: string) => readFile(join(import.meta.dirname, "..", "..", 
 /** The body of a prompt's `## <heading>` section, up to the next `## ` heading. */
 const section = (text: string, heading: string) => text.split(`\n## ${heading}\n`)[1]?.split("\n## ")[0] ?? "";
 
+/** The first line of a prompt's text that starts with `start`, after its indent. */
+const lineStarting = (text: string, start: string) => text.split("\n").find((line) => line.trimStart().startsWith(start)) ?? "";
+
 describe("The prompts of the runs that read an agent PR", () => {
   it.each(["review", "implement", "design"])("%s names the section the Operator's comments arrive under", async (role) => {
     // The prompt's weighing rules point at the section the run's context sets the comments out under.
@@ -77,7 +80,7 @@ describe("Product intent in the Triage prompt", () => {
 
   it("never sets an issue aside as wontfix on product grounds, sending a Vision conflict or an idea on no Roadmap list to needs-design", async () => {
     const decision = section(await prompt("triage"), "The decision");
-    const wontfix = decision.split("\n").find((line) => line.startsWith("- `wontfix`")) ?? "";
+    const wontfix = lineStarting(decision, "- `wontfix`");
     expect(wontfix).toContain("Never on product grounds");
     expect(wontfix).toContain("conflicts with the Vision goes to `needs-design`");
     expect(wontfix).toContain("quoting the line it conflicts with");
@@ -86,7 +89,7 @@ describe("Product intent in the Triage prompt", () => {
 
   it("counts the Vision and Roadmap's folder among the trust roots of test 5", async () => {
     const decision = section(await prompt("triage"), "The decision");
-    const test5 = decision.split("\n").find((line) => line.startsWith("5. ")) ?? "";
+    const test5 = lineStarting(decision, "5. ");
     expect(test5).toContain("`docs/product/`");
   });
 
@@ -122,7 +125,7 @@ describe("Product intent in the Design prompt", () => {
 
   it("skips the product-intent block for a Ticket back from its pull request and for internal or technical work", async () => {
     const intent = section(await prompt("design"), "Product intent");
-    const skip = intent.split("\n").find((line) => line.startsWith("- **Skip the block**")) ?? "";
+    const skip = lineStarting(intent, "- **Skip the block**");
     expect(skip).toContain("`<!-- fabrik:back-to-design`");
     expect(skip).toContain("an internal or technical issue");
   });
@@ -135,7 +138,7 @@ describe("Product intent in the Design prompt", () => {
 
   it("opens every Spec with a Product intent section above its technical sections, its success measure stated, not tracked", async () => {
     const turn = section(await prompt("design"), "Your turn");
-    const spec = turn.split("\n").find((line) => line.includes("**Finish with a Spec and its Tickets**")) ?? "";
+    const spec = lineStarting(turn, "- **Finish with a Spec and its Tickets**");
     expect(spec).toContain("opening with a `## Product intent` section above `## Problem Statement` and its technical sections");
     expect(spec).toContain("who it serves, why, how its success is measured, and what it deliberately doesn't do");
     expect(spec).toContain("State the success measure only: nothing tracks it.");
@@ -143,7 +146,7 @@ describe("Product intent in the Design prompt", () => {
 
   it("opens every agent brief with a Who and why line", async () => {
     const turn = section(await prompt("design"), "Your turn");
-    const brief = turn.split("\n").find((line) => line.includes("**Finish with an agent brief**")) ?? "";
+    const brief = lineStarting(turn, "- **Finish with an agent brief**");
     expect(brief).toContain('It opens with a "Who and why" line, which starts `**Who and why**:`');
     expect(brief).toContain("the End users it serves and why it matters to them");
   });
@@ -158,7 +161,7 @@ describe("Product intent in the Design prompt", () => {
 
   it("counts the Vision and Roadmap's folder among the trust-root files an Implementer can't change", async () => {
     const turn = section(await prompt("design"), "Your turn");
-    const trustRoots = turn.split("\n").find((line) => line.includes("the trust-root files, which are")) ?? "";
+    const trustRoots = lineStarting(turn, "Keep in mind what an Implementer can't change: the trust-root files");
     expect(trustRoots).toContain("`docs/product/`");
   });
 });
