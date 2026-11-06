@@ -6,8 +6,8 @@
 // need before they start, such as their timeout-minutes. Writes step outputs:
 //   route                    "triage", "design", "implement", "review", "audit", "retro" or "research" when the
 //                            plan starts that agent run (a Retro run's evidence job, then its Retro job),
-//                            "replay" when it starts a replay Ticket's two arms (#156), which nothing
-//                            routes to until Replay is switched on (#295),
+//                            "replay" when it starts a replay Ticket's two arms (#156), its claim and then
+//                            its replay jobs,
 //                            "push" when the push job has something to apply,
 //                            "none" when the plan is to do nothing
 //   triage-timeout-minutes   the Triage role's Kit config timeout

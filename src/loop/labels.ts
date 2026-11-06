@@ -112,8 +112,7 @@ export const RESEARCH_LABEL = "agent:research";
  * The trigger label the scheduled tick adds to a replay issue to start its
  * next pending Ticket, both arms (#156), as Dispatch adds agent:implement
  * (ADR-0001). The label comes off as the run starts. A trigger label, not one
- * of KIT_ISSUE_LABELS. It stays out of ALL_LABELS until Replay is switched on
- * (#295), so setup doesn't create it before anything adds it.
+ * of KIT_ISSUE_LABELS.
  */
 export const REPLAY_TRIGGER_LABEL = "agent:replay";
 
@@ -138,6 +137,7 @@ export const ALL_LABELS: readonly Label[] = [
   DESIGN_LABEL,
   REVIEW_LABEL,
   RESEARCH_LABEL,
+  REPLAY_TRIGGER_LABEL,
   ...CATEGORY_LABELS,
   ...KIT_ISSUE_LABELS,
   MONITOR_LABEL,

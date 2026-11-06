@@ -353,9 +353,10 @@ export const PROTOTYPE_JOB_NAME = "Prototype turn";
  * Dispatch check also reads workflow runs, through `actions`: the Fabrik App
  * has no Actions permission (ADR-0002), so that is the Dispatch job's own
  * read-only GITHUB_TOKEN. A scheduled tick also reads whether the fabrik-runs
- * store is private, through `store` (see gatherRetroSlice), and, once Replay
- * is switched on, the store's Run records through `replayStore`, only while
- * a replay issue the Operator filed is open (see gatherReplaySlice).
+ * store is private, through `store` (see gatherRetroSlice), and the store's
+ * Run records through `replayStore`, only while a replay issue the Operator
+ * filed is open (see gatherReplaySlice). Only src/main.ts, which the tick
+ * runs, passes `replayStore`; the Kit job, which never routes a tick, doesn't.
  */
 export async function gatherSnapshot(
   github: GitHub,
@@ -384,7 +385,6 @@ export async function gatherSnapshot(
   // By default the Operator owns the Product repos they run Fabrik in.
   const theOperator = part?.operator ?? operator ?? owner;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
-  // Only once Replay is switched on does the tick pass the store's records (#295).
   const replay =
     event.kind === "scheduled-tick" && replayStore !== null
       ? await gatherReplaySlice(github, repo, event.now, kitIssues, theOperator, appLogin, replayStore)
@@ -900,8 +900,8 @@ const REPLAY_ISSUES_QUERY = `
 `;
 
 /**
- * What the replay step weighs on the scheduled tick at `now` (#156), once
- * Replay is switched on. With no replay issue among the open Kit-owned
+ * What the replay step weighs on the scheduled tick at `now` (#156). With
+ * no replay issue among the open Kit-owned
  * issues, it reads nothing new, unless that page is full, since one may be
  * past it. Else it reads every open replay issue: its body whole, though the
  * Operator files it, since the request is the Operator's own text, which the

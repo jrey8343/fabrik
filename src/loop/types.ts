@@ -662,7 +662,7 @@ export interface Snapshot {
   readonly audit: AuditSnapshot | null;
   /** Gathered for a scheduled tick only: what the retro gate weighs. */
   readonly retro: RetroSnapshot | null;
-  /** Gathered for a scheduled tick only, once Replay is switched on (#295): what the replay step weighs. */
+  /** Gathered for a scheduled tick only: what the replay step weighs. */
   readonly replay: ReplaySnapshot | null;
   /**
    * Gathered for an Audit run finishing only, whose Audit is `issue`: each PR
