@@ -9,7 +9,8 @@
 //                            "none" when the plan is to do nothing
 //   triage-timeout-minutes   the Triage role's Kit config timeout
 //   design-timeout-minutes   the Design-session turn's Kit config timeout
-//   implement-timeout-minutes the Implement role's Kit config timeout
+//   implement-timeout-minutes the Implement role's Kit config timeout, which its agent step stops at
+//   implement-job-timeout-minutes the Implement job's: that, plus UI evidence capture's and room for its other steps
 //   review-timeout-minutes   the Review role's Kit config timeout
 //   audit-timeout-minutes    the Auditor's Kit config timeout
 //   pull-request, ticket     for a Review or a retry, the agent PR and the Ticket its branch was cut for;
@@ -46,6 +47,7 @@ import { callerWorkflowPath, checkKit } from "./caller.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
 import { kitJobSummary, subscriptionOf } from "./kitJob.ts";
 import { rotationIsOn } from "../loop/subscriptions.ts";
+import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -113,6 +115,7 @@ async function main(productDir: string): Promise<void> {
     "triage-timeout-minutes": String(config.roles.triage.timeoutMinutes),
     "design-timeout-minutes": String(config.roles.design.timeoutMinutes),
     "implement-timeout-minutes": String(config.roles.implement.timeoutMinutes),
+    "implement-job-timeout-minutes": String(implementJobTimeoutMinutes(config.roles.implement.timeoutMinutes)),
     "review-timeout-minutes": String(config.roles.review.timeoutMinutes),
     "audit-timeout-minutes": String(config.roles.audit.timeoutMinutes),
     "pull-request": pullRequest === null ? "" : String(pullRequest),

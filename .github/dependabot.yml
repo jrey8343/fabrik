@@ -1,5 +1,5 @@
-# Fabrik's own upstream bumps. Each Fabrik release pins Sandcastle and the
-# Claude Code CLI at exact versions (src/release/pins.ts checks this), and
+# Fabrik's own upstream bumps. Each Fabrik release pins Sandcastle, the
+# Claude Code CLI and Playwright at exact versions (src/release/pins.ts checks this), and
 # Dependabot moves those pins as reviewable PRs. Matt Pocock's skills are not a
 # package: .github/workflows/skills-bump.yml bumps their SHA instead.
 #
@@ -15,6 +15,7 @@ updates:
     allow:
       - dependency-name: "@ai-hero/sandcastle"
       - dependency-name: "@anthropic-ai/claude-code"
+      - dependency-name: "playwright-core"
     # One PR per upstream, so each bump is reviewed on its own. The default
     # cooldown stays as supply-chain hygiene.
     open-pull-requests-limit: 5

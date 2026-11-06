@@ -59,6 +59,7 @@ jobs:
       triage-timeout-minutes: ${{ steps.route.outputs.triage-timeout-minutes }}
       design-timeout-minutes: ${{ steps.route.outputs.design-timeout-minutes }}
       implement-timeout-minutes: ${{ steps.route.outputs.implement-timeout-minutes }}
+      implement-job-timeout-minutes: ${{ steps.route.outputs.implement-job-timeout-minutes }}
       review-timeout-minutes: ${{ steps.route.outputs.review-timeout-minutes }}
       audit-timeout-minutes: ${{ steps.route.outputs.audit-timeout-minutes }}
       dispatch-timeout-minutes: ${{ steps.route.outputs.dispatch-timeout-minutes }}
@@ -388,7 +389,10 @@ jobs:
     needs: kit
     if: needs.kit.outputs.route == 'implement'
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
+    # Its agent step stops at the Implement role's own timeout; this leaves room
+    # for UI evidence capture after it, so capture never cancels the job before
+    # its result uploads (implementJobTimeoutMinutes in src/evidence/capture.ts).
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-job-timeout-minutes) }}
     # One Implement run per Ticket at a time, so two never race on one branch.
     # A retry starts from a PR event, so the Ticket comes from the Kit job.
     concurrency:
@@ -407,6 +411,14 @@ jobs:
       model: ${{ steps.agent.outputs.model }}
       effort: ${{ steps.agent.outputs.effort }}
       base-sha: ${{ steps.base.outputs.sha }}
+      # "true" when the agent step's own timeout stopped it, which the push job reads as a timeout (src/kit/pushJob.ts).
+      agent-timed-out: ${{ steps.agent-time.outputs.timed-out }}
+      # UI evidence (#153), for the push job: the capture result as one compact
+      # JSON line, empty when nothing was captured, and the numeric ids of the
+      # zipped screenshots-and-result artifact and the unzipped gallery's.
+      ui-evidence: ${{ steps.capture.outputs.ui-evidence }}
+      ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}
+      ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}
     steps:
       # A fresh clone: no working directory or .env* files carried over. A first
       # run starts from main; a retry from its PR's branch (the Kit job names it).
@@ -458,9 +470,16 @@ jobs:
           OP_ENV_FILE: ${{ runner.temp }}/fabrik-secrets.env
           CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential
 
+      # So an agent step its timeout stopped can be told from one that crashed.
+      - name: Note when the Implementer starts
+        id: started
+        run: echo "at=$(date +%s)" >>"$GITHUB_OUTPUT"
+
       - name: Run the Implementer
         id: agent
         working-directory: product
+        # The Implement role's own timeout, on the step rather than the job, so capture can run after it.
+        timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
         env:
           # Every value the 1Password step resolved, in this step's env only.
           FABRIK_SECRETS: ${{ toJSON(steps.op.outputs) }}
@@ -473,6 +492,41 @@ jobs:
           FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
         run: node ../kit/src/agent/run.ts implement
 
+      # The agent step's own timeout fails the job, where a job timeout cancels
+      # it: note it, so the push job reads it as a timeout all the same.
+      - name: Note whether the Implementer ran out of time
+        id: agent-time
+        if: failure() && steps.agent.outcome == 'failure'
+        env:
+          STARTED_AT: ${{ steps.started.outputs.at }}
+          TIMEOUT_MINUTES: ${{ needs.kit.outputs.implement-timeout-minutes }}
+        run: |
+          if [ "$(( $(date +%s) - STARTED_AT ))" -ge "$(( TIMEOUT_MINUTES * 60 ))" ]; then
+            echo "timed-out=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      # UI evidence (#153), once the agent has ended: with a ui block, and a
+      # branch that changes a ui.paths file against the default branch, it
+      # builds and serves the branch, screenshots its routes, and writes the
+      # screenshots, the capture result and the gallery under fabrik-out
+      # (src/evidence/capture-main.ts). It records every failure in the capture
+      # result, never the job's: continue-on-error, and its own timeout, the
+      # Kit's CAPTURE_TIMEOUT_MINUTES (src/evidence/capture.ts; a test holds the
+      # two together). No secret reaches it, nor the build and server it runs.
+      # Gated off, with both uploads below, until Visual evidence's switch-on
+      # Ticket drops each `false && `.
+      - name: Capture UI evidence
+        id: capture
+        if: false && success()
+        continue-on-error: true
+        timeout-minutes: 20
+        working-directory: product
+        env:
+          FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node ../kit/src/evidence/capture-main.ts
+
       # The result and the bundle of the Implementer's commits (none if it made none).
       - name: Pass the Implementer's output and commits to the push job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -484,16 +538,45 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # src/agent/run.ts writes this when it catches a failure. A run cancelled
-      # by its timeout leaves none, and the push job reads that as a timeout.
+      # src/agent/run.ts writes this when it catches a failure. A run its
+      # timeout stopped leaves none, and the push job reads that as a timeout.
       - name: Pass the failure report to the push job
-        if: failure()
+        if: failure() && steps.agent-time.outputs.timed-out != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fabrik-agent-failure
           path: ${{ runner.temp }}/fabrik-out/agent-failure.json
           if-no-files-found: ignore
           retention-days: 7
+
+      # The UI evidence capture recorded, whether it captured or failed: the
+      # screenshots and the capture result, zipped, for the Reviewer. Not
+      # fabrik-agent-*: the push job downloads those and reads none as a timeout.
+      # continue-on-error: keeping evidence must never fail a run that passed.
+      - name: Keep the UI evidence
+        id: evidence
+        if: false && steps.capture.outputs.ui-evidence != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-ui-evidence
+          path: ${{ runner.temp }}/fabrik-out/ui-evidence/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # The gallery, unzipped, so it opens in the browser in one click. An
+      # unzipped artifact is one file, named after it; a capture that took no
+      # screenshot leaves none.
+      - name: Keep the UI evidence gallery
+        id: gallery
+        if: false && steps.capture.outputs.ui-evidence != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/fabrik-out/fabrik-ui-gallery.html
+          archive: false
+          if-no-files-found: ignore
+          retention-days: 30
 
       # The agent's stream-json transcript (src/agent/transcript.ts), written line by
       # line as it ran, so it's kept when the run passed, failed or timed out. Not

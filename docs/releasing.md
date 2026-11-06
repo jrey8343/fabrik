@@ -8,10 +8,11 @@ The Operator cuts every Fabrik release by hand. A Product repo pins one release 
 |---|---|---|
 | Sandcastle (`@ai-hero/sandcastle`) | exact version in `package.json` and `package-lock.json` | Dependabot (npm), weekly |
 | The Claude Code CLI (`@anthropic-ai/claude-code`) | exact version in `package.json` and `package-lock.json` | Dependabot (npm), weekly |
+| Playwright (`playwright-core`), which UI evidence capture drives | exact version in `package.json` and `package-lock.json`; its Chromium is installed at capture time | Dependabot (npm), weekly |
 | Matt Pocock's skills (`mattpocock/skills`) | commit SHA in `skills.lock.json` | `.github/workflows/skills-bump.yml`, weekly |
 | The actions the workflows use | commit SHA in each `uses:` line | Dependabot (github-actions), weekly |
 
-`src/release/pins.test.ts` fails CI if Sandcastle or the Claude Code CLI isn't pinned at one exact version, or if the CLI's install-script approval in `allowScripts` names a version, which a Dependabot bump would leave behind.
+`src/release/pins.test.ts` fails CI if Sandcastle, the Claude Code CLI or Playwright isn't pinned at one exact version, or if the CLI's install-script approval in `allowScripts` names a version, which a Dependabot bump would leave behind.
 
 Fabrik consumes the skills and Sandcastle unchanged. If an upstream change misbehaves in the Loop, steer around it with the Kit's prompts or config, hold the bump, or report it upstream. Never patch or fork upstream code into Fabrik.
 
@@ -19,7 +20,7 @@ Fabrik consumes the skills and Sandcastle unchanged. If an upstream change misbe
 
 Upstream bumps land on `main` as ordinary PRs and ship in the next release.
 
-- **Dependabot PRs** (Sandcastle, the Claude Code CLI, actions): read the upstream changelog, check CI passes, and merge. For a Claude Code CLI bump, look for changes to auth, `apiKeySource`, the `system/init` message or the metered-route env vars, because the metered-billing preflight and the init check depend on them.
+- **Dependabot PRs** (Sandcastle, the Claude Code CLI, Playwright, actions): read the upstream changelog, check CI passes, and merge. For a Claude Code CLI bump, look for changes to auth, `apiKeySource`, the `system/init` message or the metered-route env vars, because the metered-billing preflight and the init check depend on them.
 - **The skills bump PR** (`fabrik/skills-bump`, titled "Bump Matt Pocock's skills to …"): it opens only when upstream main has moved past the pinned commit. Its body has the compare link, the commits, any skills added or removed, and the upstream diff. Read the diff the way you'd read a change to the Kit's prompts, since that's what it is. Its CI run is started by `workflow_dispatch`, so it shows under the branch's commit. The PR is refreshed in place each week while it's open. Closing it unmerged declines that commit; the next PR opens once upstream moves again. Run the workflow by hand from the Actions tab to check sooner.
 
 ## Choosing the version
@@ -50,7 +51,7 @@ Fabrik uses semver, counted from what a Product repo has to do:
 4. Publish the GitHub release with notes that say what changed, whether a Product repo needs anything beyond the bump (only for a major), and the pins it carries. A release whose new behaviour waits on an opt-in Operator step gets a **To turn it on** section saying which step turns it on, in which repos, and to turn it on for the Pilot first. Notes drafted ahead of a release are in `docs/release-notes/`, such as [the Run records minor's](release-notes/run-records.md), [the Scorers minor's](release-notes/scorers.md), [the Monitor minor's](release-notes/monitor.md), [the Subscription rotation minor's](release-notes/subscription-rotation.md), [the Product intent minor's](release-notes/product-intent.md) and [the Visual evidence minor's](release-notes/visual-evidence.md).
 
    ```sh
-   jq -r '"- Sandcastle \(.dependencies["@ai-hero/sandcastle"])\n- Claude Code CLI \(.dependencies["@anthropic-ai/claude-code"])"' package.json
+   jq -r '"- Sandcastle \(.dependencies["@ai-hero/sandcastle"])\n- Claude Code CLI \(.dependencies["@anthropic-ai/claude-code"])\n- Playwright \(.dependencies["playwright-core"])"' package.json
    jq -r '"- Matt Pocock'"'"'s skills at \(.repository)@\(.sha)"' skills.lock.json
    gh release create v1.3.0 --verify-tag --title "Fabrik v1.3.0" --notes-file notes.md
    ```

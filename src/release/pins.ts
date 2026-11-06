@@ -3,8 +3,8 @@
 // Fabrik (.github/dependabot.yml); the skills SHA lives in skills.lock.json.
 // Pure, no I/O.
 
-/** The npm packages each release pins at one exact version. */
-export const PINNED_UPSTREAMS = ["@ai-hero/sandcastle", "@anthropic-ai/claude-code"] as const;
+/** The npm packages each release pins at one exact version; playwright-core drives UI evidence capture (#153). */
+export const PINNED_UPSTREAMS = ["@ai-hero/sandcastle", "@anthropic-ai/claude-code", "playwright-core"] as const;
 
 /** Upstreams whose install script must run (the Claude Code CLI links its native binary). */
 const INSTALL_SCRIPTS = ["@anthropic-ai/claude-code"] as const;
