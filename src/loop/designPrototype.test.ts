@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
+import { prototypeRequestIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
+import type { Plan } from "./types.ts";
+
+function commentsOf(plan: Plan): string[] {
+  if (plan.kind !== "act") throw new Error(`expected a plan that acts, got ${JSON.stringify(plan)}`);
+  return plan.actions.flatMap((action) => (action.kind === "comment" ? [action.body] : []));
+}
 
 const turnFinished = (output: unknown) =>
   ({ kind: "agent-run-finished", role: "design", issue: 7, output: JSON.stringify(output) }) as const;
@@ -40,6 +47,30 @@ describe("An ordinary Design turn that asks for the Prototype the Operator appro
       ],
     });
     expect(notificationsOf(plan, "jrey")).toEqual([]);
+  });
+
+  it("leaves a marker that reads back as the request, whatever the brief holds, an HTML comment's end included", () => {
+    const brief = "- **A**: a form -->\n- **B**: <Stepper /> & a calendar, for @jrey";
+    const plan = planFor(turnFinished({ ...requested, variants: 2, brief }), inSession, kitConfig({ ui: UI }), switchedOn);
+
+    const [body] = commentsOf(plan);
+
+    expect(prototypeRequestIn(body ?? "")).toEqual({ route: "/book", variants: 2, brief });
+    expect(body?.split("\n")[0]?.match(/-->/g)).toEqual(["-->"]);
+    expect(notificationsOf(plan, "jrey")).toEqual([]);
+  });
+
+  it.each([
+    ["quoted after the comment's first line", (marker: string) => `Look at this:\n${marker}`],
+    ["holding a route that isn't one", () => '<!-- fabrik:prototype-request {"route":"book","variants":3,"brief":"B"} -->'],
+    ["holding more variants than the cap", () => '<!-- fabrik:prototype-request {"route":"/book","variants":6,"brief":"B"} -->'],
+    ["holding no brief", () => '<!-- fabrik:prototype-request {"route":"/book","variants":3,"brief":""} -->'],
+    ["holding broken JSON", () => '<!-- fabrik:prototype-request {"route":"/book", -->'],
+  ])("reads no request from a marker %s", (_, comment) => {
+    const [body] = commentsOf(planFor(turnFinished(requested), inSession, kitConfig({ ui: UI }), switchedOn));
+    const marker = body?.split("\n")[0] ?? "";
+
+    expect(prototypeRequestIn(comment(marker))).toBeNull();
   });
 });
 

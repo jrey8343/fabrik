@@ -356,7 +356,7 @@ function isRepoPath(value: unknown): value is string {
 }
 
 /** A whole number of variants within the Kit's minimum and cap. */
-function isVariantCount(value: unknown): value is number {
+export function isVariantCount(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= PROTOTYPE_MIN_VARIANTS && (value as number) <= PROTOTYPE_VARIANT_CAP;
 }
 
