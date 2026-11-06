@@ -102,7 +102,7 @@ describe("Product intent in the Triage prompt", () => {
   it("counts the Vision and Roadmap's folder among the trust roots of test 5", async () => {
     const decision = section(await prompt("triage"), "The decision");
     const test5 = lineStarting(decision, "5. ");
-    expect(test5).toContain("`docs/product/`");
+    expect(test5).toContain("anything under `docs/product/` at the repo root");
   });
 
   it("reads the Vision and the Roadmap if they exist, and lets the Roadmap gate nothing", async () => {
@@ -169,7 +169,7 @@ describe("Product intent in the Design prompt", () => {
   it("counts the Vision and Roadmap's folder among the trust-root files an Implementer can't change", async () => {
     const turn = section(await prompt("design"), "Your turn");
     const trustRoots = lineStarting(turn, "Keep in mind what an Implementer can't change: the trust-root files");
-    expect(trustRoots).toContain("`docs/product/`");
+    expect(trustRoots).toContain("anything under `docs/product/` at the repo root");
   });
 });
 

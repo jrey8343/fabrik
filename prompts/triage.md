@@ -31,7 +31,7 @@ Choose exactly one **state**:
 2. **No design, product or priority question is open.** There is one obvious way to build it, and nothing about it needs the Operator to decide.
 3. **It's a two-way door.** The change is cheap to undo: no data migration, no public API break, nothing irreversible.
 4. **Testable acceptance criteria can be written.** You can state, as checks a test could make, what done means.
-5. **It touches no trust-root file.** Building it needs no change to `AGENTS.md`, `CLAUDE.md`, any `.claude/settings*` file, skills, prompts, the `.fabrik/` folder, anything under `.github/workflows/`, or anything under `docs/product/`, where the Vision and Roadmap live.
+5. **It touches no trust-root file.** Building it needs no change to `AGENTS.md`, `CLAUDE.md`, any `.claude/settings*` file, skills, prompts, the `.fabrik/` folder, anything under `.github/workflows/`, or anything under `docs/product/` at the repo root, where the Vision and Roadmap live.
 6. **It changes no product intent.** The change leaves alone who the product serves, what it promises them, and its one-way doors: public names, URLs, data shapes, pricing, anything an End user is told. Nor is it something the Vision says the product deliberately doesn't do. A one-line price change fails this test. Size alone never does: large, obvious work with no such consequence passes it.
 
 **Any doubt on any test sends the issue to `needs-design`.** Err toward asking the Operator. The Fast path is for work that is safe and clear, not merely likely to be fine.
