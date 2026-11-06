@@ -8,7 +8,7 @@ import { type Rubric, rubricSet } from "./rubrics.ts";
 import { type RateLimitReading, type ReplayRun, type RunRecord, type RunRecordRole, runStoreName } from "./runRecord.ts";
 
 /**
- * The share of first Implement runs scored: one in four. A run is in the
+ * The share of live first Implement runs scored: one in four. A run is in the
  * sample when the SHA-256 of its run id's decimal string falls in the lowest
  * quarter of the range, so every attempt of the run makes the same choice.
  */
@@ -62,12 +62,14 @@ function nearWeeklyLimit(reading: RateLimitReading): boolean {
 }
 
 /**
- * Whether scoring picks the run: only Implement runs, every Retry, Step-up
- * and Request-changes run among them, and the sample of first runs.
+ * Whether scoring picks the run: only Implement runs, every Replay arm's,
+ * Retry, Step-up and Request-changes run among them, and the sample of live
+ * first runs. A Replay arm's run is never sampled, so every arm has a
+ * process measure to compare (#156).
  */
 function picked(record: RunRecord): boolean {
   if (record.role !== "implement") return false;
-  return record.retry > 0 || record.stepUp || record.requestChanges || sampled(record.runId);
+  return record.replay !== null || record.retry > 0 || record.stepUp || record.requestChanges || sampled(record.runId);
 }
 
 /** Whether a first Implement run is in the sample, by the SHA-256 of its run id's decimal string. */

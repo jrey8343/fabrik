@@ -57,6 +57,36 @@ describe("The scoring plan for a finished run", () => {
     expect(scoringPlan(implementRun({ runId: UNSAMPLED_RUN, ...run }))).toEqual({ kind: "score" });
   });
 
+  describe("always picks a Replay arm's Implement run, never sampling it, so every arm has a process measure", () => {
+    /** A Replay arm's Implement run on Ticket 7, for replay issue 300, whose run id falls outside the sample. */
+    const armRun = (overrides: Partial<RunRecord> = {}) =>
+      implementRun({ runId: UNSAMPLED_RUN, replay: { issue: 300, arm: "variant", ticket: 7, candidateSha: null }, ...overrides });
+
+    it("scores a replay Implement run whose run id falls outside the sample", () => {
+      expect(scoringPlan(armRun())).toEqual({ kind: "score" });
+    });
+
+    it("never picks a replay arm's Review, which no Scorer scores", () => {
+      expect(scoringPlan(armRun({ role: "review" }))).toEqual({ kind: "not-sampled" });
+    });
+
+    it("still skips a replay run with no transcript", () => {
+      expect(scoringPlan(armRun({ transcript: null }))).toEqual({ kind: "skip", skip: { reason: "no-transcript" } });
+    });
+
+    it.each(["provider-error", "weekly-limit"] as const)("still skips a replay run whose Infrastructure failure was %s", (failure) => {
+      const run = armRun({ jobResult: "failure", infrastructureFailure: failure });
+
+      expect(scoringPlan(run)).toEqual({ kind: "skip", skip: { reason: "infrastructure-failure" } });
+    });
+
+    it("still skips a replay run whose last weekly-limit reading was at 0.75, keeping the reading", () => {
+      const rateLimit = { status: "allowed", rateLimitType: "seven_day", utilization: 0.75, resetsAt: 1_800_500_000 };
+
+      expect(scoringPlan(armRun({ rateLimit }))).toEqual({ kind: "skip", skip: { reason: "weekly-limit", rateLimit } });
+    });
+  });
+
   describe("records a picked run it can't score as skipped", () => {
     it("skips a run with no transcript", () => {
       expect(scoringPlan(implementRun({ retry: 1, transcript: null }))).toEqual({ kind: "skip", skip: { reason: "no-transcript" } });
