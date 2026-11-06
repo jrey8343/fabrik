@@ -3,6 +3,7 @@
 // writes and every later reader shares. Pure, no I/O.
 import { posix } from "node:path";
 import { UI_ROUTE_CAP, type UiConfig } from "../kit/config.ts";
+import { linesOutsideCode } from "../loop/markers.ts";
 
 /**
  * Whether a pull request is UI: some changed path matches one of `ui.paths`,
@@ -32,10 +33,13 @@ const ROUTE = /^\/(?!\/)\S*$/;
  * a route by putting the path alone in an inline code span: `/book` or
  * `/services/physio` does, and so does `/` for the home page. A bare /book in
  * the text doesn't, nor does a code span holding anything else beside or
- * instead of one path (`GET /api/slots`, `src/pages/book.astro`, `/book now`).
+ * instead of one path (`GET /api/slots`, `src/pages/book.astro`, `/book now`),
+ * nor anything in a fenced code block, which quotes code rather than names a route.
  */
 function ticketRoutes(body: string): string[] {
-  return [...body.matchAll(CODE_SPAN)].map(([, text = ""]) => text).filter((text) => ROUTE.test(text));
+  return linesOutsideCode(body)
+    .flatMap((line) => [...line.matchAll(CODE_SPAN)].map(([, text = ""]) => text))
+    .filter((text) => ROUTE.test(text));
 }
 
 /** The routes to capture, each with its reason. */

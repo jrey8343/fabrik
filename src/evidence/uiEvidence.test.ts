@@ -59,6 +59,20 @@ describe("The routes UI evidence captures", () => {
     expect(routesFor(body, [], [])).toEqual([{ route: "/", reason: "ticket" }]);
   });
 
+  it("never count a path in a fenced code block, which is quoted, not named", () => {
+    const body = ticket(
+      [
+        "Show the waitlist on `/book`. The router already has:",
+        "",
+        "```ts",
+        "const routes = { book: `/book/legacy`, admin: `/admin` };",
+        "```",
+      ].join("\n"),
+    );
+
+    expect(routesFor(body, [], [])).toEqual([{ route: "/book", reason: "ticket" }]);
+  });
+
   it("go on with the Implementer's routes after the Ticket's, and leave out the defaults", () => {
     const body = ticket("Add a waitlist to full days on `/book`.");
 
