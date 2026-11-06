@@ -409,10 +409,13 @@ export interface RetroEvidenceInput {
   /** The store's Run records. */
   readonly records: readonly RunRecord[];
   /**
-   * The store's transcripts, each by its path in the store, as a Run record's
-   * `transcript` names it: every stdout line of the run's stream-json.
+   * Reads one of the store's transcripts by its path in the store, as a Run
+   * record's `transcript` names it: every stdout line of the run's
+   * stream-json, or null when the store holds none there. The store keeps
+   * every transcript and the bundle digests only a few, so the module asks
+   * for each it digests, once, however often the budget digests it again.
    */
-  readonly transcripts: Readonly<Record<string, readonly string[]>>;
+  readonly readTranscript: (path: string) => readonly string[] | null;
   /** The store's score files, each by its path in the store. */
   readonly scoreFiles: Readonly<Record<string, ScoreFile>>;
   /** The Product repo's GitHub facts, as the facts adapter gathers them for a Retro (gatherRetroFacts, src/github/facts.ts). */
@@ -667,7 +670,7 @@ export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
   // Only this repo's records, whatever the store gave.
   const records = input.records.filter((record) => record.repo === input.facts.repo);
   const metrics: MetricsInput = { records, facts: [input.facts], operator: input.operator };
-  const digests = digestsOf(input.transcripts);
+  const digests = digestsOf(input.readTranscript);
   const digested: Digested = (record) => ({ ...recordEvidenceOf(record), digest: digests(record, Infinity) });
   const whole: EvidenceBundle = {
     window: { start: new Date(window.start).toISOString(), end: new Date(window.end).toISOString() },
@@ -794,15 +797,17 @@ function isStreakRow(value: unknown): boolean {
 type Digests = (record: RunRecord, budget: number) => string | null;
 
 /** The store's transcripts as digests, each transcript read once however often it's digested. */
-function digestsOf(transcripts: RetroEvidenceInput["transcripts"]): Digests {
-  const read = new Map<string, (budget: number) => TranscriptDigest>();
+function digestsOf(readTranscript: RetroEvidenceInput["readTranscript"]): Digests {
+  // Each path read, by its digest, or null when the store holds no transcript there.
+  const read = new Map<string, ((budget: number) => TranscriptDigest) | null>();
   return (record, budget) => {
     const path = record.transcript;
-    const lines = path === null ? undefined : transcripts[path];
-    if (path === null || lines === undefined) return null;
-    const digest = read.get(path) ?? digestOf(lines);
-    read.set(path, digest);
-    return digest(budget).digest;
+    if (path === null) return null;
+    if (!read.has(path)) {
+      const lines = readTranscript(path);
+      read.set(path, lines === null ? null : digestOf(lines));
+    }
+    return read.get(path)?.(budget).digest ?? null;
   };
 }
 

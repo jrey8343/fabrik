@@ -57,7 +57,7 @@ async function main(): Promise<string> {
   const operator = config.config.operator ?? owner;
 
   const storeDir = required("FABRIK_STORE_DIR");
-  const [records, scoreFiles, transcripts, facts, history] = await Promise.all([
+  const [records, scoreFiles, readTranscript, facts, history] = await Promise.all([
     // A schema 1 record, written before runs were given a Subscription, reads as on the first this repo lists.
     readStoreRunRecords(storeDir, config.config.subscriptions),
     readStoreScoreFiles(storeDir),
@@ -70,7 +70,7 @@ async function main(): Promise<string> {
 
   const bundle = evidenceBundle({
     records: Object.values(records),
-    transcripts,
+    readTranscript,
     scoreFiles,
     facts,
     operator,

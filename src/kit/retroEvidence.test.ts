@@ -398,7 +398,7 @@ describe("the evidence bundle", () => {
       const { escapes } = evidenceBundle(
         aRetroEvidenceInput({
           records: [review, untranscribed, lost],
-          transcripts: transcriptsOf([review, transcript]),
+          readTranscript: transcriptsOf([review, transcript]),
           facts: factsOf({
             pullRequests: [50, 51, 52].map((number) => aMergedPullRequest("2026-11-02T00:00:00Z", { number })),
             escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #51 #52 -->")],
@@ -630,7 +630,7 @@ describe("the evidence bundle", () => {
       const { lowScores } = evidenceBundle(
         aRetroEvidenceInput({
           records: [flailed, clean, lastWeeks, skipped, theirs],
-          transcripts: transcriptsOf([flailed, transcript], [clean, transcript], [lastWeeks, transcript], [skipped, transcript], [theirs, transcript]),
+          readTranscript: transcriptsOf([flailed, transcript], [clean, transcript], [lastWeeks, transcript], [skipped, transcript], [theirs, transcript]),
           scoreFiles: {
             "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json": aScoreFile({ runId: 1000, entries: [failing, passing] }),
             "scores/owner/product/2026-11/1001-1-implement-a1b2c3.json": aScoreFile({ runId: 1001, entries: [passing] }),
@@ -667,7 +667,7 @@ describe("the evidence bundle", () => {
 
     it("holds none when the repo has no score files", () => {
       const run = aRecordWithTranscript({ runId: 1000, endedAt: "2026-11-03T00:00:00Z" });
-      const { lowScores } = evidenceBundle(aRetroEvidenceInput({ records: [run], transcripts: transcriptsOf([run, aTranscript()]), scoreFiles: {} }));
+      const { lowScores } = evidenceBundle(aRetroEvidenceInput({ records: [run], readTranscript: transcriptsOf([run, aTranscript()]), scoreFiles: {} }));
       expect(lowScores).toEqual([]);
     });
   });
@@ -712,7 +712,7 @@ describe("the evidence bundle", () => {
       const { sample } = evidenceBundle(
         aRetroEvidenceInput({
           records: [review, judge, implement, untranscribed, aRunRecord({ runId: 1002, issue: 8, pullRequest: 13 })],
-          transcripts: transcriptsOf([implement, transcript], [review, transcript], [judge, transcript]),
+          readTranscript: transcriptsOf([implement, transcript], [review, transcript], [judge, transcript]),
           facts: factsOf({
             pullRequests: [
               aMergedPullRequest("2026-11-03T00:00:00Z", {
@@ -882,15 +882,17 @@ describe("the evidence bundle", () => {
     const inline = [{ path: "src/cart.ts", line: 12, body: "This belongs in the pricing module." }];
     const verdict = aVerdictComment("pass", "a".repeat(40), "2026-11-02T00:00:00Z");
 
-    function evidenceWith(requestChanges: string): EvidenceBundle {
+    const transcripts = transcriptsOf(
+      [sampled, aTranscript({ "src/sampled.ts": bulk("s") })],
+      [lowScoring, aTranscript({ "src/low.ts": bulk("l") })],
+      [passingReview, aTranscript({ "src/escaped.ts": bulk("e") })],
+    );
+
+    function evidenceWith(requestChanges: string, readTranscript = transcripts): EvidenceBundle {
       return evidenceBundle(
         aRetroEvidenceInput({
           records: [sampled, lowScoring, passingReview],
-          transcripts: transcriptsOf(
-            [sampled, aTranscript({ "src/sampled.ts": bulk("s") })],
-            [lowScoring, aTranscript({ "src/low.ts": bulk("l") })],
-            [passingReview, aTranscript({ "src/escaped.ts": bulk("e") })],
-          ),
+          readTranscript,
           scoreFiles: { "scores/owner/product/2026-11/2000-1-implement-a1b2c3.json": aScoreFile({ runId: 2000, entries: [aScoreEntry({ score: 0.2, pass: false })] }) },
           facts: factsOf({
             pullRequests: [
@@ -946,6 +948,19 @@ describe("the evidence bundle", () => {
       expect(leftIn(bundle)).toEqual(left);
       expect(JSON.stringify(bundle).length).toBeLessThanOrEqual(EVIDENCE_BUDGET);
       expect(bundle.trimmed).toBe(true);
+    });
+
+    it("reads each run's transcript from the store once, however often it digests it again to fit", () => {
+      const reads: string[] = [];
+      const counting = (path: string) => {
+        reads.push(path);
+        return transcripts(path);
+      };
+
+      const bundle = evidenceWith("r".repeat(EVIDENCE_BUDGET - JSON.stringify(whole).length + 150_000), counting);
+
+      expect(bundle.trimmed).toBe(true);
+      expect(reads.toSorted()).toEqual([sampled, lowScoring, passingReview].map(({ transcript }) => transcript).toSorted());
     });
 
     it("keeps a cut transcript's tool calls, as the judge's digest does, until it has to cut the transcript whole", () => {

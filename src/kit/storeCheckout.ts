@@ -60,19 +60,14 @@ export async function readStoreScoreFiles(storeDir: string): Promise<Record<stri
 }
 
 /**
- * Every transcript under `transcripts/`, by its path in the store, as its
- * stream-json lines. The store keeps them forever and a reader digests only a
- * few, so each is read and gunzipped only when it's asked for. One cut off by
- * its run's timeout keeps the lines that decoded; bytes that aren't gzip read
- * as no lines.
+ * A reader of the transcripts under `transcripts/`, each by its path in the
+ * store, as its stream-json lines; null for a path the checkout doesn't hold.
+ * The store keeps them forever and a reader digests only a few, so it lists
+ * them now and reads and gunzips one from disk each time it's called for it.
+ * One cut off by its run's timeout keeps the lines that decoded; bytes that
+ * aren't gzip read as no lines.
  */
-export async function readStoreTranscripts(storeDir: string): Promise<Readonly<Record<string, readonly string[]>>> {
-  const transcripts: Record<string, readonly string[]> = {};
-  for (const path of await pathsIn(storeDir, "transcripts", ".jsonl.gz")) {
-    Object.defineProperty(transcripts, path, {
-      enumerable: true,
-      get: () => readTranscriptGzip(readFileSync(join(storeDir, path)))?.lines ?? [],
-    });
-  }
-  return transcripts;
+export async function readStoreTranscripts(storeDir: string): Promise<(path: string) => readonly string[] | null> {
+  const paths = new Set(await pathsIn(storeDir, "transcripts", ".jsonl.gz"));
+  return (path) => (paths.has(path) ? (readTranscriptGzip(readFileSync(join(storeDir, path)))?.lines ?? []) : null);
 }
