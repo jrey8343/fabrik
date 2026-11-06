@@ -187,10 +187,14 @@ function prototypeRound(
     ...variantLines(output, event),
     "",
     ...(preview.kind === "none" ? [] : [previewLine(preview), ""]),
-    "**1. Which variant?**",
-    `➡️ Recommended: ${withoutMentions(output.recommendation)}`,
+    WHICH_VARIANT,
+    // On one line, so the round ends where the preview step looks (withVariantPreviews).
+    `➡️ Recommended: ${withoutMentions(output.recommendation.trim().replace(/\s*[\r\n]+\s*/g, " "))}`,
   ].join("\n");
 }
+
+/** The prototype round's one question, which the Kit writes. */
+const WHICH_VARIANT = "**1. Which variant?**";
 
 /** What the round says of its preview until the push job has polled it. */
 const PREVIEW_PENDING = "Each variant's preview is linked beside it once the preview deployment answers.";
@@ -205,16 +209,24 @@ const VARIANT_LINE = /^- \*\*([A-Z])\.\*\* /;
  * previews are linked once it answers goes; or that line says it never
  * answered. Null when the body isn't a prototype round still waiting on its
  * preview. Every URL is the Kit's, from Kit config and the approved route,
- * never the agent's.
+ * never the agent's, and it goes only where the Kit's own lines are, which
+ * nothing the agent wrote can stand in for.
  */
 export function withVariantPreviews(body: string, preview: Extract<PreviewLink, { kind: "linked" | "never-answered" }>): string | null {
   // An Operator's edit on GitHub may end its lines in \r\n.
   const lines = body.split("\n").map((line) => (line.endsWith("\r") ? { text: line.slice(0, -1), end: "\r" } : { text: line, end: "" }));
   if (!DESIGN_ROUND_MARKER.test(body) || lines[1]?.text.trim() !== PROTOTYPE_ROUND_MARKER) return null;
-  // The Kit writes it under the variants, one blank line between.
-  const underVariants = (i: number) => lines[i - 1]?.text.trim() === "" && VARIANT_LINE.test(lines[i - 2]?.text ?? "");
-  const at = lines.findIndex(({ text }, i) => text.trim() === PREVIEW_PENDING && underVariants(i));
-  if (at === -1) return null;
+  // Only where the Kit writes it: the round's fourth line from the end, over its question and the one line of
+  // its recommendation, and under the variants, a blank line between each. The agent's intro is above the
+  // variants and its recommendation below them, so a copy of this line, or of a variant's, in either is never taken.
+  const at = lines.length - 4;
+  const kitWroteIt =
+    lines[at]?.text.trim() === PREVIEW_PENDING &&
+    lines[at + 1]?.text.trim() === "" &&
+    lines[at + 2]?.text.trim() === WHICH_VARIANT &&
+    lines[at - 1]?.text.trim() === "" &&
+    VARIANT_LINE.test(lines[at - 2]?.text ?? "");
+  if (!kitWroteIt) return null;
   if (preview.kind === "never-answered") {
     lines[at] = { ...lines[at]!, text: `No preview links: the preview at ${code(preview.url)} never answered.` };
   } else {
