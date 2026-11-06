@@ -43,9 +43,21 @@ describe("An ordinary Design turn that asks for the Prototype the Operator appro
   });
 });
 
+describe("A Design turn that asks for a Prototype on a Product repo with no ui block", () => {
+  it("fails as a broken contract and posts nothing: the Kit can't serve or capture one", () => {
+    const plan = planFor(turnFinished(requested), inSession, kitConfig({ ui: null }), switchedOn);
+
+    expect(plan).toEqual({
+      kind: "fail",
+      failure: "infrastructure",
+      reason: "The Design-session turn on #7 emitted output that breaks its contract: this Product repo's Kit config has no `ui` block, so the Kit can't serve or capture a Prototype",
+    });
+  });
+});
+
 describe("A Design turn that asks for a Prototype while Prototypes are off", () => {
-  it("fails as a broken contract and posts nothing", () => {
-    const plan = planFor(turnFinished(requested), inSession, kitConfig());
+  it("fails as a broken contract and posts nothing, even with a ui block", () => {
+    const plan = planFor(turnFinished(requested), inSession, kitConfig({ ui: UI }));
 
     expect(plan).toEqual({
       kind: "fail",

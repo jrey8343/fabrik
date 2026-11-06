@@ -189,11 +189,14 @@ export function turnStartFrom(comment: number | undefined, found: StartingCommen
 }
 
 /**
- * Why a turn can't ask for a Prototype in this Kit, or null when it can:
- * UI prototypes are dormant until switched on (#282).
+ * Why a turn can't ask for a Prototype in this Kit, or null when it can: UI
+ * prototypes are dormant until switched on (#282), and only a Product repo
+ * with a `ui` block takes one, since its prototype turn serves and captures
+ * the variants through that block. Kit config decides, never an agent.
  */
-export function whyNoPrototype(_config: Pick<KitConfig, "ui">, switchedOn: boolean): string | null {
+export function whyNoPrototype({ ui }: Pick<KitConfig, "ui">, switchedOn: boolean): string | null {
   if (!switchedOn) return "Prototypes are off in this Kit, so a turn can't ask for one";
+  if (ui === null) return "this Product repo's Kit config has no `ui` block, so the Kit can't serve or capture a Prototype";
   return null;
 }
 
