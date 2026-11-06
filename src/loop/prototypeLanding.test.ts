@@ -497,7 +497,7 @@ describe("The Design session after a prototype round", () => {
     });
     const reply = { kind: "issue-comment-created", issue: 7, commenter: "jrey", commenterIsBot: false, body: "B, with C's calendar.", comment: 9100 } as const;
 
-    expect(planFor(reply, snapshotOf(after, { operator: "jrey" }), kitConfig({ ui: UI }), { prototypes: true })).toEqual({
+    expect(planFor(reply, snapshotOf(after, { operator: "jrey" }), kitConfig({ ui: UI }))).toEqual({
       kind: "act",
       actions: [
         { kind: "start-agent-run", role: "design", issue: 7, model: DESIGN.model, effort: DESIGN.effort, timeoutMinutes: DESIGN.timeoutMinutes, subscription: DEFAULT_KIT_CONFIG.subscriptions[0] },

@@ -97,7 +97,7 @@ describe("The Kit job's routing", () => {
     const issue = anIssue({ number: 7, labels: ["needs-design", "agent:design"], designRounds: 1, pendingPrototype: pending });
     const prototypes = kitConfig({ ui: UI });
 
-    const plan = planFor({ kind: "label-added", issue: 7, label: "agent:design" }, snapshotOf(issue), prototypes, { prototypes: true });
+    const plan = planFor({ kind: "label-added", issue: 7, label: "agent:design" }, snapshotOf(issue), prototypes);
 
     expect(kitJobOutputs(plan, null, prototypes)).toMatchObject({
       route: "design",

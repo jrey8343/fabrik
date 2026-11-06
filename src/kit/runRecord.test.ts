@@ -569,7 +569,7 @@ describe("The Run record a run's end yields", () => {
       });
     });
 
-    // loop.yml's push job needs the prototype job once Prototypes are switched on, so this is only ever a miswiring.
+    // loop.yml's push job needs the prototype job, so this is only ever a miswiring.
     it("no record is written for a prototype turn whose needs don't name the prototype job, rather than take the skipped Design job's", () => {
       const end = runEnd({
         needs: needs("design", { design: { result: "skipped", outputs: {} } }, { prototype: "true", prototype_request: REQUEST }),

@@ -190,7 +190,6 @@ describe("Reading a Ticket's Design session from its comments", () => {
       { kind: "agent-run-finished", role: "design", issue: 7, output },
       snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: 1 })),
       kitConfig({ ui: UI }),
-      { prototypes: true },
     );
     const requested = commentsOf(plan);
 
@@ -251,7 +250,6 @@ describe("Reading an issue's pending prototype request in the current session", 
       { kind: "agent-run-finished", role: "design", issue: 7, output },
       snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: 1 })),
       kitConfig({ ui: UI }),
-      { prototypes: true },
     );
     return app(commentsOf(plan)[0] ?? "");
   }

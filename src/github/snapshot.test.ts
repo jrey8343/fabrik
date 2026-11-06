@@ -938,7 +938,6 @@ describe("Gathering an issue's Design session", () => {
         { kind: "agent-run-finished", role: "design", issue: 6, output, startedBy: 9001 },
         snapshotOf(anIssue({ number: 6, labels: ["needs-design"], designRounds: 1 }), { startingComment: { id: 9001, exists: true } }),
         kitConfig({ ui: UI }),
-        { prototypes: true },
       );
       return plan.kind === "act" && plan.actions[0]?.kind === "comment" ? plan.actions[0].body : "";
     }
