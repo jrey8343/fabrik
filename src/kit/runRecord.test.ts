@@ -63,6 +63,8 @@ function needs(route: string, jobs: Needs = {}, kitOutputs: Record<string, strin
         retry: "",
         "step-up": "false",
         "request-changes": "false",
+        prototype: "false",
+        prototype_request: "",
         ...kitOutputs,
       },
     },
@@ -496,6 +498,94 @@ describe("The Run record a run's end yields", () => {
     // loop.yml's push job needs the Research job (src/kit/workflows.test.ts), so this is only ever a miswiring.
     it("no record is written for a research route whose needs don't name the Research job, rather than guess at one", () => {
       expect(runRecordFor(runEnd({ needs: needs("research"), eventIssue: 42, agentResult: null, transcript: null }))).toBeNull();
+    });
+  });
+
+  describe("a prototype turn's record is a Design-session turn's on the event's issue, marked as a prototype turn", () => {
+    const REQUEST = JSON.stringify({ route: "/book", variants: 3, brief: "Try a calendar-first layout.", reply: 7003 });
+    /** The prototype job on #12 ended `result`, the Design job skipped: the Kit job routed a pending prototype request to it. */
+    const prototypeTurn = (result: string, outputs: Record<string, string> = {}, overrides: Partial<RunEnd> = {}) =>
+      runRecordFor(
+        runEnd({
+          needs: needs(
+            "design",
+            { design: { result: "skipped", outputs: {} }, prototype: job(result, { "base-sha": DEFAULT_BRANCH_SHA, effort: "high", ...outputs }) },
+            { prototype: "true", prototype_request: REQUEST, effort: "high" },
+          ),
+          agentResult: result === "success" ? agentResult("design", 12) : null,
+          ...overrides,
+        }),
+      );
+
+    it("a passing prototype turn is in role design, with the prototype job's model, effort, base and cost", () => {
+      const files = prototypeTurn("success");
+
+      expect(files?.record).toMatchObject({
+        role: "design",
+        prototype: true,
+        issue: 12,
+        pullRequest: null,
+        model: "claude-opus-5-5",
+        effort: "high",
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: DEFAULT_BRANCH_SHA,
+        verdict: null,
+        jobResult: "success",
+        infrastructureFailure: null,
+        turns: 12,
+        totalCostUsd: 1.25,
+      });
+      expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-design.json");
+      expect(files?.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-1-design.jsonl.gz");
+    });
+
+    it("a prototype turn whose 1Password load failed is recorded as that Infrastructure failure of the prototype job", () => {
+      const files = prototypeTurn("failure", { "secrets-step": "failure", model: "", effort: "" }, { transcript: null });
+
+      expect(files?.record).toMatchObject({
+        role: "design",
+        prototype: true,
+        issue: 12,
+        jobResult: "failure",
+        infrastructureFailure: "unreachable-1password",
+        baseSha: DEFAULT_BRANCH_SHA,
+        turns: null,
+      });
+    });
+
+    it("a prototype turn timed out by its timeout-minutes, with its transcript, gets a record with no result fields", () => {
+      const files = prototypeTurn("cancelled", {}, { transcript: [init] });
+
+      expect(files?.record).toMatchObject({
+        role: "design",
+        prototype: true,
+        jobResult: "cancelled",
+        infrastructureFailure: "timeout",
+        subtype: null,
+        turns: null,
+        totalCostUsd: null,
+      });
+    });
+
+    // loop.yml's push job needs the prototype job once Prototypes are switched on, so this is only ever a miswiring.
+    it("no record is written for a prototype turn whose needs don't name the prototype job, rather than take the skipped Design job's", () => {
+      const end = runEnd({
+        needs: needs("design", { design: { result: "skipped", outputs: {} } }, { prototype: "true", prototype_request: REQUEST }),
+        agentResult: null,
+        transcript: null,
+      });
+
+      expect(runRecordFor(end)).toBeNull();
+    });
+
+    it("is known from the jobs alone, as any run's end is", () => {
+      const ended = (result: string) =>
+        agentRunEnded(needs("design", { design: { result: "skipped", outputs: {} }, prototype: job(result) }, { prototype: "true", prototype_request: REQUEST }), 12);
+
+      expect(ended("success")).toBe(true);
+      expect(ended("failure")).toBe(true);
     });
   });
 

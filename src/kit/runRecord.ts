@@ -14,7 +14,7 @@ import { infrastructureFailureOf } from "../loop/failures.ts";
 import { firstSubscription } from "../loop/subscriptions.ts";
 import type { AgentRole, InfrastructureFailure, KitConfig, Verdict } from "../loop/types.ts";
 import { parseVerdict } from "../loop/verdict.ts";
-import { type NeededJob, type Needs, pushJobInput, RETRO_EVIDENCE_JOB } from "./pushJob.ts";
+import { isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RETRO_EVIDENCE_JOB, routedJob } from "./pushJob.ts";
 
 /** What the push job knows when the run ends. */
 export interface RunEnd {
@@ -154,7 +154,7 @@ function endedRun(end: Pick<RunEnd, "needs" | "eventIssue" | "failureReport">): 
   const input = pushJobInput(end.needs, end.eventIssue);
   switch (input.kind) {
     case "agent-result":
-      return { role: input.role, issue: input.issue, pullRequest: input.pullRequest, job: end.needs[input.role], failure: null };
+      return { role: input.role, issue: input.issue, pullRequest: input.pullRequest, job: routedJob(end.needs, input.role), failure: null };
     case "review": {
       if (!input.withResult) return null;
       return { role: "review", issue: input.ticket, pullRequest: input.pullRequest, job: end.needs["review"], failure: null };
@@ -195,7 +195,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     retry: implement ? (countOf(kit["retry"]) ?? 0) : 0,
     stepUp: implement && kit["step-up"] === "true",
     requestChanges: implement && kit["request-changes"] === "true",
-    prototype: false,
+    prototype: role === "design" && isPrototypeTurn(end.needs),
     baseSha: nonEmpty(agent["base-sha"]),
     jobResult: job?.result ?? "unknown",
     infrastructureFailure: ran.failure,
@@ -317,11 +317,12 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
 /**
  * The job whose failure the push job saw: for a Review, the Reviewer, unless
  * its checks job failed first and the Reviewer never ran; for a Retro, the
- * Retro job, unless its evidence job failed first and the Retro never ran.
+ * Retro job, unless its evidence job failed first and the Retro never ran; for
+ * a prototype turn, the prototype job.
  */
 function failedJob(needs: Needs, role: AgentRole): NeededJob | undefined {
   const first = role === "review" ? needs["review-checks"] : role === "retro" ? needs[RETRO_EVIDENCE_JOB] : undefined;
-  return first !== undefined && FAILED.includes(first.result) ? first : needs[role];
+  return first !== undefined && FAILED.includes(first.result) ? first : routedJob(needs, role);
 }
 
 const FAILED = ["failure", "cancelled"];

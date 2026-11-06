@@ -75,6 +75,23 @@ const FAILED = ["failure", "cancelled"];
 export const RETRO_EVIDENCE_JOB = "retro-evidence";
 
 /**
+ * The key of the job that runs a Design session's prototype turn (#155). The
+ * turn's route and role stay `design`, so it's the Kit job's `prototype`
+ * output that says this job ran it, and the Design job was skipped.
+ */
+export const PROTOTYPE_JOB = "prototype";
+
+/** Whether the Kit job's plan started a Design session's prototype turn: its `prototype` output. */
+export function isPrototypeTurn(needs: Needs): boolean {
+  return needs["kit"]?.outputs["prototype"] === "true";
+}
+
+/** The job that ran the agent the Kit job routed to: the prototype job for a prototype turn, else the route's own. */
+export function routedJob(needs: Needs, route: AgentRole): NeededJob | undefined {
+  return needs[route === "design" && isPrototypeTurn(needs) ? PROTOTYPE_JOB : route];
+}
+
+/**
  * What the push job applies. `eventIssue` is the Actions event's issue number,
  * the run's subject for Triage, Design, the Auditor, the Retro and the
  * Researcher (whose subjects are the pending Audit and the pending Retro the
@@ -103,7 +120,7 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       // A Retro whose evidence job failed never ran its agent, and is that run's failure.
       const evidence = route === "retro" ? needs[RETRO_EVIDENCE_JOB] : undefined;
       if (evidence !== undefined && FAILED.includes(evidence.result)) return failure(route, issue, evidence, kit);
-      const job = needs[route];
+      const job = routedJob(needs, route);
       if (job !== undefined && FAILED.includes(job.result)) return failure(route, issue, job, kit);
       if (job?.result !== "success") return { kind: "nothing", reason: `the ${route} job ended ${job?.result ?? "unknown"}` };
       return {
