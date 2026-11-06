@@ -2,7 +2,7 @@
 // candidate Kit sha, the candidate's prompts and its Base skills pin, and
 // nothing else, are laid over the pinned Kit checkout before the agent job
 // fetches its skills and builds its prompt. The workflow code, the Kit's own
-// programs and the Scorers' rubrics stay the pinned release (ADR-0003).
+// programs and the Scorers' rubrics stay the pinned release (ADR-0003's addendum).
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { allPages, type GitHub, GitHubError } from "../github/client.ts";

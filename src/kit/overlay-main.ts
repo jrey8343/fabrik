@@ -1,7 +1,7 @@
 // Lays a Replay arm's candidate Kit sha over the pinned Kit checkout (#156,
 // src/kit/overlay.ts): its prompts and Base skills pin, and nothing else, so
 // the agent job's skills fetch and prompt read the candidate's while every
-// program and workflow stays the pinned release (ADR-0003). It runs before the
+// program and workflow stays the pinned release (ADR-0003's addendum). It runs before the
 // skills fetch (.github/actions/prepare-agent, its kit-candidate input).
 //   node <kit>/src/kit/overlay-main.ts <kit checkout> <candidate sha>
 // Env: GH_TOKEN, the job's read-only token, which reads the Fabrik repo;
