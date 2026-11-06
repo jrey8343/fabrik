@@ -42,19 +42,37 @@ function subscriptionNamedBy(issue: KitIssueSnapshot): string | null {
 }
 
 /**
+ * The Subscription an open weekly-limit issue is about: the one it names, or
+ * the first listed one for a V1 issue, which names none.
+ */
+export function weeklyLimitSubscriptionOf(issue: KitIssueSnapshot, config: Pick<KitConfig, "subscriptions">): string {
+  const first = config.subscriptions[0];
+  if (first === undefined) throw new Error("Kit config lists no Subscription");
+  return subscriptionNamedBy(issue) ?? first;
+}
+
+/** The listed Subscriptions with no open weekly-limit issue, in the listed order. */
+export function freeSubscriptions(
+  kitIssues: readonly KitIssueSnapshot[],
+  config: Pick<KitConfig, "subscriptions">,
+): readonly string[] {
+  const usedUp = new Set(
+    kitIssues
+      .filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL))
+      .map((issue) => weeklyLimitSubscriptionOf(issue, config)),
+  );
+  return config.subscriptions.filter((subscription) => !usedUp.has(subscription));
+}
+
+/**
  * The Subscription a run starting now is given: the first listed one with no
  * open weekly-limit issue. While every listed one has one, the first listed
  * is given, as V1 does with its one Subscription.
  */
 export function chosenSubscription(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): string {
-  const [first, ...rest] = config.subscriptions;
+  const first = config.subscriptions[0];
   if (first === undefined) throw new Error("Kit config lists no Subscription");
-  const usedUp = new Set(
-    kitIssues
-      .filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL))
-      .map((issue) => subscriptionNamedBy(issue) ?? first),
-  );
-  return [first, ...rest].find((subscription) => !usedUp.has(subscription)) ?? first;
+  return freeSubscriptions(kitIssues, config)[0] ?? first;
 }
 
 /** The Plan with every run it starts given the chosen Subscription. */

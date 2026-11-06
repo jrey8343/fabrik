@@ -3,9 +3,13 @@
 // once per Ticket. A dead Claude token gets a "Rotate the Claude token" issue;
 // the weekly usage limit gets one per window, which a scheduled tick closes
 // after the reset. They don't restart stalled Tickets: each Ticket's own
-// failure comment names the trigger label to re-add.
+// failure comment names the trigger label to re-add. With rotation on, each
+// Subscription gets its own weekly-limit issue, which stays quiet while
+// another Subscription is free: only the one opened, or refused on, once none
+// is free @-mentions the Operator.
 import { READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
-import type { Action, InfrastructureFailure, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
+import { freeSubscriptions, rotationIsOn, subscriptionMarker, weeklyLimitSubscriptionOf } from "./subscriptions.ts";
+import type { Action, InfrastructureFailure, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
 
 /** The repo-wide part of any snapshot: who the Operator is and which Kit-owned issues are open. */
 type RepoContext = Pick<Snapshot, "kitIssues" | "operator">;
@@ -31,6 +35,19 @@ export interface StalledRun {
   readonly subscription: string;
   /** Whether rotation is on, so the Kit's issues say which Subscription they're about. */
   readonly rotation: boolean;
+  /** Every listed Subscription, in the listed order, so a weekly-limit notice knows whether another is free. */
+  readonly subscriptions: readonly string[];
+}
+
+/**
+ * Whether a Subscription other than the refused one is still free: listed,
+ * with no open weekly-limit issue. Only with rotation on can one be.
+ */
+export function anotherSubscriptionFree(
+  kitIssues: readonly KitIssueSnapshot[],
+  { subscription, rotation, subscriptions }: Pick<StalledRun, "subscription" | "rotation" | "subscriptions">,
+): boolean {
+  return rotation && freeSubscriptions(kitIssues, { subscriptions }).some((free) => free !== subscription);
 }
 
 /** The token a dead-token notice says was refused: with rotation on, the Subscription's. */
@@ -63,7 +80,7 @@ export function repoWideNotice(
     case "dead-token":
       return deadToken(snapshot, stalled);
     case "weekly-limit":
-      return weeklyLimit(snapshot, stalled);
+      return stalled.rotation ? subscriptionWeeklyLimit(snapshot, stalled) : weeklyLimit(snapshot, stalled);
     default:
       return null;
   }
@@ -78,10 +95,23 @@ function resetsAtOf(issue: KitIssueSnapshot): string | null {
   return Number.isNaN(Date.parse(value)) ? null : value;
 }
 
-/** The scheduled tick: closes the weekly-limit issue once its reset time has passed. */
-export function scheduledTick(now: string, { kitIssues }: Snapshot): Plan {
-  const open = kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
-  if (open === undefined) return { kind: "nothing", reason: "No weekly-limit issue is open" };
+/**
+ * The scheduled tick: closes the weekly-limit issue once its reset time has
+ * passed. With rotation on, it closes each Subscription's at its own reset.
+ */
+export function scheduledTick(now: string, { kitIssues }: Snapshot, config: Pick<KitConfig, "subscriptions">): Plan {
+  const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
+  const [first] = limits;
+  if (first === undefined) return { kind: "nothing", reason: "No weekly-limit issue is open" };
+  if (!rotationIsOn(config)) return closedAtReset(now, first, null);
+  const plans = limits.map((issue) => closedAtReset(now, issue, weeklyLimitSubscriptionOf(issue, config)));
+  const actions = plans.flatMap((plan) => (plan.kind === "act" ? plan.actions : []));
+  if (actions.length > 0) return { kind: "act", actions };
+  return { kind: "nothing", reason: plans.map((plan) => (plan.kind === "nothing" ? plan.reason : "")).join("; ") };
+}
+
+/** One weekly-limit issue, closed once its reset has passed, naming its Subscription when rotation is on. */
+function closedAtReset(now: string, open: KitIssueSnapshot, subscription: string | null): Plan {
   const resetsAt = resetsAtOf(open);
   if (resetsAt === null) {
     return { kind: "nothing", reason: `#${open.number} doesn't say when the weekly limit resets, so the Operator closes it` };
@@ -95,7 +125,10 @@ export function scheduledTick(now: string, { kitIssues }: Snapshot): Plan {
       {
         kind: "comment",
         issue: open.number,
-        body: `The weekly usage limit reset at ${readable(resetsAt)}, so the Kit is closing this issue. Stalled Tickets stay stalled until their trigger label is re-added.`,
+        body:
+          subscription === null
+            ? `The weekly usage limit reset at ${readable(resetsAt)}, so the Kit is closing this issue. Stalled Tickets stay stalled until their trigger label is re-added.`
+            : `The weekly usage limit of the \`${subscription}\` Subscription reset at ${readable(resetsAt)}, so the Kit is closing this issue.`,
       },
       { kind: "close", issue: open.number, reason: "completed" },
     ],
@@ -164,6 +197,96 @@ function weeklyLimit({ kitIssues, operator }: RepoContext, stalled: StalledRun):
     ],
     pointer: "The Kit has opened a weekly-limit issue for the Operator.",
   };
+}
+
+/**
+ * With rotation on: the refused Subscription's own weekly-limit issue. While
+ * another Subscription is free it is opened, or commented on, quietly, since
+ * the run goes on elsewhere. Once none is free, it is the one that @-mentions
+ * the Operator, naming the earliest reset across the open weekly-limit
+ * issues, unless one of them already did.
+ */
+function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: StalledRun): RepoWideNotice {
+  const { resetsAt, subscription } = stalled;
+  const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
+  const mine = limits.find((issue) => weeklyLimitSubscriptionOf(issue, stalled) === subscription);
+  const others = limits.filter((issue) => issue !== mine);
+  const mineResetsAt = mine === undefined ? null : resetsAtOf(mine);
+  // A later reset time than the open issue's means its window is over: this is a new one.
+  const newWindow =
+    mine !== undefined && mineResetsAt !== null && resetsAt !== null && Date.parse(resetsAt) > Date.parse(mineResetsAt);
+  const stayingOpen = mine !== undefined && !newWindow ? [...others, mine] : others;
+  const buzz = !anotherSubscriptionFree(others, stalled) && !stayingOpen.some(notified);
+  const earliest = earliestOf([...others.map(resetsAtOf), mine !== undefined && !newWindow ? mineResetsAt : resetsAt]);
+  const allUsedUp = [
+    `${stalled.run} hit the weekly usage limit of the \`${subscription}\` Subscription, and every listed Subscription has now hit its limit.`,
+    earliest === null ? "When the first resets isn't known." : `The first resets at ${readable(earliest)}.`,
+    "Until then every agent run in this repo stalls",
+  ].join(" ");
+  if (mine !== undefined && !newWindow) {
+    const body = buzz
+      ? [`@${operator} ${allUsedUp}. [The run](${stalled.runUrl})`, "", NOTIFIED].join("\n")
+      : `${stalled.run} was refused on the limit too. [The run](${stalled.runUrl})`;
+    return {
+      actions: [{ kind: "comment", issue: mine.number, body }],
+      pointer: `The Kit is tracking this in #${mine.number}.`,
+    };
+  }
+  const title =
+    resetsAt === null
+      ? `The weekly usage limit of the \`${subscription}\` Subscription is reached`
+      : `The weekly usage limit of the \`${subscription}\` Subscription is reached until ${readable(resetsAt)}`;
+  const when =
+    resetsAt === null
+      ? "When it resets isn't known, so close this issue yourself once it works again."
+      : `It resets at ${readable(resetsAt)}, and the Kit closes this issue then.`;
+  const body = buzz
+    ? [
+        // The @-mention is this issue's one notification.
+        `@${operator} ${allUsedUp}, and the Kit comments here about each one.`,
+        "",
+        "## Steps",
+        "",
+        earliest === null
+          ? "- [ ] Wait until agent runs work again: when the first limit resets isn't known."
+          : `- [ ] Wait for the first limit to reset at ${readable(earliest)}.`,
+        "- [ ] Re-add the trigger label named in each stalled Ticket's failure comment, to run it again. The Kit doesn't restart them.",
+        "",
+        "Run `/fabrik-pair` on this issue to work through these steps with an agent.",
+        "",
+        `[The run](${stalled.runUrl})`,
+        "",
+        NOTIFIED,
+      ]
+    : [
+        `${stalled.run} hit the weekly usage limit of the \`${subscription}\` Subscription. ${when} Until then the Kit runs agents on the other Subscriptions, and comments here about each run refused on this one.`,
+        "",
+        `[The run](${stalled.runUrl})`,
+      ];
+  return {
+    actions: [
+      ...(mine === undefined ? [] : [{ kind: "close" as const, issue: mine.number, reason: "completed" as const }]),
+      {
+        kind: "open-issue",
+        title,
+        body: [
+          ...body,
+          "",
+          subscriptionMarker(subscription),
+          ...(resetsAt === null ? [] : [`${RESETS_AT_MARKER} ${resetsAt} -->`]),
+        ].join("\n"),
+        labels: [WEEKLY_LIMIT_LABEL],
+        assignees: [],
+      },
+    ],
+    pointer: "The Kit has opened a weekly-limit issue for the Operator.",
+  };
+}
+
+/** The earliest of these reset times, or null when none is known. */
+function earliestOf(resets: readonly (string | null)[]): string | null {
+  const known = resets.filter((reset): reset is string => reset !== null);
+  return known.length === 0 ? null : known.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a));
 }
 
 function deadToken({ kitIssues, operator }: RepoContext, stalled: StalledRun): RepoWideNotice {
