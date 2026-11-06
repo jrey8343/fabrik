@@ -26,6 +26,13 @@ export const PROTOTYPE_DEFAULT_VARIANTS = 3;
 /** The most variants a Prototype builds: past five they stop being different and the gallery stops being quick to look through. */
 export const PROTOTYPE_VARIANT_CAP = 5;
 
+/**
+ * Whether the Kit runs UI prototypes at all. Off until UI prototypes are
+ * switched on (#282): until then no Design prompt offers a Prototype and the
+ * Loop rules core refuses every `prototype` output. Only tests pass `switchedOn`.
+ */
+export const PROTOTYPES_SWITCHED_ON = false;
+
 export interface RoundQuestion {
   readonly question: string;
   /** The answer the agent recommends, so the Operator can reply in a word. */
