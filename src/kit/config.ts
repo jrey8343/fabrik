@@ -503,8 +503,43 @@ function checkHttpOrHttpsUrl(url: string): string | null {
 /** The `preview` block; left out, null, or with no `url`, the pull request links no preview. */
 function readPreview(preview: Reader | null | undefined): PreviewConfig | null {
   if (preview === undefined || preview === null) return null;
-  const url = preview.nullableString("url");
+  const url = preview.nullableString("url", checkPreviewTemplate);
   return url === undefined || url === null ? null : { url };
+}
+
+/** The placeholders a `preview.url` template may use, filled in from the pull request after the push. */
+export const PREVIEW_PLACEHOLDERS = ["pr", "branch_slug", "sha"] as const;
+
+export type PreviewPlaceholder = (typeof PREVIEW_PLACEHOLDERS)[number];
+
+/** A stand-in for each placeholder, so a template can be checked as the URL it fills in to. */
+const PLACEHOLDER_STAND_INS: Readonly<Record<PreviewPlaceholder, string>> = {
+  pr: "1",
+  branch_slug: "branch",
+  sha: "0".repeat(40),
+};
+
+const PLACEHOLDER = /\{([^{}]*)\}/g;
+
+function isPreviewPlaceholder(name: string): name is PreviewPlaceholder {
+  return (PREVIEW_PLACEHOLDERS as readonly string[]).includes(name);
+}
+
+function checkPreviewTemplate(template: string): string | null {
+  const only = `a preview URL may use only ${spelledList(PREVIEW_PLACEHOLDERS.map((name) => `{${name}}`))}`;
+  const unknown = [...template.matchAll(PLACEHOLDER)].filter(([, name = ""]) => !isPreviewPlaceholder(name));
+  if (unknown.length > 0) {
+    const tokens = spelledList(unknown.map(([token]) => token));
+    return `${tokens} ${unknown.length === 1 ? "is not a placeholder" : "are not placeholders"}; ${only}`;
+  }
+  const filled = template.replace(PLACEHOLDER, (_, name: PreviewPlaceholder) => PLACEHOLDER_STAND_INS[name]);
+  if (/[{}]/.test(filled)) return `it has a { or } that isn't part of a placeholder; ${only}`;
+  return checkHttpOrHttpsUrl(filled);
+}
+
+/** `a`, `a and b`, or `a, b and c`. */
+function spelledList(items: readonly string[]): string {
+  return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
 function readAudit(audit: Reader, defaults: KitConfig["audit"]): KitConfig["audit"] {

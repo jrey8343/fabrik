@@ -984,4 +984,84 @@ describe("The ui and preview blocks, which Visual evidence reads", () => {
       `ui.default_routes[2] is "services": a route must be a path starting with one /, such as /book`,
     ]);
   });
+
+  it.each([
+    "https://deploy-preview-{pr}--penrith-physio.netlify.app",
+    "https://{branch_slug}-penrith-physio.workers.dev",
+    "https://preview.example.dev/{pr}/{branch_slug}/{sha}",
+    "https://staging.penrithphysio.com.au",
+  ])("takes %s as a preview.url template", (url) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ preview: { url } }) });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, preview: { url } } });
+  });
+
+  it.each([
+    [
+      "https://{branch}-penrith-physio.workers.dev",
+      `preview.url is "https://{branch}-penrith-physio.workers.dev": {branch} is not a placeholder; a preview URL may use only {pr}, {branch_slug} and {sha}`,
+    ],
+    [
+      "https://pr-{PR}.example.dev/{commit}",
+      `preview.url is "https://pr-{PR}.example.dev/{commit}": {PR} and {commit} are not placeholders; a preview URL may use only {pr}, {branch_slug} and {sha}`,
+    ],
+    [
+      "https://pr-{pr.example.dev",
+      `preview.url is "https://pr-{pr.example.dev": it has a { or } that isn't part of a placeholder; a preview URL may use only {pr}, {branch_slug} and {sha}`,
+    ],
+    ["deploy-preview-{pr}.netlify.app", `preview.url is "deploy-preview-{pr}.netlify.app": a URL must start with http:// or https://`],
+    ["{pr}", `preview.url is "{pr}": a URL must start with http:// or https://`],
+    [42, "preview.url must be a string"],
+  ])("refuses a preview.url with an unknown placeholder or that isn't http(s), naming it: %j", (url, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ preview: { url } }) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [withUi({ viewports: [{ name: "tablet", width: 768, height: 1024 }] }), "ui.viewports is not a Kit config field"],
+    [withUi({ video: true }), "ui.video is not a Kit config field"],
+    [withUi({ beforeUrl: "https://penrithphysio.com.au" }), "ui.beforeUrl is not a Kit config field"],
+    [`{ "preview": { "url": null, "ready_timeout_minutes": 15 } }`, "preview.ready_timeout_minutes is not a Kit config field"],
+    [`{ "previews": { "url": "https://pr-{pr}.example.dev" } }`, "previews is not a Kit config field"],
+  ])("fails an unknown field under ui or preview, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [`{ "ui": ["src/**"] }`, "ui must be an object or null"],
+    [`{ "ui": false }`, "ui must be an object or null"],
+    [`{ "preview": "https://pr-{pr}.example.dev" }`, "preview must be an object or null"],
+  ])("fails a ui or preview block that isn't an object, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("names every problem in the ui and preview blocks at once", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        ui: { paths: [], url: "localhost:4321", before_url: "ftp://penrithphysio.com.au", default_routes: ["book"], video: true },
+        preview: { url: "https://{branch}.example.dev", bypass_header: "x-vercel-protection-bypass" },
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        "ui.paths is empty: list at least one glob of the files that make a pull request UI",
+        "ui.serve is missing",
+        `ui.url is "localhost:4321": a URL must start with http:// or https://`,
+        `ui.before_url is "ftp://penrithphysio.com.au": a URL must start with http:// or https://`,
+        `ui.default_routes[0] is "book": a route must be a path starting with one /, such as /book`,
+        `preview.url is "https://{branch}.example.dev": {branch} is not a placeholder; a preview URL may use only {pr}, {branch_slug} and {sha}`,
+        "ui.video is not a Kit config field",
+        "preview.bypass_header is not a Kit config field",
+      ],
+    });
+  });
+
+  it("names the ui and preview problems alongside the rest of the Kit config's", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ max_in_flight: -1, ui: { serve: "npm run preview", url: "http://localhost:4321" } }),
+    });
+
+    expect(!result.ok && result.errors).toEqual(["max_in_flight must be a whole number of at least 0", "ui.paths is missing"]);
+  });
 });
