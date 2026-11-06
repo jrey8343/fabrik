@@ -61,6 +61,12 @@ Then the Operator runs the wizard (`skills/fabrik-setup/wizard.sh`, made with th
 
 Re-running `/fabrik-setup` on a working install changes nothing. On a broken one it repairs only what's missing: a missing label is created, and a missing secret gets a new service account (1Password shows a token only once, so delete the old account by hand).
 
+## Vision and Roadmap
+
+A Product repo may keep two files that hold its Product intent, both free prose with no schema: `docs/product/vision.md`, the **Vision** (a short paragraph per kind of End user, the problem the product solves for them, how its success is measured, and what it deliberately doesn't do), and `docs/product/roadmap.md`, the **Roadmap** (Now / Next / Later, one line per item, and no "Not doing" list, since the Vision holds that). Both are optional, and both are Operator-only Trust-root files: the Operator writes them by hand or in a Pairing session, and the push job refuses any agent branch that touches `docs/product/` (see [Implementation](#implementation)). Only that folder at the repo root counts, so a `docs/product/` inside a package stays ordinary. Without them nothing refuses to run, and nothing asks the Operator to write them.
+
+[`docs/examples/vision.md`](docs/examples/vision.md) and [`docs/examples/roadmap.md`](docs/examples/roadmap.md) are a commented example of each, for a made-up product. The Operator writes their own by copying one into the Product repo's `docs/product/` and rewriting it. Setup never installs them, and the Loop never reads the examples.
+
 ## Triage
 
 A person's reply on a `needs-info` issue swaps `needs-info` for `needs-triage`, which starts Triage again; a bot's reply does nothing. Deleting the reply doesn't undo the swap: Triage still runs, reads the thread without the reply, and most likely asks its questions again, one more round and one more notification.
@@ -106,7 +112,7 @@ Dispatch adding `agent:implement` to a Ticket starts its Implementer (Sonnet 5.5
 - **The prompt** carries the Ticket, its parent Spec, `GLOSSARY.md`, the ADRs under `docs/adr/` and the Product's implement instructions, and starts the `implement` skill, which works test-first with `tdd`.
 - **The push job** rebuilds the branch from the git bundle the agent job passed out and runs the trust-root guard on every path any of its commits changes:
   - **Allowed**: the Fabrik App pushes the branch and opens one draft PR to `main` with `Closes #<n>`, which starts CI. Nobody is notified.
-  - **Refused** (it touches `AGENTS.md`, `CLAUDE.md`, `.claude/settings*`, `.claude/skills/`, the Kit's role prompts `prompts/<role>.md` and its Scorers' rubrics `prompts/scorers/` (a Product's other `prompts/` files are its own), `.fabrik/` or `.github/workflows/`): nothing is pushed. The Ticket moves to `ready-for-human`, is assigned to the Operator, and gets a comment listing the paths. A refused retry or Request-changes run also closes its PR unmerged, keeping its branch, so it no longer holds a `max_in_flight` slot. This uses no retry.
+  - **Refused** (it touches `AGENTS.md`, `CLAUDE.md`, `.claude/settings*`, `.claude/skills/`, the Kit's role prompts `prompts/<role>.md` and its Scorers' rubrics `prompts/scorers/` (a Product's other `prompts/` files are its own), `.fabrik/`, `.github/workflows/` or `docs/product/`, where the [Vision and Roadmap](#vision-and-roadmap) live): nothing is pushed. The Ticket moves to `ready-for-human`, is assigned to the Operator, and gets a comment listing the paths. A refused retry or Request-changes run also closes its PR unmerged, keeping its branch, so it no longer holds a `max_in_flight` slot. This uses no retry.
   - **Empty diff**: an Execution flaw, never a pass. The Implementer runs again, silently, up to 2 times (the second a Step-up), and a third empty diff sends the Ticket to `needs-design`.
 
 ## Review
