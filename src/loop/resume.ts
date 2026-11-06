@@ -16,7 +16,7 @@
 import { auditMarksIn } from "./markers.ts";
 import { startAuditorRun } from "./audit.ts";
 import { type HeldRun, RUN_NAMES, resumedMarker, type Waiting, waitingHeldRuns } from "./heldRun.ts";
-import { AUDIT_LABEL, isStateLabel, NEEDS_DESIGN, READY_FOR_AGENT, WEEKLY_LIMIT_LABEL } from "./labels.ts";
+import { AUDIT_LABEL, isStateLabel, NEEDS_DESIGN, READY_FOR_AGENT, RESEARCH_DECISION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { rotationIsOn } from "./subscriptions.ts";
 import type { Action, HeldTargetSnapshot, KitConfig, Plan, Snapshot } from "./types.ts";
 
@@ -80,7 +80,8 @@ export function resumingHeldRuns(tick: Plan, snapshot: Snapshot, config: KitConf
  * null while it still is. A Triage run was held on an issue with no state
  * label (needs-triage came off), a Design-session turn on a needs-design one,
  * an Implement run on a ready-for-agent Ticket, a Review on a draft agent PR,
- * and an Auditor run on the App's pending Audit.
+ * an Auditor run on the App's pending Audit, and a Researcher run on a
+ * research Decision.
  */
 function movedOn(run: HeldRun, on: HeldTargetSnapshot): string | null {
   const name = `The ${RUN_NAMES[run.role]} run's`;
@@ -103,5 +104,8 @@ function movedOn(run: HeldRun, on: HeldTargetSnapshot): string | null {
     case "retro":
       // A Retro run fails rather than wait for a reset, since the tick can't start one (src/loop/failures.ts).
       return `The Kit never holds a Retro run, so it starts none on #${on.number}`;
+    case "research":
+      // Its Map isn't read here: agent:research, given back, starts nothing under a closed one (src/loop/research.ts).
+      return on.labels.includes(RESEARCH_DECISION_LABEL) ? null : `${name} #${on.number} is no longer a research Decision`;
   }
 }

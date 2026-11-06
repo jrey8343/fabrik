@@ -42,6 +42,13 @@ export function designRoundMarker(round: number): string {
  */
 export const DESIGN_TURN_FAILED_MARKER = "<!-- fabrik:design-turn-failed -->";
 
+/**
+ * The first line of the Kit's failure notice for a Researcher run on a
+ * Decision (#154): while that notice is the Decision's latest run's word,
+ * Dispatch leaves it for the Operator to re-add agent:research.
+ */
+export const RESEARCH_RUN_FAILED_MARKER = "<!-- fabrik:research-run-failed -->";
+
 /** How the comment that ends a Design session starts, either way it ends. */
 export const SESSION_FINISHED = "**Design session finished.**";
 

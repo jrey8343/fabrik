@@ -15,6 +15,7 @@ import {
   NEEDS_TRIAGE,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
+  RESEARCH_LABEL,
   REVIEW_LABEL,
   WONTFIX,
 } from "./labels.ts";
@@ -25,6 +26,7 @@ import { heldOf } from "./heldRun.ts";
 import { scheduledTick } from "./kitIssues.ts";
 import { resumingHeldRuns } from "./resume.ts";
 import { heldWhileUsedUp } from "./hold.ts";
+import { startResearcher } from "./research.ts";
 import { startAgentRun } from "./runs.ts";
 import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
@@ -228,8 +230,10 @@ function missingFromSnapshot(what: string): Plan {
 
 /**
  * Adding needs-triage starts Triage; adding needs-design asks for a Design
- * queue check, whose agent:design starts the Design session's first turn; and
- * adding agent:implement starts (or resumes) an Implement run.
+ * queue check, whose agent:design starts the Design session's first turn;
+ * adding agent:implement starts (or resumes) an Implement run; and adding
+ * agent:research starts a Researcher run. Nothing adds agent:research yet
+ * but the Operator, by hand (#154).
  */
 function labelAdded(
   issueNumber: number,
@@ -241,6 +245,7 @@ function labelAdded(
   if (label === NEEDS_DESIGN) return startSession(issueNumber, context);
   if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config);
   if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
+  if (label === RESEARCH_LABEL) return startResearcher(issueNumber, context, config);
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }

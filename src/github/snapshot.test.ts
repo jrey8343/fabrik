@@ -6,7 +6,7 @@ import { type CaptureResult, evidenceSection } from "../evidence/uiEvidence.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { DESIGN_TURN_FAILED_MARKER } from "../loop/markers.ts";
+import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
 import { countImplementRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, readKitConfigSources } from "./snapshot.ts";
@@ -436,18 +436,27 @@ describe("Gathering an issue's blocked-by edges", () => {
   });
 });
 
-/** The issue a Loop event is about, as GitHub holds it: opened by `author`, with this body and these labels. */
+/** An issue's parent, as GitHub holds it. */
+interface GitHubParent {
+  number: number;
+  state: "OPEN" | "CLOSED";
+  labels: string[];
+}
+
+/** The issue a Loop event is about, as GitHub holds it: opened by `author`, with this body, these labels and this parent. */
 function issueGitHub({
   author = { login: "someone", __typename: "User" },
   body = "",
   labels = ["needs-design"],
-}: { author?: { login: string; __typename: string } | null; body?: string; labels?: string[] } = {}): GitHub {
+  parent = null,
+}: { author?: { login: string; __typename: string } | null; body?: string; labels?: string[]; parent?: GitHubParent | null } = {}): GitHub {
   return {
     async graphql(query: string): Promise<unknown> {
       if (!query.includes("issue(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
       // GitHub answers only the fields the query selects.
       const issueQuery = query.slice(query.indexOf("issue(number: $number)"));
       const selectsType = /^\s*author \{[^}]*__typename/m.test(issueQuery);
+      const parentSelection = /^\s*parent \{[^}]*/m.exec(issueQuery)?.[0] ?? "";
       return {
         repository: {
           owner: { login: "acme" },
@@ -457,7 +466,14 @@ function issueGitHub({
             author: author === null || selectsType ? author : { login: author.login },
             ...(/^\s*body$/m.test(issueQuery) ? { body } : {}),
             labels: { nodes: labels.map((name) => ({ name })) },
-            parent: null,
+            parent:
+              parent === null
+                ? null
+                : {
+                    number: parent.number,
+                    ...(/\bstate\b/.test(parentSelection) ? { state: parent.state } : {}),
+                    ...(/\blabels\(/.test(parentSelection) ? { labels: { nodes: parent.labels.map((name) => ({ name })) } } : {}),
+                  },
             comments: { nodes: [] },
             timelineItems: { nodes: [] },
             closedByPullRequestsReferences: { nodes: [] },
@@ -514,6 +530,35 @@ describe("Gathering an issue's body", () => {
     const snapshot = await gatherSnapshot(issueGitHub({ author: APP_BOT, body }), repo, event, null, APP_LOGIN);
 
     expect(snapshot.issue?.body).toBe(body);
+  });
+});
+
+describe("Gathering an issue's parent", () => {
+  const labelled = { kind: "label-added", issue: 98, label: "agent:research" } as const;
+
+  it("holds the parent's number, whether it's open and its labels, so the core can tell a research Decision's Map is open", async () => {
+    const github = issueGitHub({
+      labels: ["wayfinder:research", "agent:research"],
+      parent: { number: 3, state: "OPEN", labels: ["enhancement", "wayfinder:map"] },
+    });
+
+    const snapshot = await gatherSnapshot(github, repo, labelled, null, APP_LOGIN);
+
+    expect(snapshot.issue).toMatchObject({ parent: 3, parentIssue: { number: 3, open: true, labels: ["enhancement", "wayfinder:map"] } });
+  });
+
+  it("holds a closed parent as closed", async () => {
+    const github = issueGitHub({ labels: ["wayfinder:research"], parent: { number: 3, state: "CLOSED", labels: ["wayfinder:map"] } });
+
+    const snapshot = await gatherSnapshot(github, repo, labelled, null, APP_LOGIN);
+
+    expect(snapshot.issue?.parentIssue).toEqual({ number: 3, open: false, labels: ["wayfinder:map"] });
+  });
+
+  it("holds no parent for an issue that isn't a sub-issue", async () => {
+    const snapshot = await gatherSnapshot(issueGitHub({ labels: ["wayfinder:research"] }), repo, labelled, null, APP_LOGIN);
+
+    expect(snapshot.issue).toMatchObject({ parent: null, parentIssue: null });
   });
 });
 
@@ -914,13 +959,119 @@ describe("Gathering a Dispatch check's Tickets", () => {
             },
           };
         }
-        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+        return { repository: { owner: { login: "acme" }, issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } };
       },
     } as unknown as GitHub;
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "dispatch-check" }, null, null, actionsWith([]) as unknown as GitHub);
 
     expect(snapshot.dispatch?.tickets).toMatchObject([{ number: 6, openBlockers: [10], notPlannedBlockers: [9] }]);
+  });
+});
+
+/** An open `wayfinder:research` issue as GitHub holds it, by default unassigned, unblocked, under the open Map #3, and with no comments. */
+function aResearchNode(
+  number: number,
+  {
+    labels = ["wayfinder:research"],
+    assignees = [],
+    blockedBy = [],
+    parent = { number: 3, state: "OPEN", labels: ["enhancement", "wayfinder:map"] },
+    comments = [],
+  }: {
+    labels?: string[];
+    assignees?: string[];
+    blockedBy?: { number: number; state: "OPEN" | "CLOSED" }[];
+    parent?: GitHubParent | null;
+    comments?: { body: string; author: { __typename: string } | null }[];
+  } = {},
+) {
+  return {
+    number,
+    state: "OPEN",
+    labels: { nodes: labels.map((name) => ({ name })) },
+    assignees: { nodes: assignees.map((login) => ({ login })) },
+    blockedBy: { nodes: blockedBy },
+    parent: parent === null ? null : { number: parent.number, state: parent.state, labels: { nodes: parent.labels.map((name) => ({ name })) } },
+    comments: { nodes: comments },
+  };
+}
+
+describe("Gathering a Dispatch check's research Decisions", () => {
+  /** The read-only API, holding no ready-for-agent Ticket and these pages of open `wayfinder:research` issues. */
+  function researchGitHub(pages: ReturnType<typeof aResearchNode>[][]): GitHub {
+    return {
+      async graphql(query: string, variables: { after: string | null; research?: string }): Promise<unknown> {
+        if (query.includes("labels: [$ready]")) {
+          return { repository: { owner: { login: "acme" }, issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] }, pullRequests: { nodes: [] } } };
+        }
+        if (query.includes("labels: [$research]")) {
+          expect(variables.research).toBe("wayfinder:research");
+          const page = variables.after === null ? 0 : Number(variables.after);
+          const hasNextPage = page + 1 < pages.length;
+          return {
+            repository: {
+              issues: { pageInfo: { hasNextPage, endCursor: hasNextPage ? String(page + 1) : null }, nodes: pages[page] ?? [] },
+            },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+  }
+
+  async function gathered(pages: ReturnType<typeof aResearchNode>[][]) {
+    const snapshot = await gatherSnapshot(researchGitHub(pages), repo, { kind: "dispatch-check" }, null, null, actionsWith([]) as unknown as GitHub);
+    return snapshot.dispatch?.researchDecisions;
+  }
+
+  it("holds each one, on every page, with its labels, assignees, open blockers and parent Map's state", async () => {
+    const decisions = await gathered([
+      [
+        aResearchNode(12, {
+          labels: ["wayfinder:research", "agent:research"],
+          assignees: ["jrey"],
+          blockedBy: [
+            { number: 10, state: "OPEN" },
+            { number: 9, state: "CLOSED" },
+          ],
+        }),
+      ],
+      [
+        aResearchNode(14, { parent: { number: 5, state: "CLOSED", labels: ["wayfinder:map"] } }),
+        aResearchNode(15, { parent: null }),
+      ],
+    ]);
+
+    expect(decisions).toEqual([
+      {
+        number: 12,
+        open: true,
+        labels: ["wayfinder:research", "agent:research"],
+        assignees: ["jrey"],
+        openBlockers: [10],
+        parentIssue: { number: 3, open: true, labels: ["enhancement", "wayfinder:map"] },
+        lastRunFailed: false,
+      },
+      { number: 14, open: true, labels: ["wayfinder:research"], assignees: [], openBlockers: [], parentIssue: { number: 5, open: false, labels: ["wayfinder:map"] }, lastRunFailed: false },
+      { number: 15, open: true, labels: ["wayfinder:research"], assignees: [], openBlockers: [], parentIssue: null, lastRunFailed: false },
+    ]);
+  });
+
+  const BOT = { __typename: "Bot" };
+  const PERSON = { __typename: "User" };
+  const NOTICE = `${RESEARCH_RUN_FAILED_MARKER}\n@operator The Research run on #12 failed: it crashed.`;
+
+  it.each([
+    ["the Kit's failure notice is its last comment", [{ body: NOTICE, author: BOT }], true],
+    ["the Operator has only replied since the Kit's failure notice", [{ body: NOTICE, author: BOT }, { body: "Looking into it", author: PERSON }], true],
+    ["the Kit has commented since its failure notice, as a later run's resolution does", [{ body: NOTICE, author: BOT }, { body: "**Resolved.** The gist.", author: BOT }], false],
+    ["a person quoted the failure notice", [{ body: NOTICE, author: PERSON }], false],
+    ["it has no comments", [], false],
+  ])("reads its last run as failed only when the Kit's failure notice is its latest run's word: %s", async (_case, comments, failed) => {
+    const decisions = await gathered([[aResearchNode(12, { comments })]]);
+
+    expect(decisions?.[0]?.lastRunFailed).toBe(failed);
   });
 });
 

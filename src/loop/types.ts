@@ -7,9 +7,9 @@ import type { SentBack } from "./backToDesign.ts";
 import type { Label } from "./labels.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
-export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" | "retro";
+export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" | "retro" | "research";
 
-export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit", "retro"];
+export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit", "retro", "research"];
 
 /** How an agent job says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
 export type ReportedFailure =
@@ -107,10 +107,11 @@ export type LoopEvent =
   | {
       readonly kind: "agent-run-finished";
       /**
-       * Implement, Review, Auditor and Retro runs finish through their own
-       * events, which carry what their push jobs hold.
+       * Implement, Review, Auditor, Retro and Researcher runs finish through
+       * their own events, which carry what their push jobs hold. A
+       * Researcher's result has no event yet (#154).
        */
-      readonly role: Exclude<AgentRole, "implement" | "review" | "audit" | "retro">;
+      readonly role: Exclude<AgentRole, "implement" | "review" | "audit" | "retro" | "research">;
       readonly issue: number;
       /** The text the agent emitted as its structured output, unparsed. */
       readonly output: string;
@@ -327,6 +328,11 @@ export interface IssueSnapshot {
   readonly labels: readonly string[];
   /** The parent issue's number, or null if it isn't a sub-issue. */
   readonly parent: number | null;
+  /**
+   * The parent issue as it stands, or null if it isn't a sub-issue: a
+   * research Decision's must be an open Map (src/loop/research.ts).
+   */
+  readonly parentIssue: ParentIssueSnapshot | null;
   /** The open pull requests linked to close this issue, oldest first. */
   readonly openPullRequests: readonly number[];
   /** How many rounds the Kit has posted in the issue's current Design session (src/loop/design.ts). */
@@ -351,6 +357,13 @@ export interface IssueSnapshot {
   readonly openBlockers: readonly number[];
   /** The open issues it blocks. */
   readonly openBlocking: readonly number[];
+}
+
+/** A sub-issue's parent, as the adapter read it with the sub-issue: whether it's open, and its labels, which say whether it's a Map. */
+export interface ParentIssueSnapshot {
+  readonly number: number;
+  readonly open: boolean;
+  readonly labels: readonly string[];
 }
 
 /** A pull request as the core sees it. */
@@ -437,12 +450,37 @@ export interface TicketSnapshot {
   readonly openLinkedPullRequests: readonly number[];
 }
 
+/**
+ * An open `wayfinder:research` issue that a Dispatch check weighs: a research
+ * Decision, which the Researcher resolves AFK when it's under an open Map
+ * (src/loop/research.ts, #154).
+ */
+export interface ResearchDecisionSnapshot {
+  readonly number: number;
+  readonly open: boolean;
+  readonly labels: readonly string[];
+  /** The logins it's assigned to: the Operator assigning themselves claims it, as in `/wayfinder`. */
+  readonly assignees: readonly string[];
+  /** The issues blocking it that are still open. */
+  readonly openBlockers: readonly number[];
+  /** Its parent, which must be an open Map, or null when it isn't a sub-issue. */
+  readonly parentIssue: ParentIssueSnapshot | null;
+  /**
+   * Whether the Kit's research failure notice is its latest run's word, read
+   * from the Kit's comments on it: only the Operator re-adding agent:research
+   * runs it again then.
+   */
+  readonly lastRunFailed: boolean;
+}
+
 /** What a Dispatch check needs: the Tickets it may release and the work already in flight. */
 export interface DispatchSnapshot {
   /** Every open `ready-for-agent` issue, in any order. */
   readonly tickets: readonly TicketSnapshot[];
   readonly openAgentDraftPullRequests: number;
   readonly implementRunsInProgress: number;
+  /** Every open `wayfinder:research` issue, in any order. No Dispatch check releases one yet (#154). */
+  readonly researchDecisions: readonly ResearchDecisionSnapshot[];
 }
 
 /** An open `needs-design` issue that a Design queue check weighs (src/loop/designQueue.ts). */

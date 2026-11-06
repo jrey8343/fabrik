@@ -10,6 +10,7 @@ import {
   EMPTY_DIFF_MARKER,
   LIVE_OUTCOME_MARKER,
   REQUEST_CHANGES_RUN_MARKER,
+  RESEARCH_RUN_FAILED_MARKER,
   RETRY_PUSH_MARKER,
   SESSION_FINISHED,
   UNMARKED_RETRY_PUSH,
@@ -126,6 +127,18 @@ export function designTurnFailedIn(comments: readonly { readonly body: string; r
     }
   }
   return failed;
+}
+
+/**
+ * Whether the Kit's research failure notice is a Decision's latest run's word,
+ * from its comments oldest first: the notice is the last bot comment on it,
+ * with no later run's word, such as a resolution, since. Only a bot's comment
+ * counts, so nobody can fake a failure by quoting the notice, and a person's
+ * reply after it leaves it standing.
+ */
+export function researchRunFailedIn(comments: readonly { readonly body: string; readonly byBot: boolean }[]): boolean {
+  const latest = comments.filter(({ byBot }) => byBot).at(-1);
+  return latest !== undefined && latest.body.startsWith(RESEARCH_RUN_FAILED_MARKER);
 }
 
 /** Whether a comment is part of a Design session: a round, or the session's end, async or live. */

@@ -20,6 +20,7 @@ import {
   MAP_LABEL,
   NEEDS_DESIGN,
   READY_FOR_AGENT,
+  RESEARCH_DECISION_LABEL,
   RETRO_LABEL,
   WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
@@ -34,7 +35,9 @@ import type {
   KitIssueSnapshot,
   LoopEvent,
   NamedPullRequestSnapshot,
+  ParentIssueSnapshot,
   PullRequestSnapshot,
+  ResearchDecisionSnapshot,
   RetroSnapshot,
   Snapshot,
   SpecSnapshot,
@@ -43,7 +46,15 @@ import type {
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
 import { type GitHub, pagesOf, type Repo } from "./client.ts";
-import { countEmptyDiffs, designSessionOf, designTurnFailedIn, pushedSinceVerdictIn, requestChangesRunIn, verdictsIn } from "./threads.ts";
+import {
+  countEmptyDiffs,
+  designSessionOf,
+  designTurnFailedIn,
+  pushedSinceVerdictIn,
+  requestChangesRunIn,
+  researchRunFailedIn,
+  verdictsIn,
+} from "./threads.ts";
 
 const ISSUE_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -55,7 +66,7 @@ const ISSUE_QUERY = `
         author { login __typename }
         body
         labels(first: 100) { nodes { name } }
-        parent { number }
+        parent { number state labels(first: 100) { nodes { name } } }
         comments(last: 100) { nodes { body createdAt author { __typename } } }
         timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT], last: 100) {
           nodes {
@@ -81,7 +92,7 @@ interface IssueQueryResult {
       author: { login: string; __typename: string } | null;
       body: string;
       labels: { nodes: { name: string }[] };
-      parent: { number: number } | null;
+      parent: ParentNode | null;
       comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
       // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
       timelineItems: { nodes: LabelTimelineItem[] };
@@ -90,6 +101,18 @@ interface IssueQueryResult {
       blocking: DependencyEdges;
     } | null;
   };
+}
+
+/** A sub-issue's parent, as a query reads it with `parent { number state labels(first: 100) { nodes { name } } }`. */
+interface ParentNode {
+  number: number;
+  state: "OPEN" | "CLOSED";
+  labels: { nodes: { name: string }[] };
+}
+
+function parentIssueOf(parent: ParentNode | null): ParentIssueSnapshot | null {
+  if (parent === null) return null;
+  return { number: parent.number, open: parent.state === "OPEN", labels: parent.labels.nodes.map((label) => label.name) };
 }
 
 /** One direction of an issue's native dependencies, as the issue query reads it. */
@@ -187,6 +210,44 @@ interface DispatchQueryResult {
       }[];
     };
     pullRequests: { nodes: { isDraft: boolean; headRefName: string; author: { __typename: string } | null }[] };
+  };
+}
+
+// Pages through every open wayfinder:research issue, with its parent, which
+// the core checks is an open Map, and the thread its last run's word is in.
+const RESEARCH_DECISIONS_QUERY = `
+  query ($owner: String!, $name: String!, $after: String, $research: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, labels: [$research], first: 50, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          number
+          state
+          labels(first: 100) { nodes { name } }
+          assignees(first: 10) { nodes { login } }
+          blockedBy(first: 50) { nodes { number state } }
+          parent { number state labels(first: 100) { nodes { name } } }
+          comments(last: 100) { nodes { body author { __typename } } }
+        }
+      }
+    }
+  }
+`;
+
+interface ResearchDecisionsQueryResult {
+  repository: {
+    issues: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: {
+        number: number;
+        state: "OPEN" | "CLOSED";
+        labels: { nodes: { name: string }[] };
+        assignees: { nodes: { login: string }[] };
+        blockedBy: { nodes: { number: number; state: "OPEN" | "CLOSED" }[] };
+        parent: ParentNode | null;
+        comments: { nodes: { body: string; author: { __typename: string } | null }[] };
+      }[];
+    };
   };
 }
 
@@ -895,6 +956,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       body: issue.body,
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
+      parentIssue: parentIssueOf(issue.parent),
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
       designRounds: designSessionOf(thisSession).designRounds,
       sentBack: designSessionOf(comments).sentBack,
@@ -1008,17 +1070,47 @@ async function gatherDispatch(
     (pr) => pr.isDraft && isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }),
   ).length;
 
+  const [implementRunsInProgress, researchDecisions] = await Promise.all([
+    countImplementRuns(actions, repo),
+    gatherResearchDecisions(github, repo),
+  ]);
   return {
     issue: null,
     pullRequest: null,
-    dispatch: {
-      tickets,
-      openAgentDraftPullRequests,
-      implementRunsInProgress: await countImplementRuns(actions, repo),
-    },
+    dispatch: { tickets, openAgentDraftPullRequests, implementRunsInProgress, researchDecisions },
     designQueue: null,
     operator: operator ?? page.repository.owner.login,
   };
+}
+
+/** Every open wayfinder:research issue, with what says whether the Researcher may run on it (#154). */
+async function gatherResearchDecisions(github: GitHub, repo: Repo): Promise<ResearchDecisionSnapshot[]> {
+  const decisions: ResearchDecisionSnapshot[] = [];
+  let after: string | null = null;
+  do {
+    const page: ResearchDecisionsQueryResult = await github.graphql<ResearchDecisionsQueryResult>(RESEARCH_DECISIONS_QUERY, {
+      owner: repo.owner,
+      name: repo.name,
+      after,
+      research: RESEARCH_DECISION_LABEL,
+    });
+    for (const issue of page.repository.issues.nodes) {
+      decisions.push({
+        number: issue.number,
+        open: issue.state === "OPEN",
+        labels: issue.labels.nodes.map((label) => label.name),
+        assignees: issue.assignees.nodes.map((assignee) => assignee.login),
+        openBlockers: issue.blockedBy.nodes.filter((b) => b.state === "OPEN").map((b) => b.number),
+        parentIssue: parentIssueOf(issue.parent),
+        // Only a bot's notice counts, so nobody can fake a failure by quoting one.
+        lastRunFailed: researchRunFailedIn(
+          issue.comments.nodes.map((comment) => ({ body: comment.body, byBot: comment.author?.__typename === "Bot" })),
+        ),
+      });
+    }
+    after = page.repository.issues.pageInfo.hasNextPage ? page.repository.issues.pageInfo.endCursor : null;
+  } while (after !== null);
+  return decisions;
 }
 
 /** A Design queue check's slice, and the repo's owner, the Operator unless one is named. */
