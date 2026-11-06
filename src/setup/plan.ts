@@ -1,7 +1,7 @@
 // The setup skill's planner. Pure, no I/O: given what a Product repo holds now
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
-import { KIT_CONFIG_PATH, resolveKitConfig } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig } from "../kit/config.ts";
 import {
   ALL_LABELS,
   AUDIT_LABEL,
@@ -55,6 +55,8 @@ export interface ProductState {
   readonly labels: readonly string[];
   readonly secrets: readonly string[];
   readonly vaults: readonly string[];
+  /** The titles of the items in the `Fabrik` vault, where each Subscription's token lives. Empty when the vault is missing. */
+  readonly fabrikItems: readonly string[];
   readonly protection: BranchProtection | null;
   /** The Merge gate ruleset, found by its name, or null when the repo lacks it. */
   readonly mergeGate: MergeGateRuleset | null;
@@ -80,6 +82,12 @@ export interface SetupAnswers {
    * so the store stays an opt-in step.
    */
   readonly timeZone?: string;
+  /**
+   * Whether the Operator wants a second Subscription, so runs fail over to it
+   * when the first reaches its weekly limit. Without it setup says nothing
+   * about Subscriptions, so the second stays an opt-in step.
+   */
+  readonly secondSubscription?: boolean;
 }
 
 export interface BranchProtection {
@@ -176,7 +184,54 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
   actions.push(...protection(state, kit, notes));
   actions.push(...mergeGate(state));
   actions.push(...runStore(state.store, kit, answers, notes));
+  notes.push(...subscriptions(state, kit, answers));
   return { actions, notes };
+}
+
+/** The `Fabrik` vault item the wizard saves the second Subscription's token in. */
+export const SECOND_SUBSCRIPTION = "Claude token 2";
+
+/** The wizard's stage for the steps of a second Subscription only the Operator can take. */
+const SECOND_SUBSCRIPTION_STAGE = 'the wizard\'s "A second Subscription" stage';
+
+/**
+ * The Subscriptions the Kit config lists, read from its raw JSON: one setup
+ * plans to add is a list the reader may not take yet, and still counts as listed.
+ */
+function listedSubscriptions(state: ProductState, kit: SetupKit): readonly string[] {
+  try {
+    const raw = JSON.parse(state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig) as { subscriptions?: unknown };
+    const listed = raw.subscriptions;
+    if (Array.isArray(listed) && listed.every((name) => typeof name === "string")) return listed;
+  } catch {
+    // protection() already tells the Operator the Kit config is invalid.
+  }
+  return DEFAULT_KIT_CONFIG.subscriptions;
+}
+
+/**
+ * A second Subscription (Spec #152): every step is the Operator's, so it's
+ * planned as notes. The agent and implement accounts already read the whole
+ * `Fabrik` vault, so it needs no new service account, and the Kit config is
+ * the Product's, so setup never edits its list.
+ */
+function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers): string[] {
+  const listed = listedSubscriptions(state, kit);
+  const stored = new Set(state.fabrikItems);
+  if (listed.length > 1) {
+    return listed
+      .filter((name) => !stored.has(name))
+      .map(
+        (name) =>
+          `${KIT_CONFIG_PATH} lists ${JSON.stringify(name)} in subscriptions, but the "${FABRIK_VAULT}" vault has no item of that name: walk ${SECOND_SUBSCRIPTION_STAGE}, then run setup again.`,
+      );
+  }
+  if (answers.secondSubscription !== true) return [];
+  const list = `"subscriptions": ${JSON.stringify([...listed, SECOND_SUBSCRIPTION]).replaceAll(",", ", ")} in ${KIT_CONFIG_PATH}`;
+  if (stored.has(SECOND_SUBSCRIPTION)) return [`List the second Subscription in the Kit config: ${list}.`];
+  return [
+    `Walk ${SECOND_SUBSCRIPTION_STAGE}: create a second Claude account, run \`claude setup-token\` on it, save the token as the "${SECOND_SUBSCRIPTION}" API Credential, with its expiry date, in the "${FABRIK_VAULT}" vault, and turn usage credits off on every account. Then list it: ${list}.`,
+  ];
 }
 
 /**
