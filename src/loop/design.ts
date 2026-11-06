@@ -166,7 +166,7 @@ function landLiveOutcome(issueNumber: number, outcome: string, operator: string)
     default:
       return {
         kind: "nothing",
-        reason: `The live Design session on #${issueNumber} posted the outcome ${outcome}, which isn't brief or spec, so the Kit left the issue as it is`,
+        reason: `The live Design session on #${issueNumber} posted the outcome ${outcome}, which isn't brief, operator-brief, spec or map, so the Kit left the issue as it is`,
       };
   }
 }

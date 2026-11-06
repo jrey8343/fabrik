@@ -102,7 +102,7 @@ describe("Landing a live Design session's outcome", () => {
 
     expect(plan).toEqual({
       kind: "nothing",
-      reason: "The live Design session on #7 posted the outcome paused, which isn't brief or spec, so the Kit left the issue as it is",
+      reason: "The live Design session on #7 posted the outcome paused, which isn't brief, operator-brief, spec or map, so the Kit left the issue as it is",
     });
   });
 
