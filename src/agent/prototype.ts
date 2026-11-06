@@ -10,6 +10,7 @@
 // bundle, as an Implement run's commits.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { pageAt, variantPage } from "../evidence/uiEvidence.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { prototypeBranchFor, variantLetter } from "../loop/designOutput.ts";
 import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
@@ -47,7 +48,7 @@ export function prototypeTurnContext(
   if (ui === null) throw new Error("Kit config has no ui block, so the Kit can neither serve nor capture a Prototype");
   const { route, variants, brief } = request.request;
   const letters = Array.from({ length: variants }, (_, at) => variantLetter(at));
-  const served = `${ui.url.replace(/\/+$/, "")}${route}`;
+  const served = pageAt(ui.url, route);
   const { build } = config.sandbox;
   return {
     request,
@@ -58,7 +59,7 @@ export function prototypeTurnContext(
       fenced(brief.trimEnd(), "markdown"),
       `## ${PROTOTYPE_SECTIONS.sandbox}`,
       [build === null ? "- Build: none configured" : `- Build: \`${build}\``, `- Serve: \`${ui.serve}\`, which answers at \`${ui.url}\``].join("\n"),
-      `Once you finish, the Kit builds the branch, serves it, and captures each variant at mobile and desktop widths, at \`${served}?variant=${letters[0] ?? "A"}\` and so on, so each variant must render there from its letter alone.`,
+      `Once you finish, the Kit builds the branch, serves it, and captures each variant at mobile and desktop widths, at \`${variantPage(served, letters[0] ?? "A")}\` and so on, so each variant must render there from its letter alone.`,
     ],
   };
 }

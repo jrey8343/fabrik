@@ -688,6 +688,25 @@ function link(text: string, url: string): string {
  * break or other control character shows as U+FFFD, so agent text can never
  * start a line of its own, and the span's backticks outnumber any run of them inside.
  */
+/**
+ * A route's page on the site served at `base`, as capture takes it: the
+ * route after the base, without the base's trailing slash.
+ */
+export function pageAt(base: string, route: string): string {
+  return `${base.replace(/\/+$/, "")}${route}`;
+}
+
+/**
+ * A Prototype's variant (#155) on its route's page: the page with `variant`
+ * set to the variant's letter in its query, keeping whatever else the query
+ * holds, as capture takes it and a prototype round links its preview.
+ */
+export function variantPage(page: string, letter: string): string {
+  const url = new URL(page);
+  url.searchParams.set("variant", letter);
+  return url.href;
+}
+
 export function code(text: string): string {
   const oneLine = text.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, "\uFFFD");
   const longest = Math.max(0, ...[...oneLine.matchAll(/`+/g)].map(([run]) => run.length));

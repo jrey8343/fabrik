@@ -3,7 +3,7 @@
 // prototype round, whose one question, "Which variant?", the Kit writes. A
 // prototype round is a round of the same session: it never ends it, and the
 // Operator's reply to it starts an ordinary turn.
-import { type CaptureFailure, code, failureWords, type PreviewLink } from "../evidence/uiEvidence.ts";
+import { type CaptureFailure, code, failureWords, type PreviewLink, variantPage } from "../evidence/uiEvidence.ts";
 import { type PreviewConfig, previewNamesPullRequest } from "../kit/config.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { replyNotThere, turnStartFrom, whileInSession } from "./design.ts";
@@ -233,11 +233,9 @@ export function withVariantPreviews(body: string, preview: Extract<PreviewLink, 
   return lines.map(({ text, end }) => `${text}${end}`).join("\n");
 }
 
-/** The route's page showing one variant: `?variant=` and its letter, with a `(` or `)` escaped, so it can't end the link early. */
+/** The route's page showing one variant (variantPage), with a `(` or `)` escaped, so it can't end the link early. */
 function variantPreviewUrl(page: string, letter: string): string {
-  const url = new URL(page);
-  url.searchParams.set("variant", letter);
-  return withParensEscaped(url.href);
+  return withParensEscaped(variantPage(page, letter));
 }
 
 /** What the round says of the preview Kit config declares. */
