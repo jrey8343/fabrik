@@ -4,7 +4,7 @@
 // model call.
 import { researchRunFailedIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
-import { DECISION_TYPES, type DecisionLabel, MAP_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, RESEARCH_LABEL } from "../loop/labels.ts";
+import { DECISION_TYPES, decisionLabel, type DecisionLabel, MAP_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, RESEARCH_LABEL } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
@@ -753,9 +753,7 @@ function openRetrosOf({ openRetros }: GitHubFacts, appLogin: string, items: Item
 }
 
 /** The Decision labels whose Decisions the Operator resolves live: all but research, which the Researcher resolves AFK. */
-const OPERATOR_DECISION_LABELS: readonly string[] = DECISION_TYPES.filter((type) => type !== "research").map(
-  (type): DecisionLabel => `wayfinder:${type}`,
-);
+const OPERATOR_DECISION_LABELS: readonly DecisionLabel[] = DECISION_TYPES.filter((type) => type !== "research").map(decisionLabel);
 
 /**
  * Each open Map, read as the Map cap reads them (gatherOpenMaps), aged from
@@ -767,7 +765,7 @@ function openMapsOf({ openIssues, openMaps }: GitHubFacts, items: Items): Waitin
     kind: "map",
     ...items.issue(map, lastAdded(map.labelEvents, MAP_LABEL) ?? map.createdAt),
     decisionsWaiting: openIssues.filter(
-      (issue) => map.subIssues.includes(issue.number) && issue.labels.some((label) => OPERATOR_DECISION_LABELS.includes(label)),
+      (issue) => map.subIssues.includes(issue.number) && OPERATOR_DECISION_LABELS.some((label) => issue.labels.includes(label)),
     ).length,
   }));
 }

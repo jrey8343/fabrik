@@ -13,6 +13,7 @@ import {
 } from "./designOutput.ts";
 import {
   DESIGN_LABEL,
+  decisionLabel,
   isCategoryLabel,
   type Label,
   MAP_LABEL,
@@ -537,7 +538,7 @@ function chartAsMap(issueNumber: number, output: Extract<DesignTurnOutput, { kin
         key: decisionIssue(decision.key).created,
         title: withoutMentions(decision.title),
         body: withoutMentions(decision.body),
-        labels: [`wayfinder:${decision.type}`],
+        labels: [decisionLabel(decision.type)],
         parent: issueNumber,
         blockedBy: decision.blockedBy.map(decisionIssue),
       }),

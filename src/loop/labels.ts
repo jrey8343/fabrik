@@ -85,6 +85,11 @@ export type DecisionType = (typeof DECISION_TYPES)[number];
 /** A Decision's label, which says how it gets resolved. A Decision carries no state or category label. */
 export type DecisionLabel = `wayfinder:${DecisionType}`;
 
+/** The label a Decision of this type carries, typed as that one label when the type is known. */
+export function decisionLabel<Type extends DecisionType>(type: Type): `wayfinder:${Type}` {
+  return `wayfinder:${type}`;
+}
+
 /** The label on a research Decision: one the Researcher resolves AFK, under an open Map (#154). */
 export const RESEARCH_DECISION_LABEL = "wayfinder:research" satisfies DecisionLabel;
 
@@ -119,7 +124,7 @@ export const ALL_LABELS: readonly Label[] = [
   ...KIT_ISSUE_LABELS,
   MONITOR_LABEL,
   MAP_LABEL,
-  ...DECISION_TYPES.map((type): DecisionLabel => `wayfinder:${type}`),
+  ...DECISION_TYPES.map(decisionLabel),
 ];
 
 export function isStateLabel(label: string): label is StateLabel {
