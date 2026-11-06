@@ -57,6 +57,8 @@ function describeAction(action: Action): string {
       return `- open the issue "${action.title}"${action.assignees.length > 0 ? `, assigned to ${action.assignees.join(", ")}` : ""}`;
     case "edit-issue-body":
       return `- rewrite the body of #${action.issue}`;
+    case "append-to-decisions-so-far":
+      return `- append a line to the Decisions so far of Map #${action.issue}`;
     case "create-issue":
       return [
         `- create "${action.title}" (${action.labels.join(", ")})`,
