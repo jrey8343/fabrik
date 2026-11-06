@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { aRetroEvidenceInput } from "../__fixtures__/retroEvidence.ts";
 import {
   aComment,
   aCommit,
   anEscapeMarkerIssue,
   aLabelAdded,
   aMergedPullRequest,
+  anOpenPullRequest,
   aReview,
   aRunRecord,
   aTicketTimeline,
@@ -12,7 +14,7 @@ import {
   factsOf,
 } from "../__fixtures__/weeklySummary.ts";
 import type { Verdict } from "../loop/types.ts";
-import { type CommentFacts, escapesIn, mergedAgentPullRequestsIn, verdictsOn } from "./retroEvidence.ts";
+import { type CommentFacts, escapesIn, evidenceBundle, mergedAgentPullRequestsIn, verdictsOn } from "./retroEvidence.ts";
 
 // A week in UTC: Monday 2 November 2026 00:00 to Monday 9 November 00:00.
 const WINDOW = { start: Date.parse("2026-11-02T00:00:00Z"), end: Date.parse("2026-11-09T00:00:00Z") };
@@ -231,6 +233,247 @@ describe("the metrics", () => {
       ).toEqual([
         { number: 50, records: [implement, firstPass, retry, lastPass, flaw], lastPassingReview: lastPass, operatorPushes: true },
         { number: 51, records: [otherFlaw], lastPassingReview: null, operatorPushes: false },
+      ]);
+    });
+  });
+});
+
+describe("the evidence bundle", () => {
+  describe("the window", () => {
+    it("runs from the last Retro's window end to this one's", () => {
+      const { window } = evidenceBundle(aRetroEvidenceInput({ lastWindowEnd: "2026-11-01T09:30:00Z", windowEnd: "2026-11-07T10:00:00Z" }));
+      expect(window).toEqual({ start: "2026-11-01T09:30:00.000Z", end: "2026-11-07T10:00:00.000Z" });
+    });
+
+    it("covers the 7 days before this one's end on a first run", () => {
+      const { window } = evidenceBundle(aRetroEvidenceInput({ lastWindowEnd: null, windowEnd: "2026-11-07T10:00:00Z" }));
+      expect(window).toEqual({ start: "2026-10-31T10:00:00.000Z", end: "2026-11-07T10:00:00.000Z" });
+    });
+  });
+
+  // The window, unless a test says otherwise: Saturday 2026-10-31 00:00 UTC to Saturday 2026-11-07.
+
+  describe("Architectural escapes", () => {
+    it("holds each escape the Operator opened in the window, with its body and the agent PRs merged in the 90 days to its end that it names", () => {
+      const { escapes } = evidenceBundle(
+        aRetroEvidenceInput({
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-02T00:00:00Z", { number: 50, ticket: 7, title: "Build the cart" }),
+              aMergedPullRequest("2026-09-01T00:00:00Z", { number: 51, ticket: 8, title: "Build the till" }), // 67 days before the window's end
+              aMergedPullRequest("2026-08-01T00:00:00Z", { number: 52, ticket: 9 }), // 98 days before it
+            ],
+            escapeMarkerIssues: [
+              anEscapeMarkerIssue("The cart leaks its rules.\n\n<!-- fabrik:escape strong #50 #51 #52 -->", { number: 80, createdAt: "2026-11-03T00:00:00Z" }),
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 81, createdAt: "2026-10-30T23:59:59Z" }), // the last Retro's
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 82, createdAt: "2026-11-07T00:00:00Z" }), // the next Retro's
+            ],
+          }),
+        }),
+      );
+      expect(escapes.map(({ ref, number, title, body, strength, pullRequests }) => ({ ref, number, title, body, strength, pullRequests: pullRequests.map((pr) => [pr.ref, pr.title]) }))).toEqual([
+        {
+          ref: "#80",
+          number: 80,
+          title: "Make the cart module deeper",
+          body: "The cart leaks its rules.\n\n<!-- fabrik:escape strong #50 #51 #52 -->",
+          strength: "strong",
+          pullRequests: [
+            ["#50", "Build the cart"],
+            ["#51", "Build the till"],
+          ],
+        },
+      ]);
+    });
+
+    it("counts no marker that names only people's PRs, and no marker in an issue anyone but the Operator opened", () => {
+      const { escapes } = evidenceBundle(
+        aRetroEvidenceInput({
+          facts: factsOf({
+            // #60 is a person's PR: the facts hold agent PRs alone.
+            pullRequests: [aMergedPullRequest("2026-11-02T00:00:00Z", { number: 50 })],
+            escapeMarkerIssues: [
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #60 -->", { number: 80 }),
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 81, author: "someone" }),
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #60 -->", { number: 82 }),
+            ],
+          }),
+        }),
+      );
+      expect(escapes.map(({ number, pullRequests }) => [number, pullRequests.map((pr) => pr.number)])).toEqual([[82, [50]]]);
+    });
+
+    it("carries each PR's Ticket, the Run records on it and the last passing Review record on the PR, each by its record path", () => {
+      const implement = aRunRecord({ runId: 1000, endedAt: "2026-10-30T12:00:00Z" });
+      const firstPass = aRunRecord({ runId: 1001, role: "review", verdict: "pass", endedAt: "2026-10-31T06:00:00Z" });
+      const retry = aRunRecord({ runId: 1002, retry: 1, endedAt: "2026-11-01T00:00:00Z" });
+      const lastPass = aRunRecord({ runId: 1003, role: "review", verdict: "pass", endedAt: "2026-11-01T06:00:00Z" });
+      const { escapes } = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [lastPass, retry, firstPass, implement],
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-02T00:00:00Z", { number: 50, ticket: 7 }),
+              aMergedPullRequest("2026-11-02T00:00:00Z", { number: 51, ticket: null }),
+            ],
+            escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 #51 -->")],
+          }),
+        }),
+      );
+      expect(escapes[0]?.pullRequests).toEqual([
+        {
+          ref: "#50",
+          number: 50,
+          title: "Build the thing",
+          ticket: 7,
+          records: [
+            { ref: "runs/owner/product/2026-10/1000-1-implement.json", record: implement },
+            { ref: "runs/owner/product/2026-10/1001-1-review.json", record: firstPass },
+            { ref: "runs/owner/product/2026-11/1002-1-implement.json", record: retry },
+            { ref: "runs/owner/product/2026-11/1003-1-review.json", record: lastPass },
+          ],
+          lastPassingReview: { ref: "runs/owner/product/2026-11/1003-1-review.json", record: lastPass },
+        },
+        { ref: "#51", number: 51, title: "Build the thing", ticket: null, records: [], lastPassingReview: null },
+      ]);
+    });
+  });
+
+  describe("the Operator's feedback on agent PRs", () => {
+    it("holds each Request changes the Operator gave in the window, with its body and inline comments", () => {
+      const inline = [
+        { path: "src/cart.ts", line: 12, body: "This belongs in the pricing module." },
+        { path: "src/cart.test.ts", line: null, body: "Test through the cart, not its helper." },
+      ];
+      const { feedback } = evidenceBundle(
+        aRetroEvidenceInput({
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-04T00:00:00Z", {
+                number: 50,
+                title: "Build the cart",
+                reviews: [
+                  aReview("2026-11-02T00:00:00Z", { body: "Keep pricing out of the cart.", comments: inline }),
+                  aReview("2026-10-30T00:00:00Z", { body: "Read by the last Retro." }), // before the window
+                  aReview("2026-11-03T00:00:00Z", { author: "someone", body: "Not the Operator's." }),
+                ],
+              }),
+            ],
+          }),
+        }),
+      );
+      expect(feedback).toEqual([
+        {
+          ref: "#50",
+          number: 50,
+          title: "Build the cart",
+          state: "merged",
+          items: [{ kind: "request-changes", at: "2026-11-02T00:00:00Z", body: "Keep pricing out of the cart.", inline }],
+        },
+      ]);
+    });
+
+    it("holds each run of the Operator's commits in the window as one push, with their messages and patches", () => {
+      const patch = (path: string) => `diff --git a/${path} b/${path}\n@@ -1 +1 @@\n-old\n+new`;
+      const commit = (sha: string, at: string, message: string) => aCommit(at, { sha: sha.repeat(40), message, patch: patch(`src/${sha}.ts`) });
+      const { feedback } = evidenceBundle(
+        aRetroEvidenceInput({
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-05T00:00:00Z", {
+                commits: [
+                  commit("0", "2026-10-30T00:00:00Z", "Read by the last Retro"),
+                  aCommit("2026-11-01T00:00:00Z", { byApp: true }),
+                  commit("1", "2026-11-02T01:00:00Z", "Move pricing out of the cart"),
+                  commit("2", "2026-11-02T01:05:00Z", "Rename total to subtotal"),
+                  aCommit("2026-11-03T00:00:00Z", { byApp: true }),
+                  commit("3", "2026-11-04T00:00:00Z", "Test through the cart"),
+                  aCommit("2026-11-04T01:00:00Z", { author: "someone", message: "Not the Operator's" }),
+                  commit("5", "2026-11-04T02:00:00Z", "Tidy up"),
+                ],
+              }),
+            ],
+          }),
+        }),
+      );
+      expect(feedback[0]?.items).toEqual([
+        {
+          kind: "push",
+          at: "2026-11-02T01:05:00Z",
+          commits: [
+            { sha: "1".repeat(40), message: "Move pricing out of the cart", at: "2026-11-02T01:00:00Z" },
+            { sha: "2".repeat(40), message: "Rename total to subtotal", at: "2026-11-02T01:05:00Z" },
+          ],
+          patch: `${patch("src/1.ts")}\n${patch("src/2.ts")}`,
+        },
+        {
+          kind: "push",
+          at: "2026-11-04T00:00:00Z",
+          commits: [{ sha: "3".repeat(40), message: "Test through the cart", at: "2026-11-04T00:00:00Z" }],
+          patch: patch("src/3.ts"),
+        },
+        {
+          kind: "push",
+          at: "2026-11-04T02:00:00Z",
+          commits: [{ sha: "5".repeat(40), message: "Tidy up", at: "2026-11-04T02:00:00Z" }],
+          patch: patch("src/5.ts"),
+        },
+      ]);
+    });
+
+    it("holds each comment the Operator left in the window, and each review of theirs that isn't a Request changes, though neither is a Human touch", () => {
+      const inline = [{ path: "src/cart.ts", line: 3, body: "Nice and small." }];
+      const { feedback } = evidenceBundle(
+        aRetroEvidenceInput({
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-05T00:00:00Z", {
+                comments: [
+                  aVerdictComment("pass", "a".repeat(40), "2026-11-02T00:00:00Z"), // the App's
+                  aComment("I'd have named it subtotal.", "2026-11-03T00:00:00Z", { author: "operator", byBot: false }),
+                  aComment("+1", "2026-11-03T01:00:00Z", { author: "someone", byBot: false }),
+                  aComment("Read by the last Retro.", "2026-10-30T00:00:00Z", { author: "operator", byBot: false }),
+                ],
+                reviews: [
+                  aReview("2026-11-04T00:00:00Z", { state: "commented", body: "", comments: inline }),
+                  aReview("2026-11-04T01:00:00Z", { state: "approved" }), // says nothing
+                  aReview("2026-11-04T02:00:00Z", { state: "approved", author: "someone", body: "Looks fine to me." }),
+                ],
+              }),
+            ],
+          }),
+        }),
+      );
+      expect(feedback[0]?.items).toEqual([
+        { kind: "comment", at: "2026-11-03T00:00:00Z", body: "I'd have named it subtotal.", inline: [] },
+        { kind: "comment", at: "2026-11-04T00:00:00Z", body: "", inline },
+      ]);
+    });
+
+    it("covers agent PRs closed unmerged or still open as well as merged ones, and leaves out a PR with no feedback in the window", () => {
+      const operatorSays = (body: string, at: string) => aComment(body, at, { author: "operator", byBot: false });
+      const { feedback } = evidenceBundle(
+        aRetroEvidenceInput({
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-03T00:00:00Z", {
+                number: 50,
+                commits: [aCommit("2026-11-02T00:00:00Z", { byApp: true })],
+                comments: [aVerdictComment("pass", "a".repeat(40), "2026-11-02T01:00:00Z")],
+              }),
+              aMergedPullRequest("2026-11-04T00:00:00Z", { number: 51, mergedAt: null, mergeSha: null, comments: [operatorSays("Not this way.", "2026-11-03T00:00:00Z")] }),
+            ],
+            openPullRequests: [
+              anOpenPullRequest({ number: 52, title: "Build the till", reviews: [aReview("2026-11-05T00:00:00Z", { body: "Split this up." })] }),
+              anOpenPullRequest({ number: 53, commits: [{ at: "2026-11-05T00:00:00Z" }] }),
+            ],
+          }),
+        }),
+      );
+      expect(feedback.map(({ ref, title, state, items }) => [ref, title, state, items.map((item) => item.kind)])).toEqual([
+        ["#51", "Build the thing", "closed", ["comment"]],
+        ["#52", "Build the till", "open", ["request-changes"]],
+        ["#53", "Build the thing", "open", ["push"]],
       ]);
     });
   });

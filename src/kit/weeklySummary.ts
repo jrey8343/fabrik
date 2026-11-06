@@ -17,6 +17,7 @@ import {
   type MergedAgentPullRequest,
   mergedAgentPullRequestsIn,
   type MetricFacts,
+  type OpenPullRequestFacts,
   verdictsOn,
   type Window,
   within,
@@ -35,6 +36,7 @@ export type {
   EscapeMarkerIssueFacts,
   LabelEvent,
   MergedTitleFacts,
+  OpenPullRequestFacts,
   ReviewFacts,
   TicketFacts,
 } from "./retroEvidence.ts";
@@ -53,21 +55,6 @@ export interface OpenIssueFacts {
   readonly labels: readonly string[];
   /** ISO 8601. */
   readonly createdAt: string;
-  /** Oldest first. */
-  readonly comments: readonly CommentFacts[];
-  readonly labelEvents: readonly LabelEvent[];
-}
-
-/** An open agent PR, as Waiting on you and Stuck read it. */
-export interface OpenPullRequestFacts {
-  readonly number: number;
-  readonly title: string;
-  readonly draft: boolean;
-  readonly headSha: string;
-  /** ISO 8601. */
-  readonly createdAt: string;
-  /** When each of its commits was made. */
-  readonly commits: readonly { readonly at: string }[];
   /** Oldest first. */
   readonly comments: readonly CommentFacts[];
   readonly labelEvents: readonly LabelEvent[];
@@ -106,8 +93,6 @@ export interface GitHubFacts extends MetricFacts {
   readonly specs: readonly SpecFacts[];
   /** The repo's open issues. */
   readonly openIssues: readonly OpenIssueFacts[];
-  /** The repo's open agent PRs. */
-  readonly openPullRequests: readonly OpenPullRequestFacts[];
   /**
    * The repo's open `needs-design` issues with their slot-holding signals, as
    * the Design queue check reads them: Held counts the ones waiting for a slot.

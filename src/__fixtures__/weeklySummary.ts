@@ -130,14 +130,15 @@ export function aMergedPullRequest(mergedAt: string, overrides: Partial<AgentPul
   };
 }
 
-/** The Operator requesting changes at `at`. */
+/** The Operator requesting changes at `at`, saying nothing more. */
 export function aReview(at: string, overrides: Partial<ReviewFacts> = {}): ReviewFacts {
-  return { author: "operator", state: "changes-requested", at, ...overrides };
+  return { author: "operator", state: "changes-requested", body: "", comments: [], at, ...overrides };
 }
 
-/** A commit someone other than the Fabrik App made at `at`. */
+/** A commit the Operator made at `at`, its patch unread; the Fabrik App's with `{ byApp: true }`. */
 export function aCommit(at: string, overrides: Partial<CommitFacts> = {}): CommitFacts {
-  return { byApp: false, at, ...overrides };
+  const byApp = overrides.byApp ?? false;
+  return { sha: "d".repeat(40), byApp, author: byApp ? "fabrik-implementer" : "operator", message: "A commit", patch: null, at, ...overrides };
 }
 
 /** The App adding `label` at `at`. */
@@ -210,15 +211,22 @@ export function anOpenIssue(overrides: Partial<OpenIssueFacts> = {}): OpenIssueF
   return { number: 12, title: "An open issue", labels: [], createdAt: "2026-10-01T00:00:00Z", comments: [], labelEvents: [], ...overrides };
 }
 
-/** Open agent PR 50, a draft at head `h…h` opened on 2026-10-01, with nothing on it unless a test says so. */
-export function anOpenPullRequest(overrides: Partial<OpenPullRequestFacts> = {}): OpenPullRequestFacts {
+/**
+ * Open agent PR 50, a draft at head `h…h` opened on 2026-10-01, with nothing
+ * on it unless a test says so. A commit given only its time is the
+ * Operator's, as aCommit makes it.
+ */
+export function anOpenPullRequest(
+  { commits = [], ...overrides }: Omit<Partial<OpenPullRequestFacts>, "commits"> & { readonly commits?: readonly (Partial<CommitFacts> & Pick<CommitFacts, "at">)[] } = {},
+): OpenPullRequestFacts {
   return {
     number: 50,
     title: "Build the thing",
     draft: true,
     headSha: "h".repeat(40),
     createdAt: "2026-10-01T00:00:00Z",
-    commits: [],
+    commits: commits.map((commit) => aCommit(commit.at, commit)),
+    reviews: [],
     comments: [],
     labelEvents: [],
     ...overrides,

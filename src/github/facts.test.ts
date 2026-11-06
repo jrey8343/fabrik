@@ -198,14 +198,26 @@ describe("Gathering a Product repo's GitHub facts", () => {
         aRawPullRequest({
           commits: {
             nodes: [
-              { commit: { committedDate: "2026-11-02T00:00:00Z", author: { email: "fabrik-implementer@users.noreply.github.com" } } },
-              { commit: { committedDate: "2026-11-03T00:00:00Z", author: { email: "jared@example.com" } } },
+              aRawCommit("1", "2026-11-02T00:00:00Z", "Build the thing", { email: "fabrik-implementer@users.noreply.github.com", user: null }),
+              aRawCommit("2", "2026-11-03T00:00:00Z", "Move pricing out", { email: "jared@example.com", user: { login: "jrey8343" } }),
+              aRawCommit("3", "2026-11-03T00:05:00Z", "From a laptop", { email: "jared@laptop.local", user: null }),
             ],
           },
           reviews: {
             nodes: [
-              { author: OPERATOR, state: "CHANGES_REQUESTED", submittedAt: "2026-11-03T01:00:00Z" },
-              { author: OPERATOR, state: "PENDING", submittedAt: null },
+              {
+                author: OPERATOR,
+                state: "CHANGES_REQUESTED",
+                submittedAt: "2026-11-03T01:00:00Z",
+                body: "Keep pricing out of the cart.",
+                comments: {
+                  nodes: [
+                    { path: "src/cart.ts", line: 12, body: "This belongs in pricing." },
+                    { path: "src/cart.ts", line: null, body: "On a line since changed." },
+                  ],
+                },
+              },
+              { author: OPERATOR, state: "PENDING", submittedAt: null, body: "", comments: { nodes: [] } },
             ],
           },
           comments: { nodes: [{ body: "Verdict", createdAt: "2026-11-03T02:00:00Z", author: APP }] },
@@ -222,10 +234,22 @@ describe("Gathering a Product repo's GitHub facts", () => {
     const [pullRequest] = (await gatherGitHubFacts(github, repo, NOW, OPERATOR.login)).pullRequests;
 
     expect(pullRequest?.commits).toEqual([
-      { byApp: true, at: "2026-11-02T00:00:00Z" },
-      { byApp: false, at: "2026-11-03T00:00:00Z" },
+      { sha: "1".repeat(40), byApp: true, author: "ghost", message: "Build the thing", patch: null, at: "2026-11-02T00:00:00Z" },
+      { sha: "2".repeat(40), byApp: false, author: "jrey8343", message: "Move pricing out", patch: null, at: "2026-11-03T00:00:00Z" },
+      { sha: "3".repeat(40), byApp: false, author: "ghost", message: "From a laptop", patch: null, at: "2026-11-03T00:05:00Z" },
     ]);
-    expect(pullRequest?.reviews).toEqual([{ author: "jrey8343", state: "changes-requested", at: "2026-11-03T01:00:00Z" }]);
+    expect(pullRequest?.reviews).toEqual([
+      {
+        author: "jrey8343",
+        state: "changes-requested",
+        body: "Keep pricing out of the cart.",
+        comments: [
+          { path: "src/cart.ts", line: 12, body: "This belongs in pricing." },
+          { path: "src/cart.ts", line: null, body: "On a line since changed." },
+        ],
+        at: "2026-11-03T01:00:00Z",
+      },
+    ]);
     expect(pullRequest?.comments).toEqual([{ author: "fabrik-app[bot]", byBot: true, body: "Verdict", at: "2026-11-03T02:00:00Z" }]);
     expect(pullRequest?.labelEvents).toEqual([
       { label: "agent:review", action: "labeled", actor: "jrey8343", at: "2026-11-03T03:00:00Z" },
@@ -298,7 +322,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 
-  it("holds the open agent PRs alone, with their head, draft state and activity", async () => {
+  it("holds the open agent PRs alone, with their head, draft state, commits, reviews and activity", async () => {
     const github = repoWith({
       openPullRequests: [
         {
@@ -309,7 +333,8 @@ describe("Gathering a Product repo's GitHub facts", () => {
           headRefName: "fabrik/ticket-7",
           createdAt: "2026-11-01T00:00:00Z",
           author: APP,
-          commits: { nodes: [{ commit: { committedDate: "2026-11-02T00:00:00Z" } }] },
+          commits: { nodes: [aRawCommit("1", "2026-11-02T00:00:00Z", "A fix", { email: "jared@example.com", user: { login: "jrey8343" } })] },
+          reviews: { nodes: [{ author: OPERATOR, state: "COMMENTED", submittedAt: "2026-11-02T01:00:00Z", body: "Why here?", comments: { nodes: [] } }] },
           comments: { nodes: [] },
           timelineItems: { nodes: [] },
         },
@@ -322,6 +347,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
           createdAt: "2026-11-01T00:00:00Z",
           author: OPERATOR,
           commits: { nodes: [] },
+          reviews: { nodes: [] },
           comments: { nodes: [] },
           timelineItems: { nodes: [] },
         },
@@ -337,7 +363,8 @@ describe("Gathering a Product repo's GitHub facts", () => {
         draft: true,
         headSha: "h".repeat(40),
         createdAt: "2026-11-01T00:00:00Z",
-        commits: [{ at: "2026-11-02T00:00:00Z" }],
+        commits: [{ sha: "1".repeat(40), byApp: false, author: "jrey8343", message: "A fix", patch: null, at: "2026-11-02T00:00:00Z" }],
+        reviews: [{ author: "jrey8343", state: "commented", body: "Why here?", comments: [], at: "2026-11-02T01:00:00Z" }],
         comments: [],
         labelEvents: [],
       },
@@ -460,6 +487,11 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 });
+
+/** Commit `<digit>…<digit>`, made at `committedDate` by `author`, as a PR's commits query reads it. */
+function aRawCommit(digit: string, committedDate: string, message: string, author: { email: string; user: { login: string } | null }) {
+  return { commit: { oid: digit.repeat(40), message, committedDate, author } };
+}
 
 /** Issue `number`, titled "Issue <number>", which the Operator opened at `createdAt` with `body`, still open. */
 function aRawOperatorIssue(number: number, createdAt: string, body: string, overrides: Record<string, unknown> = {}) {

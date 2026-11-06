@@ -8,6 +8,7 @@ import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import type {
   AgentPullRequestFacts,
   CommentFacts,
+  CommitFacts,
   EscapeMarkerIssueFacts,
   GitHubFacts,
   LabelEvent,
@@ -51,7 +52,7 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
     pagesOf<RawIssue>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues),
-    pagesOf<RawCommit>(github, DEFAULT_BRANCH_QUERY, repo, { since }, (data) => data.repository.defaultBranchRef?.target.history ?? null),
+    pagesOf<RawDefaultBranchCommit>(github, DEFAULT_BRANCH_QUERY, repo, { since }, (data) => data.repository.defaultBranchRef?.target.history ?? null),
     // The Design queue check's own slice, so Held and the check can't disagree. Its token can't read
     // workflow runs, so it reads Design turns in progress from the issues, as the scheduled tick does.
     gatherDesignQueueSlice(github, null, repo),
@@ -91,6 +92,8 @@ const LABEL_EVENTS = `
   }
 `;
 const COMMENTS = `comments(last: 100) { nodes { body createdAt author ${ACTOR} } }`;
+const COMMIT = "commit { oid message committedDate author { email user { login } } }";
+const REVIEWS = `reviews(first: 100) { nodes { author ${ACTOR} state submittedAt body comments(first: 100) { nodes { path line body } } } }`;
 const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
 
 // Newest-updated first, so paging stops at the first page older than the window.
@@ -104,8 +107,8 @@ const CLOSED_PULL_REQUESTS_QUERY = `
           author ${ACTOR}
           mergeCommit { oid }
           closingIssuesReferences(first: 10) { nodes { number } }
-          commits(first: 100) { nodes { commit { committedDate author { email } } } }
-          reviews(first: 100) { nodes { author ${ACTOR} state submittedAt } }
+          commits(first: 100) { nodes { ${COMMIT} } }
+          ${REVIEWS}
           ${COMMENTS}
           ${LABEL_EVENTS}
         }
@@ -122,7 +125,8 @@ const OPEN_PULL_REQUESTS_QUERY = `
         nodes {
           number title isDraft headRefOid headRefName createdAt
           author ${ACTOR}
-          commits(last: 100) { nodes { commit { committedDate } } }
+          commits(last: 100) { nodes { ${COMMIT} } }
+          ${REVIEWS}
           ${COMMENTS}
           ${LABEL_EVENTS}
         }
@@ -235,6 +239,18 @@ interface RawComment {
   author: RawActor | null;
 }
 
+interface RawCommit {
+  commit: { oid: string; message: string; committedDate: string; author: { email: string | null; user: { login: string } | null } | null };
+}
+
+interface RawReview {
+  author: RawActor | null;
+  state: string;
+  submittedAt: string | null;
+  body: string;
+  comments: { nodes: { path: string; line: number | null; body: string }[] };
+}
+
 interface RawClosedPullRequest {
   number: number;
   title: string;
@@ -246,8 +262,8 @@ interface RawClosedPullRequest {
   author: RawActor | null;
   mergeCommit: { oid: string } | null;
   closingIssuesReferences: { nodes: { number: number }[] };
-  commits: { nodes: { commit: { committedDate: string; author: { email: string | null } | null } }[] };
-  reviews: { nodes: { author: RawActor | null; state: string; submittedAt: string | null }[] };
+  commits: { nodes: RawCommit[] };
+  reviews: { nodes: RawReview[] };
   comments: { nodes: RawComment[] };
   timelineItems: { nodes: RawLabelEvent[] };
 }
@@ -260,7 +276,8 @@ interface RawOpenPullRequest {
   headRefName: string;
   createdAt: string;
   author: RawActor | null;
-  commits: { nodes: { commit: { committedDate: string } }[] };
+  commits: { nodes: RawCommit[] };
+  reviews: { nodes: RawReview[] };
   comments: { nodes: RawComment[] };
   timelineItems: { nodes: RawLabelEvent[] };
 }
@@ -300,7 +317,7 @@ interface RawOpenKitIssue {
   author: RawActor | null;
 }
 
-interface RawCommit {
+interface RawDefaultBranchCommit {
   message: string;
   committedDate: string;
 }
@@ -363,10 +380,7 @@ function agentPullRequestOf(pr: RawClosedPullRequest): AgentPullRequestFacts {
     title: pr.title,
     mergedAt: pr.mergedAt,
     mergeSha: pr.mergeCommit?.oid ?? null,
-    commits: pr.commits.nodes.map(({ commit }) => ({
-      byApp: commit.author?.email === IMPLEMENTER_AUTHOR.email,
-      at: commit.committedDate,
-    })),
+    commits: pr.commits.nodes.map(commitOf),
     reviews: pr.reviews.nodes.flatMap(reviewOf),
     comments: pr.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(pr.timelineItems.nodes),
@@ -381,10 +395,30 @@ const REVIEW_STATES: Readonly<Record<string, ReviewFacts["state"]>> = {
 };
 
 /** A submitted review; a pending one isn't one yet. */
-function reviewOf(review: RawClosedPullRequest["reviews"]["nodes"][number]): ReviewFacts[] {
+function reviewOf(review: RawReview): ReviewFacts[] {
   const state = REVIEW_STATES[review.state];
   if (state === undefined || review.submittedAt === null) return [];
-  return [{ author: loginOf(review.author), state, at: review.submittedAt }];
+  return [
+    {
+      author: loginOf(review.author),
+      state,
+      body: review.body,
+      comments: review.comments.nodes,
+      at: review.submittedAt,
+    },
+  ];
+}
+
+/** A commit on an agent PR's branch, its patch unread: the Implementer's are the App's, as its commits carry its identity. */
+function commitOf({ commit }: RawCommit): CommitFacts {
+  return {
+    sha: commit.oid,
+    byApp: commit.author?.email === IMPLEMENTER_AUTHOR.email,
+    author: commit.author?.user?.login ?? "ghost",
+    message: commit.message,
+    patch: null,
+    at: commit.committedDate,
+  };
 }
 
 function openPullRequestOf(pr: RawOpenPullRequest): OpenPullRequestFacts {
@@ -394,7 +428,8 @@ function openPullRequestOf(pr: RawOpenPullRequest): OpenPullRequestFacts {
     draft: pr.isDraft,
     headSha: pr.headRefOid,
     createdAt: pr.createdAt,
-    commits: pr.commits.nodes.map(({ commit }) => ({ at: commit.committedDate })),
+    commits: pr.commits.nodes.map(commitOf),
+    reviews: pr.reviews.nodes.flatMap(reviewOf),
     comments: pr.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(pr.timelineItems.nodes),
   };

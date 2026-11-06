@@ -10,7 +10,7 @@ import { verdictsIn } from "../github/threads.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { escapeMarkerIn } from "../loop/markers.ts";
 import { STRENGTHS, type Strength, type VerdictRecord } from "../loop/types.ts";
-import type { RunRecord } from "./runRecord.ts";
+import { recordPathOf, type RunRecord } from "./runRecord.ts";
 
 // The GitHub facts the metrics read of one Product repo.
 
@@ -41,8 +41,17 @@ export interface TicketFacts {
 
 /** A commit on an agent PR's branch. */
 export interface CommitFacts {
+  readonly sha: string;
   /** Whether the Fabrik App made it, as an agent run's push does. */
   readonly byApp: boolean;
+  /** Its author's GitHub login, or `ghost` when its email belongs to no account. */
+  readonly author: string;
+  readonly message: string;
+  /**
+   * What it changed, file by file as a diff, or null when it wasn't read: only
+   * the Retro's facts read it, and only for a commit the App didn't make.
+   */
+  readonly patch: string | null;
   /** ISO 8601. */
   readonly at: string;
 }
@@ -51,8 +60,20 @@ export interface CommitFacts {
 export interface ReviewFacts {
   readonly author: string;
   readonly state: "approved" | "changes-requested" | "commented" | "dismissed";
+  /** What the review says, "" when it says nothing beyond its inline comments. */
+  readonly body: string;
+  /** Its inline comments, in the order GitHub lists them. */
+  readonly comments: readonly InlineCommentFacts[];
   /** ISO 8601. */
   readonly at: string;
+}
+
+/** A review's comment on a line of an agent PR's diff. */
+export interface InlineCommentFacts {
+  readonly path: string;
+  /** The line it's on, or null when the diff it was left on has moved on. */
+  readonly line: number | null;
+  readonly body: string;
 }
 
 /** A comment on an issue or a PR. */
@@ -78,6 +99,22 @@ export interface AgentPullRequestFacts {
   readonly commits: readonly CommitFacts[];
   readonly reviews: readonly ReviewFacts[];
   /** Its comments, oldest first. */
+  readonly comments: readonly CommentFacts[];
+  readonly labelEvents: readonly LabelEvent[];
+}
+
+/** An open agent PR. */
+export interface OpenPullRequestFacts {
+  readonly number: number;
+  readonly title: string;
+  readonly draft: boolean;
+  readonly headSha: string;
+  /** ISO 8601. */
+  readonly createdAt: string;
+  /** Its latest 100 commits, oldest first. */
+  readonly commits: readonly CommitFacts[];
+  readonly reviews: readonly ReviewFacts[];
+  /** Oldest first. */
   readonly comments: readonly CommentFacts[];
   readonly labelEvents: readonly LabelEvent[];
 }
@@ -116,6 +153,8 @@ export interface MetricFacts {
   /** The Product repo, as `owner/name`. */
   readonly repo: string;
   readonly pullRequests: readonly AgentPullRequestFacts[];
+  /** The repo's open agent PRs. */
+  readonly openPullRequests: readonly OpenPullRequestFacts[];
   readonly tickets: readonly TicketFacts[];
   /** The default branch's commits in the last 30 days. */
   readonly defaultBranchCommits: readonly DefaultBranchCommitFacts[];
@@ -317,4 +356,207 @@ function escapedPullRequestOf(pullRequest: AgentPullRequestFacts, onRepo: readon
 /** The repo's agent PRs merged in the window. */
 function mergedIn(window: Window, { pullRequests }: MetricFacts): AgentPullRequestFacts[] {
   return pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(window, pullRequest.mergedAt));
+}
+
+// The evidence bundle: what one Retro reads of one Product repo for its window.
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** How far back a first Retro's window reaches, with no last Retro to start from. */
+export const FIRST_RUN_WINDOW_MS = 7 * DAY_MS;
+
+/** How far back an escape's PRs may have merged to count, as for the Weekly summary's escape rate: slow decay takes time to show. */
+export const ESCAPE_WINDOW_MS = 90 * DAY_MS;
+
+/** What a Retro reads of one Product repo, as the Retro evidence job gathers it. */
+export interface RetroEvidenceInput {
+  /** The store's Run records. */
+  readonly records: readonly RunRecord[];
+  /** The Product repo's GitHub facts. */
+  readonly facts: MetricFacts;
+  /** The Operator's GitHub login. */
+  readonly operator: string;
+  /** When the last Retro's window ended, as its marker says, ISO 8601; null on a first run. */
+  readonly lastWindowEnd: string | null;
+  /** When this Retro's window ends, as its marker says, ISO 8601: the tick that opened it. */
+  readonly windowEnd: string;
+}
+
+/**
+ * What a Retro reads. Every item in it carries the ref the Retro cites it by:
+ * a Run record's path in the store, `#<pr>` or `#<issue>`.
+ */
+export interface EvidenceBundle {
+  /** The span the Retro covers, from `start` (inclusive) to `end` (exclusive), ISO 8601. */
+  readonly window: { readonly start: string; readonly end: string };
+  /** The Architectural escapes the Operator opened in the window, as the Weekly summary counts them. */
+  readonly escapes: readonly EscapeEvidence[];
+  /** The Operator's feedback in the window, per agent PR it was given on, whether merged, closed or still open. */
+  readonly feedback: readonly FeedbackEvidence[];
+}
+
+/** A Run record, by its path in the store. */
+export interface RecordEvidence {
+  /** The record's path in the store. */
+  readonly ref: string;
+  readonly record: RunRecord;
+}
+
+/** An Architectural escape: the Operator's issue, and the agent PRs it counts against. */
+export interface EscapeEvidence {
+  /** `#<issue>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
+  /** Its marker's Strength, or null when it isn't one the Auditor gives. */
+  readonly strength: Strength | null;
+  readonly pullRequests: readonly EscapedPullRequestEvidence[];
+}
+
+/** An agent PR an escape counts against, and what let it through. */
+export interface EscapedPullRequestEvidence {
+  /** `#<pr>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  /** The Ticket its `Closes #n` names, or null. */
+  readonly ticket: number | null;
+  /** Every Run record on its Ticket, oldest first. */
+  readonly records: readonly RecordEvidence[];
+  /** The last Review record on the PR with a pass Verdict, the gate that missed the escape, or null when the store holds none. */
+  readonly lastPassingReview: RecordEvidence | null;
+}
+
+/**
+ * The Operator's feedback on one agent PR in the window, oldest first: what
+ * the Retro learns review lessons from. The App's and other people's activity
+ * on it is left out.
+ */
+export interface FeedbackEvidence {
+  /** `#<pr>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  readonly state: "merged" | "closed" | "open";
+  readonly items: readonly OperatorFeedback[];
+}
+
+/** One piece of the Operator's feedback on an agent PR, each at an ISO 8601 time. */
+export type OperatorFeedback =
+  | {
+      /** A Request changes review. */
+      readonly kind: "request-changes";
+      readonly at: string;
+      readonly body: string;
+      readonly inline: readonly InlineCommentFacts[];
+    }
+  | {
+      /** A run of consecutive commits the Operator made, at the last one's time, with what they changed. */
+      readonly kind: "push";
+      readonly at: string;
+      readonly commits: readonly { readonly sha: string; readonly message: string; readonly at: string }[];
+      /** Each commit's patch in turn. */
+      readonly patch: string;
+    }
+  | {
+      /**
+       * An Operator comment: one in the PR's conversation, which has no inline
+       * comments, or a review that isn't a Request changes.
+       */
+      readonly kind: "comment";
+      readonly at: string;
+      readonly body: string;
+      readonly inline: readonly InlineCommentFacts[];
+    };
+
+/** The evidence bundle for one Retro: what it reads of one Product repo for its window. Pure, no I/O. */
+export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
+  const end = Date.parse(input.windowEnd);
+  const window = { start: input.lastWindowEnd === null ? end - FIRST_RUN_WINDOW_MS : Date.parse(input.lastWindowEnd), end };
+  const metrics: MetricsInput = { records: input.records, facts: [input.facts], operator: input.operator };
+  return {
+    window: { start: new Date(window.start).toISOString(), end: new Date(window.end).toISOString() },
+    escapes: escapesOf(window, metrics),
+    feedback: feedbackOf(window, input),
+  };
+}
+
+/** The escapes opened in the window, each counted against the agent PRs merged in the 90 days to its end. */
+function escapesOf(window: Window, metrics: MetricsInput): EscapeEvidence[] {
+  return escapesIn({ start: window.end - ESCAPE_WINDOW_MS, end: window.end }, metrics)
+    .filter(({ issue }) => within(window, issue.createdAt))
+    .map(({ issue, strength, pullRequests }) => ({
+      ref: `#${issue.number}`,
+      number: issue.number,
+      title: issue.title,
+      body: issue.body,
+      strength,
+      pullRequests: pullRequests.map(({ pullRequest, records, lastPassingReview }) => ({
+        ref: `#${pullRequest.number}`,
+        number: pullRequest.number,
+        title: pullRequest.title,
+        ticket: pullRequest.ticket,
+        records: records.map(recordEvidenceOf),
+        lastPassingReview: lastPassingReview === null ? null : recordEvidenceOf(lastPassingReview),
+      })),
+    }));
+}
+
+/** The Operator's feedback in the window on each agent PR that got some. */
+function feedbackOf(window: Window, { facts, operator }: RetroEvidenceInput): FeedbackEvidence[] {
+  const pullRequests = [
+    ...facts.pullRequests.map((pullRequest) => ({ pullRequest, state: pullRequest.mergedAt === null ? ("closed" as const) : ("merged" as const) })),
+    ...facts.openPullRequests.map((pullRequest) => ({ pullRequest, state: "open" as const })),
+  ];
+  return pullRequests.flatMap(({ pullRequest, state }) => {
+    const items = operatorFeedbackOn(pullRequest, window, operator);
+    const { number, title } = pullRequest;
+    return items.length === 0 ? [] : [{ ref: `#${number}`, number, title, state, items }];
+  });
+}
+
+/** The Operator's Request changes, pushes and comments on a PR in the window, oldest first. */
+function operatorFeedbackOn(
+  { reviews, commits, comments }: Pick<AgentPullRequestFacts, "reviews" | "commits" | "comments">,
+  window: Window,
+  operator: string,
+): OperatorFeedback[] {
+  const theirs = reviews.filter((review) => review.author === operator && within(window, review.at));
+  const requestChanges = theirs
+    .filter((review) => review.state === "changes-requested")
+    .map((review): OperatorFeedback => ({ kind: "request-changes", at: review.at, body: review.body, inline: review.comments }));
+  const reviewComments = theirs
+    .filter((review) => review.state !== "changes-requested" && (review.body.trim() !== "" || review.comments.length > 0))
+    .map((review): OperatorFeedback => ({ kind: "comment", at: review.at, body: review.body, inline: review.comments }));
+  const conversation = comments
+    .filter((comment) => !comment.byBot && comment.author === operator && within(window, comment.at))
+    .map((comment): OperatorFeedback => ({ kind: "comment", at: comment.at, body: comment.body, inline: [] }));
+  const pushes = pushesOf(
+    commits.filter((commit) => within(window, commit.at)),
+    operator,
+  );
+  return [...requestChanges, ...reviewComments, ...conversation, ...pushes].toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
+/** Each run of consecutive commits the Operator made, as one push: anyone else's commit ends a run. */
+function pushesOf(commits: readonly CommitFacts[], operator: string): OperatorFeedback[] {
+  const runs: CommitFacts[][] = [];
+  commits.forEach((commit, i) => {
+    if (commit.byApp || commit.author !== operator) return;
+    const previous = commits[i - 1];
+    const run = runs.at(-1);
+    if (run !== undefined && previous !== undefined && run.at(-1) === previous) run.push(commit);
+    else runs.push([commit]);
+  });
+  return runs.map((run) => ({
+    kind: "push",
+    at: run.at(-1)?.at ?? "",
+    commits: run.map(({ sha, message, at }) => ({ sha, message, at })),
+    patch: run.flatMap((commit) => (commit.patch === null ? [] : [commit.patch])).join("\n"),
+  }));
+}
+
+function recordEvidenceOf(record: RunRecord): RecordEvidence {
+  return { ref: recordPathOf(record), record };
 }
