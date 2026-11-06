@@ -36,7 +36,7 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
 
   it("counts an Implement job still queued or waiting after its claim took agent:implement off the Ticket", async () => {
     const actions = actionsWith([
-      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Claim the Ticket", status: "completed" }, { name: "fabrik / Implement", status: "queued" }] },
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Claim the work", status: "completed" }, { name: "fabrik / Implement", status: "queued" }] },
       { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "waiting" }] },
       { id: 3, status: "queued", jobs: [{ name: "fabrik / Implement", status: "queued" }] },
       { id: 4, status: "waiting", jobs: [{ name: "fabrik / Implement", status: "pending" }] },

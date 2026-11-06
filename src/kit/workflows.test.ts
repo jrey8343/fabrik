@@ -818,6 +818,10 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
 });
 
 describe("loop.yml's claim job", () => {
+  it("is named for what it claims of any run, a Ticket's, a research Decision's or a Design session's, keeping its job id", () => {
+    expect(job("implement-claim")).toMatch(/^ {2}implement-claim:\n {4}name: Claim the work\n/);
+  });
+
   it("takes agent:design off as the Design session's first turn starts, and agent:research as a Research run starts, as it takes agent:implement off", () => {
     expect(job("implement-claim")).toContain(
       "if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')",
