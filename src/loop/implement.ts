@@ -123,7 +123,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
  * ones having passed it already. One that changes nothing is an Execution flaw
  * on the PR, which starts the next retry if one is left. All of it is silent.
  */
-export function applyRetryImplementation(event: ImplementRunFinished, snapshot: Snapshot): Plan {
+export function applyRetryImplementation(event: ImplementRunFinished, snapshot: Snapshot, config: KitConfig): Plan {
   const { issue: issueNumber, changes, branch, fixes } = event;
   const { issue, pullRequest, operator } = snapshot;
   if (fixes === undefined) throw new Error("A first Implement run lands through applyImplementation");
@@ -169,10 +169,11 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
     kind: "act",
     actions: [
       // The body says what the PR as a whole now does, so the next Review, which reads the body, never judges a stale one.
+      // Its evidence section is this run's, never an earlier run's, so the evidence matches the PR's new head.
       {
         kind: "edit-issue-body",
         issue: pullRequest.number,
-        body: `${withoutMentions(parsed.output.summary)}\n\nCloses #${issueNumber}`,
+        body: pullRequestBody(parsed.output.summary, issueNumber, evidenceFor(event, config, pullRequest.uiEvidence !== null)),
       },
       {
         kind: "comment",

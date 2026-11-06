@@ -92,7 +92,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // A retry lands on the PR it fixes; a first run opens one.
       return event.fixes === undefined
         ? withIssue(snapshot, (context) => applyImplementation(event, context, config))
-        : applyRetryImplementation(event, snapshot);
+        : applyRetryImplementation(event, snapshot, config);
     case "agent-run-failed":
       return withIssue(snapshot, (context) => failureNotice(event, context, config));
     // A closed issue may finish its Spec, free a slot or unblock a Ticket, or end a
