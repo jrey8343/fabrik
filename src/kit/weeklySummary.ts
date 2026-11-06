@@ -12,11 +12,13 @@ import {
   type ArchitecturalEscape,
   type CommentFacts,
   dispatchOf,
+  ESCAPE_WINDOW_MS,
   escapesIn,
   type LabelEvent,
   type MergedAgentPullRequest,
   mergedAgentPullRequestsIn,
   type MetricFacts,
+  type OpenPullRequestFacts,
   verdictsOn,
   type Window,
   within,
@@ -33,8 +35,10 @@ export type {
   CommitFacts,
   DefaultBranchCommitFacts,
   EscapeMarkerIssueFacts,
+  FollowUpIssueFacts,
   LabelEvent,
   MergedTitleFacts,
+  OpenPullRequestFacts,
   ReviewFacts,
   TicketFacts,
 } from "./retroEvidence.ts";
@@ -53,21 +57,6 @@ export interface OpenIssueFacts {
   readonly labels: readonly string[];
   /** ISO 8601. */
   readonly createdAt: string;
-  /** Oldest first. */
-  readonly comments: readonly CommentFacts[];
-  readonly labelEvents: readonly LabelEvent[];
-}
-
-/** An open agent PR, as Waiting on you and Stuck read it. */
-export interface OpenPullRequestFacts {
-  readonly number: number;
-  readonly title: string;
-  readonly draft: boolean;
-  readonly headSha: string;
-  /** ISO 8601. */
-  readonly createdAt: string;
-  /** When each of its commits was made. */
-  readonly commits: readonly { readonly at: string }[];
   /** Oldest first. */
   readonly comments: readonly CommentFacts[];
   readonly labelEvents: readonly LabelEvent[];
@@ -106,8 +95,6 @@ export interface GitHubFacts extends MetricFacts {
   readonly specs: readonly SpecFacts[];
   /** The repo's open issues. */
   readonly openIssues: readonly OpenIssueFacts[];
-  /** The repo's open agent PRs. */
-  readonly openPullRequests: readonly OpenPullRequestFacts[];
   /**
    * The repo's open `needs-design` issues with their slot-holding signals, as
    * the Design queue check reads them: Held counts the ones waiting for a slot.
@@ -867,7 +854,6 @@ interface Week extends Window {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REVERT_WINDOW_MS = 30 * DAY_MS;
-const ESCAPE_WINDOW_MS = 90 * DAY_MS;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /** The week ending at the last Monday 00:00 at or before `now`, and the week before it. */

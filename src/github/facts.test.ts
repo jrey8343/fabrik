@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gatherGitHubFacts, productReposOf } from "./facts.ts";
+import { gatherGitHubFacts, gatherRetroFacts, productReposOf } from "./facts.ts";
 
 const CALLER = "jobs:\n  fabrik:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v1.2.0\n";
 
@@ -142,6 +142,7 @@ function aRawPullRequest(overrides: Record<string, unknown> = {}) {
     reviews: { nodes: [] },
     comments: { nodes: [] },
     timelineItems: { nodes: [] },
+    files: { nodes: [] },
     ...overrides,
   };
 }
@@ -166,6 +167,16 @@ describe("Gathering a Product repo's GitHub facts", () => {
       { number: 50, ticket: 7, title: "Build the thing", mergedAt: "2026-11-04T00:00:00Z", mergeSha: "c".repeat(40) },
       { number: 51, ticket: null, title: "Build the thing", mergedAt: null, mergeSha: null },
     ]);
+  });
+
+  it("holds the paths each agent PR changed", async () => {
+    const github = repoWith({
+      closedPullRequests: [aRawPullRequest({ files: { nodes: [{ path: "src/cart.ts" }, { path: "src/cart.test.ts" }] } })],
+    });
+
+    const [pullRequest] = (await gatherGitHubFacts(github, repo, NOW, OPERATOR.login)).pullRequests;
+
+    expect(pullRequest?.changedPaths).toEqual(["src/cart.ts", "src/cart.test.ts"]);
   });
 
   it("leaves out a PR that isn't an agent PR, but keeps its merged title for spotting reverts", async () => {
@@ -198,14 +209,26 @@ describe("Gathering a Product repo's GitHub facts", () => {
         aRawPullRequest({
           commits: {
             nodes: [
-              { commit: { committedDate: "2026-11-02T00:00:00Z", author: { email: "fabrik-implementer@users.noreply.github.com" } } },
-              { commit: { committedDate: "2026-11-03T00:00:00Z", author: { email: "jared@example.com" } } },
+              aRawCommit("1", "2026-11-02T00:00:00Z", "Build the thing", { email: "fabrik-implementer@users.noreply.github.com", user: null }),
+              aRawCommit("2", "2026-11-03T00:00:00Z", "Move pricing out", { email: "jared@example.com", user: { login: "jrey8343" } }),
+              aRawCommit("3", "2026-11-03T00:05:00Z", "From a laptop", { email: "jared@laptop.local", user: null }),
             ],
           },
           reviews: {
             nodes: [
-              { author: OPERATOR, state: "CHANGES_REQUESTED", submittedAt: "2026-11-03T01:00:00Z" },
-              { author: OPERATOR, state: "PENDING", submittedAt: null },
+              {
+                author: OPERATOR,
+                state: "CHANGES_REQUESTED",
+                submittedAt: "2026-11-03T01:00:00Z",
+                body: "Keep pricing out of the cart.",
+                comments: {
+                  nodes: [
+                    { path: "src/cart.ts", line: 12, body: "This belongs in pricing." },
+                    { path: "src/cart.ts", line: null, body: "On a line since changed." },
+                  ],
+                },
+              },
+              { author: OPERATOR, state: "PENDING", submittedAt: null, body: "", comments: { nodes: [] } },
             ],
           },
           comments: { nodes: [{ body: "Verdict", createdAt: "2026-11-03T02:00:00Z", author: APP }] },
@@ -222,10 +245,22 @@ describe("Gathering a Product repo's GitHub facts", () => {
     const [pullRequest] = (await gatherGitHubFacts(github, repo, NOW, OPERATOR.login)).pullRequests;
 
     expect(pullRequest?.commits).toEqual([
-      { byApp: true, at: "2026-11-02T00:00:00Z" },
-      { byApp: false, at: "2026-11-03T00:00:00Z" },
+      { sha: "1".repeat(40), byApp: true, author: "ghost", message: "Build the thing", patch: null, at: "2026-11-02T00:00:00Z" },
+      { sha: "2".repeat(40), byApp: false, author: "jrey8343", message: "Move pricing out", patch: null, at: "2026-11-03T00:00:00Z" },
+      { sha: "3".repeat(40), byApp: false, author: "ghost", message: "From a laptop", patch: null, at: "2026-11-03T00:05:00Z" },
     ]);
-    expect(pullRequest?.reviews).toEqual([{ author: "jrey8343", state: "changes-requested", at: "2026-11-03T01:00:00Z" }]);
+    expect(pullRequest?.reviews).toEqual([
+      {
+        author: "jrey8343",
+        state: "changes-requested",
+        body: "Keep pricing out of the cart.",
+        comments: [
+          { path: "src/cart.ts", line: 12, body: "This belongs in pricing." },
+          { path: "src/cart.ts", line: null, body: "On a line since changed." },
+        ],
+        at: "2026-11-03T01:00:00Z",
+      },
+    ]);
     expect(pullRequest?.comments).toEqual([{ author: "fabrik-app[bot]", byBot: true, body: "Verdict", at: "2026-11-03T02:00:00Z" }]);
     expect(pullRequest?.labelEvents).toEqual([
       { label: "agent:review", action: "labeled", actor: "jrey8343", at: "2026-11-03T03:00:00Z" },
@@ -298,7 +333,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 
-  it("holds the open agent PRs alone, with their head, draft state and activity", async () => {
+  it("holds the open agent PRs alone, with their head, draft state, commits, reviews and activity", async () => {
     const github = repoWith({
       openPullRequests: [
         {
@@ -309,7 +344,8 @@ describe("Gathering a Product repo's GitHub facts", () => {
           headRefName: "fabrik/ticket-7",
           createdAt: "2026-11-01T00:00:00Z",
           author: APP,
-          commits: { nodes: [{ commit: { committedDate: "2026-11-02T00:00:00Z" } }] },
+          commits: { nodes: [aRawCommit("1", "2026-11-02T00:00:00Z", "A fix", { email: "jared@example.com", user: { login: "jrey8343" } })] },
+          reviews: { nodes: [{ author: OPERATOR, state: "COMMENTED", submittedAt: "2026-11-02T01:00:00Z", body: "Why here?", comments: { nodes: [] } }] },
           comments: { nodes: [] },
           timelineItems: { nodes: [] },
         },
@@ -322,6 +358,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
           createdAt: "2026-11-01T00:00:00Z",
           author: OPERATOR,
           commits: { nodes: [] },
+          reviews: { nodes: [] },
           comments: { nodes: [] },
           timelineItems: { nodes: [] },
         },
@@ -337,7 +374,8 @@ describe("Gathering a Product repo's GitHub facts", () => {
         draft: true,
         headSha: "h".repeat(40),
         createdAt: "2026-11-01T00:00:00Z",
-        commits: [{ at: "2026-11-02T00:00:00Z" }],
+        commits: [{ sha: "1".repeat(40), byApp: false, author: "jrey8343", message: "A fix", patch: null, at: "2026-11-02T00:00:00Z" }],
+        reviews: [{ author: "jrey8343", state: "commented", body: "Why here?", comments: [], at: "2026-11-02T01:00:00Z" }],
         comments: [],
         labelEvents: [],
       },
@@ -416,6 +454,22 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 
+  it("holds the issues the Operator opened in the 97 days whose body says From PR #n, the Follow-ups they opened, with their title and body", async () => {
+    const filed = "Both modules round prices.\n\nFrom PR #50";
+    const github = repoWith({
+      operatorIssues: [
+        aRawOperatorIssue(91, "2026-11-05T00:00:00Z", "Just an idea, from PR #50."),
+        aRawOperatorIssue(90, "2026-11-04T00:00:00Z", filed),
+        aRawOperatorIssue(89, "2026-11-04T00:00:00Z", "```\nFrom PR #50\n```"), // quoted as code
+        aRawOperatorIssue(60, "2026-08-03T00:00:00Z", "From PR #30"), // before the window
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(facts.followUpIssues).toEqual([{ number: 90, title: "Issue 90", author: "jrey8343", body: filed }]);
+  });
+
   it("holds the open fabrik:audit issues, with who opened them and when", async () => {
     const github = repoWith({
       openAudits: [
@@ -448,6 +502,21 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 
+  it("reads the default branch's commits from 97 days back, so a revert is seen across the streak table's 90 days", async () => {
+    const github = repoWith({});
+    const asked: unknown[] = [];
+    const watched = {
+      graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        if (query.includes("history(")) asked.push(variables["since"]);
+        return github.graphql<T>(query, variables);
+      },
+    };
+
+    await gatherGitHubFacts(watched, repo, NOW, OPERATOR.login);
+
+    expect(asked).toEqual(["2026-08-03T20:00:00.000Z"]);
+  });
+
   it("holds the default branch's commit messages in the window", async () => {
     const github = repoWith({
       defaultBranchCommits: [{ message: `Revert "Build the thing"\n\nThis reverts commit ${"c".repeat(40)}.`, committedDate: "2026-11-05T00:00:00Z" }],
@@ -460,6 +529,11 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 });
+
+/** Commit `<digit>…<digit>`, made at `committedDate` by `author`, as a PR's commits query reads it. */
+function aRawCommit(digit: string, committedDate: string, message: string, author: { email: string; user: { login: string } | null }) {
+  return { commit: { oid: digit.repeat(40), message, committedDate, author } };
+}
 
 /** Issue `number`, titled "Issue <number>", which the Operator opened at `createdAt` with `body`, still open. */
 function aRawOperatorIssue(number: number, createdAt: string, body: string, overrides: Record<string, unknown> = {}) {
@@ -494,3 +568,81 @@ function aRawIssue(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+describe("Gathering a Product repo's GitHub facts for a Retro", () => {
+  const OPERATOR_COMMIT = { email: "jared@example.com", user: { login: "jrey8343" } };
+  const IMPLEMENTER = { email: "fabrik-implementer@users.noreply.github.com", user: null };
+
+  /** The facts queries over `raw`, and the REST API's commits, each with these changed files; any other call fails. */
+  function retroRepoWith(raw: RawRepo, files: Record<string, unknown[]>) {
+    const read: string[] = [];
+    return {
+      read,
+      github: {
+        ...repoWith(raw),
+        async rest(method: string, path: string): Promise<unknown> {
+          expect(method).toBe("GET");
+          const sha = /^\/repos\/jrey8343\/shop\/commits\/([0-9a-f]{40})$/.exec(path)?.[1];
+          if (sha === undefined || files[sha] === undefined) throw new Error(`Unexpected call: ${path}`);
+          read.push(sha);
+          return { sha, files: files[sha] };
+        },
+      },
+    };
+  }
+
+  it("reads the patch of each commit on an agent PR that the Fabrik App didn't make, file by file, and only those", async () => {
+    const { github, read } = retroRepoWith(
+      {
+        closedPullRequests: [
+          aRawPullRequest({
+            commits: {
+              nodes: [aRawCommit("1", "2026-11-02T00:00:00Z", "Build the thing", IMPLEMENTER), aRawCommit("2", "2026-11-03T00:00:00Z", "Move pricing out", OPERATOR_COMMIT)],
+            },
+          }),
+        ],
+        openPullRequests: [
+          {
+            number: 52,
+            title: "Build the till",
+            isDraft: true,
+            headRefOid: "h".repeat(40),
+            headRefName: "fabrik/ticket-9",
+            createdAt: "2026-11-01T00:00:00Z",
+            author: APP,
+            commits: { nodes: [aRawCommit("3", "2026-11-04T00:00:00Z", "Add the logo", OPERATOR_COMMIT)] },
+            reviews: { nodes: [] },
+            comments: { nodes: [] },
+            timelineItems: { nodes: [] },
+          },
+        ],
+      },
+      {
+        ["2".repeat(40)]: [
+          { filename: "src/pricing.ts", status: "added", patch: "@@ -0,0 +1 @@\n+export const price = 1;" },
+          { filename: "src/cart.ts", previous_filename: "src/basket.ts", status: "renamed", patch: "@@ -1 +1 @@\n-old\n+new" },
+        ],
+        ["3".repeat(40)]: [{ filename: "logo.png", status: "added" }],
+      },
+    );
+
+    const facts = await gatherRetroFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(facts.pullRequests[0]?.commits.map((commit) => commit.patch)).toEqual([
+      null,
+      [
+        "diff --git a/src/pricing.ts b/src/pricing.ts",
+        "@@ -0,0 +1 @@",
+        "+export const price = 1;",
+        "diff --git a/src/basket.ts b/src/cart.ts",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+      ].join("\n"),
+    ]);
+    expect(facts.openPullRequests[0]?.commits.map((commit) => commit.patch)).toEqual([
+      "diff --git a/logo.png b/logo.png\n(No textual diff: a binary file, or too large for GitHub to show.)",
+    ]);
+    expect(read).toEqual(["2".repeat(40), "3".repeat(40)]);
+  });
+});

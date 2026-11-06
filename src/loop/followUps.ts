@@ -3,6 +3,7 @@
 // Open as issue link to the Product repo's new-issue form, prefilled, so the
 // Operator can open it and it goes through Intake and Triage as normal. An
 // Audit's candidates get the same link (src/loop/auditLanding.ts). Pure.
+import { fromPullRequestLine } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { FollowUp } from "./verdict.ts";
 
@@ -12,16 +13,22 @@ export const MAX_ISSUE_URL_LENGTH = 8000;
 /** GitHub's longest issue title. */
 const MAX_TITLE_LENGTH = 256;
 
+/** The heading a pass's Verdict comment lists its Follow-ups under. */
+const FOLLOW_UPS_HEADING = "### Follow-ups";
+
+/** The line each Follow-up in a Verdict comment ends with. */
+const OPEN_AS_ISSUE_LINK = /^\[Open as issue\]\(.*\)$/;
+
 /**
  * The Follow-ups part of a pass's Verdict comment: each Follow-up's title,
  * body and Open as issue link, with @-mentions stripped. Nothing when there
- * are none.
+ * are none. followUpsIn reads it back.
  */
 export function followUpsSection(followUps: readonly FollowUp[], repoUrl: string, pullRequest: number): string[] {
   if (followUps.length === 0) return [];
   return [
     "",
-    "### Follow-ups",
+    FOLLOW_UPS_HEADING,
     ...followUps.flatMap((followUp) => {
       const title = withoutMentions(followUp.title);
       const body = withoutMentions(followUp.body);
@@ -30,10 +37,29 @@ export function followUpsSection(followUps: readonly FollowUp[], repoUrl: string
         `#### ${title}`,
         ...(body === "" ? [] : ["", body]),
         "",
-        `[Open as issue](${newIssueUrl(repoUrl, title, body, `From PR #${pullRequest}`)})`,
+        `[Open as issue](${newIssueUrl(repoUrl, title, body, fromPullRequestLine(pullRequest))})`,
       ];
     }),
   ];
+}
+
+/**
+ * The Follow-ups a posted Verdict comment lists, as followUpsSection wrote
+ * them, in order: each one's title and body. None when it lists none.
+ */
+export function followUpsIn(comment: string): FollowUp[] {
+  const lines = comment.split("\n").map((line) => line.replace(/\r$/, ""));
+  const followUps: FollowUp[] = [];
+  let at = lines.lastIndexOf(FOLLOW_UPS_HEADING) + 1;
+  if (at === 0) return followUps;
+  for (;;) {
+    while (lines[at] === "") at += 1;
+    const title = /^#### (.*)$/.exec(lines[at] ?? "")?.[1];
+    const link = lines.findIndex((line, i) => i > at && OPEN_AS_ISSUE_LINK.test(line));
+    if (title === undefined || link === -1) return followUps;
+    followUps.push({ title, body: lines.slice(at + 1, link).join("\n").replace(/^\n+|\n+$/g, "") });
+    at = link + 1;
+  }
 }
 
 /**

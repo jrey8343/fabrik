@@ -5,12 +5,15 @@
 // agent PRs merged in a window, each with its Ticket, Dispatch, Human touches,
 // last passing Verdict and whether it was reverted; the Verdicts on a PR; and
 // the Architectural escapes opened in a window, with what let each PR through.
-// Pure, no I/O.
+// Then the evidence bundle a Retro reads for its window (evidenceBundle), each
+// of its items carrying the ref the Retro cites it by (refsOf). Pure, no I/O.
 import { verdictsIn } from "../github/threads.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
-import { escapeMarkerIn } from "../loop/markers.ts";
-import { STRENGTHS, type Strength, type VerdictRecord } from "../loop/types.ts";
-import type { RunRecord } from "./runRecord.ts";
+import { followUpsIn } from "../loop/followUps.ts";
+import { escapeMarkerIn, fromPullRequestIn, fromRetroIn } from "../loop/markers.ts";
+import { retrosIn, retroWindowStart } from "../loop/retro.ts";
+import { type RetroIssueSnapshot, STRENGTHS, type Strength, type VerdictRecord } from "../loop/types.ts";
+import { recordPathOf, type RunRecord } from "./runRecord.ts";
 
 // The GitHub facts the metrics read of one Product repo.
 
@@ -41,8 +44,17 @@ export interface TicketFacts {
 
 /** A commit on an agent PR's branch. */
 export interface CommitFacts {
+  readonly sha: string;
   /** Whether the Fabrik App made it, as an agent run's push does. */
   readonly byApp: boolean;
+  /** Its author's GitHub login, or `ghost` when its email belongs to no account. */
+  readonly author: string;
+  readonly message: string;
+  /**
+   * What it changed, file by file as a diff, or null when it wasn't read: only
+   * the Retro's facts read it, and only for a commit the App didn't make.
+   */
+  readonly patch: string | null;
   /** ISO 8601. */
   readonly at: string;
 }
@@ -51,8 +63,20 @@ export interface CommitFacts {
 export interface ReviewFacts {
   readonly author: string;
   readonly state: "approved" | "changes-requested" | "commented" | "dismissed";
+  /** What the review says, "" when it says nothing beyond its inline comments. */
+  readonly body: string;
+  /** Its first 50 inline comments, in the order GitHub lists them. */
+  readonly comments: readonly InlineCommentFacts[];
   /** ISO 8601. */
   readonly at: string;
+}
+
+/** A review's comment on a line of an agent PR's diff. */
+export interface InlineCommentFacts {
+  readonly path: string;
+  /** The line it's on, or null when the diff it was left on has moved on. */
+  readonly line: number | null;
+  readonly body: string;
 }
 
 /** A comment on an issue or a PR. */
@@ -78,6 +102,24 @@ export interface AgentPullRequestFacts {
   readonly commits: readonly CommitFacts[];
   readonly reviews: readonly ReviewFacts[];
   /** Its comments, oldest first. */
+  readonly comments: readonly CommentFacts[];
+  readonly labelEvents: readonly LabelEvent[];
+  /** The paths of the files it changed, its first 100. */
+  readonly changedPaths: readonly string[];
+}
+
+/** An open agent PR. */
+export interface OpenPullRequestFacts {
+  readonly number: number;
+  readonly title: string;
+  readonly draft: boolean;
+  readonly headSha: string;
+  /** ISO 8601. */
+  readonly createdAt: string;
+  /** Its latest 100 commits, oldest first. */
+  readonly commits: readonly CommitFacts[];
+  readonly reviews: readonly ReviewFacts[];
+  /** Oldest first. */
   readonly comments: readonly CommentFacts[];
   readonly labelEvents: readonly LabelEvent[];
 }
@@ -111,17 +153,30 @@ export interface EscapeMarkerIssueFacts {
   readonly body: string;
 }
 
+/** An issue the Operator opened whose body says `From PR #n`: a Follow-up opened through its Open as issue link. */
+export interface FollowUpIssueFacts {
+  readonly number: number;
+  readonly title: string;
+  /** Who opened it: only the Operator's issues count. */
+  readonly author: string;
+  readonly body: string;
+}
+
 /** What the metrics read of one Product repo on GitHub. */
 export interface MetricFacts {
   /** The Product repo, as `owner/name`. */
   readonly repo: string;
   readonly pullRequests: readonly AgentPullRequestFacts[];
+  /** The repo's open agent PRs. */
+  readonly openPullRequests: readonly OpenPullRequestFacts[];
   readonly tickets: readonly TicketFacts[];
-  /** The default branch's commits in the last 30 days. */
+  /** The default branch's commits in the last 97 days. */
   readonly defaultBranchCommits: readonly DefaultBranchCommitFacts[];
   readonly mergedPullRequestTitles: readonly MergedTitleFacts[];
   /** The issues the Operator opened in the last 97 days whose body has an escape marker. */
   readonly escapeMarkerIssues: readonly EscapeMarkerIssueFacts[];
+  /** The issues the Operator opened in the last 97 days whose body says `From PR #n`. */
+  readonly followUpIssues: readonly FollowUpIssueFacts[];
 }
 
 /** What the metrics read: the store's Run records, each Product repo's GitHub facts, and the Operator's GitHub login. */
@@ -317,4 +372,397 @@ function escapedPullRequestOf(pullRequest: AgentPullRequestFacts, onRepo: readon
 /** The repo's agent PRs merged in the window. */
 function mergedIn(window: Window, { pullRequests }: MetricFacts): AgentPullRequestFacts[] {
   return pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(window, pullRequest.mergedAt));
+}
+
+// The evidence bundle: what one Retro reads of one Product repo for its window.
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** How far back an escape's PRs may have merged to count, as for the Weekly summary's escape rate: slow decay takes time to show. */
+export const ESCAPE_WINDOW_MS = 90 * DAY_MS;
+
+/** How far back the streak table reaches: long enough to count a streak a loosening can rest on. */
+export const STREAK_WINDOW_MS = 90 * DAY_MS;
+
+/** How many closed Retros a Retro reads the Operator's verdicts on its proposals from. */
+export const HISTORY_DEPTH = 3;
+
+/** A `fabrik:retro` issue, as the tick's snapshot reads it, with its comments, oldest first. */
+export interface RetroIssueFacts extends RetroIssueSnapshot {
+  readonly comments: readonly CommentFacts[];
+}
+
+/** What a Retro reads of one Product repo, as the Retro evidence job gathers it. */
+export interface RetroEvidenceInput {
+  /** The store's Run records. */
+  readonly records: readonly RunRecord[];
+  /** The Product repo's GitHub facts, as the facts adapter gathers them for a Retro (gatherRetroFacts, src/github/facts.ts). */
+  readonly facts: MetricFacts;
+  /** The Operator's GitHub login. */
+  readonly operator: string;
+  /** The Retro being filled: the pending `fabrik:retro` issue this evidence is for. */
+  readonly retro: number;
+  /** When its window ends, as its retro marker says, ISO 8601: the time of the tick that opened it. */
+  readonly windowEnd: string;
+  /**
+   * The repo's `fabrik:retro` issues, open and closed, the Retro being filled
+   * among them or not. Its window starts where the last Retro's ended, as the
+   * retro gate reads it (src/loop/retro.ts), with the Retro being filled left
+   * out: the gate takes a pending Retro for the last one, so it would
+   * otherwise be its own last Retro, and its window would come out empty.
+   */
+  readonly retros: readonly RetroIssueFacts[];
+  /** The repo's open issues whose body says `From retro #n`: any other open issue given is left out. */
+  readonly fromRetroIssues: readonly FromRetroIssueFacts[];
+}
+
+/** An open issue, as the Retro's history reads it. */
+export interface FromRetroIssueFacts {
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
+}
+
+/**
+ * What a Retro reads. Every item in it carries the ref the Retro cites it by:
+ * a Run record's path in the store, `#<pr>` or `#<issue>`.
+ */
+export interface EvidenceBundle {
+  /** The span the Retro covers, from `start` (inclusive) to `end` (exclusive), ISO 8601. */
+  readonly window: { readonly start: string; readonly end: string };
+  /** The Architectural escapes the Operator opened in the window, as the Weekly summary counts them. */
+  readonly escapes: readonly EscapeEvidence[];
+  /** The Operator's feedback in the window, per agent PR it was given on, whether merged, closed or still open. */
+  readonly feedback: readonly FeedbackEvidence[];
+  /** The Follow-ups on the pass Verdicts of the agent PRs merged in the window, PR by PR. */
+  readonly followUps: readonly FollowUpEvidence[];
+  /** Every agent PR merged in the 90 days to the window's end, oldest first: the counts a loosening's streak rests on. */
+  readonly streakTable: readonly StreakRow[];
+  /** What the Operator made of earlier Retros: what not to propose again without new evidence. */
+  readonly history: RetroHistory;
+}
+
+/** A Run record, by its path in the store. */
+export interface RecordEvidence {
+  /** The record's path in the store. */
+  readonly ref: string;
+  readonly record: RunRecord;
+}
+
+/** An Architectural escape: the Operator's issue, and the agent PRs it counts against. */
+export interface EscapeEvidence {
+  /** `#<issue>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
+  /** Its marker's Strength, or null when it isn't one the Auditor gives. */
+  readonly strength: Strength | null;
+  readonly pullRequests: readonly EscapedPullRequestEvidence[];
+}
+
+/** An agent PR an escape counts against, and what let it through. */
+export interface EscapedPullRequestEvidence {
+  /** `#<pr>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  /** The Ticket its `Closes #n` names, or null. */
+  readonly ticket: number | null;
+  /** Every Run record on its Ticket, oldest first. */
+  readonly records: readonly RecordEvidence[];
+  /** The last Review record on the PR with a pass Verdict, the gate that missed the escape, or null when the store holds none. */
+  readonly lastPassingReview: RecordEvidence | null;
+}
+
+/**
+ * The Operator's feedback on one agent PR in the window, oldest first: what
+ * the Retro learns review lessons from. The App's and other people's activity
+ * on it is left out.
+ */
+export interface FeedbackEvidence {
+  /** `#<pr>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  readonly state: "merged" | "closed" | "open";
+  readonly items: readonly OperatorFeedback[];
+}
+
+/** One piece of the Operator's feedback on an agent PR, each at an ISO 8601 time. */
+export type OperatorFeedback =
+  | {
+      /** A Request changes review. */
+      readonly kind: "request-changes";
+      readonly at: string;
+      readonly body: string;
+      readonly inline: readonly InlineCommentFacts[];
+    }
+  | {
+      /** A run of consecutive commits the Operator made, at the last one's time, with what they changed. */
+      readonly kind: "push";
+      readonly at: string;
+      readonly commits: readonly { readonly sha: string; readonly message: string; readonly at: string }[];
+      /** Each commit's patch in turn. */
+      readonly patch: string;
+    }
+  | {
+      /**
+       * An Operator comment: one in the PR's conversation, which has no inline
+       * comments, or a review that isn't a Request changes.
+       */
+      readonly kind: "comment";
+      readonly at: string;
+      readonly body: string;
+      readonly inline: readonly InlineCommentFacts[];
+    };
+
+/** A Follow-up a pass Verdict named: work outside its Ticket's scope, left for the Operator to open as an issue or ignore. */
+export interface FollowUpEvidence {
+  /** `#<pr>`: the PR whose pass named it. */
+  readonly ref: string;
+  readonly pullRequest: number;
+  readonly title: string;
+  readonly body: string;
+  /** The issue the Operator opened it as through its Open as issue link, still titled as the link prefilled it, or null. */
+  readonly openedAs: number | null;
+}
+
+/** An agent PR in the streak table, and whatever breaks a streak it's counted in. */
+export interface StreakRow {
+  /** `#<pr>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  /** ISO 8601. */
+  readonly mergedAt: string;
+  /** The paths it changed, by which the Retro tells what kind of PR it is. */
+  readonly paths: readonly string[];
+  /** Whether an Architectural escape the Operator opened in the 90 days counts against it. */
+  readonly escaped: boolean;
+  /** Whether a revert in the 90 days reverted it, by the revert rule the Weekly summary's revert rate counts by. */
+  readonly reverted: boolean;
+  /** Whether the Operator sent it a Request changes. */
+  readonly requestChanges: boolean;
+}
+
+/** The earlier Retros, and what the Operator filed from them. */
+export interface RetroHistory {
+  /** The last 3 closed Retros the Fabrik App opened whose run didn't fail, newest first. */
+  readonly retros: readonly ClosedRetroEvidence[];
+  /** The open issues filed from a Retro's proposal: the Retro skips a proposal while its issue is open. */
+  readonly filed: readonly FiledProposalEvidence[];
+}
+
+/** A closed Retro: its proposals, and the Operator's comments on them, context never a trigger (ADR-0007). */
+export interface ClosedRetroEvidence {
+  /** `#<issue>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  /** How the Operator closed it: completed when they filed something, not planned otherwise. */
+  readonly closedAs: RetroIssueSnapshot["stateReason"];
+  /** The filled Retro, its proposals' cards included. */
+  readonly body: string;
+  /** What the Operator wrote on it, oldest first, each at an ISO 8601 time. */
+  readonly operatorComments: readonly { readonly at: string; readonly body: string }[];
+}
+
+/** An open issue filed from a Retro's proposal, by its `From retro #n` line. */
+export interface FiledProposalEvidence {
+  /** `#<issue>`. */
+  readonly ref: string;
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
+  /** The Retro it was filed from. */
+  readonly retro: number;
+}
+
+/** The evidence bundle for one Retro: what it reads of one Product repo for its window. Pure, no I/O. */
+export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
+  const earlier = input.retros.filter((retro) => retro.number !== input.retro);
+  const window = { start: Date.parse(retroWindowStart(input.windowEnd, earlier)), end: Date.parse(input.windowEnd) };
+  // Only this repo's records, whatever the store gave.
+  const records = input.records.filter((record) => record.repo === input.facts.repo);
+  const metrics: MetricsInput = { records, facts: [input.facts], operator: input.operator };
+  return {
+    window: { start: new Date(window.start).toISOString(), end: new Date(window.end).toISOString() },
+    escapes: escapesOf(window, metrics),
+    feedback: feedbackOf(window, input),
+    followUps: followUpsOf(window, input),
+    streakTable: streakTableOf({ start: window.end - STREAK_WINDOW_MS, end: window.end }, metrics),
+    history: historyOf(earlier, input),
+  };
+}
+
+/** A ref the Retro may cite, and what it cites. */
+export interface EvidenceRef {
+  readonly ref: string;
+  /** An escape's issue, an agent PR, any other issue, or a Run record. */
+  readonly kind: "escape" | "pull-request" | "issue" | "record";
+}
+
+/**
+ * Every ref in the bundle, once each, in the order the bundle first gives
+ * it: the refs a Retro's proposal may cite as its evidence.
+ */
+export function refsOf(bundle: EvidenceBundle): EvidenceRef[] {
+  const pullRequest = (ref: string): EvidenceRef => ({ ref, kind: "pull-request" });
+  const issue = (number: number): EvidenceRef => ({ ref: `#${number}`, kind: "issue" });
+  const record = ({ ref }: RecordEvidence): EvidenceRef => ({ ref, kind: "record" });
+  const refs: EvidenceRef[] = [
+    ...bundle.escapes.flatMap((escape) => [
+      { ref: escape.ref, kind: "escape" as const },
+      ...escape.pullRequests.flatMap((escaped) => [
+        pullRequest(escaped.ref),
+        ...(escaped.ticket === null ? [] : [issue(escaped.ticket)]),
+        ...escaped.records.map(record),
+        ...(escaped.lastPassingReview === null ? [] : [record(escaped.lastPassingReview)]),
+      ]),
+    ]),
+    ...bundle.feedback.map(({ ref }) => pullRequest(ref)),
+    ...bundle.followUps.flatMap((followUp) => [pullRequest(followUp.ref), ...(followUp.openedAs === null ? [] : [issue(followUp.openedAs)])]),
+    ...bundle.streakTable.map(({ ref }) => pullRequest(ref)),
+    ...bundle.history.retros.map(({ number }) => issue(number)),
+    ...bundle.history.filed.map(({ number }) => issue(number)),
+  ];
+  const once = new Map<string, EvidenceRef>();
+  for (const each of refs) if (!once.has(each.ref)) once.set(each.ref, each);
+  return [...once.values()];
+}
+
+/** The escapes opened in the window, each counted against the agent PRs merged in the 90 days to its end. */
+function escapesOf(window: Window, metrics: MetricsInput): EscapeEvidence[] {
+  return escapesIn({ start: window.end - ESCAPE_WINDOW_MS, end: window.end }, metrics)
+    .filter(({ issue }) => within(window, issue.createdAt))
+    .map(({ issue, strength, pullRequests }) => ({
+      ref: `#${issue.number}`,
+      number: issue.number,
+      title: issue.title,
+      body: issue.body,
+      strength,
+      pullRequests: pullRequests.map(({ pullRequest, records, lastPassingReview }) => ({
+        ref: `#${pullRequest.number}`,
+        number: pullRequest.number,
+        title: pullRequest.title,
+        ticket: pullRequest.ticket,
+        records: records.map(recordEvidenceOf),
+        lastPassingReview: lastPassingReview === null ? null : recordEvidenceOf(lastPassingReview),
+      })),
+    }));
+}
+
+/** The Operator's feedback in the window on each agent PR that got some. */
+function feedbackOf(window: Window, { facts, operator }: RetroEvidenceInput): FeedbackEvidence[] {
+  const pullRequests = [
+    ...facts.pullRequests.map((pullRequest) => ({ pullRequest, state: pullRequest.mergedAt === null ? ("closed" as const) : ("merged" as const) })),
+    ...facts.openPullRequests.map((pullRequest) => ({ pullRequest, state: "open" as const })),
+  ];
+  return pullRequests.flatMap(({ pullRequest, state }) => {
+    const items = operatorFeedbackOn(pullRequest, window, operator);
+    const { number, title } = pullRequest;
+    return items.length === 0 ? [] : [{ ref: `#${number}`, number, title, state, items }];
+  });
+}
+
+/** The Operator's Request changes, pushes and comments on a PR in the window, oldest first. */
+function operatorFeedbackOn(
+  { reviews, commits, comments }: Pick<AgentPullRequestFacts, "reviews" | "commits" | "comments">,
+  window: Window,
+  operator: string,
+): OperatorFeedback[] {
+  const theirs = reviews.filter((review) => review.author === operator && within(window, review.at));
+  const requestChanges = theirs
+    .filter((review) => review.state === "changes-requested")
+    .map((review): OperatorFeedback => ({ kind: "request-changes", at: review.at, body: review.body, inline: review.comments }));
+  const reviewComments = theirs
+    .filter((review) => review.state !== "changes-requested" && (review.body.trim() !== "" || review.comments.length > 0))
+    .map((review): OperatorFeedback => ({ kind: "comment", at: review.at, body: review.body, inline: review.comments }));
+  const conversation = comments
+    .filter((comment) => !comment.byBot && comment.author === operator && within(window, comment.at))
+    .map((comment): OperatorFeedback => ({ kind: "comment", at: comment.at, body: comment.body, inline: [] }));
+  const pushes = pushesOf(commits.filter((commit) => within(window, commit.at)), operator);
+  return [...requestChanges, ...reviewComments, ...conversation, ...pushes].toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
+/** Each run of consecutive commits the Operator made, as one push: anyone else's commit ends a run. */
+function pushesOf(commits: readonly CommitFacts[], operator: string): OperatorFeedback[] {
+  const runs: CommitFacts[][] = [];
+  let inRun = false;
+  for (const commit of commits) {
+    const theirs = !commit.byApp && commit.author === operator;
+    if (theirs && inRun) runs.at(-1)?.push(commit);
+    else if (theirs) runs.push([commit]);
+    inRun = theirs;
+  }
+  return runs.flatMap((run) => {
+    const last = run.at(-1);
+    if (last === undefined) return [];
+    return [
+      {
+        kind: "push",
+        at: last.at,
+        commits: run.map(({ sha, message, at }) => ({ sha, message, at })),
+        patch: run.flatMap((commit) => (commit.patch === null ? [] : [commit.patch])).join("\n"),
+      },
+    ];
+  });
+}
+
+/** The Follow-ups the Fabrik App's pass Verdicts listed on each agent PR merged in the window, read back from the Verdict comments. */
+function followUpsOf(window: Window, { facts, operator }: RetroEvidenceInput): FollowUpEvidence[] {
+  return mergedIn(window, facts).flatMap(({ number, comments }) =>
+    comments
+      .filter((comment) => verdictsOn([comment]).some(({ record }) => record.verdict === "pass"))
+      .flatMap((comment) => followUpsIn(comment.body))
+      .map(({ title, body }) => {
+        const opened = facts.followUpIssues.find(
+          (issue) => issue.author === operator && fromPullRequestIn(issue.body) === number && issue.title.trim() === title.trim(),
+        );
+        return { ref: `#${number}`, pullRequest: number, title, body, openedAs: opened?.number ?? null };
+      }),
+  );
+}
+
+/** The agent PRs merged in the streak window, oldest first, each flagged for what breaks a streak in the same window. */
+function streakTableOf(window: Window, metrics: MetricsInput): StreakRow[] {
+  const escaped = new Set(escapesIn(window, metrics).flatMap(({ pullRequests }) => pullRequests.map(({ pullRequest }) => pullRequest.number)));
+  return mergedAgentPullRequestsIn(window, metrics)
+    .toSorted((a, b) => Date.parse(a.mergedAt) - Date.parse(b.mergedAt))
+    .map(({ pullRequest: { number, title, changedPaths, reviews }, mergedAt, reverted }) => ({
+      ref: `#${number}`,
+      number,
+      title,
+      mergedAt,
+      paths: changedPaths,
+      escaped: escaped.has(number),
+      reverted,
+      requestChanges: reviews.some((review) => review.author === metrics.operator && review.state === "changes-requested"),
+    }));
+}
+
+/** The last closed Retros whose run didn't fail, with the Operator's comments, and the open issues filed from one. */
+function historyOf(retros: readonly RetroIssueFacts[], { operator, fromRetroIssues }: RetroEvidenceInput): RetroHistory {
+  const closed = retrosIn(retros)
+    .filter((retro) => !retro.open && !retro.failed)
+    .slice(0, HISTORY_DEPTH)
+    .flatMap(({ number }) => retros.find((issue) => issue.number === number) ?? [])
+    .map(({ number, title, stateReason, body, comments }) => ({
+      ref: `#${number}`,
+      number,
+      title,
+      closedAs: stateReason,
+      body,
+      operatorComments: comments.filter((comment) => !comment.byBot && comment.author === operator).map(({ at, body }) => ({ at, body })),
+    }));
+  const filed = fromRetroIssues.flatMap(({ number, title, body }) => {
+    const retro = fromRetroIn(body);
+    return retro === null ? [] : [{ ref: `#${number}`, number, title, body, retro }];
+  });
+  return { retros: closed, filed };
+}
+
+function recordEvidenceOf(record: RunRecord): RecordEvidence {
+  return { ref: recordPathOf(record), record };
 }

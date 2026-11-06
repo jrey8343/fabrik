@@ -1,13 +1,15 @@
 // The Weekly summary's GitHub side, beside the Loop's snapshot gatherer: which
 // Product repos the summary covers, and the GitHub facts it reads of each
-// (src/kit/weeklySummary.ts), the metrics' among them (src/kit/retroEvidence.ts).
-// Read-only. It holds no summary or metric rules; those all live in those two
-// modules.
+// (src/kit/weeklySummary.ts), the metrics' among them (src/kit/retroEvidence.ts);
+// and the same facts for a Retro's evidence, with the patches its Operator
+// feedback reads. Read-only. It holds no summary, metric or evidence rules;
+// those all live in those two modules.
 import { fabrikRefsIn } from "../kit/caller.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import type {
   AgentPullRequestFacts,
   CommentFacts,
+  CommitFacts,
   EscapeMarkerIssueFacts,
   GitHubFacts,
   LabelEvent,
@@ -22,7 +24,7 @@ import type {
 } from "../kit/weeklySummary.ts";
 import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { AUDIT_LABEL, MONITOR_LABEL, RETRO_LABEL } from "../loop/labels.ts";
-import { escapeMarkerIn } from "../loop/markers.ts";
+import { escapeMarkerIn, fromPullRequestIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import { type GitHub, pagesOf, type Repo } from "./client.ts";
 import { gatherDesignQueueSlice, loginOf } from "./snapshot.ts";
@@ -30,15 +32,16 @@ import { gatherDesignQueueSlice, loginOf } from "./snapshot.ts";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * How far back the issue and default-branch facts reach: 30 days, plus the
- * week before, so last week's 30-day revert window is as whole as this week's.
+ * How far back the issue facts reach: 30 days, plus the week before, so last
+ * week's 30-day revert window is as whole as this week's.
  */
 const WINDOW_MS = 37 * DAY_MS;
 
 /**
- * How far back the PRs and the escape-marked issues reach: 90 days, plus the
- * week before, so last week's 90-day escape window is as whole as this week's.
- * Revert rate reads its own 30 days of them.
+ * How far back the PRs, the default branch's commits and the issues the
+ * Operator opened reach: 90 days, plus the week before, so last week's 90-day
+ * escape window is as whole as this week's, and a Retro's 90-day streak table
+ * sees every revert in it. Revert rate reads its own 30 days of them.
  */
 const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 
@@ -46,17 +49,17 @@ const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(now - ESCAPE_WINDOWS_REACH_MS).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, escapeMarkerIssues, openAudits, openRetros] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
     pagesOf<RawIssue>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues),
-    pagesOf<RawCommit>(github, DEFAULT_BRANCH_QUERY, repo, { since }, (data) => data.repository.defaultBranchRef?.target.history ?? null),
+    pagesOf<RawDefaultBranchCommit>(github, DEFAULT_BRANCH_QUERY, repo, { since: escapeSince }, (data) => data.repository.defaultBranchRef?.target.history ?? null),
     // The Design queue check's own slice, so Held and the check can't disagree. Its token can't read
     // workflow runs, so it reads Design turns in progress from the issues, as the scheduled tick does.
     gatherDesignQueueSlice(github, null, repo),
     pagesOf<RawMonitorIssue>(github, MONITOR_ISSUES_QUERY, repo, { monitor: MONITOR_LABEL }, (data) => data.repository.issues),
-    gatherEscapeMarkerIssues(github, repo, operator, escapeSince),
+    gatherOperatorIssues(github, repo, operator, escapeSince),
     pagesOf<RawOpenKitIssue>(github, OPEN_KIT_ISSUES_QUERY, repo, { label: AUDIT_LABEL }, (data) => data.repository.issues),
     pagesOf<RawOpenKitIssue>(github, OPEN_KIT_ISSUES_QUERY, repo, { label: RETRO_LABEL }, (data) => data.repository.issues),
   ]);
@@ -72,10 +75,49 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     openPullRequests: open.filter(isAgent).map(openPullRequestOf),
     designQueue,
     monitorIssues: monitorIssues.map(monitorIssueOf),
-    escapeMarkerIssues,
+    escapeMarkerIssues: operatorIssues.filter((issue) => escapeMarkerIn(issue.body) !== null).map(escapeMarkerIssueOf),
+    followUpIssues: operatorIssues
+      .filter((issue) => fromPullRequestIn(issue.body) !== null)
+      .map(({ number, title, author, body }) => ({ number, title, author: loginOf(author), body })),
     openAudits: openAudits.map(openKitIssueOf),
     openRetros: openRetros.map(openKitIssueOf),
   };
+}
+
+/**
+ * The GitHub facts a Retro reads of one Product repo, as of `now`: the
+ * Weekly summary's, with the patch of each commit on an agent PR that the
+ * Fabrik App didn't make, read one commit at a time.
+ */
+export async function gatherRetroFacts(github: Pick<GitHub, "graphql" | "rest">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
+  const facts = await gatherGitHubFacts(github, repo, now, operator);
+  const patches = new Map<string, Promise<string>>();
+  const withPatch = async (commit: CommitFacts): Promise<CommitFacts> => {
+    if (commit.byApp) return commit;
+    const patch = patches.get(commit.sha) ?? patchOf(github, repo, commit.sha);
+    patches.set(commit.sha, patch);
+    return { ...commit, patch: await patch };
+  };
+  const [pullRequests, openPullRequests] = await Promise.all([
+    Promise.all(facts.pullRequests.map(async (pullRequest) => ({ ...pullRequest, commits: await Promise.all(pullRequest.commits.map(withPatch)) }))),
+    Promise.all(facts.openPullRequests.map(async (pullRequest) => ({ ...pullRequest, commits: await Promise.all(pullRequest.commits.map(withPatch)) }))),
+  ]);
+  return { ...facts, pullRequests, openPullRequests };
+}
+
+/** What a commit changed, as a diff file by file; a file GitHub shows no patch for is named with a note. */
+async function patchOf(github: Pick<GitHub, "rest">, repo: Repo, sha: string): Promise<string> {
+  const { files } = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/commits/${sha}`)) as {
+    files: { filename: string; previous_filename?: string; patch?: string }[];
+  };
+  return files
+    .map((file) =>
+      [
+        `diff --git a/${file.previous_filename ?? file.filename} b/${file.filename}`,
+        file.patch ?? "(No textual diff: a binary file, or too large for GitHub to show.)",
+      ].join("\n"),
+    )
+    .join("\n");
 }
 
 // --- The queries --------------------------------------------------------------
@@ -91,6 +133,8 @@ const LABEL_EVENTS = `
   }
 `;
 const COMMENTS = `comments(last: 100) { nodes { body createdAt author ${ACTOR} } }`;
+const COMMIT = "commit { oid message committedDate author { email user { login } } }";
+const REVIEWS = `reviews(first: 100) { nodes { author ${ACTOR} state submittedAt body comments(first: 50) { nodes { path line body } } } }`;
 const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
 
 // Newest-updated first, so paging stops at the first page older than the window.
@@ -104,10 +148,11 @@ const CLOSED_PULL_REQUESTS_QUERY = `
           author ${ACTOR}
           mergeCommit { oid }
           closingIssuesReferences(first: 10) { nodes { number } }
-          commits(first: 100) { nodes { commit { committedDate author { email } } } }
-          reviews(first: 100) { nodes { author ${ACTOR} state submittedAt } }
+          commits(first: 100) { nodes { ${COMMIT} } }
+          ${REVIEWS}
           ${COMMENTS}
           ${LABEL_EVENTS}
+          files(first: 100) { nodes { path } }
         }
       }
     }
@@ -122,7 +167,8 @@ const OPEN_PULL_REQUESTS_QUERY = `
         nodes {
           number title isDraft headRefOid headRefName createdAt
           author ${ACTOR}
-          commits(last: 100) { nodes { commit { committedDate } } }
+          commits(last: 100) { nodes { ${COMMIT} } }
+          ${REVIEWS}
           ${COMMENTS}
           ${LABEL_EVENTS}
         }
@@ -235,6 +281,18 @@ interface RawComment {
   author: RawActor | null;
 }
 
+interface RawCommit {
+  commit: { oid: string; message: string; committedDate: string; author: { email: string | null; user: { login: string } | null } | null };
+}
+
+interface RawReview {
+  author: RawActor | null;
+  state: string;
+  submittedAt: string | null;
+  body: string;
+  comments: { nodes: { path: string; line: number | null; body: string }[] };
+}
+
 interface RawClosedPullRequest {
   number: number;
   title: string;
@@ -246,10 +304,11 @@ interface RawClosedPullRequest {
   author: RawActor | null;
   mergeCommit: { oid: string } | null;
   closingIssuesReferences: { nodes: { number: number }[] };
-  commits: { nodes: { commit: { committedDate: string; author: { email: string | null } | null } }[] };
-  reviews: { nodes: { author: RawActor | null; state: string; submittedAt: string | null }[] };
+  commits: { nodes: RawCommit[] };
+  reviews: { nodes: RawReview[] };
   comments: { nodes: RawComment[] };
   timelineItems: { nodes: RawLabelEvent[] };
+  files: { nodes: { path: string }[] };
 }
 
 interface RawOpenPullRequest {
@@ -260,7 +319,8 @@ interface RawOpenPullRequest {
   headRefName: string;
   createdAt: string;
   author: RawActor | null;
-  commits: { nodes: { commit: { committedDate: string } }[] };
+  commits: { nodes: RawCommit[] };
+  reviews: { nodes: RawReview[] };
   comments: { nodes: RawComment[] };
   timelineItems: { nodes: RawLabelEvent[] };
 }
@@ -300,7 +360,7 @@ interface RawOpenKitIssue {
   author: RawActor | null;
 }
 
-interface RawCommit {
+interface RawDefaultBranchCommit {
   message: string;
   committedDate: string;
 }
@@ -322,13 +382,8 @@ async function gatherClosedPullRequests(github: Pick<GitHub, "graphql">, repo: R
   });
 }
 
-/** The issues the Operator opened in the window whose body has an escape marker, such as filed Audit candidates. */
-async function gatherEscapeMarkerIssues(
-  github: Pick<GitHub, "graphql">,
-  repo: Repo,
-  operator: string,
-  since: string,
-): Promise<EscapeMarkerIssueFacts[]> {
+/** The issues the Operator opened in the window, newest first. */
+async function gatherOperatorIssues(github: Pick<GitHub, "graphql">, repo: Repo, operator: string, since: string): Promise<RawOpenedIssue[]> {
   const sinceMs = Date.parse(since);
   const issues = await pagesOf<RawOpenedIssue>(
     github,
@@ -338,16 +393,7 @@ async function gatherEscapeMarkerIssues(
     (data) => data.repository.issues,
     (page) => page.some((issue) => Date.parse(issue.createdAt) < sinceMs),
   );
-  return issues
-    .filter((issue) => Date.parse(issue.createdAt) >= sinceMs && escapeMarkerIn(issue.body) !== null)
-    .map((issue) => ({
-      number: issue.number,
-      title: issue.title,
-      author: loginOf(issue.author),
-      createdAt: issue.createdAt,
-      state: issue.state === "CLOSED" ? "closed" : "open",
-      body: issue.body,
-    }));
+  return issues.filter((issue) => Date.parse(issue.createdAt) >= sinceMs);
 }
 
 // --- Into the summary's facts -------------------------------------------------
@@ -363,13 +409,11 @@ function agentPullRequestOf(pr: RawClosedPullRequest): AgentPullRequestFacts {
     title: pr.title,
     mergedAt: pr.mergedAt,
     mergeSha: pr.mergeCommit?.oid ?? null,
-    commits: pr.commits.nodes.map(({ commit }) => ({
-      byApp: commit.author?.email === IMPLEMENTER_AUTHOR.email,
-      at: commit.committedDate,
-    })),
+    commits: pr.commits.nodes.map(commitOf),
     reviews: pr.reviews.nodes.flatMap(reviewOf),
     comments: pr.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(pr.timelineItems.nodes),
+    changedPaths: pr.files.nodes.map((file) => file.path),
   };
 }
 
@@ -381,10 +425,30 @@ const REVIEW_STATES: Readonly<Record<string, ReviewFacts["state"]>> = {
 };
 
 /** A submitted review; a pending one isn't one yet. */
-function reviewOf(review: RawClosedPullRequest["reviews"]["nodes"][number]): ReviewFacts[] {
+function reviewOf(review: RawReview): ReviewFacts[] {
   const state = REVIEW_STATES[review.state];
   if (state === undefined || review.submittedAt === null) return [];
-  return [{ author: loginOf(review.author), state, at: review.submittedAt }];
+  return [
+    {
+      author: loginOf(review.author),
+      state,
+      body: review.body,
+      comments: review.comments.nodes,
+      at: review.submittedAt,
+    },
+  ];
+}
+
+/** A commit on an agent PR's branch, its patch unread: the Implementer's are the App's, as its commits carry its identity. */
+function commitOf({ commit }: RawCommit): CommitFacts {
+  return {
+    sha: commit.oid,
+    byApp: commit.author?.email === IMPLEMENTER_AUTHOR.email,
+    author: commit.author?.user?.login ?? "ghost",
+    message: commit.message,
+    patch: null,
+    at: commit.committedDate,
+  };
 }
 
 function openPullRequestOf(pr: RawOpenPullRequest): OpenPullRequestFacts {
@@ -394,7 +458,8 @@ function openPullRequestOf(pr: RawOpenPullRequest): OpenPullRequestFacts {
     draft: pr.isDraft,
     headSha: pr.headRefOid,
     createdAt: pr.createdAt,
-    commits: pr.commits.nodes.map(({ commit }) => ({ at: commit.committedDate })),
+    commits: pr.commits.nodes.map(commitOf),
+    reviews: pr.reviews.nodes.flatMap(reviewOf),
     comments: pr.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(pr.timelineItems.nodes),
   };
@@ -425,6 +490,18 @@ function openIssueOf(issue: RawIssue): OpenIssueFacts {
     createdAt: issue.createdAt,
     comments: issue.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(issue.timelineItems.nodes),
+  };
+}
+
+/** An issue whose body has an escape marker, such as a filed Audit candidate. */
+function escapeMarkerIssueOf(issue: RawOpenedIssue): EscapeMarkerIssueFacts {
+  return {
+    number: issue.number,
+    title: issue.title,
+    author: loginOf(issue.author),
+    createdAt: issue.createdAt,
+    state: issue.state === "CLOSED" ? "closed" : "open",
+    body: issue.body,
   };
 }
 
