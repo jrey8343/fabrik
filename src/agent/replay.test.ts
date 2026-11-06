@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { implementInput } from "./implement.ts";
-import { OPERATOR_COMMENTS_HEADING } from "./operatorComments.ts";
+import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
 import { promptFor } from "./prompt.ts";
 import { REPLAY_PATCH_FILE, replayImplementInput, replayReviewContext, writeReplayPatch } from "./replay.ts";
 
@@ -69,7 +69,7 @@ async function aReplayReviewCheckout(): Promise<{ productDir: string; baseSha: s
 }
 
 describe("A replay arm's Review context", () => {
-  it("carries the Ticket, its Spec and the diff from baseSha, with no PR number and no Operator comments", async () => {
+  it("carries the Ticket, its Spec and the diff from baseSha, with no PR number, no Request changes and no Operator comments", async () => {
     const { productDir, baseSha } = await aReplayReviewCheckout();
 
     const parts = await replayReviewContext(productDir, await fileOf(spec), baseSha);
@@ -91,6 +91,8 @@ describe("A replay arm's Review context", () => {
     expect(prompt).toContain(`git diff ${baseSha} HEAD`);
     expect(prompt).not.toContain("## The pull request");
     expect(prompt).not.toContain(OPERATOR_COMMENTS_HEADING);
+    expect(prompt).not.toContain(REQUESTED_CHANGES_HEADING);
+    expect(prompt).toContain("what this prompt says of a PR's description, of the Operator's Request changes and of the Operator's comments doesn't apply");
     expect(prompt).not.toMatch(/"number": (?!7\b|3\b)\d+/);
   });
 

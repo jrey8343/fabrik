@@ -2,7 +2,8 @@
 // Product repo untouched: no branch is pushed and no PR is opened. A replay
 // arm's Review judges the arm's diff from the Ticket's baseSha, a local commit
 // on top of it in the job's checkout, with the Ticket and its Spec in place of
-// a PR, and no Operator comments, since nobody has commented on it.
+// a PR, and no Operator comments or Request changes, since nobody has
+// commented on it or requested changes on it.
 import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -93,7 +94,7 @@ export function replayChangeParts(baseSha: string, diff: string): string[] {
     [
       `This change has no pull request. It's an Implementer's work on the Ticket above, built from the commit \`${baseSha}\`, and the checkout holds it as a commit on top of that one, at \`HEAD\`.`,
       `Wherever this prompt speaks of the PR, judge this change: its base is \`${baseSha}\`, so read it with \`git diff ${baseSha} HEAD\` and \`git log ${baseSha}..HEAD\`, never against \`origin/main\`.`,
-      "It has no title, description or comments, and the Operator has written nothing on it, so what this prompt says of a PR's description and of the Operator's comments doesn't apply.",
+      "It has no title, description or comments, and the Operator has written nothing on it and requested no changes on it, so what this prompt says of a PR's description, of the Operator's Request changes and of the Operator's comments doesn't apply: judge it against the Ticket as it stands above.",
       "Its build and tests run apart from you, and their result isn't given to you: judge it as you would a PR whose required checks have passed.",
     ].join(" "),
     text === ""
