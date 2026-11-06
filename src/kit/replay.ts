@@ -340,7 +340,7 @@ function eligibilityOf(candidate: ReplayCandidate | undefined): Eligible | strin
   const originalRuns = candidate.records.filter((record) => record.replay === null && (record.role === "implement" || record.role === "review"));
   const implementRuns = originalRuns.filter((record) => record.role === "implement");
   if (implementRuns.length === 0) return "the store holds no Implement run of it";
-  const first = implementRuns.find(isFirstRun);
+  const first = firstRunOf(implementRuns);
   if (first?.baseSha == null) return "the store has no baseSha for its first Implement run";
   const flags: ReplayFlag[] = [];
   if (candidate.humanTouches > 0) flags.push("human-touches");
@@ -353,9 +353,14 @@ function eligibilityOf(candidate: ReplayCandidate | undefined): Eligible | strin
   };
 }
 
-/** Whether an Implement run cut its Ticket's branch: not a Retry, a Step-up or a Request-changes run. */
-function isFirstRun(record: RunRecord): boolean {
-  return record.retry === 0 && !record.stepUp && !record.requestChanges;
+/**
+ * A Ticket's first Implement run, the one that cut the branch it merged: the
+ * last of its runs that wasn't a Retry, Step-up or Request-changes run, since
+ * a first run that failed for its Subscription is run again as a first run.
+ */
+function firstRunOf(implementRuns: readonly RunRecord[]): RunRecord | undefined {
+  const first = implementRuns.filter((record) => record.retry === 0 && !record.stepUp && !record.requestChanges);
+  return first.toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt)).at(-1);
 }
 
 /** About when a run started, in ms: its end less its agent's duration, or its end when it has none. */

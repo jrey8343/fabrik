@@ -248,6 +248,19 @@ describe("Picking a Replay's Tickets", () => {
     });
   });
 
+  it("replays a Ticket whose first Implement run ran again after an Infrastructure failure from the run that built its branch", () => {
+    const refusedBase = "a".repeat(40);
+    const records = [
+      aRunRecord({ issue: 12, pullRequest: null, baseSha: refusedBase, endedAt: "2026-10-01T09:00:00Z", infrastructureFailure: "weekly-limit" }),
+      aRunRecord({ issue: 12, pullRequest: null, baseSha: baseOf(12), endedAt: "2026-10-03T09:00:00Z" }),
+      aRunRecord({ issue: 12, pullRequest: 112, retry: 1, baseSha: "c".repeat(40), endedAt: "2026-10-04T09:00:00Z" }),
+    ];
+    // Edited between the two, so the run that built the branch read the edit.
+    const candidate = aCandidate(12, { records, lastEdited: { ticket: "2026-10-02T09:00:00Z", spec: null } });
+
+    expect(pickReplayTickets({ tickets: [12] }, [candidate]).picked).toEqual([{ ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags: [] }]);
+  });
+
   it("picks the listed Tickets that are eligible in the order listed, and names each one left out", () => {
     const reverted = aCandidate(4, { merged: { ...aCandidate(4).merged!, reverted: true } });
     const candidates = [aCandidate(3), reverted, aCandidate(12), aCandidate(20, { merged: null }), aCandidate(9)];
