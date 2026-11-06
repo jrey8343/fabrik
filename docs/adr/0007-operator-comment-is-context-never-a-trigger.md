@@ -10,5 +10,5 @@ An Operator comment on an agent pull request never starts a run or changes the p
 ## Consequences
 
 - An Operator comment that lands after a run read its inputs is not re-run. Leaving it out of that run's list of weighed comments shows it was missed.
-- An Operator comment settles questions and corrects claims, but it never widens scope. A retry that is asked for more than its findings says so in its fix comment and doesn't build it. When the comment conflicts with the Ticket, the Ticket wins.
+- An Operator comment settles questions and corrects claims, but it never widens scope. A retry that is asked for more than its findings says so in its fix comment and doesn't build it. When the comment conflicts with the Ticket, the Ticket wins. This applies to Operator comments only: a Request changes amends the Ticket (ADR-0010).
 - Only the Operator's comments are read, never another human's or a bot's, so commenting on a pull request can't steer an agent.
