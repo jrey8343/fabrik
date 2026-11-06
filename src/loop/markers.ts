@@ -64,28 +64,40 @@ export const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
 
 /**
- * A prototype request's first line (#155), carrying what the Operator
- * approved as JSON: the request a prototype turn of the session builds.
+ * A prototype request's first line (#155), carrying as JSON what the Operator
+ * approved and the reply they approved it in.
  */
 const PROTOTYPE_REQUEST_MARKER = /^<!-- fabrik:prototype-request (\{.*\}) -->(?:\n|$)/;
+
+/** What a prototype request's marker says. */
+export interface PrototypeRequestMarker {
+  /** What the prototype turn of the session builds. */
+  readonly request: PrototypeRequest;
+  /**
+   * The id of the Operator's reply that started the turn which asked for it,
+   * so the prototype turn posts nothing once the Operator deleted it; null
+   * when agent:design started that turn.
+   */
+  readonly reply: number | null;
+}
 
 /**
  * The marker a prototype request opens with, on one line, which
  * prototypeRequestIn reads back. The JSON spells `<`, `>` and `@` as escapes,
  * so a brief can neither end the HTML comment early nor mention anyone.
  */
-export function prototypeRequestMarker({ route, variants, brief }: PrototypeRequest): string {
-  const json = JSON.stringify({ route, variants, brief }).replace(/[<>@]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+export function prototypeRequestMarker({ request: { route, variants, brief }, reply }: PrototypeRequestMarker): string {
+  const json = JSON.stringify({ route, variants, brief, reply }).replace(/[<>@]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
   return `<!-- fabrik:prototype-request ${json} -->`;
 }
 
 /**
- * The request a prototype request's marker holds, read from the comment's
- * first line, so quoting one further down doesn't count; null when the
- * comment opens with no marker, or with one whose request the Design turn
- * output contract wouldn't take.
+ * What a prototype request's marker says, read from the comment's first line,
+ * so quoting one further down doesn't count; null when the comment opens with
+ * no marker, or with one whose request the Design turn output contract
+ * wouldn't take.
  */
-export function prototypeRequestIn(body: string): PrototypeRequest | null {
+export function prototypeRequestIn(body: string): PrototypeRequestMarker | null {
   const json = PROTOTYPE_REQUEST_MARKER.exec(body)?.[1];
   if (json === undefined) return null;
   let value: unknown;
@@ -95,9 +107,10 @@ export function prototypeRequestIn(body: string): PrototypeRequest | null {
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const { route, variants, brief } = value as Record<string, unknown>;
+  const { route, variants, brief, reply = null } = value as Record<string, unknown>;
   if (!isRoute(route) || !isVariantCount(variants) || typeof brief !== "string" || brief.trim() === "") return null;
-  return { route, variants, brief };
+  if (reply !== null && !(Number.isSafeInteger(reply) && (reply as number) > 0)) return null;
+  return { request: { route, variants, brief }, reply: reply as number | null };
 }
 
 /** The heading of a Map's Decisions so far: one line under it per Decision resolved. */

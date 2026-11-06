@@ -27,7 +27,7 @@ const requested = {
 const switchedOn = { prototypes: true } as const;
 
 describe("An ordinary Design turn that asks for the Prototype the Operator approved", () => {
-  it("posts the prototype request with its marker, mentioning nobody, then adds agent:design to start the prototype turn", () => {
+  it("posts the prototype request with its marker, mentioning nobody, then adds agent:design afresh to start the prototype turn", () => {
     const plan = planFor(turnFinished(requested), inSession, kitConfig({ ui: UI }), switchedOn);
 
     expect(plan).toEqual({
@@ -37,16 +37,26 @@ describe("An ordinary Design turn that asks for the Prototype the Operator appro
           kind: "comment",
           issue: 7,
           body: [
-            String.raw`<!-- fabrik:prototype-request {"route":"/book","variants":3,"brief":"- **A**: one long form.\n- **B**: a stepper.\n- **C**: a calendar first."} -->`,
+            String.raw`<!-- fabrik:prototype-request {"route":"/book","variants":3,"brief":"- **A**: one long form.\n- **B**: a stepper.\n- **C**: a calendar first.","reply":null} -->`,
             "**Prototype requested.** Prototyping the booking page as you approved.",
             "",
             "The Kit is building 3 variants of `/book`. The prototype round follows when they're ready.",
           ].join("\n"),
         },
+        { kind: "remove-label", issue: 7, label: "agent:design" },
         { kind: "add-labels", issue: 7, labels: ["agent:design"] },
       ],
     });
     expect(notificationsOf(plan, "jrey")).toEqual([]);
+  });
+
+  it("leaves a marker naming the Operator's reply that started the turn, for the prototype turn to check it is still there", () => {
+    const replied = { ...turnFinished(requested), startedBy: 9001 };
+    const snapshot = { ...inSession, startingComment: { id: 9001, exists: true } };
+
+    const [body] = commentsOf(planFor(replied, snapshot, kitConfig({ ui: UI }), switchedOn));
+
+    expect(prototypeRequestIn(body ?? "")?.reply).toBe(9001);
   });
 
   it("leaves a marker that reads back as the request, whatever the brief holds, an HTML comment's end included", () => {
@@ -55,7 +65,7 @@ describe("An ordinary Design turn that asks for the Prototype the Operator appro
 
     const [body] = commentsOf(plan);
 
-    expect(prototypeRequestIn(body ?? "")).toEqual({ route: "/book", variants: 2, brief });
+    expect(prototypeRequestIn(body ?? "")).toEqual({ request: { route: "/book", variants: 2, brief }, reply: null });
     expect(body?.split("\n")[0]?.match(/-->/g)).toEqual(["-->"]);
     expect(notificationsOf(plan, "jrey")).toEqual([]);
   });
@@ -65,6 +75,7 @@ describe("An ordinary Design turn that asks for the Prototype the Operator appro
     ["holding a route that isn't one", () => '<!-- fabrik:prototype-request {"route":"book","variants":3,"brief":"B"} -->'],
     ["holding more variants than the cap", () => '<!-- fabrik:prototype-request {"route":"/book","variants":6,"brief":"B"} -->'],
     ["holding no brief", () => '<!-- fabrik:prototype-request {"route":"/book","variants":3,"brief":""} -->'],
+    ["holding a reply that isn't a comment id", () => '<!-- fabrik:prototype-request {"route":"/book","variants":3,"brief":"B","reply":"9001"} -->'],
     ["holding broken JSON", () => '<!-- fabrik:prototype-request {"route":"/book", -->'],
   ])("reads no request from a marker %s", (_, comment) => {
     const [body] = commentsOf(planFor(turnFinished(requested), inSession, kitConfig({ ui: UI }), switchedOn));

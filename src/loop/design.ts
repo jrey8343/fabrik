@@ -239,7 +239,8 @@ export function applyTurn(
       reason: `The Design-session turn on #${issueNumber} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
     };
   }
-  const plan = landTurn(issueNumber, parsed.output, snapshot, mapCap, noPrototype);
+  const reply = start.kind === "reply" ? start.comment.id : null;
+  const plan = landTurn(issueNumber, parsed.output, snapshot, mapCap, noPrototype, reply);
   if (plan.kind !== "act") return plan;
   const considered = consideredSection(parsed.output.operatorCommentsConsidered ?? [], given);
   return considered.length === 0 ? plan : { ...plan, actions: plan.actions.map((action) => endedWith(action, considered)) };
@@ -260,6 +261,7 @@ function landTurn(
   snapshot: IssueContext,
   mapCap: MapCap | null,
   noPrototype: string | null,
+  reply: number | null,
 ): Plan {
   const notNow = whileInSession(issueNumber, snapshot.issue);
   if (notNow !== null) return notNow;
@@ -274,7 +276,7 @@ function landTurn(
     };
   }
   if (output.kind === "prototype") {
-    return noPrototype === null ? { kind: "act", actions: requestPrototype(issueNumber, output) } : wrongOutcome(issueNumber, noPrototype);
+    return noPrototype === null ? { kind: "act", actions: requestPrototype(issueNumber, output, reply) } : wrongOutcome(issueNumber, noPrototype);
   }
   if (output.kind === "prototype-round") {
     return wrongOutcome(issueNumber, "only a prototype turn ends in a prototype-round, and this was an ordinary turn");
@@ -375,26 +377,32 @@ function heldByMapCap(issueNumber: number, { openMaps, cap }: Extract<MapCap, { 
 }
 
 /**
- * The Operator approved a Prototype, so the Kit posts its prototype request,
- * whose marker holds what the prototype turn builds, then adds agent:design,
- * on the App token, as it does to restart a turn refused on its weekly limit,
- * to start that turn. The request is no round, so it carries no round marker
+ * The Operator approved a Prototype, in their `reply` when one started this
+ * turn, so the Kit posts its prototype request, whose marker holds what the
+ * prototype turn builds and that reply, then adds agent:design afresh, on the
+ * App token, as it does to restart a turn refused on its weekly limit, to
+ * start that turn. The request is no round, so it carries no round marker
  * and the round count stays where it was, and it mentions nobody: only the
  * prototype round that follows notifies.
  */
-function requestPrototype(issueNumber: number, output: Extract<DesignTurnOutput, { kind: "prototype" }>): Action[] {
+function requestPrototype(
+  issueNumber: number,
+  output: Extract<DesignTurnOutput, { kind: "prototype" }>,
+  reply: number | null,
+): Action[] {
   const { route, variants, brief } = output;
   return [
     {
       kind: "comment",
       issue: issueNumber,
       body: [
-        prototypeRequestMarker({ route, variants, brief }),
+        prototypeRequestMarker({ request: { route, variants, brief }, reply }),
         `**Prototype requested.** ${withoutMentions(output.comment)}`,
         "",
         `The Kit is building ${variants} variants of \`${withoutMentions(route)}\`. The prototype round follows when they're ready.`,
       ].join("\n"),
     },
+    { kind: "remove-label", issue: issueNumber, label: DESIGN_LABEL },
     { kind: "add-labels", issue: issueNumber, labels: [DESIGN_LABEL] },
   ];
 }
