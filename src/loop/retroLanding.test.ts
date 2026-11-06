@@ -677,6 +677,14 @@ describe("Landing a Retro: a reply that breaks the contract", () => {
     ),
     ["proposes a mechanical change anywhere but product code", JSON.stringify({ proposals: [aTightening({ target: "kit" })] })],
     ["loosens on no streak", JSON.stringify({ proposals: [aLoosening({ streak: undefined })] })],
+    ["loosens with no tightening it undoes", JSON.stringify({ proposals: [aLoosening({ undoes: undefined })] })],
+    [
+      "tightens on a streak",
+      JSON.stringify({ proposals: [aTightening({ streak: { pullRequests: DOCS_STREAK, kind: "agent PRs that change only docs/" } })] }),
+    ],
+    ["tightens undoing a tightening", JSON.stringify({ proposals: [aTightening({ undoes: "#97" })] })],
+    ["proposes a change to an Extra skill without naming the skill", JSON.stringify({ proposals: [aTightening({ kind: "judgement", target: "extra-skill" })] })],
+    ["names a skill on a proposal for anything but an Extra skill", JSON.stringify({ proposals: [aTightening({ kind: "judgement", target: "kit", skill: "tdd" })] })],
   ])("closes the Retro as failed, filing nothing, when the reply %s", (_, output) => {
     const plan = planFor(retroFinished(output), retroRunSnapshotOf(), kitConfig());
 
