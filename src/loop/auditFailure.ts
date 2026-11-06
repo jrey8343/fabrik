@@ -20,7 +20,7 @@ export interface AuditRunFailure {
    * notice; absent when the Auditor's own reply failed it, which stalls no
    * other run.
    */
-  readonly ranOn?: Pick<StalledRun, "subscription" | "rotation">;
+  readonly ranOn?: Pick<StalledRun, "subscription" | "rotation" | "subscriptions">;
 }
 
 /**

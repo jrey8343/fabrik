@@ -3,10 +3,12 @@
 // Ticket's retries; the Operator gets one comment saying how to resume it. A
 // failed Auditor run goes to failAudit instead, which fails its Audit with no
 // trigger to re-add, since the scheduled tick opens the next one
-// (src/loop/auditFailure.ts).
+// (src/loop/auditFailure.ts). With rotation on, a run refused on its
+// Subscription's weekly limit is re-run once, quietly, through its trigger
+// label while another Subscription is free, so the Operator hears nothing.
 import { failAudit } from "./auditFailure.ts";
-import { refusedToken, repoWideNotice } from "./kitIssues.ts";
-import { DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
+import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
+import { DESIGN_LABEL, DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
 import { rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
 import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
@@ -28,6 +30,13 @@ const TRIGGER_LABELS: Readonly<Record<Exclude<NoticedRole, "design">, Label>> = 
   implement: DISPATCH_LABEL,
   review: REVIEW_LABEL,
 };
+
+/**
+ * The label the Kit itself removes and re-adds to re-run a refused run on the
+ * next free Subscription: each role's trigger label, and agent:design for a
+ * Design-session turn, which starts the turn again (src/loop/design.ts).
+ */
+const RERUN_LABELS: Readonly<Record<NoticedRole, Label>> = { ...TRIGGER_LABELS, design: DESIGN_LABEL };
 
 const ROLE_NAMES: Readonly<Record<NoticedRole, string>> = {
   triage: "Triage",
@@ -80,7 +89,11 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
 export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig): Plan {
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
-  const ranOn = { subscription: subscriptionOfRun(run, config), rotation: rotationIsOn(config) };
+  const ranOn = {
+    subscription: subscriptionOfRun(run, config),
+    rotation: rotationIsOn(config),
+    subscriptions: config.subscriptions,
+  };
   // The scheduled tick tries a failed Audit again, so there's no trigger label to re-add.
   if (run.role === "audit") {
     const how = howItFailed(failure, run, config);
@@ -110,6 +123,19 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     resetsAt: run.report?.resetsAt ?? null,
     ...ranOn,
   });
+  // Another Subscription is free: the new Loop run's Kit job starts the run on it,
+  // as an Infrastructure failure's resumption that never counts against retries.
+  if (failure === "weekly-limit" && anotherSubscriptionFree(context.kitIssues, ranOn)) {
+    const rerun = RERUN_LABELS[run.role];
+    return {
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: labelled, label: rerun },
+        { kind: "add-labels", issue: labelled, labels: [rerun] },
+        ...(repoWide?.actions ?? []),
+      ],
+    };
+  }
   const body = [
     ...(run.role === "design" ? [DESIGN_TURN_FAILED_MARKER] : []),
     `${repoWide === null ? `@${operator} ` : ""}${failedRun} failed: ${howItFailed(failure, run, config)}.`,

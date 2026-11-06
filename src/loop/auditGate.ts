@@ -14,13 +14,13 @@ const DAY = 24 * 60 * 60 * 1000;
 const FAILED_AUDITS_A_WEEK = 2;
 
 /**
- * The scheduled tick with the audit gate: closes the weekly-limit issue after
- * its reset, as scheduledTick does, alongside opening a pending Audit when
- * one is due. The scheduled-tick rule calls it on every tick.
+ * The scheduled tick with the audit gate: closes each weekly-limit issue
+ * after its reset, as scheduledTick does, alongside opening a pending Audit
+ * when one is due. The scheduled-tick rule calls it on every tick.
  */
 export function scheduledTickWithAuditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
-  const tick = scheduledTick(now, snapshot);
-  // The weekly-limit issue this tick closes after its reset no longer holds the Audit back.
+  const tick = scheduledTick(now, snapshot, config);
+  // A weekly-limit issue this tick closes after its reset no longer holds the Audit back.
   const closing = actionsOf(tick).flatMap((action) => (action.kind === "close" ? [action.issue] : []));
   const kitIssues = snapshot.kitIssues.filter((issue) => !closing.includes(issue.number));
   return alongside(tick, auditGate(now, { ...snapshot, kitIssues }, config));
