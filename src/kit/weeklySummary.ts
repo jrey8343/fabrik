@@ -2,104 +2,48 @@
 // a GitHub facts snapshot per Product repo, the Operator and now, the one issue
 // filed for the week that just ended, or skip in a quiet week. Pure, no I/O, no
 // model call.
-import { verdictsIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
-import { DISPATCH_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
+import { NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { DESIGN_ROUND_MARKER, escapeMarkerIn } from "../loop/markers.ts";
+import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
+import {
+  type ArchitecturalEscape,
+  type CommentFacts,
+  dispatchOf,
+  escapesIn,
+  type LabelEvent,
+  type MergedAgentPullRequest,
+  mergedAgentPullRequestsIn,
+  type MetricFacts,
+  verdictsOn,
+  type Window,
+  within,
+} from "./retroEvidence.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
 import { type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
 
-/** A label added to or removed from an issue, by whom and when. */
-export interface LabelEvent {
-  readonly label: string;
-  readonly action: "labeled" | "unlabeled";
-  readonly actor: string;
-  /** ISO 8601. */
-  readonly at: string;
-}
-
-/** An issue a Ticket is blocked by. */
-export interface BlockerFacts {
-  readonly number: number;
-  /** Its labels: an Operator step's include `ready-for-human`. */
-  readonly labels: readonly string[];
-}
-
-/** A Ticket, its label timeline and what it's blocked by. */
-export interface TicketFacts {
-  readonly number: number;
-  readonly labelEvents: readonly LabelEvent[];
-  readonly blockedBy: readonly BlockerFacts[];
-  /** ISO 8601, or null while it's open. */
-  readonly closedAt: string | null;
-}
-
-/** A commit on an agent PR's branch. */
-export interface CommitFacts {
-  /** Whether the Fabrik App made it, as an agent run's push does. */
-  readonly byApp: boolean;
-  /** ISO 8601. */
-  readonly at: string;
-}
-
-/** A review left on an agent PR. */
-export interface ReviewFacts {
-  readonly author: string;
-  readonly state: "approved" | "changes-requested" | "commented" | "dismissed";
-  /** ISO 8601. */
-  readonly at: string;
-}
-
-/** A comment on an issue or a PR. */
-export interface CommentFacts {
-  readonly author: string;
-  /** Whether a bot, such as the Fabrik App, wrote it: only a bot's markers count, so quoting one fakes nothing. */
-  readonly byBot: boolean;
-  readonly body: string;
-  /** ISO 8601. */
-  readonly at: string;
-}
+// The GitHub facts the metrics read are the Retro evidence module's (src/kit/retroEvidence.ts).
+export type {
+  AgentPullRequestFacts,
+  BlockerFacts,
+  CommentFacts,
+  CommitFacts,
+  DefaultBranchCommitFacts,
+  EscapeMarkerIssueFacts,
+  LabelEvent,
+  MergedTitleFacts,
+  ReviewFacts,
+  TicketFacts,
+} from "./retroEvidence.ts";
 
 /** A Spec, its label timeline and the Tickets that build it (its sub-issues). */
 export interface SpecFacts {
   readonly number: number;
   readonly labelEvents: readonly LabelEvent[];
   readonly tickets: readonly number[];
-}
-
-/** An agent PR merged or closed in the last 97 days. */
-export interface AgentPullRequestFacts {
-  readonly number: number;
-  /** The Ticket its `Closes #n` names, or null. */
-  readonly ticket: number | null;
-  readonly title: string;
-  /** ISO 8601, or null for a PR closed without merging. */
-  readonly mergedAt: string | null;
-  readonly mergeSha: string | null;
-  /** Its commits, oldest first. */
-  readonly commits: readonly CommitFacts[];
-  readonly reviews: readonly ReviewFacts[];
-  /** Its comments, oldest first. */
-  readonly comments: readonly CommentFacts[];
-  readonly labelEvents: readonly LabelEvent[];
-}
-
-/** A commit on the default branch. */
-export interface DefaultBranchCommitFacts {
-  readonly message: string;
-  /** ISO 8601. */
-  readonly at: string;
-}
-
-/** Any PR merged in the last 97 days, agent or not, by its title. */
-export interface MergedTitleFacts {
-  readonly title: string;
-  /** ISO 8601. */
-  readonly mergedAt: string;
 }
 
 /** An open issue, as Waiting on you and Stuck read it. */
@@ -137,21 +81,6 @@ export interface MonitorIssueFacts {
   readonly body: string;
 }
 
-/**
- * An issue the Operator opened whose body has a `fabrik:escape` marker, such
- * as an Audit candidate filed through its Open as issue link.
- */
-export interface EscapeMarkerIssueFacts {
-  readonly number: number;
-  readonly title: string;
-  /** Who opened it: only the Operator's issues count. */
-  readonly author: string;
-  /** ISO 8601. */
-  readonly createdAt: string;
-  readonly state: "open" | "closed";
-  readonly body: string;
-}
-
 /** An open `fabrik:audit` issue, as Waiting on you reads it. */
 export interface OpenAuditFacts {
   readonly number: number;
@@ -162,15 +91,8 @@ export interface OpenAuditFacts {
   readonly createdAt: string;
 }
 
-/** What the summary reads of one Product repo on GitHub. */
-export interface GitHubFacts {
-  /** The Product repo, as `owner/name`. */
-  readonly repo: string;
-  readonly pullRequests: readonly AgentPullRequestFacts[];
-  readonly tickets: readonly TicketFacts[];
-  /** The default branch's commits in the last 30 days. */
-  readonly defaultBranchCommits: readonly DefaultBranchCommitFacts[];
-  readonly mergedPullRequestTitles: readonly MergedTitleFacts[];
+/** What the summary reads of one Product repo on GitHub: what the metrics read, and the rest. */
+export interface GitHubFacts extends MetricFacts {
   readonly specs: readonly SpecFacts[];
   /** The repo's open issues. */
   readonly openIssues: readonly OpenIssueFacts[];
@@ -186,8 +108,6 @@ export interface GitHubFacts {
    * Monitor holds from the newest error issue among them that has a stats block.
    */
   readonly monitorIssues: readonly MonitorIssueFacts[];
-  /** The issues the Operator opened in the last 97 days whose body has an escape marker. */
-  readonly escapeMarkerIssues: readonly EscapeMarkerIssueFacts[];
   /** The repo's open `fabrik:audit` issues, whoever opened them. */
   readonly openAudits: readonly OpenAuditFacts[];
 }
@@ -484,7 +404,9 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
   return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
 }
 
-// The metrics: one week's figures, computed the same way for any week.
+// The metrics: one week's figures, computed the same way for any week. Which
+// agent PRs merged, their Human touches, Verdicts and reverts, and the escapes
+// are read through the Retro evidence module, by the rules the Retro reads.
 
 interface WeekMetrics {
   readonly records: number;
@@ -513,15 +435,11 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     .filter((record) => within(week, record.endedAt))
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
   const tickets = input.facts.flatMap((facts) => facts.tickets);
-  const merged = input.facts.flatMap((facts) =>
-    facts.pullRequests.flatMap((pullRequest) =>
-      pullRequest.mergedAt !== null && within(week, pullRequest.mergedAt) ? [mergedPullRequestOf(facts, pullRequest, pullRequest.mergedAt)] : [],
-    ),
-  );
+  const merged = mergedAgentPullRequestsIn(week, input);
   const { usd: cost, unknownCost } = costOf(records);
   const scoring = costOf(records.filter((record) => record.role === "score"));
   const escapeWindow = escapeWindowOf(week);
-  const escapes = escapesIn(escapeWindow, input.facts, input.operator);
+  const escapes = escapesIn(escapeWindow, input);
   return {
     records: records.length,
     cost,
@@ -530,16 +448,11 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     costPerSpec: costPerSpecOf(week, input),
     spendNeverMerged: spendNeverMergedOf(week, input),
     weeklyLimit: records.findLast((record) => record.rateLimit?.rateLimitType === WEEKLY_LIMIT)?.rateLimit ?? null,
-    humanTouches: mean(merged.map((pullRequest) => humanTouchesOf(pullRequest, input.operator))),
+    humanTouches: mean(merged.map((pullRequest) => pullRequest.humanTouches)),
     cycleTimeMs: median(merged.flatMap(({ dispatch, mergedAt }) => (dispatch === null ? [] : [Date.parse(mergedAt) - Date.parse(dispatch)]))),
-    operatorWaitMs: median(
-      merged.flatMap(({ pullRequest, mergedAt }) => {
-        const passed = lastPassOf(pullRequest, mergedAt);
-        return passed === null ? [] : [Date.parse(mergedAt) - Date.parse(passed)];
-      }),
-    ),
-    revertRate: revertRateOf(week, input.facts),
-    escapeRate: escapeRateOf(escapeWindow, escapes, input.facts),
+    operatorWaitMs: median(merged.flatMap(({ mergedAt, lastPass }) => (lastPass === null ? [] : [Date.parse(mergedAt) - Date.parse(lastPass)]))),
+    revertRate: revertRateOf(week, input),
+    escapeRate: escapeRateOf(escapeWindow, escapes, input),
     escapesByStrength: escapesByStrengthOf(escapes),
     mergedPullRequests: merged.length,
     ticketsDispatched: tickets.filter((ticket) => {
@@ -595,67 +508,10 @@ function inKitOrder(a: RubricScores, b: RubricScores): number {
   return rank(a.scorer) - rank(b.scorer) || a.scorer.localeCompare(b.scorer) || a.version - b.version;
 }
 
-/** An agent PR merged in the week, with its repo, its Ticket and when that was dispatched. */
-interface MergedPullRequest {
-  readonly repo: string;
-  readonly pullRequest: AgentPullRequestFacts;
-  readonly mergedAt: string;
-  readonly ticket: TicketFacts | null;
-  readonly dispatch: string | null;
-}
-
-function mergedPullRequestOf(facts: GitHubFacts, pullRequest: AgentPullRequestFacts, mergedAt: string): MergedPullRequest {
-  const ticket = facts.tickets.find((candidate) => candidate.number === pullRequest.ticket) ?? null;
-  return { repo: facts.repo, pullRequest, mergedAt, ticket, dispatch: ticket === null ? null : dispatchOf(ticket) };
-}
-
-/**
- * The Operator's steps into a Ticket's path between Dispatch and merge (the
- * glossary's Human touch). The merge, Design-session answers and Operator
- * comments are never touches.
- */
-function humanTouchesOf({ pullRequest, mergedAt, ticket, dispatch }: MergedPullRequest, operator: string): number {
-  const before = (at: string) => Date.parse(at) <= Date.parse(mergedAt);
-  const between = (at: string) => (dispatch === null || Date.parse(at) >= Date.parse(dispatch)) && before(at);
-  // Dispatch itself adds the first agent:implement, so a label counts only after it.
-  const after = (at: string) => (dispatch === null || Date.parse(at) > Date.parse(dispatch)) && before(at);
-  // A push: a run of consecutive commits the App didn't make.
-  const commits = pullRequest.commits.filter((commit) => between(commit.at));
-  const pushes = commits.filter((commit, i) => !commit.byApp && (i === 0 || commits[i - 1]?.byApp === true)).length;
-  const requestChanges = pullRequest.reviews.filter(
-    (review) => review.author === operator && review.state === "changes-requested" && between(review.at),
-  ).length;
-  const added = [...(ticket?.labelEvents ?? []), ...pullRequest.labelEvents].filter((event) => event.action === "labeled" && after(event.at));
-  // A Retry or Step-up the Operator asked for.
-  const retriesAsked = added.filter((event) => event.actor === operator && (event.label === DISPATCH_LABEL || event.label === REVIEW_LABEL)).length;
-  // A Pairing session on the Ticket.
-  const pairing = ticket?.labelEvents.some((event) => event.label === READY_FOR_HUMAN && event.action === "labeled" && after(event.at)) ? 1 : 0;
-  const operatorSteps = ticket?.blockedBy.filter((blocker) => blocker.labels.includes(READY_FOR_HUMAN)).length ?? 0;
-  return pushes + requestChanges + retriesAsked + pairing + operatorSteps;
-}
-
-/**
- * The agent PRs merged in the 30 days to the week's end, and how many of them
- * a default-branch commit's `This reverts commit <merge sha>` trailer, or a
- * merged `Revert "<title>"` PR, reverted in the same window.
- */
-function revertRateOf(week: Week, facts: readonly GitHubFacts[]): RevertRate {
-  const window = { start: week.end - REVERT_WINDOW_MS, end: week.end };
-  const counts = facts.map((repo) => {
-    const merged = repo.pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(window, pullRequest.mergedAt));
-    const commits = repo.defaultBranchCommits.filter((commit) => within(window, commit.at));
-    const titles = repo.mergedPullRequestTitles.filter((pullRequest) => within(window, pullRequest.mergedAt));
-    const reverted = merged.filter(
-      ({ mergeSha, title }) =>
-        (mergeSha !== null && commits.some((commit) => commit.message.includes(`This reverts commit ${mergeSha}`))) ||
-        titles.some((pullRequest) => pullRequest.title === `Revert "${title}"`),
-    );
-    return { reverted: reverted.length, merged: merged.length };
-  });
-  return {
-    reverted: counts.reduce((sum, count) => sum + count.reverted, 0),
-    merged: counts.reduce((sum, count) => sum + count.merged, 0),
-  };
+/** The agent PRs merged in the 30 days to the week's end, and how many of them a revert in that window reverted. */
+function revertRateOf(week: Week, input: WeeklySummaryInput): RevertRate {
+  const merged = mergedAgentPullRequestsIn({ start: week.end - REVERT_WINDOW_MS, end: week.end }, input);
+  return { reverted: merged.filter((pullRequest) => pullRequest.reverted).length, merged: merged.length };
 }
 
 /** The 90 days to the week's end: slow decay needs longer than revert rate's 30 to show. */
@@ -663,40 +519,10 @@ function escapeWindowOf(week: Week): Window {
   return { start: week.end - ESCAPE_WINDOW_MS, end: week.end };
 }
 
-/**
- * An Architectural escape: an issue whose escape marker names at least one
- * agent PR merged in the window. It counts against those PRs alone.
- */
-interface ArchitecturalEscape {
-  readonly repo: string;
-  readonly issue: EscapeMarkerIssueFacts;
-  /** The marker's Strength as written, or null when it isn't one the Auditor gives. */
-  readonly strength: Strength | null;
-  /** The marker's PRs that are agent PRs merged in the window. */
-  readonly pullRequests: readonly AgentPullRequestFacts[];
-}
-
-/**
- * The Architectural escapes opened in the window, repo by repo. Only the
- * Operator's issues count, so someone else's issue body can't move the metric.
- */
-function escapesIn(window: Window, facts: readonly GitHubFacts[], operator: string): ArchitecturalEscape[] {
-  return facts.flatMap((repo) => {
-    const merged = mergedIn(window, repo);
-    return repo.escapeMarkerIssues.flatMap((issue) => {
-      const marker = escapeMarkerIn(issue.body);
-      if (marker === null || issue.author !== operator || !within(window, issue.createdAt)) return [];
-      const pullRequests = merged.filter((pullRequest) => marker.pullRequests.includes(pullRequest.number));
-      const strength = STRENGTHS.find((known) => known === marker.strength) ?? null;
-      return pullRequests.length === 0 ? [] : [{ repo: repo.repo, issue, strength, pullRequests }];
-    });
-  });
-}
-
 /** Of the agent PRs merged in the window, how many at least one escape names, each counted once however many do. */
-function escapeRateOf(window: Window, escapes: readonly ArchitecturalEscape[], facts: readonly GitHubFacts[]): EscapeRate {
-  const escaped = new Set(escapes.flatMap(({ repo, pullRequests }) => pullRequests.map((pullRequest) => `${repo}#${pullRequest.number}`)));
-  return { escaped: escaped.size, merged: facts.reduce((sum, repo) => sum + mergedIn(window, repo).length, 0) };
+function escapeRateOf(window: Window, escapes: readonly ArchitecturalEscape[], input: WeeklySummaryInput): EscapeRate {
+  const escaped = new Set(escapes.flatMap(({ repo, pullRequests }) => pullRequests.map(({ pullRequest }) => `${repo}#${pullRequest.number}`)));
+  return { escaped: escaped.size, merged: mergedAgentPullRequestsIn(window, input).length };
 }
 
 function escapesByStrengthOf(escapes: readonly ArchitecturalEscape[]): EscapesByStrength {
@@ -709,51 +535,31 @@ function escapesByStrengthOf(escapes: readonly ArchitecturalEscape[]): EscapesBy
  * counts them against, each with its Ticket's records, the Review that passed
  * it last and whether anyone but the App pushed to it.
  */
-function escapesThisWeekOf(week: Week, { facts, records, operator }: WeeklySummaryInput): EscapeThisWeek[] {
-  return escapesIn(escapeWindowOf(week), facts, operator)
+function escapesThisWeekOf(week: Week, input: WeeklySummaryInput): EscapeThisWeek[] {
+  return escapesIn(escapeWindowOf(week), input)
     .filter(({ issue }) => within(week, issue.createdAt))
-    .map(({ repo, issue, strength, pullRequests }) => {
-      const onRepo = records.filter((record) => record.repo === repo).toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
-      return {
-        repo,
-        number: issue.number,
-        url: `https://github.com/${repo}/issues/${issue.number}`,
-        title: issue.title,
-        body: issue.body,
-        strength,
-        pullRequests: pullRequests.map((pullRequest) => {
-          const passed = onRepo.findLast((record) => record.role === "review" && record.pullRequest === pullRequest.number && record.verdict === "pass");
-          return {
-            number: pullRequest.number,
-            url: `https://github.com/${repo}/pull/${pullRequest.number}`,
-            ticket: pullRequest.ticket,
-            records: onRepo.filter((record) => pullRequest.ticket !== null && record.issue === pullRequest.ticket),
-            lastPassingReview: passed === undefined ? null : { record: passed, transcript: passed.transcript, url: runUrlOf(passed) },
-            operatorPushes: pullRequest.commits.some((commit) => !commit.byApp),
-          };
-        }),
-      };
-    });
+    .map(({ repo, issue, strength, pullRequests }) => ({
+      repo,
+      number: issue.number,
+      url: `https://github.com/${repo}/issues/${issue.number}`,
+      title: issue.title,
+      body: issue.body,
+      strength,
+      pullRequests: pullRequests.map(({ pullRequest, records, lastPassingReview, operatorPushes }) => ({
+        number: pullRequest.number,
+        url: `https://github.com/${repo}/pull/${pullRequest.number}`,
+        ticket: pullRequest.ticket,
+        records,
+        lastPassingReview:
+          lastPassingReview === null ? null : { record: lastPassingReview, transcript: lastPassingReview.transcript, url: runUrlOf(lastPassingReview) },
+        operatorPushes,
+      })),
+    }));
 }
 
 /** The Actions run attempt a record came from, in its Product repo. */
 function runUrlOf({ repo, runId, runAttempt }: RunRecord): string {
   return `https://github.com/${repo}/actions/runs/${runId}/attempts/${runAttempt}`;
-}
-
-/** The repo's agent PRs merged in the window. */
-function mergedIn(window: Window, { pullRequests }: GitHubFacts): AgentPullRequestFacts[] {
-  return pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(window, pullRequest.mergedAt));
-}
-
-/** When the PR's last passing Verdict before its merge was given, read through the Verdict marker on the App's comments, or null. */
-function lastPassOf(pullRequest: AgentPullRequestFacts, mergedAt: string): string | null {
-  return (
-    pullRequest.comments.findLast(
-      (comment) =>
-        comment.byBot && Date.parse(comment.at) <= Date.parse(mergedAt) && verdictsIn([comment.body]).some((record) => record.verdict === "pass"),
-    )?.at ?? null
-  );
 }
 
 function median(values: readonly number[]): number | null {
@@ -770,7 +576,7 @@ function mean(values: readonly number[]): number | null {
 /** The roles whose runs build a Ticket: Implement (Retries and Step-ups among them) and Review. */
 const BUILD_ROLES: readonly RunRecord["role"][] = ["implement", "review"];
 
-function costPerMergedPullRequestOf(week: Week, records: readonly RunRecord[], merged: readonly MergedPullRequest[]): CostFigure {
+function costPerMergedPullRequestOf(week: Week, records: readonly RunRecord[], merged: readonly MergedAgentPullRequest[]): CostFigure {
   const ended = endedBy(week, records);
   const perPullRequest = merged.map(({ repo, pullRequest }) =>
     ended.filter(
@@ -851,12 +657,6 @@ function costOf(records: readonly RunRecord[]): CostFigure & { readonly usd: num
 /** Whether any of the run's models has an unknown cost basis, which leaves the run with no total (src/kit/runRecord.ts). */
 function hasUnknownCostBasis(record: RunRecord): boolean {
   return Object.values(record.modelUsage).some((usage) => usage.costBasis === UNKNOWN_COST_BASIS);
-}
-
-/** When the Ticket was dispatched: its first `agent:implement` (a Retry adds it again), or null. */
-function dispatchOf(ticket: TicketFacts): string | null {
-  const added = ticket.labelEvents.filter((event) => event.label === DISPATCH_LABEL && event.action === "labeled");
-  return added.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at))[0]?.at ?? null;
 }
 
 // Per repo: what waits on the Operator and what is stuck, as of the filing.
@@ -1014,11 +814,7 @@ function unansweredRoundOf(issue: OpenIssueFacts): string | null {
 
 /** When a PR's latest Verdict on its head was posted, if that Verdict is a pass; otherwise null. */
 function passAtHeadOf(pullRequest: OpenPullRequestFacts): string | null {
-  // Only a bot's markers count, so nobody can fake a pass by quoting one.
-  const verdicts = pullRequest.comments.flatMap((comment) =>
-    comment.byBot ? verdictsIn([comment.body]).map((record) => ({ record, at: comment.at })) : [],
-  );
-  const latest = verdicts.filter(({ record }) => record.headSha === pullRequest.headSha).at(-1);
+  const latest = verdictsOn(pullRequest.comments).filter(({ record }) => record.headSha === pullRequest.headSha).at(-1);
   return latest?.record.verdict === "pass" ? latest.at : null;
 }
 
@@ -1031,9 +827,7 @@ function lastAdded(events: readonly LabelEvent[], label: string): string | null 
 // The week: Monday 00:00 to Monday 00:00 in the Operator's time zone.
 
 /** A week as the instants it starts at (inclusive) and ends at (exclusive), and its Monday's date. */
-interface Week {
-  readonly start: number;
-  readonly end: number;
+interface Week extends Window {
   readonly monday: string;
 }
 
@@ -1041,14 +835,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const REVERT_WINDOW_MS = 30 * DAY_MS;
 const ESCAPE_WINDOW_MS = 90 * DAY_MS;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-/** A span of time, from `start` (inclusive) to `end` (exclusive). */
-type Window = Pick<Week, "start" | "end">;
-
-function within({ start, end }: Window, at: string): boolean {
-  const time = Date.parse(at);
-  return time >= start && time < end;
-}
 
 /** The week ending at the last Monday 00:00 at or before `now`, and the week before it. */
 function weeksEndingAt(now: number, timeZone: string): { thisWeek: Week; lastWeek: Week } {
