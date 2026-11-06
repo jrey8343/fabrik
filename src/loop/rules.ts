@@ -44,8 +44,15 @@ import type {
 export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
   // Every run the Plan starts is given its Subscription here, whichever role it is,
   // or held, with rotation on, while every Subscription is used up.
-  const plan = heldWhileUsedUp(planOnAnySubscription(event, snapshot, config), snapshot.kitIssues, config);
-  return onChosenSubscription(plan, snapshot.kitIssues, config);
+  const planned = planOnAnySubscription(event, snapshot, config);
+  // A Kit-owned issue the Plan closes, as the scheduled tick closes a weekly-limit
+  // issue at its reset, no longer stands in the way of the runs it starts.
+  const kitIssues = snapshot.kitIssues.filter((issue) => !closes(planned, issue.number));
+  return onChosenSubscription(heldWhileUsedUp(planned, kitIssues, config), kitIssues, config);
+}
+
+function closes(plan: Plan, issue: number): boolean {
+  return plan.kind === "act" && plan.actions.some((action) => action.kind === "close" && action.issue === issue);
 }
 
 /** What the Kit does about one Loop event, before the runs it starts are given a Subscription. */

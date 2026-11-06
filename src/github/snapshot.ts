@@ -10,13 +10,15 @@ import {
 } from "../kit/config.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
-import { AUDIT_LABEL, DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT } from "../loop/labels.ts";
+import { heldRunsIn } from "../loop/heldRun.ts";
+import { AUDIT_LABEL, DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT, WEEKLY_LIMIT_LABEL } from "../loop/labels.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
   AuditIssueSnapshot,
   AuditSnapshot,
   DesignQueueIssue,
   DesignQueueSnapshot,
+  HeldTargetSnapshot,
   KitIssueSnapshot,
   LoopEvent,
   NamedPullRequestSnapshot,
@@ -266,10 +268,11 @@ export async function gatherSnapshot(
   // A closed Ticket may be its Spec's last.
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
+  const held = event.kind === "scheduled-tick" ? await gatherHeld(github, repo, kitIssues, appLogin) : null;
   // By default the Operator owns the Product repos they run Fabrik in.
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment, audit, namedPullRequests }
-    : { ...part, spec, kitIssues, startingComment, audit, namedPullRequests };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: operator ?? owner, kitIssues, startingComment, audit, namedPullRequests, held }
+    : { ...part, spec, kitIssues, startingComment, audit, namedPullRequests, held };
 }
 
 // The newest Audit issues, open and closed: enough to hold this week's, any
@@ -500,7 +503,7 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "namedPullRequests">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "namedPullRequests" | "held">;
 
 const KIT_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $labels: [String!]!) {
@@ -543,6 +546,70 @@ async function gatherKitIssues(github: GitHub, repo: Repo): Promise<{ owner: str
       comments: issue.comments.nodes.map((comment) => comment.body),
     })),
   };
+}
+
+interface HeldTargetNode {
+  __typename: "Issue" | "PullRequest";
+  number: number;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  isDraft?: boolean;
+  body: string;
+  author: { login: string; __typename: string } | null;
+  labels: { nodes: { name: string }[] };
+}
+
+const HELD_TARGET_FIELDS = "__typename number state body author { login __typename } labels(first: 100) { nodes { name } }";
+
+/**
+ * Each issue or PR a held marker on an open weekly-limit issue names, once,
+ * for the scheduled tick to tell a held run still in the state it was held in
+ * from one that has moved on (src/loop/resume.ts). A number naming nothing
+ * GitHub has is left out.
+ */
+async function gatherHeld(
+  github: GitHub,
+  repo: Repo,
+  kitIssues: readonly KitIssueSnapshot[],
+  appLogin: string | null,
+): Promise<HeldTargetSnapshot[]> {
+  const numbers = [
+    ...new Set(
+      kitIssues
+        .filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL))
+        .flatMap((issue) => [issue.body, ...issue.comments])
+        .flatMap((text) => heldRunsIn(text).map((run) => run.issue)),
+    ),
+  ];
+  if (numbers.length === 0) return [];
+  const query = [
+    `query ($owner: String!, $name: String!, ${numbers.map((_, at) => `$n${at}: Int!`).join(", ")}) {`,
+    "  repository(owner: $owner, name: $name) {",
+    ...numbers.map(
+      (_, at) =>
+        `    t${at}: issueOrPullRequest(number: $n${at}) { ... on Issue { ${HELD_TARGET_FIELDS} } ... on PullRequest { ${HELD_TARGET_FIELDS} isDraft } }`,
+    ),
+    "  }",
+    "}",
+  ].join("\n");
+  const variables: Record<string, unknown> = { owner: repo.owner, name: repo.name };
+  numbers.forEach((number, at) => {
+    variables[`n${at}`] = number;
+  });
+  const data = await github.graphql<{ repository: Record<string, HeldTargetNode | null> }>(query, variables);
+  return numbers.flatMap((_, at): HeldTargetSnapshot[] => {
+    const node = data.repository[`t${at}`];
+    if (node === null || node === undefined) return [];
+    return [
+      {
+        number: node.number,
+        open: node.state === "OPEN",
+        labels: node.labels.nodes.map((label) => label.name),
+        draft: node.__typename === "PullRequest" ? node.isDraft === true : null,
+        byApp: byAppOf(node.author, appLogin),
+        body: node.body,
+      },
+    ];
+  });
 }
 
 /**

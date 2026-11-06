@@ -743,6 +743,83 @@ describe("Gathering a scheduled tick's audit slice", () => {
   });
 });
 
+describe("Gathering the issues and PRs held runs are on, for a scheduled tick", () => {
+  const tick = { kind: "scheduled-tick", now: "2026-11-08T04:00:00.000Z" } as const;
+  const heldMarker = (issue: number, role: string, label: string | null) =>
+    `<!-- fabrik:held ${JSON.stringify({ issue, role, label })} -->`;
+
+  /** The read-only API, holding one weekly-limit issue with these comments, and these issues and PRs by number. */
+  function githubWith(comments: string[], targets: Record<number, unknown>) {
+    const asked: number[][] = [];
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("issueOrPullRequest")) {
+          const numbers = Object.entries(variables).filter(([name]) => /^n\d+$/.test(name)).map(([, value]) => value as number);
+          asked.push(numbers);
+          return {
+            repository: Object.fromEntries(
+              Object.entries(variables)
+                .filter(([name]) => /^n\d+$/.test(name))
+                .map(([name, number]) => [`t${name.slice(1)}`, targets[number as number] ?? null]),
+            ),
+          };
+        }
+        if (query.includes("defaultBranchRef")) return { repository: { defaultBranchRef: null, issues: { nodes: [] } } };
+        return {
+          repository: {
+            owner: { login: "acme" },
+            issues: {
+              nodes: [
+                {
+                  number: 41,
+                  body: "<!-- fabrik:notified -->",
+                  labels: { nodes: [{ name: "fabrik:weekly-limit" }] },
+                  comments: { nodes: comments.map((body) => ({ body })) },
+                },
+              ],
+            },
+          },
+        };
+      },
+    } as unknown as GitHub;
+    return { github, asked };
+  }
+
+  it("holds each issue or PR a held marker names, once, with its state, labels and whether it's a draft", async () => {
+    const { github } = githubWith(
+      [heldMarker(7, "triage", "needs-triage"), `${heldMarker(50, "review", "agent:review")}\n${heldMarker(7, "triage", "needs-triage")}`, heldMarker(9, "implement", "agent:implement")],
+      {
+        7: { __typename: "Issue", number: 7, state: "OPEN", body: "", author: { login: "jrey", __typename: "User" }, labels: { nodes: [{ name: "bug" }] } },
+        50: { __typename: "PullRequest", number: 50, state: "OPEN", isDraft: true, body: "Closes #7", author: { login: "fabrik-app", __typename: "Bot" }, labels: { nodes: [] } },
+      },
+    );
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, "fabrik-app[bot]");
+
+    expect(snapshot.held).toEqual([
+      { number: 7, open: true, labels: ["bug"], draft: null, byApp: false, body: "" },
+      { number: 50, open: true, labels: [], draft: true, byApp: true, body: "Closes #7" },
+    ]);
+  });
+
+  it("asks nothing when no run is held", async () => {
+    const { github, asked } = githubWith([], {});
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, "fabrik-app[bot]");
+
+    expect(snapshot.held).toEqual([]);
+    expect(asked).toEqual([]);
+  });
+
+  it("isn't gathered for any other event", async () => {
+    const { github } = githubWith([heldMarker(7, "triage", "needs-triage")], {});
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "kit-config-changed" }, null, "fabrik-app[bot]");
+
+    expect(snapshot.held).toBeNull();
+  });
+});
+
 describe("Gathering the PRs an Auditor named", () => {
   /** The read-only API, holding Audit #97 and these PRs by number; any other number is no PR, which GitHub answers with a 404. */
   function githubWith(pulls: Record<number, unknown>) {

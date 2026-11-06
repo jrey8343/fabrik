@@ -439,6 +439,25 @@ export interface Snapshot {
    * number naming no PR isn't here.
    */
   readonly namedPullRequests: readonly NamedPullRequestSnapshot[] | null;
+  /**
+   * Gathered for a scheduled tick only: each issue or PR a held marker on an
+   * open weekly-limit issue names, that GitHub has, in any order, so that the
+   * tick resumes only held runs still in the state they were held in
+   * (src/loop/resume.ts). A number naming nothing GitHub has isn't here.
+   */
+  readonly held: readonly HeldTargetSnapshot[] | null;
+}
+
+/** An issue or PR a held run is on, as the adapter read it on a scheduled tick (src/loop/resume.ts). */
+export interface HeldTargetSnapshot {
+  readonly number: number;
+  readonly open: boolean;
+  readonly labels: readonly string[];
+  /** For a PR, whether it's a draft; null for an issue. */
+  readonly draft: boolean | null;
+  /** Whether the Fabrik App itself opened it, as IssueSnapshot.byApp says. Only the App's body is read for markers. */
+  readonly byApp: boolean;
+  readonly body: string;
 }
 
 /** A PR an Auditor named, as GitHub has it (src/loop/auditLanding.ts). */
@@ -624,6 +643,18 @@ export type Action =
       readonly label: Label | null;
       /** When the first weekly-limit issue's limit resets, if known. */
       readonly until: string | null;
+    }
+  | {
+      /**
+       * Drops a held run rather than resume it, on the scheduled tick: its
+       * issue or PR has closed, or moved on in the Loop, since it was held. It
+       * changes nothing on GitHub itself; the step summary reads it.
+       */
+      readonly kind: "drop-held-run";
+      readonly role: AgentRole;
+      readonly issue: number;
+      /** Why, such as "#7 is closed". */
+      readonly reason: string;
     }
   /** Push the agent branch the Implement run built, which the push job holds from its bundle. */
   | { readonly kind: "push-branch"; readonly branch: string }

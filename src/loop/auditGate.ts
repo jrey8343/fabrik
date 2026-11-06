@@ -4,6 +4,7 @@ import { AUDIT_DAYS } from "../kit/config.ts";
 import { shortSha } from "../skills/lock.ts";
 import { auditsIn, lastAudit } from "./audit.ts";
 import { scheduledTick } from "./kitIssues.ts";
+import { resumingHeldRuns } from "./resume.ts";
 import { AUDIT_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { AUDIT_PENDING_MARKER, auditMarker } from "./markers.ts";
 import { rotationIsOn } from "./subscriptions.ts";
@@ -16,11 +17,12 @@ const FAILED_AUDITS_A_WEEK = 2;
 
 /**
  * The scheduled tick with the audit gate: closes each weekly-limit issue
- * after its reset, as scheduledTick does, alongside opening a pending Audit
+ * after its reset, as scheduledTick does, and resumes held runs then, alongside opening a pending Audit
  * when one is due. The scheduled-tick rule calls it on every tick.
  */
 export function scheduledTickWithAuditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
-  const tick = scheduledTick(now, snapshot, config);
+  // With rotation on, a weekly-limit issue it closes resumes the held runs.
+  const tick = resumingHeldRuns(scheduledTick(now, snapshot, config), snapshot, config);
   // A weekly-limit issue this tick closes after its reset no longer holds the Audit back.
   const closing = actionsOf(tick).flatMap((action) => (action.kind === "close" ? [action.issue] : []));
   const kitIssues = snapshot.kitIssues.filter((issue) => !closing.includes(issue.number));
