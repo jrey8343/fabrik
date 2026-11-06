@@ -29,6 +29,8 @@ export interface KitConfig {
     readonly audit: AgentRole;
     /** The Retro; it takes no Extra skills (ADR-0008). */
     readonly retro: AgentRole;
+    /** The Researcher; it takes no Extra skills (ADR-0008). */
+    readonly research: AgentRole;
     readonly dispatch: { readonly timeoutMinutes: number };
     readonly stepUp: { readonly model: string; readonly effort: string | null };
   };
@@ -40,6 +42,8 @@ export interface KitConfig {
     readonly designSessions: number;
     /** How many open error issues the Monitor keeps at once; 0 pauses new error filings (#148). */
     readonly monitorIssues: number;
+    /** How many open Maps the repo may have at once, whoever charted them; 0 stops new Maps (#154). */
+    readonly maps: number;
   };
   /** What the Monitor watches in this Product repo (#148). */
   readonly monitor: {
@@ -276,11 +280,12 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     review: { model: OPUS, effort: null, timeoutMinutes: 30 },
     audit: { model: OPUS, effort: null, timeoutMinutes: 45 },
     retro: { model: OPUS, effort: null, timeoutMinutes: 45 },
+    research: { model: OPUS, effort: null, timeoutMinutes: 30 },
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: OPUS, effort: null },
   },
   maxInFlight: 2,
-  caps: { designSessions: 2, monitorIssues: 5 },
+  caps: { designSessions: 2, monitorIssues: 5, maps: 1 },
   monitor: { errors: null, redMain: true },
   // Sunday, so a fresh Audit is open by Monday's Weekly summary and misses the Monday skills bump.
   audit: { day: "sunday" },
@@ -488,6 +493,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
       review: readPickingRole(roles.object("review"), defaults.roles.review, picks, "review"),
       audit: readAgentRole(roles.object("audit"), defaults.roles.audit),
       retro: readAgentRole(roles.object("retro"), defaults.roles.retro),
+      research: readAgentRole(roles.object("research"), defaults.roles.research),
       dispatch: readDispatch(roles.object("dispatch"), defaults.roles.dispatch),
       stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp),
     },
@@ -538,6 +544,7 @@ function readCaps(caps: Reader, defaults: KitConfig["caps"]): KitConfig["caps"] 
   return {
     designSessions: caps.cap("design_sessions", defaults.designSessions) ?? defaults.designSessions,
     monitorIssues: caps.cap("monitor_issues", defaults.monitorIssues) ?? defaults.monitorIssues,
+    maps: caps.cap("maps", defaults.maps) ?? defaults.maps,
   };
 }
 

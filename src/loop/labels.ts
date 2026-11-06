@@ -72,6 +72,13 @@ export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
  */
 export const MONITOR_LABEL = "fabrik:monitor";
 
+/**
+ * The label on a Map: an issue charting the way to a destination still in fog,
+ * whose children are Decisions (#154). A Design session that ends in a Map puts
+ * it on in place of needs-design.
+ */
+export const MAP_LABEL = "wayfinder:map";
+
 /** A label the Kit itself adds or removes. Labels read from GitHub stay plain strings: anyone can add any label. */
 export type Label =
   | StateLabel
@@ -80,7 +87,8 @@ export type Label =
   | typeof DESIGN_LABEL
   | typeof REVIEW_LABEL
   | KitIssueLabel
-  | typeof MONITOR_LABEL;
+  | typeof MONITOR_LABEL
+  | typeof MAP_LABEL;
 
 /** Every label the Kit uses, so the setup skill can create each one. */
 export const ALL_LABELS: readonly Label[] = [
