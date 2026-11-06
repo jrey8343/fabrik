@@ -108,8 +108,7 @@ export type LoopEvent =
       readonly kind: "agent-run-finished";
       /**
        * Implement, Review, Auditor, Retro and Researcher runs finish through
-       * their own events, which carry what their push jobs hold. A
-       * Researcher's result has no event yet (#154).
+       * their own events, which carry what their push jobs hold.
        */
       readonly role: Exclude<AgentRole, "implement" | "review" | "audit" | "retro" | "research">;
       readonly issue: number;
@@ -232,6 +231,22 @@ export type LoopEvent =
       readonly repoUrl: string;
     }
   | {
+      /** A Researcher run finished on a research Decision; its push job has the branch it built, not yet pushed (#154). */
+      readonly kind: "research-run-finished";
+      /** The Decision. */
+      readonly issue: number;
+      /** The Researcher's structured output, the `<research>` tag's JSON, unparsed (src/loop/researchOutput.ts). */
+      readonly output: string;
+      /** The research branch the run built (src/loop/researchPaths.ts), which names the one findings file it may change. */
+      readonly branch: string;
+      /** What the branch changes, read from the bundle the agent job passed out. */
+      readonly changes: BranchChanges;
+      /** The Actions run, which the resolution and a refused branch's failure notice link to. */
+      readonly runUrl: string;
+      /** The Product repo's web address, by which the resolution links the findings file on the branch. */
+      readonly repoUrl: string;
+    }
+  | {
       /** A review that requests changes was submitted on a PR: at the Merge gate, the Operator's ask for another run. */
       readonly kind: "pull-request-changes-requested";
       readonly pullRequest: number;
@@ -307,6 +322,8 @@ export type PullRequestCommentPlace =
 /** An issue as the core sees it, gathered fresh by the GitHub adapter. */
 export interface IssueSnapshot {
   readonly number: number;
+  /** Its title as it stands: a research Decision's line in its Map's Decisions so far names it by this (src/loop/researchLanding.ts). */
+  readonly title: string;
   readonly open: boolean;
   readonly author: string;
   /**

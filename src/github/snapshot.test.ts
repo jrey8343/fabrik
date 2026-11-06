@@ -443,13 +443,20 @@ interface GitHubParent {
   labels: string[];
 }
 
-/** The issue a Loop event is about, as GitHub holds it: opened by `author`, with this body, these labels and this parent. */
+/** The issue a Loop event is about, as GitHub holds it: opened by `author`, with this title, body, these labels and this parent. */
 function issueGitHub({
   author = { login: "someone", __typename: "User" },
+  title = "An issue",
   body = "",
   labels = ["needs-design"],
   parent = null,
-}: { author?: { login: string; __typename: string } | null; body?: string; labels?: string[]; parent?: GitHubParent | null } = {}): GitHub {
+}: {
+  author?: { login: string; __typename: string } | null;
+  title?: string;
+  body?: string;
+  labels?: string[];
+  parent?: GitHubParent | null;
+} = {}): GitHub {
   return {
     async graphql(query: string): Promise<unknown> {
       if (!query.includes("issue(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
@@ -464,6 +471,7 @@ function issueGitHub({
             number: 98,
             state: "OPEN",
             author: author === null || selectsType ? author : { login: author.login },
+            ...(/^\s*title$/m.test(issueQuery) ? { title } : {}),
             ...(/^\s*body$/m.test(issueQuery) ? { body } : {}),
             labels: { nodes: labels.map((name) => ({ name })) },
             parent:
@@ -500,6 +508,16 @@ describe("Gathering an issue's body", () => {
     const snapshot = await gatherSnapshot(issueGitHub({ author: APP_BOT, body }), repo, event, null, APP_LOGIN);
 
     expect(snapshot.issue?.body).toBe(body);
+  });
+});
+
+describe("Gathering an issue's title", () => {
+  it("holds the title as it stands, so a resolved research Decision's line in its Map names it", async () => {
+    const event = { kind: "issue-opened", issue: 98 } as const;
+
+    const snapshot = await gatherSnapshot(issueGitHub({ title: "Which payment provider fits group classes?" }), repo, event, null, APP_LOGIN);
+
+    expect(snapshot.issue?.title).toBe("Which payment provider fits group classes?");
   });
 });
 

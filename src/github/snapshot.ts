@@ -61,6 +61,7 @@ const ISSUE_QUERY = `
       owner { login }
       issue(number: $number) {
         number
+        title
         state
         author { login __typename }
         body
@@ -87,6 +88,7 @@ interface IssueQueryResult {
     owner: { login: string };
     issue: {
       number: number;
+      title: string;
       state: "OPEN" | "CLOSED";
       author: { login: string; __typename: string } | null;
       body: string;
@@ -911,6 +913,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
   return {
     issue: {
       number: issue.number,
+      title: issue.title,
       open: issue.state === "OPEN",
       author: issue.author?.login ?? "ghost",
       byApp: byAppOf(issue.author, appLogin),
