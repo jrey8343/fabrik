@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { type CaptureInput, type Capturer, captureEvidence } from "./capture.ts";
-import { type Capture, type CaptureFailure, parseCaptureResult } from "./uiEvidence.ts";
+import { buildAndServeEnv, type CaptureInput, type CaptureOutcome, type Capturer, captureEvidence, captureStepFiles, captureStepOutputs, captureStepSummary } from "./capture.ts";
+import { type Capture, type CaptureFailure, type CaptureResult, parseCaptureResult } from "./uiEvidence.ts";
 
 const HEAD = "c".repeat(40);
 
@@ -354,3 +354,87 @@ describe("Capturing UI evidence", () => {
     ]);
   });
 });
+
+const book: Capture = { route: "/book", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-1-book.png" };
+const bookWide: Capture = { ...book, viewport: "desktop", image: "after-desktop-1-book.png" };
+const captured: CaptureResult = { outcome: "captured", headSha: HEAD, captures: [book, bookWide] };
+
+describe("What the capture step leaves", () => {
+  it("passes the capture result out as one compact JSON line, which reads back as it was", () => {
+    const { "ui-evidence": line } = captureStepOutputs({ kind: "recorded", result: captured });
+
+    expect(line).not.toContain("\n");
+    expect(line).toBe(JSON.stringify(captured));
+    expect(parseCaptureResult(line ?? "")).toEqual({ ok: true, result: captured });
+  });
+
+  it.each([
+    ["Visual evidence is off", { kind: "off" }],
+    ["there was nothing to capture", { kind: "skipped", why: "the Implementer made no commit" }],
+  ] as const)("passes out an empty result when %s, so no evidence is uploaded", (_case, outcome) => {
+    expect(captureStepOutputs(outcome)).toEqual({ "ui-evidence": "" });
+  });
+
+  it("writes the capture result, and a gallery holding every screenshot it took", () => {
+    const images = new Map([
+      [book.image, Uint8Array.of(1, 2, 3)],
+      [bookWide.image, Uint8Array.of(4, 5, 6)],
+    ]);
+
+    const files = captureStepFiles(captured, images, 12);
+
+    expect(JSON.parse(files.result)).toEqual(captured);
+    expect(files.gallery).toContain("<title>UI evidence for #12 at ccccccc</title>");
+    expect(files.gallery).toContain(`src="data:image/png;base64,${Buffer.from([1, 2, 3]).toString("base64")}"`);
+    expect(files.gallery).toContain(`src="data:image/png;base64,${Buffer.from([4, 5, 6]).toString("base64")}"`);
+  });
+
+  it("writes no gallery for a capture that took no screenshot, only its result", () => {
+    const noRoutes: CaptureResult = { outcome: "failed", reason: "no-routes", headSha: HEAD, captures: [] };
+
+    expect(captureStepFiles(noRoutes, new Map(), 12)).toEqual({ result: `${JSON.stringify(noRoutes, null, 2)}\n`, gallery: null });
+  });
+
+  // Without a ui block, the Kit job's step summary has the quiet line instead (src/kit/kitJob.ts).
+  it.each([
+    ["Visual evidence is off", { kind: "off" }, null],
+    [
+      "nothing was captured",
+      { kind: "skipped", why: "the branch changes no file that ui.paths marks as UI" },
+      "### UI evidence\n\nNothing was captured: the branch changes no file that ui.paths marks as UI.\n",
+    ],
+    ["it captured", { kind: "recorded", result: captured }, "### UI evidence\n\nCaptured 2 screenshots of 1 route at `ccccccc`.\n"],
+    [
+      "capture failed",
+      { kind: "recorded", result: { outcome: "failed", reason: "server-did-not-start", headSha: HEAD, captures: [] } },
+      "### UI evidence\n\nCapture failed (`server-did-not-start`) after 0 screenshots; its log says where it stopped.\n",
+    ],
+  ] satisfies [string, CaptureOutcome, string | null][])("sums up in the step summary when %s", (_case, outcome, summary) => {
+    expect(captureStepSummary(outcome)).toBe(summary);
+  });
+});
+
+describe("The env sandbox.build and ui.serve run with", () => {
+  it("is the runner's with Kit config's sandbox.env, but never the Claude token, the 1Password step's outputs or a GitHub token", () => {
+    const runnerEnv = {
+      PATH: "/usr/bin",
+      HOME: "/home/runner",
+      FABRIK_SECRETS: '{"CLAUDE_CODE_OAUTH_TOKEN":"sk-ant-oat01-secret"}',
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-secret",
+      GH_TOKEN: "ghs_secret",
+      GITHUB_TOKEN: "ghs_secret",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "secret",
+      ACTIONS_RUNTIME_TOKEN: "secret",
+      NODE_ENV: "development",
+      UNSET: undefined,
+    };
+
+    expect(buildAndServeEnv(runnerEnv, { NODE_ENV: "production", PUBLIC_SITE: "https://example.com", GH_TOKEN: "ghp_operator" })).toEqual({
+      PATH: "/usr/bin",
+      HOME: "/home/runner",
+      NODE_ENV: "production",
+      PUBLIC_SITE: "https://example.com",
+    });
+  });
+});
+
