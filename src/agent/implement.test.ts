@@ -2,9 +2,11 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { PENRITH_59_REPO, PENRITH_59_REQUEST, PENRITH_59_TICKET_PRACTITIONERS, penrith59 } from "../__fixtures__/requestedChanges.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { verdictMarker } from "../loop/markers.ts";
 import { implementContext, requestChangesContext, retryContext } from "./implement.ts";
+import { readPullRequest } from "./inputs.ts";
 
 async function fileOf(value: unknown): Promise<string> {
   const path = join(await mkdtemp(join(tmpdir(), "fabrik-implement-")), "file.json");
@@ -164,5 +166,27 @@ describe("The Implementer's context", () => {
     expect(text).toContain("Patients waiting for a cancelled slot.");
     expect(text).not.toContain("CODING_STANDARDS.md");
     expect(text).not.toContain("Name a test for the behaviour it checks.");
+  });
+});
+
+describe("A retry on a PR the Operator requested changes on is given the amended Ticket (ADR-0010)", () => {
+  it("replays penrith#59: the retry sees the Request changes as an amendment, beside the findings that would undo it", async () => {
+    const read = (await readPullRequest(penrith59(), PENRITH_59_REPO, 59, { withComments: true, operator: "operator" })) as { body: string };
+    // The Ticket lists eight practitioners; the PR, as the Operator asked, lists seven.
+    expect(PENRITH_59_TICKET_PRACTITIONERS).toHaveLength(8);
+    expect(read.body).not.toContain("Declan Price");
+
+    const { parts, operatorComments: given } = await retryContext(await fileOf(read));
+
+    const text = parts.join("\n");
+    expect(text.indexOf("## The Operator's Request changes, which amend the Ticket")).toBeGreaterThan(text.indexOf("## The findings to fix"));
+    expect(text).toContain(`### \`review-70\`: Request changes, 2026-11-01T00:00:00Z\n${PENRITH_59_REQUEST}`);
+    expect(given.map((comment) => comment.id)).toEqual(["review-70"]);
+  });
+
+  it("carries no amendment section on a PR the Operator never requested changes on", async () => {
+    const text = (await retryContext(await fileOf(pullRequest))).parts.join("\n");
+
+    expect(text).not.toContain("which amend the Ticket");
   });
 });

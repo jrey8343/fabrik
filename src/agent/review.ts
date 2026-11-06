@@ -1,5 +1,6 @@
 // The Review agent job's own context around the Reviewer: the PR it judges,
-// checked out at the head its required checks passed on, and the Operator's
+// checked out at the head its required checks passed on, the Operator's
+// Request changes reviews on it, which amend the Ticket (ADR-0010), and its
 // comments on it (never earlier Verdicts or fix comments), with the Ticket's
 // Spec, the repo's glossary and ADRs, its Coding standards, and on a UI PR its
 // UI evidence. The Reviewer holds no GitHub credential and runs none of the
@@ -20,7 +21,7 @@ import {
 import { CODING_STANDARDS_FILE } from "../guard/trust-root.ts";
 import { readIfPresent } from "../kit/checkout.ts";
 import { ticketContext, type PullRequestRunContext } from "./implement.ts";
-import { givenOperatorComments, operatorCommentsSection } from "./operatorComments.ts";
+import { operatorInputSections } from "./operatorComments.ts";
 
 /**
  * What the Reviewer's prompt carries beyond the Ticket, the PR its result is
@@ -37,11 +38,13 @@ export async function reviewContext(
   evidenceDir: string | null = null,
   recordedFailure: CaptureFailure | null = null,
 ): Promise<PullRequestRunContext> {
-  const { operatorComments, ...pullRequest } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
+  const { operatorComments, requestedChanges, ...pullRequest } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
     headRefOid?: unknown;
     operatorComments?: unknown;
+    requestedChanges?: unknown;
   };
+  const fromOperator = operatorInputSections({ operatorComments, requestedChanges });
   const number = pullRequest.number;
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   const standards = await readIfPresent(join(productDir, CODING_STANDARDS_FILE));
@@ -52,14 +55,14 @@ export async function reviewContext(
       "```json",
       JSON.stringify(pullRequest, null, 2),
       "```",
-      ...operatorCommentsSection(operatorComments),
+      ...fromOperator.parts,
       ...(await ticketContext(productDir, specFile)),
       ...(standards === null ? [] : [`## ${CODING_STANDARDS_FILE}`, standards.trimEnd()]),
       ...(evidenceDir === null
         ? []
         : await uiEvidenceContext(productDir, evidenceDir, { head: headOf(pullRequest.headRefOid), recorded: recordedFailure })),
     ],
-    operatorComments: givenOperatorComments(operatorComments),
+    operatorComments: fromOperator.given,
   };
 }
 
