@@ -12,7 +12,7 @@ function kitIssueOpenedBy(plan: Plan, number: number, comments: readonly string[
   return { number, labels: opened.labels, body: opened.body, comments };
 }
 
-function deadToken(issue = 7): LoopEvent {
+function deadToken(issue = 7): Extract<LoopEvent, { kind: "agent-run-failed" }> {
   return {
     kind: "agent-run-failed",
     role: "triage",
@@ -108,6 +108,73 @@ describe("The Rotate the Claude token issue", () => {
     const later = planFor(deadToken(8), snapshotOf(anIssue({ number: 8 }), { kitIssues: [after] }), kitConfig());
 
     expect(notificationsOf(later)).toEqual([]);
+  });
+});
+
+describe("The dead-token issue names the Subscription whose vault item needs rotating", () => {
+  const TWO_SUBSCRIPTIONS = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
+  const onSecond = (issue = 7): LoopEvent => ({ ...deadToken(issue), subscription: "Claude token 2" });
+
+  it("opens the rotation issue for that Subscription, whose step names its vault item", () => {
+    const plan = planFor(onSecond(), snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] })), TWO_SUBSCRIPTIONS);
+    const issue = kitIssueOpenedBy(plan, 40);
+
+    expect(plan).toMatchObject({ kind: "act", actions: [{}, {}, { kind: "open-issue", title: "Rotate the Claude token of the `Claude token 2` Subscription" }] });
+    expect(issue.body).toMatch(/^The Claude token of the `Claude token 2` Subscription was refused \(`authentication_failed`\)/);
+    expect(issue.body).toContain("in the `Claude token 2` item in the Fabrik 1Password vault.");
+    expect(issue.body).not.toContain("`Claude token` item");
+  });
+
+  it("says in the Ticket's failure comment which Subscription's token was refused", () => {
+    const plan = planFor(onSecond(), snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] })), TWO_SUBSCRIPTIONS);
+
+    expect(plan).toMatchObject({
+      kind: "act",
+      actions: [
+        {},
+        {
+          kind: "comment",
+          issue: 7,
+          body: expect.stringMatching(
+            /^The Triage run on #7 failed: the Claude token of the `Claude token 2` Subscription was refused \(`authentication_failed`\), so its `Claude token 2` vault item may need rotating\./,
+          ),
+        },
+        {},
+      ],
+    });
+  });
+
+  it("names the Subscription on an open rotation issue it @-mentions on, and on a later quiet comment", () => {
+    const ahead: KitIssueSnapshot = { number: 40, labels: ["fabrik:token-rotation"], body: "Rotating soon.", comments: [] };
+
+    const first = planFor(onSecond(7), snapshotOf(anIssue({ number: 7 }), { kitIssues: [ahead] }), TWO_SUBSCRIPTIONS);
+    const mention = first.kind === "act" ? first.actions.find((action) => action.kind === "comment" && action.issue === 40) : undefined;
+    expect(mention).toMatchObject({ body: expect.stringMatching(/^@operator The Claude token of the `Claude token 2` Subscription was refused/) });
+
+    const after = { ...ahead, comments: [mention?.kind === "comment" ? mention.body : ""] };
+    const later = planFor(onSecond(8), snapshotOf(anIssue({ number: 8 }), { kitIssues: [after] }), TWO_SUBSCRIPTIONS);
+    expect(later).toMatchObject({
+      kind: "act",
+      actions: [{}, {}, { kind: "comment", issue: 40, body: `The Triage run on #8 was refused too, on the \`Claude token 2\` Subscription. [The run](${RUN})` }],
+    });
+  });
+
+  it("reads a failed run that names no Subscription as the first listed one's", () => {
+    const plan = planFor(deadToken(), snapshotOf(anIssue({ number: 7 })), TWO_SUBSCRIPTIONS);
+
+    expect(kitIssueOpenedBy(plan, 40).body).toContain("in the `Claude token` item in the Fabrik 1Password vault.");
+    expect(plan).toMatchObject({ kind: "act", actions: [{}, {}, { title: "Rotate the Claude token of the `Claude token` Subscription" }] });
+  });
+
+  it("with one Subscription listed, names its vault item in the step and keeps the V1 wording elsewhere", () => {
+    const plan = planFor(
+      { ...deadToken(), subscription: "Work token" },
+      snapshotOf(anIssue({ number: 7 })),
+      kitConfig({ subscriptions: ["Work token"] }),
+    );
+
+    expect(plan).toMatchObject({ kind: "act", actions: [{}, {}, { title: "Rotate the Claude token" }] });
+    expect(kitIssueOpenedBy(plan, 40).body).toContain("in the `Work token` item in the Fabrik 1Password vault.");
   });
 });
 

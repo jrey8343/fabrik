@@ -11,7 +11,16 @@ import {
 import { storeIsPrivate } from "../kit/runStore.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
-import { AUDIT_LABEL, DESIGN_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, READY_FOR_AGENT, RETRO_LABEL } from "../loop/labels.ts";
+import { heldRunsIn } from "../loop/heldRun.ts";
+import {
+  AUDIT_LABEL,
+  DESIGN_LABEL,
+  KIT_ISSUE_LABELS,
+  NEEDS_DESIGN,
+  READY_FOR_AGENT,
+  RETRO_LABEL,
+  WEEKLY_LIMIT_LABEL,
+} from "../loop/labels.ts";
 import { escapeMarkerIn } from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
@@ -20,6 +29,7 @@ import type {
   AuditSnapshot,
   DesignQueueIssue,
   DesignQueueSnapshot,
+  HeldTargetSnapshot,
   KitIssueSnapshot,
   LoopEvent,
   NamedPullRequestSnapshot,
@@ -263,7 +273,7 @@ export async function gatherSnapshot(
   store: Pick<GitHub, "rest"> | null = null,
 ): Promise<Snapshot> {
   const [{ owner, kitIssues }, part, startingComment, audit, namedPullRequests] = await Promise.all([
-    gatherKitIssues(github, repo),
+    gatherKitIssues(github, repo, appLogin),
     gatherEventPart(github, repo, event, operator, appLogin, actions),
     gatherStartingComment(github, repo, event),
     event.kind === "scheduled-tick" ? gatherAuditSlice(github, repo, appLogin) : null,
@@ -272,12 +282,13 @@ export async function gatherSnapshot(
   // A closed Ticket may be its Spec's last.
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
+  const held = event.kind === "scheduled-tick" ? await gatherHeld(github, repo, kitIssues, appLogin) : null;
   // By default the Operator owns the Product repos they run Fabrik in.
   const theOperator = part?.operator ?? operator ?? owner;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, namedPullRequests }
-    : { ...part, spec, kitIssues, startingComment, audit, retro, namedPullRequests };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, namedPullRequests, held }
+    : { ...part, spec, kitIssues, startingComment, audit, retro, namedPullRequests, held };
 }
 
 // The newest issues with a weekly gate's label (src/loop/weeklyGate.ts),
@@ -611,7 +622,9 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "namedPullRequests">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "namedPullRequests" | "held">;
+
+const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body author { login __typename } }";
 
 const KIT_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $labels: [String!]!) {
@@ -621,39 +634,157 @@ const KIT_ISSUES_QUERY = `
         nodes {
           number
           body
+          author { login __typename }
           labels(first: 100) { nodes { name } }
-          comments(last: 100) { nodes { body } }
+          comments(last: 100) { ${KIT_ISSUE_COMMENTS} }
         }
       }
     }
   }
 `;
 
+/** A Kit-owned issue's comments before the ones already read, a page at a time, newest page first. */
+const KIT_ISSUE_EARLIER_COMMENTS_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!, $before: String!) {
+    repository(owner: $owner, name: $name) {
+      issue(number: $number) {
+        comments(last: 100, before: $before) { ${KIT_ISSUE_COMMENTS} }
+      }
+    }
+  }
+`;
+
+type Actor = { login: string; __typename: string } | null;
+
+interface KitIssueComments {
+  pageInfo?: { hasPreviousPage: boolean; startCursor: string | null };
+  nodes: { body: string; author: Actor }[];
+}
+
 interface KitIssuesQueryResult {
   repository: {
     owner: { login: string };
     issues: {
-      nodes: { number: number; body: string; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string }[] } }[];
+      nodes: { number: number; body: string; author: Actor; labels: { nodes: { name: string }[] }; comments: KitIssueComments }[];
     };
   };
 }
 
-/** The open issues carrying a Kit-owned label (src/loop/kitIssues.ts), which every event's snapshot holds. */
-async function gatherKitIssues(github: GitHub, repo: Repo): Promise<{ owner: string; kitIssues: KitIssueSnapshot[] }> {
+/**
+ * The open issues carrying a Kit-owned label (src/loop/kitIssues.ts), which
+ * every event's snapshot holds. Their markers steer agent runs (a held marker
+ * resumes one), so only the App's own text is read (ADR-0007): the body of an
+ * issue the App opened, and the App's comments, every one of them, however
+ * many pages they take. Anyone else's comment is left out.
+ */
+async function gatherKitIssues(
+  github: GitHub,
+  repo: Repo,
+  appLogin: string | null,
+): Promise<{ owner: string; kitIssues: KitIssueSnapshot[] }> {
   const data = await github.graphql<KitIssuesQueryResult>(KIT_ISSUES_QUERY, {
     owner: repo.owner,
     name: repo.name,
     labels: KIT_ISSUE_LABELS,
   });
-  return {
-    owner: data.repository.owner.login,
-    kitIssues: data.repository.issues.nodes.map((issue) => ({
-      number: issue.number,
-      labels: issue.labels.nodes.map((label) => label.name),
-      body: issue.body,
-      comments: issue.comments.nodes.map((comment) => comment.body),
-    })),
-  };
+  const kitIssues = await Promise.all(
+    data.repository.issues.nodes.map(async (issue): Promise<KitIssueSnapshot> => {
+      const comments = [...(await earlierComments(github, repo, issue.number, issue.comments)), ...issue.comments.nodes];
+      return {
+        number: issue.number,
+        labels: issue.labels.nodes.map((label) => label.name),
+        body: byAppOf(issue.author, appLogin) ? issue.body : "",
+        comments: comments.filter((comment) => byAppOf(comment.author, appLogin)).map((comment) => comment.body),
+      };
+    }),
+  );
+  return { owner: data.repository.owner.login, kitIssues };
+}
+
+/** The comments before this page, oldest first. */
+async function earlierComments(
+  github: GitHub,
+  repo: Repo,
+  number: number,
+  page: KitIssueComments,
+): Promise<KitIssueComments["nodes"]> {
+  const earlier: KitIssueComments["nodes"][] = [];
+  let pageInfo = page.pageInfo;
+  while (pageInfo?.hasPreviousPage === true && pageInfo.startCursor !== null) {
+    const data = await github.graphql<{ repository: { issue: { comments: KitIssueComments } | null } }>(
+      KIT_ISSUE_EARLIER_COMMENTS_QUERY,
+      { owner: repo.owner, name: repo.name, number, before: pageInfo.startCursor },
+    );
+    const comments = data.repository.issue?.comments;
+    if (comments === undefined) break;
+    earlier.unshift(comments.nodes);
+    pageInfo = comments.pageInfo;
+  }
+  return earlier.flat();
+}
+
+interface HeldTargetNode {
+  __typename: "Issue" | "PullRequest";
+  number: number;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  isDraft?: boolean;
+  body: string;
+  author: { login: string; __typename: string } | null;
+  labels: { nodes: { name: string }[] };
+}
+
+const HELD_TARGET_FIELDS = "__typename number state body author { login __typename } labels(first: 100) { nodes { name } }";
+
+/**
+ * Each issue or PR a held marker on an open weekly-limit issue names, once,
+ * for the scheduled tick to tell a held run still in the state it was held in
+ * from one that has moved on (src/loop/resume.ts). A number naming nothing
+ * GitHub has is left out.
+ */
+async function gatherHeld(
+  github: GitHub,
+  repo: Repo,
+  kitIssues: readonly KitIssueSnapshot[],
+  appLogin: string | null,
+): Promise<HeldTargetSnapshot[]> {
+  const numbers = [
+    ...new Set(
+      kitIssues
+        .filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL))
+        .flatMap((issue) => [issue.body, ...issue.comments])
+        .flatMap((text) => heldRunsIn(text).map((run) => run.issue)),
+    ),
+  ];
+  if (numbers.length === 0) return [];
+  const query = [
+    `query ($owner: String!, $name: String!, ${numbers.map((_, at) => `$n${at}: Int!`).join(", ")}) {`,
+    "  repository(owner: $owner, name: $name) {",
+    ...numbers.map(
+      (_, at) =>
+        `    t${at}: issueOrPullRequest(number: $n${at}) { ... on Issue { ${HELD_TARGET_FIELDS} } ... on PullRequest { ${HELD_TARGET_FIELDS} isDraft } }`,
+    ),
+    "  }",
+    "}",
+  ].join("\n");
+  const variables: Record<string, unknown> = { owner: repo.owner, name: repo.name };
+  numbers.forEach((number, at) => {
+    variables[`n${at}`] = number;
+  });
+  const data = await github.graphql<{ repository: Record<string, HeldTargetNode | null> }>(query, variables);
+  return numbers.flatMap((_, at): HeldTargetSnapshot[] => {
+    const node = data.repository[`t${at}`];
+    if (node === null || node === undefined) return [];
+    return [
+      {
+        number: node.number,
+        open: node.state === "OPEN",
+        labels: node.labels.nodes.map((label) => label.name),
+        draft: node.__typename === "PullRequest" ? node.isDraft === true : null,
+        byApp: byAppOf(node.author, appLogin),
+        body: node.body,
+      },
+    ];
+  });
 }
 
 /**

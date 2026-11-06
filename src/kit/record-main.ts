@@ -84,6 +84,7 @@ async function recordRun(): Promise<Recorded> {
     kitSha,
     endedAt: new Date().toISOString(),
     roles: config.config.roles,
+    subscriptions: config.config.subscriptions,
     agentResult: await readIfPresent(join(agentDir, AGENT_RESULT_FILE)),
     failureReport: await readIfPresent(join(agentDir, AGENT_FAILURE_FILE)),
     transcript: transcript?.lines ?? null,

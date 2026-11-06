@@ -27,6 +27,7 @@ import {
 import { aMonitorIssueBody, AGROUP_STATS } from "../__fixtures__/monitor.ts";
 import { aDesignQueueIssue } from "../__fixtures__/snapshots.ts";
 import type { Verdict } from "../loop/types.ts";
+import { readRunRecord, type RunRecord } from "./runRecord.ts";
 import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
@@ -116,6 +117,65 @@ describe("the Weekly summary", () => {
   it("reports no weekly-limit reading in a week whose records read none", () => {
     const result = weeklySummary(input({ records: [aRunRecord({ endedAt: "2026-11-06T00:00:00Z", rateLimit: null })] }));
     expect(result).toMatchObject({ kind: "summary", summary: { weeklyLimit: { thisWeek: null, lastWeek: null } } });
+  });
+
+  describe("Subscription usage, per Subscription", () => {
+    const reading = (utilization: number, resetsAt: number) => ({ status: "allowed", rateLimitType: "seven_day", utilization, resetsAt });
+    const bodyOf = (records: WeeklySummaryInput["records"]) => {
+      const result = weeklySummary(input({ records }));
+      return result.kind === "summary" ? result.body : "";
+    };
+
+    it("shows one line for each Subscription the week's runs used, with its cost and its last weekly-limit reading", () => {
+      const body = bodyOf([
+        aRunRecord({ endedAt: "2026-11-03T00:00:00Z", subscription: "Claude token", totalCostUsd: 2, rateLimit: reading(0.4, 1_793_000_000) }),
+        aRunRecord({ endedAt: "2026-11-05T00:00:00Z", subscription: "Claude token", totalCostUsd: 1, rateLimit: reading(0.97, 1_794_000_000) }),
+        aRunRecord({ endedAt: "2026-11-06T00:00:00Z", subscription: "Claude token 2", totalCostUsd: 1.5, rateLimit: reading(0.12, 1_794_500_000) }),
+        aRunRecord({ endedAt: "2026-11-07T00:00:00Z", subscription: "Claude token 2", totalCostUsd: 0.25, rateLimit: null }),
+        aRunRecord({ endedAt: "2026-10-28T00:00:00Z", subscription: "Claude token", totalCostUsd: 4, rateLimit: reading(0.9, 1_792_000_000) }),
+      ]);
+      expect(body).toContain(
+        [
+          "Subscription usage:",
+          "",
+          "- Claude token: $3.00 API-equivalent cost, 97% of the weekly limit, resetting 2026-11-07 08:20 (Australia/Sydney). Last week: 90%.",
+          "- Claude token 2: $1.75 API-equivalent cost, 12% of the weekly limit, resetting 2026-11-13 03:13 (Australia/Sydney).",
+        ].join("\n"),
+      );
+    });
+
+    it("says so for a Subscription whose runs read no weekly limit this week", () => {
+      const body = bodyOf([
+        aRunRecord({ endedAt: "2026-11-03T00:00:00Z", subscription: "Claude token", totalCostUsd: 2, rateLimit: reading(0.4, 1_793_000_000) }),
+        aRunRecord({ endedAt: "2026-11-06T00:00:00Z", subscription: "Claude token 2", totalCostUsd: 0.5, rateLimit: null }),
+      ]);
+      expect(body).toContain("- Claude token 2: $0.50 API-equivalent cost, no weekly-limit reading this week.");
+    });
+
+    it("shows today's one line for a week on one Subscription", () => {
+      const body = bodyOf([
+        aRunRecord({ endedAt: "2026-11-05T00:00:00Z", subscription: "Claude token", rateLimit: reading(0.97, 1_794_000_000) }),
+        aRunRecord({ endedAt: "2026-10-28T00:00:00Z", subscription: "Claude token 2", rateLimit: reading(0.9, 1_792_000_000) }),
+      ]);
+      expect(body).toContain("\nSubscription usage: 97% of the weekly limit, resetting 2026-11-07 08:20 (Australia/Sydney). Last week: 90%.\n");
+      expect(body).not.toContain("- Claude token");
+    });
+
+    it("counts a record written before runs named their Subscription towards the first listed Subscription", () => {
+      const older = (record: RunRecord) => {
+        const { subscription: _, ...rest } = record;
+        return readRunRecord({ ...rest, schema: 1 }, ["Claude token", "Claude token 2"]);
+      };
+      const body = bodyOf(
+        [
+          older(aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 2, rateLimit: reading(0.97, 1_794_000_000) })),
+          aRunRecord({ endedAt: "2026-11-05T00:00:00Z", subscription: "Claude token", totalCostUsd: 1 }),
+          aRunRecord({ endedAt: "2026-11-06T00:00:00Z", subscription: "Claude token 2", totalCostUsd: 0.5 }),
+        ].flatMap((record) => record ?? []),
+      );
+      expect(body).toContain("- Claude token: $3.00 API-equivalent cost, 97% of the weekly limit, resetting 2026-11-07 08:20 (Australia/Sydney).");
+      expect(body).toContain("- Claude token 2: $0.50 API-equivalent cost, no weekly-limit reading this week.");
+    });
   });
 
   it("leaves a run whose cost basis is unknown out of the cost, and counts it", () => {

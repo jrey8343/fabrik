@@ -12,6 +12,7 @@ const startsDesignTurn = {
       model: "claude-opus-5-5",
       effort: null,
       timeoutMinutes: 30,
+      subscription: "Claude token",
     },
   ],
 };

@@ -51,7 +51,17 @@ describe("The App's pending Retro, when it's opened", () => {
 
     expect(plan).toEqual({
       kind: "act",
-      actions: [{ kind: "start-agent-run", role: "retro", issue: 120, model: "claude-retro", effort: "high", timeoutMinutes: 50 }],
+      actions: [
+        {
+          kind: "start-agent-run",
+          role: "retro",
+          issue: 120,
+          model: "claude-retro",
+          effort: "high",
+          timeoutMinutes: 50,
+          subscription: "Claude token",
+        },
+      ],
     });
   });
 });
@@ -141,6 +151,23 @@ describe("A dead token or the weekly limit on a Retro run", () => {
         labels: ["ready-for-human", "fabrik:token-rotation"],
         assignees: ["operator"],
       },
+    ]);
+  });
+
+  it("with rotation on, a dead token names the Subscription whose vault item needs rotating, on the Retro and in its rotation issue", () => {
+    const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
+
+    const plan = planFor(retroFailed({ ...report("dead-token"), subscription: "Claude token 2" }), snapshotOf(aRetro()), config);
+
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "edit-issue-body",
+      issue: 120,
+      body: expect.stringContaining(
+        "The Retro's run failed: the Claude token of the `Claude token 2` Subscription was refused (`authentication_failed`), so its `Claude token 2` vault item may need rotating.",
+      ),
+    });
+    expect(actionsOf(plan).filter((action) => action.kind === "open-issue")).toEqual([
+      expect.objectContaining({ title: "Rotate the Claude token of the `Claude token 2` Subscription", assignees: ["operator"] }),
     ]);
   });
 

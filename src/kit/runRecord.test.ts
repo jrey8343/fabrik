@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { kitConfig } from "../__fixtures__/snapshots.ts";
+import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { agentRunIn } from "../github/apply.ts";
+import { planFor } from "../loop/rules.ts";
 import type { Needs } from "./pushJob.ts";
-import { agentRunEnded, type JudgeRunEnd, judgeRunRecordFor, type RunEnd, runRecordFor } from "./runRecord.ts";
+import { agentRunEnded, type JudgeRunEnd, judgeRunRecordFor, readRunRecord, type RunEnd, runRecordFor } from "./runRecord.ts";
 
 const KIT_SHA = "f".repeat(40);
 const BASE_SHA = "b".repeat(40);
@@ -82,6 +84,7 @@ function runEnd(overrides: Partial<RunEnd> = {}): RunEnd {
     kitSha: KIT_SHA,
     endedAt: "2026-11-05T10:00:00Z",
     roles,
+    subscriptions: kitConfig().subscriptions,
     agentResult: agentResult("triage", 12),
     failureReport: null,
     transcript: [init, result()],
@@ -92,7 +95,7 @@ function runEnd(overrides: Partial<RunEnd> = {}): RunEnd {
 describe("The Run record a run's end yields", () => {
   it("a passing Triage run gets a record with its identity, what ran, its outcome, effort spent and cost", () => {
     expect(runRecordFor(runEnd())?.record).toEqual({
-      schema: 1,
+      schema: 2,
       kitSha: KIT_SHA,
       repo: "acme/widgets",
       runId: 9001,
@@ -103,6 +106,7 @@ describe("The Run record a run's end yields", () => {
       endedAt: "2026-11-05T10:00:00Z",
       model: "claude-opus-5-5",
       effort: null,
+      subscription: "Claude token",
       retry: 0,
       stepUp: false,
       requestChanges: false,
@@ -347,6 +351,26 @@ describe("The Run record a run's end yields", () => {
       expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-retro.json");
     });
 
+    it("a Retro run names the Subscription the Kit job gave it, at schema 2, its evidence job's failure included", () => {
+      const subscriptions = ["Claude token", "Claude token 2"];
+      const passed = retro("success", {
+        needs: needs("retro", { retro: job("success", { "base-sha": DEFAULT_BRANCH_SHA }) }, { subscription: "Claude token 2" }),
+        subscriptions,
+      });
+      const evidenceFailed = retro("failure", {
+        needs: needs(
+          "retro",
+          { "retro-evidence": { result: "failure", outputs: { "secrets-step": "success" } }, retro: { result: "skipped", outputs: {} } },
+          { subscription: "Claude token 2" },
+        ),
+        subscriptions,
+        transcript: null,
+      });
+
+      expect(passed?.record).toMatchObject({ schema: 2, role: "retro", subscription: "Claude token 2" });
+      expect(evidenceFailed?.record).toMatchObject({ schema: 2, role: "retro", infrastructureFailure: "crash", subscription: "Claude token 2" });
+    });
+
     it("a failed Retro run is recorded as the Infrastructure failure its report names", () => {
       const files = retro("failure", { failureReport: JSON.stringify({ failure: "missing-output", detail: "no <retro> tag" }), transcript: [init] });
 
@@ -444,6 +468,25 @@ describe("The Run record a run's end yields", () => {
     });
 
     it("the Kit job routed straight to the push job", () => {
+      expect(runRecordFor(runEnd({ needs: needs("push"), agentResult: null, transcript: null }))).toBeNull();
+    });
+
+    it("a held run: its Plan starts no agent job, so the Kit job routes it to the push job", () => {
+      const usedUp = (number: number, subscription: string) => ({
+        number,
+        labels: ["fabrik:weekly-limit" as const],
+        body: `<!-- fabrik:subscription ${subscription} -->\n<!-- fabrik:resets-at 2026-11-09T04:00:00.000Z -->`,
+        comments: [],
+      });
+      const plan = planFor(
+        { kind: "label-added", issue: 7, label: "needs-triage" },
+        snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] }), {
+          kitIssues: [usedUp(40, "Claude token"), usedUp(41, "Claude token 2")],
+        }),
+        kitConfig({ subscriptions: ["Claude token", "Claude token 2"] }),
+      );
+
+      expect(agentRunIn(plan)).toBeNull();
       expect(runRecordFor(runEnd({ needs: needs("push"), agentResult: null, transcript: null }))).toBeNull();
     });
 
@@ -630,8 +673,85 @@ describe("The Run record a run's end yields", () => {
     expect(files?.record).toMatchObject({ runAttempt: 2, transcript: files?.transcriptPath });
   });
 
-  it("carries schema 1 and the Kit sha that wrote it", () => {
-    expect(runRecordFor(runEnd({ kitSha: "c".repeat(40) }))?.record).toMatchObject({ schema: 1, kitSha: "c".repeat(40) });
+  it("carries schema 2 and the Kit sha that wrote it", () => {
+    expect(runRecordFor(runEnd({ kitSha: "c".repeat(40) }))?.record).toMatchObject({ schema: 2, kitSha: "c".repeat(40) });
+  });
+
+  describe("names the Subscription the run used", () => {
+    const TWO_SUBSCRIPTIONS = ["Claude token", "Claude token 2"];
+
+    it("the vault item the Kit job gave the run, never its secret", () => {
+      const end = runEnd({
+        needs: needs("triage", { triage: job("success") }, { subscription: "Claude token 2" }),
+        subscriptions: TWO_SUBSCRIPTIONS,
+      });
+
+      expect(runRecordFor(end)?.record).toMatchObject({ schema: 2, subscription: "Claude token 2" });
+    });
+
+    it("the first listed Subscription when the Kit job gave the run none", () => {
+      expect(runRecordFor(runEnd({ subscriptions: ["Work token", "Claude token 2"] }))?.record.subscription).toBe("Work token");
+    });
+
+    it("a run refused on its weekly limit shows that Infrastructure failure and the Subscription it was refused on", () => {
+      const end = runEnd({
+        needs: needs("implement", { implement: job("failure") }, { ticket: "7", subscription: "Claude token 2" }),
+        eventIssue: 7,
+        subscriptions: TWO_SUBSCRIPTIONS,
+        agentResult: null,
+        failureReport: JSON.stringify({ failure: "weekly-limit", detail: "", resetsAt: "2026-11-09T04:00:00.000Z" }),
+        transcript: [init],
+      });
+
+      expect(runRecordFor(end)?.record).toMatchObject({
+        role: "implement",
+        issue: 7,
+        jobResult: "failure",
+        infrastructureFailure: "weekly-limit",
+        subscription: "Claude token 2",
+      });
+    });
+
+    it("a run killed for spending usage credits shows that Infrastructure failure and the Subscription it was killed on", () => {
+      const end = runEnd({
+        needs: needs("implement", { implement: job("failure") }, { ticket: "7", subscription: "Claude token 2" }),
+        eventIssue: 7,
+        subscriptions: TWO_SUBSCRIPTIONS,
+        agentResult: null,
+        failureReport: JSON.stringify({ failure: "usage-credits", detail: "stopped for spending usage credits: isUsingOverage was true" }),
+        transcript: [init],
+      });
+
+      expect(runRecordFor(end)?.record).toMatchObject({
+        role: "implement",
+        issue: 7,
+        jobResult: "failure",
+        infrastructureFailure: "usage-credits",
+        subscription: "Claude token 2",
+      });
+    });
+  });
+});
+
+describe("A Run record read back from the store", () => {
+  const written = runRecordFor(
+    runEnd({ needs: needs("triage", { triage: job("success") }, { subscription: "Claude token 2" }) }),
+  )?.record;
+
+  it("of the current schema reads as written", () => {
+    expect(readRunRecord(JSON.parse(JSON.stringify(written)), ["Claude token", "Claude token 2"])).toEqual(written);
+  });
+
+  it("of the older schema, which names no Subscription, reads as being on the first listed one, at the current schema", () => {
+    const { subscription: _, ...rest } = written ?? { subscription: "" };
+    const older = { ...rest, schema: 1 };
+
+    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 2, subscription: "Work token" });
+  });
+
+  it("of a schema the Kit doesn't know reads as no record", () => {
+    expect(readRunRecord({ ...written, schema: 3 }, ["Claude token"])).toBeNull();
+    expect(readRunRecord("not a record", ["Claude token"])).toBeNull();
   });
 });
 
@@ -686,7 +806,7 @@ describe("A judge run's record", () => {
 
   it("is for the scored run's subject, in role score, with its own model, outcome, effort spent and cost", () => {
     expect(judgeRunRecordFor(judgeRunEnd()).record).toEqual({
-      schema: 1,
+      schema: 2,
       kitSha: KIT_SHA,
       repo: "acme/widgets",
       runId: 9001,
@@ -697,6 +817,7 @@ describe("A judge run's record", () => {
       endedAt: "2026-11-05T10:04:00Z",
       model: JUDGE_MODEL,
       effort: null,
+      subscription: "Claude token",
       retry: 0,
       stepUp: false,
       requestChanges: false,
@@ -719,6 +840,14 @@ describe("A judge run's record", () => {
       rateLimit: { status: "allowed", rateLimitType: "seven_day", utilization: 0.52, resetsAt: 1_800_500_000 },
       transcript: "transcripts/acme/widgets/2026-11/9001-1-score.jsonl.gz",
     });
+  });
+
+  it("is on the scored run's Subscription, which the Kit job gave the judge too", () => {
+    const scored = scoredRun({
+      needs: needs("implement", { implement: job("success") }, { ticket: "7", "pull-request": "50", subscription: "Claude token 2" }),
+    }).record;
+
+    expect(judgeRunRecordFor(judgeRunEnd({ scored })).record.subscription).toBe("Claude token 2");
   });
 
   it("sits beside the scored run's record and transcript, sharing its run id and attempt, even when the judge ends the next month", () => {

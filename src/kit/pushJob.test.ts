@@ -164,6 +164,40 @@ describe("What the push job applies", () => {
     expect(input).toEqual({ kind: "agent-failure", role: "review", issue: 7, jobResult: "failure", secretsStep: "success" });
   });
 
+  it("names the Subscription a failed run used, from the Kit job's subscription output", () => {
+    const input = pushJobInput(
+      needs("implement", { implement: { result: "failure", outputs: { "secrets-step": "success" } } }, { ticket: "7", subscription: "Claude token 2" }),
+      50,
+    );
+
+    expect(input).toEqual({
+      kind: "agent-failure",
+      role: "implement",
+      issue: 7,
+      jobResult: "failure",
+      secretsStep: "success",
+      subscription: "Claude token 2",
+    });
+  });
+
+  it("names the Subscription a failed Retro run used, its evidence job's failure included", () => {
+    const evidenceFailed = pushJobInput(
+      needs(
+        "retro",
+        { "retro-evidence": { result: "failure", outputs: { "secrets-step": "success" } }, retro: { result: "skipped", outputs: {} } },
+        { subscription: "Claude token 2" },
+      ),
+      120,
+    );
+    const retroFailed = pushJobInput(
+      needs("retro", { "retro-evidence": ok(), retro: { result: "failure", outputs: { "secrets-step": "success" } } }, { subscription: "Claude token 2" }),
+      120,
+    );
+
+    expect(evidenceFailed).toMatchObject({ kind: "agent-failure", role: "retro", issue: 120, subscription: "Claude token 2" });
+    expect(retroFailed).toMatchObject({ kind: "agent-failure", role: "retro", issue: 120, subscription: "Claude token 2" });
+  });
+
   it("does nothing when the Kit job routed nowhere, or failed", () => {
     expect(pushJobInput(needs("none"), 12).kind).toBe("nothing");
     expect(pushJobInput({ kit: { result: "failure", outputs: {} } }, 12).kind).toBe("nothing");

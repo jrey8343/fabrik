@@ -85,6 +85,7 @@ describe("Starting a retry", () => {
           model: "claude-sonnet-5-5",
           effort: config.roles.implement.effort,
           timeoutMinutes: 60,
+          subscription: "Claude token",
           retry: 1,
           stepUp: false,
         },

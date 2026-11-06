@@ -2,9 +2,10 @@
 // week's pending Retro, whose opening starts the Retro's run.
 import { RETRO_LABEL } from "./labels.ts";
 import { RETRO_PENDING_MARKER, retroMarker } from "./markers.ts";
+import { readable } from "./readable.ts";
 import { retrosIn, retroWindowStart } from "./retro.ts";
 import type { Action, KitConfig, Plan, Snapshot } from "./types.ts";
-import { dateOf, heldBack, readable, weekStart } from "./weeklyGate.ts";
+import { dateOf, heldBack, weekStart } from "./weeklyGate.ts";
 
 /**
  * The retro gate: a pending Retro to open, or why there's none this tick. The
@@ -18,7 +19,7 @@ export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): P
   if (slice === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the retro slice the retro gate weighs" };
   }
-  const held = heldBack("Retro", day, retrosIn(slice.issues), now, snapshot.kitIssues);
+  const held = heldBack("Retro", day, retrosIn(slice.issues), now, snapshot.kitIssues, config);
   if (held !== null) return { kind: "nothing", reason: held };
   // The store's opt-in step isn't done: a Retro would have nothing to read, and isn't worth a notice (#139).
   if (!slice.storeReady) return { kind: "nothing", reason: "The fabrik-runs store isn't ready: the Fabrik App isn't on it, or it isn't private" };

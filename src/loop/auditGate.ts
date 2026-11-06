@@ -9,7 +9,8 @@ import { dateOf, heldBack, weekStart } from "./weeklyGate.ts";
 
 /**
  * The audit gate: a pending Audit to open, or why there's none this tick. The
- * scheduled-tick rule runs it on every tick, beside the retro gate
+ * scheduled-tick rule runs it on every tick, beside the retro gate, after
+ * closing each weekly-limit issue past its reset and resuming held runs then
  * (scheduledTickWith).
  */
 export function auditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
@@ -19,7 +20,7 @@ export function auditGate(now: string, snapshot: Snapshot, config: KitConfig): P
   if (slice === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the audit slice the audit gate weighs" };
   }
-  const held = heldBack("Audit", day, auditsIn(slice.issues), now, snapshot.kitIssues);
+  const held = heldBack("Audit", day, auditsIn(slice.issues), now, snapshot.kitIssues, config);
   if (held !== null) return { kind: "nothing", reason: held };
 
   const { head } = slice;

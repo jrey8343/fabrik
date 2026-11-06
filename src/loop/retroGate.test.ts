@@ -309,6 +309,35 @@ describe("The tick's other rules", () => {
   });
 });
 
+// As the Audit's (src/loop/hold.test.ts): with rotation on, a weekly-limit
+// issue no longer holds the Retro back, since its run starts on a free
+// Subscription, or is held on the pending Retro while none is.
+describe("The Retro due while a Subscription's weekly-limit issue is open, with rotation on", () => {
+  const TWO_SUBSCRIPTIONS = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
+
+  /** An open weekly-limit issue for `subscription`, resetting after the tick. */
+  const limitOf = (number: number, subscription: string): KitIssueSnapshot => ({
+    number,
+    labels: ["fabrik:weekly-limit"],
+    body: `The weekly usage limit of the \`${subscription}\` Subscription is reached.\n\n<!-- fabrik:subscription ${subscription} -->\n<!-- fabrik:resets-at 2026-11-09T04:00:00.000Z -->`,
+    comments: [],
+  });
+
+  it("opens while another Subscription is free, so its Retro run starts there", () => {
+    expect(opened(tick(SATURDAY, { kitIssues: [limitOf(41, "Claude token")] }, TWO_SUBSCRIPTIONS))).toHaveLength(1);
+  });
+
+  it("opens while every Subscription is used up, so its Retro run is held on the pending Retro", () => {
+    const kitIssues = [limitOf(40, "Claude token 2"), limitOf(41, "Claude token")];
+
+    expect(opened(tick(SATURDAY, { kitIssues }, TWO_SUBSCRIPTIONS))).toHaveLength(1);
+  });
+
+  it("with one Subscription listed, waits for the reset, as V1 does", () => {
+    expect(tick(SATURDAY, { kitIssues: [limitOf(41, "Claude token")] })).toEqual(OPENS_NOTHING);
+  });
+});
+
 describe("A tick's snapshot without the retro slice", () => {
   it("fails rather than guess, and changes nothing", () => {
     const plan = planFor({ kind: "scheduled-tick", now: SATURDAY }, tickSnapshot({ audit: AUDITED, retro: null }), kitConfig());

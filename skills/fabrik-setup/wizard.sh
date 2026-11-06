@@ -210,7 +210,7 @@ finish() {
 
 run_wizard() {
 
-TOTAL_STAGES=6
+TOTAL_STAGES=7
 
 for tool in gh op; do
   command -v "$tool" >/dev/null 2>&1 || { warn "$tool isn't installed; install it and sign in, then re-run."; exit 1; }
@@ -354,6 +354,91 @@ else
     say "${GREEN}✓ stored${RESET} the Sentry token"
   fi
   unset SENTRY_TOKEN
+  pause
+fi
+
+# ── 4b. A second Subscription ─────────────────────────────────────────────
+# Opt-in: with a second Subscription listed, a run refused on one Subscription's
+# weekly limit is re-run on the next, and runs wait only when every one is used
+# up. Its token is one more item in the 'Fabrik' vault, which the agent and
+# implement service accounts already read, so it needs no new service account.
+stage "A second Subscription"
+SECOND="Claude token 2"
+LIST='"subscriptions": ["Claude token", "Claude token 2"]'
+say "With a second Subscription, a run refused on the first one's weekly limit is"
+say "re-run on the second, and runs wait only once both are used up."
+SECOND_EXISTS=0
+op item get "$SECOND" --vault "Fabrik" >/dev/null 2>&1 && SECOND_EXISTS=1
+ADDING_SECOND=0
+if (( SECOND_EXISTS )); then
+  if confirm "1Password already holds the '$SECOND' item. Replace it with a new token?"; then
+    ADDING_SECOND=1
+  else
+    say "Keeping the current second token."
+  fi
+elif confirm "Add a second Subscription?"; then
+  ADDING_SECOND=1
+fi
+if (( SECOND_EXISTS || ADDING_SECOND )); then
+  if (( ADDING_SECOND )); then
+    if (( ! SECOND_EXISTS )); then
+      step "Create a second Claude account, with its own email and its own Claude subscription."
+      pause "Press Enter once the second account has its subscription."
+    fi
+    step "In another terminal, run: claude setup-token"
+    step "Run it signed in as the second account, not the first. It prints a token that lasts one year."
+    ask_secret SECOND_TOKEN "Paste the second account's token (hidden):"
+    if [[ -z "$SECOND_TOKEN" ]]; then
+      warn "No token pasted."
+      SKIPPED+=("the '$SECOND' API Credential in the 'Fabrik' vault (the second account's claude setup-token)")
+    else
+      EXPIRES=$(date -v+1y +%Y-%m-%d 2>/dev/null || date -d "+1 year" +%Y-%m-%d)
+      OLD_ID=""
+      if (( SECOND_EXISTS )); then
+        # By its id, so that once the new item is stored under the same title, only the old one is archived.
+        OLD_ID=$(op item get "$SECOND" --vault "Fabrik" --format json | node -e '
+          let text = ""; process.stdin.on("data", (chunk) => { text += chunk; });
+          process.stdin.on("end", () => process.stdout.write(JSON.parse(text).id));')
+      fi
+      TEMPLATE=$(umask 077 && mktemp)
+      SECOND="$SECOND" SECOND_TOKEN="$SECOND_TOKEN" EXPIRES="$EXPIRES" node -e '
+        const item = { title: process.env.SECOND, category: "API_CREDENTIAL", fields: [
+          { id: "credential", type: "CONCEALED", label: "credential", value: process.env.SECOND_TOKEN },
+          { id: "expires", type: "DATE", label: "expires", value: process.env.EXPIRES },
+        ] };
+        process.stdout.write(JSON.stringify(item));' > "$TEMPLATE"
+      # Stored before the old item is archived, so a failed create leaves the vault holding a second token still.
+      if ! op item create --vault "Fabrik" --template "$TEMPLATE" >/dev/null; then
+        rm -f "$TEMPLATE"
+        unset SECOND_TOKEN
+        warn "1Password didn't store the new '$SECOND' token, so the old one stays as it was."
+        exit 1
+      fi
+      rm -f "$TEMPLATE"
+      if [[ -n "$OLD_ID" ]]; then
+        # Archived, not deleted, so the old token stays in the item's history.
+        op item delete "$OLD_ID" --vault "Fabrik" --archive
+      fi
+      say "${GREEN}✓ stored${RESET} the '$SECOND' token, expiring $EXPIRES"
+    fi
+    unset SECOND_TOKEN
+  fi
+  say "Usage credits would bill a used-up Subscription past its limit instead of failing over,"
+  say "so turn usage credits off on every account, the first one included."
+  open_url "https://claude.ai/settings/usage"
+  step "Signed in as each account in turn, turn usage credits (extra usage) off."
+  pause "Press Enter once usage credits are off on every account."
+  if node -e '
+    const { subscriptions } = JSON.parse(require("node:fs").readFileSync(".fabrik/config.json", "utf8"));
+    process.exit(Array.isArray(subscriptions) && subscriptions.length > 1 && subscriptions.includes(process.argv[1]) ? 0 : 1);' "$SECOND" 2>/dev/null; then
+    say "${GREEN}✓${RESET} .fabrik/config.json lists both Subscriptions."
+  else
+    step "List it in the Kit config, after the first: $LIST in .fabrik/config.json."
+    SKIPPED+=("list \"$SECOND\" in subscriptions in .fabrik/config.json: $LIST")
+  fi
+  pause
+else
+  say "Skipping the second Subscription. Re-run the wizard to add one later."
   pause
 fi
 

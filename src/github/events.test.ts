@@ -3,7 +3,7 @@ import { aRetroEvidenceInput } from "../__fixtures__/retroEvidence.ts";
 import { aMergedPullRequest, anEscapeMarkerIssue, aRunRecord, factsOf } from "../__fixtures__/weeklySummary.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { evidenceBundle, readEvidenceBundle } from "../kit/retroEvidence.ts";
-import { agentRunEventFrom, auditEventFrom, loopEventFrom, retroEventFrom } from "./events.ts";
+import { agentFailureEventFrom, agentRunEventFrom, auditEventFrom, loopEventFrom, retroEventFrom } from "./events.ts";
 
 describe("A push", () => {
   const push = (overrides: Record<string, unknown> = {}) => ({
@@ -270,5 +270,33 @@ describe("A finished Retro run", () => {
     ...["escapes", "feedback", "followUps", "lowScores", "sample"].map((part): [string, string] => [`has no ${part}`, JSON.stringify({ ...JSON.parse(artifact), [part]: undefined })]),
   ])("refuses evidence that %s", (_, text) => {
     expect(() => readEvidenceBundle(text)).toThrow(/evidence\.json/);
+  });
+});
+
+describe("A failed agent run", () => {
+  const job = {
+    role: "triage" as const,
+    issue: 7,
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    jobResult: "failure",
+    secretsStep: "success",
+    report: { failure: "weekly-limit" as const, detail: "seven_day", resetsAt: "2026-11-09T04:00:00.000Z" },
+  };
+
+  it("carries the Subscription the run used", () => {
+    expect(agentFailureEventFrom({ ...job, subscription: "Claude token 2" })).toEqual({
+      kind: "agent-run-failed",
+      role: "triage",
+      issue: 7,
+      runUrl: job.runUrl,
+      jobResult: "failure",
+      secretsStep: "success",
+      report: job.report,
+      subscription: "Claude token 2",
+    });
+  });
+
+  it("names no Subscription when the Kit job passed none out", () => {
+    expect(agentFailureEventFrom(job)).not.toHaveProperty("subscription");
   });
 });

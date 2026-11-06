@@ -22,7 +22,10 @@ import {
 import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
 import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
+import { heldOf } from "./heldRun.ts";
+import { heldWhileUsedUp } from "./hold.ts";
 import { startAgentRun } from "./runs.ts";
+import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
 import { isPendingRetro } from "./retro.ts";
@@ -44,6 +47,21 @@ import type {
 
 /** The Loop rules core: decides what the Kit does about one Loop event. Pure, no I/O. */
 export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
+  // Every run the Plan starts is given its Subscription here, whichever role it is,
+  // or held, with rotation on, while every Subscription is used up.
+  const planned = planOnAnySubscription(event, snapshot, config);
+  // A Kit-owned issue the Plan closes, as the scheduled tick closes a weekly-limit
+  // issue at its reset, no longer stands in the way of the runs it starts.
+  const kitIssues = snapshot.kitIssues.filter((issue) => !closes(planned, issue.number));
+  return onChosenSubscription(heldWhileUsedUp(planned, kitIssues, config), kitIssues, config);
+}
+
+function closes(plan: Plan, issue: number): boolean {
+  return plan.kind === "act" && plan.actions.some((action) => action.kind === "close" && action.issue === issue);
+}
+
+/** What the Kit does about one Loop event, before the runs it starts are given a Subscription. */
+function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
   switch (event.kind) {
     case "issue-opened":
       // The App opens a pending Audit for the Auditor to fill in, and a pending
@@ -129,20 +147,20 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
     case "dispatch-check":
       return snapshot.dispatch === null
         ? missingFromSnapshot("the Tickets a Dispatch check weighs")
-        : dispatch(snapshot.dispatch, config);
+        : dispatch(snapshot.dispatch, config, heldOf("implement", snapshot.kitIssues));
     case "design-queue-check":
       return snapshot.designQueue === null
         ? missingFromSnapshot("the needs-design issues a Design queue check weighs")
-        : checkDesignQueue(snapshot.designQueue, config);
+        : checkDesignQueue(snapshot.designQueue, config, heldOf("design", snapshot.kitIssues));
     case "kit-config-changed":
       // max_in_flight or caps.design_sessions may have gone up, or from 0 back
       // above it, so see what can start now.
       return { kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] };
     case "scheduled-tick":
-      // The tick closes the weekly-limit issue after its reset and opens the
-      // week's pending Audit and pending Retro when each is due. It also
-      // catches a Design session slot freed by an event the Loop doesn't
-      // watch, such as needs-design coming off by hand.
+      // The tick closes each weekly-limit issue after its reset, resuming the
+      // runs held until then, and opens the week's pending Audit and pending
+      // Retro when each is due. It also catches a Design session slot freed by
+      // an event the Loop doesn't watch, such as needs-design coming off by hand.
       return thenCheckDesignQueue(scheduledTickWith([auditGate, retroGate], event.now, snapshot, config));
   }
 }

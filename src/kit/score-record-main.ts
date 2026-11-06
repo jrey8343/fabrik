@@ -21,7 +21,8 @@ import { JUDGE_FAILURE_FILE, JUDGE_JOB, JUDGE_RESULT_FILE, judgeOutcome } from "
 import { loadRubrics } from "./kitFiles.ts";
 import type { Needs } from "./pushJob.ts";
 import type { StoreApi } from "./recordWriter.ts";
-import { judgeRunRecordFor, type RunRecord } from "./runRecord.ts";
+import { DEFAULT_KIT_CONFIG } from "./config.ts";
+import { judgeRunRecordFor, readRunRecord } from "./runRecord.ts";
 import { JUDGE_MODEL, RUN_STORE } from "./runStore.ts";
 import { type ScoreRecordOutcome, scoreRecordSummary, writeScoreRecord } from "./scoreRecord.ts";
 import { scoreFileFor } from "./scorer.ts";
@@ -60,7 +61,9 @@ async function outcome(): Promise<ScoreRecordOutcome> {
   const scoredPath = required("FABRIK_SCORED_RECORD");
   const scoredText = await storeText(store, scoredPath);
   if (scoredText === null) throw new Error(`The store has no Run record at ${scoredPath} to score`);
-  const scored = JSON.parse(scoredText) as RunRecord;
+  // This workflow run wrote it at the current schema; an older one reads as on the V1 Subscription.
+  const scored = readRunRecord(JSON.parse(scoredText), DEFAULT_KIT_CONFIG.subscriptions);
+  if (scored === null) throw new Error(`The Run record at ${scoredPath} is of a schema the Kit doesn't know`);
 
   const judgeDir = process.env["FABRIK_JUDGE_DIR"] || join(required("RUNNER_TEMP"), "judge");
   const transcriptDir = process.env["FABRIK_TRANSCRIPT_DIR"] || join(required("RUNNER_TEMP"), "judge-transcript");

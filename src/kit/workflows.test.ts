@@ -733,7 +733,7 @@ describe("The judge action", () => {
     expect(action).not.toMatch(/OP_PUSH_TOKEN|OP_IMPLEMENT_TOKEN|op-push-token|id-token/);
     expect(secrets).toHaveLength(1);
     expect(secrets[0]).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-agent-token }}");
-    expect([...secrets[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual(["op://Fabrik/Claude token/credential"]);
+    expect([...secrets[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual(["op://Fabrik/${{ inputs.subscription }}/credential"]);
   });
 
   it("reads the Ticket with the read-only token before the Claude token loads, and never gives the judge that token", () => {
@@ -927,7 +927,13 @@ describe("The Retro action", () => {
     expect(secrets).toHaveLength(1);
     expect(secrets[0]).toContain("id: op\n");
     expect(secrets[0]).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-agent-token }}");
-    expect([...secrets[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual(["op://Fabrik/Claude token/credential"]);
+    expect([...secrets[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual(["op://Fabrik/${{ inputs.subscription }}/credential"]);
+  });
+
+  // As every agent job's, the Claude token is the one of the Subscription the Kit job's routing chose.
+  it("loads the Claude token of the Subscription it's given, which its job passes in from the Kit job", () => {
+    expect(text).toMatch(/\n  subscription:\n\s+description: .*\n\s+required: true\n/);
+    expect(text).toContain("#       subscription: ${{ needs.kit.outputs.subscription }}\n");
   });
 
   it("gives the agent no GitHub token: only prepare-agent reads the pending Retro, with the job's read-only token", () => {
@@ -1137,4 +1143,53 @@ describe("loop.yml's push job, after a Retro run", () => {
     expect(steps[download]).toContain("path: ${{ runner.temp }}/retro-evidence\n");
     expect(download).toBeLessThan(loopStep);
   });
+});
+
+// Which Subscription an agent run is on: the Kit job's routing chooses it, and
+// every job that loads a Claude token loads that one's, and only that one.
+describe("The Subscription each agent job runs on", () => {
+  const SUBSCRIPTION_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential";
+  const claudeTokensIn = (text: string) => [...text.matchAll(/CLAUDE_CODE_OAUTH_TOKEN: (op:\/\/\S.*)$/gm)].map((match) => match[1]);
+  const judge = readFileSync(new URL(".github/actions/run-judge/action.yml", root), "utf8");
+
+  it("loop.yml's Kit job passes out the Subscription its routing chose", () => {
+    expect(jobIn(loop, "kit")).toContain("subscription: ${{ steps.route.outputs.subscription }}");
+  });
+
+  it.each(["triage", "design", "implement", "review", "audit"])(
+    "loop.yml's %s job loads one Claude token: the Kit job's Subscription's",
+    (name) => {
+      const job = jobIn(loop, name);
+      const loads = stepsOf(job).filter((step) => step.includes("CLAUDE_CODE_OAUTH_TOKEN: op://"));
+
+      expect(loads).toHaveLength(1);
+      expect(loads[0]).toContain("uses: 1password/load-secrets-action@");
+      expect(loads[0]).toContain(SUBSCRIPTION_TOKEN);
+      expect(claudeTokensIn(job)).toHaveLength(1);
+    },
+  );
+
+  it("the judge loads one Claude token: the Kit job's Subscription's, which its Score job passes in", () => {
+    expect(jobIn(loop, "score")).toContain("subscription: ${{ needs.kit.outputs.subscription }}");
+    expect(judge).toMatch(/\n  subscription:\n\s+description: .*\n\s+required: true\n/);
+    expect(claudeTokensIn(judge)).toEqual(["op://Fabrik/${{ inputs.subscription }}/credential"]);
+  });
+
+  it("the judge is told whether rotation is on, so its stream watch kills it on overage as an agent run's does", () => {
+    expect(jobIn(loop, "kit")).toContain("rotation: ${{ steps.route.outputs.rotation }}");
+    expect(jobIn(loop, "score")).toContain("rotation: ${{ needs.kit.outputs.rotation }}");
+    expect(judge).toMatch(/\n  rotation:\n\s+description: .*\n\s+required: true\n/);
+    expect(judge).toContain("FABRIK_ROTATION: ${{ inputs.rotation }}");
+    expect(readFileSync(new URL("src/kit/judge-main.ts", root), "utf8")).toContain(
+      'streamWatch(join(outDir, TRANSCRIPT_FILE), abort, { rotation: process.env["FABRIK_ROTATION"] === "true" })',
+    );
+  });
+
+  it.each([...workflows, ...actions.map(({ name, text }) => ({ path: `.github/actions/${name}`, text }))])(
+    "$path loads no more than one Claude token in any job, and names no Subscription itself",
+    ({ text }) => {
+      for (const section of text.split(/\n(?=  [a-z-]+:\n)/)) expect(claudeTokensIn(section).length).toBeLessThanOrEqual(1);
+      expect(text).not.toContain("op://Fabrik/Claude token");
+    },
+  );
 });

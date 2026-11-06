@@ -5,13 +5,15 @@ import type { DispatchSnapshot, KitConfig, Plan, TicketSnapshot } from "./types.
 /**
  * Releases eligible Tickets to Implementers, lowest number first, up to the free slots.
  * A max_in_flight of 0 pauses it; resuming an agent PR's run doesn't go through here.
+ * `held` names the Tickets whose Implement run is held (src/loop/heldRun.ts):
+ * dispatched already, each keeps its slot until the scheduled tick resumes it.
  */
-export function dispatch(snapshot: DispatchSnapshot, config: KitConfig): Plan {
+export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: readonly number[] = []): Plan {
   const tickets = [...snapshot.tickets].sort((a, b) => a.number - b.number);
   const ineligible: string[] = [];
   const eligible: number[] = [];
   for (const ticket of tickets) {
-    const why = whyNotEligible(ticket);
+    const why = held.includes(ticket.number) && ticket.open ? `#${ticket.number} is held` : whyNotEligible(ticket);
     if (why === null) eligible.push(ticket.number);
     else ineligible.push(why);
   }
@@ -30,13 +32,23 @@ export function dispatch(snapshot: DispatchSnapshot, config: KitConfig): Plan {
   const waiting = tickets.filter(
     (ticket) => ticket.open && ticket.labels.includes(DISPATCH_LABEL) && ticket.openLinkedPullRequests.length === 0,
   ).length;
-  const inFlight = snapshot.openAgentDraftPullRequests + snapshot.implementRunsInProgress + waiting;
+  // A held Implement run's Ticket has had agent:implement taken off, and has no run in progress.
+  // One with an open PR is a held retry, whose draft PR already holds its slot.
+  const heldTickets = tickets.filter(
+    (ticket) =>
+      held.includes(ticket.number) &&
+      ticket.open &&
+      !ticket.labels.includes(DISPATCH_LABEL) &&
+      ticket.openLinkedPullRequests.length === 0,
+  ).length;
+  const inFlight = snapshot.openAgentDraftPullRequests + snapshot.implementRunsInProgress + waiting + heldTickets;
   const free = Math.max(0, config.maxInFlight - inFlight);
   if (free === 0) {
     const counts = [
       count(snapshot.openAgentDraftPullRequests, "open agent draft PR", "open agent draft PRs"),
       count(snapshot.implementRunsInProgress, "Implement run in progress", "Implement runs in progress"),
       `${waiting} dispatched and waiting`,
+      ...(heldTickets === 0 ? [] : [`${heldTickets} held`]),
     ].join(", ");
     return {
       kind: "nothing",

@@ -13,10 +13,9 @@ import { appendFile } from "node:fs/promises";
 import { gatherGitHubFacts, productReposOf } from "../github/facts.ts";
 import { GitHub, GitHubError } from "../github/client.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
-import type { RunRecord } from "./runRecord.ts";
+import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { RUN_STORE } from "./runStore.ts";
-import type { ScoreFile } from "./scorer.ts";
-import { readStoreFiles } from "./storeCheckout.ts";
+import { readStoreRunRecords, readStoreScoreFiles } from "./storeCheckout.ts";
 import { type SummaryIssue, WEEKLY_SUMMARY_LABEL, type WeeklyFiling, weeklyFilingOf } from "./weeklyFiling.ts";
 import { weeklySummary } from "./weeklySummary.ts";
 
@@ -95,9 +94,11 @@ async function main(): Promise<string> {
   const caller = await store.fileText(RUN_STORE, STORE_CALLER_PATH, required("GITHUB_SHA"));
   const timeZone = (caller === null ? null : timeZoneIn(caller)) ?? "UTC";
   const storeDir = required("FABRIK_STORE_DIR");
-  const records = Object.values(await readStoreFiles<RunRecord>(storeDir, "runs"));
+  // The summary has no Product's Kit config, so a schema 1 record is read as
+  // being on the one V1 Subscription, the first a Kit config lists by default.
+  const records = Object.values(await readStoreRunRecords(storeDir, DEFAULT_KIT_CONFIG.subscriptions));
   // No scores/ until scoring has run.
-  const scoreFiles = Object.values(await readStoreFiles<ScoreFile>(storeDir, "scores"));
+  const scoreFiles = Object.values(await readStoreScoreFiles(storeDir));
   const repos = await productReposOf(products);
   const facts = await Promise.all(repos.map((repo) => gatherGitHubFacts(products, repo, now, RUN_STORE.owner)));
 
