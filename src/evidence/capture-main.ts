@@ -22,7 +22,7 @@
 //                          the branch diffed against, at its commit
 // Nothing here holds a secret, and the build and server get none (buildAndServeEnv).
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -32,6 +32,7 @@ import { AGENT_RESULT_FILE, readAgentRunResult } from "../agent/result.ts";
 import { readKitConfigWith } from "../kit/checkout.ts";
 import type { Viewport } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
+import { writeOutputs, writeSummary } from "../kit/stepFiles.ts";
 import {
   buildAndServeEnv,
   CAPTURE_RESULT_FILE,
@@ -303,18 +304,6 @@ async function main(): Promise<void> {
   await writeOutputs(captureStepOutputs(outcome));
   const summary = captureStepSummary(outcome);
   if (summary !== null) await writeSummary(summary);
-}
-
-async function writeOutputs(outputs: Readonly<Record<string, string>>): Promise<void> {
-  const path = process.env["GITHUB_OUTPUT"];
-  if (path === undefined || path === "") return;
-  await appendFile(path, Object.entries(outputs).map(([key, value]) => `${key}=${value}\n`).join(""));
-}
-
-async function writeSummary(text: string): Promise<void> {
-  console.log(text);
-  const path = process.env["GITHUB_STEP_SUMMARY"];
-  if (path !== undefined && path !== "") await appendFile(path, text);
 }
 
 main().catch((error: unknown) => {
