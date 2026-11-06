@@ -23,6 +23,7 @@ function fakeGitHub() {
       const existing = new RegExp(`^${issues}/(\\d+)$`).exec(path);
       if (method === "GET" && existing !== null) return { number: Number(existing[1]), id: Number(existing[1]) + 1000 };
       if (method === "POST" && path.endsWith("/comments")) return { html_url: "https://github.com/acme/shop/issues/7#c" };
+      if (method === "POST" && path === "/repos/acme/shop/pulls") return { number: 51, id: 5051 };
       return null;
     },
     async graphql(): Promise<never> {
@@ -161,5 +162,61 @@ describe("Applying a 👀 reaction to an Operator comment", () => {
     await applyPlan(github, repo, plan);
 
     expect(posts(github)).toStrictEqual([]);
+  });
+});
+
+describe("Applying a plan that links a UI PR's preview deployment", () => {
+  const HEAD = "4f2b9c0e1d3a5b7c9e0f2a4b6c8d0e1f3a5b7c9d";
+  const TEMPLATE = "https://deploy-preview-{pr}--shop.netlify.app/{branch_slug}/{sha}";
+  /** The agent branch the push job holds, which its push leaves at HEAD. */
+  const heldBranch = () => {
+    const pushed: string[] = [];
+    return { pushed, head: HEAD, push: async (branch: string) => void pushed.push(branch) };
+  };
+
+  it("hands on the preview to poll, filled in from the PR it opened, its branch's slug and the head its push left", async () => {
+    const plan: Plan = {
+      kind: "act",
+      actions: [
+        { kind: "push-branch", branch: "fabrik/ticket-7" },
+        { kind: "open-pull-request", issue: 7, head: "fabrik/ticket-7", base: "main", title: "Waitlist", body: "Adds it.", draft: true },
+        { kind: "link-preview", pullRequest: null, template: TEMPLATE, branch: "fabrik/ticket-7" },
+      ],
+    };
+
+    const applied = await applyPlan(fakeGitHub(), repo, plan, heldBranch());
+
+    expect(applied).toEqual({ preview: { pullRequest: 51, url: `https://deploy-preview-51--shop.netlify.app/fabrik-ticket-7/${HEAD}` } });
+  });
+
+  it("hands on a retry's preview for the PR it pushed to, changing nothing on GitHub itself", async () => {
+    const github = fakeGitHub();
+    const branch = heldBranch();
+    const plan: Plan = {
+      kind: "act",
+      actions: [
+        { kind: "push-branch", branch: "fabrik/ticket-7" },
+        { kind: "link-preview", pullRequest: 50, template: TEMPLATE, branch: "fabrik/ticket-7" },
+      ],
+    };
+
+    const applied = await applyPlan(github, repo, plan, branch);
+
+    expect(applied.preview).toEqual({ pullRequest: 50, url: `https://deploy-preview-50--shop.netlify.app/fabrik-ticket-7/${HEAD}` });
+    expect(github.calls).toEqual([]);
+    expect(branch.pushed).toEqual(["fabrik/ticket-7"]);
+  });
+
+  it("hands on no preview for a plan that doesn't ask to link one", async () => {
+    const plan: Plan = {
+      kind: "act",
+      actions: [
+        { kind: "push-branch", branch: "fabrik/ticket-7" },
+        { kind: "open-pull-request", issue: 7, head: "fabrik/ticket-7", base: "main", title: "Waitlist", body: "Adds it.", draft: true },
+      ],
+    };
+
+    expect(await applyPlan(fakeGitHub(), repo, plan, heldBranch())).toEqual({ preview: null });
+    expect(await applyPlan(fakeGitHub(), repo, { kind: "nothing", reason: "no change" })).toEqual({ preview: null });
   });
 });

@@ -1,5 +1,6 @@
 // The adapter's apply side: carries out the plan the core returns, one action
 // at a time, as the token the job holds. It holds no Loop rules.
+import { previewUrl } from "../kit/config.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
 import type { GitHub, Repo } from "./client.ts";
 
@@ -19,7 +20,21 @@ type GitHubApi = Pick<GitHub, "rest" | "graphql">;
 
 /** Pushes an agent branch the push job holds (src/github/branch.ts). */
 export interface BranchPusher {
+  /** The commit its push leaves the branch at, or null when it has nothing to push. */
+  readonly head: string | null;
   push(branch: string): Promise<void>;
+}
+
+/** A UI PR's preview deployment, which the push job's preview step polls and links (src/kit/previewLink.ts). */
+export interface PreviewToLink {
+  readonly pullRequest: number;
+  /** Kit config's `preview.url`, filled in for the PR as the plan's push left it. */
+  readonly url: string;
+}
+
+/** What the push job hands on from applying a plan: the preview deployment to link, when the plan asked for one. */
+export interface AppliedPlan {
+  readonly preview: PreviewToLink | null;
 }
 
 /** Applies each action in the plan, in order. Only an Implement run's push job has a branch to push. */
@@ -28,20 +43,23 @@ export async function applyPlan(
   repo: Repo,
   plan: Plan,
   branches: BranchPusher | null = null,
-): Promise<void> {
-  if (plan.kind !== "act") return;
-  const created = new Map<string, CreatedRecord>();
-  // The URL of each comment the plan has posted under a key, for later comments that link it.
-  const posted = new Map<string, string>();
+): Promise<AppliedPlan> {
+  if (plan.kind !== "act") return { preview: null };
+  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null };
   for (const action of plan.actions) {
-    await apply(github, repo, action, { created, posted }, branches);
+    await apply(github, repo, action, made, branches);
   }
+  return { preview: made.preview };
 }
 
 /** What earlier actions in the plan made, for later ones to refer to. */
 interface Made {
   readonly created: Map<string, CreatedRecord>;
+  /** The URL of each comment the plan has posted under a key, for later comments that link it. */
   readonly posted: Map<string, string>;
+  /** The number of the PR the plan opened, for a preview to link on it. */
+  opened: number | null;
+  preview: PreviewToLink | null;
 }
 
 function postedIn(posted: ReadonlyMap<string, string>, { posted: key }: PostedComment): string {
@@ -135,9 +153,16 @@ async function apply(
     case "check-dispatch":
     // Nor this: the push job hands it on to the Design queue job.
     case "check-design-queue":
-    // Nor this: the push job hands it on to its preview step.
-    case "link-preview":
       return;
+    // Nor this: the push job hands it on to its preview step, filled in for the PR as the push left it.
+    case "link-preview": {
+      const pullRequest = action.pullRequest ?? made.opened;
+      if (pullRequest === null) throw new Error("The plan links the preview of a PR it hasn't opened");
+      const headSha = branches?.head ?? null;
+      if (headSha === null) throw new Error(`This job pushed no ${action.branch}, so it has no head to link a preview of`);
+      made.preview = { pullRequest, url: previewUrl(action.template, { number: pullRequest, branch: action.branch, headSha }) };
+      return;
+    }
     case "create-issue":
       return createIssue(github, repo, action, made.created);
     case "add-blocked-by":
@@ -159,15 +184,17 @@ async function apply(
       if (branches === null) throw new Error(`This job holds no branch to push (${action.branch})`);
       await branches.push(action.branch);
       return;
-    case "open-pull-request":
-      await github.rest("POST", `/repos/${repo.owner}/${repo.name}/pulls`, {
+    case "open-pull-request": {
+      const opened = (await github.rest("POST", `/repos/${repo.owner}/${repo.name}/pulls`, {
         title: action.title,
         head: action.head,
         base: action.base,
         body: action.body,
         draft: action.draft,
-      });
+      })) as { number: number };
+      made.opened = opened.number;
       return;
+    }
     case "convert-to-draft": {
       // As with leaving draft, only GraphQL can do this, by the PR's node id.
       const pullRequest = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}`)) as {
