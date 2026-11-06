@@ -315,6 +315,14 @@ describe("Routes in the Implement prompt", () => {
   });
 });
 
+describe("Prototypes in the prompts", () => {
+  it("implement tells the Implementer a Prototype the Ticket links is a reference to rewrite, never code to take from prototype/*", async () => {
+    const line = lineStarting(section(await prompt("implement"), "How to work"), "- A Prototype");
+    expect(line).toContain("A Prototype linked from the Ticket is a reference to rewrite");
+    expect(line).toContain("never code to merge, cherry-pick or copy wholesale from `prototype/*`");
+  });
+});
+
 describe("Questions for the Operator", () => {
   it("the Implementer is told to ask them under one fixed heading in its summary", async () => {
     expect(section(await prompt("implement"), "Your output")).toContain('"Questions for the Operator"');
