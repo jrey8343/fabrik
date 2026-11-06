@@ -1,6 +1,10 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_KIT_CONFIG, type KitConfig } from "../kit/config.ts";
 import { extraSkillsLine, promptFor } from "./prompt.ts";
+import { RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
 import { RETRO_ISSUE_HEADING } from "./retro.ts";
 
 describe("the prompt line naming a role's Extra skills", () => {
@@ -131,5 +135,57 @@ describe("an AFK role's prompt", () => {
         "Context.",
       ].join("\n\n") + "\n",
     );
+  });
+
+  describe("for the Researcher", () => {
+    const decision = { number: 42, title: "Which payment provider takes group bookings?", body: "## Question\n\nCan one payment cover every seat?" };
+    const map = { number: 12, title: "Let patients book group classes", body: "## Destination\n\nA Spec for group class booking." };
+    /** The prompt as the agent runner builds it, from the Decision and its Map as the agent-inputs step left them. */
+    const researchPrompt = async (instructions: string | null) => {
+      const mapFile = join(await mkdtemp(join(tmpdir(), "fabrik-research-")), "spec.json");
+      await writeFile(mapFile, JSON.stringify(map));
+      const withResearch: KitConfig = {
+        ...config({ design: [eventStorming], review: [deciders] }),
+        instructions: { ...DEFAULT_KIT_CONFIG.instructions, research: instructions },
+      };
+      const { parts } = await researchContext(mapFile, decision);
+      return promptFor({
+        ...base,
+        template: "# The Kit's research prompt\n",
+        role: "research",
+        config: withResearch,
+        issue: decision,
+        heading: RESEARCH_ISSUE_HEADING,
+        extra: parts,
+      });
+    };
+    const decisionMapAndFindingsFile = [
+      "## The research Decision",
+      "```json",
+      JSON.stringify(decision, null, 2),
+      "```",
+      "## The Map",
+      "```json",
+      JSON.stringify(map, null, 2),
+      "```",
+      "## The findings file",
+      "Write your findings to `docs/research/42-which-payment-provider-takes-group-bookings.md`, from the repo root, and change no other file.",
+    ];
+
+    it("gives the Researcher its Decision, the Map's body and its findings file, with this repo's research instructions from .fabrik/research.md and no Extra skills line", async () => {
+      expect(await researchPrompt("Prefer the payment providers' own API references.\n")).toBe(
+        [
+          "# The Kit's research prompt",
+          "## This Product repo's research instructions",
+          "The Operator wrote these for this repo.",
+          "Prefer the payment providers' own API references.",
+          ...decisionMapAndFindingsFile,
+        ].join("\n\n") + "\n",
+      );
+    });
+
+    it("leaves the research instructions out when the repo has no .fabrik/research.md", async () => {
+      expect(await researchPrompt(null)).toBe(["# The Kit's research prompt", ...decisionMapAndFindingsFile].join("\n\n") + "\n");
+    });
   });
 });
