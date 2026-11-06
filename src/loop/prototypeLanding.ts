@@ -4,6 +4,7 @@
 // prototype round is a round of the same session: it never ends it, and the
 // Operator's reply to it starts an ordinary turn.
 import { type CaptureFailure, code } from "../evidence/uiEvidence.ts";
+import { checkTrustRoot } from "../guard/trust-root.ts";
 import { parsePrototypeTurnOutput, type PrototypeRoundOutput } from "./designOutput.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
@@ -25,24 +26,40 @@ export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operato
     };
   }
   const round = issue.designRounds + 1;
+  const comment = (body: string): Action => ({ kind: "comment", issue: event.issue, body });
+  const failed = (said: string): Action => comment(failureRound(round, operator, said));
+  // Every commit counts, and both ends of a rename, so nothing hides behind a later revert or a move.
+  const guard = checkTrustRoot([...event.changes.net, ...event.changes.commits]);
+  if (guard.kind === "refuse") {
+    const said = [
+      `The prototype turn's branch for #${event.issue} changes files that steer or judge the agents, so the Kit didn't push it (ADR-0005):`,
+      "",
+      ...guard.paths.map((path) => `- \`${path}\``),
+      "",
+      `Only the Operator changes these. [The run](${event.runUrl}) has what the turn did.`,
+    ].join("\n");
+    return { kind: "act", actions: [failed(said)] };
+  }
+  // Commits that undo each other built nothing either.
+  if (event.changes.net.length === 0) {
+    const said = `The prototype turn on #${event.issue} built nothing: its branch has no change of its own, so the Kit pushed nothing and there's nothing to look at. [The run](${event.runUrl}) has what the turn did.`;
+    return { kind: "act", actions: [failed(said)] };
+  }
   const push: Action = { kind: "push-prototype-branch", issue: event.issue };
   const { capture } = event;
   if (capture?.outcome === "failed" && NOT_SERVED.includes(capture.reason)) {
     // The branch is still worth a look: it holds what the agent wrote.
     const said = `The Kit pushed the variants the prototype turn wrote to [\`${event.branch}\`](${branchUrl(event)}), but ${captureFailed(capture.reason, event.runUrl)}, and nothing to look at. [The run](${event.runUrl}) has the log.`;
-    return { kind: "act", actions: [push, { kind: "comment", issue: event.issue, body: failureRound(round, operator, said) }] };
+    return { kind: "act", actions: [push, failed(said)] };
   }
-  return {
-    kind: "act",
-    actions: [push, { kind: "comment", issue: event.issue, body: prototypeRound(round, parsed.output, event, operator) }],
-  };
+  return { kind: "act", actions: [push, comment(prototypeRound(round, parsed.output, event, operator))] };
 }
 
 /**
  * A prototype failure round: a round too, with the next round's marker, the
  * failure marker under it and the one @-mention, saying what stopped the
  * prototype. Its one question is the Kit's, and it recommends carrying on, so
- * that \`yes\` never spends another prototype turn's Sandbox time.
+ * that `yes` never spends another prototype turn's Sandbox time.
  */
 function failureRound(round: number, operator: string, said: string): string {
   return [

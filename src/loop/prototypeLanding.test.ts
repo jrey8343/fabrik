@@ -198,3 +198,83 @@ describe("Landing a prototype turn whose build or dev server failed", () => {
     expect(round).toContain("**1. Carry on without a prototype, or try again?**");
   });
 });
+
+describe("The trust-root guard on a prototype branch (ADR-0005)", () => {
+  it("pushes nothing, and posts a prototype failure round naming every Trust-root path, even one a later commit undid", () => {
+    const changes = {
+      net: [{ path: "src/pages/book/Stepper.tsx" }],
+      commits: [{ path: "src/pages/book/Stepper.tsx" }, { path: "AGENTS.md" }, { path: "src/App.tsx", from: ".github/workflows/ci.yml" }],
+    };
+
+    const plan = planFor(finished({ changes }), inSession(), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: 7,
+          body: [
+            "<!-- fabrik:design-round 3 -->",
+            "<!-- fabrik:prototype-failed -->",
+            "@jrey **Design session, round 3: the prototype failed.** Reply with how you'd go on, or `yes` to take the recommendation.",
+            "",
+            "The prototype turn's branch for #7 changes files that steer or judge the agents, so the Kit didn't push it (ADR-0005):",
+            "",
+            "- `AGENTS.md`",
+            "- `.github/workflows/ci.yml`",
+            "",
+            `Only the Operator changes these. [The run](${RUN}) has what the turn did.`,
+            "",
+            "**1. Carry on without a prototype, or try again?**",
+            "➡️ Recommended: Carry on without a prototype. Trying again spends another prototype turn's Sandbox time, and may fail the same way.",
+          ].join("\n"),
+        },
+      ],
+    });
+  });
+
+  it("refuses before anything else is said of the branch, even when its build failed", () => {
+    const plan = planFor(
+      finished({ changes: { net: [{ path: "CLAUDE.md" }], commits: [{ path: "CLAUDE.md" }] }, capture: { ...CAPTURED, outcome: "failed", reason: "build-failed", captures: [] } }),
+      inSession(),
+      kitConfig(),
+    );
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["comment"]);
+    expect(commentsOf(plan)[0]).toContain("so the Kit didn't push it (ADR-0005):\n\n- `CLAUDE.md`\n");
+  });
+});
+
+describe("Landing a prototype turn that made no commit", () => {
+  it("pushes nothing, and posts a prototype failure round saying nothing was built", () => {
+    const plan = planFor(finished({ changes: { net: [], commits: [] }, headSha: null, capture: undefined, gallery: null }), inSession(), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: 7,
+          body: [
+            "<!-- fabrik:design-round 3 -->",
+            "<!-- fabrik:prototype-failed -->",
+            "@jrey **Design session, round 3: the prototype failed.** Reply with how you'd go on, or `yes` to take the recommendation.",
+            "",
+            `The prototype turn on #7 built nothing: its branch has no change of its own, so the Kit pushed nothing and there's nothing to look at. [The run](${RUN}) has what the turn did.`,
+            "",
+            "**1. Carry on without a prototype, or try again?**",
+            "➡️ Recommended: Carry on without a prototype. Trying again spends another prototype turn's Sandbox time, and may fail the same way.",
+          ].join("\n"),
+        },
+      ],
+    });
+  });
+
+  it("counts commits that undo each other as building nothing", () => {
+    const plan = planFor(finished({ changes: { net: [], commits: [{ path: "src/pages/book/Stepper.tsx" }] } }), inSession(), kitConfig());
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["comment"]);
+    expect(commentsOf(plan)[0]).toContain("The prototype turn on #7 built nothing:");
+  });
+});
