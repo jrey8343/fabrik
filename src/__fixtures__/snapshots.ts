@@ -35,6 +35,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     designRounds: 0,
     turnFailed: false,
     firstTurnClaimed: false,
+    pendingPrototype: null,
     sentBack: null,
     emptyDiffs: 0,
     openBlockers: [],

@@ -9,6 +9,8 @@ import {
   DESIGN_TURN_FAILED_MARKER,
   EMPTY_DIFF_MARKER,
   LIVE_OUTCOME_MARKER,
+  type PrototypeRequestMarker,
+  prototypeRequestIn,
   REQUEST_CHANGES_RUN_MARKER,
   RESEARCH_RUN_FAILED_MARKER,
   RETRY_PUSH_MARKER,
@@ -127,6 +129,20 @@ export function designTurnFailedIn(comments: readonly { readonly body: string; r
     }
   }
   return failed;
+}
+
+/**
+ * An issue's pending prototype request (#155), from its current Design
+ * session's comments oldest first: the latest prototype request. Only the
+ * Fabrik App's comments count (`byApp`), since the request steers what a
+ * prototype turn builds.
+ */
+export function pendingPrototypeIn(comments: readonly { readonly body: string; readonly byApp: boolean }[]): PrototypeRequestMarker | null {
+  let pending: PrototypeRequestMarker | null = null;
+  for (const { body, byApp } of comments) {
+    if (byApp) pending = prototypeRequestIn(body) ?? pending;
+  }
+  return pending;
 }
 
 /**
