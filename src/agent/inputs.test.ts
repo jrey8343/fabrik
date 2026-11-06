@@ -473,6 +473,88 @@ describe("The Operator's comments on a PR", () => {
       { id: "conversation-2", body: "Edited: use the short copy." },
     ]);
   });
+
+  describe("a Request changes from the Operator, which amends the Ticket (ADR-0010)", () => {
+    const graph = {
+      repository: {
+        pullRequest: {
+          number: 50,
+          title: "Add a waitlist",
+          body: "Closes #7",
+          baseRefName: "main",
+          headRefName: "fabrik/ticket-7",
+          headRefOid: "a".repeat(40),
+          comments: { nodes: [] },
+        },
+      },
+    };
+    const inReview = (review: number, id: number, user: unknown, body: string, at: string) => ({
+      ...inline(id, user, body, at),
+      pull_request_review_id: review,
+    });
+    const github = () =>
+      restGitHub(
+        routes({
+          conversation: [conversation(1, OP, "Keep the copy short.", "2026-11-01T00:00:00Z")],
+          inline: [
+            inReview(4, 5, OP, "And drop this row.", "2026-11-04T00:00:00Z"),
+            inReview(9, 10, OTHER, "Not the Operator's.", "2026-11-05T00:00:00Z"),
+          ],
+          reviews: [
+            review(3, OP, "CHANGES_REQUESTED", "Remove Declan Price as a provider.", "2026-11-03T00:00:00Z"),
+            review(4, OP, "CHANGES_REQUESTED", "", "2026-11-04T00:00:00Z"),
+            review(6, OP, "PENDING", "Not sent yet.", "2026-11-06T00:00:00Z"),
+            review(7, BOT, "CHANGES_REQUESTED", "A bot's.", "2026-11-07T00:00:00Z"),
+            review(9, OTHER, "CHANGES_REQUESTED", "Someone else's.", "2026-11-05T00:00:00Z"),
+          ],
+        }),
+        graph,
+      );
+    const requestedChanges = [
+      {
+        id: "review-3",
+        url: "https://github.com/acme/shop/pull/50#pullrequestreview-3",
+        submittedAt: "2026-11-03T00:00:00Z",
+        body: "Remove Declan Price as a provider.",
+        comments: [],
+      },
+      {
+        id: "review-4",
+        url: "https://github.com/acme/shop/pull/50#pullrequestreview-4",
+        submittedAt: "2026-11-04T00:00:00Z",
+        body: "",
+        comments: [
+          {
+            id: "inline-5",
+            url: "https://github.com/acme/shop/pull/50#discussion_r5",
+            path: "src/cart.ts",
+            line: 12,
+            body: "And drop this row.",
+          },
+        ],
+      },
+    ];
+
+    it.each([false, true])(
+      "reaches a Review's and a retry's PR input apart from the comments, oldest first, with its inline comments, even one with an empty body (withComments: %s)",
+      async (withComments) => {
+        const read = (await readPullRequest(github(), repo, 50, { withComments, operator: "operator" })) as {
+          requestedChanges?: unknown;
+          operatorComments: { id: string }[];
+        };
+
+        expect(read.requestedChanges).toEqual(requestedChanges);
+        // The plain comments stay as they were, for the Request-changes run, which names its review's inline comments from them.
+        expect(read.operatorComments.map((comment) => comment.id)).toEqual(["conversation-1", "inline-5"]);
+      },
+    );
+
+    it("is left out of the PR input entirely when the Operator has requested none", async () => {
+      const none = restGitHub(routes({ reviews: [review(3, OP, "COMMENTED", "Looks close.")] }), graph);
+
+      expect(await readPullRequest(none, repo, 50, { withComments: false, operator: "operator" })).not.toHaveProperty("requestedChanges");
+    });
+  });
 });
 
 describe("What a Design-session turn's inputs say of the Map cap", () => {

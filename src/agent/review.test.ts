@@ -2,6 +2,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { PENRITH_59_REPO, PENRITH_59_REQUEST, penrith59 } from "../__fixtures__/requestedChanges.ts";
 import { aPullRequest, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { CAPTURED, CAPTURED_SHA } from "../__fixtures__/uiEvidence.ts";
 import type { CaptureFailure, CaptureResult } from "../evidence/uiEvidence.ts";
@@ -47,6 +48,48 @@ const pullRequest = {
 };
 
 describe("A Review's context", () => {
+  it("replays penrith#59: the Operator's Request changes reaches the Review as an amendment to the Ticket, and its id is given, to name as weighed", async () => {
+    const read = await readPullRequest(penrith59(), PENRITH_59_REPO, 59, { withComments: false, operator: "operator" });
+    const { productDir, pullRequestFile, specFile } = await inputs(read);
+
+    const { parts, operatorComments: given } = await reviewContext(productDir, pullRequestFile, specFile);
+
+    const text = parts.join("\n");
+    const amendments = text.slice(text.indexOf("## The Operator's Request changes, which amend the Ticket"), text.indexOf("## The Operator's comments on the pull request"));
+    expect(amendments).toContain(`### \`review-70\`: Request changes, 2026-11-01T00:00:00Z\n${PENRITH_59_REQUEST}`);
+    expect(amendments).toContain("amend the Ticket");
+    // Set out once, in its own section, not again inside the PR's JSON.
+    expect(text.split(PENRITH_59_REQUEST)).toHaveLength(2);
+    expect(given).toEqual([{ id: "review-70", url: "https://github.com/jrey8343/penrith-physiotherapy-sports-centre/pull/59#pullrequestreview-70" }]);
+  });
+
+  it("shows a Request changes review's inline comments in its amendment, not again among the comments, even when the review has no body", async () => {
+    const inlineComment = { id: "inline-9", url: "https://github.com/acme/shop/pull/50#discussion_r9", path: "src/parking.ts", line: 4, body: "Drop the paid option." };
+    const { productDir, pullRequestFile, specFile } = await inputs({
+      ...pullRequest,
+      operatorComments: [
+        ...pullRequest.operatorComments,
+        { id: "inline-9", url: inlineComment.url, where: { kind: "inline", path: "src/parking.ts", line: 4 }, createdAt: "2026-11-05T00:00:00Z", body: "Drop the paid option." },
+      ],
+      requestedChanges: [{ id: "review-8", url: "https://github.com/acme/shop/pull/50#pullrequestreview-8", submittedAt: "2026-11-05T00:00:00Z", body: "", comments: [inlineComment] }],
+    });
+
+    const { parts, operatorComments: given } = await reviewContext(productDir, pullRequestFile, specFile);
+
+    const text = parts.join("\n");
+    expect(text).toContain("### `review-8`: Request changes, 2026-11-05T00:00:00Z\n(The review has no summary; see its comments below.)\n#### `inline-9`: inline on `src/parking.ts` line 4\nDrop the paid option.");
+    expect(text.split("Drop the paid option.")).toHaveLength(2);
+    expect(given.map((comment) => comment.id)).toEqual(["conversation-3", "review-5", "inline-9", "review-8"]);
+  });
+
+  it("carries no amendment section on a PR the Operator never requested changes on", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(pullRequest);
+
+    const text = (await reviewContext(productDir, pullRequestFile, specFile)).parts.join("\n");
+
+    expect(text).not.toContain("Request changes");
+  });
+
   it("carries the repo's CODING_STANDARDS.md when it has one at its root", async () => {
     const { productDir, pullRequestFile, specFile } = await inputs(pullRequest);
     await writeFile(join(productDir, "CODING_STANDARDS.md"), "# Coding standards\n\n- Name a test for the behaviour it checks.\n");
