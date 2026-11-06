@@ -30,6 +30,7 @@ import { heldWhileUsedUp } from "./hold.ts";
 import { mapCapOf } from "./mapCap.ts";
 import { startResearcher } from "./research.ts";
 import { landResearch } from "./researchLanding.ts";
+import { applyPrototypeTurn } from "./prototypeLanding.ts";
 import { startAgentRun } from "./runs.ts";
 import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
@@ -152,6 +153,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withIssue(snapshot, (context) => landRetro(event, context, config));
     case "research-run-finished":
       return withIssue(snapshot, (context) => landResearch(event, context));
+    case "prototype-run-finished":
+      return withIssue(snapshot, (context) => applyPrototypeTurn(event, context, snapshot.startingComment));
     case "pull-request-changes-requested":
       return requestChanges(event, snapshot, config);
     // Context for the next run that reads the PR, never a trigger (ADR-0007).

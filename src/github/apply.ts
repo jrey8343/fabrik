@@ -2,6 +2,7 @@
 // at a time, as the token the job holds. It holds no Loop rules.
 import { previewUrl } from "../kit/config.ts";
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
+import { prototypeBranchFor } from "../loop/designOutput.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
 import type { GitHub, Repo } from "./client.ts";
 
@@ -40,7 +41,8 @@ export interface AppliedPlan {
 
 /**
  * Applies each action in the plan, in order, and returns what the push job
- * hands on from it. Only an Implement run's push job has a branch to push.
+ * hands on from it. Only the push job of an Implement run, a Researcher run or
+ * a prototype turn has a branch to push.
  */
 export async function applyPlan(
   github: GitHubApi,
@@ -188,6 +190,13 @@ async function apply(
       if (branches === null) throw new Error(`This job holds no branch to push (${action.branch})`);
       await branches.push(action.branch);
       return;
+    case "push-prototype-branch": {
+      // Only ever the issue's own prototype branch, which the branch the push job holds fast-forwards (src/github/branch.ts).
+      const branch = prototypeBranchFor(action.issue);
+      if (branches === null) throw new Error(`This job holds no branch to push (${branch})`);
+      await branches.push(branch);
+      return;
+    }
     case "open-pull-request": {
       const opened = (await github.rest("POST", `/repos/${repo.owner}/${repo.name}/pulls`, {
         title: action.title,
@@ -268,6 +277,7 @@ async function applyToIssue(
         | "add-blocked-by"
         | "open-issue"
         | "push-branch"
+        | "push-prototype-branch"
         | "open-pull-request"
         | "close-pull-request"
         | "convert-to-draft"
