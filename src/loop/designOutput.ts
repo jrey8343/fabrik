@@ -148,6 +148,14 @@ export interface PrototypeVariant {
   readonly component: string;
 }
 
+/**
+ * The issue's prototype branch, which every prototype turn of its Design
+ * sessions builds on and nothing in the Kit merges or deletes.
+ */
+export function prototypeBranchFor(issue: number): string {
+  return `prototype/${issue}`;
+}
+
 /** The letter of the variant at `index`: A for the first, then B, C… */
 export function variantLetter(index: number): string {
   return String.fromCharCode("A".charCodeAt(0) + index);

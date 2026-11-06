@@ -25,21 +25,27 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 /** The env var the workflow passes the 1Password step's outputs in, as JSON. */
 export const SECRETS_ENV = "FABRIK_SECRETS";
 
-/**
- * Sets the Implementer's env on this process, which the agent inherits
- * (noSandbox): the Claude token, the Sandbox's values and its test secrets,
- * and the commit identity. The JSON they came in goes, so the agent sees each
- * value once, under its own name.
- */
+/** Sets the Implementer's env on this process, which the agent inherits (noSandbox), committing as the Fabrik Implementer. */
 export function setImplementerEnv(config: KitConfig): void {
+  setSandboxEnv(config, IMPLEMENTER_AUTHOR);
+}
+
+/**
+ * Sets the env of an agent that builds and runs the Product (the
+ * Implementer's, or a prototype turn's) on this process, which the agent
+ * inherits (noSandbox): the Claude token, the Sandbox's values and its test
+ * secrets, and the commit identity. The JSON they came in goes, so the agent
+ * sees each value once, under its own name.
+ */
+export function setSandboxEnv(config: KitConfig, author: { readonly name: string; readonly email: string }): void {
   const resolved = process.env[SECRETS_ENV];
   if (resolved === undefined || resolved === "") throw new Error(`${SECRETS_ENV} is not set`);
   delete process.env[SECRETS_ENV];
   Object.assign(process.env, sandboxEnv(config, resolved), {
-    GIT_AUTHOR_NAME: IMPLEMENTER_AUTHOR.name,
-    GIT_AUTHOR_EMAIL: IMPLEMENTER_AUTHOR.email,
-    GIT_COMMITTER_NAME: IMPLEMENTER_AUTHOR.name,
-    GIT_COMMITTER_EMAIL: IMPLEMENTER_AUTHOR.email,
+    GIT_AUTHOR_NAME: author.name,
+    GIT_AUTHOR_EMAIL: author.email,
+    GIT_COMMITTER_NAME: author.name,
+    GIT_COMMITTER_EMAIL: author.email,
   });
 }
 

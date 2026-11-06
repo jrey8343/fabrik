@@ -152,7 +152,7 @@ interface SentBackInput {
 const text = (value: unknown): string => (typeof value === "string" ? value : String(value ?? ""));
 
 /** A fence longer than any run of backticks in `body`, so the body can't close it. */
-function fenced(body: string, language = ""): string {
+export function fenced(body: string, language = ""): string {
   const longest = Math.max(2, ...[...body.matchAll(/`+/g)].map((match) => match[0].length));
   const fence = "`".repeat(longest + 1);
   return `${fence}${language}\n${body}\n${fence}`;
