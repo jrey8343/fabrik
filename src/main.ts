@@ -7,6 +7,7 @@ import { AGENT_FAILURE_FILE, readFailureReport } from "./agent/failure.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult } from "./agent/result.ts";
 import { type AgentBranchGit, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
+import { prototypeBranchFor } from "./loop/designOutput.ts";
 import { applyPlan, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { GitHub, type Repo } from "./github/client.ts";
 import {
@@ -96,6 +97,8 @@ function describeAction(action: Action): string {
       return `- link the preview deployment of ${action.pullRequest === null ? "the PR it opens" : `#${action.pullRequest}`} once it answers, or say it never answered`;
     case "push-branch":
       return `- push ${action.branch}`;
+    case "push-prototype-branch":
+      return `- push ${prototypeBranchFor(action.issue)}, only as a fast-forward`;
     case "open-pull-request":
       return `- open a draft PR from ${action.head} to ${action.base} that closes #${action.issue}`;
     case "convert-to-draft":

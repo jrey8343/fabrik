@@ -248,6 +248,38 @@ export type LoopEvent =
       readonly repoUrl: string;
     }
   | {
+      /**
+       * A Design session's prototype turn finished (#155); its push job has the
+       * issue's prototype branch it built, not yet pushed, and what capture
+       * recorded of its variants.
+       */
+      readonly kind: "prototype-run-finished";
+      readonly issue: number;
+      /** The prototype turn's structured output, its prototype-round, unparsed (src/loop/designOutput.ts). */
+      readonly output: string;
+      /**
+       * The prototype request the turn built, as the Kit job's plan passed it
+       * out, never from the agent: what the push job checks is still the
+       * session's pending request, and, in it, the Operator's reply that
+       * approved it, which must still exist for the round to post.
+       */
+      readonly request: PrototypeRequestMarker;
+      /** The issue's prototype branch (prototypeBranchFor). */
+      readonly branch: string;
+      /** What this turn's commits change, read from the bundle the prototype job passed out. */
+      readonly changes: BranchChanges;
+      /** The commit the push leaves the branch at, which the round links each variant's component at; null when the turn made no commit. */
+      readonly headSha: string | null;
+      /** What capture recorded, read from the prototype job's outputs; absent when the job passed out none the push job could read. */
+      readonly capture?: CaptureResult;
+      /** The prototype gallery's web address, or null when the job kept none. */
+      readonly gallery: string | null;
+      /** The Actions run, which a failure round links to. */
+      readonly runUrl: string;
+      /** The Product repo's web address, by which the round links the branch and each variant's component. */
+      readonly repoUrl: string;
+    }
+  | {
       /** A review that requests changes was submitted on a PR: at the Merge gate, the Operator's ask for another run. */
       readonly kind: "pull-request-changes-requested";
       readonly pullRequest: number;
@@ -854,6 +886,13 @@ export type Action =
     }
   /** Push the agent branch the Implement run built, which the push job holds from its bundle. */
   | { readonly kind: "push-branch"; readonly branch: string }
+  /**
+   * Push the issue's prototype branch, `prototype/<issue>`, which the push job
+   * holds from a prototype turn's bundle (#155): no other branch, and only as
+   * a fast-forward from the head the turn started on (src/github/branch.ts).
+   * It never opens a PR, and nothing in the Kit deletes the branch.
+   */
+  | { readonly kind: "push-prototype-branch"; readonly issue: number }
   | {
       /** Opens a PR as the Fabrik App, which starts CI on it. */
       readonly kind: "open-pull-request";
