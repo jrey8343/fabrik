@@ -6,10 +6,25 @@
 // Spec. Any Ticket in an outcome may instead be an Operator step. Or the
 // session ends as not planned: the Operator decided the issue won't be built.
 // Or, when the destination is too foggy to design in one session, the issue
-// becomes a Map with its first Decisions.
+// becomes a Map with its first Decisions. Two kinds carry a Prototype (#155)
+// and end nothing: an ordinary turn's `prototype`, the request the Operator
+// approved, and a prototype turn's `prototype-round`, the variants it built.
+import { isRoute } from "../kit/config.ts";
 import { isCommentIdList } from "./considered.ts";
 import { DECISION_TYPES, type DecisionType } from "./labels.ts";
 import type { AgentBrief } from "./triageOutput.ts";
+
+/**
+ * The fewest variants a Prototype builds: with one, there is nothing to
+ * choose between. A Kit constant, not Kit config, like the two below.
+ */
+export const PROTOTYPE_MIN_VARIANTS = 2;
+
+/** How many variants a Prototype builds when the Operator didn't ask for another count, as the `prototype` skill does. */
+export const PROTOTYPE_DEFAULT_VARIANTS = 3;
+
+/** The most variants a Prototype builds: past five they stop being different and the gallery stops being quick to look through. */
+export const PROTOTYPE_VARIANT_CAP = 5;
 
 export interface RoundQuestion {
   readonly question: string;
@@ -82,7 +97,54 @@ type DesignTurnOutcome =
       readonly outOfScope: string;
       /** Each Decision, with the keys of the Decisions that block it. Any order. */
       readonly decisions: readonly MapDecision[];
+    }
+  | ({
+      /**
+       * Not an outcome: the Operator approved a Prototype, so the Kit posts a
+       * prototype request and starts a prototype turn of the same session.
+       */
+      readonly kind: "prototype";
+      /** A one-line lead-in for the prototype request comment. */
+      readonly comment: string;
+    } & PrototypeRequest)
+  | {
+      /**
+       * Not an outcome: a prototype turn built the variants, so the Kit posts a
+       * prototype round. The agent writes no question: the Kit asks "Which variant?".
+       */
+      readonly kind: "prototype-round";
+      /** Markdown: the round's lead-in. */
+      readonly intro: string;
+      /** One per variant, in letter order. */
+      readonly variants: readonly PrototypeVariant[];
+      /** The variant the agent recommends, with any tweak it suggests, so the Operator can reply in a word. */
+      readonly recommendation: string;
     };
+
+/** What the Operator approved a prototype turn to build. */
+export interface PrototypeRequest {
+  /** The one route every variant renders on, starting with `/`. */
+  readonly route: string;
+  /** How many variants to build, from PROTOTYPE_MIN_VARIANTS to PROTOTYPE_VARIANT_CAP. */
+  readonly variants: number;
+  /** Markdown: what each variant explores, and anything the Operator asked for. */
+  readonly brief: string;
+}
+
+/** One variant a prototype turn built, as its prototype round describes it. */
+export interface PrototypeVariant {
+  /** Its letter, from its place in the round (variantLetter): what `?variant=` names it by. */
+  readonly letter: string;
+  /** One line on what it is. */
+  readonly summary: string;
+  /** The repo path, from the root, of the component that renders it. */
+  readonly component: string;
+}
+
+/** The letter of the variant at `index`: A for the first, then B, C… */
+export function variantLetter(index: number): string {
+  return String.fromCharCode("A".charCodeAt(0) + index);
+}
 
 /** A Decision as a Design session writes it, before it is a sub-issue of its Map. */
 export interface MapDecision {
@@ -138,6 +200,11 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
+}
+
+/** Non-empty text on one line. */
+function isLine(value: unknown): value is string {
+  return isText(value) && !/[\r\n]/.test(value);
 }
 
 function readQuestions(value: unknown, errors: string[]): RoundQuestion[] {
@@ -259,6 +326,33 @@ function isDecisionType(value: unknown): value is DecisionType {
   return (DECISION_TYPES as readonly unknown[]).includes(value);
 }
 
+/** A prototype round's variants, each lettered from its place in the list. */
+function readVariants(value: unknown, errors: string[]): PrototypeVariant[] {
+  if (!Array.isArray(value) || !isVariantCount(value.length)) {
+    errors.push(`a prototype-round needs from ${PROTOTYPE_MIN_VARIANTS} to ${PROTOTYPE_VARIANT_CAP} variants`);
+    if (!Array.isArray(value)) return [];
+  }
+  const variants: PrototypeVariant[] = [];
+  value.forEach((item: unknown, i: number) => {
+    const letter = variantLetter(i);
+    const { summary, component } = isObject(item) ? item : {};
+    if (!isLine(summary)) errors.push(`variant ${letter} needs a summary, one non-empty line`);
+    if (!isRepoPath(component)) errors.push(`variant ${letter} needs the repo path of its component`);
+    if (isLine(summary) && isRepoPath(component)) variants.push({ letter, summary, component });
+  });
+  return variants;
+}
+
+/** A path from the repo root, on one line: never an absolute path on the runner. */
+function isRepoPath(value: unknown): value is string {
+  return isLine(value) && !value.startsWith("/");
+}
+
+/** A whole number of variants within the Kit's minimum and cap. */
+function isVariantCount(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= PROTOTYPE_MIN_VARIANTS && (value as number) <= PROTOTYPE_VARIANT_CAP;
+}
+
 /** What the blocked-by edges within an outcome link: its Tickets, or its Decisions. */
 interface Blocked {
   readonly key: string;
@@ -365,10 +459,41 @@ function readTurn(value: unknown): DesignTurnOutputResult {
         },
       };
     }
+    case "prototype": {
+      if (!isRoute(value.route)) errors.push("a prototype needs a route, a path starting with /");
+      if (!isVariantCount(value.variants)) {
+        errors.push(`a prototype needs variants, a whole number from ${PROTOTYPE_MIN_VARIANTS} to ${PROTOTYPE_VARIANT_CAP}`);
+      }
+      if (!isText(value.brief)) errors.push("a prototype needs non-empty brief text");
+      if (!isLine(value.comment)) errors.push("a prototype needs a comment, one non-empty line");
+      if (errors.length > 0) return { ok: false, errors };
+      return {
+        ok: true,
+        output: {
+          kind: "prototype",
+          route: value.route as string,
+          variants: value.variants as number,
+          brief: value.brief as string,
+          comment: value.comment as string,
+        },
+      };
+    }
+    case "prototype-round": {
+      if (!isText(value.intro)) errors.push("a prototype-round needs non-empty intro text");
+      const variants = readVariants(value.variants, errors);
+      if (!isText(value.recommendation)) errors.push("a prototype-round needs non-empty recommendation text");
+      if (errors.length > 0) return { ok: false, errors };
+      return {
+        ok: true,
+        output: { kind: "prototype-round", intro: value.intro as string, variants, recommendation: value.recommendation as string },
+      };
+    }
     default:
       return {
         ok: false,
-        errors: [`kind must be round, brief, spec, split, not-planned or map, not ${JSON.stringify(value.kind)}`],
+        errors: [
+          `kind must be round, brief, spec, split, not-planned, map, prototype or prototype-round, not ${JSON.stringify(value.kind)}`,
+        ],
       };
   }
 }
