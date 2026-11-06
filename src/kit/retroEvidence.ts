@@ -396,7 +396,7 @@ export const STREAK_WINDOW_MS = 90 * DAY_MS;
  */
 export const SAMPLE_SHARE = 1 / 10;
 
-/** How many closed Retros a Retro reads the Operator's verdicts on its proposals from. */
+/** How many closed Retros a Retro reads the Operator's comments on its proposals from. */
 export const HISTORY_DEPTH = 3;
 
 /** A `fabrik:retro` issue, as the tick's snapshot reads it, with its comments, oldest first. */

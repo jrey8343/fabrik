@@ -643,6 +643,7 @@ describe("Gathering a Product repo's GitHub facts for a Retro", () => {
     expect(facts.openPullRequests[0]?.commits.map((commit) => commit.patch)).toEqual([
       "diff --git a/logo.png b/logo.png\n(No textual diff: a binary file, or too large for GitHub to show.)",
     ]);
-    expect(read).toEqual(["2".repeat(40), "3".repeat(40)]);
+    // Each once, in whatever order the reads went out.
+    expect(read.toSorted()).toEqual(["2".repeat(40), "3".repeat(40)]);
   });
 });
