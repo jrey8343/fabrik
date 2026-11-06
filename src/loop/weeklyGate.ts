@@ -7,7 +7,6 @@ import { scheduledTick } from "./kitIssues.ts";
 import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { readable } from "./readable.ts";
 import { resumingHeldRuns } from "./resume.ts";
-import { rotationIsOn } from "./subscriptions.ts";
 import type { Action, AuditIssueSnapshot, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
 
 export const DAY = 24 * 60 * 60 * 1000;
@@ -70,9 +69,9 @@ export interface WeeklyIssue {
  * Why a gate due from `day` opens nothing on the tick at `now`, or null when
  * nothing here holds it back. It waits for the day's 00:00 UTC, and then
  * opens nothing once one of its issues this week didn't fail, while one is
- * open (pending, filled, or not yet closed by the Operator), while the
- * weekly-limit issue is open with rotation off, or after two failed this
- * week. `issues` are the gate's own, newest first, and `name` is what it
+ * open (pending, filled, or not yet closed by the Operator), while a
+ * weekly-limit issue is open if `weeklyLimitHoldsBack`, or after two failed
+ * this week. `issues` are the gate's own, newest first, and `name` is what it
  * opens, such as "Audit".
  */
 export function heldBack(
@@ -81,7 +80,7 @@ export function heldBack(
   issues: readonly WeeklyIssue[],
   now: string,
   kitIssues: readonly KitIssueSnapshot[],
-  config: Pick<KitConfig, "subscriptions">,
+  weeklyLimitHoldsBack: boolean,
 ): string | null {
   const week = weekStart(now);
   const due = week + AUDIT_DAYS.indexOf(day) * DAY;
@@ -92,9 +91,7 @@ export function heldBack(
   if (done !== undefined) return `#${done.number} is this week's ${name}`;
   const open = issues.find((issue) => issue.open);
   if (open !== undefined) return `${name} #${open.number} is still open`;
-  // With rotation on it opens anyway: its run starts on a free Subscription,
-  // or is held on the pending issue while none is.
-  const limit = rotationIsOn(config) ? undefined : kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
+  const limit = weeklyLimitHoldsBack ? kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL)) : undefined;
   if (limit !== undefined) return `The weekly usage limit is reached, as #${limit.number} says`;
   const failed = thisWeek.filter((issue) => issue.failed).reverse();
   if (failed.length >= FAILED_RUNS_A_WEEK) {
