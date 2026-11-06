@@ -173,6 +173,26 @@ describe("What the push job applies", () => {
     expect(checks).toMatchObject({ kind: "agent-failure", role: "review", issue: 7, jobResult: "cancelled" });
   });
 
+  // The Implement job's agent step has a timeout of its own (#153), which fails the job where V1's job timeout
+  // cancelled it, so its job notes it, and the push job reads it as V1 did: a timeout, never a crash.
+  it("reads an Implement job whose agent step its timeout stopped as cancelled, as its job timeout left it", () => {
+    const input = pushJobInput(
+      needs("implement", { implement: { result: "failure", outputs: { "secrets-step": "success", "agent-timed-out": "true" } } }, { ticket: "7" }),
+      7,
+    );
+
+    expect(input).toEqual({ kind: "agent-failure", role: "implement", issue: 7, jobResult: "cancelled", secretsStep: "success" });
+  });
+
+  it("names the Implement job's result as it ended when its agent step didn't time out", () => {
+    const input = pushJobInput(
+      needs("implement", { implement: { result: "failure", outputs: { "secrets-step": "success", "agent-timed-out": "" } } }, { ticket: "7" }),
+      7,
+    );
+
+    expect(input).toMatchObject({ kind: "agent-failure", jobResult: "failure" });
+  });
+
   it("names a failed Reviewer, after green checks, as the Review's failure", () => {
     const input = pushJobInput(
       needs(

@@ -87,6 +87,37 @@ describe("The Kit job's step summary", () => {
     );
   });
 
+  describe("on an Implement run", () => {
+    const dispatched = { kind: "label-added", issue: 7, label: "agent:implement" } as const;
+    const readyTicket = anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"] });
+    const ui = { paths: ["src/**/*.astro"], serve: "npm run preview", url: "http://127.0.0.1:4321", beforeUrl: null, defaultRoutes: ["/"] };
+
+    it("notes quietly that Visual evidence is off until Kit config has a ui block, which /fabrik-setup adds", () => {
+      const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
+      const plan = planFor(dispatched, snapshotOf(readyTicket), config);
+
+      expect(kitJobSummary(plan, config, [])).toBe(
+        "### Fabrik Kit job\n\n" +
+          "The Implement run on #7 was given the Subscription **Claude token**.\n\n" +
+          "Visual evidence is off until Kit config has a `ui` block: `/fabrik-setup` turns it on.\n",
+      );
+    });
+
+    it("says nothing of Visual evidence once Kit config has a ui block", () => {
+      const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"], ui });
+      const plan = planFor(dispatched, snapshotOf(readyTicket), config);
+
+      expect(kitJobSummary(plan, config, [])).toBe("### Fabrik Kit job\n\nThe Implement run on #7 was given the Subscription **Claude token**.\n");
+    });
+  });
+
+  it("says nothing of Visual evidence on a run that isn't an Implement run", () => {
+    const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
+    const plan = planFor(triage, snapshotOf(ticket), config);
+
+    expect(kitJobSummary(plan, config, [])).not.toContain("Visual evidence");
+  });
+
   it("says nothing when the plan starts no run", () => {
     const config = kitConfig();
     const plan = planFor({ kind: "label-added", issue: 7, label: "docs" }, snapshotOf(ticket), config);
