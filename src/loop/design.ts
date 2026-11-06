@@ -152,7 +152,6 @@ function landLiveOutcome(issueNumber: number, outcome: string, operator: string)
     case "map":
       // The live session rewrote the body as the Map and filed its first
       // Decisions before posting the marker, so only the labels move here.
-      // Nothing posts this marker until the Map is switched on (#263).
       return {
         kind: "act",
         actions: [

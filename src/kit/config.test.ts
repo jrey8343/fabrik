@@ -748,6 +748,13 @@ describe("The Kit config template", () => {
     });
   });
 
+  it("spells out roles.research and caps.maps at their Kit defaults: the Researcher on Opus 5.5 for 30 minutes, and one open Map", () => {
+    expect(JSON.parse(template)).toMatchObject({
+      roles: { research: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 } },
+      caps: { maps: 1 },
+    });
+  });
+
   it("spells out subscriptions at its Kit default, the one V1 Subscription", () => {
     expect(JSON.parse(template)).toMatchObject({ subscriptions: ["Claude token"] });
   });

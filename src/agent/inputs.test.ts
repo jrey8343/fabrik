@@ -493,26 +493,18 @@ describe("What a Design-session turn's inputs say of the Map cap", () => {
   }
 
   const capOf = (maps: number) => ({ caps: { ...DEFAULT_KIT_CONFIG.caps, maps } });
-  const switchedOn = { switchedOn: true };
-
-  it("says a Map can't be offered while Maps are switched off, whatever the cap, and reads nothing", async () => {
-    const github = githubWithMaps([]);
-
-    expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG)).toEqual({ kind: "switched-off" });
-    expect(github.reads).toEqual([]);
-  });
 
   it("says a Map may be offered while the cap has room", async () => {
     const github = githubWithMaps([]);
 
-    expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG, switchedOn)).toEqual({ kind: "may-offer" });
+    expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG)).toEqual({ kind: "may-offer" });
     expect(github.reads).toEqual(["wayfinder:map"]);
   });
 
   it("says the cap is full and which Map holds it, a Map made by hand included", async () => {
     const github = githubWithMaps([{ number: 12, title: "Group classes" }]);
 
-    expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG, switchedOn)).toEqual({
+    expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG)).toEqual({
       kind: "cap-full",
       cap: 1,
       openMaps: [{ number: 12, title: "Group classes" }],
@@ -520,6 +512,6 @@ describe("What a Design-session turn's inputs say of the Map cap", () => {
   });
 
   it("says the cap is full when caps.maps is 0, with no Map open", async () => {
-    expect(await readMapOffer(githubWithMaps([]), repo, capOf(0), switchedOn)).toEqual({ kind: "cap-full", cap: 0, openMaps: [] });
+    expect(await readMapOffer(githubWithMaps([]), repo, capOf(0))).toEqual({ kind: "cap-full", cap: 0, openMaps: [] });
   });
 });

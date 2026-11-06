@@ -257,7 +257,7 @@ describe("A failed research run", () => {
     ...overrides,
   });
 
-  it("posts the usual failure notice on the Decision, opening with the research failure marker that Dispatch reads as its last run failing", () => {
+  it("posts the usual failure notice on the Decision, opening with the research failure marker that Dispatch reads as its last run failing, and naming no retries, which a Decision hasn't", () => {
     const plan = planFor(failed({ jobResult: "cancelled", secretsStep: null }), snapshotOf(aDecision()), kitConfig());
 
     expect(plan).toEqual({
@@ -271,7 +271,7 @@ describe("A failed research run", () => {
             "<!-- fabrik:research-run-failed -->",
             "@operator The Research run on #12 failed: it was cancelled, most likely by its 30-minute timeout.",
             "",
-            "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-add the `agent:research` label to run it again.",
+            "This is an Infrastructure failure, so neither the Loop nor Dispatch runs it again by itself. Re-add the `agent:research` label to run it again.",
             "",
             `[The run](${RUN})`,
           ].join("\n"),

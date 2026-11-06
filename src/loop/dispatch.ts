@@ -1,17 +1,8 @@
 // Dispatch (ADR-0001): the Kit, not a person, decides when a Ticket starts,
-// and, once research Dispatch is switched on, when a research Decision does.
+// and when a research Decision does.
 import { DISPATCH_LABEL, type Label, READY_FOR_AGENT, RESEARCH_LABEL } from "./labels.ts";
 import { whyNotResearchable } from "./research.ts";
 import type { DispatchSnapshot, KitConfig, Plan, ResearchDecisionSnapshot, TicketSnapshot } from "./types.ts";
-
-/**
- * The Kit-internal switch for releasing research Decisions to the Researcher
- * (#154). While it's off a Dispatch check weighs Tickets only, as before, so
- * a release cut before switch-on dispatches no research Decision, and its
- * reasons read as before. The switch-on Ticket (#263) deletes it, and
- * planFor's researchDispatch option with it.
- */
-export const RESEARCH_DISPATCH_SWITCHED_ON = false;
 
 /** The issues whose run is held (src/loop/heldRun.ts), by the role Dispatch released them to. */
 export interface HeldDispatched {
@@ -27,17 +18,15 @@ interface Candidate {
 }
 
 /**
- * Releases eligible Tickets to Implementers, and with `research` on eligible
- * research Decisions to the Researcher, lowest issue number first across
- * both, up to the free slots. A max_in_flight of 0 pauses it; resuming an
- * agent PR's run doesn't go through here. `held` names the Tickets and
- * Decisions whose run is held: dispatched already, each keeps its slot until
- * the scheduled tick resumes it.
+ * Releases eligible Tickets to Implementers and eligible research Decisions
+ * to the Researcher, lowest issue number first across both, up to the free
+ * slots. A max_in_flight of 0 pauses it; resuming an agent PR's run doesn't
+ * go through here. `held` names the Tickets and Decisions whose run is held:
+ * dispatched already, each keeps its slot until the scheduled tick resumes it.
  */
-export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDispatched, research: boolean): Plan {
+export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDispatched): Plan {
   const tickets = [...snapshot.tickets].sort((a, b) => a.number - b.number);
-  // While research Dispatch is off, no research Decision is weighed at all.
-  const decisions = research ? [...snapshot.researchDecisions].sort((a, b) => a.number - b.number) : [];
+  const decisions = [...snapshot.researchDecisions].sort((a, b) => a.number - b.number);
   const candidates: Candidate[] = [
     ...tickets.map((ticket): Candidate => ({
       number: ticket.number,
@@ -74,7 +63,7 @@ export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: He
     ).length +
     decisions.filter((decision) => decision.labels.includes(RESEARCH_LABEL) && whyNotResearchable(decision) === null)
       .length;
-  const researchRuns = research ? snapshot.researchRunsInProgress : 0;
+  const researchRuns = snapshot.researchRunsInProgress;
   // A held run's Ticket or Decision has had its trigger label taken off, and has no run in progress.
   // A Ticket with an open PR is a held retry, whose draft PR already holds its slot.
   const heldRuns =

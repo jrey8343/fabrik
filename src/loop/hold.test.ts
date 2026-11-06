@@ -278,7 +278,7 @@ describe("A held run, under Dispatch's max_in_flight cap and the Design session 
       heldMarker(7, "research", "agent:research"),
     );
 
-    const plan = planFor({ kind: "dispatch-check" }, snapshot, ONE_IN_FLIGHT, { researchDispatch: true });
+    const plan = planFor({ kind: "dispatch-check" }, snapshot, ONE_IN_FLIGHT);
 
     expect(plan).toEqual({
       kind: "nothing",

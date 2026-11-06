@@ -496,7 +496,7 @@ export interface DispatchSnapshot {
   readonly tickets: readonly TicketSnapshot[];
   readonly openAgentDraftPullRequests: number;
   readonly implementRunsInProgress: number;
-  /** Every open `wayfinder:research` issue, in any order. No Dispatch check releases one until research Dispatch is switched on (#154). */
+  /** Every open `wayfinder:research` issue, in any order: the core weighs which are research Decisions on an open Map. */
   readonly researchDecisions: readonly ResearchDecisionSnapshot[];
   /** Research jobs not yet finished: they hold slots under max_in_flight with the Implement runs. */
   readonly researchRunsInProgress: number;

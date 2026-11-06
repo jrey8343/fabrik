@@ -402,26 +402,12 @@ export interface SubscriptionUsage {
   readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
 }
 
-/**
- * The Kit-internal switch for the Weekly summary's Maps (#154). While it's
- * off, an open Map and a failed research Decision wait on nobody and the Map
- * cap holds nothing: none shows in Waiting on you or Held, or keeps a quiet
- * week from being skipped, so a release cut before switch-on reads as if
- * Maps didn't exist. The switch-on Ticket (#263) deletes it.
- */
-export const MAPS_SWITCHED_ON = false;
-
-export interface WeeklySummaryOptions {
-  /** Overrides the switch; only tests pass it. */
-  readonly maps?: boolean;
-}
-
 /** The summary to file for the week that just ended, or skip. */
-export function weeklySummary(input: WeeklySummaryInput, { maps = MAPS_SWITCHED_ON }: WeeklySummaryOptions = {}): WeeklySummaryResult {
+export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
-  const repos = input.facts.map((facts) => repoSectionOf(facts, input, maps));
+  const repos = input.facts.map((facts) => repoSectionOf(facts, input));
   // Held work counts too, so a queue never sits unseen through a week nothing ran.
   const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null);
   if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && quiet) return { kind: "skip" };
@@ -738,11 +724,9 @@ function hasUnknownCostBasis(record: RunRecord): boolean {
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
-function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: WeeklySummaryInput, maps: boolean): RepoSection {
+function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: WeeklySummaryInput): RepoSection {
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
-  // Until switch-on a Map waits on nobody, so it neither shows nor keeps a quiet week from being skipped.
-  const mapItems = maps ? [...openMapsOf(facts, items), ...failedResearchOf(facts, items)] : [];
   return {
     repo: facts.repo,
     // An open Audit, Retro or Map waits on the Operator, so it also keeps a quiet week from being skipped.
@@ -750,10 +734,11 @@ function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: 
       ...waitingOnYou(facts, items),
       ...openAuditsOf(facts, appLogin, items),
       ...openRetrosOf(facts, appLogin, items),
-      ...mapItems,
+      ...openMapsOf(facts, items),
+      ...failedResearchOf(facts, items),
     ]),
     stuck: stuck(facts, records, items, now),
-    held: heldIn(facts, appLogin, now, maps),
+    held: heldIn(facts, appLogin, now),
   };
 }
 
@@ -808,11 +793,11 @@ function failedResearchOf({ openIssues }: GitHubFacts, items: Items): WaitingIte
   });
 }
 
-/** What a cap holds in the repo, or null when nothing is held. Until switch-on the Map cap holds nothing. */
-function heldIn({ designQueue, monitorIssues, openMaps }: GitHubFacts, appLogin: string, now: number, maps: boolean): Held | null {
+/** What a cap holds in the repo, or null when nothing is held. */
+function heldIn({ designQueue, monitorIssues, openMaps }: GitHubFacts, appLogin: string, now: number): Held | null {
   const designSessions = heldDesignSessionsOf(designQueue, now);
   const monitor = heldMonitorOf(monitorIssues, appLogin);
-  const mapCap = maps ? heldMapsOf(openMaps) : null;
+  const mapCap = heldMapsOf(openMaps);
   return designSessions === null && monitor === null && mapCap === null ? null : { designSessions, monitor, maps: mapCap };
 }
 
@@ -1031,10 +1016,9 @@ function localTime(time: number, timeZone: string): string {
 
 // Rendering. Only shipped features get a section: the Monitor issues add
 // theirs when their Spec ships. The open Retro gets no section, only its line
-// in Waiting on you, and so do an open Map and a failed research Decision,
-// which wait for MAPS_SWITCHED_ON. Scores shows only in a week with score
-// files, and never a run's own scores. Held shows what the Design-session and
-// Monitor caps hold, and the Map cap once MAPS_SWITCHED_ON.
+// in Waiting on you, and so do an open Map and a failed research Decision.
+// Scores shows only in a week with score files, and never a run's own scores.
+// Held shows what the Design-session, Monitor and Map caps hold.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
   const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;

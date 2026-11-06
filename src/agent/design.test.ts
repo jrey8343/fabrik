@@ -151,19 +151,13 @@ describe("What a Design-session turn's prompt says of the Map cap", () => {
     expect(text).toContain("Don't offer a Map, and never end in `map`: the Kit would refuse it.");
   });
 
-  it("tells the turn not to offer a Map while Maps are switched off", () => {
-    expect(said({ kind: "switched-off" })).toContain("This Kit doesn't chart Maps yet. Don't offer a Map, and never end in `map`.");
-  });
-
-  it("tells every turn not to offer a Map, from the file the inputs step writes, while Maps are switched off", async () => {
+  it("lets a turn offer a Map, from the file the inputs step writes, while no Map is open", async () => {
     const github = {
-      graphql: async () => {
-        throw new Error("nothing is read while Maps are switched off");
-      },
+      graphql: async <T>() => ({ repository: { issues: { nodes: [] } } }) as T,
     };
     const written = JSON.stringify(await readMapOffer(github, { owner: "acme", name: "shop" }, DEFAULT_KIT_CONFIG));
 
-    expect(said(JSON.parse(written))).toContain("Don't offer a Map, and never end in `map`.");
+    expect(said(JSON.parse(written))).toContain("The Map cap has room, so this session may offer to chart the issue as a Map.");
   });
 
   it.each([null, {}, { kind: "maybe" }, { kind: "cap-full", cap: "1", openMaps: [] }, { kind: "cap-full", cap: 1 }])(
