@@ -7,48 +7,32 @@
 // Subscription gets its own weekly-limit issue, which stays quiet while
 // another Subscription is free: only the one opened, or refused on, once none
 // is free @-mentions the Operator. While none is free, each run due is held
-// instead of started, and the buzzing weekly-limit issue names it with a held
-// marker (src/loop/heldRun.ts), which the scheduled tick resumes at the reset
-// (src/loop/resume.ts). A run killed for spending usage credits gets a "Turn
-// off usage credits" issue for its Subscription, assigned to the Operator, and
-// the Kit skips that Subscription until the issue is closed.
-import { type HeldRun, heldMarker, heldRunOf, holding, RUN_NAMES } from "./heldRun.ts";
-import { READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
-import {
-  freeSubscriptions,
-  rotationIsOn,
-  subscriptionMarker,
-  subscriptionNamedBy,
-  weeklyLimitSubscriptionOf,
-} from "./subscriptions.ts";
+// instead of started (src/loop/hold.ts), and the scheduled tick resumes it at
+// the reset (src/loop/resume.ts). A run killed for spending usage credits gets
+// a usage-credits issue (src/loop/usageCreditsIssue.ts).
+import type { HeldRun } from "./heldRun.ts";
+import { heldLine } from "./hold.ts";
+import { earliestOf, NOTIFIED, notified, resetsAtMarker, resetsAtOf } from "./kitIssueMarks.ts";
+import { READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
+import { readable } from "./readable.ts";
+import { freeSubscriptions, type RanOn, rotationIsOn, subscriptionMarker, weeklyLimitSubscriptionOf } from "./subscriptions.ts";
 import type { Action, InfrastructureFailure, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
+import { usageCreditsNotice } from "./usageCreditsIssue.ts";
 
 /** The repo-wide part of any snapshot: who the Operator is and which Kit-owned issues are open. */
-type RepoContext = Pick<Snapshot, "kitIssues" | "operator">;
-
-
-/** Where in its body the weekly-limit issue records when the limit resets, for the scheduled tick. */
-const RESETS_AT_MARKER = "<!-- fabrik:resets-at";
+export type RepoContext = Pick<Snapshot, "kitIssues" | "operator">;
 
 /**
- * Left in the body or comment that buzzed the Operator about a Kit-owned
- * issue, so that later failures on it stay quiet.
+ * The failed run, as the Ticket's failure comment names it, and what it ran
+ * on: with rotation on, the Kit's issues say which Subscription they're
+ * about, and a weekly-limit notice knows whether another is free.
  */
-const NOTIFIED = "<!-- fabrik:notified -->";
-
-/** The failed run, as the Ticket's failure comment names it. */
-export interface StalledRun {
+export interface StalledRun extends RanOn {
   /** Such as "The Triage run on #7". */
   readonly run: string;
   readonly runUrl: string;
   /** When the weekly limit resets, if known. */
   readonly resetsAt: string | null;
-  /** The Subscription it ran on: the `Fabrik` vault item its Claude token came from. */
-  readonly subscription: string;
-  /** Whether rotation is on, so the Kit's issues say which Subscription they're about. */
-  readonly rotation: boolean;
-  /** Every listed Subscription, in the listed order, so a weekly-limit notice knows whether another is free. */
-  readonly subscriptions: readonly string[];
   /** With rotation on, the run the Kit holds rather than fails, which the weekly-limit notice names. */
   readonly held?: HeldRun;
 }
@@ -59,13 +43,13 @@ export interface StalledRun {
  */
 export function anotherSubscriptionFree(
   kitIssues: readonly KitIssueSnapshot[],
-  { subscription, rotation, subscriptions }: Pick<StalledRun, "subscription" | "rotation" | "subscriptions">,
+  { subscription, rotation, subscriptions }: RanOn,
 ): boolean {
   return rotation && freeSubscriptions(kitIssues, { subscriptions }).some((free) => free !== subscription);
 }
 
 /** The token a dead-token notice says was refused: with rotation on, the Subscription's. */
-export function refusedToken({ subscription, rotation }: Pick<StalledRun, "subscription" | "rotation">): string {
+export function refusedToken({ subscription, rotation }: Pick<RanOn, "subscription" | "rotation">): string {
   return rotation ? `the Claude token of the \`${subscription}\` Subscription` : "the Claude token";
 }
 
@@ -82,10 +66,6 @@ export interface RepoWideNotice {
   readonly firstReset?: string | null;
 }
 
-function notified(issue: KitIssueSnapshot): boolean {
-  return [issue.body, ...issue.comments].some((text) => text.includes(NOTIFIED));
-}
-
 /** The Kit-owned issue notice for a failure that stalls the whole repo, or null for one that doesn't. */
 export function repoWideNotice(
   failure: InfrastructureFailure,
@@ -99,19 +79,10 @@ export function repoWideNotice(
       return stalled.rotation ? subscriptionWeeklyLimit(snapshot, stalled) : weeklyLimit(snapshot, stalled);
     // Only with rotation on does the stream watch kill a run for spending usage credits.
     case "usage-credits":
-      return stalled.rotation ? usageCredits(snapshot, stalled) : null;
+      return stalled.rotation ? usageCreditsNotice(snapshot, stalled) : null;
     default:
       return null;
   }
-}
-
-/** When the weekly-limit issue says the limit resets, or null if it doesn't say. */
-function resetsAtOf(issue: KitIssueSnapshot): string | null {
-  const start = issue.body.indexOf(RESETS_AT_MARKER);
-  if (start === -1) return null;
-  const end = issue.body.indexOf("-->", start);
-  const value = issue.body.slice(start + RESETS_AT_MARKER.length, end === -1 ? undefined : end).trim();
-  return Number.isNaN(Date.parse(value)) ? null : value;
 }
 
 /**
@@ -152,12 +123,6 @@ function closedAtReset(now: string, open: KitIssueSnapshot, subscription: string
       { kind: "close", issue: open.number, reason: "completed" },
     ],
   };
-}
-
-/** Such as "2026-11-09 04:00 UTC". */
-function readable(iso: string): string {
-  const at = new Date(iso).toISOString();
-  return `${at.slice(0, 10)} ${at.slice(11, 16)} UTC`;
 }
 
 function weeklyLimit({ kitIssues, operator }: RepoContext, stalled: StalledRun): RepoWideNotice {
@@ -208,7 +173,7 @@ function weeklyLimit({ kitIssues, operator }: RepoContext, stalled: StalledRun):
           `[The first stalled run](${stalled.runUrl})`,
           "",
           NOTIFIED,
-          ...(resetsAt === null ? [] : [`${RESETS_AT_MARKER} ${resetsAt} -->`]),
+          ...(resetsAt === null ? [] : [resetsAtMarker(resetsAt)]),
         ].join("\n"),
         labels: [WEEKLY_LIMIT_LABEL],
         assignees: [],
@@ -307,7 +272,7 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
           ...heldHere,
           "",
           subscriptionMarker(subscription),
-          ...(resetsAt === null ? [] : [`${RESETS_AT_MARKER} ${resetsAt} -->`]),
+          ...(resetsAt === null ? [] : [resetsAtMarker(resetsAt)]),
         ].join("\n"),
         labels: [WEEKLY_LIMIT_LABEL],
         assignees: [],
@@ -319,148 +284,46 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
   };
 }
 
-/** The line naming a held run, with its held marker, for a weekly-limit issue. */
-function heldLine(held: HeldRun, until: string | null): string {
-  const when =
-    until === null
-      ? "a Subscription's weekly limit resets, which isn't known"
-      : `${readable(until)}, when the first Subscription's weekly limit resets`;
-  const resume =
-    held.label === null
-      ? "The Kit starts it again on that pending Audit then."
-      : `The Kit re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
-  return [`The ${RUN_NAMES[held.role]} run on #${held.issue} is held until ${when}. ${resume}`, "", heldMarker(held)].join("\n");
+/** How the dead-token notice words a refusal, with rotation on (naming its Subscription) or off. */
+interface DeadTokenWording {
+  readonly title: string;
+  /** The opening of a new issue's body. */
+  readonly refused: string;
+  /** After "no agent run in this repo can start", before "until it's rotated". */
+  readonly startsOn: string;
+  /** After "was refused too", for a later refusal. */
+  readonly too: string;
 }
 
-/**
- * With rotation on and every listed Subscription used up, the Plan with each
- * run it would start held instead: its trigger label off, and a quiet comment
- * naming it on the weekly-limit issue that buzzed the Operator, or else on the
- * first to reset. No comment on the Ticket, and no @-mention. Every other
- * action, and every Plan that starts no run, is left as it is.
- */
-export function heldWhileUsedUp(
-  plan: Plan,
-  kitIssues: readonly KitIssueSnapshot[],
-  config: Pick<KitConfig, "subscriptions">,
-): Plan {
-  if (plan.kind !== "act" || !rotationIsOn(config) || freeSubscriptions(kitIssues, config).length > 0) return plan;
-  if (!plan.actions.some((action) => action.kind === "start-agent-run")) return plan;
-  const { until, on } = holdingOn(kitIssues);
-  const comments: Action[] = [];
-  const actions = plan.actions.flatMap((action): Action[] => {
-    if (action.kind !== "start-agent-run") return [action];
-    const held = heldRunOf(action);
-    if (on !== undefined) comments.push({ kind: "comment", issue: on.number, body: heldLine(held, until) });
-    // A Plan that already takes the trigger label off, as a Design-session turn's does, takes it off once.
-    const removed = plan.actions.some(
-      (other) => other.kind === "remove-label" && other.issue === held.issue && other.label === held.label,
-    );
-    return holding(held, until).filter((step) => step.kind !== "remove-label" || !removed);
-  });
-  return { kind: "act", actions: [...actions, ...comments] };
-}
-
-/**
- * Where a run held while no Subscription is free is named: the weekly-limit
- * issue that buzzed the Operator, else the first to reset, else the first
- * open; and when it is held until, the earliest reset across them.
- */
-function holdingOn(kitIssues: readonly KitIssueSnapshot[]): { until: string | null; on: KitIssueSnapshot | undefined } {
-  const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
-  const until = earliestOf(limits.map(resetsAtOf));
-  const on = limits.find(notified) ?? limits.find((issue) => until !== null && resetsAtOf(issue) === until) ?? limits[0];
-  return { until, on };
-}
-
-/**
- * With rotation on, a run killed for spending usage credits while no other
- * Subscription is free, held: its trigger label off, and a quiet comment
- * naming it on the weekly-limit issue a run held now is named on.
- */
-export function heldAfterKill(held: HeldRun, kitIssues: readonly KitIssueSnapshot[]): Action[] {
-  const { until, on } = holdingOn(kitIssues);
-  return [
-    ...holding(held, until),
-    ...(on === undefined ? [] : [{ kind: "comment" as const, issue: on.number, body: heldLine(held, until) }]),
-  ];
-}
-
-/** The earliest of these reset times, or null when none is known. */
-function earliestOf(resets: readonly (string | null)[]): string | null {
-  const known = resets.filter((reset): reset is string => reset !== null);
-  return known.length === 0 ? null : known.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a));
-}
-
-/**
- * With rotation on: the killed run's Subscription's usage-credits issue,
- * opened assigned to the Operator, its one notification, or commented on
- * quietly when it's already open. The Kit skips that Subscription until the
- * Operator closes it (src/loop/subscriptions.ts).
- */
-function usageCredits({ kitIssues, operator }: RepoContext, stalled: StalledRun): RepoWideNotice {
-  const { subscription } = stalled;
-  const open = kitIssues.find(
-    (issue) => issue.labels.includes(USAGE_CREDITS_LABEL) && subscriptionNamedBy(issue) === subscription,
-  );
-  if (open !== undefined) {
+function deadTokenWording(stalled: StalledRun): DeadTokenWording {
+  const token = capitalised(refusedToken(stalled));
+  if (!stalled.rotation) {
     return {
-      actions: [
-        {
-          kind: "comment",
-          issue: open.number,
-          body: `${stalled.run} was killed for spending usage credits too. [The run](${stalled.runUrl})`,
-        },
-      ],
-      pointer: `The Kit is tracking this in #${open.number}.`,
+      title: "Rotate the Claude token",
+      refused: `The Claude token that every Fabrik run in this repo uses was refused (\`authentication_failed\`). ${stalled.run} was the first to fail, and no agent run can start until the token is rotated.`,
+      startsOn: "",
+      too: "",
     };
   }
-  const title = `Turn off usage credits on the \`${subscription}\` Subscription`;
   return {
-    actions: [
-      {
-        kind: "open-issue",
-        title,
-        body: [
-          `${stalled.run} showed usage credits being spent on the \`${subscription}\` Subscription, so the Kit killed it. Until this issue is closed the Kit runs no agent on that Subscription, and comments here about each other run killed on it.`,
-          "",
-          "## Steps",
-          "",
-          `- [ ] Turn usage credits off on the Claude account whose token is the \`${subscription}\` item in the Fabrik 1Password vault.`,
-          "- [ ] Close this issue, so that the Kit runs agents on that Subscription again.",
-          "",
-          "Run `/fabrik-pair` on this issue to work through these steps with an agent.",
-          "",
-          `[The killed run](${stalled.runUrl})`,
-          "",
-          NOTIFIED,
-          subscriptionMarker(subscription),
-        ].join("\n"),
-        labels: [READY_FOR_HUMAN, USAGE_CREDITS_LABEL],
-        // The assignment is this issue's one notification.
-        assignees: [operator],
-      },
-    ],
-    pointer: `The Kit has opened a ${title} issue for the Operator.`,
+    title: `Rotate the Claude token of the \`${stalled.subscription}\` Subscription`,
+    refused: `${token} was refused (\`authentication_failed\`). ${stalled.run} was the first to fail, and no agent run on it can start until the token is rotated.`,
+    startsOn: " on it",
+    too: `, on the \`${stalled.subscription}\` Subscription`,
   };
 }
 
 function deadToken({ kitIssues, operator }: RepoContext, stalled: StalledRun): RepoWideNotice {
   const open = kitIssues.find((issue) => issue.labels.includes(TOKEN_ROTATION_LABEL));
-  const token = capitalised(refusedToken(stalled));
+  const wording = deadTokenWording(stalled);
   if (open === undefined) {
-    const title = stalled.rotation
-      ? `Rotate the Claude token of the \`${stalled.subscription}\` Subscription`
-      : "Rotate the Claude token";
     return {
       actions: [
         {
           kind: "open-issue",
-          title,
+          title: wording.title,
           body: [
-            stalled.rotation
-              ? `${token} was refused (\`authentication_failed\`). ${stalled.run} was the first to fail, and no agent run on it can start until the token is rotated.`
-              : `The Claude token that every Fabrik run in this repo uses was refused (\`authentication_failed\`). ${stalled.run} was the first to fail, and no agent run can start until the token is rotated.`,
+            wording.refused,
             "",
             "## Steps",
             "",
@@ -478,14 +341,13 @@ function deadToken({ kitIssues, operator }: RepoContext, stalled: StalledRun): R
           assignees: [operator],
         },
       ],
-      pointer: `The Kit has opened a ${title} issue for the Operator.`,
+      pointer: `The Kit has opened a ${wording.title} issue for the Operator.`,
     };
   }
-  const on = stalled.rotation ? `, on the \`${stalled.subscription}\` Subscription` : "";
   const body = notified(open)
-    ? `${stalled.run} was refused too${on}. [The run](${stalled.runUrl})`
+    ? `${stalled.run} was refused too${wording.too}. [The run](${stalled.runUrl})`
     : [
-        `@${operator} ${token} was refused (\`authentication_failed\`), so no agent run in this repo can start ${stalled.rotation ? "on it " : ""}until it's rotated. ${stalled.run} was the first to fail. [The run](${stalled.runUrl})`,
+        `@${operator} ${capitalised(refusedToken(stalled))} was refused (\`authentication_failed\`), so no agent run in this repo can start${wording.startsOn} until it's rotated. ${stalled.run} was the first to fail. [The run](${stalled.runUrl})`,
         "",
         NOTIFIED,
       ].join("\n");

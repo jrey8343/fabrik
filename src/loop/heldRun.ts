@@ -28,21 +28,21 @@ export function heldMarker({ issue, role, label }: HeldRun): string {
  * agent:design for a Design-session turn, whichever round it was
  * (src/loop/design.ts). An Auditor run has none: its pending Audit is all it needs.
  */
-export const RESUME_LABELS: Readonly<Record<AgentRole, Label | null>> = {
+export const RESUME_LABELS = {
   triage: NEEDS_TRIAGE,
   design: DESIGN_LABEL,
   implement: DISPATCH_LABEL,
   review: REVIEW_LABEL,
   audit: null,
-};
+} as const satisfies Readonly<Record<AgentRole, Label | null>>;
 
-/** How the Kit names each role's run, as in "The Triage run on #7". */
+/** How the Kit names each role's run, as in "The Triage run on #7", in its comments and step summaries alike. */
 export const RUN_NAMES: Readonly<Record<AgentRole, string>> = {
   triage: "Triage",
   design: "Design-session turn",
   implement: "Implement",
   review: "Review",
-  audit: "Auditor",
+  audit: "Audit",
 };
 
 /**

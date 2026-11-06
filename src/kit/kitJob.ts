@@ -5,6 +5,7 @@
 // no I/O.
 import { agentRunIn } from "../github/apply.ts";
 import { RUN_NAMES } from "../loop/heldRun.ts";
+import { readable } from "../loop/readable.ts";
 import { rotationIsOn } from "../loop/subscriptions.ts";
 import type { Action, KitConfig, Plan } from "../loop/types.ts";
 
@@ -16,7 +17,7 @@ export function kitJobSummary(plan: Plan, config: Pick<KitConfig, "subscriptions
   if (run !== null) {
     lines.push(`The ${RUN_NAMES[run.role]} run on #${run.issue} was given the Subscription **${subscriptionOf(run)}**.`);
   }
-  for (const hold of held) lines.push(heldLine(hold));
+  for (const hold of held) lines.push(heldSummaryLine(hold));
   if (lines.length === 0) return null;
   if (!rotationIsOn(config)) {
     lines.push("Subscription rotation is off until a second Subscription is listed in Kit config's `subscriptions`.");
@@ -30,17 +31,12 @@ function heldIn(plan: Plan): Hold[] {
   return plan.kind === "act" ? plan.actions.filter((action): action is Hold => action.kind === "hold-agent-run") : [];
 }
 
-function heldLine(hold: Hold): string {
+/** The step summary's line for a held run: until when, and why. */
+function heldSummaryLine(hold: Hold): string {
   const until =
     hold.until === null ? "a Subscription's weekly limit resets, which isn't known" : readable(hold.until);
   const where = hold.label === null ? "Its Audit stays pending." : `Its \`${hold.label}\` label came off.`;
   return `The ${RUN_NAMES[hold.role]} run on #${hold.issue} was held until ${until}: every listed Subscription has hit its weekly limit. ${where}`;
-}
-
-/** Such as "2026-11-09 04:00 UTC". */
-function readable(iso: string): string {
-  const at = new Date(iso).toISOString();
-  return `${at.slice(0, 10)} ${at.slice(11, 16)} UTC`;
 }
 
 /** The Subscription the Loop rules core gave a run it starts, which `planFor` always does. */

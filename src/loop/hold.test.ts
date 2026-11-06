@@ -92,7 +92,7 @@ const STARTS: readonly (readonly [
   ],
   [
     "audit",
-    "Auditor",
+    "Audit",
     (kitIssues) => [
       { kind: "issue-opened", issue: 98 },
       snapshotOf(anIssue({ number: 98, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "pending") }), {

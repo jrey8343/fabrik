@@ -12,51 +12,24 @@
 // Subscription's usage-credits issue keeps the Kit off that Subscription.
 import { isPendingAudit } from "./audit.ts";
 import { failAudit } from "./auditFailure.ts";
-import { type HeldRun, holding } from "./heldRun.ts";
-import { anotherSubscriptionFree, heldAfterKill, refusedToken, repoWideNotice, type StalledRun } from "./kitIssues.ts";
-import { DESIGN_LABEL, DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
+import { type HeldRun, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
+import { heldAfterKill } from "./hold.ts";
+import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
-import { rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
-import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
+import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
+import type { InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
-
-/** A role whose failed run gets a failure notice: a failed Auditor run fails its Audit instead (src/loop/auditFailure.ts). */
-type NoticedRole = Exclude<AgentRole, "audit">;
-
-/**
- * The label whose adding starts each role's agent job, so re-adding it
- * resumes a stalled run. A Design-session turn has none to re-add: its issue
- * keeps needs-design, its place in the Loop, and the Operator's reply starts
- * the turn again. agent:implement on a Ticket with an open agent PR resumes
- * that PR's retry or Request-changes run (src/loop/implement.ts).
- */
-const TRIGGER_LABELS: Readonly<Record<Exclude<NoticedRole, "design">, Label>> = {
-  triage: NEEDS_TRIAGE,
-  implement: DISPATCH_LABEL,
-  review: REVIEW_LABEL,
-};
-
-/**
- * The label the Kit itself removes and re-adds to re-run a refused run on the
- * next free Subscription: each role's trigger label, and agent:design for a
- * Design-session turn, which starts the turn again (src/loop/design.ts).
- */
-const RERUN_LABELS: Readonly<Record<NoticedRole, Label>> = { ...TRIGGER_LABELS, design: DESIGN_LABEL };
 
 /**
  * With rotation on, the failures that leave the run's Subscription unusable,
  * so the Kit re-runs the run on the next free one, or holds it while none is:
- * the weekly limit, and a kill for spending usage credits.
+ * the weekly limit, and a kill for spending usage credits. A run is re-run,
+ * or resumed, through the label RESUME_LABELS names for its role
+ * (src/loop/heldRun.ts): its trigger label, and agent:design for a
+ * Design-session turn, which starts the turn again (src/loop/design.ts).
  */
 const RERUN_FAILURES: readonly InfrastructureFailure[] = ["weekly-limit", "usage-credits"];
-
-const ROLE_NAMES: Readonly<Record<NoticedRole, string>> = {
-  triage: "Triage",
-  design: "Design-session turn",
-  implement: "Implement",
-  review: "Review",
-};
 
 /**
  * Which Infrastructure failure this was, from what the agent job left and how
@@ -107,7 +80,7 @@ function heldOnRefusal(
   run: FailedRun,
   failure: InfrastructureFailure,
   { issue, kitIssues }: IssueContext,
-  ranOn: Pick<StalledRun, "subscription" | "rotation" | "subscriptions">,
+  ranOn: RanOn,
 ): HeldRun | null {
   if (!ranOn.rotation || !RERUN_FAILURES.includes(failure)) return null;
   // A killed Auditor run is held only while none is free: else its Audit fails, for the tick to try again.
@@ -116,7 +89,7 @@ function heldOnRefusal(
   if (anotherSubscriptionFree(kitIssues, ranOn)) return null;
   // The review trigger lives on the PR; every other role's on the issue.
   const labelled = run.role === "review" ? (issue.openPullRequests[0] ?? run.issue) : run.issue;
-  return { role: run.role, issue: labelled, label: RERUN_LABELS[run.role] };
+  return { role: run.role, issue: labelled, label: RESUME_LABELS[run.role] };
 }
 
 /**
@@ -127,30 +100,21 @@ function heldOnRefusal(
 export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig): Plan {
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
-  const ranOn = {
-    subscription: subscriptionOfRun(run, config),
-    rotation: rotationIsOn(config),
-    subscriptions: config.subscriptions,
-  };
+  const ranOn = ranOnOf(run, config);
+  const failedRun = `The ${RUN_NAMES[run.role]} run on #${run.issue}`;
   const held = heldOnRefusal(run, failure, context, ranOn);
-  if (held !== null && failure === "usage-credits") {
-    const repoWide = repoWideNotice(failure, context, {
-      run: run.role === "audit" ? `The Audit run on #${run.issue}` : `The ${ROLE_NAMES[run.role]} run on #${run.issue}`,
-      runUrl: run.runUrl,
-      resetsAt: null,
-      ...ranOn,
-    });
-    return { kind: "act", actions: [...heldAfterKill(held, context.kitIssues), ...(repoWide?.actions ?? [])] };
-  }
   if (held !== null) {
+    // A kill says nothing of when the limit resets: the held run waits for the first weekly-limit issue's.
+    const killed = failure === "usage-credits";
     const repoWide = repoWideNotice(failure, context, {
-      run: run.role === "audit" ? `The Audit run on #${run.issue}` : `The ${ROLE_NAMES[run.role]} run on #${run.issue}`,
+      run: failedRun,
       runUrl: run.runUrl,
-      resetsAt: run.report?.resetsAt ?? null,
+      resetsAt: killed ? null : (run.report?.resetsAt ?? null),
       ...ranOn,
-      held,
+      ...(killed ? {} : { held }),
     });
-    return { kind: "act", actions: [...holding(held, repoWide?.firstReset ?? null), ...(repoWide?.actions ?? [])] };
+    const holds = killed ? heldAfterKill(held, context.kitIssues) : holding(held, repoWide?.firstReset ?? null);
+    return { kind: "act", actions: [...holds, ...(repoWide?.actions ?? [])] };
   }
   // The scheduled tick tries a failed Audit again, so there's no trigger label to re-add.
   if (run.role === "audit") {
@@ -168,13 +132,13 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   // The review trigger lives on the PR; every other role's on the issue.
   const labelled = run.role === "review" ? target : run.issue;
   const where = labelled === target ? "" : ` on #${labelled}`;
-  const label = run.role === "design" ? null : TRIGGER_LABELS[run.role];
+  // A Design-session turn has none to re-add: its issue keeps needs-design, and the Operator's reply starts it again.
+  const label = run.role === "design" ? null : RESUME_LABELS[run.role];
   const resume =
     label === null
       ? "Reply on this issue to run the turn again."
       : `Re-add the \`${label}\` label${where} to run it again.`;
   const detail = run.report === null || run.report.detail.trim() === "" ? [] : ["", `> ${run.report.detail.trim()}`];
-  const failedRun = `The ${ROLE_NAMES[run.role]} run on #${run.issue}`;
   const repoWide = repoWideNotice(failure, context, {
     run: failedRun,
     runUrl: run.runUrl,
@@ -184,7 +148,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   // Another Subscription is free: the new Loop run's Kit job starts the run on it,
   // as an Infrastructure failure's resumption that never counts against retries.
   if (RERUN_FAILURES.includes(failure) && anotherSubscriptionFree(context.kitIssues, ranOn)) {
-    const rerun = RERUN_LABELS[run.role];
+    const rerun = RESUME_LABELS[run.role];
     return {
       kind: "act",
       actions: [

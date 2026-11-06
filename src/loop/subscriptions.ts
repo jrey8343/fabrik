@@ -6,11 +6,24 @@
 import { USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import type { Action, KitConfig, KitIssueSnapshot, Plan } from "./types.ts";
 
+/** A Subscription: the name of the `Fabrik` vault item that holds its Claude token. */
+export type Subscription = string;
+
+/**
+ * The Subscription a run ran on, with every listed one, in the listed order,
+ * and whether rotation is on, which the list decides.
+ */
+export interface RanOn {
+  readonly subscription: Subscription;
+  readonly subscriptions: readonly Subscription[];
+  readonly rotation: boolean;
+}
+
 /** Where a weekly-limit issue names the Subscription whose limit it is about. */
 export const SUBSCRIPTION_MARKER = "<!-- fabrik:subscription";
 
 /** The marker naming a Subscription, for a Kit-owned issue's body. */
-export function subscriptionMarker(subscription: string): string {
+export function subscriptionMarker(subscription: Subscription): string {
   return `${SUBSCRIPTION_MARKER} ${subscription} -->`;
 }
 
@@ -19,21 +32,31 @@ export function rotationIsOn(config: Pick<KitConfig, "subscriptions">): boolean 
   return config.subscriptions.length >= 2;
 }
 
+/** The first listed Subscription: Kit config always lists one. */
+export function firstSubscription({ subscriptions }: Pick<KitConfig, "subscriptions">): Subscription {
+  const first = subscriptions[0];
+  if (first === undefined) throw new Error("Kit config lists no Subscription");
+  return first;
+}
+
 /**
  * The Subscription a failed run used: the one its event names, else the first
  * listed one, as for a run started before runs were given a Subscription.
  */
 export function subscriptionOfRun(
-  run: { readonly subscription?: string },
+  run: { readonly subscription?: Subscription },
   config: Pick<KitConfig, "subscriptions">,
-): string {
-  const first = config.subscriptions[0];
-  if (first === undefined) throw new Error("Kit config lists no Subscription");
-  return run.subscription ?? first;
+): Subscription {
+  return run.subscription ?? firstSubscription(config);
+}
+
+/** What a failed run ran on: its Subscription, every listed one, and whether rotation is on. */
+export function ranOnOf(run: { readonly subscription?: Subscription }, config: Pick<KitConfig, "subscriptions">): RanOn {
+  return { subscription: subscriptionOfRun(run, config), subscriptions: config.subscriptions, rotation: rotationIsOn(config) };
 }
 
 /** The Subscription a Kit-owned issue names, or null when it names none, as a V1 issue doesn't. */
-export function subscriptionNamedBy(issue: KitIssueSnapshot): string | null {
+export function subscriptionNamedBy(issue: KitIssueSnapshot): Subscription | null {
   const start = issue.body.indexOf(SUBSCRIPTION_MARKER);
   if (start === -1) return null;
   const end = issue.body.indexOf("-->", start);
@@ -45,10 +68,8 @@ export function subscriptionNamedBy(issue: KitIssueSnapshot): string | null {
  * The Subscription an open weekly-limit issue is about: the one it names, or
  * the first listed one for a V1 issue, which names none.
  */
-export function weeklyLimitSubscriptionOf(issue: KitIssueSnapshot, config: Pick<KitConfig, "subscriptions">): string {
-  const first = config.subscriptions[0];
-  if (first === undefined) throw new Error("Kit config lists no Subscription");
-  return subscriptionNamedBy(issue) ?? first;
+export function weeklyLimitSubscriptionOf(issue: KitIssueSnapshot, config: Pick<KitConfig, "subscriptions">): Subscription {
+  return subscriptionNamedBy(issue) ?? firstSubscription(config);
 }
 
 /**
@@ -58,7 +79,7 @@ export function weeklyLimitSubscriptionOf(issue: KitIssueSnapshot, config: Pick<
 export function freeSubscriptions(
   kitIssues: readonly KitIssueSnapshot[],
   config: Pick<KitConfig, "subscriptions">,
-): readonly string[] {
+): readonly Subscription[] {
   const unusable = new Set(
     kitIssues.flatMap((issue) => {
       if (issue.labels.includes(WEEKLY_LIMIT_LABEL)) return [weeklyLimitSubscriptionOf(issue, config)];
@@ -74,10 +95,11 @@ export function freeSubscriptions(
  * open weekly-limit or usage-credits issue. While every listed one has one,
  * the first listed is given, as V1 does with its one Subscription.
  */
-export function chosenSubscription(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): string {
-  const first = config.subscriptions[0];
-  if (first === undefined) throw new Error("Kit config lists no Subscription");
-  return freeSubscriptions(kitIssues, config)[0] ?? first;
+export function chosenSubscription(
+  kitIssues: readonly KitIssueSnapshot[],
+  config: Pick<KitConfig, "subscriptions">,
+): Subscription {
+  return freeSubscriptions(kitIssues, config)[0] ?? firstSubscription(config);
 }
 
 /** The Plan with every run it starts given the chosen Subscription. */

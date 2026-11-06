@@ -4,6 +4,7 @@ import { AUDIT_DAYS } from "../kit/config.ts";
 import { shortSha } from "../skills/lock.ts";
 import { auditsIn, lastAudit } from "./audit.ts";
 import { scheduledTick } from "./kitIssues.ts";
+import { readable } from "./readable.ts";
 import { resumingHeldRuns } from "./resume.ts";
 import { AUDIT_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { AUDIT_PENDING_MARKER, auditMarker } from "./markers.ts";
@@ -103,12 +104,6 @@ function weekStart(now: string): number {
   const at = new Date(now);
   const sinceMonday = (at.getUTCDay() + 6) % 7;
   return Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()) - sinceMonday * DAY;
-}
-
-/** Such as "2026-11-08 00:00 UTC". */
-function readable(time: number): string {
-  const at = new Date(time).toISOString();
-  return `${at.slice(0, 10)} ${at.slice(11, 16)} UTC`;
 }
 
 /** Such as "2026-11-02". */

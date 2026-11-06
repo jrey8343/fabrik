@@ -11,6 +11,7 @@ import { readFailureReport } from "../agent/failure.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
 import { infrastructureFailureOf } from "../loop/failures.ts";
+import { firstSubscription } from "../loop/subscriptions.ts";
 import type { AgentRole, InfrastructureFailure, KitConfig, Verdict } from "../loop/types.ts";
 import { parseVerdict } from "../loop/verdict.ts";
 import { type NeededJob, type Needs, pushJobInput } from "./pushJob.ts";
@@ -186,7 +187,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     pullRequest,
     endedAt: end.endedAt,
     ...whatRan(agent, kit, end.roles[role]),
-    subscription: nonEmpty(kit["subscription"]) ?? firstListed(end.subscriptions),
+    subscription: nonEmpty(kit["subscription"]) ?? firstSubscription({ subscriptions: end.subscriptions }),
     retry: implement ? (countOf(kit["retry"]) ?? 0) : 0,
     stepUp: implement && kit["step-up"] === "true",
     requestChanges: implement && kit["request-changes"] === "true",
@@ -302,15 +303,9 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
   const { schema } = stored as { schema?: unknown };
   if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
   if (schema === 1) {
-    return { ...(stored as Omit<RunRecord, "schema" | "subscription">), schema: RUN_RECORD_SCHEMA, subscription: firstListed(subscriptions) };
+    return { ...(stored as Omit<RunRecord, "schema" | "subscription">), schema: RUN_RECORD_SCHEMA, subscription: firstSubscription({ subscriptions }) };
   }
   return null;
-}
-
-function firstListed(subscriptions: KitConfig["subscriptions"]): string {
-  const first = subscriptions[0];
-  if (first === undefined) throw new Error("Kit config lists no Subscription");
-  return first;
 }
 
 /**

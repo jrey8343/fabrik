@@ -60,7 +60,7 @@ describe("The Kit job's step summary", () => {
 
     expect(kitJobSummary(plan, config)).toBe(
       "### Fabrik Kit job\n\n" +
-        "The Auditor run on #98 was held until a Subscription's weekly limit resets, which isn't known: every listed Subscription has hit its weekly limit. " +
+        "The Audit run on #98 was held until a Subscription's weekly limit resets, which isn't known: every listed Subscription has hit its weekly limit. " +
         "Its Audit stays pending.\n",
     );
   });

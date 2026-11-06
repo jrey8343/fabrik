@@ -3,8 +3,10 @@
 // a Ticket's failure there's no trigger label to re-add and nobody to tell,
 // unless the failure stalls the whole repo.
 import { isPendingAudit } from "./audit.ts";
-import { repoWideNotice, type StalledRun } from "./kitIssues.ts";
+import { RUN_NAMES } from "./heldRun.ts";
+import { repoWideNotice } from "./kitIssues.ts";
 import { AUDIT_FAILED_MARKER, auditMarker, auditMarksIn } from "./markers.ts";
+import type { RanOn } from "./subscriptions.ts";
 import type { InfrastructureFailure, IssueContext, Plan } from "./types.ts";
 
 /** How an Auditor run failed. */
@@ -20,7 +22,7 @@ export interface AuditRunFailure {
    * notice; absent when the Auditor's own reply failed it, which stalls no
    * other run.
    */
-  readonly ranOn?: Pick<StalledRun, "subscription" | "rotation" | "subscriptions">;
+  readonly ranOn?: RanOn;
 }
 
 /**
@@ -43,7 +45,7 @@ export function failAudit(
   const repoWide =
     ranOn === undefined
       ? null
-      : repoWideNotice(failure, context, { run: `The Audit run on #${issue.number}`, runUrl, resetsAt, ...ranOn });
+      : repoWideNotice(failure, context, { run: `The ${RUN_NAMES.audit} run on #${issue.number}`, runUrl, resetsAt, ...ranOn });
   return {
     kind: "act",
     actions: [
