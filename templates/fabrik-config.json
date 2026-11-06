@@ -21,5 +21,7 @@
   "monitor": { "errors": null, "red_main": true },
   "audit": { "day": "sunday" },
   "operator": null,
-  "subscriptions": ["Claude token"]
+  "subscriptions": ["Claude token"],
+  "ui": null,
+  "preview": { "url": null }
 }

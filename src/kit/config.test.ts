@@ -573,6 +573,10 @@ describe("The Kit config template", () => {
     expect(JSON.parse(template)).toMatchObject({ subscriptions: ["Claude token"] });
   });
 
+  it("spells out ui and preview at their Kit defaults: Visual evidence off, and no preview linked", () => {
+    expect(JSON.parse(template)).toMatchObject({ ui: null, preview: { url: null } });
+  });
+
   it("resolves to every Kit default", () => {
     expect(resolveKitConfig({ config: template })).toEqual({ ok: true, config: DEFAULTS });
   });
