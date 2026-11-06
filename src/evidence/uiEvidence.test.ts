@@ -226,11 +226,11 @@ describe("The capture result", () => {
     ["a short head SHA", withResult({ headSha: "4f2b9c0" }), "headSha must be a full commit SHA"],
     ["captures that aren't a list", withResult({ captures: { "/book": [] } }), "captures must be a list"],
     ["a capture outcome with no captures", withResult({ captures: [] }), `captures can't be empty when the outcome is "captured"`],
-    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be build-failed, server-did-not-start, timeout, no-routes, error or no-result"],
+    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, error or no-result"],
     [
       "a failed outcome with an unknown reason",
       withResult({ outcome: "failed", reason: "flaky" }),
-      "reason must be build-failed, server-did-not-start, timeout, no-routes, error or no-result",
+      "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, error or no-result",
     ],
     ["a capture that isn't an object", withResult({ captures: ["after-mobile-book.png"] }), "captures[0] must be an object"],
     ["a route that isn't a path", withCapture({ route: "book" }), "captures[0].route must be a path starting with one /"],
@@ -285,7 +285,7 @@ describe("The capture result", () => {
     expect(parseCaptureResult(text)).toEqual({
       ok: false,
       errors: [
-        "reason must be build-failed, server-did-not-start, timeout, no-routes, error or no-result",
+        "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, error or no-result",
         "headSha must be a full commit SHA",
         "captures[1].side must be before or after",
         "captures[1].status must be an HTTP status from 100 to 599",
@@ -309,8 +309,14 @@ describe("A prototype turn's capture result", () => {
     expect(parseCaptureResult(JSON.stringify(failed))).toEqual({ ok: true, result: failed });
   });
 
+  it("reads back a capture that had no variant to capture", () => {
+    const failed: CaptureResult = { outcome: "failed", reason: "no-variants", headSha: HEAD, captures: [] };
+
+    expect(parseCaptureResult(JSON.stringify(failed))).toEqual({ ok: true, result: failed });
+  });
+
   it.each([
-    ["a letter past the cap", withVariants({ variant: "F" }), "captures[0].variant must be A, B, C, D or E"],
+    ["a letter past the cap",withVariants({ variant: "F" }), "captures[0].variant must be A, B, C, D or E"],
     ["a lowercase letter", withVariants({ variant: "a" }), "captures[0].variant must be A, B, C, D or E"],
     ["a variant's capture that has a side too", withVariants({ side: "after" }), "captures[0] must have a side or a variant, not both"],
     ["an image name that isn't a plain file name", withVariants({ image: "../a.png" }), "captures[0].image must be a plain file name, such as variant-a-mobile.png, with no / or .."],
