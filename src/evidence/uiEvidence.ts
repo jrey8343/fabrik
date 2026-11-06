@@ -4,6 +4,7 @@
 import { posix } from "node:path";
 import { UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
+import { withoutMentions } from "../loop/mentions.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 
 /**
@@ -299,7 +300,8 @@ function screenshots(count: number): string {
 
 /** A captured route, why it was chosen, and every screenshot of it that shows a server's error page rather than the design. */
 function routeLine({ route, reason }: ChosenRoute, captures: readonly Capture[]): string {
-  const line = `- ${code(route)}, ${ROUTE_REASON_WORDS[reason]}`;
+  // Its route may be the Implementer's: agent text, which never mentions anyone.
+  const line = `- ${code(withoutMentions(route))}, ${ROUTE_REASON_WORDS[reason]}`;
   const errors = captures.filter((capture) => capture.route === route && isServerError(capture.status));
   if (errors.length === 0) return line;
   const answered = errors.map(({ status, side, viewport }) => `${status} for ${SIDE_WORDS[side]} at ${viewport}`);
@@ -348,7 +350,16 @@ function link(text: string, url: string): string {
   return `[${text}](<${url}>)`;
 }
 
-/** Text as a Markdown code span. */
+/**
+ * Text as one Markdown code span on one line, whatever it holds: a line
+ * break or other control character shows as U+FFFD, so agent text can never
+ * start a line of its own, and the span's backticks outnumber any run of them inside.
+ */
 function code(text: string): string {
-  return `\`${text}\``;
+  const oneLine = text.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, "\uFFFD");
+  const longest = Math.max(0, ...[...oneLine.matchAll(/`+/g)].map(([run]) => run.length));
+  const fence = "`".repeat(longest + 1);
+  // CommonMark drops one space each side, so a backtick at either end stays in the span.
+  const pad = oneLine.startsWith("`") || oneLine.endsWith("`") ? " " : "";
+  return `${fence}${pad}${oneLine}${pad}${fence}`;
 }
