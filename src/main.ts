@@ -25,6 +25,9 @@ import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
+import { readStoreRunRecords } from "./kit/storeCheckout.ts";
+import type { ReplayStore } from "./github/replaySlice.ts";
+import { REPLAY_SWITCHED_ON } from "./loop/replayGate.ts";
 import { planFor } from "./loop/rules.ts";
 import type { Action, KitConfig, LoopEvent, Plan } from "./loop/types.ts";
 
@@ -302,6 +305,17 @@ async function finishedReviewEvent(
   };
 }
 
+/**
+ * The fabrik-runs store's checkout at `dir`, read as the Weekly summary reads
+ * it, a schema 1 record as on the first listed Subscription; with no
+ * checkout, as when the Fabrik App isn't on the store, it can't be read.
+ */
+function storeCheckoutAt(dir: string | undefined, config: KitConfig): ReplayStore {
+  return {
+    records: async () => (dir === undefined || dir === "" ? null : Object.values(await readStoreRunRecords(dir, config.subscriptions))),
+  };
+}
+
 async function report(text: string): Promise<void> {
   console.log(text);
   const summary = process.env["GITHUB_STEP_SUMMARY"];
@@ -361,7 +375,10 @@ async function main(): Promise<void> {
   // that reads only the store's metadata, so the retro gate weighs whether the store is private.
   const storeToken = process.env["FABRIK_STORE_METADATA_TOKEN"];
   const store = storeToken === undefined || storeToken === "" ? null : new GitHub(storeToken, process.env["GITHUB_API_URL"]);
-  const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store);
+  // Once Replay is switched on (#295), the scheduled tick reads the store's Run records from its checkout,
+  // FABRIK_STORE_DIR, as the Weekly summary does, and only while a replay issue the Operator filed is open.
+  const replayStore = REPLAY_SWITCHED_ON ? storeCheckoutAt(process.env["FABRIK_STORE_DIR"], config) : null;
+  const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
   const plan = planFor(event, snapshot, config);
   // A replay Ticket's claim marks it in progress in this run, and fails when another run claimed it first.
   const { preview } = await applyPlan(github, repo, plan, branch, Number(required("GITHUB_RUN_ID")));
