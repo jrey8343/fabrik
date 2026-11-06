@@ -5,9 +5,11 @@
 // never held and never re-run on another Subscription: while any
 // Subscription is used up it doesn't start, and the Ticket waits, pending,
 // for a later tick. When the run ends, its replay-record job lands it: the
-// Ticket's progress, and for a weekly-limit refusal the weekly-limit issue,
-// as any refused run opens it, with the Ticket back to pending. Pure, no I/O.
-import { nextReplayTicket, replayMarksIn, withTicketFinished } from "../kit/replay.ts";
+// Ticket's progress and the results as the store holds them, one comment
+// once the last Ticket is in, and for a weekly-limit refusal the weekly-limit
+// issue, as any refused run opens it, with the Ticket back to pending. Pure,
+// no I/O.
+import { nextReplayTicket, replayMarksIn, replayResultsIn, withReplayResults, withTicketFinished } from "../kit/replay.ts";
 import { repoWideNotice } from "./kitIssues.ts";
 import { REPLAY_LABEL, REPLAY_TRIGGER_LABEL } from "./labels.ts";
 import { whyUsedUp } from "./replayGate.ts";
@@ -47,16 +49,25 @@ export function startReplay(issueNumber: number, { issue, operator, kitIssues }:
 
 /**
  * A replay Ticket's run ending, as its replay-record job saw it: the
- * Ticket's progress on its replay issue (withTicketFinished), unless the
- * Operator closed the issue, which cancels the Replay; and a weekly-limit
- * refusal opens or comments on the weekly-limit issue, a fact about the
- * Subscription, as any refused run does. Never a hold, and never the trigger
- * label again: the Ticket waits, pending, for a later tick with spare capacity.
+ * Ticket's progress on its replay issue (withTicketFinished), and the
+ * results rewritten from what the store holds of the Replay
+ * (withReplayResults), so the table grows as Tickets finish; unless the
+ * Operator closed the issue, which cancels the Replay. Once every Ticket is
+ * done or failed, one comment tells the Operator the results are in. A
+ * weekly-limit refusal opens or comments on the weekly-limit issue, a fact
+ * about the Subscription, as any refused run does. Never a hold, and never
+ * the trigger label again: the Ticket waits, pending, for a later tick with
+ * spare capacity.
  */
 export function landReplayRun(run: Extract<LoopEvent, { kind: "replay-run-finished" }>, context: IssueContext, config: KitConfig): Plan {
   const { issue } = context;
   const name = `#${run.ticket}`;
-  const progressed = issue.open ? withTicketFinished(issue.body, run.ticket, run.run, run.end) : null;
+  const finished = issue.open ? withTicketFinished(issue.body, run.ticket, run.run, run.end) : null;
+  // Without the store, the body keeps the results it last showed.
+  const progressed =
+    finished === null || run.outcomes === null ? finished : (withReplayResults(finished, { open: true, ...run.outcomes }) ?? finished);
+  // Only the run that finishes the last Ticket sees the results come in, so the comment is posted once.
+  const resultsIn = progressed !== null && replayResultsIn(progressed) && !replayResultsIn(issue.body);
   const notice =
     run.end.kind === "weekly-limit"
       ? repoWideNotice("weekly-limit", context, {
@@ -68,9 +79,19 @@ export function landReplayRun(run: Extract<LoopEvent, { kind: "replay-run-finish
       : null;
   const actions: Action[] = [
     ...(progressed === null ? [] : [{ kind: "edit-issue-body" as const, issue: run.issue, body: progressed }]),
+    ...(resultsIn ? [{ kind: "comment" as const, issue: run.issue, body: resultsReady(context.operator) }] : []),
     ...(notice?.actions ?? []),
   ];
   if (actions.length > 0) return { kind: "act", actions };
   const why = issue.open ? `${name} isn't in progress in run ${run.run} on replay #${run.issue}` : `replay #${run.issue} is closed, which cancelled it`;
   return { kind: "nothing", reason: `${why}, so its run's end changes nothing there` };
+}
+
+/** The one comment a Replay gets when its results are in, the Operator's to act on: no model judged them, and nothing changes until they do. */
+function resultsReady(operator: string): string {
+  return [
+    `@${operator} **This Replay's results are in.** The table above sets each Ticket's baseline beside its variant, with the totals and the baseline's gap from the original runs.`,
+    "",
+    "Nothing changes until you act on them, as by changing a Kit config default or merging a Retro proposal. Close this issue once you have.",
+  ].join("\n");
 }

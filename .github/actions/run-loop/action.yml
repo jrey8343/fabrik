@@ -2,7 +2,8 @@
 # account, mints an App token, and runs src/main.ts, which gathers the snapshot,
 # asks the Loop rules core for a plan and applies it. Every job that changes
 # GitHub uses this: the push job, the claim job, the Dispatch job, the
-# Design queue job and the scheduled tick. None of them checks out or runs Product code.
+# Design queue job, the scheduled tick and a replay's replay-record job. None
+# of them checks out or runs Product code.
 #
 # Use it after checking out the Kit at the pinned commit into `kit/`:
 #   - uses: ./kit/.github/actions/run-loop
@@ -24,6 +25,14 @@ inputs:
     description: For the scheduled tick only, "true" to find whether the fabrik-runs store is ready for a Retro (#151), with a token that reads only its metadata.
     required: false
     default: "false"
+  replay-run-ended:
+    description: For a replay's replay-record job only (.github/actions/replay-record), the file its record step left of how the replay Ticket's run ended, which the Loop lands on the replay issue (#156).
+    required: false
+    default: ""
+  store-dir:
+    description: A checkout of the fabrik-runs store the Loop reads Run records from (src/kit/storeCheckout.ts), or empty for none, which reads as a store it can't read.
+    required: false
+    default: ""
 
 outputs:
   dispatch:
@@ -109,4 +118,6 @@ runs:
         FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}
         FABRIK_ACTIONS_TOKEN: ${{ inputs.actions-token }}
         FABRIK_STORE_METADATA_TOKEN: ${{ steps.store-metadata.outputs.token }}
+        FABRIK_REPLAY_RUN_ENDED: ${{ inputs.replay-run-ended }}
+        FABRIK_STORE_DIR: ${{ inputs.store-dir }}
       run: node src/main.ts
