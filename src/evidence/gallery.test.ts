@@ -47,3 +47,42 @@ describe("The gallery", () => {
     expect(html).toContain(`<code>${HEAD}</code>`);
   });
 });
+
+/** Each row of the page, side by side: which image each shows, by its alt text and the capture whose bytes it holds. */
+const rows = (html: string, from: readonly GalleryShot[]) =>
+  [...html.matchAll(/<div class="pair">([\s\S]*?)<\/div>/g)].map(([, row = ""]) =>
+    [...row.matchAll(/<img alt="([^"]*)" src="data:image\/png;base64,([^"]*)"/g)].map(([, alt, base64]) => {
+      const image = from.find(({ png }) => Buffer.from(png).toString("base64") === base64)?.image;
+      return `${alt}: ${image}`;
+    }),
+  );
+
+describe("The gallery's rows", () => {
+  it("pair Before beside After for each route and viewport, routes in the order captured, mobile first", () => {
+    expect(rows(gallery(shots, meta), shots)).toEqual([
+      ["/book at mobile, Before: before-mobile-book.png", "/book at mobile, After: after-mobile-book.png"],
+      ["/book at desktop, Before: before-desktop-book.png", "/book at desktop, After: after-desktop-book.png"],
+      ["/book/waitlist at mobile, After: after-mobile-book-waitlist.png"],
+      ["/book/waitlist at desktop, After: after-desktop-book-waitlist.png"],
+    ]);
+  });
+
+  it("pair the same way whatever order capture took them in", () => {
+    const reversed = shots.toReversed();
+
+    expect(rows(gallery(reversed, meta), reversed)).toEqual(rows(gallery(shots, meta), shots));
+  });
+
+  it("show a Before alone when capture stopped before its After", () => {
+    const stopped = shots.filter(({ route, viewport, side }) => !(route === "/book" && viewport === "desktop" && side === "after"));
+
+    expect(rows(gallery(stopped, meta), stopped)[1]).toEqual(["/book at desktop, Before: before-desktop-book.png"]);
+  });
+
+  it("head each route's rows with the route and why it was captured", () => {
+    const html = gallery(shots, meta);
+
+    expect(html).toContain("<h2><code>/book</code>, named by the Ticket</h2>");
+    expect(html).toContain("<h2><code>/book/waitlist</code>, named by the Implementer</h2>");
+  });
+});
