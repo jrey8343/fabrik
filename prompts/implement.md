@@ -60,7 +60,8 @@ When you have committed your work, end your reply with exactly one `<implement>`
   "title": "The PR title: one line saying what the change does.",
   "summary": "Markdown for the PR body: what the PR changes and why, how you tested it, and anything the reviewer should look at closely.",
   "fix": "Only on a retry or a Request-changes run: Markdown saying what you were asked to fix and what this run changed.",
-  "operatorCommentsConsidered": ["conversation-3"]
+  "operatorCommentsConsidered": ["conversation-3"],
+  "routes": ["/book"]
 }
 </implement>
 
@@ -69,3 +70,4 @@ When you have committed your work, end your reply with exactly one `<implement>`
 - If you need the Operator's input, put every question for them in `summary` under one heading, "Questions for the Operator", and nowhere else in it. Leave the heading out when you have none.
 - `fix` is non-empty Markdown on a retry or a Request-changes run, which the Kit posts as a comment on the PR. Leave it out on a first run. Don't @-mention anyone.
 - `operatorCommentsConsidered` lists, on a retry or a Request-changes run, the id of each comment under "The Operator's comments on the pull request" or "The Operator's comments on the code" that you weighed, exactly as its heading gives it (such as `conversation-3`, `review-5` or `inline-9`). Leave it out, or leave it empty, if you weighed none, and always on a first run. The Kit ends your `fix` comment with a link to each one; it ignores an id it didn't give you.
+- `routes` lists, when your change touched the UI, the routes it shows on, so any UI evidence is captured where the change can be seen: each a path starting with `/`, such as `/book`, never a full URL. Leave it out when you touched no UI. On a retry or a Request-changes run, name the routes the PR as a whole shows on.
