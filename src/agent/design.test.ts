@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { agentRunEventFrom } from "../github/events.ts";
-import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, type UiConfig } from "../kit/config.ts";
+import { readDesignTurnOutput } from "../loop/designOutput.ts";
 import { planFor } from "../loop/rules.ts";
-import { MAP_CAP_HEADING, mapCapContext, sentBackContext } from "./design.ts";
+import { MAP_CAP_HEADING, mapCapContext, PROTOTYPES_HEADING, prototypeContext, sentBackContext } from "./design.ts";
 import { readMapOffer } from "./inputs.ts";
 import { readAgentRunResult } from "./result.ts";
 
@@ -180,4 +181,58 @@ describe("What a Design-session turn's prompt says of the Map cap", () => {
       expect(() => mapCapContext(offer)).toThrow("map.json doesn't say whether this turn may offer a Map");
     },
   );
+});
+
+describe("What a Design-session turn's prompt says of Prototypes", () => {
+  const ui: UiConfig = { paths: ["src/pages/**"], serve: "npm run dev", url: "http://localhost:3000", beforeUrl: null, defaultRoutes: [] };
+  const withUi = kitConfig({ ui });
+  const switchedOn = { switchedOn: true };
+  const said = prototypeContext(withUi, 7, switchedOn).join("\n\n");
+
+  it("sets out that Prototypes are available, under its own heading, for a repo with a ui block while Prototypes are switched on", () => {
+    expect(prototypeContext(withUi, 7, switchedOn)[0]).toBe(`## ${PROTOTYPES_HEADING}`);
+  });
+
+  it("adds nothing to the prompt of a repo without a ui block, even with Prototypes switched on", () => {
+    expect(prototypeContext(kitConfig({ ui: null }), 7, switchedOn)).toEqual([]);
+  });
+
+  it("adds nothing to the prompt of a repo with a ui block while Prototypes are dormant", () => {
+    expect(prototypeContext(withUi, 7)).toEqual([]);
+  });
+
+  it("lets the turn offer a Prototype in a round only when the open question is how a page looks, naming the route and the count, with a recommendation", () => {
+    expect(said).toContain("**Offer a Prototype only when the open question is how a page looks**");
+    expect(said).toContain("Never offer one for a question of logic, data or behaviour, which an ordinary round settles.");
+    expect(said).toContain("Ask it as one question of a round, naming the route and how many variants it builds, with your recommendation");
+    expect(said).toContain("Nothing is built until the Operator says yes.");
+  });
+
+  it("offers 3 variants unless the Operator asks for another count, never fewer than 2 or more than 5", () => {
+    expect(said).toContain("Offer 3 variants unless the Operator asked for another count, never fewer than 2 or more than 5.");
+  });
+
+  it("ends in prototype on the Operator's yes, which may change the route or the count, and never without it", () => {
+    expect(said).toContain("- **End in `prototype` on the Operator's yes.** Their reply may change the route or the count");
+    expect(said).toContain("ask for what they approved.");
+    expect(said).toContain("Never end in `prototype` without the Operator's yes.");
+  });
+
+  it("reads the Operator's reply to a prototype round as an ordinary answer", () => {
+    expect(said).toContain("- **Read the Operator's reply to a prototype round as an ordinary answer**");
+    expect(said).toContain("the variant they chose and any tweaks to it. Carry on the session from there.");
+  });
+
+  it("records the chosen variant, the tweaks and links to the branch and the variant's component when it finishes, for the Implementer to rewrite", () => {
+    expect(said).toContain(
+      "- **When you finish after a prototype round, record the Prototype in the outcome**: the variant the Operator chose, their tweaks, and links to the branch `prototype/7` and to that variant's component",
+    );
+    expect(said).toContain("Say that the Implementer rewrites the Prototype as a reference, never merging or cherry-picking it.");
+  });
+
+  it("describes the prototype output with an example the Kit accepts", () => {
+    const example: unknown = JSON.parse(/<design>\n([\s\S]*?)\n<\/design>/.exec(said)?.[1] ?? "null");
+
+    expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "prototype", route: "/book", variants: 3 } });
+  });
 });

@@ -4,10 +4,13 @@
 // gets and what its prompt says of them (src/agent/review.ts only reads the
 // files in), and what the Operator reads of it on the PR: the evidence
 // section, its marker, which the PR snapshot reads back, and withoutEvidence,
-// which keeps both out of agent text. The gallery is beside it
-// (src/evidence/gallery.ts). Pure, no I/O.
+// which keeps both out of agent text. A prototype turn's capture of its
+// variants (#155) shares the capture result, and neither the Reviewer nor the
+// evidence section ever shows it. The galleries, the PR's and the prototype's,
+// are beside it (src/evidence/gallery.ts). Pure, no I/O.
 import { posix } from "node:path";
 import { isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+import { PROTOTYPE_VARIANT_CAP, variantLetter } from "../loop/designOutput.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 import { spelled } from "../loop/readable.ts";
@@ -87,15 +90,16 @@ export type CaptureSide = (typeof CAPTURE_SIDES)[number];
 
 /**
  * Why capture failed: `sandbox.build` failed, the server never answered at
- * `ui.url`, capture ran out of time, there was no route to capture, or
- * anything else it caught. The push job records the last, `no-result`,
- * itself: a UI pull request whose Implement job passed it no capture result it could read.
+ * `ui.url`, capture ran out of time, there was no route to capture, a
+ * prototype turn's capture had no variant to capture, or anything else it
+ * caught. The push job records the last, `no-result`, itself: a UI pull
+ * request whose Implement job passed it no capture result it could read.
  */
-export const CAPTURE_FAILURES = ["build-failed", "server-did-not-start", "timeout", "no-routes", "error", "no-result"] as const;
+export const CAPTURE_FAILURES = ["build-failed", "server-did-not-start", "timeout", "no-routes", "no-variants", "error", "no-result"] as const;
 
 export type CaptureFailure = (typeof CAPTURE_FAILURES)[number];
 
-/** One screenshot: of which route and why, at which viewport, of which side, and what the page answered. */
+/** One screenshot of a pull request: of which route and why, at which viewport, of which side, and what the page answered. */
 export interface Capture {
   readonly route: string;
   readonly reason: RouteReason;
@@ -107,24 +111,55 @@ export interface Capture {
   readonly image: string;
 }
 
+/** The letters a Prototype's variants go by, in order, one for each up to PROTOTYPE_VARIANT_CAP: A is the first (variantLetter). */
+export const VARIANT_LETTERS: readonly string[] = Array.from({ length: PROTOTYPE_VARIANT_CAP }, (_, at) => variantLetter(at));
+
 /**
- * What the Implement job's capture step records, as a contract every later
- * reader shares: the PR body's evidence section, the Reviewer's images, and
- * the UI prototypes Spec (#80). A failed capture keeps whatever it took first.
+ * One capture of a Prototype's variant, served at `route?variant=<letter>`:
+ * a capture like a pull request's, but of a variant rather than a side, and
+ * with the short load-and-scroll video capture recorded beside its screenshot,
+ * when it recorded one. Its route is the one the Prototype was approved for,
+ * so it has no reason.
  */
-export type CaptureResult =
+export interface VariantCapture extends Omit<Capture, "reason" | "side"> {
+  /** One of VARIANT_LETTERS. */
+  readonly variant: string;
+  /** The video's file name, a plain name beside the image. */
+  readonly video?: string;
+}
+
+/** Whether a capture is of a Prototype's variant rather than a pull request's side. */
+export function isVariantCapture(capture: Capture | VariantCapture): capture is VariantCapture {
+  return "variant" in capture;
+}
+
+/** The captures of a pull request's sides, leaving out any of a Prototype's variants. */
+function sideCaptures(captures: readonly (Capture | VariantCapture)[]): Capture[] {
+  return captures.filter((capture): capture is Capture => !isVariantCapture(capture));
+}
+
+/**
+ * What the Implement job's capture step records, and a prototype turn's
+ * capture of its variants, as a contract every later reader shares: the PR
+ * body's evidence section, the Reviewer's images, and the prototype round
+ * (#155). A failed capture keeps whatever it took first. A pull request's
+ * capture holds only Captures, and a prototype turn's only VariantCaptures,
+ * as CaptureResult<Capture> and CaptureResult<VariantCapture> say; a reader
+ * takes either.
+ */
+export type CaptureResult<C extends Capture | VariantCapture = Capture | VariantCapture> =
   | {
       readonly outcome: "captured";
       /** The head commit the branch was captured at. */
       readonly headSha: string;
       /** Never empty. */
-      readonly captures: readonly Capture[];
+      readonly captures: readonly C[];
     }
   | {
       readonly outcome: "failed";
       readonly reason: CaptureFailure;
       readonly headSha: string;
-      readonly captures: readonly Capture[];
+      readonly captures: readonly C[];
     };
 
 export type CaptureResultRead =
@@ -155,7 +190,7 @@ export function readCaptureResult(value: unknown): CaptureResultRead {
   const read = Array.isArray(captures) ? captures.map((capture, at) => readCapture(capture, `captures[${at}]`, errors)) : [];
   errors.push(...repeatedCaptures(read));
   if (errors.length > 0) return { ok: false, errors };
-  const checked = read as Capture[];
+  const checked = read as (Capture | VariantCapture)[];
   const result: CaptureResult =
     outcome === "captured"
       ? { outcome, headSha: headSha as string, captures: checked }
@@ -168,28 +203,50 @@ const VIEWPORT_NAMES = UI_VIEWPORTS.map(({ name }) => name);
 /** A plain file name in the capture's folder: never a path, `..`, or a hidden file. */
 const IMAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** One capture, or null after naming its problems in `errors`. */
-function readCapture(value: unknown, at: string, errors: string[]): Capture | null {
+function isFileName(value: unknown): value is string {
+  return typeof value === "string" && IMAGE_NAME.test(value) && !value.includes("..");
+}
+
+/** One capture, or null after naming its problems in `errors`: a variant's when it names a variant, else a side's. */
+function readCapture(value: unknown, at: string, errors: string[]): Capture | VariantCapture | null {
   if (!isObject(value)) {
     errors.push(`${at} must be an object`);
     return null;
   }
-  const { route, reason, viewport, side, status, image } = value;
+  const { route, reason, viewport, side, variant, status, image, video } = value;
+  const ofVariant = variant !== undefined;
   const before = errors.length;
   // As the Implementer output reads a route, so a route it named never makes its capture unreadable.
   if (!isRoute(route)) {
     errors.push(`${at}.route must be a path starting with one /, such as /book`);
   }
-  if (!isOneOf(ROUTE_REASONS, reason)) errors.push(`${at}.reason must be ${spelled(ROUTE_REASONS)}`);
+  if (!ofVariant && !isOneOf(ROUTE_REASONS, reason)) errors.push(`${at}.reason must be ${spelled(ROUTE_REASONS)}`);
   if (!isOneOf(VIEWPORT_NAMES, viewport)) errors.push(`${at}.viewport must be ${spelled(VIEWPORT_NAMES)}`);
-  if (!isOneOf(CAPTURE_SIDES, side)) errors.push(`${at}.side must be ${spelled(CAPTURE_SIDES)}`);
+  if (!ofVariant && !isOneOf(CAPTURE_SIDES, side)) errors.push(`${at}.side must be ${spelled(CAPTURE_SIDES)}`);
+  if (ofVariant && !isOneOf(VARIANT_LETTERS, variant)) errors.push(`${at}.variant must be ${spelled(VARIANT_LETTERS)}`);
   if (!Number.isInteger(status) || (status as number) < 100 || (status as number) > 599) {
     errors.push(`${at}.status must be an HTTP status from 100 to 599`);
   }
-  if (typeof image !== "string" || !IMAGE_NAME.test(image) || image.includes("..")) {
-    errors.push(`${at}.image must be a plain file name, such as after-mobile-book.png, with no / or ..`);
+  if (!isFileName(image)) {
+    const example = ofVariant ? "variant-a-mobile.png" : "after-mobile-book.png";
+    errors.push(`${at}.image must be a plain file name, such as ${example}, with no / or ..`);
   }
+  if (ofVariant && video !== undefined && !isFileName(video)) {
+    errors.push(`${at}.video must be a plain file name, such as variant-a-mobile.webm, with no / or ..`);
+  }
+  // Whether it's a side's or a variant's decides how every reader shows it.
+  if (ofVariant && side !== undefined) errors.push(`${at} must have a side or a variant, not both`);
   if (errors.length > before) return null;
+  if (ofVariant) {
+    return {
+      route: route as string,
+      variant: variant as string,
+      viewport: viewport as Viewport["name"],
+      status: status as number,
+      image: image as string,
+      ...(video === undefined ? {} : { video: video as string }),
+    };
+  }
   return {
     route: route as string,
     reason: reason as RouteReason,
@@ -200,22 +257,39 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | nu
   };
 }
 
+/** Which shot of its route and viewport a capture is: its side, or its variant. */
+function shotOf(capture: Capture | VariantCapture): string {
+  return isVariantCapture(capture) ? `variant ${capture.variant}` : capture.side;
+}
+
+/** A capture's files, each by the field that names it: its image, then its video when it has one. */
+function filesOf(capture: Capture | VariantCapture): ["image" | "video", string][] {
+  const video = isVariantCapture(capture) ? capture.video : undefined;
+  return [["image", capture.image], ...(video === undefined ? [] : [["video", video] as ["video", string]])];
+}
+
 /**
- * Each image file and each route, viewport and side is one capture's alone,
- * since the gallery pairs Before and After by them and opens each file by name.
+ * Each image or video file and each route, viewport and side or variant is
+ * one capture's alone, since the galleries pair captures by them and open
+ * each file by name.
  */
-function repeatedCaptures(captures: readonly (Capture | null)[]): string[] {
+function repeatedCaptures(captures: readonly (Capture | VariantCapture | null)[]): string[] {
   const problems: string[] = [];
+  /** Every file named so far, with the capture that named it. */
+  const named: { readonly name: string; readonly at: number }[] = [];
   captures.forEach((capture, at) => {
     if (capture === null) return;
     const earlier = captures.slice(0, at);
-    const sameFile = earlier.findIndex((other) => other?.image === capture.image);
+    for (const [field, name] of filesOf(capture)) {
+      const owner = named.find((file) => file.name === name);
+      if (owner !== undefined) problems.push(`captures[${at}].${field} ${name} is captures[${owner.at}]'s too`);
+      named.push({ name, at });
+    }
     const sameShot = earlier.findIndex(
-      (other) => other?.route === capture.route && other.viewport === capture.viewport && other.side === capture.side,
+      (other) => other !== null && other.route === capture.route && other.viewport === capture.viewport && shotOf(other) === shotOf(capture),
     );
-    if (sameFile !== -1) problems.push(`captures[${at}].image ${capture.image} is captures[${sameFile}]'s too`);
     if (sameShot !== -1) {
-      problems.push(`captures[${at}] is ${capture.route} at ${capture.viewport}, ${capture.side}, which captures[${sameShot}] already is`);
+      problems.push(`captures[${at}] is ${capture.route} at ${capture.viewport}, ${shotOf(capture)}, which captures[${sameShot}] already is`);
     }
   });
   return problems;
@@ -239,17 +313,19 @@ function isOneOf<T extends string>(options: readonly T[], value: unknown): value
  * its context, the ones that matter most first: After before Before, mobile
  * before desktop, then routes in reason order (the Ticket's, the
  * Implementer's, the defaults), each reason's routes in the order they were
- * captured. The Operator's gallery has them all.
+ * captured. The Operator's gallery has them all. None is ever of a
+ * Prototype's variant: the Reviewer gets nothing from a Prototype.
  */
-export function reviewerImages(captures: readonly Capture[]): readonly Capture[] {
-  const routes = captures.map(({ route }) => route);
+export function reviewerImages(captures: readonly (Capture | VariantCapture)[]): readonly Capture[] {
+  const sides = sideCaptures(captures);
+  const routes = sides.map(({ route }) => route);
   const rank = ({ side, viewport, reason, route }: Capture): number[] => [
     side === "after" ? 0 : 1,
     UI_VIEWPORTS.findIndex(({ name }) => name === viewport),
     ROUTE_REASONS.indexOf(reason),
     routes.indexOf(route),
   ];
-  return captures
+  return sides
     .toSorted((a, b) => {
       const [ranked, other] = [rank(a), rank(b)];
       return ranked.reduce((order, value, at) => order || value - (other[at] ?? 0), 0);
@@ -392,16 +468,17 @@ const SECTION_START = "<!-- fabrik:ui-evidence-start -->";
  * captured route with why it was chosen, flagged when it answered a server
  * error. A failed capture keeps the screenshots it took first, so the
  * section shows those too. Its routes may be agent text, so each shows as
- * code on one line and mentions nobody.
+ * code on one line and mentions nobody. It never shows a capture of a
+ * Prototype's variant: a Ticket's UI evidence gets nothing from a Prototype.
  */
 export function evidenceSection(evidence: UiEvidence): string {
   const { result, gallery, preview } = evidence;
-  const { captures } = result;
+  const captures = sideCaptures(result.captures);
   return [
     SECTION_START,
     "## UI evidence",
     ...(result.outcome === "failed" ? ["", failureLine(result.reason, captures)] : []),
-    ...(captures.length === 0 ? [] : ["", galleryLine(gallery, result)]),
+    ...(captures.length === 0 ? [] : ["", galleryLine(gallery, result.headSha, captures)]),
     "",
     previewLine(preview),
     ...(captures.length === 0 ? [] : ["", "Captured routes:", "", ...capturedRoutes(captures).map((chosen) => routeLine(chosen, captures))]),
@@ -415,6 +492,7 @@ export const FAILURE_WORDS: Readonly<Record<CaptureFailure, string>> = {
   "server-did-not-start": "the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran",
   timeout: "it ran out of time",
   "no-routes": "there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`",
+  "no-variants": "there was no variant to capture: the prototype turn's output named none",
   error: "it hit an error the Kit didn't expect, which the Implement job's log shows",
   "no-result": "it left no result the push job could read",
 };
@@ -458,7 +536,7 @@ export function serverErrorWords(answered: string, shows: string): string {
 /** How the evidence names each side. */
 export const SIDE_WORDS: Readonly<Record<CaptureSide, string>> = { before: "Before", after: "After" };
 
-function galleryLine(url: string | null, { headSha, captures }: CaptureResult): string {
+function galleryLine(url: string | null, headSha: string, captures: readonly Capture[]): string {
   if (url === null) return `The Implement run kept no gallery of its ${screenshots(captures.length)}.`;
   const besideProduction = captures.some(({ side }) => side === "before") ? " beside the production site" : "";
   const viewports = UI_VIEWPORTS.map(({ name }) => name).filter((name) => captures.some(({ viewport }) => viewport === name));

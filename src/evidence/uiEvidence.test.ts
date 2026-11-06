@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { type Capture, type CaptureFailure, type CaptureResult, evidenceSection, isUi, parseCaptureResult, reviewerImages, routesFor, type UiEvidence, withoutEvidence, withPreviewLink } from "./uiEvidence.ts";
+import {
+  type Capture,
+  type CaptureFailure,
+  type CaptureResult,
+  evidenceSection,
+  isUi,
+  parseCaptureResult,
+  reviewerImages,
+  routesFor,
+  type UiEvidence,
+  type VariantCapture,
+  withoutEvidence,
+  withPreviewLink,
+} from "./uiEvidence.ts";
 
 /** The Pilot's ui block: an Astro site served from its build. */
 const ui: UiConfig = {
@@ -155,6 +168,16 @@ describe("The routes UI evidence captures", () => {
 
 const HEAD = "4f2b9c0d1e3a5b7c9d0e1f2a3b4c5d6e7f8a9b0c";
 
+/** A Prototype of /book in three variants, each captured at both viewports, as a prototype turn's capture writes it: C's desktop video wasn't recorded. */
+const variantCaptures: VariantCapture[] = [
+  { route: "/book", variant: "A", viewport: "mobile", status: 200, image: "variant-a-mobile.png", video: "variant-a-mobile.webm" },
+  { route: "/book", variant: "A", viewport: "desktop", status: 200, image: "variant-a-desktop.png", video: "variant-a-desktop.webm" },
+  { route: "/book", variant: "B", viewport: "mobile", status: 200, image: "variant-b-mobile.png", video: "variant-b-mobile.webm" },
+  { route: "/book", variant: "B", viewport: "desktop", status: 200, image: "variant-b-desktop.png", video: "variant-b-desktop.webm" },
+  { route: "/book", variant: "C", viewport: "mobile", status: 200, image: "variant-c-mobile.png", video: "variant-c-mobile.webm" },
+  { route: "/book", variant: "C", viewport: "desktop", status: 200, image: "variant-c-desktop.png" },
+];
+
 /** A capture result as the capture step writes it, for the Ticket's /book and a default /. */
 const captured: CaptureResult = {
   outcome: "captured",
@@ -182,6 +205,12 @@ describe("The capture result", () => {
     expect(parseCaptureResult(JSON.stringify(failed))).toEqual({ ok: true, result: failed });
   });
 
+  it("reads back a prototype turn's capture of its variants exactly as written, each with its video where it recorded one", () => {
+    const prototype: CaptureResult = { outcome: "captured", headSha: HEAD, captures: variantCaptures };
+
+    expect(parseCaptureResult(JSON.stringify(prototype))).toStrictEqual({ ok: true, result: prototype });
+  });
+
   /** The captured result with these fields changed; undefined leaves a field out. */
   const withResult = (changes: Record<string, unknown>) => JSON.stringify({ ...captured, ...changes });
   /** The captured result with its first capture's fields changed. */
@@ -197,11 +226,11 @@ describe("The capture result", () => {
     ["a short head SHA", withResult({ headSha: "4f2b9c0" }), "headSha must be a full commit SHA"],
     ["captures that aren't a list", withResult({ captures: { "/book": [] } }), "captures must be a list"],
     ["a capture outcome with no captures", withResult({ captures: [] }), `captures can't be empty when the outcome is "captured"`],
-    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be build-failed, server-did-not-start, timeout, no-routes, error or no-result"],
+    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, error or no-result"],
     [
       "a failed outcome with an unknown reason",
       withResult({ outcome: "failed", reason: "flaky" }),
-      "reason must be build-failed, server-did-not-start, timeout, no-routes, error or no-result",
+      "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, error or no-result",
     ],
     ["a capture that isn't an object", withResult({ captures: ["after-mobile-book.png"] }), "captures[0] must be an object"],
     ["a route that isn't a path", withCapture({ route: "book" }), "captures[0].route must be a path starting with one /"],
@@ -256,12 +285,48 @@ describe("The capture result", () => {
     expect(parseCaptureResult(text)).toEqual({
       ok: false,
       errors: [
-        "reason must be build-failed, server-did-not-start, timeout, no-routes, error or no-result",
+        "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, error or no-result",
         "headSha must be a full commit SHA",
         "captures[1].side must be before or after",
         "captures[1].status must be an HTTP status from 100 to 599",
       ],
     });
+  });
+});
+
+describe("A prototype turn's capture result", () => {
+  const prototype: CaptureResult = { outcome: "captured", headSha: HEAD, captures: variantCaptures };
+  /** The prototype's result with its first two captures' fields changed; undefined leaves a field out. */
+  const withVariants = (first: Record<string, unknown>, second: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      ...prototype,
+      captures: [{ ...variantCaptures[0], ...first }, { ...variantCaptures[1], ...second }, ...variantCaptures.slice(2)],
+    });
+
+  it("reads back a capture that ran out of time with the variants it took first", () => {
+    const failed: CaptureResult = { outcome: "failed", reason: "timeout", headSha: HEAD, captures: variantCaptures.slice(0, 3) };
+
+    expect(parseCaptureResult(JSON.stringify(failed))).toEqual({ ok: true, result: failed });
+  });
+
+  it("reads back a capture that had no variant to capture", () => {
+    const failed: CaptureResult = { outcome: "failed", reason: "no-variants", headSha: HEAD, captures: [] };
+
+    expect(parseCaptureResult(JSON.stringify(failed))).toEqual({ ok: true, result: failed });
+  });
+
+  it.each([
+    ["a letter past the cap",withVariants({ variant: "F" }), "captures[0].variant must be A, B, C, D or E"],
+    ["a lowercase letter", withVariants({ variant: "a" }), "captures[0].variant must be A, B, C, D or E"],
+    ["a variant's capture that has a side too", withVariants({ side: "after" }), "captures[0] must have a side or a variant, not both"],
+    ["an image name that isn't a plain file name", withVariants({ image: "../a.png" }), "captures[0].image must be a plain file name, such as variant-a-mobile.png, with no / or .."],
+    ["a video name that isn't a plain file name", withVariants({ video: "videos/a.webm" }), "captures[0].video must be a plain file name, such as variant-a-mobile.webm, with no / or .."],
+    ["a video name that isn't a string", withVariants({ video: null }), "captures[0].video must be a plain file name, such as variant-a-mobile.webm, with no / or .."],
+    ["two captures of the same variant at the same viewport", withVariants({}, { viewport: "mobile" }), "captures[1] is /book at mobile, variant A, which captures[0] already is"],
+    ["a video in another capture's video file", withVariants({}, { video: "variant-a-mobile.webm" }), "captures[1].video variant-a-mobile.webm is captures[0]'s too"],
+    ["a video in another capture's image file", withVariants({}, { video: "variant-a-mobile.png" }), "captures[1].video variant-a-mobile.png is captures[0]'s too"],
+  ])("refuses %s, naming the problem", (_, text, error) => {
+    expect(parseCaptureResult(text)).toEqual({ ok: false, errors: [error] });
   });
 });
 
@@ -278,7 +343,7 @@ const evidence = (result: CaptureResult, changes: Partial<UiEvidence> = {}): UiE
 });
 
 /** Every capture 200 OK: the Ticket's /book at both viewports and sides, and the Implementer's /book/waitlist at both viewports, After only. */
-const allCaptured: CaptureResult = {
+const allCaptured: CaptureResult<Capture> = {
   outcome: "captured",
   headSha: HEAD,
   captures: [
@@ -309,6 +374,14 @@ describe("The evidence section a UI PR's body carries", () => {
         `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null} -->`,
       ].join("\n"),
     );
+  });
+
+  // The Reviewer, and the Ticket's UI evidence, get nothing from a Prototype.
+  it("leaves out every capture of a Prototype's variant, in its counts, its widths and its routes", () => {
+    const [first, ...rest] = allCaptured.captures;
+    const mixed: CaptureResult = { ...allCaptured, captures: [variantCaptures[0]!, first!, ...variantCaptures.slice(1), ...rest] };
+
+    expect(evidenceSection(evidence(mixed))).toBe(evidenceSection(evidence(allCaptured)));
   });
 });
 
@@ -568,6 +641,14 @@ describe("The images a Reviewer gets", () => {
   it("are every capture when there are eight or fewer, and none when there are none", () => {
     expect(reviewerImages([shot("/book", "ticket", "desktop", "before")])).toEqual([shot("/book", "ticket", "desktop", "before")]);
     expect(reviewerImages([])).toEqual([]);
+  });
+
+  // The Reviewer gets nothing from a Prototype.
+  it("leave out every capture of a Prototype's variant", () => {
+    const captures = [variantCaptures[0]!, shot("/book", "ticket", "desktop", "after"), variantCaptures[3]!, shot("/book", "ticket", "mobile", "after")];
+
+    expect(reviewerImages(captures).map(({ image }) => image)).toEqual(["after-mobile-book.png", "after-desktop-book.png"]);
+    expect(reviewerImages(variantCaptures)).toEqual([]);
   });
 });
 
