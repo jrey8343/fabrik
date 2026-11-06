@@ -1,23 +1,31 @@
 // What the Kit job's step summary says about the run it routes: which
 // Subscription the run was given, or, with rotation on and every Subscription
-// used up, that it was held and until when; and, with one Subscription
+// used up, that it was held, until when and why; and, with one Subscription
 // listed, a quiet note that rotation is off until a second is listed. Pure,
 // no I/O.
 import { agentRunIn } from "../github/apply.ts";
 import { RUN_NAMES } from "../loop/heldRun.ts";
 import { readable } from "../loop/readable.ts";
-import { rotationIsOn } from "../loop/subscriptions.ts";
-import type { Action, KitConfig, Plan } from "../loop/types.ts";
+import { rotationIsOn, type Subscription, type Unusable, unusableSubscriptions } from "../loop/subscriptions.ts";
+import type { Action, KitConfig, KitIssueSnapshot, Plan } from "../loop/types.ts";
 
-/** The Kit job's step summary for this Plan, or null when it starts or holds no run. */
-export function kitJobSummary(plan: Plan, config: Pick<KitConfig, "subscriptions">): string | null {
+/**
+ * The Kit job's step summary for this Plan, or null when it starts or holds
+ * no run. The open Kit-owned issues say why a held run's Subscriptions are used up.
+ */
+export function kitJobSummary(
+  plan: Plan,
+  config: Pick<KitConfig, "subscriptions">,
+  kitIssues: readonly KitIssueSnapshot[],
+): string | null {
   const run = agentRunIn(plan);
   const held = heldIn(plan);
   const lines: string[] = [];
   if (run !== null) {
     lines.push(`The ${RUN_NAMES[run.role]} run on #${run.issue} was given the Subscription **${subscriptionOf(run)}**.`);
   }
-  for (const hold of held) lines.push(heldSummaryLine(hold));
+  const why = usedUp(kitIssues, config);
+  for (const hold of held) lines.push(heldSummaryLine(hold, why));
   if (lines.length === 0) return null;
   if (!rotationIsOn(config)) {
     lines.push("Subscription rotation is off until a second Subscription is listed in Kit config's `subscriptions`.");
@@ -32,11 +40,29 @@ function heldIn(plan: Plan): Hold[] {
 }
 
 /** The step summary's line for a held run: until when, and why. */
-function heldSummaryLine(hold: Hold): string {
+function heldSummaryLine(hold: Hold, why: string): string {
   const until =
     hold.until === null ? "a Subscription's weekly limit resets, which isn't known" : readable(hold.until);
   const where = hold.label === null ? "Its Audit stays pending." : `Its \`${hold.label}\` label came off.`;
-  return `The ${RUN_NAMES[hold.role]} run on #${hold.issue} was held until ${until}: every listed Subscription has hit its weekly limit. ${where}`;
+  return `The ${RUN_NAMES[hold.role]} run on #${hold.issue} was held until ${until}: ${why} ${where}`;
+}
+
+const UNUSABLE: Readonly<Record<Unusable, string>> = {
+  "weekly-limit": "has hit its weekly limit",
+  "usage-credits": "has an open usage-credits issue",
+};
+
+/** Why every listed Subscription is used up, from the open Kit-owned issues that make each unusable. */
+function usedUp(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): string {
+  const unusable = unusableSubscriptions(kitIssues, config);
+  const reasons = config.subscriptions.flatMap((subscription): [Subscription, Unusable][] => {
+    const why = unusable.get(subscription);
+    return why === undefined ? [] : [[subscription, why]];
+  });
+  if (reasons.every(([, why]) => why === "weekly-limit")) return "every listed Subscription has hit its weekly limit.";
+  const each = reasons.map(([subscription, why]) => `\`${subscription}\` ${UNUSABLE[why]}`);
+  const listed = each.length < 2 ? each.join("") : `${each.slice(0, -1).join(", ")}, and ${each.at(-1)}`;
+  return `every listed Subscription is used up. ${listed}.`;
 }
 
 /** The Subscription the Loop rules core gave a run it starts, which `planFor` always does. */

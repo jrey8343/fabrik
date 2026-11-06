@@ -72,6 +72,28 @@ export function weeklyLimitSubscriptionOf(issue: KitIssueSnapshot, config: Pick<
   return subscriptionNamedBy(issue) ?? firstSubscription(config);
 }
 
+/** Why a Subscription is unusable: an open weekly-limit issue, or an open usage-credits issue. */
+export type Unusable = "weekly-limit" | "usage-credits";
+
+/**
+ * Each Subscription an open Kit-owned issue makes unusable, and why: its
+ * weekly-limit issue first, when it has both.
+ */
+export function unusableSubscriptions(
+  kitIssues: readonly KitIssueSnapshot[],
+  config: Pick<KitConfig, "subscriptions">,
+): ReadonlyMap<Subscription, Unusable> {
+  const unusable = new Map<Subscription, Unusable>();
+  for (const issue of kitIssues) {
+    if (issue.labels.includes(WEEKLY_LIMIT_LABEL)) unusable.set(weeklyLimitSubscriptionOf(issue, config), "weekly-limit");
+  }
+  for (const issue of kitIssues) {
+    const named = issue.labels.includes(USAGE_CREDITS_LABEL) ? subscriptionNamedBy(issue) : null;
+    if (named !== null && !unusable.has(named)) unusable.set(named, "usage-credits");
+  }
+  return unusable;
+}
+
 /**
  * The listed Subscriptions with no open weekly-limit issue and no open
  * usage-credits issue, in the listed order.
@@ -80,13 +102,7 @@ export function freeSubscriptions(
   kitIssues: readonly KitIssueSnapshot[],
   config: Pick<KitConfig, "subscriptions">,
 ): readonly Subscription[] {
-  const unusable = new Set(
-    kitIssues.flatMap((issue) => {
-      if (issue.labels.includes(WEEKLY_LIMIT_LABEL)) return [weeklyLimitSubscriptionOf(issue, config)];
-      const named = issue.labels.includes(USAGE_CREDITS_LABEL) ? subscriptionNamedBy(issue) : null;
-      return named === null ? [] : [named];
-    }),
-  );
+  const unusable = unusableSubscriptions(kitIssues, config);
   return config.subscriptions.filter((subscription) => !unusable.has(subscription));
 }
 

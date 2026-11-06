@@ -98,7 +98,7 @@ async function main(productDir: string): Promise<void> {
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
     route = routeOf(plan);
     run = agentRunIn(plan);
-    summary = kitJobSummary(plan, config);
+    summary = kitJobSummary(plan, config, snapshot.kitIssues);
     ticket = snapshot.pullRequest?.ticket ?? null;
   }
   // A Review's subject is the PR itself; a retry is an Implement run on the Ticket that fixes its PR.
