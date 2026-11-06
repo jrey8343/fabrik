@@ -62,6 +62,30 @@ export interface KitConfig {
   readonly skillsSources: readonly SkillsSource[];
   /** Each role's Extra skills, picked from those sources; a Step-up run uses implement's. */
   readonly extraSkills: Readonly<Record<Phase, readonly ExtraSkill[]>>;
+  /** What makes a pull request UI and how the Sandbox serves it for UI evidence (#153); null never captures. */
+  readonly ui: UiConfig | null;
+  /** Where a pull request's preview deployment appears (#153); null links none. */
+  readonly preview: PreviewConfig | null;
+}
+
+/** The `ui` block: which changed files make a pull request UI, and how the Sandbox serves the branch to capture it. */
+export interface UiConfig {
+  /** Globs of the files whose change makes a pull request UI; never empty. */
+  readonly paths: readonly string[];
+  /** The command the Sandbox runs in the background after `sandbox.build` to serve the branch. */
+  readonly serve: string;
+  /** The local base URL the Kit polls until it answers, then captures routes under. */
+  readonly url: string;
+  /** The production base URL Before is captured from; null skips Before. */
+  readonly beforeUrl: string | null;
+  /** The routes captured when neither the Ticket nor the Implementer names any, each starting with `/`. */
+  readonly defaultRoutes: readonly string[];
+}
+
+/** The `preview` block: a URL template the Kit fills in and polls, never calling a host's API. */
+export interface PreviewConfig {
+  /** An http(s) URL that may use only the PREVIEW_PLACEHOLDERS, such as `https://pr-{pr}.example.dev`. */
+  readonly url: string;
 }
 
 /** The Sentry project the Monitor reads a Product repo's production errors from. */
@@ -163,6 +187,9 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   instructions: { triage: null, design: null, implement: null, review: null, audit: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
+  // Visual evidence is off until a Product repo turns it on with /fabrik-setup.
+  ui: null,
+  preview: null,
 };
 
 /** Where the Kit config lives in a Product repo (ADR-0005). */
@@ -363,6 +390,8 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     audit: readAudit(file.object("audit"), defaults.audit),
     operator: orDefault(file.nullableString("operator", checkLogin), defaults.operator),
     subscriptions: file.subscriptions("subscriptions") ?? defaults.subscriptions,
+    ui: readUi(file.nullableObject("ui")),
+    preview: readPreview(file.nullableObject("preview")),
   };
 }
 
@@ -439,6 +468,25 @@ function checkSentrySlug(slug: string): string | null {
 
 function checkHttpsUrl(url: string): string | null {
   return URL.parse(url)?.protocol === "https:" ? null : "the Sentry token is sent there, so it must be an https:// URL";
+}
+
+/** The `ui` block; left out or null, Visual evidence never captures. */
+function readUi(ui: Reader | null | undefined): UiConfig | null {
+  if (ui === undefined || ui === null) return null;
+  const paths = ui.stringList("paths");
+  const serve = ui.requiredString("serve");
+  const url = ui.requiredString("url");
+  const beforeUrl = ui.nullableString("before_url");
+  const defaultRoutes = ui.stringList("default_routes");
+  if (paths === undefined || serve === undefined || url === undefined) return null;
+  return { paths, serve, url, beforeUrl: beforeUrl ?? null, defaultRoutes: defaultRoutes ?? [] };
+}
+
+/** The `preview` block; left out, null, or with no `url`, the pull request links no preview. */
+function readPreview(preview: Reader | null | undefined): PreviewConfig | null {
+  if (preview === undefined || preview === null) return null;
+  const url = preview.nullableString("url");
+  return url === undefined || url === null ? null : { url };
 }
 
 function readAudit(audit: Reader, defaults: KitConfig["audit"]): KitConfig["audit"] {

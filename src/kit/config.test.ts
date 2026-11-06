@@ -26,6 +26,8 @@ const DEFAULTS = {
   instructions: { triage: null, design: null, implement: null, review: null, audit: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
+  ui: null,
+  preview: null,
 };
 
 describe("Kit config", () => {
@@ -851,4 +853,74 @@ describe("A Subscription name, which goes into a job output and an op:// referen
       errors: [`subscriptions names ${JSON.stringify(name)}, but a Fabrik vault item name can't hold a control character or a slash`],
     });
   });
+});
+
+describe("The ui and preview blocks, which Visual evidence reads", () => {
+  it("leaves ui and preview off when the Kit config has neither", () => {
+    const result = resolveKitConfig({ config: `{ "max_in_flight": 1, "operator": "jrey8343" }` });
+
+    expect(result.ok && result.config.ui).toBeNull();
+    expect(result.ok && result.config.preview).toBeNull();
+  });
+
+  it("resolves a full ui block and a preview block", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        ui: {
+          paths: ["src/**/*.astro", "src/components/**", "public/**"],
+          serve: "node ./dist/server/entry.mjs",
+          url: "http://127.0.0.1:4321",
+          before_url: "https://penrithphysio.com.au",
+          default_routes: ["/", "/book", "/services"],
+        },
+        preview: { url: "https://deploy-preview-{pr}--penrith-physio.netlify.app" },
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        ui: {
+          paths: ["src/**/*.astro", "src/components/**", "public/**"],
+          serve: "node ./dist/server/entry.mjs",
+          url: "http://127.0.0.1:4321",
+          beforeUrl: "https://penrithphysio.com.au",
+          defaultRoutes: ["/", "/book", "/services"],
+        },
+        preview: { url: "https://deploy-preview-{pr}--penrith-physio.netlify.app" },
+      },
+    });
+  });
+
+  it("resolves a ui block with only paths, serve and url to no Before and no default routes", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } }),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", beforeUrl: null, defaultRoutes: [] },
+      },
+    });
+  });
+
+  it("lets null skip Before, as a repo with no public production site spells it", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", before_url: null },
+      }),
+    });
+
+    expect(result.ok && result.config.ui?.beforeUrl).toBeNull();
+  });
+
+  it.each([`{ "ui": null }`, `{ "preview": null }`, `{ "preview": {} }`, `{ "preview": { "url": null } }`])(
+    "resolves %s to Visual evidence off and no preview link",
+    (text) => {
+      expect(resolveKitConfig({ config: text })).toEqual({ ok: true, config: DEFAULTS });
+    },
+  );
 });
