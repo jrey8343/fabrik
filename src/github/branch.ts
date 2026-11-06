@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 import type { BuiltBranch } from "../agent/result.ts";
 import { parseNameStatus } from "../guard/changes.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
+import { PROTOTYPE_BRANCH_PREFIX } from "../loop/designOutput.ts";
 import type { BranchChanges } from "../loop/types.ts";
 import type { Repo } from "./client.ts";
 
@@ -93,7 +94,7 @@ export async function rebuildAgentBranch(
  * ever fast-forwards, whoever's run built it.
  */
 function isPrototypeBranch(name: string): boolean {
-  return name.startsWith("prototype/");
+  return name.startsWith(PROTOTYPE_BRANCH_PREFIX);
 }
 
 /** Reads the bundle's branch in, checking it ends where the agent job said. */

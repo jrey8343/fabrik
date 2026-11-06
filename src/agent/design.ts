@@ -5,7 +5,7 @@
 // what the inputs say of the Map cap; and, on a repo the Kit can prototype,
 // that Prototypes are available.
 import type { KitConfig } from "../kit/config.ts";
-import { PROTOTYPE_DEFAULT_VARIANTS, PROTOTYPE_MIN_VARIANTS, PROTOTYPE_VARIANT_CAP } from "../loop/designOutput.ts";
+import { PROTOTYPE_DEFAULT_VARIANTS, PROTOTYPE_MIN_VARIANTS, PROTOTYPE_VARIANT_CAP, prototypeBranchFor } from "../loop/designOutput.ts";
 import { spelled } from "../loop/readable.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 import { MAP_INPUTS_FILE, type MapOffer } from "./inputs.ts";
@@ -80,7 +80,7 @@ const PROTOTYPE_EXAMPLE = {
  */
 export function prototypeContext(config: Pick<KitConfig, "ui">, issue: number): string[] {
   if (config.ui === null) return [];
-  const branch = `\`prototype/${issue}\``;
+  const branch = `\`${prototypeBranchFor(issue)}\``;
   return [
     `## ${PROTOTYPES_HEADING}`,
     [

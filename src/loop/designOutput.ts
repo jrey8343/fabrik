@@ -141,12 +141,15 @@ export interface PrototypeVariant {
   readonly component: string;
 }
 
+/** What every issue's prototype branch is named under (prototypeBranchFor). loop.yml spells it out too. */
+export const PROTOTYPE_BRANCH_PREFIX = "prototype/";
+
 /**
  * The issue's prototype branch, which every prototype turn of its Design
  * sessions builds on and nothing in the Kit merges or deletes.
  */
 export function prototypeBranchFor(issue: number): string {
-  return `prototype/${issue}`;
+  return `${PROTOTYPE_BRANCH_PREFIX}${issue}`;
 }
 
 /** The letter of the variant at `index`: A for the first, then B, C… */
