@@ -398,3 +398,34 @@ describe("Applying a plan that appends a line to a Map's Decisions so far", () =
     expect(github.map.body).toBe(appended);
   });
 });
+
+describe("Applying a prototype turn's plan (#155)", () => {
+  /** The prototype branch the push job holds from the turn's bundle. */
+  const heldBranch = () => {
+    const pushed: string[] = [];
+    return { pushed, head: "7e3d1c9b5a4f2e0d8c6b4a2f0e9d7c5b3a1f0e2d", push: async (branch: string) => void pushed.push(branch) };
+  };
+
+  it("pushes the issue's prototype branch, then posts the round, and opens no PR", async () => {
+    const github = fakeGitHub();
+    const branch = heldBranch();
+    const plan: Plan = {
+      kind: "act",
+      actions: [
+        { kind: "push-prototype-branch", issue: 7 },
+        { kind: "comment", issue: 7, body: "The prototype round." },
+      ],
+    };
+
+    await applyPlan(github, repo, plan, branch);
+
+    expect(branch.pushed).toEqual(["prototype/7"]);
+    expect(github.calls).toEqual([{ method: "POST", path: `${issues}/7/comments`, body: { body: "The prototype round." } }]);
+  });
+
+  it("fails rather than push when the job holds no branch", async () => {
+    await expect(applyPlan(fakeGitHub(), repo, { kind: "act", actions: [{ kind: "push-prototype-branch", issue: 7 }] })).rejects.toThrow(
+      "This job holds no branch to push (prototype/7)",
+    );
+  });
+});
