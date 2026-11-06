@@ -276,7 +276,8 @@ function landTurn(
     };
   }
   if (output.kind === "prototype") {
-    return noPrototype === null ? { kind: "act", actions: requestPrototype(issueNumber, output, reply) } : wrongOutcome(issueNumber, noPrototype);
+    if (noPrototype !== null) return wrongOutcome(issueNumber, noPrototype);
+    return { kind: "act", actions: requestPrototype(issueNumber, output, reply) };
   }
   if (output.kind === "prototype-round") {
     return wrongOutcome(issueNumber, "only a prototype turn ends in a prototype-round, and this was an ordinary turn");

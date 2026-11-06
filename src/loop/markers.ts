@@ -65,7 +65,7 @@ export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) 
 
 /**
  * A prototype request's first line (#155), carrying as JSON what the Operator
- * approved and the reply they approved it in.
+ * approved and, when a reply of theirs started the turn, that reply.
  */
 const PROTOTYPE_REQUEST_MARKER = /^<!-- fabrik:prototype-request (\{.*\}) -->(?:\n|$)/;
 
@@ -81,13 +81,16 @@ export interface PrototypeRequestMarker {
   readonly reply: number | null;
 }
 
+/** How a prototype request's marker spells the characters that could end its HTML comment early or mention someone. */
+const ESCAPED: Readonly<Record<string, string>> = { "<": "\\u003c", ">": "\\u003e", "@": "\\u0040" };
+
 /**
  * The marker a prototype request opens with, on one line, which
- * prototypeRequestIn reads back. The JSON spells `<`, `>` and `@` as escapes,
+ * prototypeRequestIn reads back. Its JSON spells `<`, `>` and `@` as escapes,
  * so a brief can neither end the HTML comment early nor mention anyone.
  */
 export function prototypeRequestMarker({ request: { route, variants, brief }, reply }: PrototypeRequestMarker): string {
-  const json = JSON.stringify({ route, variants, brief, reply }).replace(/[<>@]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  const json = JSON.stringify({ route, variants, brief, reply }).replace(/[<>@]/g, (c) => ESCAPED[c] ?? c);
   return `<!-- fabrik:prototype-request ${json} -->`;
 }
 
