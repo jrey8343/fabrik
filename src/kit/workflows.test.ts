@@ -3,6 +3,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { JUDGE_JOB } from "./judge.ts";
+import { RETRO_EVIDENCE_JOB } from "./pushJob.ts";
 import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 
@@ -1001,10 +1002,139 @@ describe("The Retro action", () => {
   });
 });
 
-// Dormant until the switch-on (#151): the actions exist, but no loop.yml job uses them.
-describe("loop.yml, until the Retro is switched on", () => {
-  it("routes nothing to the Retro's jobs, and its push job needs neither", () => {
-    expect(loop).not.toMatch(/gather-retro-evidence|run-retro|retro-evidence|fabrik-transcript-retro/);
-    expect(/\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ")).not.toContain("retro");
+/** A job's `permissions:` block, one `name: level` per entry, or `{}` for none. */
+function permissionsIn(body: string): readonly string[] {
+  if (/\n    permissions: \{\}\n/.test(body)) return ["{}"];
+  const block = /\n    permissions:\n((?: {6}.*\n)+)/.exec(body)?.[1] ?? "";
+  return block.trim().split("\n").map((line) => line.trim()).filter((line) => !line.startsWith("#"));
+}
+
+/** The push job's `needs`. */
+const pushNeeds = (): readonly string[] => /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ") ?? [];
+
+// A Retro run's first job (#151): Kit-only like the push job, and read-only (ADR-0009's addendum).
+describe("loop.yml's Retro evidence job", () => {
+  const evidence = (): string => job(RETRO_EVIDENCE_JOB);
+  const steps = (): readonly string[] => stepsOf(evidence());
+  const gather = (): string | undefined => steps().find((step) => step.includes("uses: ./kit/.github/actions/gather-retro-evidence"));
+
+  it("checks out only the Kit, at its pinned commit, and never the Product repo", () => {
+    const checkouts = steps().filter((step) => step.includes("uses: actions/checkout@"));
+
+    expect(checkouts).toHaveLength(1);
+    expect(checkouts[0]).toContain("repository: jrey8343/fabrik\n");
+    expect(checkouts[0]).toContain("ref: ${{ needs.kit.outputs.sha }}");
+    expect(checkouts[0]).toContain("path: kit\n");
+    expect(checkouts[0]).toContain("persist-credentials: false");
+  });
+
+  it("holds no GitHub permission of its own, and only the push service account, which loads the Fabrik App key", () => {
+    expect(permissionsIn(evidence())).toEqual(["{}"]);
+    expect(gather()).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
+    expect(evidence()).not.toMatch(/OP_AGENT_TOKEN|OP_IMPLEMENT_TOKEN|id-token|github\.token|GH_TOKEN/);
+  });
+
+  it("mints a Contents-read token on fabrik-runs and no write token, through its action alone", () => {
+    const { text, steps: actionSteps } = actionNamed("gather-retro-evidence");
+    const tokens = actionSteps.filter((step) => step.includes("uses: actions/create-github-app-token@"));
+    const store = tokens.filter((step) => step.includes("repositories: fabrik-runs"));
+
+    expect(evidence()).not.toContain("create-github-app-token");
+    expect(store).toHaveLength(1);
+    expect(permissionsOf(store[0])).toEqual(["contents: read"]);
+    expect(tokens.flatMap(permissionsOf).every((permission) => permission.endsWith(": read"))).toBe(true);
+    expect(text).not.toMatch(/: write\b/);
+  });
+
+  it("inlines no gh calls, nor any other command: its action runs the Kit's program", () => {
+    expect(evidence()).not.toMatch(/\n\s+run: /);
+    expect(evidence()).not.toMatch(/\bgh /);
+  });
+
+  it("runs only when the Kit job routed to the Retro, within the Retro's timeout", () => {
+    expect(evidence()).toContain("needs: kit\n");
+    expect(evidence()).toContain("if: needs.kit.outputs.route == 'retro'");
+    expect(evidence()).toContain("timeout-minutes: ${{ fromJSON(needs.kit.outputs.retro-timeout-minutes) }}");
+    expect(job("kit")).toContain("retro-timeout-minutes: ${{ steps.route.outputs.retro-timeout-minutes }}");
+  });
+
+  it("passes out how its secrets loaded, which the push job weighs when it fails", () => {
+    expect(gather()).toContain("id: evidence\n");
+    expect(evidence()).toContain("secrets-step: ${{ steps.evidence.outputs.secrets-step }}");
+  });
+});
+
+// A Retro run's second job (#151), shaped like the Audit job: read-only, with only the Claude token.
+describe("loop.yml's Retro job", () => {
+  const retro = (): string => job("retro");
+  const steps = (): readonly string[] => stepsOf(retro());
+  const run = (): string | undefined => steps().find((step) => step.includes("uses: ./kit/.github/actions/run-retro"));
+
+  it("holds only read permissions", () => {
+    expect(permissionsIn(retro())).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
+  });
+
+  it("holds only the agent service account, which loads the Claude token, and no GitHub write credential", () => {
+    expect(run()).toContain("op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}");
+    expect(run()).toContain("github-token: ${{ github.token }}");
+    expect(retro()).not.toMatch(/OP_PUSH_TOKEN|OP_IMPLEMENT_TOKEN|id-token|GH_TOKEN|create-github-app-token/);
+  });
+
+  it("checks out the Kit alone, and runs the Retro through its action on the model and effort the Kit job's plan chose", () => {
+    const checkouts = steps().filter((step) => step.includes("uses: actions/checkout@"));
+
+    expect(checkouts).toHaveLength(1);
+    expect(checkouts[0]).toContain("repository: jrey8343/fabrik\n");
+    expect(checkouts[0]).toContain("path: kit\n");
+    expect(run()).toContain("id: retro\n");
+    expect(run()).toContain("model: ${{ needs.kit.outputs.model }}");
+    expect(run()).toContain("effort: ${{ needs.kit.outputs.effort }}");
+    expect(steps().indexOf(checkouts[0]!)).toBeLessThan(steps().indexOf(run()!));
+  });
+
+  it("keeps fabrik-transcript-retro, which the push job's record step takes on the retro route", () => {
+    const keep = actionNamed("run-retro").steps.find((step) => step.includes("name: fabrik-transcript-retro\n"));
+
+    expect(keep).toContain("if: always()");
+    expect(keep).toContain("continue-on-error: true");
+    expect(stepsOf(job("push")).find((step) => step.includes("uses: ./kit/.github/actions/write-run-record"))).toContain(
+      "role: ${{ needs.kit.outputs.route }}",
+    );
+  });
+
+  it("runs only after the evidence job, when the Kit job routed to the Retro, within the Retro's timeout", () => {
+    expect(retro()).toContain(`needs: [kit, ${RETRO_EVIDENCE_JOB}]\n`);
+    expect(retro()).toContain("if: needs.kit.outputs.route == 'retro'");
+    expect(retro()).toContain("timeout-minutes: ${{ fromJSON(needs.kit.outputs.retro-timeout-minutes) }}");
+  });
+
+  it("runs one Retro per repo at a time, queueing the next", () => {
+    expect(retro()).toMatch(/\n    concurrency:\n {6}group: fabrik-retro\n {6}cancel-in-progress: false\n {6}queue: max\n/);
+  });
+
+  it("passes out how its secrets loaded, the model and effort it ran and the commit it started from, for the push job and the Run record", () => {
+    for (const output of ["secrets-step", "model", "effort", "base-sha"]) {
+      expect(retro()).toContain(`${output}: \${{ steps.retro.outputs.${output} }}`);
+    }
+  });
+});
+
+describe("loop.yml's push job, after a Retro run", () => {
+  it("needs both the Retro evidence job and the Retro job, so it fills in or fails the Retro once they've ended", () => {
+    expect(pushNeeds()).toEqual(expect.arrayContaining([RETRO_EVIDENCE_JOB, "retro"]));
+  });
+
+  // src/main.ts reads the evidence from $RUNNER_TEMP/retro-evidence, never from the agent's output.
+  it("takes the evidence job's bundle on the retro route, before the Loop runs, and goes on without one", () => {
+    const steps = stepsOf(job("push"));
+    const download = steps.findIndex((step) => step.includes("name: fabrik-retro-evidence\n"));
+    const loopStep = steps.findIndex((step) => step.includes("name: Run the Loop"));
+
+    expect(download).toBeGreaterThan(-1);
+    expect(steps[download]).toContain("uses: actions/download-artifact@");
+    expect(steps[download]).toContain("if: needs.kit.outputs.route == 'retro'");
+    expect(steps[download]).toContain("continue-on-error: true");
+    expect(steps[download]).toContain("path: ${{ runner.temp }}/retro-evidence\n");
+    expect(download).toBeLessThan(loopStep);
   });
 });
