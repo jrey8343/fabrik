@@ -611,6 +611,7 @@ function openIssueOf(issue: RawIssue): OpenIssueFacts {
     createdAt: issue.createdAt,
     comments: issue.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(issue.timelineItems.nodes),
+    subIssues: issue.subIssues.nodes.map((subIssue) => subIssue.number),
   };
 }
 

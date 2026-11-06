@@ -215,9 +215,9 @@ export function aVerdictComment(verdict: Verdict, headSha: string, at: string, o
   return aComment(`${verdictMarker({ verdict, source: "reviewer", requestChanges: false, headSha })}\nVerdict: ${verdict}`, at, overrides);
 }
 
-/** Open issue 12, opened on 2026-10-01, with no labels, comments or label events unless a test says so. */
+/** Open issue 12, opened on 2026-10-01, with no labels, comments, label events or sub-issues unless a test says so. */
 export function anOpenIssue(overrides: Partial<OpenIssueFacts> = {}): OpenIssueFacts {
-  return { number: 12, title: "An open issue", labels: [], createdAt: "2026-10-01T00:00:00Z", comments: [], labelEvents: [], ...overrides };
+  return { number: 12, title: "An open issue", labels: [], createdAt: "2026-10-01T00:00:00Z", comments: [], labelEvents: [], subIssues: [], ...overrides };
 }
 
 /**

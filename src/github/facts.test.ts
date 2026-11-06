@@ -330,7 +330,24 @@ describe("Gathering a Product repo's GitHub facts", () => {
           { author: "ghost", byBot: false, body: "An answer", at: "2026-11-02T00:00:00Z" },
         ],
         labelEvents: [],
+        subIssues: [],
       },
+    ]);
+  });
+
+  it("holds each open issue's sub-issues, open or closed, so the summary finds a Map's Decisions", async () => {
+    const github = repoWith({
+      openIssues: [
+        aRawIssue({ number: 30, labels: { nodes: [{ name: "wayfinder:map" }] }, subIssues: { nodes: [{ number: 31 }, { number: 32 }] } }),
+        aRawIssue({ number: 31, labels: { nodes: [{ name: "wayfinder:grilling" }] } }),
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(facts.openIssues.map(({ number, subIssues }) => [number, subIssues])).toEqual([
+      [30, [31, 32]],
+      [31, []],
     ]);
   });
 
