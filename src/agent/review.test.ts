@@ -60,6 +60,8 @@ describe("A Review's context", () => {
     expect(amendments).toContain("amend the Ticket");
     // Set out once, in its own section, not again inside the PR's JSON.
     expect(text.split(PENRITH_59_REQUEST)).toHaveLength(2);
+    // The Operator's only words are the Request changes, so the comments section says so rather than claiming silence.
+    expect(text).toContain("## The Operator's comments on the pull request\n(The Operator hasn't commented on it beyond the Request changes above.)");
     expect(given).toEqual([{ id: "review-70", url: "https://github.com/jrey8343/penrith-physiotherapy-sports-centre/pull/59#pullrequestreview-70" }]);
   });
 
@@ -79,6 +81,7 @@ describe("A Review's context", () => {
     const text = parts.join("\n");
     expect(text).toContain("### `review-8`: Request changes, 2026-11-05T00:00:00Z\n(The review has no summary; see its comments below.)\n#### `inline-9`: inline on `src/parking.ts` line 4\nDrop the paid option.");
     expect(text.split("Drop the paid option.")).toHaveLength(2);
+    expect(text).not.toContain("(The Operator hasn't commented on it.)");
     expect(given.map((comment) => comment.id)).toEqual(["conversation-3", "review-5", "inline-9", "review-8"]);
   });
 

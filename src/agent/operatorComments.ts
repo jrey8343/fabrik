@@ -2,7 +2,9 @@
 // src/agent/inputs.ts reads them into a run's input files: under the PR's
 // `operatorComments` for a Review, a retry or a Request-changes run, and under
 // the issue's `sentBack.operatorComments` for the Design session that follows a
-// return. Each is context for the run, never a request for work.
+// return. Each is context for the run, never a request for work. Beside them,
+// for a Review or a retry, are the Operator's Request changes reviews, under
+// the PR's `requestedChanges`: those amend the Ticket (ADR-0010).
 import { isGivenOperatorComment } from "../loop/considered.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 
@@ -74,6 +76,11 @@ export const OPERATOR_COMMENTS_HEADING = "The Operator's comments on the pull re
 
 const text = (value: unknown): string => (typeof value === "string" ? value : String(value ?? ""));
 
+/** An inline comment's place: its file, and its line when it has one. */
+function inlinePlace(path: unknown, line: unknown): string {
+  return `\`${text(path)}\`${typeof line === "number" ? ` line ${line}` : ""}`;
+}
+
 function placeOf(where: unknown): string {
   const place = (where ?? {}) as { kind?: unknown; state?: unknown; path?: unknown; line?: unknown };
   switch (place.kind) {
@@ -82,7 +89,7 @@ function placeOf(where: unknown): string {
     case "review":
       return `in a review (${text(place.state)})`;
     case "inline":
-      return `inline on \`${text(place.path)}\`${typeof place.line === "number" ? ` line ${place.line}` : ""}`;
+      return `inline on ${inlinePlace(place.path, place.line)}`;
     default:
       return "on the pull request";
   }
@@ -93,11 +100,11 @@ function placeOf(where: unknown): string {
  * under OPERATOR_COMMENTS_HEADING at heading `level`, oldest first, each
  * headed by its id, so the run can name the ones it weighed.
  */
-export function operatorCommentsSection(comments: unknown, level: 2 | 3 = 2): string[] {
+export function operatorCommentsSection(comments: unknown, level: 2 | 3 = 2, none = "(The Operator hasn't commented on it.)"): string[] {
   const list = Array.isArray(comments) ? (comments as { id?: unknown; where?: unknown; createdAt?: unknown; body?: unknown }[]) : [];
   const hashes = "#".repeat(level);
   const parts = [`${hashes} ${OPERATOR_COMMENTS_HEADING}`];
-  if (list.length === 0) return [...parts, "(The Operator hasn't commented on it.)"];
+  if (list.length === 0) return [...parts, none];
   parts.push(
     "The Operator's own words on this pull request, oldest first, as they stood when this run started. Weigh them as this prompt says. Each is headed by its id.",
   );
@@ -143,7 +150,7 @@ export function requestedChangesSection(requestedChanges: unknown): string[] {
     const comments = Array.isArray(review.comments) ? (review.comments as { id?: unknown; path?: unknown; line?: unknown; body?: unknown }[]) : [];
     for (const comment of comments) {
       parts.push(
-        `#### \`${text(comment.id)}\`: inline on \`${text(comment.path)}\`${typeof comment.line === "number" ? ` line ${comment.line}` : ""}`,
+        `#### \`${text(comment.id)}\`: inline on ${inlinePlace(comment.path, comment.line)}`,
         text(comment.body).trimEnd(),
       );
     }
@@ -170,7 +177,12 @@ export function operatorInputSections({ operatorComments, requestedChanges }: Re
     ? (operatorComments as { id?: unknown }[]).filter(({ id }) => !shown.has(id))
     : operatorComments;
   return {
-    parts: [...requestedChangesSection(reviews), ...operatorCommentsSection(others)],
+    parts: [
+      ...requestedChangesSection(reviews),
+      ...(reviews.length === 0
+        ? operatorCommentsSection(others)
+        : operatorCommentsSection(others, 2, "(The Operator hasn't commented on it beyond the Request changes above.)")),
+    ],
     given: [...givenOperatorComments(operatorComments), ...givenOperatorComments(reviews)],
   };
 }

@@ -1,7 +1,7 @@
 // The Review agent job's own context around the Reviewer: the PR it judges,
 // checked out at the head its required checks passed on, the Operator's
-// Request changes reviews on it, which amend the Ticket (ADR-0010), and the
-// Operator's comments on it (never earlier Verdicts or fix comments), with the Ticket's
+// Request changes reviews on it, which amend the Ticket (ADR-0010), and its
+// comments on it (never earlier Verdicts or fix comments), with the Ticket's
 // Spec, the repo's glossary and ADRs, its Coding standards, and on a UI PR its
 // UI evidence. The Reviewer holds no GitHub credential and runs none of the
 // PR's code.
@@ -44,7 +44,7 @@ export async function reviewContext(
     operatorComments?: unknown;
     requestedChanges?: unknown;
   };
-  const operator = operatorInputSections({ operatorComments, requestedChanges });
+  const fromOperator = operatorInputSections({ operatorComments, requestedChanges });
   const number = pullRequest.number;
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   const standards = await readIfPresent(join(productDir, CODING_STANDARDS_FILE));
@@ -55,14 +55,14 @@ export async function reviewContext(
       "```json",
       JSON.stringify(pullRequest, null, 2),
       "```",
-      ...operator.parts,
+      ...fromOperator.parts,
       ...(await ticketContext(productDir, specFile)),
       ...(standards === null ? [] : [`## ${CODING_STANDARDS_FILE}`, standards.trimEnd()]),
       ...(evidenceDir === null
         ? []
         : await uiEvidenceContext(productDir, evidenceDir, { head: headOf(pullRequest.headRefOid), recorded: recordedFailure })),
     ],
-    operatorComments: operator.given,
+    operatorComments: fromOperator.given,
   };
 }
 

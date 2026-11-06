@@ -128,7 +128,7 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
   );
   const latest = verdicts.at(-1);
   if (latest === undefined) throw new Error(`#${number} has no Verdict for the retry to fix`);
-  const operator = operatorInputSections({ operatorComments, requestedChanges });
+  const fromOperator = operatorInputSections({ operatorComments, requestedChanges });
   return {
     pullRequest: number,
     parts: [
@@ -138,9 +138,9 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
       "## The findings to fix",
       "The latest Verdict on the PR, posted by the Kit:",
       latest.trimEnd(),
-      ...operator.parts,
+      ...fromOperator.parts,
     ],
-    operatorComments: operator.given,
+    operatorComments: fromOperator.given,
   };
 }
 
