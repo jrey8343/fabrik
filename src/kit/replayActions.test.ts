@@ -9,7 +9,7 @@ import { REPLAY_PATCH_FILE } from "../agent/replay.ts";
 import { AGENT_RESULT_FILE } from "../agent/result.ts";
 import { JUDGE_FAILURE_FILE, JUDGE_RESULT_FILE } from "./judge.ts";
 import { REPLAY_GATES_FILE } from "./replayGates.ts";
-import { ARM_JOB_FILE, replayArtifact, type ReplayArtifactKind } from "./replayRecord.ts";
+import { ARM_JOB_FILE, replayArtifact, type ReplayArtifactKind } from "./replayArtifacts.ts";
 
 const root = new URL("../../", import.meta.url);
 const workflows = readdirSync(new URL(".github/workflows/", root)).map((name) => ({ name, text: readFileSync(new URL(`.github/workflows/${name}`, root), "utf8") }));

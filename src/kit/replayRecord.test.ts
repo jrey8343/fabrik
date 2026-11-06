@@ -3,18 +3,8 @@ import { REVIEW_HIGH } from "../__fixtures__/replay.ts";
 import { noWait, storeWith } from "../__fixtures__/store.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { replayArms } from "./replay.ts";
-import {
-  type ArmArtifacts,
-  armJobOf,
-  type ArmRunArtifacts,
-  armScoring,
-  readArmJob,
-  readReplayRunEnded,
-  replayRunContextOf,
-  replayRunEnded,
-  replayRunFiles,
-  writeReplayRun,
-} from "./replayRecord.ts";
+import { type ArmArtifacts, armJobOf, type ArmRunArtifacts, readArmJob } from "./replayArtifacts.ts";
+import { armScoring, readReplayRunEnded, replayRunContextOf, replayRunEnded, replayRunFiles, writeReplayRun } from "./replayRecord.ts";
 import type { Rubric } from "./rubrics.ts";
 import type { ReplayArm } from "./runRecord.ts";
 
