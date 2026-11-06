@@ -19,6 +19,19 @@ export function rotationIsOn(config: Pick<KitConfig, "subscriptions">): boolean 
   return config.subscriptions.length >= 2;
 }
 
+/**
+ * The Subscription a failed run used: the one its event names, else the first
+ * listed one, as for a run started before runs were given a Subscription.
+ */
+export function subscriptionOfRun(
+  run: { readonly subscription?: string },
+  config: Pick<KitConfig, "subscriptions">,
+): string {
+  const first = config.subscriptions[0];
+  if (first === undefined) throw new Error("Kit config lists no Subscription");
+  return run.subscription ?? first;
+}
+
 /** The Subscription a Kit-owned issue names, or null when it names none, as a V1 issue doesn't. */
 function subscriptionNamedBy(issue: KitIssueSnapshot): string | null {
   const start = issue.body.indexOf(SUBSCRIPTION_MARKER);
