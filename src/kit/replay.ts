@@ -8,7 +8,10 @@
 // replay issue whose request names one variable. What the experiment runs:
 // the Tickets it picks from the merged ones, each picked Ticket's two arms,
 // and the hidden tests, the merged PR's own, that each arm is measured by.
-// Pure, no I/O.
+// Where it stands: the plan and each Ticket's progress, in hidden markers in
+// the Kit's part of the replay issue's body, below the Operator's request.
+// And the scheduled tick's next step: accept or reject a waiting request, or
+// start the next pending Ticket. Pure, no I/O.
 import { type ChangedPath, checkTrustRoot } from "../guard/trust-root.ts";
 import { newIssueUrl } from "../loop/followUps.ts";
 import { REPLAY_LABEL } from "../loop/labels.ts";
@@ -484,11 +487,11 @@ export interface ReplayIssue {
   readonly author: string;
   /** Its body as it stands: the Operator's request, with the Kit's part below it once accepted. */
   readonly body: string;
-  /** The Fabrik App's own comments on it, oldest first. */
+  /** The Fabrik App's own comments on it, oldest first: what the tick has said about its request already. */
   readonly comments: readonly string[];
 }
 
-/** Whether this tick has spare capacity for a replay Ticket, or why not. */
+/** Whether this tick has spare capacity for a replay Ticket, as the rules core's spare-capacity gate weighs it, or why not. */
 export type ReplayCapacity = { readonly spare: true } | { readonly spare: false; readonly why: string };
 
 /** A Product repo's Kit config at a Ticket's baseSha, as resolveKitConfig read it there. */
@@ -522,10 +525,19 @@ export type ReplayStep =
   | { readonly kind: "accept"; readonly issue: number; readonly body: string }
   /** Comments on the issue, once, saying why its request can't run. */
   | { readonly kind: "reject"; readonly issue: number; readonly comment: string }
-  /** Starts the issue's next pending Ticket, both arms. */
+  /** Starts the issue's next pending Ticket, both arms: the one nextReplayTicket names. */
   | { readonly kind: "start"; readonly issue: number; readonly ticket: number };
 
-/** The tick's next step for the Replays. */
+/**
+ * The tick's next step for the Replays, weighing only the Operator's open
+ * replay issues, oldest first. A waiting request comes first: one that
+ * doesn't read, names a candidate Kit that isn't a Fabrik commit, or picks no
+ * eligible Ticket is rejected with one comment, never twice for the same
+ * problem, and read again on the next tick; a valid one is accepted, its plan
+ * written into the body. With none to act on, the oldest accepted issue's
+ * next pending Ticket starts, unless a replay Ticket is in progress on any of
+ * them, or the tick has no spare capacity.
+ */
 export function nextReplayStep(tick: ReplayTick): ReplayStep {
   const issues = operatorsOpenIssues(tick);
   if (issues.length === 0) return { kind: "nothing", reason: "No open replay issue is the Operator's" };
@@ -668,6 +680,7 @@ function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): { readonl
   const { variable } = request;
   const { picked, leftOut, ruledOut } = pickWith(request, acceptance.candidates, ({ baseSha }) => {
     const base = acceptance.baseConfigs[baseSha];
+    // Never unread: requestStep weighs no request until every base it picks from is read.
     if (base === undefined) return null;
     if (!base.ok) return `its Kit config at ${shortSha(baseSha)} doesn't resolve under this Kit release: ${base.errors.join("; ")}`;
     const runs = alreadyRuns(base.config, variable);
@@ -725,6 +738,15 @@ export type ReplayProgress =
   | { readonly state: "done"; readonly run: number }
   | { readonly state: "failed"; readonly run: number; readonly reason: string };
 
+/** A planned Ticket's progress. */
+export type TicketProgress = { readonly ticket: number } & ReplayProgress;
+
+/** What a replay issue's markers hold: its plan, and each planned Ticket's progress, in plan order. */
+export interface ReplayMarks {
+  readonly plan: ReplayPlan;
+  readonly progress: readonly TicketProgress[];
+}
+
 /** How a Ticket's run ended, as its replay-record job saw it. */
 export type ReplayTicketEnd =
   /** Both arms ran, whatever their gates and Verdicts. */
@@ -776,15 +798,6 @@ function withProgress(body: string, ticket: number, next: (progress: ReplayProgr
   return marks === null || changed === null ? null : replayBody(body, { ...marks, progress: marks.progress.with(at, { ticket, ...changed }) });
 }
 
-/** A planned Ticket's progress. */
-export type TicketProgress = { readonly ticket: number } & ReplayProgress;
-
-/** What a replay issue's markers hold: its plan, and each planned Ticket's progress, in plan order. */
-export interface ReplayMarks {
-  readonly plan: ReplayPlan;
-  readonly progress: readonly TicketProgress[];
-}
-
 /** The hidden line the Kit's part opens with. */
 const KIT_PART_START = "<!-- fabrik:replay-start -->";
 
@@ -794,6 +807,7 @@ const PLAN_MARKER = /^<!-- fabrik:replay-plan (\{.*\}) -->$/;
 /** How a marker's JSON spells the characters that could end its HTML comment early or mention someone. */
 const MARKER_ESCAPES: Readonly<Record<string, string>> = { "<": "\\u003c", ">": "\\u003e", "@": "\\u0040" };
 
+/** A marker's value as one line of JSON that can neither end its HTML comment early nor mention anyone. */
 function markerJson(value: unknown): string {
   return JSON.stringify(value).replace(/[<>@]/g, (c) => MARKER_ESCAPES[c] ?? c);
 }
