@@ -2,7 +2,8 @@
 // up, with the Operator's own `gh` and `op` sign-ins:
 //   node src/setup/main.ts <product checkout> <release>          prints the plan
 //   node src/setup/main.ts <product checkout> <release> --apply  carries it out
-// With --time-zone=<IANA zone> it also sets up the fabrik-runs store.
+// With --time-zone=<IANA zone> it also sets up the fabrik-runs store, and with
+// --second-subscription it tells the Operator how to add a second Subscription.
 // It gathers the Product repo's state, asks the planner (plan.ts) what's
 // missing, and applies that. Thin by design: every decision is in the planner.
 import { spawn } from "node:child_process";
@@ -14,6 +15,7 @@ import { loadSetupKit } from "./kit.ts";
 import {
   ADMIN_BYPASS,
   type BranchProtection,
+  FABRIK_VAULT,
   MERGE_GATE_RULESET,
   type MergeGateRuleset,
   type ProductState,
@@ -74,12 +76,16 @@ async function gatherState(productDir: string, paths: readonly string[]): Promis
   const labels = names(await ok("gh", ["label", "list", "--limit", "1000", "--json", "name"], { cwd }));
   const secrets = names(await ok("gh", ["secret", "list", "--json", "name"], { cwd }));
   const vaults = names(await ok("op", ["vault", "list", "--format", "json"], { cwd }));
+  const titles = (json: string) => (JSON.parse(json) as { title: string }[]).map((item) => item.title);
+  const fabrikItems = vaults.includes(FABRIK_VAULT)
+    ? titles(await ok("op", ["item", "list", "--vault", FABRIK_VAULT, "--format", "json"], { cwd }))
+    : [];
   const [protection, mergeGate, store] = await Promise.all([
     gatherProtection(cwd, repo),
     gatherMergeGate(cwd, repo),
     gatherStore(cwd),
   ]);
-  return { repo, files, labels, secrets, vaults, protection, mergeGate, store };
+  return { repo, files, labels, secrets, vaults, fabrikItems, protection, mergeGate, store };
 }
 
 /** The fabrik-runs store, read through the API: setup has no checkout of it. */
@@ -307,12 +313,17 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   const applying = args.includes("--apply");
   const timeZone = args.find((arg) => arg.startsWith("--time-zone="))?.slice("--time-zone=".length);
+  const secondSubscription = args.includes("--second-subscription");
   const [productDir, release] = args.filter((arg) => !arg.startsWith("--"));
   if (productDir === undefined || release === undefined) {
-    console.error("Usage: node src/setup/main.ts <product checkout> <release> [--time-zone=<IANA zone>] [--apply]");
+    console.error("Usage: node src/setup/main.ts <product checkout> <release> [--time-zone=<IANA zone>] [--second-subscription] [--apply]");
     process.exit(2);
   }
-  main(resolve(productDir), release, applying, timeZone === undefined ? {} : { timeZone }).catch((error: unknown) => {
+  const answers: SetupAnswers = {
+    ...(timeZone === undefined ? {} : { timeZone }),
+    ...(secondSubscription ? { secondSubscription } : {}),
+  };
+  main(resolve(productDir), release, applying, answers).catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   });

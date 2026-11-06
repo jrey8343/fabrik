@@ -8,6 +8,7 @@ export function aCleanProduct(overrides: Partial<ProductState> = {}): ProductSta
     labels: [],
     secrets: [],
     vaults: [],
+    fabrikItems: [],
     protection: null,
     mergeGate: null,
     store: noStore(),
