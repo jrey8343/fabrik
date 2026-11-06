@@ -218,7 +218,92 @@ function isOneOf<T extends string>(options: readonly T[], value: unknown): value
   return (options as readonly unknown[]).includes(value);
 }
 
-/** `a`, `a or b`, or `a, b or c`. */
-function spelled(options: readonly string[]): string {
-  return options.length <= 1 ? options.join("") : `${options.slice(0, -1).join(", ")} or ${options.at(-1)}`;
+/** `a`, `a or b`, or `a, b or c`; or with `and`. */
+function spelled(options: readonly string[], conjunction: "or" | "and" = "or"): string {
+  return options.length <= 1 ? options.join("") : `${options.slice(0, -1).join(", ")} ${conjunction} ${options.at(-1)}`;
+}
+
+/** How the evidence section names why each route was captured. */
+export const ROUTE_REASON_WORDS: Readonly<Record<RouteReason, string>> = {
+  ticket: "named by the Ticket",
+  implementer: "named by the Implementer",
+  default: "a default route",
+};
+
+/** Whether a pull request's preview deployment is linked: none is declared, it answered and is linked, or it never answered. */
+export type PreviewLink =
+  | { readonly kind: "none" }
+  | { readonly kind: "linked"; readonly url: string }
+  | { readonly kind: "never-answered"; readonly url: string };
+
+/** Where a UI pull request's evidence is kept, as its marker records it. */
+export interface EvidenceMarker {
+  /** The Actions run whose Implement job captured it. */
+  readonly run: number;
+  /** The id of that run's artifact holding the screenshots and the capture result, or null when it kept none. */
+  readonly artifact: number | null;
+}
+
+/** A UI pull request's evidence, as the push job puts it together for the PR body. */
+export interface UiEvidence extends EvidenceMarker {
+  /** What capture recorded. */
+  readonly result: CaptureResult;
+  /** The gallery's web address, or null when the run kept none. */
+  readonly gallery: string | null;
+  readonly preview: PreviewLink;
+}
+
+/** The hidden line the evidence section opens with, so it can be found and replaced whole. */
+const SECTION_START = "<!-- fabrik:ui-evidence-start -->";
+
+/**
+ * The evidence section of a UI pull request's body: the gallery link, the
+ * preview link or why there is none, and each captured route with why it was
+ * chosen, between a hidden start line and the marker (evidenceMarkerIn).
+ */
+export function evidenceSection(evidence: UiEvidence): string {
+  const { result, gallery, preview } = evidence;
+  const { captures } = result;
+  return [
+    SECTION_START,
+    "## UI evidence",
+    ...(gallery === null ? [] : ["", galleryLine(gallery, result)]),
+    "",
+    previewLine(preview),
+    "",
+    "Captured routes:",
+    "",
+    ...capturedRoutes(captures).map(({ route, reason }) => `- ${code(route)}, ${ROUTE_REASON_WORDS[reason]}`),
+    evidenceMarker(evidence),
+  ].join("\n");
+}
+
+function galleryLine(url: string, { headSha, captures }: CaptureResult): string {
+  const besideProduction = captures.some(({ side }) => side === "before") ? " beside the production site" : "";
+  const viewports = UI_VIEWPORTS.map(({ name }) => name).filter((name) => captures.some(({ viewport }) => viewport === name));
+  return `${link("Open the gallery", url)} of ${captures.length} screenshots: this branch at \`${headSha.slice(0, 7)}\`${besideProduction}, at ${spelled(viewports, "and")} widths.`;
+}
+
+function previewLine(preview: PreviewLink): string {
+  return "No preview link: Kit config declares no `preview.url`.";
+}
+
+/** Each captured route once, in the order it was first captured, with its reason. */
+function capturedRoutes(captures: readonly Capture[]): ChosenRoute[] {
+  return onceEach(captures.map(({ route, reason }) => ({ route, reason })));
+}
+
+/** The marker line closing the evidence section. */
+function evidenceMarker({ run, artifact }: EvidenceMarker): string {
+  return `<!-- fabrik:ui-evidence ${JSON.stringify({ run, artifact })} -->`;
+}
+
+/** A Markdown link. */
+function link(text: string, url: string): string {
+  return `[${text}](<${url}>)`;
+}
+
+/** Text as a Markdown code span. */
+function code(text: string): string {
+  return `\`${text}\``;
 }

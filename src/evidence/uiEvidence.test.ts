@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { type CaptureResult, isUi, parseCaptureResult, routesFor } from "./uiEvidence.ts";
+import { type CaptureResult, evidenceSection, isUi, parseCaptureResult, routesFor, type UiEvidence } from "./uiEvidence.ts";
 
 /** The Pilot's ui block: an Astro site served from its build. */
 const ui: UiConfig = {
@@ -262,5 +262,52 @@ describe("The capture result", () => {
         "captures[1].status must be an HTTP status from 100 to 599",
       ],
     });
+  });
+});
+
+const GALLERY = "https://github.com/acme/shop/actions/runs/9100/artifacts/9201";
+
+/** The evidence the push job puts together for a UI PR's body: this result, kept by run 9100, with no preview declared. */
+const evidence = (result: CaptureResult, changes: Partial<UiEvidence> = {}): UiEvidence => ({
+  result,
+  run: 9100,
+  artifact: 9202,
+  gallery: GALLERY,
+  preview: { kind: "none" },
+  ...changes,
+});
+
+/** Every capture 200 OK: the Ticket's /book at both viewports and sides, and the Implementer's /book/waitlist at both viewports, After only. */
+const allCaptured: CaptureResult = {
+  outcome: "captured",
+  headSha: HEAD,
+  captures: [
+    { route: "/book", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-book.png" },
+    { route: "/book", reason: "ticket", viewport: "desktop", side: "after", status: 200, image: "after-desktop-book.png" },
+    { route: "/book/waitlist", reason: "implementer", viewport: "mobile", side: "after", status: 200, image: "after-mobile-book-waitlist.png" },
+    { route: "/book/waitlist", reason: "implementer", viewport: "desktop", side: "after", status: 200, image: "after-desktop-book-waitlist.png" },
+    { route: "/book", reason: "ticket", viewport: "mobile", side: "before", status: 200, image: "before-mobile-book.png" },
+    { route: "/book", reason: "ticket", viewport: "desktop", side: "before", status: 200, image: "before-desktop-book.png" },
+  ],
+};
+
+describe("The evidence section a UI PR's body carries", () => {
+  it("links the gallery, lists each captured route with why it was chosen, and ends with the marker naming where the images are kept", () => {
+    expect(evidenceSection(evidence(allCaptured))).toBe(
+      [
+        "<!-- fabrik:ui-evidence-start -->",
+        "## UI evidence",
+        "",
+        `[Open the gallery](<${GALLERY}>) of 6 screenshots: this branch at \`4f2b9c0\` beside the production site, at mobile and desktop widths.`,
+        "",
+        "No preview link: Kit config declares no `preview.url`.",
+        "",
+        "Captured routes:",
+        "",
+        "- `/book`, named by the Ticket",
+        "- `/book/waitlist`, named by the Implementer",
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`,
+      ].join("\n"),
+    );
   });
 });
