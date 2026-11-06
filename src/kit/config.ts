@@ -99,6 +99,12 @@ export const UI_VIEWPORTS: readonly Viewport[] = [
 ];
 
 /**
+ * The most routes UI evidence captures, so capture stays fast: a Kit constant,
+ * not Kit config. A route the Ticket names is captured even past it.
+ */
+export const UI_ROUTE_CAP = 4;
+
+/**
  * The most UI evidence images a Reviewer gets, so the ones that matter most fit
  * in its context: a Kit constant, not Kit config. The Operator's gallery is uncapped.
  */
