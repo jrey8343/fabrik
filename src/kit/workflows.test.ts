@@ -557,6 +557,26 @@ describe("loop.yml's Research job", () => {
   });
 });
 
+// A Design session's prototype turn (#155): the Kit job's plan says whether the
+// Design run is one, and the prototype job runs it in the design job's place.
+describe("loop.yml's prototype job", () => {
+  const prototype = (): string => job("prototype");
+
+  it("runs a Design run only when the Kit job's plan made it a prototype turn, and the design job only when it didn't", () => {
+    expect(prototype()).toMatch(/\n    needs: kit\n/);
+    expect(prototype()).toMatch(/\n    if: (?:false && )?needs\.kit\.outputs\.route == 'design' && needs\.kit\.outputs\.prototype == 'true'\n/);
+    expect(job("design")).toContain("\n    if: needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype != 'true'\n");
+  });
+
+  // Dormant until UI prototypes' switch-on Ticket (#282), which drops the gate and adds the job to the push job's needs.
+  it("is gated off until switch-on, and nothing waits on it, so V1's Design turns run as they did", () => {
+    const needs = /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ");
+
+    expect(prototype()).toContain("\n    if: false && needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype == 'true'\n");
+    expect(needs).not.toContain("prototype");
+  });
+});
+
 // A UI PR's Review (#153): the Kit job passes out where its marker says the
 // UI evidence is kept, and the Review job downloads it for the Reviewer.
 describe("loop.yml's Review job on a UI PR", () => {

@@ -264,7 +264,8 @@ jobs:
   design:
     name: "Design-session turn #${{ github.event.issue.number }}"
     needs: kit
-    if: needs.kit.outputs.route == 'design'
+    # A prototype turn of the session runs in the prototype job instead.
+    if: needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.design-timeout-minutes) }}
     # One turn per issue at a time. queue: max keeps every queued Operator reply
@@ -369,6 +370,27 @@ jobs:
           path: ${{ runner.temp }}/fabrik-out/transcript.jsonl.gz
           if-no-files-found: ignore
           retention-days: 7
+
+  # A Design session's prototype turn (#155), in the design job's place when
+  # the Kit job's plan made the Design run one. Gated off, and absent from the
+  # push job's needs, until UI prototypes' switch-on Ticket (#282) drops the
+  # `false && ` and adds it there.
+  prototype:
+    name: "Prototype turn #${{ github.event.issue.number }}"
+    needs: kit
+    if: false && needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - name: Check out the Product repo's default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
 
   # Takes agent:implement off the Ticket as its Implement run starts, so the
   # label never claims work that isn't running (the open draft PR does that),
