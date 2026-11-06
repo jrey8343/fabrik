@@ -3,12 +3,13 @@
 // prototype round, whose one question, "Which variant?", the Kit writes. A
 // prototype round is a round of the same session: it never ends it, and the
 // Operator's reply to it starts an ordinary turn.
-import { type CaptureFailure, code } from "../evidence/uiEvidence.ts";
+import { type CaptureFailure, code, type PreviewLink } from "../evidence/uiEvidence.ts";
 import { type PreviewConfig, previewNamesPullRequest } from "../kit/config.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { turnStartFrom, whileInSession } from "./design.ts";
 import { parsePrototypeTurnOutput, prototypeBranchFor, type PrototypeRoundOutput } from "./designOutput.ts";
 import {
+  DESIGN_ROUND_MARKER,
   designRoundMarker,
   PROTOTYPE_FAILURE_ROUND_MARKER,
   PROTOTYPE_ROUND_MARKER,
@@ -178,6 +179,47 @@ function prototypeRound(
 
 /** What the round says of its preview until the push job has polled it. */
 const PREVIEW_PENDING = "Each variant's preview is linked beside it once the preview deployment answers.";
+
+/** A variant's line in the round, as the Kit writes it, with the variant's letter. */
+const VARIANT_LINE = /^- \*\*([A-Z])\.\*\* /;
+
+/**
+ * The prototype round with what came of its preview, once the push job has
+ * polled it (src/kit/previewLink.ts): each variant's line links the route's
+ * page with `?variant=` and the variant's letter, and the line saying the
+ * previews are linked once it answers goes; or that line says it never
+ * answered. Null when the body isn't a prototype round still waiting on its
+ * preview. Every URL is the Kit's, from Kit config and the approved route,
+ * never the agent's.
+ */
+export function withVariantPreviews(body: string, preview: Extract<PreviewLink, { kind: "linked" | "never-answered" }>): string | null {
+  // An Operator's edit on GitHub may end its lines in \r\n.
+  const lines = body.split("\n").map((line) => (line.endsWith("\r") ? { text: line.slice(0, -1), end: "\r" } : { text: line, end: "" }));
+  if (!DESIGN_ROUND_MARKER.test(body) || lines[1]?.text.trim() !== PROTOTYPE_ROUND_MARKER) return null;
+  // The Kit writes it under the variants, one blank line between.
+  const at = lines.findIndex(({ text }, i) => text.trim() === PREVIEW_PENDING && lines[i - 1]?.text.trim() === "" && VARIANT_LINE.test(lines[i - 2]?.text ?? ""));
+  if (at === -1) return null;
+  if (preview.kind === "never-answered") {
+    lines[at] = { ...lines[at]!, text: `No preview links: the preview at ${code(preview.url)} never answered.` };
+  } else {
+    for (let i = at - 2; i >= 0; i--) {
+      const line = lines[i]!;
+      const letter = VARIANT_LINE.exec(line.text)?.[1];
+      if (letter === undefined) break;
+      lines[i] = { ...line, text: `${line.text} · [Preview](${variantPreviewUrl(preview.url, letter)})` };
+    }
+    // The pending line, and the blank line above it.
+    lines.splice(at - 1, 2);
+  }
+  return lines.map(({ text, end }) => `${text}${end}`).join("\n");
+}
+
+/** The route's page showing one variant: `?variant=` and its letter, with a `(` or `)` escaped, so it can't end the link early. */
+function variantPreviewUrl(page: string, letter: string): string {
+  const url = new URL(page);
+  url.searchParams.set("variant", letter);
+  return url.href.replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
 
 /** What the round says of the preview Kit config declares. */
 function previewLine(preview: Exclude<RoundPreview, { kind: "none" }>): string {
