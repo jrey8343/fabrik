@@ -199,7 +199,7 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
     if ("note" in update) notes.push(update.note);
     else actions.push(write(path, update.content, why));
   }
-  actions.push(...kitConfig(state, kit, answers));
+  actions.push(...kitConfig(state, kit, answers, notes));
   actions.push(...starters(state, kit));
   const present = new Set(state.labels.map((label) => label.toLowerCase()));
   for (const name of ALL_LABELS) {
@@ -219,10 +219,10 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
  * opt-in step ask for. Visual evidence is that step: its `ui` and `preview`
  * blocks go into the starter, or into the Kit config the repo already has.
  */
-function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers): SetupAction[] {
+function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, notes: string[]): SetupAction[] {
   const existing = state.files[KIT_CONFIG_PATH] ?? null;
   const text = existing ?? kit.templates.kitConfig;
-  const updated = answers.visualEvidence === undefined ? null : withVisualEvidence(text, answers.visualEvidence);
+  const updated = answers.visualEvidence === undefined ? null : withVisualEvidence(text, answers.visualEvidence, notes);
   if (existing === null) {
     return [
       updated === null
@@ -236,12 +236,10 @@ function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers): S
 /**
  * The Kit config with its `ui` and `preview` blocks as the Visual evidence
  * step's answers spell them, every other key kept where it is, or null when
- * it already holds them.
+ * it already holds them or the answers are ones the Kit config would refuse.
  */
-function withVisualEvidence(text: string, answers: VisualEvidenceAnswers): string | null {
-  const config = JSON.parse(text) as Record<string, unknown>;
-  const merged = {
-    ...config,
+function withVisualEvidence(text: string, answers: VisualEvidenceAnswers, notes: string[]): string | null {
+  const blocks = {
     ui: {
       paths: answers.paths,
       serve: answers.serve,
@@ -251,7 +249,29 @@ function withVisualEvidence(text: string, answers: VisualEvidenceAnswers): strin
     },
     preview: { url: answers.previewUrl ?? null },
   };
+  const checked = resolveKitConfig({ config: JSON.stringify(blocks) });
+  if (!checked.ok) {
+    notes.push(
+      `The Visual evidence answers weren't written to ${KIT_CONFIG_PATH}, because the Kit config would refuse them: ${checked.errors.join("; ")}. Run setup again with them fixed.`,
+    );
+    return null;
+  }
+  const config = jsonObject(text);
+  if (config === null) {
+    notes.push(`${KIT_CONFIG_PATH} isn't a JSON object, so the Visual evidence answers weren't written to it: fix it and run setup again.`);
+    return null;
+  }
+  const merged = { ...config, ...blocks };
   return JSON.stringify(merged) === JSON.stringify(config) ? null : `${JSON.stringify(merged, null, 2)}\n`;
+}
+
+function jsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The `Fabrik` vault item the wizard saves the second Subscription's token in. */

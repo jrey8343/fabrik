@@ -800,6 +800,46 @@ describe("Visual evidence, the opt-in step for UI evidence on UI pull requests",
     expect(planSetup(setUp, kit, operator)).toEqual(planSetup(setUp, kit));
     expect(written(planSetup(withConfig(reformatted), kit, operator).actions, ".fabrik/config.json")).toBeUndefined();
   });
+
+  it("spells out no Before, no default routes and no preview when the Operator gives none", () => {
+    const only = { visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } };
+
+    const config = written(planSetup(withConfig(theirs), kit, only).actions, ".fabrik/config.json") ?? null;
+
+    expect(JSON.parse(config ?? "{}")).toMatchObject({
+      ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", before_url: null, default_routes: [] },
+      preview: { url: null },
+    });
+    const resolved = resolveKitConfig({ config });
+    expect(resolved.ok && [resolved.config.ui, resolved.config.preview]).toEqual([
+      { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", beforeUrl: null, defaultRoutes: [] },
+      null,
+    ]);
+  });
+
+  it("writes nothing for answers the Kit config would refuse, naming every problem for the Operator", () => {
+    const wrong = {
+      visualEvidence: { paths: [], serve: "npm run preview", url: "localhost:4321", defaultRoutes: ["book"], previewUrl: "https://pr-{number}.clinic.dev" },
+    };
+
+    const plan = planSetup(withConfig(theirs), kit, wrong);
+
+    expect(written(plan.actions, ".fabrik/config.json")).toBeUndefined();
+    const note = plan.notes.find((n) => n.includes("Visual evidence")) ?? "";
+    expect(note).toContain("ui.paths is empty");
+    expect(note).toContain('ui.url is "localhost:4321"');
+    expect(note).toContain('ui.default_routes[0] is "book"');
+    expect(note).toContain("{number} is not a placeholder");
+  });
+
+  it.each(["{ oops", "[]\n"])("leaves a Kit config that isn't a JSON object (%j) for the Operator to fix, rather than overwrite it", (broken) => {
+    const plan = planSetup(withConfig(broken), kit, operator);
+
+    expect(written(plan.actions, ".fabrik/config.json")).toBeUndefined();
+    expect(plan.notes).toContainEqual(
+      ".fabrik/config.json isn't a JSON object, so the Visual evidence answers weren't written to it: fix it and run setup again.",
+    );
+  });
 });
 
 function storeWritten(actions: readonly SetupAction[], path: string): string | undefined {
