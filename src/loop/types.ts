@@ -982,14 +982,30 @@ export type Action =
       /**
        * Marks a replay issue's Ticket in progress in the run applying it, as
        * its claim takes agent:replay off (#156): the adapter reads the body
-       * fresh and marks it with this Actions run's id (withTicketStarted,
-       * src/kit/replay.ts), and fails, so the run's replay jobs never
-       * start, when the Ticket isn't waiting to run there, as when another
-       * run claimed it first.
+       * fresh and marks it with this Actions run's id and the time
+       * (withTicketStarted, src/kit/replay.ts), and fails, so the run's
+       * replay jobs never start, when the Ticket isn't waiting to run there,
+       * as when another run claimed it first.
        */
       readonly kind: "mark-replay-started";
       readonly issue: number;
       readonly ticket: number;
+    }
+  | {
+      /**
+       * Ends a replay Ticket's run that never landed (#156), as the tick
+       * found it in progress past the longest its run can last: the adapter
+       * reads the body fresh and ends run `run` as an Infrastructure failure
+       * with `reason` (withTicketFinished, src/kit/replay.ts), which leaves a
+       * run that landed since as it landed. When that ends the Replay's last
+       * Ticket, it posts `resultsReady`, the one comment that the results are in.
+       */
+      readonly kind: "release-replay-ticket";
+      readonly issue: number;
+      readonly ticket: number;
+      readonly run: number;
+      readonly reason: string;
+      readonly resultsReady: string;
     }
   | {
       /**

@@ -524,9 +524,21 @@ function acceptanceOf(candidates: readonly ReplayCandidate[]): ReplayAcceptance 
   return { candidates, baseConfigs, fabrikCommits: {} };
 }
 
-/** A tick with spare capacity, these replay issues, and Tickets 7, 12 and 20 to pick from. */
+/** When the tick runs, and when a run's claim marked its Ticket in progress, an hour before. */
+const NOW = "2026-11-11T04:00:00.000Z";
+const STARTED = "2026-11-11T03:00:00.000Z";
+
+/** A tick with spare capacity, these replay issues, and Tickets 7, 12 and 20 to pick from, at NOW, a replay Ticket's run lasting up to 210 minutes. */
 function aTick(issues: readonly ReplayIssue[], overrides: Partial<ReplayTick> = {}): ReplayTick {
-  return { operator: OPERATOR, issues, capacity: { spare: true }, acceptance: acceptanceOf([aCandidate(7), aCandidate(12), aCandidate(20)]), ...overrides };
+  return {
+    operator: OPERATOR,
+    issues,
+    capacity: { spare: true },
+    acceptance: acceptanceOf([aCandidate(7), aCandidate(12), aCandidate(20)]),
+    now: NOW,
+    runLimitMinutes: 210,
+    ...overrides,
+  };
 }
 
 /** The body an accept step writes, failing the test on any other step. */
@@ -543,7 +555,7 @@ function anAcceptedIssue(number: number, overrides: Partial<ReplayIssue> = {}, a
 
 /** The issue with its Ticket `ticket` started by run `run`, failing the test when it can't start. */
 function started(issue: ReplayIssue, ticket: number, run: number): ReplayIssue {
-  const body = withTicketStarted(issue.body, ticket, run);
+  const body = withTicketStarted(issue.body, ticket, run, STARTED);
   if (body === null) throw new Error(`#${ticket} can't start on #${issue.number}`);
   return { ...issue, body };
 }
@@ -803,7 +815,7 @@ describe("A Replay's next step on the tick", () => {
 
       expect(marks?.plan).toEqual(replayMarksIn(accepted.body)?.plan);
       expect(marks?.progress).toEqual([
-        { ticket: 12, state: "in-progress", run: 9001, retrying: null },
+        { ticket: 12, state: "in-progress", run: 9001, retrying: null, startedAt: STARTED },
         { ticket: 7, state: "pending" },
       ]);
     });
@@ -824,9 +836,9 @@ describe("A Replay's next step on the tick", () => {
     it("starting only a Ticket in the plan that is waiting to run", () => {
       const accepted = anAcceptedIssue(140);
 
-      expect(withTicketStarted(started(accepted, 12, 9001).body, 12, 9002)).toBeNull();
-      expect(withTicketStarted(accepted.body, 30, 9001)).toBeNull();
-      expect(withTicketStarted(bodyWith("review.effort: high"), 12, 9001)).toBeNull();
+      expect(withTicketStarted(started(accepted, 12, 9001).body, 12, 9002, STARTED)).toBeNull();
+      expect(withTicketStarted(accepted.body, 30, 9001, STARTED)).toBeNull();
+      expect(withTicketStarted(bodyWith("review.effort: high"), 12, 9001, STARTED)).toBeNull();
     });
 
     it("marking a Ticket done once its run ends, so the next one starts", () => {

@@ -8,6 +8,9 @@ import type { IssueSnapshot, KitIssueSnapshot, LoopEvent, Plan, ReplayIssueSnaps
 
 const TWO_SUBSCRIPTIONS = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
 
+/** When a run's claim marked a Ticket in progress. */
+const STARTED = "2026-11-11T04:00:00.000Z";
+
 /** agent:replay added to #140. */
 const ADDED: LoopEvent = { kind: "label-added", issue: 140, label: "agent:replay" };
 
@@ -79,7 +82,7 @@ describe("agent:replay on a replay issue", () => {
 
   describe("runs one replay Ticket at a time across every one of the Operator's replay issues", () => {
     /** The Operator's replay issue #130, accepted, with its Ticket 20 in progress in run 8000. */
-    const busy = aReplayIssue({ number: 130, body: acceptedBody([20], [{ ticket: 20, state: "in-progress", run: 8000, retrying: null }]) });
+    const busy = aReplayIssue({ number: 130, body: acceptedBody([20], [{ ticket: 20, state: "in-progress", run: 8000, retrying: null, startedAt: STARTED }]) });
 
     it("starting nothing while a Ticket of another of them is in progress, saying which", () => {
       expect(planFor(ADDED, claimSnapshot(aReplay(), [busy]), kitConfig())).toEqual({
@@ -113,7 +116,7 @@ describe("agent:replay on a replay issue", () => {
     ["is closed", { open: false }, "#140 is closed, which cancels its Replay"],
     ["someone else filed", { author: "someone-else" }, "#140 isn't the Operator's, so its Replay never runs"],
     ["the tick hasn't accepted", { body: "```replay\nreview.effort: high\n```\n" }, "#140's request isn't accepted yet"],
-    ["has a Ticket in progress", { body: acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null }]) }, "#12 is in progress on replay #140, and one replay Ticket runs at a time"],
+    ["has a Ticket in progress", { body: acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null, startedAt: STARTED }]) }, "#12 is in progress on replay #140, and one replay Ticket runs at a time"],
     ["has no Ticket left to run", { body: acceptedBody([12], [{ ticket: 12, state: "done", run: 9001 }]) }, "No Ticket of #140 waits to run"],
   ])("starts nothing on an issue that %s, saying why", (_, overrides, reason) => {
     expect(planFor(ADDED, claimSnapshot(aReplay(overrides)), kitConfig())).toEqual({ kind: "nothing", reason });
@@ -124,7 +127,7 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
   const RUN = "https://github.com/acme/shop/actions/runs/9001/attempts/1";
   const RESETS_AT = "2026-11-12T04:00:00.000Z";
   /** Replay #140 with Ticket 12 in progress in run 9001. */
-  const running = aReplay({ labels: ["fabrik:replay"], body: acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null }]) });
+  const running = aReplay({ labels: ["fabrik:replay"], body: acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null, startedAt: STARTED }]) });
 
   function ended(end: ReplayTicketEnd, subscription = "Claude token"): Extract<LoopEvent, { kind: "replay-run-finished" }> {
     return {
@@ -225,7 +228,7 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
     });
 
     describe("once the last Ticket finishes", () => {
-      const lastRunning = acceptedBody([12, 7], [{ ticket: 7, state: "done", run: 8001 }, { ticket: 12, state: "in-progress", run: 9001, retrying: null }]);
+      const lastRunning = acceptedBody([12, 7], [{ ticket: 7, state: "done", run: 8001 }, { ticket: 12, state: "in-progress", run: 9001, retrying: null, startedAt: STARTED }]);
 
       it("posts one comment saying the results are in, mentioning the Operator once", () => {
         const plan = finished(lastRunning, { kind: "done" }, outcomes([...armsOf(7, 8001), ...armsOf(12, 9001)]));
@@ -236,7 +239,7 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
       });
 
       it("posts it when the last Ticket fails a second time too, since every Ticket is then done or failed", () => {
-        const retrying = acceptedBody([12, 7], [{ ticket: 7, state: "done", run: 8001 }, { ticket: 12, state: "in-progress", run: 9001, retrying: "it crashed" }]);
+        const retrying = acceptedBody([12, 7], [{ ticket: 7, state: "done", run: 8001 }, { ticket: 12, state: "in-progress", run: 9001, retrying: "it crashed", startedAt: STARTED }]);
 
         expect(notificationsOf(finished(retrying, { kind: "infrastructure", reason: "it crashed again" }))).toEqual(["mention on #140"]);
       });
@@ -254,7 +257,7 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
     });
 
     it("rewrites nothing and posts nothing on a closed replay issue, which cancelled it", () => {
-      const lastRunning = acceptedBody([12], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null }]);
+      const lastRunning = acceptedBody([12], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null, startedAt: STARTED }]);
       const plan = planFor({ ...ended({ kind: "done" }), outcomes: outcomes() }, snapshotOf({ ...running, open: false, body: lastRunning }), kitConfig());
 
       expect(plan).toMatchObject({ kind: "nothing" });

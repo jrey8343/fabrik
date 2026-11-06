@@ -455,7 +455,7 @@ describe("the Weekly summary", () => {
       it.each([
         ["whose request the tick hasn't accepted", { body: "```replay\nreview.effort: high\n```\n" }],
         ["whose Ticket is still pending", { body: aReplayBody({ state: "pending" }) }],
-        ["whose Ticket is in progress", { body: aReplayBody({ state: "in-progress", run: 2000, retrying: null }) }],
+        ["whose Ticket is in progress", { body: aReplayBody({ state: "in-progress", run: 2000, retrying: null, startedAt: "2026-11-05T10:00:00.000Z" }) }],
         ["that someone other than the Operator filed", { author: "someone-else" }],
       ])("never lists one %s", (_, overrides) => {
         expect(waitingIn({ openReplays: [anOpenReplay(overrides)] })).toEqual([]);

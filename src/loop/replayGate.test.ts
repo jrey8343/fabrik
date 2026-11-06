@@ -143,13 +143,48 @@ describe("The scheduled tick's replay step", () => {
 
 describe("The scheduled tick's replay step, beside its gates", () => {
   it.each([
-    ["on the issue it would start", [aReplayIssue({ body: acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null }]) })]],
+    ["on the issue it would start", [aReplayIssue({ body: acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null, startedAt: EARLIER }]) })]],
     [
       "on any other replay issue",
-      [aReplayIssue(), aReplayIssue({ number: 150, body: acceptedBody([20], [{ ticket: 20, state: "in-progress", run: 9001, retrying: null }]) })],
+      [aReplayIssue(), aReplayIssue({ number: 150, body: acceptedBody([20], [{ ticket: 20, state: "in-progress", run: 9001, retrying: null, startedAt: EARLIER }]) })],
     ],
   ])("starts none while a replay Ticket is in progress %s, since one runs at a time", (_, issues) => {
     expect(tick(replaySlice(issues))).toEqual(STARTS_NOTHING);
+  });
+
+  describe("releases a replay Ticket whose run never landed, so none stays in progress for good", () => {
+    /** Replay #140 with its Ticket 12 in progress in run 9001 since `startedAt`. */
+    const inProgressSince = (startedAt: string) =>
+      replaySlice([aReplayIssue({ body: acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null, startedAt }]) })]);
+
+    // At Kit config's default timeouts a replay Ticket's run can last 210 minutes: the Kit job's 5 and the claim's 10,
+    // Implement's 60, the slowest of the gates, Review and judge at 60, the replay-record job's 15, and an hour to queue.
+    it("ending its run as an Infrastructure failure once it's in progress past the longest its run can last, so it runs again on a later tick, then fails", () => {
+      expect(tick(inProgressSince("2026-11-11T00:29:00.000Z"))).toEqual({
+        kind: "act",
+        actions: [
+          {
+            kind: "release-replay-ticket",
+            issue: 140,
+            ticket: 12,
+            run: 9001,
+            reason: "run 9001 never landed, still in progress 211 minutes after it started, past the 210 a replay Ticket's run can last, as when its replay-record job couldn't run",
+            resultsReady: expect.stringContaining("@operator **This Replay's results are in.**"),
+          },
+          { kind: "check-design-queue" },
+        ],
+      });
+    });
+
+    it("but leaving one in progress within it, starting nothing beside it", () => {
+      expect(tick(inProgressSince("2026-11-11T00:31:00.000Z"))).toEqual(STARTS_NOTHING);
+    });
+
+    it("allowing a run longer under Kit config's longer timeouts", () => {
+      const slower = kitConfig({ roles: { ...DEFAULT_KIT_CONFIG.roles, review: { ...DEFAULT_KIT_CONFIG.roles.review, timeoutMinutes: 90 } } });
+
+      expect(tick(inProgressSince("2026-11-11T00:29:00.000Z"), [], slower)).toEqual(STARTS_NOTHING);
+    });
   });
 
   it.each([

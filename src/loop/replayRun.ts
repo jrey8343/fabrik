@@ -17,6 +17,7 @@ import {
   replayInProgress,
   replayMarksIn,
   replayResultsIn,
+  resultsReady,
   withReplayResults,
   withTicketFinished,
 } from "../kit/replay.ts";
@@ -104,11 +105,3 @@ export function landReplayRun(run: Extract<LoopEvent, { kind: "replay-run-finish
   return { kind: "nothing", reason: `${why}, so its run's end changes nothing there` };
 }
 
-/** The one comment a Replay gets when its results are in, the Operator's to act on: no model judged them, and nothing changes until they do. */
-function resultsReady(operator: string): string {
-  return [
-    `@${operator} **This Replay's results are in.** The table above sets each Ticket's baseline beside its variant, with the totals and the baseline's gap from the original runs.`,
-    "",
-    "Nothing changes until you act on them, as by changing a Kit config default or merging a Retro proposal. Close this issue once you have.",
-  ].join("\n");
-}

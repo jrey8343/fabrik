@@ -2085,7 +2085,7 @@ describe("Gathering a replay Ticket's claim (#156)", () => {
   it("reads every open replay issue, with its body whole, so the claim can start none while a Ticket of any is in progress", async () => {
     const other = {
       number: 130,
-      body: acceptedBody([20], [{ ticket: 20, state: "in-progress", run: 8000, retrying: null }]),
+      body: acceptedBody([20], [{ ticket: 20, state: "in-progress", run: 8000, retrying: null, startedAt: "2026-11-11T03:00:00.000Z" }]),
       author: { login: "jrey8343", __typename: "User" },
       labels: { nodes: [{ name: "fabrik:replay" }] },
       comments: { pageInfo: { hasPreviousPage: false, startCursor: null }, nodes: [] },

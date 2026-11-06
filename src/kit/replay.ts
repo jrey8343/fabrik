@@ -522,6 +522,14 @@ export interface ReplayTick {
   readonly capacity: ReplayCapacity;
   /** What accepting a waiting request weighs, or null when the adapter read none. */
   readonly acceptance: ReplayAcceptance | null;
+  /** The tick's time, ISO 8601. */
+  readonly now: string;
+  /**
+   * The longest a replay Ticket's run can last, in minutes, from its claim
+   * to its replay-record job's end: a Ticket in progress longer than that
+   * was never landed, so its run is no longer going.
+   */
+  readonly runLimitMinutes: number;
 }
 
 /** What the tick does next for the Replays. */
@@ -532,7 +540,13 @@ export type ReplayStep =
   /** Comments on the issue, once, saying why its request can't run. */
   | { readonly kind: "reject"; readonly issue: number; readonly comment: string }
   /** Starts the issue's next pending Ticket, both arms: the one nextReplayTicket names. */
-  | { readonly kind: "start"; readonly issue: number; readonly ticket: number };
+  | { readonly kind: "start"; readonly issue: number; readonly ticket: number }
+  /**
+   * Ends run `run` of the issue's Ticket, which never landed, as an
+   * Infrastructure failure, with why (withTicketFinished): the Ticket waits to
+   * run again the first time, and fails the second.
+   */
+  | { readonly kind: "release"; readonly issue: number; readonly ticket: number; readonly run: number; readonly reason: string };
 
 /**
  * The tick's next step for the Replays, weighing only the Operator's open
@@ -542,7 +556,10 @@ export type ReplayStep =
  * problem, and read again on the next tick; a valid one is accepted, its plan
  * written into the body. With none to act on, the oldest accepted issue's
  * next pending Ticket starts, unless a replay Ticket is in progress on any of
- * them, or the tick has no spare capacity.
+ * them, or the tick has no spare capacity. A Ticket in progress longer than
+ * its run can last never landed, as when its replay-record job couldn't run,
+ * so it is released as an Infrastructure failure: tried once more on a later
+ * tick, then failed, so no Ticket stays in progress for good.
  */
 export function nextReplayStep(tick: ReplayTick): ReplayStep {
   const issues = operatorsOpenIssues(tick);
@@ -558,7 +575,7 @@ export function nextReplayStep(tick: ReplayTick): ReplayStep {
     if (step !== null) return step;
   }
   const running = replayInProgress(tick);
-  if (running !== null) return { kind: "nothing", reason: oneAtATime(running) };
+  if (running !== null) return neverLanded(running, tick) ?? { kind: "nothing", reason: oneAtATime(running) };
   const next = accepted.flatMap(({ issue, marks }) => {
     const planned = nextReplayTicket(marks);
     return planned === null ? [] : [{ issue, ticket: planned.ticket }];
@@ -639,6 +656,16 @@ export function replayInProgress(tick: Pick<ReplayTick, "operator" | "issues">):
     if (progress?.state === "in-progress") return { issue: issue.number, progress };
   }
   return null;
+}
+
+/** The release of `running`'s run when it has been in progress longer than a run can last, so it never landed; null while it may still be going. */
+function neverLanded({ issue, progress }: ReplayRunning, { now, runLimitMinutes }: Pick<ReplayTick, "now" | "runLimitMinutes">): ReplayStep | null {
+  const elapsed = Date.parse(now) - Date.parse(progress.startedAt);
+  if (elapsed <= runLimitMinutes * 60_000) return null;
+  const { ticket, run } = progress;
+  const minutes = Math.floor(elapsed / 60_000);
+  const reason = `run ${run} never landed, still in progress ${minutes} minutes after it started, past the ${runLimitMinutes} a replay Ticket's run can last, as when its replay-record job couldn't run`;
+  return { kind: "release", issue, ticket, run, reason };
 }
 
 /** Why no other replay Ticket starts while `running` is in progress. */
@@ -766,13 +793,14 @@ export interface PlannedTicket extends PickedTicket {
 
 /**
  * Where a planned Ticket's replay stands: waiting to run, the first time or
- * again after one Infrastructure failure; in progress in a run, which retries
- * one when `retrying` names it; or finished, done or failed.
+ * again after one Infrastructure failure; in progress in a run since its
+ * claim marked it so, which retries one when `retrying` names it; or
+ * finished, done or failed.
  */
 export type ReplayProgress =
   | { readonly state: "pending" }
   | { readonly state: "retried"; readonly reason: string }
-  | { readonly state: "in-progress"; readonly run: number; readonly retrying: string | null }
+  | { readonly state: "in-progress"; readonly run: number; readonly retrying: string | null; readonly startedAt: string }
   | { readonly state: "done"; readonly run: number }
   | { readonly state: "failed"; readonly run: number; readonly reason: string };
 
@@ -795,14 +823,14 @@ export type ReplayTicketEnd =
   | { readonly kind: "infrastructure"; readonly reason: string };
 
 /**
- * The body with Ticket `ticket` marked in progress in run `run`, or null
- * when it isn't in the body's plan waiting to run, as when another run
- * claimed it first.
+ * The body with Ticket `ticket` marked in progress in run `run` from
+ * `startedAt`, an ISO 8601 time, or null when it isn't in the body's plan
+ * waiting to run, as when another run claimed it first.
  */
-export function withTicketStarted(body: string, ticket: number, run: number): string | null {
+export function withTicketStarted(body: string, ticket: number, run: number, startedAt: string): string | null {
   return withProgress(body, ticket, (progress): ReplayProgress | null => {
-    if (progress.state === "pending") return { state: "in-progress", run, retrying: null };
-    if (progress.state === "retried") return { state: "in-progress", run, retrying: progress.reason };
+    if (progress.state === "pending") return { state: "in-progress", run, retrying: null, startedAt };
+    if (progress.state === "retried") return { state: "in-progress", run, retrying: progress.reason, startedAt };
     return null;
   });
 }
@@ -949,11 +977,14 @@ function readRoleSettings(value: unknown): ReplayRoleSettings | null {
 /** A Ticket's progress as its marker holds it, or null when it doesn't read. */
 function readProgress(value: unknown): TicketProgress | null {
   if (!isObject(value) || !isId(value.ticket)) return null;
-  const { ticket, state, run, reason, retrying } = value;
+  const { ticket, state, run, reason, retrying, startedAt } = value;
   if (state === "pending") return { ticket, state };
   if (state === "retried") return typeof reason === "string" ? { ticket, state, reason } : null;
   if (!isId(run)) return null;
-  if (state === "in-progress") return retrying === null || typeof retrying === "string" ? { ticket, state, run, retrying } : null;
+  if (state === "in-progress") {
+    if (!(retrying === null || typeof retrying === "string") || typeof startedAt !== "string" || Number.isNaN(Date.parse(startedAt))) return null;
+    return { ticket, state, run, retrying, startedAt };
+  }
   if (state === "done") return { ticket, state, run };
   if (state === "failed") return typeof reason === "string" ? { ticket, state, run, reason } : null;
   return null;
@@ -1052,6 +1083,19 @@ export function withReplayResults(body: string, outcomes: ReplayOutcomes): strin
   if (marks === null) return null;
   const results = marks.progress.flatMap((progress) => (progress.state === "done" ? [ticketResultOf(progress.ticket, progress.run, outcomes)] : []));
   return withKitPart(body, marks, results, outcomes.open);
+}
+
+/**
+ * The one comment a Replay gets when its results are in, mentioning the
+ * Operator, whose they are to act on: no model judged them, and nothing
+ * changes until they do.
+ */
+export function resultsReady(operator: string): string {
+  return [
+    `@${operator} **This Replay's results are in.** The table above sets each Ticket's baseline beside its variant, with the totals and the baseline's gap from the original runs.`,
+    "",
+    "Nothing changes until you act on them, as by changing a Kit config default or merging a Retro proposal. Close this issue once you have.",
+  ].join("\n");
 }
 
 /** Whether a replay issue's results are in: its request accepted, and every Ticket in its plan done or failed. */
