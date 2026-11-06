@@ -524,8 +524,12 @@ export interface SpecSnapshot {
 export interface KitIssueSnapshot {
   readonly number: number;
   readonly labels: readonly string[];
+  /**
+   * Its body, or empty when the App didn't open it: its markers steer agent
+   * runs, so only the App's own text is read (ADR-0007).
+   */
   readonly body: string;
-  /** Its comments' text, oldest first. */
+  /** The App's own comments' text, every one, oldest first: anyone else's is left out. */
   readonly comments: readonly string[];
 }
 

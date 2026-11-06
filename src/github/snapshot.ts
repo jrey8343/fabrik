@@ -259,7 +259,7 @@ export async function gatherSnapshot(
   actions: GitHub | null = null,
 ): Promise<Snapshot> {
   const [{ owner, kitIssues }, part, startingComment, audit, namedPullRequests] = await Promise.all([
-    gatherKitIssues(github, repo),
+    gatherKitIssues(github, repo, appLogin),
     gatherEventPart(github, repo, event, operator, appLogin, actions),
     gatherStartingComment(github, repo, event),
     event.kind === "scheduled-tick" ? gatherAuditSlice(github, repo, appLogin) : null,
@@ -505,6 +505,8 @@ async function gatherEventPart(
 
 type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "namedPullRequests" | "held">;
 
+const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body author { login __typename } }";
+
 const KIT_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $labels: [String!]!) {
     repository(owner: $owner, name: $name) {
@@ -513,39 +515,93 @@ const KIT_ISSUES_QUERY = `
         nodes {
           number
           body
+          author { login __typename }
           labels(first: 100) { nodes { name } }
-          comments(last: 100) { nodes { body } }
+          comments(last: 100) { ${KIT_ISSUE_COMMENTS} }
         }
       }
     }
   }
 `;
 
+/** A Kit-owned issue's comments before the ones already read, a page at a time, newest page first. */
+const KIT_ISSUE_EARLIER_COMMENTS_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!, $before: String!) {
+    repository(owner: $owner, name: $name) {
+      issue(number: $number) {
+        comments(last: 100, before: $before) { ${KIT_ISSUE_COMMENTS} }
+      }
+    }
+  }
+`;
+
+type Actor = { login: string; __typename: string } | null;
+
+interface KitIssueComments {
+  pageInfo?: { hasPreviousPage: boolean; startCursor: string | null };
+  nodes: { body: string; author: Actor }[];
+}
+
 interface KitIssuesQueryResult {
   repository: {
     owner: { login: string };
     issues: {
-      nodes: { number: number; body: string; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string }[] } }[];
+      nodes: { number: number; body: string; author: Actor; labels: { nodes: { name: string }[] }; comments: KitIssueComments }[];
     };
   };
 }
 
-/** The open issues carrying a Kit-owned label (src/loop/kitIssues.ts), which every event's snapshot holds. */
-async function gatherKitIssues(github: GitHub, repo: Repo): Promise<{ owner: string; kitIssues: KitIssueSnapshot[] }> {
+/**
+ * The open issues carrying a Kit-owned label (src/loop/kitIssues.ts), which
+ * every event's snapshot holds. Their markers steer agent runs (a held marker
+ * resumes one), so only the App's own text is read (ADR-0007): the body of an
+ * issue the App opened, and the App's comments, every one of them, however
+ * many pages they take. Anyone else's comment is left out.
+ */
+async function gatherKitIssues(
+  github: GitHub,
+  repo: Repo,
+  appLogin: string | null,
+): Promise<{ owner: string; kitIssues: KitIssueSnapshot[] }> {
   const data = await github.graphql<KitIssuesQueryResult>(KIT_ISSUES_QUERY, {
     owner: repo.owner,
     name: repo.name,
     labels: KIT_ISSUE_LABELS,
   });
-  return {
-    owner: data.repository.owner.login,
-    kitIssues: data.repository.issues.nodes.map((issue) => ({
-      number: issue.number,
-      labels: issue.labels.nodes.map((label) => label.name),
-      body: issue.body,
-      comments: issue.comments.nodes.map((comment) => comment.body),
-    })),
-  };
+  const kitIssues = await Promise.all(
+    data.repository.issues.nodes.map(async (issue): Promise<KitIssueSnapshot> => {
+      const comments = [...(await earlierComments(github, repo, issue.number, issue.comments)), ...issue.comments.nodes];
+      return {
+        number: issue.number,
+        labels: issue.labels.nodes.map((label) => label.name),
+        body: byAppOf(issue.author, appLogin) ? issue.body : "",
+        comments: comments.filter((comment) => byAppOf(comment.author, appLogin)).map((comment) => comment.body),
+      };
+    }),
+  );
+  return { owner: data.repository.owner.login, kitIssues };
+}
+
+/** The comments before this page, oldest first. */
+async function earlierComments(
+  github: GitHub,
+  repo: Repo,
+  number: number,
+  page: KitIssueComments,
+): Promise<KitIssueComments["nodes"]> {
+  const earlier: KitIssueComments["nodes"][] = [];
+  let pageInfo = page.pageInfo;
+  while (pageInfo?.hasPreviousPage === true && pageInfo.startCursor !== null) {
+    const data = await github.graphql<{ repository: { issue: { comments: KitIssueComments } | null } }>(
+      KIT_ISSUE_EARLIER_COMMENTS_QUERY,
+      { owner: repo.owner, name: repo.name, number, before: pageInfo.startCursor },
+    );
+    const comments = data.repository.issue?.comments;
+    if (comments === undefined) break;
+    earlier.unshift(comments.nodes);
+    pageInfo = comments.pageInfo;
+  }
+  return earlier.flat();
 }
 
 interface HeldTargetNode {

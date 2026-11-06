@@ -743,6 +743,8 @@ describe("Gathering a scheduled tick's audit slice", () => {
   });
 });
 
+const APP = { login: "fabrik-app", __typename: "Bot" };
+
 describe("Gathering the issues and PRs held runs are on, for a scheduled tick", () => {
   const tick = { kind: "scheduled-tick", now: "2026-11-08T04:00:00.000Z" } as const;
   const heldMarker = (issue: number, role: string, label: string | null) =>
@@ -773,8 +775,9 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick", 
                 {
                   number: 41,
                   body: "<!-- fabrik:notified -->",
+                  author: APP,
                   labels: { nodes: [{ name: "fabrik:weekly-limit" }] },
-                  comments: { nodes: comments.map((body) => ({ body })) },
+                  comments: { nodes: comments.map((body) => ({ body, author: APP })) },
                 },
               ],
             },
@@ -1027,5 +1030,94 @@ describe("Reading the Kit config folder through the API", () => {
     const sources = await readKitConfigSources({ fileText: async () => null }, repo, "abc123");
 
     expect(sources.skillsLock).toBeNull();
+  });
+});
+
+describe("Gathering the Kit-owned issues, whose markers steer agent runs (ADR-0007)", () => {
+  const PERSON = { login: "mallory", __typename: "User" };
+  const OTHER_BOT = { login: "other-app", __typename: "Bot" };
+  const tick = { kind: "scheduled-tick", now: "2026-11-08T04:00:00.000Z" } as const;
+  const heldMarker = (issue: number) => `<!-- fabrik:held ${JSON.stringify({ issue, role: "implement", label: "agent:implement" })} -->`;
+  type Author = { login: string; __typename: string } | null;
+  interface Comment {
+    body: string;
+    author: Author;
+  }
+
+  /**
+   * The read-only API, holding one weekly-limit issue opened by `author` with
+   * these comments, which it serves 100 at a time, newest page first, as
+   * GitHub's `comments(last:, before:)` does.
+   */
+  function githubWith(author: Author, comments: readonly Comment[]) {
+    const asked: number[] = [];
+    const page = (before: number) => {
+      const start = Math.max(0, before - 100);
+      return {
+        pageInfo: { hasPreviousPage: start > 0, startCursor: String(start) },
+        nodes: comments.slice(start, before),
+      };
+    };
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("issueOrPullRequest")) {
+          const numbers = Object.entries(variables).filter(([name]) => /^n\d+$/.test(name)).map(([, value]) => value as number);
+          asked.push(...numbers);
+          return { repository: {} };
+        }
+        if (query.includes("defaultBranchRef")) return { repository: { defaultBranchRef: null, issues: { nodes: [] } } };
+        if (query.includes("before: $before")) {
+          return { repository: { issue: { comments: page(Number(variables["before"])) } } };
+        }
+        return {
+          repository: {
+            owner: { login: "acme" },
+            issues: {
+              nodes: [
+                {
+                  number: 41,
+                  body: "@jrey The weekly usage limit is reached.\n\n<!-- fabrik:notified -->",
+                  author,
+                  labels: { nodes: [{ name: "fabrik:weekly-limit" }] },
+                  comments: page(comments.length),
+                },
+              ],
+            },
+          },
+        };
+      },
+    } as unknown as GitHub;
+    return { github, asked };
+  }
+
+  it("reads only the App's own comments, so a held marker someone else posts holds no run", async () => {
+    const { github, asked } = githubWith(APP, [
+      { body: heldMarker(7), author: APP },
+      { body: heldMarker(8), author: PERSON },
+      { body: heldMarker(9), author: OTHER_BOT },
+      { body: heldMarker(10), author: null },
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, "fabrik-app[bot]");
+
+    expect(snapshot.kitIssues.map((issue) => issue.comments)).toEqual([[heldMarker(7)]]);
+    expect(asked).toEqual([7]);
+  });
+
+  it("reads no body from a Kit-labelled issue the App didn't open", async () => {
+    const { github } = githubWith(PERSON, []);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, "fabrik-app[bot]");
+
+    expect(snapshot.kitIssues).toEqual([{ number: 41, labels: ["fabrik:weekly-limit"], body: "", comments: [] }]);
+  });
+
+  it("reads every comment, however many there are, so the oldest held markers aren't cut off", async () => {
+    const comments = Array.from({ length: 250 }, (_, at) => ({ body: heldMarker(at + 1), author: APP }));
+    const { github } = githubWith(APP, comments);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, "fabrik-app[bot]");
+
+    expect(snapshot.kitIssues[0]?.comments).toEqual(comments.map((comment) => comment.body));
   });
 });
