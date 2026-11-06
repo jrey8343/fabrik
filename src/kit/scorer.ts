@@ -8,7 +8,7 @@ import { type Rubric, rubricSet } from "./rubrics.ts";
 import { type RateLimitReading, type ReplayRun, type RunRecord, type RunRecordRole, runStoreName } from "./runRecord.ts";
 
 /**
- * The share of first Implement runs scored: one in four. A run is in the
+ * The share of live first Implement runs scored: one in four. A run is in the
  * sample when the SHA-256 of its run id's decimal string falls in the lowest
  * quarter of the range, so every attempt of the run makes the same choice.
  */
@@ -62,12 +62,14 @@ function nearWeeklyLimit(reading: RateLimitReading): boolean {
 }
 
 /**
- * Whether scoring picks the run: only Implement runs, every Retry, Step-up
- * and Request-changes run among them, and the sample of first runs.
+ * Whether scoring picks the run: only Implement runs, every Replay arm's,
+ * Retry, Step-up and Request-changes run among them, and the sample of live
+ * first runs. A Replay arm's run is never sampled, so every arm has a
+ * process measure to compare (#156).
  */
 function picked(record: RunRecord): boolean {
   if (record.role !== "implement") return false;
-  return record.retry > 0 || record.stepUp || record.requestChanges || sampled(record.runId);
+  return record.replay !== null || record.retry > 0 || record.stepUp || record.requestChanges || sampled(record.runId);
 }
 
 /** Whether a first Implement run is in the sample, by the SHA-256 of its run id's decimal string. */
@@ -83,6 +85,27 @@ function sampled(runId: number): boolean {
 export function inSample(key: string, share: number): boolean {
   const digest = createHash("sha256").update(key).digest();
   return digest.readUInt32BE(0) < share * 2 ** 32;
+}
+
+/** The Kit's rubrics as a scoring job read them from its Kit checkout, and the Kit commit it checked out. */
+export interface KitRubrics {
+  readonly sha: string;
+  readonly rubrics: readonly Rubric[];
+}
+
+/**
+ * The rubrics a run is scored, or skipped, under: always those of its pinned
+ * release, the Kit commit that ran and recorded it (its record's `kitSha`).
+ * A Replay's `kit` variant names a candidate Kit sha too, whose prompts and
+ * Base skills its agents loaded, but never its rubrics, so both arms' scores
+ * compare with each other and with live runs' (#156). Throws for rubrics read
+ * at any other commit, so a score file is never built under them.
+ */
+export function scoringRubrics(scored: RunRecord, kit: KitRubrics): readonly Rubric[] {
+  if (kit.sha === scored.kitSha) return kit.rubrics;
+  const run = `Run ${scored.runId}-${scored.runAttempt} is scored under the rubrics of its pinned release ${scored.kitSha}`;
+  if (kit.sha === scored.replay?.candidateSha) throw new Error(`${run}, never those of its candidate Kit sha ${kit.sha}`);
+  throw new Error(`${run}, not those read at ${kit.sha}`);
 }
 
 /** One rubric's answer in the judge's structured output. */
