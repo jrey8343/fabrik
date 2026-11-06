@@ -80,6 +80,10 @@ jobs:
       retry: ${{ steps.route.outputs.retry }}
       step-up: ${{ steps.route.outputs.step-up }}
       request-changes: ${{ steps.route.outputs.request-changes }}
+      # The Subscription the plan's agent run is given: the Fabrik vault item its
+      # job loads the Claude token from. Only ever a vault item name from the
+      # Kit config this job checked, never a secret.
+      subscription: ${{ steps.route.outputs.subscription }}
     steps:
       # No expression context names the commit of a called workflow, so read
       # it from the OIDC token's job_workflow_sha claim.
@@ -181,7 +185,7 @@ jobs:
           export-env: false
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}
-          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential
 
       - name: Run Triage
         id: agent
@@ -290,7 +294,7 @@ jobs:
           export-env: false
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}
-          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential
 
       - name: Run the Design-session turn
         id: agent
@@ -445,7 +449,7 @@ jobs:
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_IMPLEMENT_TOKEN }}
           OP_ENV_FILE: ${{ runner.temp }}/fabrik-secrets.env
-          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential
 
       - name: Run the Implementer
         id: agent
@@ -623,7 +627,7 @@ jobs:
           export-env: false
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}
-          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential
 
       - name: Run the Reviewer
         id: agent
@@ -743,7 +747,7 @@ jobs:
           export-env: false
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}
-          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential
 
       - name: Run the Auditor
         id: agent
@@ -974,6 +978,8 @@ jobs:
           op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
           github-token: ${{ github.token }}
           ticket: ${{ needs.kit.outputs.ticket }}
+          # The scored Implement run's Subscription, chosen by this Loop run's Kit job.
+          subscription: ${{ needs.kit.outputs.subscription }}
 
   # The judge run's own push job (ADR-0009's addendum): it writes the judge's
   # transcript, its Run record (role `score`) and the score file to fabrik-runs.

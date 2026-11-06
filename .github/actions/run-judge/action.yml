@@ -14,6 +14,7 @@
 #       op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
 #       github-token: ${{ github.token }}
 #       ticket: ${{ needs.kit.outputs.ticket }}
+#       subscription: ${{ needs.kit.outputs.subscription }}
 # It leaves the judge's answer (fabrik-judge-result) or its failure report
 # (fabrik-judge-failure), and its transcript (fabrik-transcript-score), for the
 # score-record job (.github/actions/write-score-record). Its outputs are for
@@ -30,6 +31,9 @@ inputs:
     required: true
   ticket:
     description: The Ticket the scored run built (needs.kit.outputs.ticket).
+    required: true
+  subscription:
+    description: The Subscription whose Claude token the judge runs on, the Fabrik vault item name the Kit job chose (needs.kit.outputs.subscription).
     required: true
 
 outputs:
@@ -83,7 +87,7 @@ runs:
         export-env: false
       env:
         OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-agent-token }}
-        CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+        CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ inputs.subscription }}/credential
 
     - name: Run the judge
       id: judge

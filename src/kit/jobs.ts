@@ -23,6 +23,9 @@
 //   retry                    for an Implement run, its Retry number (0 for a first or Request-changes run); else empty
 //   step-up, request-changes "true" when the run Steps up, or is the Operator's Request-changes run; else "false"
 //   dispatch-timeout-minutes the Dispatch job's Kit config timeout
+//   subscription             the Subscription the plan's agent run is given: the `Fabrik` vault item
+//                            its job loads the Claude token from; empty when it starts none
+// Its step summary names that Subscription, and notes when rotation is off.
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
 import { appendFile, readFile } from "node:fs/promises";
@@ -37,6 +40,7 @@ import type { Plan } from "../loop/types.ts";
 import { kitConfigErrors } from "../skills/pinnedManifests.ts";
 import { callerWorkflowPath, checkKit } from "./caller.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
+import { kitJobSummary, subscriptionOf } from "./kitJob.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -79,6 +83,7 @@ async function main(productDir: string): Promise<void> {
   let route = "none";
   let run: ReturnType<typeof agentRunIn> = null;
   let ticket: number | null = null;
+  let summary: string | null = null;
   if (event === null) {
     console.log(`The Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
   } else {
@@ -91,6 +96,7 @@ async function main(productDir: string): Promise<void> {
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
     route = routeOf(plan);
     run = agentRunIn(plan);
+    summary = kitJobSummary(plan, config);
     ticket = snapshot.pullRequest?.ticket ?? null;
   }
   // A Review's subject is the PR itself; a retry is an Implement run on the Ticket that fixes its PR.
@@ -119,6 +125,8 @@ async function main(productDir: string): Promise<void> {
     "step-up": String(run?.stepUp === true),
     "request-changes": String(run?.requestChanges !== undefined),
     "dispatch-timeout-minutes": String(config.roles.dispatch.timeoutMinutes),
+    // Only ever a vault item name from the Kit config checked above, never a secret.
+    subscription: run === null ? "" : subscriptionOf(run),
   };
   await appendFile(
     required("GITHUB_OUTPUT"),
@@ -127,6 +135,8 @@ async function main(productDir: string): Promise<void> {
       .join(""),
   );
   console.log(`Route: ${route}`);
+  const summaryPath = process.env["GITHUB_STEP_SUMMARY"];
+  if (summary !== null && summaryPath !== undefined && summaryPath !== "") await appendFile(summaryPath, summary);
 }
 
 const productDir = process.argv[2];
