@@ -98,14 +98,14 @@ export const RETRO_EVIDENCE_JOB = "retro-evidence";
  */
 export const PROTOTYPE_JOB = "prototype";
 
-/** Whether the Kit job's plan started a Design session's prototype turn: its `prototype` output. */
-export function isPrototypeTurn(needs: Needs): boolean {
-  return needs["kit"]?.outputs["prototype"] === "true";
+/** Whether the run the Kit job routed to `route` is a Design session's prototype turn: a Design run, with the Kit job's `prototype` output true. */
+export function isPrototypeTurn(needs: Needs, route: string): boolean {
+  return route === "design" && needs["kit"]?.outputs["prototype"] === "true";
 }
 
 /** The job that ran the agent the Kit job routed to: the prototype job for a prototype turn, else the route's own. */
 export function routedJob(needs: Needs, route: AgentRole): NeededJob | undefined {
-  return needs[route === "design" && isPrototypeTurn(needs) ? PROTOTYPE_JOB : route];
+  return needs[isPrototypeTurn(needs, route) ? PROTOTYPE_JOB : route];
 }
 
 /**
@@ -138,7 +138,7 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       const evidence = route === "retro" ? needs[RETRO_EVIDENCE_JOB] : undefined;
       if (evidence !== undefined && FAILED.includes(evidence.result)) return failure(route, issue, evidence, kit);
       const job = routedJob(needs, route);
-      const prototype = route === "design" && isPrototypeTurn(needs);
+      const prototype = isPrototypeTurn(needs, route);
       if (job !== undefined && FAILED.includes(job.result)) {
         const failed = failure(route, issue, job, kit);
         return prototype ? { ...failed, prototype: true } : failed;

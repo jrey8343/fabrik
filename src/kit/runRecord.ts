@@ -196,7 +196,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     retry: implement ? (countOf(kit["retry"]) ?? 0) : 0,
     stepUp: implement && kit["step-up"] === "true",
     requestChanges: implement && kit["request-changes"] === "true",
-    prototype: role === "design" && isPrototypeTurn(end.needs),
+    prototype: isPrototypeTurn(end.needs, role),
     baseSha: nonEmpty(agent["base-sha"]),
     jobResult: job?.result ?? "unknown",
     infrastructureFailure: ran.failure,
