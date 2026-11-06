@@ -335,6 +335,15 @@ describe("The evidence section on a first run's draft PR", () => {
     expect(body.split("\n").filter((line) => line.startsWith("<!-- fabrik:ui-evidence {"))).toEqual(markers);
   });
 
+  it("says the preview deployment is linked once it answers when Kit config declares a preview.url, never that it declares none", () => {
+    const config = kitConfig({ ui: UI, preview: { url: "https://pr-{pr}.shop.example.dev" } });
+
+    const lines = openedBody(planFor(uiRun(), snapshotOf(readyTicket()), config)).split("\n");
+
+    expect(lines).toContain("The preview deployment is linked here once it answers.");
+    expect(lines).not.toContain("No preview link: Kit config declares no `preview.url`.");
+  });
+
   it("says why capture failed, and the PR still opens, using no Retry", () => {
     const failed: CaptureResult = { outcome: "failed", reason: "server-did-not-start", headSha: CAPTURED_SHA, captures: [] };
 

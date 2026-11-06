@@ -222,7 +222,8 @@ function evidenceFor(event: ImplementRunFinished, config: KitConfig, marked: boo
     run,
     artifact,
     gallery,
-    preview: { kind: "none" },
+    // The push job polls a declared preview once it has pushed, and links it if it answers.
+    preview: config.preview === null ? { kind: "none" } : { kind: "pending" },
   });
 }
 
