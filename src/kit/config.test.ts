@@ -15,11 +15,12 @@ const DEFAULTS = {
     review: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
     audit: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 45 },
     retro: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 45 },
+    research: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: "claude-opus-5-5", effort: null },
   },
   maxInFlight: 2,
-  caps: { designSessions: 2, monitorIssues: 5 },
+  caps: { designSessions: 2, monitorIssues: 5, maps: 1 },
   monitor: { errors: null, redMain: true },
   audit: { day: "sunday" },
   retro: { day: "saturday" },
@@ -133,6 +134,9 @@ describe("Kit config", () => {
     [`{ "caps": { "design_sessions": null } }`, "caps.design_sessions must be a whole number of at least 0"],
     [`{ "caps": { "monitor_issues": -1 } }`, "caps.monitor_issues must be a whole number of at least 0"],
     [`{ "caps": { "monitor_issues": "2" } }`, "caps.monitor_issues must be a whole number of at least 0"],
+    [`{ "caps": { "maps": -1 } }`, "caps.maps must be a whole number of at least 0"],
+    [`{ "caps": { "maps": "1" } }`, "caps.maps must be a whole number of at least 0"],
+    [`{ "caps": { "maps": null } }`, "caps.maps must be a whole number of at least 0"],
     [`{ "roles": { "review": { "effort": "extreme" } } }`, `roles.review.effort is "extreme": effort must be one of low, medium, high, xhigh, max`],
     [`[]`, ".fabrik/config.json must be an object"],
   ])("fails a mistyped field, naming it: %s", (text, error) => {
@@ -252,11 +256,12 @@ describe("Kit config", () => {
         review: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
         audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
         retro: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
+        research: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
         dispatch: { timeout_minutes: 10 },
         step_up: { model: "claude-opus-5-5", effort: null },
       },
       max_in_flight: 2,
-      caps: { design_sessions: 2, monitor_issues: 5 },
+      caps: { design_sessions: 2, monitor_issues: 5, maps: 1 },
       monitor: { errors: null, red_main: true },
       audit: { day: "sunday" },
       retro: { day: "saturday" },
@@ -291,10 +296,10 @@ describe("Kit config", () => {
     expect(result.ok && result.config.maxInFlight).toBe(0);
   });
 
-  it("gives a Product repo whose config never sets caps the Kit defaults: 2 Design sessions and 5 open Monitor error issues", () => {
+  it("gives a Product repo whose config never sets caps the Kit defaults: 2 Design sessions, 5 open Monitor error issues and 1 open Map", () => {
     const result = resolveKitConfig({ config: `{ "max_in_flight": 1, "operator": "jrey8343" }` });
 
-    expect(result.ok && result.config.caps).toEqual({ designSessions: 2, monitorIssues: 5 });
+    expect(result.ok && result.config.caps).toEqual({ designSessions: 2, monitorIssues: 5, maps: 1 });
   });
 
   it.each([1, 0])("honours lowering caps.design_sessions to %i", (cap) => {
@@ -330,6 +335,27 @@ describe("Kit config", () => {
     expect(result).toEqual({
       ok: false,
       errors: [`caps.monitor_issues is ${cap}, but a cap can only be lowered: the Kit default is 5`],
+    });
+  });
+
+  it("honours lowering caps.maps to 0, which stops new Maps", () => {
+    const result = resolveKitConfig({ config: `{ "caps": { "maps": 0 } }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, caps: { ...DEFAULTS.caps, maps: 0 } } });
+  });
+
+  it("keeps the Kit default when caps.maps is set to it", () => {
+    const result = resolveKitConfig({ config: `{ "caps": { "maps": 1 } }` });
+
+    expect(result).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it.each([2, 99])("refuses raising caps.maps to %i, naming the field, the value and the Kit default", (cap) => {
+    const result = resolveKitConfig({ config: `{ "caps": { "maps": ${cap} } }` });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [`caps.maps is ${cap}, but a cap can only be lowered: the Kit default is 1`],
     });
   });
 
@@ -644,6 +670,50 @@ describe("The Retro's Kit config", () => {
     });
 
     expect(result).toEqual({ ok: false, errors: ["roles.retro.skills is not a Kit config field"] });
+  });
+});
+
+describe("The Researcher's Kit config", () => {
+  it("gives a repo that sets nothing a Researcher on Opus 5.5 with no effort and a 30-minute timeout", () => {
+    const result = resolveKitConfig({ config: `{ "max_in_flight": 1 }` });
+
+    expect(result.ok && result.config.roles.research).toEqual({
+      model: "claude-opus-5-5",
+      effort: null,
+      timeoutMinutes: 30,
+    });
+  });
+
+  it("honours overrides of the Researcher's model, effort and timeout", () => {
+    const result = resolveKitConfig({
+      config: `{ "roles": { "research": { "model": "claude-sonnet-5-5", "effort": "high", "timeout_minutes": 20 } } }`,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        roles: { ...DEFAULTS.roles, research: { model: "claude-sonnet-5-5", effort: "high", timeoutMinutes: 20 } },
+      },
+    });
+  });
+
+  it.each([
+    [`{ "roles": { "research": { "model": "fable" } } }`, `roles.research.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role`],
+    [`{ "roles": { "research": { "effort": "extreme" } } }`, `roles.research.effort is "extreme": effort must be one of low, medium, high, xhigh, max`],
+    [`{ "roles": { "research": { "timeout_minutes": 0 } } }`, "roles.research.timeout_minutes must be a whole number of at least 1"],
+    [`{ "roles": { "research": { "sources": ["docs.github.com"] } } }`, "roles.research.sources is not a Kit config field"],
+  ])("fails a bad roles.research field, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("refuses roles.research.skills, naming the field, because only triage, design, implement and review take Extra skills", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ roles: { research: { skills: ["jrey8343/skills/event-storming"] } } }),
+      skillsLock: null,
+    });
+
+    expect(result).toEqual({ ok: false, errors: ["roles.research.skills is not a Kit config field"] });
   });
 });
 
