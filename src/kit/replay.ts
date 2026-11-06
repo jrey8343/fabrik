@@ -12,7 +12,8 @@ import { REPLAY_LABEL } from "../loop/labels.ts";
 import { spelled } from "../loop/readable.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { FULL_SHA } from "../skills/lock.ts";
-import { checkEffort, refuseFable } from "./config.ts";
+import { checkEffort, type KitConfig, refuseFable } from "./config.ts";
+import type { ReplayArm } from "./runRecord.ts";
 
 /** A role whose model or effort a Replay can change. */
 export type ReplayRole = Extract<AgentRole, "implement" | "review">;
@@ -211,6 +212,51 @@ const CLAUDE_MODEL = /^claude-[a-z0-9][a-z0-9.[\]-]*$/;
 /** Why a replay won't run `model`: Kit config's rule first, then only Claude models, each named in full. */
 function refuseModel(model: string): string | null {
   return refuseFable(model) ?? (CLAUDE_MODEL.test(model) ? null : "a replay runs only a Claude model, named in full, such as claude-sonnet-5-5");
+}
+
+/** A role's model and effort, as a Replay arm runs it; a null effort passes no --effort, as in Kit config. */
+export type ReplayRoleSettings = Pick<KitConfig["roles"][ReplayRole], "model" | "effort">;
+
+/** What one arm of a Replay runs a Ticket with. */
+export interface ReplayArmSettings {
+  readonly implement: ReplayRoleSettings;
+  readonly review: ReplayRoleSettings;
+  /**
+   * The candidate Kit sha whose prompts and Base skills the arm loads over
+   * the pinned release, or null for the pinned release's own.
+   */
+  readonly candidateSha: string | null;
+}
+
+/** What each of a Replay's arms runs a Ticket with. */
+export type ReplayArms = Readonly<Record<ReplayArm, ReplayArmSettings>>;
+
+/**
+ * A picked Ticket's two arms: the baseline, run with the models and efforts
+ * its Kit config held at its `baseSha`, and the variant, differing from the
+ * baseline only in `variable`. Both arms load the pinned release's prompts
+ * and Base skills unless the variable is a candidate Kit.
+ */
+export function replayArms(base: Pick<KitConfig, "roles">, variable: ReplayVariable): ReplayArms {
+  const { implement, review } = base.roles;
+  const baseline: ReplayArmSettings = {
+    implement: { model: implement.model, effort: implement.effort },
+    review: { model: review.model, effort: review.effort },
+    candidateSha: null,
+  };
+  return { baseline, variant: varied(baseline, variable) };
+}
+
+/** `baseline` with `variable` changed. */
+function varied(baseline: ReplayArmSettings, variable: ReplayVariable): ReplayArmSettings {
+  switch (variable.kind) {
+    case "model":
+      return { ...baseline, [variable.role]: { ...baseline[variable.role], model: variable.model } };
+    case "effort":
+      return { ...baseline, [variable.role]: { ...baseline[variable.role], effort: variable.effort } };
+    case "kit":
+      return { ...baseline, candidateSha: variable.sha };
+  }
 }
 
 /** One file a merged PR changed, as its diff names it: a rename also carries the path it moved from. */

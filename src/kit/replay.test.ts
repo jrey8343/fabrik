@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { hiddenTests, type MergedFile, readReplayRequest, type ReplayVariable, replayThisUrl } from "./replay.ts";
+import { DEFAULT_KIT_CONFIG, type KitConfig } from "./config.ts";
+import { hiddenTests, type MergedFile, readReplayRequest, replayArms, type ReplayVariable, replayThisUrl } from "./replay.ts";
 
 /** A Fabrik commit with a prompt change to try. */
 const CANDIDATE = "0123456789abcdef0123456789abcdef01234567";
@@ -198,6 +199,54 @@ describe("The Replay this link", () => {
     expect(`${url.origin}${url.pathname}`).toBe(`${PRODUCT}/issues/new`);
     expect(url.searchParams.get("labels")).toBe("fabrik:replay");
     expect(readReplayRequest(url.searchParams.get("body") ?? "")).toEqual({ ok: true, request: { variable, tickets: null } });
+  });
+});
+
+describe("A Replay's two arms", () => {
+  /** A Product repo's Kit config at a Ticket's baseSha, with role defaults of its own. */
+  const base: KitConfig = {
+    ...DEFAULT_KIT_CONFIG,
+    roles: {
+      ...DEFAULT_KIT_CONFIG.roles,
+      implement: { model: "claude-sonnet-5-5", effort: "medium", timeoutMinutes: 60 },
+      review: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
+      stepUp: { model: "claude-opus-5-5", effort: "max" },
+    },
+  };
+
+  /** How the Ticket was built: the base Kit config's models and efforts, and the pinned release's own prompts. */
+  const asBuilt = {
+    implement: { model: "claude-sonnet-5-5", effort: "medium" },
+    review: { model: "claude-opus-5-5", effort: null },
+    candidateSha: null,
+  };
+
+  const variables: [string, ReplayVariable, unknown][] = [
+    [
+      "Implement's model",
+      { kind: "model", role: "implement", model: "claude-opus-5-5" },
+      { ...asBuilt, implement: { model: "claude-opus-5-5", effort: "medium" } },
+    ],
+    [
+      "Implement's effort",
+      { kind: "effort", role: "implement", effort: "max" },
+      { ...asBuilt, implement: { model: "claude-sonnet-5-5", effort: "max" } },
+    ],
+    [
+      "Review's model",
+      { kind: "model", role: "review", model: "claude-sonnet-5-5" },
+      { ...asBuilt, review: { model: "claude-sonnet-5-5", effort: null } },
+    ],
+    ["Review's effort", { kind: "effort", role: "review", effort: "low" }, { ...asBuilt, review: { model: "claude-opus-5-5", effort: "low" } }],
+    ["a candidate Kit", { kind: "kit", sha: CANDIDATE }, { ...asBuilt, candidateSha: CANDIDATE }],
+  ];
+
+  it.each(variables)("run the baseline as the base Kit config held, when the variable is %s", (_, variable) => {
+    expect(replayArms(base, variable).baseline).toEqual(asBuilt);
+  });
+
+  it.each(variables)("run the variant differing from it only in %s", (_, variable, variant) => {
+    expect(replayArms(base, variable).variant).toEqual(variant);
   });
 });
 
