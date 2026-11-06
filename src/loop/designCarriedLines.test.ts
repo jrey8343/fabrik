@@ -163,6 +163,49 @@ describe("A Design session's rewrite keeps the issue's From audit line and escap
   });
 });
 
+// A Retro proposal the Operator filed ends with the Retro it came from (#151).
+const filedProposal = [
+  "**Problem**",
+  "",
+  "Route handlers keep querying the database directly.",
+  "",
+  "**Change**",
+  "",
+  "Forbid `pg` in `src/routes/**`.",
+  "",
+  "From retro #120",
+].join("\n");
+
+describe("A Design session's rewrite keeps the issue's From retro line, so the next Retro still skips the proposal while it's open", () => {
+  it("ends the Operator brief and the agent brief with it, as the filed issue did", () => {
+    for (const output of [operatorBrief, agentBrief]) {
+      expect(rewrittenBody(planFor(turnFinished(output), inSession(filedProposal), kitConfig()))?.split("\n").slice(-3)).toEqual([
+        "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
+        "",
+        "From retro #120",
+      ]);
+    }
+  });
+
+  it("ends the Spec that supersedes the issue with it", () => {
+    const plan = planFor(turnFinished(spec), inSession(filedProposal), kitConfig());
+
+    expect(createdBody(plan, "spec")?.split("\n").slice(-2)).toEqual(["", "From retro #120"]);
+  });
+
+  it("carries it beside an Audit's lines, in the order the old body has them", () => {
+    const plan = planFor(turnFinished(operatorBrief), inSession(`${filedProposal}\nFrom audit #40\n<!-- fabrik:escape strong #31 -->`), kitConfig());
+
+    expect(rewrittenBody(plan)?.split("\n").slice(-3)).toEqual(["From retro #120", "From audit #40", "<!-- fabrik:escape strong #31 -->"]);
+  });
+
+  it("carries no From retro line quoted in a code block", () => {
+    const quoting = ["The log said:", "", "```", "From retro #120", "```", "", "Split it."].join("\n");
+
+    expect(planFor(turnFinished(spec), inSession(quoting), kitConfig())).toEqual(planFor(turnFinished(spec), inSession("Split it."), kitConfig()));
+  });
+});
+
 /** The body of the issue the plan creates under this key. */
 function createdBody(plan: Plan, key: string): string | undefined {
   if (plan.kind !== "act") return undefined;
