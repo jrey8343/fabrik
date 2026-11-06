@@ -30,7 +30,23 @@ describe("A Design turn's prototype output: the Operator approved a Prototype", 
     ["2.5 variants", { ...requested, variants: 2.5 }, "a prototype needs variants, a whole number from 2 to 5"],
     ["variants given as text", { ...requested, variants: "3" }, "a prototype needs variants, a whole number from 2 to 5"],
     ["no variant count", { ...requested, variants: undefined }, "a prototype needs variants, a whole number from 2 to 5"],
+    ["an empty brief", { ...requested, brief: " " }, "a prototype needs non-empty brief text"],
+    ["no brief", { ...requested, brief: undefined }, "a prototype needs non-empty brief text"],
+    ["an empty comment", { ...requested, comment: "" }, "a prototype needs a comment, one non-empty line"],
+    ["a comment of two lines", { ...requested, comment: "Prototyping the booking page.\nThree variants." }, "a prototype needs a comment, one non-empty line"],
   ])("refuses %s, naming it", (_, output, error) => {
     expect(turn(output)).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("names every problem at once", () => {
+    expect(turn({ kind: "prototype", route: "book", variants: 9 })).toEqual({
+      ok: false,
+      errors: [
+        "a prototype needs a route, a path starting with /",
+        "a prototype needs variants, a whole number from 2 to 5",
+        "a prototype needs non-empty brief text",
+        "a prototype needs a comment, one non-empty line",
+      ],
+    });
   });
 });

@@ -168,6 +168,11 @@ function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
+/** Non-empty text on one line. */
+function isLine(value: unknown): value is string {
+  return isText(value) && !/[\r\n]/.test(value);
+}
+
 function readQuestions(value: unknown, errors: string[]): RoundQuestion[] {
   if (!Array.isArray(value) || value.length === 0) {
     errors.push("a round needs at least one question");
@@ -403,6 +408,8 @@ function readTurn(value: unknown): DesignTurnOutputResult {
       if (!isVariantCount(value.variants)) {
         errors.push(`a prototype needs variants, a whole number from ${PROTOTYPE_MIN_VARIANTS} to ${PROTOTYPE_VARIANT_CAP}`);
       }
+      if (!isText(value.brief)) errors.push("a prototype needs non-empty brief text");
+      if (!isLine(value.comment)) errors.push("a prototype needs a comment, one non-empty line");
       if (errors.length > 0) return { ok: false, errors };
       return {
         ok: true,
