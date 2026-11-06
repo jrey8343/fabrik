@@ -12,6 +12,7 @@ import {
   type ReplayCandidate,
   type ReplayIssue,
   replayMarksIn,
+  replayReads,
   type ReplayStep,
   type ReplayTick,
   type ReplayTicketEnd,
@@ -684,6 +685,55 @@ describe("A Replay's next step on the tick", () => {
 
       expect(step).toMatchObject({ kind: "reject", issue: 140 });
       expect((step as Extract<ReplayStep, { kind: "reject" }>).comment).toContain("no merged Ticket here can be replayed");
+    });
+  });
+
+  describe("checks a candidate Kit is a Fabrik commit", () => {
+    const issue = aReplayIssue(140, { body: bodyWith(`kit: ${CANDIDATE}`, "tickets: 12") });
+
+    it("rejecting a request whose candidate Kit isn't one", () => {
+      const step = nextReplayStep(aTick([issue], { acceptance: { ...acceptanceOf([aCandidate(12)]), fabrikCommits: { [CANDIDATE]: false } } }));
+
+      expect(step).toMatchObject({ kind: "reject", issue: 140 });
+      expect((step as Extract<ReplayStep, { kind: "reject" }>).comment).toContain(`kit is ${CANDIDATE}, which isn't a commit in the Fabrik repo`);
+    });
+
+    it("accepting one whose candidate Kit is, its variant loading that commit's prompts and Base skills", () => {
+      const step = nextReplayStep(aTick([issue], { acceptance: { ...acceptanceOf([aCandidate(12)]), fabrikCommits: { [CANDIDATE]: true } } }));
+
+      expect(replayMarksIn(acceptedBody(step))?.plan.tickets[0]?.arms.variant.candidateSha).toBe(CANDIDATE);
+    });
+  });
+
+  describe("tells the adapter what to read for a request waiting to be accepted", () => {
+    const listed = aReplayIssue(140, { body: bodyWith(`kit: ${CANDIDATE}`, "tickets: 12, 7, 30") });
+    const byDefault = aReplayIssue(150, { body: bodyWith("review.effort: high") });
+    const candidates = [aCandidate(7), aCandidate(12), aCandidate(20), aCandidate(21, { merged: null })];
+
+    it("the candidates and each candidate Kit to check, then the Kit config at the base of each eligible Ticket a pick weighs", () => {
+      const tick = aTick([listed]);
+
+      expect(replayReads(tick, null)).toEqual({ acceptance: true, fabrikShas: [CANDIDATE], baseShas: [] });
+      expect(replayReads(tick, candidates)).toEqual({ acceptance: true, fabrikShas: [CANDIDATE], baseShas: [baseOf(12), baseOf(7)] });
+      expect(replayReads(aTick([byDefault]), candidates).baseShas).toEqual([baseOf(7), baseOf(12), baseOf(20)]);
+    });
+
+    it.each<[string, ReplayIssue[]]>([
+      ["no replay issue", []],
+      ["an accepted one", [anAcceptedIssue(140)]],
+      ["an invalid request", [aReplayIssue(140, { body: bodyWith("review.effort: highest") })]],
+      ["someone else's request", [aReplayIssue(140, { author: "someone-else" })]],
+      ["a closed issue's request", [aReplayIssue(140, { open: false })]],
+    ])("and nothing for %s", (_, issues) => {
+      expect(replayReads(aTick(issues), candidates)).toEqual({ acceptance: false, fabrikShas: [], baseShas: [] });
+    });
+
+    it.each<[string, ReplayIssue, Partial<ReplayTick>]>([
+      ["with no acceptance facts", byDefault, { acceptance: null }],
+      ["with no Kit config read at a base it names", byDefault, { acceptance: { ...acceptanceOf([aCandidate(7), aCandidate(12)]), baseConfigs: {} } }],
+      ["with no check of the candidate Kit", listed, {}],
+    ])("doing nothing, never a comment, for a waiting request %s", (_, issue, overrides) => {
+      expect(nextReplayStep(aTick([issue], overrides))).toMatchObject({ kind: "nothing" });
     });
   });
 

@@ -321,10 +321,9 @@ function pickWith(
   return { picked, leftOut, ruledOut: [] };
 }
 
-/** The eligible Tickets the pick chooses from: every eligible candidate for the default pick, or the listed ones. */
+/** The eligible Tickets the pick chooses from: every eligible candidate for the default pick, or the listed ones, in the order listed. */
 function eligibleOf(request: Pick<ReplayRequest, "tickets">, candidates: readonly ReplayCandidate[]): Eligible[] {
-  const { tickets } = request;
-  const considered = tickets === null ? candidates : candidates.filter(({ ticket }) => tickets.includes(ticket));
+  const considered = request.tickets?.map((ticket) => candidates.find((candidate) => candidate.ticket === ticket)) ?? candidates;
   return considered.flatMap((candidate) => {
     const eligibility = eligibilityOf(candidate);
     return typeof eligibility === "string" ? [] : [eligibility];
@@ -564,17 +563,60 @@ export function nextReplayTicket({ plan, progress }: ReplayMarks): PlannedTicket
   return plan.tickets.find(({ ticket }) => waiting(ticket)) ?? null;
 }
 
+/**
+ * What the adapter reads for the tick's replay step beyond the replay issues
+ * themselves: only what accepting a waiting request weighs, and nothing at
+ * all while no valid request waits.
+ */
+export interface ReplayReads {
+  /** Whether a valid request waits to be accepted, so the acceptance facts are read, the candidates first. */
+  readonly acceptance: boolean;
+  /** Each candidate Kit sha a waiting request names, to check is a commit in the Fabrik repo. */
+  readonly fabrikShas: readonly string[];
+  /** Each baseSha whose Kit config a waiting request's pick weighs, from the candidates: none until they're read. */
+  readonly baseShas: readonly string[];
+}
+
+/**
+ * What the adapter reads for the tick's replay step, ReplayAcceptance's facts:
+ * asked first with no candidates, to learn whether to read them, then again
+ * with them, to learn whose Kit config to read.
+ */
+export function replayReads(tick: Pick<ReplayTick, "operator" | "issues">, candidates: readonly ReplayCandidate[] | null): ReplayReads {
+  const requests = operatorsOpenIssues(tick).flatMap((issue) => {
+    const read = replayMarksIn(issue.body) === null ? readReplayRequest(issue.body) : null;
+    return read?.ok === true ? [read.request] : [];
+  });
+  const fabrikShas = requests.flatMap(({ variable }) => (variable.kind === "kit" ? [variable.sha] : []));
+  const baseShas = candidates === null ? [] : requests.flatMap((request) => eligibleOf(request, candidates).map(({ picked }) => picked.baseSha));
+  return { acceptance: requests.length > 0, fabrikShas: [...new Set(fabrikShas)], baseShas: [...new Set(baseShas)] };
+}
+
 /** The open replay issues the Operator filed, oldest first: no one else's count, nor a closed one. */
 function operatorsOpenIssues({ operator, issues }: Pick<ReplayTick, "operator" | "issues">): ReplayIssue[] {
   return issues.filter((issue) => issue.open && issue.author === operator).toSorted((a, b) => a.number - b.number);
 }
 
-/** What to do with a waiting request: reject it, accept it, or nothing, when it was rejected already for the same problem. */
+/**
+ * What to do with a waiting request: reject it, accept it, or null when it
+ * was rejected already for the same problem. Nothing, when the acceptance
+ * facts lack one that replayReads names.
+ */
 function requestStep(issue: ReplayIssue, acceptance: ReplayAcceptance | null): ReplayStep | null {
   const read = readReplayRequest(issue.body);
   if (!read.ok) return rejection(issue, rejectedRequest(read.errors));
-  if (acceptance === null) return { kind: "nothing", reason: "" };
-  const { plan, ruledOut } = planOf(read.request, acceptance);
+  const { request } = read;
+  const missing = (fact: string): ReplayStep => ({ kind: "nothing", reason: `Replay #${issue.number}'s request waits on ${fact}, which the tick didn't read` });
+  if (acceptance === null) return missing("its acceptance facts");
+  if (request.variable.kind === "kit") {
+    const { sha } = request.variable;
+    const commit = acceptance.fabrikCommits[sha];
+    if (commit === undefined) return missing(`whether ${shortSha(sha)} is a Fabrik commit`);
+    if (!commit) return rejection(issue, rejectedRequest([`kit is ${sha}, which isn't a commit in the Fabrik repo`]));
+  }
+  const unread = eligibleOf(request, acceptance.candidates).find(({ picked }) => acceptance.baseConfigs[picked.baseSha] === undefined);
+  if (unread !== undefined) return missing(`the Kit config at ${shortSha(unread.picked.baseSha)}`);
+  const { plan, ruledOut } = planOf(request, acceptance);
   if (plan.tickets.length === 0) return rejection(issue, noEligibleTicket(plan, ruledOut));
   const progress = plan.tickets.map(({ ticket }): TicketProgress => ({ ticket, state: "pending" }));
   return { kind: "accept", issue: issue.number, body: replayBody(issue.body, { plan, progress }) };
