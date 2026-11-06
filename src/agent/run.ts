@@ -38,7 +38,9 @@
 // A Researcher run is in a checkout of the default branch: FABRIK_ISSUE_FILE is
 // the research Decision and FABRIK_SPEC_FILE its Map (the issue's parent, as
 // the agent-inputs step wrote it), and it writes its findings to the one file
-// the Kit names from the Decision (src/agent/research.ts). No job runs it yet.
+// the Kit names from the Decision (src/agent/research.ts). The runner cuts the
+// Decision's throwaway branch, commits what the run left to it, and passes it
+// out as a git bundle beside agent-result.json, as an Implement run does.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
@@ -64,6 +66,7 @@ import { AGENT_FAILURE_FILE, MissingVerdictError } from "./failure.ts";
 import {
   bundleAgentBranch,
   continueAgentBranch,
+  cutBranch,
   implementContext,
   requestChangesContext,
   retryContext,
@@ -72,7 +75,7 @@ import {
 } from "./implement.ts";
 import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
-import { RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
+import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
 import { mapCapContext, sentBackContext } from "./design.ts";
 import { claudeArgs, leaveFailureReport, readyHook, schemaOf, setAgentEnv, streamWatch } from "./launch.ts";
 import { reviewContext } from "./review.ts";
@@ -131,7 +134,8 @@ interface RoleSpec<T> {
   readonly retros?: boolean;
   /**
    * The Researcher reads the research Decision's Map from FABRIK_SPEC_FILE and
-   * writes its findings to the one file the Kit names from the Decision.
+   * writes its findings to the one file the Kit names from the Decision, which
+   * the runner commits to the Decision's throwaway branch and passes out as a bundle.
    */
   readonly researches?: boolean;
 }
@@ -245,7 +249,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   // For the run's record (src/kit/runRecord.ts): the model and effort passed to the CLI.
   await writeOutputs({ model: role.model, effort: role.effort ?? "" });
 
-  // The Implementer builds on its own branch from main, with its test secrets.
+  // The Implementer builds on its own branch from main, with its test secrets; the Researcher's findings go on the Decision's throwaway branch.
   let branch: BuiltBranch | null = null;
   let onPullRequest = false;
   // The Operator comments a run on an agent PR is given, recorded before the agent runs.
@@ -296,7 +300,12 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...audit.parts);
   }
   if (spec.retros === true) extra.push(...(await retroContext(required("FABRIK_RETRO_EVIDENCE_FILE"), KIT_DIR)));
-  if (spec.researches === true) extra.push(...(await researchContext(required("FABRIK_SPEC_FILE"), issue)).parts);
+  if (spec.researches === true) {
+    const research = await researchContext(required("FABRIK_SPEC_FILE"), issue);
+    extra.push(...research.parts);
+    // The Decision's throwaway branch, from the default branch, which the runner commits the findings to once the run ends.
+    branch = await cutBranch(productDir, research.branch);
+  }
   // The Reviewer's result is for the PR it judged, which its push job checks against the event.
   let subject = issueNumber;
   if (spec.reviewsPullRequest === true) {
@@ -368,6 +377,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     // Either output kind puts what the tag held on the result.
     const reply = (result as { output?: unknown }).output;
     const checked = "text" in spec.output ? spec.output.text(String(reply)) : (reply as T);
+    // The Researcher commits nothing itself: the Kit commits what it left, as the Fabrik Researcher.
+    if (spec.researches === true) await commitResearch(productDir, issueNumber);
     const built = branch === null ? null : await bundleAgentBranch(productDir, branch, outDir);
     const artifact: AgentRunResult = {
       role: name,

@@ -9,7 +9,7 @@ import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
-import { countDispatchedRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, readKitConfigSources } from "./snapshot.ts";
+import { countDispatchedRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, readKitConfigSources, RESEARCH_JOB_NAME } from "./snapshot.ts";
 
 const repo = { owner: "acme", name: "shop" };
 
@@ -82,6 +82,15 @@ describe("The Implement job's name", () => {
     const implementJob = /^ {2}implement:\n {4}name: (.+)$/m.exec(workflow)?.[1];
 
     expect(implementJob).toBe(IMPLEMENT_JOB_NAME);
+  });
+});
+
+describe("The Research job's name", () => {
+  it("is the name loop.yml gives the Research job, which Dispatch counts Research runs by", async () => {
+    const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
+    const researchJob = /^ {2}research:\n {4}name: (.+)$/m.exec(workflow)?.[1];
+
+    expect(researchJob).toBe(RESEARCH_JOB_NAME);
   });
 });
 

@@ -312,10 +312,10 @@ interface DesignQueueQueryResult {
 export const IMPLEMENT_JOB_NAME = "Implement";
 
 /**
- * The name of the Research job, which Dispatch counts Research runs by as it
- * counts Implement runs by IMPLEMENT_JOB_NAME. loop.yml has no Research job
- * until #260 adds one by this name, and the job-name test holds the two
- * together from then.
+ * The name of the Research job in .github/workflows/loop.yml (a test holds
+ * the two together), which Dispatch counts Research runs by as it counts
+ * Implement runs by IMPLEMENT_JOB_NAME. Called from a Product repo's caller
+ * workflow, it shows up as `<caller job> / Research`.
  */
 export const RESEARCH_JOB_NAME = "Research";
 

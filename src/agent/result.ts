@@ -1,17 +1,18 @@
 // What an agent job passes to its push job (ADR-0002): the role, the issue it
 // ran for, and the structured output it emitted. The push job applies it
 // through the Loop rules core, which checks the output against its contract.
-// An Implement run also passes the branch it built, as a git bundle beside it.
+// An Implement run and a Researcher run also pass the branch they built, as a
+// git bundle beside it.
 import { isGivenOperatorComment } from "../loop/considered.ts";
 import { AGENT_ROLES, type AgentRole, type AuditWindow, type GivenOperatorComment } from "../loop/types.ts";
 
-/** The branch an Implement run built, which the push job reads back from the bundle. */
+/** The branch an Implement or Researcher run built, which the push job reads back from the bundle. */
 export interface BuiltBranch {
-  /** The agent branch's name. */
+  /** The agent branch's name, or the research Decision's throwaway branch's. */
   readonly name: string;
   /** The branch it was cut from, and the commit it started at. */
   readonly base: { readonly ref: string; readonly sha: string };
-  /** The branch's last commit, or null if the Implementer made none (and there's no bundle). */
+  /** The branch's last commit, or null if the run made none (and there's no bundle). */
   readonly head: string | null;
 }
 
@@ -20,7 +21,7 @@ export interface AgentRunResult {
   readonly issue: number;
   /** The agent's structured output, as text, unchecked. */
   readonly output: string;
-  /** For an Implement run only. */
+  /** For an Implement or Researcher run only. */
   readonly branch?: BuiltBranch;
   /**
    * For a run that read an agent PR (a Review, a retry or a Request-changes
@@ -39,8 +40,11 @@ export interface AgentRunResult {
 /** The artifact's file name, the same in both jobs. */
 export const AGENT_RESULT_FILE = "agent-result.json";
 
-/** The Implementer's commits, beside the result, when it made any. */
+/** The Implementer's commits, or the Researcher's findings, beside the result, when the run made any. */
 export const AGENT_BUNDLE_FILE = "agent-branch.bundle";
+
+/** The roles whose run passes out a branch: the Implementer's, and the Researcher's throwaway one. */
+const BUILDS_BRANCH: readonly AgentRole[] = ["implement", "research"];
 
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -62,8 +66,8 @@ export function readAgentRunResult(text: string): AgentRunResult {
     ...(operatorComments === undefined ? {} : { operatorComments: readGiven(operatorComments) }),
     ...(window === undefined ? {} : { window: readWindow(window) }),
   };
-  if (role !== "implement") return { role: role as AgentRole, issue, output, ...given };
-  return { role, issue, output, branch: readBranch(branch), ...given };
+  if (!BUILDS_BRANCH.includes(role as AgentRole)) return { role: role as AgentRole, issue, output, ...given };
+  return { role: role as AgentRole, issue, output, branch: readBranch(branch, role), ...given };
 }
 
 function readGiven(value: unknown): GivenOperatorComment[] {
@@ -86,9 +90,9 @@ function readWindow(value: unknown): AuditWindow {
   return fail();
 }
 
-function readBranch(value: unknown): BuiltBranch {
+function readBranch(value: unknown, role: string): BuiltBranch {
   const fail = (): never => {
-    throw new Error(`${AGENT_RESULT_FILE} has no valid branch for the Implement run`);
+    throw new Error(`${AGENT_RESULT_FILE} has no valid branch for the ${role} run`);
   };
   if (typeof value !== "object" || value === null) return fail();
   const { name, base, head } = value as Record<string, unknown>;
