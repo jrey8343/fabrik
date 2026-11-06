@@ -68,32 +68,13 @@ describe("Trust-root guard", () => {
     expect(checkTrustRoot([{ path }])).toEqual({ kind: "allow" });
   });
 
-  it("refuses a rename out of a trust-root path, naming where it came from", () => {
-    expect(checkTrustRoot([{ from: "CLAUDE.md", path: "docs/old-claude.md" }])).toEqual({
-      kind: "refuse",
-      paths: ["CLAUDE.md"],
-    });
-  });
-
-  it("refuses a rename into a trust-root path", () => {
-    expect(checkTrustRoot([{ from: "docs/draft-review.md", path: "prompts/review.md" }])).toEqual({
-      kind: "refuse",
-      paths: ["prompts/review.md"],
-    });
-  });
-
-  it("refuses a rename out of docs/product/, naming where it came from", () => {
-    expect(checkTrustRoot([{ from: "docs/product/vision.md", path: "docs/vision-draft.md" }])).toEqual({
-      kind: "refuse",
-      paths: ["docs/product/vision.md"],
-    });
-  });
-
-  it("refuses a rename into docs/product/, naming where it went", () => {
-    expect(checkTrustRoot([{ from: "docs/roadmap-draft.md", path: "docs/product/roadmap.md" }])).toEqual({
-      kind: "refuse",
-      paths: ["docs/product/roadmap.md"],
-    });
+  it.each([
+    ["out of a trust-root path, naming where it came from", "CLAUDE.md", "docs/old-claude.md", "CLAUDE.md"],
+    ["into a trust-root path, naming where it went", "docs/draft-review.md", "prompts/review.md", "prompts/review.md"],
+    ["out of docs/product/, naming where it came from", "docs/product/vision.md", "docs/vision-draft.md", "docs/product/vision.md"],
+    ["into docs/product/, naming where it went", "docs/roadmap-draft.md", "docs/product/roadmap.md", "docs/product/roadmap.md"],
+  ])("refuses a rename %s", (_rename, from, path, refused) => {
+    expect(checkTrustRoot([{ from, path }])).toEqual({ kind: "refuse", paths: [refused] });
   });
 
   it("allows a rename between two ordinary paths", () => {
