@@ -1,6 +1,6 @@
 // Small builders for the Weekly summary's tests, matching anIssue, aPullRequest
 // and snapshotOf (./snapshots.ts): say only what a test cares about.
-import type { RunRecord } from "../kit/runRecord.ts";
+import type { ReplayRun, RunRecord } from "../kit/runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "../kit/scorer.ts";
 import type {
   AgentPullRequestFacts,
@@ -61,6 +61,14 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     transcript: null,
     ...overrides,
   };
+}
+
+/** Replay 140's baseline arm of Ticket 7, Replay 140 being the Operator's `fabrik:replay` issue. */
+export const A_REPLAY: ReplayRun = { issue: 140, arm: "baseline", ticket: 7, candidateSha: null };
+
+/** The baseline arm's Implement run in Replay 140, re-running Ticket 7 (merged as PR 50), costing $1, ended at `endedAt`. */
+export function aReplayRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
+  return aRunRecord({ runId: 2000, replay: A_REPLAY, ...overrides });
 }
 
 /** An Auditor's run on Audit 90 in `owner/product`, costing $1. */
