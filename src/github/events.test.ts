@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readAgentRunResult } from "../agent/result.ts";
-import { agentRunEventFrom, auditEventFrom, loopEventFrom } from "./events.ts";
+import { agentFailureEventFrom, agentRunEventFrom, auditEventFrom, loopEventFrom } from "./events.ts";
 
 describe("A push", () => {
   const push = (overrides: Record<string, unknown> = {}) => ({
@@ -184,5 +184,33 @@ describe("A finished Audit run", () => {
 
   it("isn't an agent-run-finished event", () => {
     expect(() => agentRunEventFrom(readAgentRunResult(artifact({ kind: "last-days", days: 30 })))).toThrow(/auditEventFrom/);
+  });
+});
+
+describe("A failed agent run", () => {
+  const job = {
+    role: "triage" as const,
+    issue: 7,
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    jobResult: "failure",
+    secretsStep: "success",
+    report: { failure: "weekly-limit" as const, detail: "seven_day", resetsAt: "2026-11-09T04:00:00.000Z" },
+  };
+
+  it("carries the Subscription the run used", () => {
+    expect(agentFailureEventFrom({ ...job, subscription: "Claude token 2" })).toEqual({
+      kind: "agent-run-failed",
+      role: "triage",
+      issue: 7,
+      runUrl: job.runUrl,
+      jobResult: "failure",
+      secretsStep: "success",
+      report: job.report,
+      subscription: "Claude token 2",
+    });
+  });
+
+  it("names no Subscription when the Kit job passed none out", () => {
+    expect(agentFailureEventFrom(job)).not.toHaveProperty("subscription");
   });
 });

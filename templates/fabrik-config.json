@@ -20,5 +20,6 @@
   "caps": { "design_sessions": 2, "monitor_issues": 5 },
   "monitor": { "errors": null, "red_main": true },
   "audit": { "day": "sunday" },
-  "operator": null
+  "operator": null,
+  "subscriptions": ["Claude token"]
 }

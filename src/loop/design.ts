@@ -51,8 +51,10 @@ const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
 
 /**
  * agent:design, which the Design queue check adds when a slot frees up, starts
- * the session's first turn. The label comes off as the turn starts, so the
- * running turn and then its round hold the slot, not the label. It always
+ * the session's first turn. The Kit also re-adds it to start a turn refused on
+ * its Subscription's weekly limit again, on the next free one, whichever round
+ * it was (src/loop/failures.ts). The label comes off as the turn starts, so
+ * the running turn and then its round hold the slot, not the label. It always
  * comes off, so it never holds a slot for a session that can't start.
  */
 export function startQueuedSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {

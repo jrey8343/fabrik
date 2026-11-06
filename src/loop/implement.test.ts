@@ -22,6 +22,7 @@ describe("Starting an Implementer", () => {
           model: "claude-sonnet-5-5",
           effort: null,
           timeoutMinutes: 60,
+          subscription: "Claude token",
         },
       ],
     });

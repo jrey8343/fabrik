@@ -132,6 +132,22 @@ describe("What the push job applies", () => {
     expect(input).toEqual({ kind: "agent-failure", role: "review", issue: 7, jobResult: "failure", secretsStep: "success" });
   });
 
+  it("names the Subscription a failed run used, from the Kit job's subscription output", () => {
+    const input = pushJobInput(
+      needs("implement", { implement: { result: "failure", outputs: { "secrets-step": "success" } } }, { ticket: "7", subscription: "Claude token 2" }),
+      50,
+    );
+
+    expect(input).toEqual({
+      kind: "agent-failure",
+      role: "implement",
+      issue: 7,
+      jobResult: "failure",
+      secretsStep: "success",
+      subscription: "Claude token 2",
+    });
+  });
+
   it("does nothing when the Kit job routed nowhere, or failed", () => {
     expect(pushJobInput(needs("none"), 12).kind).toBe("nothing");
     expect(pushJobInput({ kit: { result: "failure", outputs: {} } }, 12).kind).toBe("nothing");

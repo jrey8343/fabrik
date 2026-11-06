@@ -15,6 +15,11 @@ export interface FailureEvidence {
   readonly lines: readonly string[];
   /** The routes the init check refused (empty when it passed), or null if no init message arrived. */
   readonly initRefused: readonly string[] | null;
+  /**
+   * What showed the run spending usage credits, when the stream watch stopped
+   * it for that (only with rotation on); null or absent otherwise.
+   */
+  readonly overage?: string | null;
 }
 
 /** The Reviewer replied without a valid Verdict line, which is never a pass. */
@@ -72,9 +77,13 @@ function providerError({
 }
 
 /** Classifies a failed agent run. Anything it can't place is a crash. */
-export function failureReportFor({ error, lines, initRefused }: FailureEvidence): FailureReport {
+export function failureReportFor({ error, lines, initRefused, overage = null }: FailureEvidence): FailureReport {
   if (initRefused !== null && initRefused.length > 0) {
     return { failure: "metered-billing", detail: initRefused.join("; ") };
+  }
+  // The stream watch stopped it, so whatever the stream said after is the stop's doing.
+  if (overage !== null) {
+    return { failure: "usage-credits", detail: `stopped for spending usage credits: ${overage}` };
   }
   const message = messageOf(error);
   if (PREFLIGHT_REFUSAL.test(message)) {
@@ -110,6 +119,7 @@ const REPORTED: readonly ReportedFailure[] = [
   "dead-token",
   "weekly-limit",
   "metered-billing",
+  "usage-credits",
 ];
 
 /** Reads the artifact's text; anything unreadable counts as a crash, so a notice still goes out. */

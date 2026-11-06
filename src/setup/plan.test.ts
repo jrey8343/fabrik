@@ -337,6 +337,7 @@ describe("Labels", () => {
     "enhancement",
     "fabrik:token-rotation",
     "fabrik:weekly-limit",
+    "fabrik:usage-credits",
     "fabrik:audit",
     "fabrik:monitor",
   ];
@@ -510,6 +511,7 @@ describe("The starters the Product repo then owns", () => {
       monitor: { errors: null, red_main: true },
       audit: { day: "sunday" },
       operator: null,
+      subscriptions: ["Claude token"],
     });
     expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({
       ok: true,
@@ -666,6 +668,69 @@ describe("The fabrik-runs store, the opt-in step for Run records and the Weekly 
 
     expect(plan.actions.filter((a) => a.kind === "create-run-store" || a.kind === "write-store-file")).toEqual([]);
     expect(plan.notes.join("\n")).toContain("Mars/Olympus_Mons");
+  });
+});
+
+describe("A second Subscription, the opt-in step for Subscription rotation", () => {
+  const operator = { secondSubscription: true };
+  const oneListed = '{ "subscriptions": ["Claude token"] }\n';
+  const twoListed = '{ "subscriptions": ["Claude token", "Claude token 2"] }\n';
+
+  function withConfig(config: string, fabrikItems: readonly string[]): ProductState {
+    return aCleanProduct({ files: { ".fabrik/config.json": config }, vaults: ["Fabrik"], fabrikItems });
+  }
+
+  it("walks the Operator through the second account, its token and usage credits when the Kit config lists one Subscription", () => {
+    const { notes } = planSetup(withConfig(oneListed, ["Claude token"]), kit, operator);
+
+    const step = notes.find((note) => note.includes("A second Subscription")) ?? "";
+    expect(step).toContain("create a second Claude account");
+    expect(step).toContain("`claude setup-token`");
+    expect(step).toContain('the "Claude token 2" API Credential, with its expiry date, in the "Fabrik" vault');
+    expect(step).toContain("usage credits off on every account");
+    expect(step).toContain('"subscriptions": ["Claude token", "Claude token 2"] in .fabrik/config.json');
+  });
+
+  it("is planned for a repo that leaves subscriptions to its one-item default", () => {
+    const { notes } = planSetup(withConfig('{ "max_in_flight": 1 }\n', ["Claude token"]), kit, operator);
+
+    expect(notes.join("\n")).toContain("A second Subscription");
+  });
+
+  it("asks only for the Kit config list once the second vault item exists", () => {
+    const { notes } = planSetup(withConfig(oneListed, ["Claude token", "Claude token 2"]), kit, operator);
+
+    expect(notes.join("\n")).not.toContain("A second Subscription");
+    expect(notes).toContainEqual(
+      'List the second Subscription in the Kit config: "subscriptions": ["Claude token", "Claude token 2"] in .fabrik/config.json.',
+    );
+  });
+
+  it("is planned away once the second vault item exists and is listed", () => {
+    const state = withConfig(twoListed, ["Claude token", "Claude token 2"]);
+
+    expect(planSetup(state, kit, operator)).toEqual(planSetup(state, kit));
+    expect(planSetup(state, kit, operator).notes.join("\n")).not.toMatch(/Claude token 2|A second Subscription/);
+  });
+
+  it("names a listed Subscription the Fabrik vault lacks, so no run asks 1Password for a missing item", () => {
+    const { notes } = planSetup(withConfig(twoListed, ["Claude token"]), kit);
+
+    expect(notes).toContainEqual(
+      '.fabrik/config.json lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name: walk the wizard\'s "A second Subscription" stage, then run setup again.',
+    );
+  });
+
+  it("creates no service account: the agent and implement accounts already read the Fabrik vault", () => {
+    const state = withConfig(oneListed, ["Claude token"]);
+
+    expect(planSetup(state, kit, operator).actions).toEqual(planSetup(state, kit).actions);
+  });
+
+  it("leaves Subscriptions alone until the Operator opts in", () => {
+    const { notes } = planSetup(withConfig(oneListed, ["Claude token"]), kit);
+
+    expect(notes.join("\n")).not.toContain("Subscription");
   });
 });
 

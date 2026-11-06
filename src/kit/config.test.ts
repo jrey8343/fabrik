@@ -22,6 +22,7 @@ const DEFAULTS = {
   monitor: { errors: null, redMain: true },
   audit: { day: "sunday" },
   operator: null,
+  subscriptions: ["Claude token"],
   instructions: { triage: null, design: null, implement: null, review: null, audit: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
@@ -566,6 +567,10 @@ describe("The Kit config template", () => {
     });
   });
 
+  it("spells out subscriptions at its Kit default, the one V1 Subscription", () => {
+    expect(JSON.parse(template)).toMatchObject({ subscriptions: ["Claude token"] });
+  });
+
   it("resolves to every Kit default", () => {
     expect(resolveKitConfig({ config: template })).toEqual({ ok: true, config: DEFAULTS });
   });
@@ -769,5 +774,81 @@ describe("Skills sources and Extra skill picks, as shipped", () => {
     const result = resolveKitConfig({ config: JSON.stringify({ roles: { [role]: { skills: [] } } }) });
 
     expect(result).toEqual({ ok: false, errors: [`roles.${role}.skills is not a Kit config field`] });
+  });
+});
+
+describe("The Kit config's Subscriptions", () => {
+  it("resolves a repo that lists none to the one V1 Subscription, Claude token", () => {
+    const result = resolveKitConfig({ config: null });
+
+    expect(result.ok && result.config.subscriptions).toEqual(["Claude token"]);
+  });
+
+  it("reads a one-Subscription list naming another vault item as written", () => {
+    const result = resolveKitConfig({ config: `{ "subscriptions": ["Claude token (work)"] }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, subscriptions: ["Claude token (work)"] } });
+  });
+
+  it.each([
+    [`{ "subscriptions": "Claude token" }`, "subscriptions must be a list of Fabrik vault item names"],
+    [`{ "subscriptions": null }`, "subscriptions must be a list of Fabrik vault item names"],
+    [`{ "subscriptions": { "name": "Claude token" } }`, "subscriptions must be a list of Fabrik vault item names"],
+    [`{ "subscriptions": [2] }`, "subscriptions must be a list of Fabrik vault item names"],
+    [`{ "subscriptions": [""] }`, "subscriptions must be a list of Fabrik vault item names"],
+  ])("refuses a Subscriptions value that isn't a list of vault item names, naming the field: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("refuses an empty Subscriptions list, since the Kit needs one to run agents on", () => {
+    expect(resolveKitConfig({ config: `{ "subscriptions": [] }` })).toEqual({
+      ok: false,
+      errors: ["subscriptions is empty: list at least one Subscription"],
+    });
+  });
+
+  it("refuses a Subscriptions list that names one vault item twice", () => {
+    expect(resolveKitConfig({ config: `{ "subscriptions": ["Claude token", "Claude token"] }` })).toEqual({
+      ok: false,
+      errors: [`subscriptions lists "Claude token" more than once`],
+    });
+  });
+
+  it.each([
+    [["Claude token", "Claude token 2"]],
+    [["Claude token 2", "Claude token"]],
+    [["Claude token", "Claude token 2", "Claude token 3"]],
+  ])("reads %j as written, in the Operator's order", (subscriptions) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ subscriptions }) })).toEqual({
+      ok: true,
+      config: { ...DEFAULTS, subscriptions },
+    });
+  });
+
+  it("refuses a two-item list with an empty name, naming the field", () => {
+    expect(resolveKitConfig({ config: `{ "subscriptions": ["Claude token", ""] }` })).toEqual({
+      ok: false,
+      errors: ["subscriptions must be a list of Fabrik vault item names"],
+    });
+  });
+
+  it("refuses a longer list that names one vault item twice", () => {
+    expect(
+      resolveKitConfig({ config: `{ "subscriptions": ["Claude token", "Claude token 2", "Claude token 2"] }` }),
+    ).toEqual({ ok: false, errors: [`subscriptions lists "Claude token 2" more than once`] });
+  });
+});
+
+describe("A Subscription name, which goes into a job output and an op:// reference", () => {
+  it.each([
+    ["a newline, which would write another job output", "Claude token\nroute=implement"],
+    ["a carriage return", "Claude token\r"],
+    ["a tab", "Claude\ttoken"],
+    ["a slash, which would change the op:// reference", "Claude token/other"],
+  ])("is refused when it holds %s", (_, name) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ subscriptions: [name] }) })).toEqual({
+      ok: false,
+      errors: [`subscriptions names ${JSON.stringify(name)}, but a Fabrik vault item name can't hold a control character or a slash`],
+    });
   });
 });

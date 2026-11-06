@@ -32,6 +32,14 @@ _Avoid_: custom skill, plugin, add-on
 A Claude account whose token the Kit runs agents on. The Kit may hold several, used one after another in a fixed order as each reaches its weekly limit.
 _Avoid_: account, plan, token (the token is the Subscription's credential, not the Subscription)
 
+**Subscription rotation**:
+Running agents on the next listed Subscription once one is used up. It is on when two or more Subscriptions are listed, and off with one.
+_Avoid_: failover, load balancing, round-robin
+
+**Used up**:
+Of a Subscription: unusable until something changes, because it has reached its weekly limit or has been caught spending usage credits.
+_Avoid_: exhausted, rate-limited, out
+
 **Product repo**:
 A repository holding a real product that has adopted the Kit, where the Loop's work actually lands.
 _Avoid_: target repo, client repo, project
@@ -177,6 +185,18 @@ _Avoid_: nit, suggestion
 **Infrastructure failure**:
 A run that fails for a reason outside the work itself, such as the model provider, the Sandbox or a credential, rather than anything the Implementer built. It never counts against a Ticket's retries.
 _Avoid_: crash, error, flake
+
+**Held run**:
+An agent run the Kit neither starts nor fails while every Subscription is used up, and resumes by itself, in the order it was first held, once one is free.
+_Avoid_: paused run, queued run, stalled run
+
+**Weekly-limit issue**:
+A Kit-owned issue saying a Subscription has reached its weekly limit, open until that limit resets.
+_Avoid_: rate-limit issue, quota issue
+
+**Usage-credits issue**:
+A Kit-owned issue telling the Operator to turn usage credits off on a Subscription caught spending them, which stays unusable until the Operator closes it.
+_Avoid_: overage issue, billing issue
 
 **Step-up**:
 An Implementer run on a stronger model than its role's default, after a failed review or at the Operator's request.

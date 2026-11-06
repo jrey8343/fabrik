@@ -72,6 +72,10 @@ function describeAction(action: Action): string {
       return `- close #${action.issue} as superseded`;
     case "start-agent-run":
       return `- a ${action.role} run on #${action.issue}${action.pullRequest === undefined ? "" : `, ${action.requestChanges === undefined ? "retrying" : "with the Operator's requested changes on"} #${action.pullRequest}`} (${action.model}), which the Kit job routes to its agent job`;
+    case "hold-agent-run":
+      return `- hold the ${action.role} run on #${action.issue}${action.until === null ? "" : ` until ${action.until}`}, starting no agent job`;
+    case "drop-held-run":
+      return `- drop the held ${action.role} run on #${action.issue} rather than resume it: ${action.reason}`;
     case "check-dispatch":
       return "- run a Dispatch check";
     case "check-design-queue":
@@ -198,6 +202,7 @@ async function failedRunEvent(
     jobResult: input.jobResult,
     secretsStep: input.secretsStep,
     report: reportText === null ? null : readFailureReport(reportText),
+    ...(input.subscription === undefined ? {} : { subscription: input.subscription }),
   });
   return { event, source: `the failed ${input.role} run on #${input.issue}` };
 }

@@ -4,8 +4,11 @@ import { AUDIT_DAYS } from "../kit/config.ts";
 import { shortSha } from "../skills/lock.ts";
 import { auditsIn, lastAudit } from "./audit.ts";
 import { scheduledTick } from "./kitIssues.ts";
+import { readable } from "./readable.ts";
+import { resumingHeldRuns } from "./resume.ts";
 import { AUDIT_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { AUDIT_PENDING_MARKER, auditMarker } from "./markers.ts";
+import { rotationIsOn } from "./subscriptions.ts";
 import type { Action, KitConfig, Plan, Snapshot } from "./types.ts";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -14,13 +17,14 @@ const DAY = 24 * 60 * 60 * 1000;
 const FAILED_AUDITS_A_WEEK = 2;
 
 /**
- * The scheduled tick with the audit gate: closes the weekly-limit issue after
- * its reset, as scheduledTick does, alongside opening a pending Audit when
- * one is due. The scheduled-tick rule calls it on every tick.
+ * The scheduled tick with the audit gate: closes each weekly-limit issue
+ * after its reset, as scheduledTick does, and resumes held runs then, alongside opening a pending Audit
+ * when one is due. The scheduled-tick rule calls it on every tick.
  */
 export function scheduledTickWithAuditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
-  const tick = scheduledTick(now, snapshot);
-  // The weekly-limit issue this tick closes after its reset no longer holds the Audit back.
+  // With rotation on, a weekly-limit issue it closes resumes the held runs.
+  const tick = resumingHeldRuns(scheduledTick(now, snapshot, config), snapshot, config);
+  // A weekly-limit issue this tick closes after its reset no longer holds the Audit back.
   const closing = actionsOf(tick).flatMap((action) => (action.kind === "close" ? [action.issue] : []));
   const kitIssues = snapshot.kitIssues.filter((issue) => !closing.includes(issue.number));
   return alongside(tick, auditGate(now, { ...snapshot, kitIssues }, config));
@@ -58,7 +62,11 @@ function auditGate(now: string, snapshot: Snapshot, config: KitConfig): Plan {
   if (done !== undefined) return { kind: "nothing", reason: `#${done.number} already audited this week` };
   const open = audits.find((audit) => audit.open);
   if (open !== undefined) return { kind: "nothing", reason: `Audit #${open.number} is still open` };
-  const limit = snapshot.kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
+  // With rotation on the Audit opens anyway: its Auditor run starts on a free
+  // Subscription, or is held on the pending Audit while none is.
+  const limit = rotationIsOn(config)
+    ? undefined
+    : snapshot.kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
   if (limit !== undefined) return { kind: "nothing", reason: `The weekly usage limit is reached, as #${limit.number} says` };
   const failed = thisWeek.filter((audit) => audit.failed).reverse();
   if (failed.length >= FAILED_AUDITS_A_WEEK) {
@@ -96,12 +104,6 @@ function weekStart(now: string): number {
   const at = new Date(now);
   const sinceMonday = (at.getUTCDay() + 6) % 7;
   return Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()) - sinceMonday * DAY;
-}
-
-/** Such as "2026-11-08 00:00 UTC". */
-function readable(time: number): string {
-  const at = new Date(time).toISOString();
-  return `${at.slice(0, 10)} ${at.slice(11, 16)} UTC`;
 }
 
 /** Such as "2026-11-02". */

@@ -144,6 +144,12 @@ describe("Reading the failure report in the push job", () => {
     });
   });
 
+  it("reads back a usage-credits report, an Infrastructure failure the push job knows", () => {
+    const report = { failure: "usage-credits", detail: "stopped for spending usage credits: overageInUse was true" };
+
+    expect(readFailureReport(JSON.stringify(report))).toEqual(report);
+  });
+
   it.each(["", "not json", JSON.stringify({ failure: "timeout" })])(
     "treats an unreadable report (%j) as a crash, so a notice still goes out",
     (text) => {
