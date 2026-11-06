@@ -318,3 +318,120 @@ describe("The head a push leaves the agent branch at, which fills in a preview U
     expect((await rebuild(prHead)).head).toBeNull();
   });
 });
+
+// A Design session's prototype turn (#155) builds on the issue's prototype branch, which the Kit
+// never merges, never opens a PR from, never deletes, and only ever fast-forwards.
+describe("A prototype turn's branch", () => {
+  const PROTOTYPE = "prototype/7";
+  const remoteGit = { serverUrl: "", repo: { owner: "acme", name: "shop" }, token: "unused" };
+
+  /** Rebuilds the clone's prototype branch from a bundle of what the turn made on top of `base`, as the push job does. */
+  async function rebuildPrototype(base: { ref: string; sha: string }) {
+    const head = await git(clone, "rev-parse", "HEAD");
+    const bundle = join(root, "prototype.bundle");
+    await git(clone, "bundle", "create", "--quiet", bundle, `refs/heads/${PROTOTYPE}`, `^${base.sha}`);
+    return rebuildAgentBranch({ name: PROTOTYPE, base, head }, bundle, { ...remoteGit, serverUrl: `file://${root}` });
+  }
+
+  /** A first round's turn: prototype/7 cut from main as it is now, with the variants committed on it. */
+  async function firstRound(): Promise<{ main: string; tip: string }> {
+    await git(clone, "fetch", "--quiet", "origin");
+    const main = await git(clone, "rev-parse", "origin/main");
+    await git(clone, "checkout", "--quiet", "-B", PROTOTYPE, main);
+    const tip = await commit(clone, { "src/pages/book/A.tsx": "variant A\n", "src/pages/book/B.tsx": "variant B\n" }, "Variants");
+    return { main, tip };
+  }
+
+  /** Someone pushes prototype/7 as `files` on top of main, as an earlier round's push job would. */
+  async function pushedRound(files: Record<string, string>): Promise<string> {
+    const other = join(root, "earlier");
+    await git(root, "clone", "--quiet", "--branch", "main", remote, other);
+    await git(other, "checkout", "--quiet", "-b", PROTOTYPE);
+    const head = await commit(other, files, "An earlier round");
+    await git(other, "push", "--quiet", "origin", PROTOTYPE);
+    return head;
+  }
+
+  it("cut from the default branch on a first round, reads every change since the head it started on, and its push creates the branch", async () => {
+    const { main, tip } = await firstRound();
+
+    const branch = await rebuildPrototype({ ref: "main", sha: main });
+    await branch.push(PROTOTYPE);
+
+    expect(paths(branch.changes.net)).toEqual(["src/pages/book/A.tsx", "src/pages/book/B.tsx"]);
+    expect(paths(branch.changes.commits)).toEqual(["src/pages/book/A.tsx", "src/pages/book/B.tsx"]);
+    expect(branch.head).toBe(tip);
+    expect(await git(remote, "rev-parse", `refs/heads/${PROTOTYPE}`)).toBe(tip);
+  });
+
+  it("on a later round, built on the branch an earlier round pushed, reads only its own commits, and its push fast-forwards the branch", async () => {
+    const earlier = await pushedRound({ "src/pages/book/A.tsx": "variant A\n" });
+    await git(clone, "fetch", "--quiet", "origin");
+    await git(clone, "checkout", "--quiet", "-B", PROTOTYPE, `origin/${PROTOTYPE}`);
+    const tip = await commit(clone, { "src/pages/book/C.tsx": "variant C\n" }, "Another variant");
+
+    const branch = await rebuildPrototype({ ref: PROTOTYPE, sha: earlier });
+    await branch.push(PROTOTYPE);
+
+    expect(paths(branch.changes.net)).toEqual(["src/pages/book/C.tsx"]);
+    expect(paths(branch.changes.commits)).toEqual(["src/pages/book/C.tsx"]);
+    expect(await git(remote, "rev-parse", `refs/heads/${PROTOTYPE}`)).toBe(tip);
+    expect(await git(remote, "rev-parse", `${tip}~1`)).toBe(earlier);
+  });
+
+  it("still counts a Trust-root change a later commit of the turn undid", async () => {
+    const { main } = await firstRound();
+    await commit(clone, { "AGENTS.md": "weaker rules\n" }, "Sneak");
+    await git(clone, "rm", "--quiet", "AGENTS.md");
+    await git(clone, "commit", "--quiet", "-m", "Undo");
+
+    const branch = await rebuildPrototype({ ref: "main", sha: main });
+
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "refuse", paths: ["AGENTS.md"] });
+  });
+
+  it("refuses to push over the branch when it moved since the turn started, rather than rebase onto it or replace it", async () => {
+    const earlier = await pushedRound({ "src/pages/book/A.tsx": "variant A\n" });
+    await git(clone, "fetch", "--quiet", "origin");
+    await git(clone, "checkout", "--quiet", "-B", PROTOTYPE, `origin/${PROTOTYPE}`);
+    await commit(clone, { "src/pages/book/C.tsx": "variant C\n" }, "Another variant");
+    const other = join(root, "meanwhile");
+    await git(root, "clone", "--quiet", "--branch", PROTOTYPE, remote, other);
+    const moved = await commit(other, { "src/pages/book/D.tsx": "meanwhile\n" }, "Meanwhile");
+    await git(other, "push", "--quiet", "origin", PROTOTYPE);
+    const branch = await rebuildPrototype({ ref: PROTOTYPE, sha: earlier });
+
+    await expect(branch.push(PROTOTYPE)).rejects.toThrow();
+    expect(branch.changes.rebase).toBeUndefined();
+    expect(await git(remote, "rev-parse", `refs/heads/${PROTOTYPE}`)).toBe(moved);
+  });
+
+  it("refuses, on a first round, to replace a prototype branch that was pushed while the turn worked", async () => {
+    const { main } = await firstRound();
+    const branch = await rebuildPrototype({ ref: "main", sha: main });
+    const meanwhile = await pushedRound({ "src/pages/book/Z.tsx": "meanwhile\n" });
+
+    await expect(branch.push(PROTOTYPE)).rejects.toThrow();
+    expect(await git(remote, "rev-parse", `refs/heads/${PROTOTYPE}`)).toBe(meanwhile);
+  });
+
+  it("refuses a bundle that doesn't start from the head the turn said it started on", async () => {
+    const { main } = await firstRound();
+    const head = await git(clone, "rev-parse", "HEAD");
+    const bundle = join(root, "prototype.bundle");
+    await git(clone, "bundle", "create", "--quiet", bundle, `refs/heads/${PROTOTYPE}`, `^${main}`);
+
+    // The PR's head, which the turn's commits don't start from.
+    await expect(
+      rebuildAgentBranch({ name: PROTOTYPE, base: { ref: "main", sha: prHead }, head }, bundle, { ...remoteGit, serverUrl: `file://${root}` }),
+    ).rejects.toThrow();
+  });
+
+  it("pushes no branch but the issue's prototype branch, never the default branch", async () => {
+    const { main } = await firstRound();
+    const branch = await rebuildPrototype({ ref: "main", sha: main });
+
+    await expect(branch.push("main")).rejects.toThrow(/bundle holds prototype\/7/);
+    expect(await git(remote, "rev-parse", "refs/heads/main")).toBe(main);
+  });
+});

@@ -1,4 +1,5 @@
-// The push job's git work for an Implement run: rebuilds the agent branch from
+// The push job's git work for an Implement run, a Researcher run or a Design
+// session's prototype turn: rebuilds the agent branch from
 // the bundle the agent job passed out, in an empty repository, reads the paths
 // it changes for the trust-root guard, and pushes it as the Fabrik App. It
 // never checks out a working tree or runs anything from the Product repo: a
@@ -80,9 +81,19 @@ export async function rebuildAgentBranch(
       push: () => Promise.reject(new Error(`${branch.name} has no commits to push`)),
     };
   }
+  if (isPrototypeBranch(branch.name)) return fastForwardOnly(git, url, branch, bundlePath);
   return branch.base.ref === branch.name
     ? onItsOwnBranch(git, url, branch, bundlePath)
     : cutFromMain(git, url, branch, bundlePath);
+}
+
+/**
+ * Whether this is an issue's prototype branch (#155, prototypeBranchFor),
+ * which the Kit never merges, never opens a PR from, never deletes, and only
+ * ever fast-forwards, whoever's run built it.
+ */
+function isPrototypeBranch(name: string): boolean {
+  return name.startsWith("prototype/");
 }
 
 /** Reads the bundle's branch in, checking it ends where the agent job said. */
@@ -135,6 +146,34 @@ async function cutFromMain(git: Git, url: string, branch: BuiltBranch, bundlePat
     async push(name) {
       if (name !== branch.name) throw new Error(`Asked to push ${name}, but the bundle holds ${branch.name}`);
       await git("push", "--quiet", "--force", url, `${ref}:${ref}`);
+    },
+  };
+}
+
+/**
+ * A Design session's prototype turn, on the issue's prototype branch: a first
+ * round cut it from the default branch, and a later one carried on from the
+ * head an earlier round pushed. Everything since the head it started on is
+ * its own, every commit judged, since only the push job's guard stands before
+ * the branch. Its push only fast-forwards from that head: a later round's
+ * only while the branch is still there, and a first round's only while there
+ * is no branch yet. It never rebases onto a branch that moved, nor replaces
+ * one, as an agent PR's runs may; the next prototype turn builds on what's there.
+ */
+async function fastForwardOnly(git: Git, url: string, branch: BuiltBranch, bundlePath: string): Promise<AgentBranchGit> {
+  const ref = `refs/heads/${branch.name}`;
+  const { sha: base } = branch.base;
+  await git("fetch", "--quiet", "--depth=1", url, base);
+  const tip = await fetchBundle(git, branch, bundlePath);
+  if (!(await isAncestor(git, base, tip))) throw new Error(`${branch.name} doesn't start from ${branch.base.ref} at ${base}`);
+  // An empty lease means the branch mustn't exist yet.
+  const lease = branch.base.ref === branch.name ? base : "";
+  return {
+    changes: { net: await diff(git, base, tip), commits: await commitsIn(git, `${base}..${tip}`), updatedFromMain: false },
+    head: tip,
+    async push(name) {
+      if (name !== branch.name) throw new Error(`Asked to push ${name}, but the bundle holds ${branch.name}`);
+      await git("push", "--quiet", `--force-with-lease=${ref}:${lease}`, url, `${ref}:${ref}`);
     },
   };
 }
