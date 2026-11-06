@@ -278,6 +278,35 @@ describe("Picking a Replay's Tickets", () => {
       expect(pickReplayTickets({ tickets: [12] }, candidates)).toEqual({ picked: [], leftOut: [{ ticket: 12, reason }] });
     });
   });
+
+  describe("keeps a Ticket whose results need weighing, and flags it", () => {
+    const merged = aCandidate(12).merged!;
+    // Ticket 12's first Implement run ran for 90 seconds, ending at 09:00.
+    const whileItRan = "2026-10-01T08:59:00Z";
+    const beforeItRan = "2026-10-01T08:58:00Z";
+
+    it.each<[string, Partial<ReplayCandidate>, string[]]>([
+      ["Human touches", { humanTouches: 2 }, ["human-touches"]],
+      ["its Ticket edited after its first Implement run started", { lastEdited: { ticket: whileItRan, spec: null } }, ["edited-input"]],
+      ["its Spec edited after its first Implement run started", { lastEdited: { ticket: beforeItRan, spec: "2026-10-03T10:00:00Z" } }, ["edited-input"]],
+      ["no hidden tests", { merged: { ...merged, files: [{ path: "src/booking.ts", removed: false }] } }, ["no-hidden-tests"]],
+      [
+        "all three",
+        { humanTouches: 1, lastEdited: { ticket: null, spec: whileItRan }, merged: { ...merged, files: [{ path: "src/booking.ts", removed: false }] } },
+        ["human-touches", "edited-input", "no-hidden-tests"],
+      ],
+    ])("keeps a Ticket with %s", (_, overrides, flags) => {
+      expect(pickReplayTickets({ tickets: [12] }, [aCandidate(12, overrides)]).picked).toEqual([
+        { ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags },
+      ]);
+    });
+
+    it("flags nothing for a Ticket and Spec last edited before its first Implement run started", () => {
+      const picked = pickReplayTickets({ tickets: [12] }, [aCandidate(12, { lastEdited: { ticket: beforeItRan, spec: "2026-09-20T10:00:00Z" } })]).picked;
+
+      expect(picked.map(({ flags }) => flags)).toEqual([[]]);
+    });
+  });
 });
 
 describe("A Replay's two arms", () => {

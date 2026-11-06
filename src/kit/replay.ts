@@ -248,8 +248,13 @@ export interface PickedTicket {
   readonly flags: readonly ReplayFlag[];
 }
 
-/** What a picked Ticket's results are weighed with. */
-export type ReplayFlag = never;
+/**
+ * Why a picked Ticket's results need weighing: the original only merged with
+ * the Operator's Human touches, its Ticket or Spec was edited after its first
+ * Implement run started, so the arms' rebuilt input may differ from the
+ * original's, or its merged PR has no hidden tests to measure the arms by.
+ */
+export type ReplayFlag = "human-touches" | "edited-input" | "no-hidden-tests";
 
 /** Which Tickets a Replay runs, in the order it runs them. */
 export interface ReplayPick {
@@ -294,14 +299,28 @@ function eligibilityOf(candidate: ReplayCandidate | undefined): PickedTicket | s
   }
   const implementRuns = candidate.records.filter((record) => record.replay === null && record.role === "implement");
   if (implementRuns.length === 0) return "the store holds no Implement run of it";
-  const baseSha = implementRuns.find(isFirstRun)?.baseSha ?? null;
-  if (baseSha === null) return "the store has no baseSha for its first Implement run";
-  return { ticket: candidate.ticket, pullRequest: merged.number, baseSha, flags: [] };
+  const first = implementRuns.find(isFirstRun);
+  if (first?.baseSha == null) return "the store has no baseSha for its first Implement run";
+  const flags: ReplayFlag[] = [];
+  if (candidate.humanTouches > 0) flags.push("human-touches");
+  if (editedSince(candidate.lastEdited, startOf(first))) flags.push("edited-input");
+  if (hiddenTests(merged.files).length === 0) flags.push("no-hidden-tests");
+  return { ticket: candidate.ticket, pullRequest: merged.number, baseSha: first.baseSha, flags };
 }
 
 /** Whether an Implement run cut its Ticket's branch: not a Retry, a Step-up or a Request-changes run. */
 function isFirstRun(record: RunRecord): boolean {
   return record.retry === 0 && !record.stepUp && !record.requestChanges;
+}
+
+/** About when a run started, in ms: its end less its agent's duration, or its end when it has none. */
+function startOf(record: RunRecord): number {
+  return Date.parse(record.endedAt) - (record.durationMs ?? 0);
+}
+
+/** Whether the Ticket or its Spec was last edited after `start`. */
+function editedSince(lastEdited: ReplayCandidate["lastEdited"], start: number): boolean {
+  return [lastEdited.ticket, lastEdited.spec].some((at) => at !== null && Date.parse(at) > start);
 }
 
 /** A role's model and effort, as a Replay arm runs it; a null effort passes no --effort, as in Kit config. */
