@@ -1,7 +1,7 @@
-// The Replay's composite actions (#156), which the switch-on Ticket wires into
-// loop.yml (#295). Like the workflows tests, these hold the wiring to the files
-// it names and to the credentials each job may hold (ADR-0002, ADR-0009),
-// since nothing runs them before a release.
+// The Replay's composite actions (#156), which loop.yml's replay jobs run
+// (src/kit/workflows.test.ts holds those jobs). Like the workflows tests, these
+// hold the wiring to the files it names and to the credentials each job may
+// hold (ADR-0002, ADR-0009), since nothing runs them before a release.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
@@ -12,7 +12,7 @@ import { REPLAY_GATES_FILE } from "./replayGates.ts";
 import { ARM_JOB_FILE, replayArtifact, type ReplayArtifactKind } from "./replayRecord.ts";
 
 const root = new URL("../../", import.meta.url);
-const workflows = readdirSync(new URL(".github/workflows/", root)).map((name) => readFileSync(new URL(`.github/workflows/${name}`, root), "utf8"));
+const workflows = readdirSync(new URL(".github/workflows/", root)).map((name) => ({ name, text: readFileSync(new URL(`.github/workflows/${name}`, root), "utf8") }));
 
 /** A composite action's text and its steps, each from its `- ` line to the next one's. */
 function actionNamed(name: string): { readonly text: string; readonly steps: readonly string[] } {
@@ -44,10 +44,14 @@ const ARM_ACTIONS = ["replay-implement", "replay-gates", "replay-review", "repla
 /** Every write credential, or way to one, an agent job must never hold (ADR-0002). */
 const WRITE_CREDENTIALS = /create-github-app-token|OP_PUSH_TOKEN|op-push-token|id-token|store-token|run-loop/;
 
-describe("The Replay's composite actions, dormant until the switch-on Ticket", () => {
-  it.each(REPLAY_ACTIONS)("%s ships, and no workflow uses it yet", (name) => {
+describe("The Replay's composite actions", () => {
+  it.each(REPLAY_ACTIONS)("%s ships, and only loop.yml's job of the same name runs it", (name) => {
     expect(existsSync(new URL(`.github/actions/${name}/action.yml`, root))).toBe(true);
-    for (const workflow of workflows) expect(workflow).not.toContain(`./kit/.github/actions/${name}`);
+    const using = workflows.filter(({ text }) => text.includes(`./kit/.github/actions/${name}\n`));
+
+    expect(using.map(({ name: file }) => file)).toEqual(["loop.yml"]);
+    expect(using[0]!.text.split(`uses: ./kit/.github/actions/${name}\n`)).toHaveLength(2);
+    expect(using[0]!.text).toMatch(new RegExp(`\\n  ${name}:\\n(?: {4}.*\\n|\\n)*? {8}uses: \\./kit/\\.github/actions/${name}\\n`));
   });
 
   it.each(ARM_ACTIONS)("%s leaves its artifacts under names that carry its arm, so the arms' matrix legs never collide, and never the push job's", (name) => {

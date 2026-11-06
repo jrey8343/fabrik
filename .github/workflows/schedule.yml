@@ -3,12 +3,14 @@
 #
 # This file is wiring only. It runs the Loop's time-based rules (closing the
 # weekly-limit issue after its reset, opening the week's pending Audit and
-# pending Retro, and a Design queue check) through the Loop rules core, which
-# src/main.ts runs as a `scheduled-tick` event, once a week the Product repo's
-# skills bumps for its own Skills sources, and every hour the Monitor, in a job
-# of its own. The Fabrik App opening the pending Audit or Retro starts the Loop
-# workflow, whose Audit job runs the Auditor and whose Retro evidence and Retro
-# jobs run the Retro, so the tick itself holds only the push service account.
+# pending Retro, taking the Replays' next step, and a Design queue check)
+# through the Loop rules core, which src/main.ts runs as a `scheduled-tick`
+# event, once a week the Product repo's skills bumps for its own Skills
+# sources, and every hour the Monitor, in a job of its own. The Fabrik App
+# opening the pending Audit or Retro starts the Loop workflow, whose Audit job
+# runs the Auditor and whose Retro evidence and Retro jobs run the Retro, and
+# its adding agent:replay to a replay issue starts that workflow's replay jobs
+# (#156), so the tick itself holds only the push service account.
 #
 # Like the Loop's push job (ADR-0002), the tick, skills bump and Monitor jobs
 # run on a fresh VM, load the Fabrik App key through the push service account,
@@ -78,6 +80,17 @@ jobs:
           path: kit
           persist-credentials: false
 
+      # While a replay issue is open (#156), the Run records the replay step reads, from a
+      # read-only checkout of fabrik-runs; with none open it reads nothing of the store. A
+      # store that isn't there or can't be read never fails the tick: the replay step then
+      # starts no replay Ticket.
+      - name: Check out the store for the replay step
+        id: replay-store
+        continue-on-error: true
+        uses: ./kit/.github/actions/replay-store
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+
       - name: Run the Loop's scheduled rules
         id: loop
         uses: ./kit/.github/actions/run-loop
@@ -85,6 +98,8 @@ jobs:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
           # Whether the fabrik-runs store is ready for a Retro, which the retro gate weighs.
           find-store: "true"
+          # The replay step's checkout of the store, empty when it made none.
+          store-dir: ${{ steps.replay-store.outputs.store-dir }}
 
   # The hourly Design queue check (#147), which catches a slot freed by an
   # event the Loop doesn't watch, such as needs-design coming off by hand.

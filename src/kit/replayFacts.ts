@@ -25,6 +25,19 @@ export function newestWeeklyLimits(records: readonly RunRecord[], now: string): 
   return Object.fromEntries(Object.entries(newest).map(([subscription, { reading }]) => [subscription, reading]));
 }
 
+/**
+ * What the scheduled tick checks out of the store for the replay step at
+ * `now`, as git's non-cone sparse-checkout patterns: every Product repo's
+ * Run records from the store's last two months, which newestWeeklyLimits
+ * reads, and every one of this repo's, `repo` as `owner/name`, whatever
+ * month, which a waiting request's candidates are read from. A record sits
+ * under the month it ended, by UTC (runStoreName in src/kit/runRecord.ts).
+ */
+export function replayStorePaths(repo: string, now: string): string[] {
+  const month = (at: number) => new Date(at).toISOString().slice(0, 7);
+  return [`/runs/*/*/${month(Date.parse(now))}/`, `/runs/*/*/${month(lastMonthStart(now))}/`, `/runs/${repo}/`];
+}
+
 /** 00:00 UTC on the first of the month before `now`'s, in ms. */
 function lastMonthStart(now: string): number {
   const at = new Date(now);

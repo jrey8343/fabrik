@@ -1,10 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { aReading } from "../__fixtures__/replay.ts";
 import { A_REPLAY, aRunRecord } from "../__fixtures__/weeklySummary.ts";
-import { newestWeeklyLimits, replayCandidatesOf, replayTicketsIn } from "./replayFacts.ts";
+import { newestWeeklyLimits, replayCandidatesOf, replayStorePaths, replayTicketsIn } from "./replayFacts.ts";
 
 /** Wednesday 2026-11-11, so the store's last two months are October and November 2026. */
 const NOW = "2026-11-11T04:00:00.000Z";
+
+// The tick's sparse checkout of the store (.github/actions/replay-store), in git's non-cone patterns.
+describe("What the tick checks out of the store for the replay step", () => {
+  it("is every Product repo's Run records from the store's last two months, and every one of this repo's, whatever month", () => {
+    expect(replayStorePaths("acme/shop", NOW)).toEqual(["/runs/*/*/2026-11/", "/runs/*/*/2026-10/", "/runs/acme/shop/"]);
+  });
+
+  it("reaches back into last year from January, by UTC", () => {
+    expect(replayStorePaths("acme/shop", "2027-01-01T00:30:00+10:00")).toEqual(["/runs/*/*/2026-12/", "/runs/*/*/2026-11/", "/runs/acme/shop/"]);
+  });
+});
 
 describe("The newest weekly-limit reading on each Subscription, as the spare-capacity gate weighs it", () => {
   it("is each Subscription's newest, from any Product repo's records, a Replay run's included", () => {
