@@ -9,14 +9,14 @@
 // Contents read on the store alone, and FABRIK_PRODUCTS_TOKEN, read-only on
 // the Product repos. FABRIK_STORE_DIR is the store's checkout, and
 // FABRIK_APP_SLUG the Fabrik App's slug, which names its label events.
-import { appendFile, readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { appendFile } from "node:fs/promises";
 import { gatherGitHubFacts, productReposOf } from "../github/facts.ts";
 import { GitHub, GitHubError } from "../github/client.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
 import type { RunRecord } from "./runRecord.ts";
 import { RUN_STORE } from "./runStore.ts";
 import type { ScoreFile } from "./scorer.ts";
+import { readStoreFiles } from "./storeCheckout.ts";
 import { type SummaryIssue, WEEKLY_SUMMARY_LABEL, type WeeklyFiling, weeklyFilingOf } from "./weeklyFiling.ts";
 import { weeklySummary } from "./weeklySummary.ts";
 
@@ -30,20 +30,6 @@ async function report(line: string): Promise<void> {
   console.log(line);
   const summary = process.env["GITHUB_STEP_SUMMARY"];
   if (summary !== undefined && summary !== "") await appendFile(summary, `### Weekly summary\n\n${line}\n`);
-}
-
-/** Every schema 1 file under one of the checkout's directories, whatever repo or month: none when the directory isn't there. */
-async function readStoreFiles<T extends { readonly schema: number }>(storeDir: string, directory: "runs" | "scores"): Promise<T[]> {
-  const root = join(storeDir, directory);
-  let paths: string[];
-  try {
-    paths = (await readdir(root, { recursive: true })).filter((path) => path.endsWith(".json"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-  const files = await Promise.all(paths.map(async (path) => JSON.parse(await readFile(join(root, path), "utf8")) as T));
-  return files.filter((file) => file.schema === 1);
 }
 
 /** The store repo's REST path, for its issues and labels. */
@@ -109,9 +95,9 @@ async function main(): Promise<string> {
   const caller = await store.fileText(RUN_STORE, STORE_CALLER_PATH, required("GITHUB_SHA"));
   const timeZone = (caller === null ? null : timeZoneIn(caller)) ?? "UTC";
   const storeDir = required("FABRIK_STORE_DIR");
-  const records = await readStoreFiles<RunRecord>(storeDir, "runs");
+  const records = Object.values(await readStoreFiles<RunRecord>(storeDir, "runs"));
   // No scores/ until scoring has run.
-  const scoreFiles = await readStoreFiles<ScoreFile>(storeDir, "scores");
+  const scoreFiles = Object.values(await readStoreFiles<ScoreFile>(storeDir, "scores"));
   const repos = await productReposOf(products);
   const facts = await Promise.all(repos.map((repo) => gatherGitHubFacts(products, repo, now, RUN_STORE.owner)));
 

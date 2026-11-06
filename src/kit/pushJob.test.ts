@@ -55,7 +55,7 @@ describe("What the push job applies", () => {
   });
 
   it("applies a Retro run's result for the event's issue, the pending Retro, once the Retro job succeeded", () => {
-    expect(pushJobInput(needs("retro", { retro: ok() }), 120)).toEqual({
+    expect(pushJobInput(needs("retro", { "retro-evidence": ok(), retro: ok() }), 120)).toEqual({
       kind: "agent-result",
       role: "retro",
       issue: 120,
@@ -125,9 +125,19 @@ describe("What the push job applies", () => {
   });
 
   it.each(["failure", "cancelled"])("gives a Retro run's failure on the pending Retro when the Retro job's result is %s", (result) => {
-    const input = pushJobInput(needs("retro", { retro: { result, outputs: { "secrets-step": "success" } } }), 120);
+    const input = pushJobInput(needs("retro", { "retro-evidence": ok(), retro: { result, outputs: { "secrets-step": "success" } } }), 120);
 
     expect(input).toEqual({ kind: "agent-failure", role: "retro", issue: 120, jobResult: result, secretsStep: "success" });
+  });
+
+  // The Retro job never starts without its evidence, so the Retro would otherwise stay pending and block the next one.
+  it.each(["failure", "cancelled"])("gives a Retro run's failure on the pending Retro when the Retro evidence job's result is %s", (result) => {
+    const input = pushJobInput(
+      needs("retro", { "retro-evidence": { result, outputs: { "secrets-step": "failure" } }, retro: { result: "skipped", outputs: {} } }),
+      120,
+    );
+
+    expect(input).toEqual({ kind: "agent-failure", role: "retro", issue: 120, jobResult: result, secretsStep: "failure" });
   });
 
   it("names the Ticket for a failed Implement or Review run, where the core finds its PR", () => {

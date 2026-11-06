@@ -1,0 +1,153 @@
+# Runs the Retro (#151): the Retro job, the second of a Retro run's two jobs,
+# shaped like the Audit job. It holds no GitHub write credential (ADR-0002):
+# only the read-only GITHUB_TOKEN, which prepare-agent reads the pending Retro
+# with, and the Claude token, loaded through the agent service account
+# (ADR-0004). The agent gets neither a GitHub token nor `gh` access. It checks
+# out the Product repo's default branch read-only, with its full history and
+# no credential left behind, and runs none of its code. It takes the evidence
+# job's bundle (fabrik-retro-evidence), and the agent runner
+# (src/agent/run.ts retro) builds the Retro's prompt from it and from the
+# Kit's role prompts and rubrics in this Kit checkout. prepare-agent installs
+# the Base skills alone for it (ADR-0008).
+#
+# It leaves its result (fabrik-agent-result) or its failure report
+# (fabrik-agent-failure) for the push job, and keeps its transcript as
+# fabrik-transcript-retro for the Run record, whether it passed, failed or
+# timed out. The job keyed `retro` runs it after the Retro evidence job
+# succeeded, within retro-timeout-minutes, one at a time per repo, with
+# contents, issues and pull-requests read, after checking out the Kit alone
+# into kit/:
+#   - id: retro
+#     uses: ./kit/.github/actions/run-retro
+#     with:
+#       op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
+#       github-token: ${{ github.token }}
+#       model: ${{ needs.kit.outputs.model }}
+#       effort: ${{ needs.kit.outputs.effort }}
+# Its outputs are for the job to pass out, as every agent job does, for the
+# push job and the Run record.
+name: Run the Retro
+description: Proposes up to three changes to how the factory works in this repo from the evidence job's bundle, read-only, with no write credential.
+
+inputs:
+  op-agent-token:
+    description: The agent service account's token (secrets.OP_AGENT_TOKEN), which reads the Claude token.
+    required: true
+  github-token:
+    description: The job's read-only GITHUB_TOKEN, to read the pending Retro.
+    required: true
+  model:
+    description: The model the Kit job's plan chose (needs.kit.outputs.model); empty for roles.retro's own.
+    required: false
+    default: ""
+  effort:
+    description: The effort the Kit job's plan chose (needs.kit.outputs.effort); empty for roles.retro's own.
+    required: false
+    default: ""
+
+outputs:
+  secrets-step:
+    description: How loading the Claude token went; "failure" means the agent never started.
+    value: ${{ steps.op.outcome }}
+  model:
+    description: The model the runner passed.
+    value: ${{ steps.agent.outputs.model }}
+  effort:
+    description: The effort the runner passed, empty for the model's default.
+    value: ${{ steps.agent.outputs.effort }}
+  base-sha:
+    description: The default branch commit the run started from.
+    value: ${{ steps.base.outputs.sha }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out the default branch
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        path: product
+        ref: ${{ github.event.repository.default_branch }}
+        fetch-depth: 0
+        persist-credentials: false
+
+    # Before the secrets load, so a run whose agent never started still names it.
+    - name: Note the commit the run starts from
+      id: base
+      shell: bash
+      run: echo "sha=$(git -C product rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+
+    # The evidence job succeeded before this job started, so its bundle is there; missing anyway, the run fails.
+    - name: Take the Retro's evidence
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: fabrik-retro-evidence
+        path: ${{ runner.temp }}/retro-evidence
+
+    # The pending Retro, into issue.json, and the Base skills alone.
+    - name: Prepare the agent job
+      uses: ./kit/.github/actions/prepare-agent
+      with:
+        role: retro
+        github-token: ${{ inputs.github-token }}
+        issue: ${{ github.event.issue.number }}
+
+    - name: Load the Claude token
+      id: op
+      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+      with:
+        export-env: false
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-agent-token }}
+        CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/Claude token/credential
+
+    - name: Run the Retro
+      id: agent
+      shell: bash
+      working-directory: product
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
+        FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+        FABRIK_RETRO_EVIDENCE_FILE: ${{ runner.temp }}/retro-evidence/evidence.json
+        FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+        FABRIK_MODEL: ${{ inputs.model }}
+        FABRIK_EFFORT: ${{ inputs.effort }}
+      run: node ../kit/src/agent/run.ts retro
+
+    - name: Pass the Retro's output to the push job
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: fabrik-agent-result
+        path: ${{ runner.temp }}/fabrik-out/agent-result.json
+        if-no-files-found: error
+        retention-days: 7
+
+    # src/agent/run.ts writes this when it catches a failure, a reply that
+    # breaks the Retro contract included. A run cancelled by its timeout leaves none.
+    - name: Pass the failure report to the push job
+      if: failure()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: fabrik-agent-failure
+        path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+        if-no-files-found: ignore
+        retention-days: 7
+
+    # The agent's stream-json transcript (src/agent/transcript.ts), written line by
+    # line as it ran, so it's kept when the run passed, failed or timed out. Not
+    # fabrik-agent-*: the push job downloads those and reads none as a timeout.
+    # continue-on-error: keeping it must never fail a run that passed.
+    - name: Gzip the agent's transcript
+      if: always()
+      continue-on-error: true
+      shell: bash
+      run: if [ -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl" ]; then gzip -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl"; fi
+
+    - name: Keep the agent's transcript
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: fabrik-transcript-retro
+        path: ${{ runner.temp }}/fabrik-out/transcript.jsonl.gz
+        if-no-files-found: ignore
+        retention-days: 7

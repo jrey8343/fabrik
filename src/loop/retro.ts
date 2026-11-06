@@ -43,13 +43,21 @@ export function lastRetro(issues: readonly RetroIssueSnapshot[]): Retro | null {
 /**
  * Where the window of a Retro opened at `now` starts, as an ISO 8601 time:
  * the last Retro's window end, so nothing falls between two Retros, or
- * FIRST_RETRO_WINDOW_DAYS before `now` on a first run. A last Retro whose
- * body has lost its retro marker ended its window when it was opened.
+ * FIRST_RETRO_WINDOW_DAYS before `now` on a first run.
  */
 export function retroWindowStart(now: string, issues: readonly RetroIssueSnapshot[]): string {
   const last = lastRetro(issues);
-  if (last !== null) return new Date(last.windowEnd ?? last.createdAt).toISOString();
+  if (last !== null) return retroWindowEnd(last);
   return new Date(Date.parse(now) - FIRST_RETRO_WINDOW_DAYS * DAY).toISOString();
+}
+
+/**
+ * Where a Retro's window ends, as an ISO 8601 time: its retro marker's time,
+ * or when it was opened if its body has lost the marker. The evidence for a
+ * pending Retro reads up to it, and the next Retro's window starts there.
+ */
+export function retroWindowEnd({ windowEnd, createdAt }: Pick<Retro, "windowEnd" | "createdAt">): string {
+  return new Date(windowEnd ?? createdAt).toISOString();
 }
 
 /**
