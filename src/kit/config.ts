@@ -170,6 +170,34 @@ export function previewNamesPullRequest(template: string): boolean {
   return [...template.matchAll(PLACEHOLDER)].some(([, name]) => name === "pr");
 }
 
+/** A Prototype's branch as its push left it, and the route its variants render on: what fills its preview in. */
+export interface PrototypePreviewOf {
+  /** prototype/<issue>. */
+  readonly branch: string;
+  /** The commit the push left that branch at. */
+  readonly headSha: string;
+  /** A path starting with `/`, which may hold a query. */
+  readonly route: string;
+}
+
+/**
+ * A Prototype's preview of its route: `template` filled in as a pull
+ * request's, `{branch_slug}` the branch's slug and `{sha}` its head, with the
+ * route on its path, as capture puts it on `ui.url` (src/evidence/capture.ts).
+ * A prototype has no PR, so a template that names one fills in to nothing.
+ * The route is set as the URL's path, so whatever it holds, it stays on the
+ * preview's host.
+ */
+export function prototypePreviewUrl(template: string, { branch, headSha, route }: PrototypePreviewOf): string {
+  if (previewNamesPullRequest(template)) throw new Error(`The preview.url template ${template} names the pull request, which a prototype hasn't got`);
+  const url = URL.parse(fillPlaceholders(template, { pr: "", branch_slug: slug(branch), sha: headSha }));
+  if (url === null) throw new Error(`The preview.url template ${template} doesn't fill in to a URL`);
+  const at = route.indexOf("?");
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}${at === -1 ? route : route.slice(0, at)}`;
+  if (at !== -1) for (const [name, value] of new URLSearchParams(route.slice(at + 1))) url.searchParams.append(name, value);
+  return url.href;
+}
+
 /**
  * The text as a slug: in lower case, with each run of characters other than a
  * letter or a digit (a to z, 0 to 9) made one `-`, and no `-` at either end.
