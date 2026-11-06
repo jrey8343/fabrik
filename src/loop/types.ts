@@ -16,7 +16,9 @@ export type ReportedFailure =
   | "provider-error"
   | "dead-token"
   | "weekly-limit"
-  | "metered-billing";
+  | "metered-billing"
+  /** With rotation on, the stream watch stopped a run whose stream showed overage. */
+  | "usage-credits";
 
 /** Every kind of Infrastructure failure: what the agent job reported, or what the push job saw. */
 export type InfrastructureFailure = ReportedFailure | "timeout" | "unreachable-1password";
