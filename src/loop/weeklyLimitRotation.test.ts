@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, notificationsOf, snapshotOf, tickSnapshot } from "../__fixtures__/snapshots.ts";
+import { UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "./rules.ts";
 import type { AgentRole, IssueSnapshot, KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
@@ -105,6 +106,27 @@ describe("A run refused on its Subscription's weekly limit, with rotation on", (
     expect(actionsOf(plan)).toEqual([
       { kind: "remove-label", issue: 7, label: "agent:design" },
       expect.objectContaining({ kind: "start-agent-run", role: "design", issue: 7, subscription: "Claude token 2" }),
+    ]);
+  });
+
+  // The turn to start is read from the thread (#155): the refusal posts nothing on the issue, so its request stays pending.
+  it("agent:design re-added after a refused prototype turn starts the prototype turn again, on the next free Subscription", () => {
+    const pending = { request: { route: "/book", variants: 3, brief: "- **A**: a form.\n- **B**: a stepper.\n- **C**: a calendar." }, reply: 9001 };
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], designRounds: 2, pendingPrototype: pending });
+    const config = kitConfig({ ...TWO_SUBSCRIPTIONS, ui: UI });
+
+    const refusal = planFor(refused("design"), snapshotOf(issue), config, { prototypes: true });
+    const restart = planFor(
+      { kind: "label-added", issue: 7, label: "agent:design" },
+      snapshotOf({ ...issue, labels: [...issue.labels, "agent:design"] }, { kitIssues: [kitIssueOpenedBy(refusal, 41)] }),
+      config,
+      { prototypes: true },
+    );
+
+    expect(actionsOf(refusal).filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([]);
+    expect(actionsOf(restart)).toEqual([
+      { kind: "remove-label", issue: 7, label: "agent:design" },
+      expect.objectContaining({ kind: "start-agent-run", role: "design", issue: 7, prototype: pending, timeoutMinutes: 60, subscription: "Claude token 2" }),
     ]);
   });
 
