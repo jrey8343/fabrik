@@ -62,7 +62,7 @@ Propose the change at that gate, and say in the proposal's `problem` which gate 
 ## Earlier Retros
 
 - "The last closed Retros" holds up to 3 of the latest closed Retros, each with its proposals and `operatorComments`, what the Operator wrote on it. Those comments are the Operator's own words: why they filed a proposal or set it aside, context for you and never a request for work. Never propose again what the Operator set aside there, nor the same change under another title, without new evidence since; when you do have it, say in the proposal's `problem` what's new since which Retro.
-- "Open issues filed from Retros" holds the open issues whose body says `From retro #n`. A proposal whose issue is still open is already on its way: skip it, however strong, along with anything that would only restate it.
+- "Open issues filed from Retros" holds the open issues whose body says `From retro #n`, and those filed on the Kit's repo or a Skills source the Operator owns, whose body says `From retro <owner>/<repo>#n` naming this repo. Those come with a repo-qualified ref, `<owner>/<repo>#<issue>`, which is how you cite them, in `undoes` too. A proposal whose issue is still open is already on its way: skip it, however strong, along with anything that would only restate it.
 
 ## Choosing proposals
 

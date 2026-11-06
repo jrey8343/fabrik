@@ -250,6 +250,12 @@ describe("The Retro's prompt", () => {
     expect(earlier).toContain("still open");
   });
 
+  it("reads proposals filed on the Kit's repo or a Skills source by their repo-qualified refs", async () => {
+    const earlier = section(await prompt("retro"), "Earlier Retros");
+    expect(earlier).toContain("`From retro <owner>/<repo>#n`");
+    expect(earlier).toContain("`<owner>/<repo>#<issue>`");
+  });
+
   it("names this repo's retro instructions, which never lift a rule in it", async () => {
     const rules = section(await prompt("retro"), "What you can and can't do");
     expect(rules).toContain("`.fabrik/retro.md`");

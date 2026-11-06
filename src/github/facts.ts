@@ -162,6 +162,35 @@ export async function gatherRetroHistory(github: Pick<GitHub, "graphql">, repo: 
 }
 
 /**
+ * Every open issue, with its body, on each of these repos, owner/name, each
+ * by the repo it's on: what a Retro reads of the proposals its Product repo's
+ * Retros filed on the Kit's repo or a Skills source (the Retro evidence module
+ * keeps those whose `From retro` line names the Product repo). A repo it can't
+ * read, private to the token say, is named in `unread`, with why, and the rest
+ * are read as usual, so one unreadable repo costs the Retro only its issues.
+ */
+export async function gatherOpenIssuesOn(
+  github: Pick<GitHub, "graphql">,
+  repos: readonly string[],
+): Promise<{ issues: FromRetroIssueFacts[]; unread: { repo: string; why: string }[] }> {
+  const read = await Promise.all(
+    repos.map(async (repo) => {
+      const [owner = "", name = ""] = repo.split("/");
+      try {
+        const issues = await pagesOf<FromRetroIssueFacts>(github, OPEN_ISSUE_BODIES_QUERY, { owner, name }, {}, (data) => data.repository.issues);
+        return { repo, issues: issues.map(({ number, title, body }) => ({ repo, number, title, body })), why: null };
+      } catch (error) {
+        return { repo, issues: [], why: error instanceof Error ? error.message : String(error) };
+      }
+    }),
+  );
+  return {
+    issues: read.flatMap(({ issues }) => issues),
+    unread: read.flatMap(({ repo, why }) => (why === null ? [] : [{ repo, why }])),
+  };
+}
+
+/**
  * The title and body of each of these Tickets, as GitHub has them now, one
  * call per Ticket, as the judge reads the Ticket it scores against
  * (src/kit/judge-ticket-main.ts): what a Retro's evidence carries for each

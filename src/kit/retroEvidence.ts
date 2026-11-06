@@ -434,7 +434,12 @@ export interface RetroEvidenceInput {
    * otherwise be its own last Retro, and its window would come out empty.
    */
   readonly retros: readonly RetroIssueFacts[];
-  /** The repo's open issues whose body says `From retro #n`: any other open issue given is left out. */
+  /**
+   * The open issues whose body says it was filed from a Retro: the repo's own
+   * that say `From retro #n`, and those on the Kit's repo or a Skills source
+   * the Operator owns that say `From retro <this repo>#n`. Any other open
+   * issue given is left out.
+   */
   readonly fromRetroIssues: readonly FromRetroIssueFacts[];
   /**
    * The Tickets evidenceTicketsOf names, each with its title and body, as the
@@ -453,6 +458,8 @@ export interface TicketTextFacts {
 
 /** An open issue, as the Retro's history reads it. */
 export interface FromRetroIssueFacts {
+  /** The repo it's open on, owner/name, when that isn't the Product repo. */
+  readonly repo?: string;
   readonly number: number;
   readonly title: string;
   readonly body: string;
@@ -679,9 +686,9 @@ export interface ClosedRetroEvidence {
   readonly operatorComments: readonly { readonly at: string; readonly body: string }[];
 }
 
-/** An open issue filed from a Retro's proposal, by its `From retro #n` line. */
+/** An open issue filed from a Retro's proposal, by its `From retro` line. */
 export interface FiledProposalEvidence {
-  /** `#<issue>`. */
+  /** `#<issue>`, or `<owner>/<repo>#<issue>` for one open on another repo, the Kit's or a Skills source. */
   readonly ref: string;
   readonly number: number;
   readonly title: string;
@@ -797,7 +804,7 @@ export function refsOf(bundle: EvidenceBundle): EvidenceRef[] {
     ]),
     ...bundle.streakTable.map(({ ref }) => pullRequest(ref)),
     ...bundle.history.retros.map(({ number }) => issue(number)),
-    ...bundle.history.filed.map(({ number }) => issue(number)),
+    ...bundle.history.filed.map(({ ref }): EvidenceRef => ({ ref, kind: "issue" })),
   ];
   const once = new Map<string, EvidenceRef>();
   for (const each of refs) if (!once.has(each.ref)) once.set(each.ref, each);
@@ -1065,7 +1072,7 @@ function streakTableOf(window: Window, metrics: MetricsInput): StreakRow[] {
 }
 
 /** The last closed Retros whose run didn't fail, with the Operator's comments, and the open issues filed from one. */
-function historyOf(retros: readonly RetroIssueFacts[], { operator, fromRetroIssues }: RetroEvidenceInput): RetroHistory {
+function historyOf(retros: readonly RetroIssueFacts[], { operator, fromRetroIssues, facts }: RetroEvidenceInput): RetroHistory {
   const closed = retrosIn(retros)
     .filter((retro) => !retro.open && !retro.failed)
     .slice(0, HISTORY_DEPTH)
@@ -1078,9 +1085,13 @@ function historyOf(retros: readonly RetroIssueFacts[], { operator, fromRetroIssu
       body,
       operatorComments: comments.filter((comment) => !comment.byBot && comment.author === operator).map(({ at, body }) => ({ at, body })),
     }));
-  const filed = fromRetroIssues.flatMap(({ number, title, body }) => {
-    const retro = fromRetroIn(body);
-    return retro === null ? [] : [{ ref: `#${number}`, number, title, body, retro }];
+  // A bare `From retro #n` names a Retro of the repo the issue is open on, so only one of this repo's counts.
+  const isThisRepo = (repo: string | null | undefined) => repo == null || repo.toLowerCase() === facts.repo.toLowerCase();
+  const filed = fromRetroIssues.flatMap(({ repo, number, title, body }) => {
+    const from = fromRetroIn(body);
+    if (from === null || !isThisRepo(from.repo ?? repo)) return [];
+    const ref = isThisRepo(repo) ? `#${number}` : `${repo}#${number}`;
+    return [{ ref, number, title, body, retro: from.retro }];
   });
   return { retros: closed, filed };
 }

@@ -939,6 +939,31 @@ describe("the evidence bundle", () => {
       );
       expect(history.filed).toEqual([{ ref: "#130", number: 130, title: "Lint floating promises", body: filed, retro: 100 }]);
     });
+
+    // The Kit's repo and a Skills source get the trailer naming the Product repo, as a bare #n there would link to their own issue.
+    it("holds those open on another repo whose From retro line names this Product repo, each by its repo-qualified ref, and only those", () => {
+      const kit = `Read #140 first.\n\n${fromRetroLine(100, "owner/product")}`;
+      const { history } = evidenceBundle(
+        aRetroEvidenceInput({
+          fromRetroIssues: [
+            { repo: "jrey8343/fabrik", number: 230, title: "Check route imports in review", body: kit },
+            { repo: "jrey8343/fabrik", number: 231, title: "Another Product repo's", body: fromRetroLine(100, "owner/other") },
+            { repo: "jrey8343/fabrik", number: 232, title: "A bare trailer, naming the Kit's own Retro", body: fromRetroLine(100) },
+            { repo: "Owner/Skills", number: 12, title: "Route handlers skill", body: fromRetroLine(99, "Owner/Product") },
+            { number: 133, title: "Filed here, naming this repo", body: fromRetroLine(98, "owner/product") },
+          ],
+        }),
+      );
+      expect(history.filed).toEqual([
+        { ref: "jrey8343/fabrik#230", number: 230, title: "Check route imports in review", body: kit, retro: 100 },
+        { ref: "Owner/Skills#12", number: 12, title: "Route handlers skill", body: fromRetroLine(99, "Owner/Product"), retro: 99 },
+        { ref: "#133", number: 133, title: "Filed here, naming this repo", body: fromRetroLine(98, "owner/product"), retro: 98 },
+      ]);
+      expect(refsOf(evidenceBundle(aRetroEvidenceInput({ fromRetroIssues: [{ repo: "jrey8343/fabrik", number: 230, title: "", body: kit }] })))).toContainEqual({
+        ref: "jrey8343/fabrik#230",
+        kind: "issue",
+      });
+    });
   });
 
   describe("the budget", () => {

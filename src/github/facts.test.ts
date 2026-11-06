@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "./client.ts";
-import { gatherGitHubFacts, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
+import { gatherGitHubFacts, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
 
 const CALLER = "jobs:\n  fabrik:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v1.2.0\n";
 
@@ -731,5 +731,35 @@ describe("Reading the Tickets a Retro's evidence carries", () => {
     };
 
     await expect(gatherTickets(github, repo, [7])).rejects.toThrow("502");
+  });
+});
+
+// Proposals a Retro filed on the Kit's repo or a Skills source: the next Retro reads them there.
+describe("Reading the open issues on other repos a Retro's proposals may be filed on", () => {
+  /** A read-only GraphQL API over these repos' open issues, by owner/name; reading any other repo fails, as for a private one. */
+  function reposWith(open: Record<string, { number: number; title: string; body: string }[]>) {
+    return {
+      async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        expect(query).toContain("issues(states: OPEN");
+        const issues = open[`${String(variables["owner"])}/${String(variables["name"])}`];
+        if (issues === undefined) throw new Error("GitHub GraphQL error: Could not resolve to a Repository");
+        return { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: issues } } } as T;
+      },
+    };
+  }
+
+  it("reads each one's open issues with their bodies, each by the repo it's on, and names each repo it couldn't read rather than fail", async () => {
+    const github = reposWith({
+      "jrey8343/fabrik": [{ number: 230, title: "Check route imports in review", body: "From retro jrey8343/shop#100" }],
+      "jrey8343/skills": [{ number: 12, title: "Route handlers skill", body: "From retro jrey8343/shop#99" }],
+    });
+
+    const { issues, unread } = await gatherOpenIssuesOn(github, ["jrey8343/fabrik", "jrey8343/private-skills", "jrey8343/skills"]);
+
+    expect(issues).toEqual([
+      { repo: "jrey8343/fabrik", number: 230, title: "Check route imports in review", body: "From retro jrey8343/shop#100" },
+      { repo: "jrey8343/skills", number: 12, title: "Route handlers skill", body: "From retro jrey8343/shop#99" },
+    ]);
+    expect(unread).toEqual([{ repo: "jrey8343/private-skills", why: "GitHub GraphQL error: Could not resolve to a Repository" }]);
   });
 });

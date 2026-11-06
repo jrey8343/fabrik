@@ -3,7 +3,8 @@
 // no Product code, and it holds no write credential. It refuses a store that
 // isn't private, reads this Product repo's Run records, score files and
 // transcripts from the store's sparse checkout, gathers the repo's GitHub
-// facts, its Retros' history and the Tickets of the PRs the evidence carries,
+// facts, its Retros' history, the proposals they filed on the Kit's repo or a
+// Skills source, and the Tickets of the PRs the evidence carries,
 // builds the pending Retro's evidence bundle
 // (src/kit/retroEvidence.ts) and writes it as RETRO_EVIDENCE_FILE for the
 // action to upload, for the Retro job and the push job to read. It writes one
@@ -17,11 +18,12 @@
 // bundle goes. The pending Retro is the Actions event's issue.
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { gatherRetroFacts, gatherRetroHistory, gatherTickets } from "../github/facts.ts";
+import { gatherOpenIssuesOn, gatherRetroFacts, gatherRetroHistory, gatherTickets } from "../github/facts.ts";
 import { GitHub, type Repo } from "../github/client.ts";
 import { readKitConfigSources } from "../github/snapshot.ts";
 import { retroMarksIn } from "../loop/markers.ts";
 import { retroWindowEnd } from "../loop/retro.ts";
+import { proposalReposBeside } from "../loop/retroLanding.ts";
 import { resolveKitConfig } from "./config.ts";
 import { type EvidenceBundle, evidenceBundle, evidenceReachOf, evidenceTicketsOf, RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { RUN_STORE_REPO, storeIsPrivate } from "./runStore.ts";
@@ -65,13 +67,19 @@ async function main(): Promise<string> {
   const reach = evidenceReachOf({ retro, windowEnd, retros: history.retros });
 
   const storeDir = required("FABRIK_STORE_DIR");
-  const [records, scoreFiles, readTranscript, facts] = await Promise.all([
+  const [records, scoreFiles, readTranscript, facts, elsewhere] = await Promise.all([
     // A schema 1 record, written before runs were given a Subscription, reads as on the first this repo lists.
     readStoreRunRecords(storeDir, config.config.subscriptions),
     readStoreScoreFiles(storeDir),
     readStoreTranscripts(storeDir),
     gatherRetroFacts(product, repo, Date.now(), operator, reach),
+    // Proposals filed on the Kit's repo or an owned Skills source, read with the same read-only token.
+    gatherOpenIssuesOn(product, proposalReposBeside(`${owner}/${name}`, operator, config.config)),
   ]);
+  // One it can't read costs the Retro only the proposals filed there, which it may then propose again.
+  for (const { repo: unread, why } of elsewhere.unread) {
+    console.log(`::warning title=Retro evidence::Couldn't read the open issues on ${unread}, so the Retro won't see proposals filed there: ${why}`);
+  }
 
   const input = {
     records: Object.values(records),
@@ -82,7 +90,7 @@ async function main(): Promise<string> {
     retro,
     windowEnd,
     retros: history.retros,
-    fromRetroIssues: history.openIssues,
+    fromRetroIssues: [...history.openIssues, ...elsewhere.issues],
   };
   // The facts hold each PR's Ticket by number: the bundle carries the escaped and sampled PRs' as written.
   const tickets = await gatherTickets(product, repo, evidenceTicketsOf(input));
