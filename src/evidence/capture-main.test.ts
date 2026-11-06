@@ -229,7 +229,7 @@ const ROUND = {
   recommendation: "B.",
 };
 
-// A capture that reaches the server drives Playwright, which the Pilot exercises at switch-on.
+// A capture that reaches the server drives Playwright, which the Pilot exercises on a real UI issue.
 describe("The capture step of a prototype turn", () => {
   it("records no-variants when the turn's output names none it can read, building nothing, and passes the result out", async () => {
     const job = await aPrototypeJob({ defaultConfig: await withUi(), output: { kind: "round", intro: "?", questions: [] } });

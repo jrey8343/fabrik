@@ -24,12 +24,9 @@ const requested = {
   comment: "Prototyping the booking page as you approved.",
 };
 
-/** Prototypes as they will be once switched on (#282); only these tests pass it. */
-const switchedOn = { prototypes: true } as const;
-
 describe("An ordinary Design turn that asks for the Prototype the Operator approved", () => {
   it("posts the prototype request with its marker, mentioning nobody, then adds agent:design afresh to start the prototype turn", () => {
-    const plan = planFor(turnFinished(requested), inSession, kitConfig({ ui: UI }), switchedOn);
+    const plan = planFor(turnFinished(requested), inSession, kitConfig({ ui: UI }));
 
     expect(plan).toEqual({
       kind: "act",
@@ -55,14 +52,14 @@ describe("An ordinary Design turn that asks for the Prototype the Operator appro
     const replied = { ...turnFinished(requested), startedBy: 9001 };
     const snapshot = { ...inSession, startingComment: { id: 9001, exists: true } };
 
-    const [body] = commentsOf(planFor(replied, snapshot, kitConfig({ ui: UI }), switchedOn));
+    const [body] = commentsOf(planFor(replied, snapshot, kitConfig({ ui: UI })));
 
     expect(prototypeRequestIn(body ?? "")?.reply).toBe(9001);
   });
 
   it("leaves a marker that reads back as the request, whatever the brief holds, an HTML comment's end included", () => {
     const brief = "- **A**: a form -->\n- **B**: <Stepper /> & a calendar, for @jrey";
-    const plan = planFor(turnFinished({ ...requested, variants: 2, brief }), inSession, kitConfig({ ui: UI }), switchedOn);
+    const plan = planFor(turnFinished({ ...requested, variants: 2, brief }), inSession, kitConfig({ ui: UI }));
 
     const [body] = commentsOf(plan);
 
@@ -79,7 +76,7 @@ describe("An ordinary Design turn that asks for the Prototype the Operator appro
     ["holding a reply that isn't a comment id", () => '<!-- fabrik:prototype-request {"route":"/book","variants":3,"brief":"B","reply":"9001"} -->'],
     ["holding broken JSON", () => '<!-- fabrik:prototype-request {"route":"/book", -->'],
   ])("reads no request from a marker %s", (_, comment) => {
-    const [body] = commentsOf(planFor(turnFinished(requested), inSession, kitConfig({ ui: UI }), switchedOn));
+    const [body] = commentsOf(planFor(turnFinished(requested), inSession, kitConfig({ ui: UI })));
     const marker = body?.split("\n")[0] ?? "";
 
     expect(prototypeRequestIn(comment(marker))).toBeNull();
@@ -88,7 +85,7 @@ describe("An ordinary Design turn that asks for the Prototype the Operator appro
 
 describe("A Design turn that asks for a Prototype on a Product repo with no ui block", () => {
   it("fails as a broken contract and posts nothing: the Kit can't serve or capture one", () => {
-    const plan = planFor(turnFinished(requested), inSession, kitConfig({ ui: null }), switchedOn);
+    const plan = planFor(turnFinished(requested), inSession, kitConfig({ ui: null }));
 
     expect(plan).toEqual({
       kind: "fail",
@@ -98,23 +95,11 @@ describe("A Design turn that asks for a Prototype on a Product repo with no ui b
   });
 });
 
-describe("A Design turn that asks for a Prototype while Prototypes are off", () => {
-  it("fails as a broken contract and posts nothing, even with a ui block", () => {
-    const plan = planFor(turnFinished(requested), inSession, kitConfig({ ui: UI }));
-
-    expect(plan).toEqual({
-      kind: "fail",
-      failure: "infrastructure",
-      reason: "The Design-session turn on #7 emitted output that breaks its contract: Prototypes are off in this Kit, so a turn can't ask for one",
-    });
-  });
-});
-
 describe("An ordinary Design turn that ends in a prototype round", () => {
   it.each([
-    ["while Prototypes are off", kitConfig(), {}],
-    ["with Prototypes switched on and a ui block", kitConfig({ ui: UI }), switchedOn],
-  ])("fails as a broken contract and posts nothing %s: only a prototype turn builds variants", (_, config, options) => {
+    ["on a Product repo with no ui block", kitConfig({ ui: null })],
+    ["on a Product repo with a ui block", kitConfig({ ui: UI })],
+  ])("fails as a broken contract and posts nothing %s: only a prototype turn builds variants", (_, config) => {
     const built = {
       kind: "prototype-round",
       intro: "Two takes on `/book`.",
@@ -125,7 +110,7 @@ describe("An ordinary Design turn that ends in a prototype round", () => {
       recommendation: "B",
     };
 
-    const plan = planFor(turnFinished(built), inSession, config, options);
+    const plan = planFor(turnFinished(built), inSession, config);
 
     expect(plan).toEqual({
       kind: "fail",
@@ -150,7 +135,7 @@ describe("agent:design on an issue whose Design session has a pending prototype 
     });
 
   it("starts the session's prototype turn, carrying the request, on the Design model and effort within the Implement role's timeout", () => {
-    const plan = planFor(added, issue(), kitConfig({ ui: UI, roles }), switchedOn);
+    const plan = planFor(added, issue(), kitConfig({ ui: UI, roles }));
 
     expect(plan).toEqual({
       kind: "act",
@@ -172,7 +157,7 @@ describe("agent:design on an issue whose Design session has a pending prototype 
   });
 
   it("starts an ordinary turn, as before, on an issue with no request pending", () => {
-    const plan = planFor(added, issue({ pendingPrototype: null }), kitConfig({ ui: UI, roles }), switchedOn);
+    const plan = planFor(added, issue({ pendingPrototype: null }), kitConfig({ ui: UI, roles }));
 
     expect(plan).toEqual({
       kind: "act",
@@ -183,11 +168,8 @@ describe("agent:design on an issue whose Design session has a pending prototype 
     });
   });
 
-  it.each([
-    ["while Prototypes are off", kitConfig({ ui: UI, roles }), {}],
-    ["on a Product repo with no ui block, which can't serve or capture one", kitConfig({ ui: null, roles }), switchedOn],
-  ])("starts an ordinary turn %s, even with a request pending", (_, config, options) => {
-    const plan = planFor(added, issue(), config, options);
+  it("starts an ordinary turn on a Product repo with no ui block, which can't serve or capture one, even with a request pending", () => {
+    const plan = planFor(added, issue(), kitConfig({ ui: null, roles }));
 
     expect(plan).toMatchObject({ kind: "act", actions: [{ kind: "remove-label" }, { kind: "start-agent-run", timeoutMinutes: 30 }] });
     expect(plan.kind === "act" ? plan.actions.find(({ kind }) => kind === "start-agent-run") : null).not.toHaveProperty("prototype");
@@ -197,7 +179,7 @@ describe("agent:design on an issue whose Design session has a pending prototype 
   it("leaves the Operator's reply to start an ordinary turn, as any reply does, while the request is pending", () => {
     const replied = { kind: "issue-comment-created", issue: 7, commenter: "jrey", commenterIsBot: false, body: "Also try a dark one", comment: 9002 } as const;
 
-    const plan = planFor(replied, issue({ labels: ["enhancement", "needs-design"] }), kitConfig({ ui: UI, roles }), switchedOn);
+    const plan = planFor(replied, issue({ labels: ["enhancement", "needs-design"] }), kitConfig({ ui: UI, roles }));
 
     expect(plan).toEqual({
       kind: "act",
@@ -206,7 +188,7 @@ describe("agent:design on an issue whose Design session has a pending prototype 
   });
 
   it("only takes agent:design off an issue that has left its Design session, starting nothing", () => {
-    const plan = planFor(added, issue({ labels: ["ready-for-agent", "agent:design"] }), kitConfig({ ui: UI, roles }), switchedOn);
+    const plan = planFor(added, issue({ labels: ["ready-for-agent", "agent:design"] }), kitConfig({ ui: UI, roles }));
 
     expect(plan).toEqual({ kind: "act", actions: [{ kind: "remove-label", issue: 7, label: "agent:design" }] });
   });

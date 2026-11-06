@@ -115,12 +115,11 @@ describe("A run refused on its Subscription's weekly limit, with rotation on", (
     const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], designRounds: 2, pendingPrototype: pending });
     const config = kitConfig({ ...TWO_SUBSCRIPTIONS, ui: UI });
 
-    const refusal = planFor(refused("design"), snapshotOf(issue), config, { prototypes: true });
+    const refusal = planFor(refused("design"), snapshotOf(issue), config);
     const restart = planFor(
       { kind: "label-added", issue: 7, label: "agent:design" },
       snapshotOf({ ...issue, labels: [...issue.labels, "agent:design"] }, { kitIssues: [kitIssueOpenedBy(refusal, 41)] }),
       config,
-      { prototypes: true },
     );
 
     expect(actionsOf(refusal).filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([]);
