@@ -50,3 +50,39 @@ describe("A Design turn's prototype output: the Operator approved a Prototype", 
     });
   });
 });
+
+const built = {
+  kind: "prototype-round",
+  intro: "Three takes on `/book`, each with the bigger booking button you asked for.",
+  variants: [
+    { summary: "One long form: every field on one page.", component: "src/routes/book/VariantA.tsx" },
+    { summary: "A stepper: one question at a time.", component: "src/routes/book/VariantB.tsx" },
+    { summary: "Calendar first, details after.", component: "src/routes/book/VariantC.tsx" },
+  ],
+  recommendation: "B, with C's calendar as its first step",
+};
+
+describe("A prototype turn's prototype-round output: the variants it built", () => {
+  it("reads the intro, each variant lettered A, B, C in order with its summary and component, and the recommendation", () => {
+    expect(turn(built)).toEqual({
+      ok: true,
+      output: {
+        kind: "prototype-round",
+        intro: built.intro,
+        variants: [
+          { letter: "A", summary: "One long form: every field on one page.", component: "src/routes/book/VariantA.tsx" },
+          { letter: "B", summary: "A stepper: one question at a time.", component: "src/routes/book/VariantB.tsx" },
+          { letter: "C", summary: "Calendar first, details after.", component: "src/routes/book/VariantC.tsx" },
+        ],
+        recommendation: "B, with C's calendar as its first step",
+      },
+    });
+  });
+
+  it("reads its own checked output back the same, as the push job does after the agent job checked it", () => {
+    const checked = turn(built);
+    if (!checked.ok) throw new Error(checked.errors.join("; "));
+
+    expect(turn(checked.output)).toEqual(checked);
+  });
+});

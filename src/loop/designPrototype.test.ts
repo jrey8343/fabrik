@@ -26,3 +26,25 @@ describe("A Design turn that asks for a Prototype while Prototypes are off", () 
     });
   });
 });
+
+describe("An ordinary Design turn that ends in a prototype round", () => {
+  it("fails as a broken contract and posts nothing: only a prototype turn builds variants", () => {
+    const built = {
+      kind: "prototype-round",
+      intro: "Two takes on `/book`.",
+      variants: [
+        { summary: "One long form.", component: "src/routes/book/VariantA.tsx" },
+        { summary: "A stepper.", component: "src/routes/book/VariantB.tsx" },
+      ],
+      recommendation: "B",
+    };
+
+    const plan = planFor(turnFinished(built), inSession, kitConfig());
+
+    expect(plan).toEqual({
+      kind: "fail",
+      failure: "infrastructure",
+      reason: "The Design-session turn on #7 emitted output that breaks its contract: only a prototype turn ends in a prototype-round, and this was an ordinary turn",
+    });
+  });
+});

@@ -96,21 +96,53 @@ type DesignTurnOutcome =
       /** Each Decision, with the keys of the Decisions that block it. Any order. */
       readonly decisions: readonly MapDecision[];
     }
-  | {
+  | ({
       /**
        * Not an outcome: the Operator approved a Prototype, so the Kit posts a
        * prototype request and starts a prototype turn of the same session.
        */
       readonly kind: "prototype";
-      /** The one route every variant renders on, starting with `/`. */
-      readonly route: string;
-      /** How many variants to build. */
-      readonly variants: number;
-      /** Markdown: what each variant explores, and anything the Operator asked for. */
-      readonly brief: string;
       /** A one-line lead-in for the prototype request comment. */
       readonly comment: string;
+    } & PrototypeRequest)
+  | {
+      /**
+       * Not an outcome: a prototype turn built the variants, so the Kit posts a
+       * prototype round. The agent writes no question: the Kit asks "Which variant?".
+       */
+      readonly kind: "prototype-round";
+      /** Markdown: the round's lead-in. */
+      readonly intro: string;
+      /** One per variant, in letter order. */
+      readonly variants: readonly PrototypeVariant[];
+      /** The variant the agent recommends, with any tweak it suggests, so the Operator can reply in a word. */
+      readonly recommendation: string;
     };
+
+/** What the Operator approved a prototype turn to build. */
+export interface PrototypeRequest {
+  /** The one route every variant renders on, starting with `/`. */
+  readonly route: string;
+  /** How many variants to build, from PROTOTYPE_MIN_VARIANTS to PROTOTYPE_VARIANT_CAP. */
+  readonly variants: number;
+  /** Markdown: what each variant explores, and anything the Operator asked for. */
+  readonly brief: string;
+}
+
+/** One variant a prototype turn built, as its prototype round describes it. */
+export interface PrototypeVariant {
+  /** Its letter, from its place in the round (variantLetter): what `?variant=` names it by. */
+  readonly letter: string;
+  /** One line on what it is. */
+  readonly summary: string;
+  /** The repo path, from the root, of the component that renders it. */
+  readonly component: string;
+}
+
+/** The letter of the variant at `index`: A for the first, then B, C… */
+export function variantLetter(index: number): string {
+  return String.fromCharCode("A".charCodeAt(0) + index);
+}
 
 /** A Decision as a Design session writes it, before it is a sub-issue of its Map. */
 export interface MapDecision {
@@ -420,6 +452,17 @@ function readTurn(value: unknown): DesignTurnOutputResult {
           brief: value.brief as string,
           comment: value.comment as string,
         },
+      };
+    }
+    case "prototype-round": {
+      const variants = (value.variants as Record<string, string>[]).map((variant, i) => ({
+        letter: variantLetter(i),
+        summary: variant.summary as string,
+        component: variant.component as string,
+      }));
+      return {
+        ok: true,
+        output: { kind: "prototype-round", intro: value.intro as string, variants, recommendation: value.recommendation as string },
       };
     }
     default:

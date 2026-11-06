@@ -176,6 +176,8 @@ const ROLE_SPECS = {
           return `The Design session on #${issue} charted it as a Map with ${output.decisions.length} Decision(s)`;
         case "prototype":
           return `The Design-session turn on #${issue} asked for a Prototype of ${output.route} in ${output.variants} variants`;
+        case "prototype-round":
+          return `The prototype turn on #${issue} built ${output.variants.length} variants`;
       }
     },
     readsParentSpec: true,
