@@ -181,6 +181,18 @@ describe("Landing a Retro: the evidence", () => {
     expect(evidenceOf(plan)).toEqual([["#212", "#140", REVIEW_RECORD]]);
   });
 
+  it("keeps a score file the bundle holds, linked to its file in the store", () => {
+    const score = "scores/acme/shop/2026-10/88124-1-implement-0a1b2c3d.json";
+
+    const plan = planFor(
+      retroFinished({ proposals: [aTightening({ evidence: ["#212", score] })] }, anEvidence({ refs: [...anEvidence().refs, { ref: score, kind: "score" }] })),
+      retroRunSnapshotOf(),
+      kitConfig(),
+    );
+
+    expect(rewrittenBodyOf(plan)).toContain(`- [#212](https://github.com/acme/shop/issues/212)\n- [\`${score}\`](${STORE}/${score})\n`);
+  });
+
   it("links an issue the bundle holds to itself, and a Run record with no transcript to its file alone", () => {
     const plan = planFor(
       retroFinished({ proposals: [aTightening({ evidence: ["#212", "#7", "#131", REVIEW_RECORD] })] }, anEvidence({ transcripts: {} })),
