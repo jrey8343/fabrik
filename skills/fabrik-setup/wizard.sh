@@ -393,9 +393,12 @@ if (( SECOND_EXISTS || ADDING_SECOND )); then
       SKIPPED+=("the '$SECOND' API Credential in the 'Fabrik' vault (the second account's claude setup-token)")
     else
       EXPIRES=$(date -v+1y +%Y-%m-%d 2>/dev/null || date -d "+1 year" +%Y-%m-%d)
+      OLD_ID=""
       if (( SECOND_EXISTS )); then
-        # Archived, not deleted, so the old token stays in the item's history.
-        op item delete "$SECOND" --vault "Fabrik" --archive
+        # By its id, so that once the new item is stored under the same title, only the old one is archived.
+        OLD_ID=$(op item get "$SECOND" --vault "Fabrik" --format json | node -e '
+          let text = ""; process.stdin.on("data", (chunk) => { text += chunk; });
+          process.stdin.on("end", () => process.stdout.write(JSON.parse(text).id));')
       fi
       TEMPLATE=$(umask 077 && mktemp)
       SECOND="$SECOND" SECOND_TOKEN="$SECOND_TOKEN" EXPIRES="$EXPIRES" node -e '
@@ -404,8 +407,18 @@ if (( SECOND_EXISTS || ADDING_SECOND )); then
           { id: "expires", type: "DATE", label: "expires", value: process.env.EXPIRES },
         ] };
         process.stdout.write(JSON.stringify(item));' > "$TEMPLATE"
-      op item create --vault "Fabrik" --template "$TEMPLATE" >/dev/null
+      # Stored before the old item is archived, so a failed create leaves the vault holding a second token still.
+      if ! op item create --vault "Fabrik" --template "$TEMPLATE" >/dev/null; then
+        rm -f "$TEMPLATE"
+        unset SECOND_TOKEN
+        warn "1Password didn't store the new '$SECOND' token, so the old one stays as it was."
+        exit 1
+      fi
       rm -f "$TEMPLATE"
+      if [[ -n "$OLD_ID" ]]; then
+        # Archived, not deleted, so the old token stays in the item's history.
+        op item delete "$OLD_ID" --vault "Fabrik" --archive
+      fi
       say "${GREEN}✓ stored${RESET} the '$SECOND' token, expiring $EXPIRES"
     fi
     unset SECOND_TOKEN

@@ -20,8 +20,11 @@ appendFileSync(process.env.STUB_DIR + "/op.log", JSON.stringify({
 }) + "\\n");
 if (args[0] === "item" && args[1] === "get") {
   const items = JSON.parse(process.env.STUB_OP_ITEMS);
-  process.exit(items.includes(flag("--vault") + "/" + args[2]) ? 0 : 1);
+  const found = items.includes(flag("--vault") + "/" + args[2]);
+  if (found && flag("--format") === "json") process.stdout.write(JSON.stringify({ id: "id of " + args[2], title: args[2] }));
+  process.exit(found ? 0 : 1);
 }
+if (args[0] === "item" && args[1] === "create" && process.env.STUB_OP_CREATE_FAILS === "1") process.exit(1);
 `;
 
 const FAKE_GH = `#!/bin/sh
@@ -79,7 +82,7 @@ async function linesOf(path: string): Promise<string[]> {
  * and then nothing, which every stage after the Sentry token's takes as Enter or No.
  * `kitConfig` is the checkout's .fabrik/config.json, when it has one.
  */
-async function walk(items: string[], answers: string[], kitConfig?: string): Promise<Walk> {
+async function walk(items: string[], answers: string[], kitConfig?: string, { createFails = false } = {}): Promise<Walk> {
   const bin = await tempDir("wizard-bin");
   await stub(bin, "op", FAKE_OP);
   await stub(bin, "gh", FAKE_GH);
@@ -99,6 +102,7 @@ async function walk(items: string[], answers: string[], kitConfig?: string): Pro
       PATH: `${bin}:${process.env["PATH"] ?? ""}`,
       STUB_DIR: bin,
       STUB_OP_ITEMS: JSON.stringify(items),
+      STUB_OP_CREATE_FAILS: createFails ? "1" : "0",
     },
   });
   return {
@@ -266,6 +270,27 @@ describe("The setup wizard's second Subscription stage", () => {
     expect(created(w)).toEqual([]);
     expect(w.stdout).not.toContain("Create a second Claude account");
     expect(w.stdout).toContain("Setup complete");
+  });
+
+  const REPLACING_IT = [...TO_THE_SECOND_SUBSCRIPTION, "y", "sk-ant-oat01-new", ""];
+
+  it("replaces the second token by storing the new one first, then archiving the old item by its id", async () => {
+    const w = await walk([...THE_APP_AND_CLAUDE, "Fabrik/Claude token 2"], REPLACING_IT, BOTH_LISTED);
+
+    expect(w.status).toBe(0);
+    const writes = w.op.filter((c) => c.args[0] === "item" && (c.args[1] === "create" || c.args[1] === "delete"));
+    expect(writes.map((c) => c.args.slice(0, 3))).toEqual([
+      ["item", "create", "--vault"],
+      ["item", "delete", "id of Claude token 2"],
+    ]);
+    expect(deleted(w)).toEqual([["item", "delete", "id of Claude token 2", "--vault", "Fabrik", "--archive"]]);
+  });
+
+  it("leaves the old second token in place when storing the new one fails", async () => {
+    const w = await walk([...THE_APP_AND_CLAUDE, "Fabrik/Claude token 2"], REPLACING_IT, BOTH_LISTED, { createFails: true });
+
+    expect(w.status).not.toBe(0);
+    expect(deleted(w)).toEqual([]);
   });
 
   it("keeps the second token 1Password already holds, and still checks usage credits and the Kit config list", async () => {
