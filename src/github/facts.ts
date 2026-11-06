@@ -1,7 +1,8 @@
 // The Weekly summary's GitHub side, beside the Loop's snapshot gatherer: which
 // Product repos the summary covers, and the GitHub facts it reads of each
-// (src/kit/weeklySummary.ts). Read-only. It holds no summary rules; those all
-// live in the Weekly summary module.
+// (src/kit/weeklySummary.ts), the metrics' among them (src/kit/retroEvidence.ts).
+// Read-only. It holds no summary or metric rules; those all live in those two
+// modules.
 import { fabrikRefsIn } from "../kit/caller.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import type {
@@ -14,12 +15,13 @@ import type {
   OpenAuditFacts,
   OpenIssueFacts,
   OpenPullRequestFacts,
+  OpenRetroFacts,
   ReviewFacts,
   SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
 import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest.ts";
-import { AUDIT_LABEL, MONITOR_LABEL } from "../loop/labels.ts";
+import { AUDIT_LABEL, MONITOR_LABEL, RETRO_LABEL } from "../loop/labels.ts";
 import { escapeMarkerIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import { type GitHub, pagesOf, type Repo } from "./client.ts";
@@ -44,7 +46,7 @@ const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(now - ESCAPE_WINDOWS_REACH_MS).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, escapeMarkerIssues, openAudits] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, escapeMarkerIssues, openAudits, openRetros] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
@@ -55,7 +57,8 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     gatherDesignQueueSlice(github, null, repo),
     pagesOf<RawMonitorIssue>(github, MONITOR_ISSUES_QUERY, repo, { monitor: MONITOR_LABEL }, (data) => data.repository.issues),
     gatherEscapeMarkerIssues(github, repo, operator, escapeSince),
-    pagesOf<RawAudit>(github, OPEN_AUDITS_QUERY, repo, { audit: AUDIT_LABEL }, (data) => data.repository.issues),
+    pagesOf<RawOpenKitIssue>(github, OPEN_KIT_ISSUES_QUERY, repo, { label: AUDIT_LABEL }, (data) => data.repository.issues),
+    pagesOf<RawOpenKitIssue>(github, OPEN_KIT_ISSUES_QUERY, repo, { label: RETRO_LABEL }, (data) => data.repository.issues),
   ]);
   const issues = [...new Map([...updatedIssues, ...openIssues].map((issue) => [issue.number, issue])).values()];
   return {
@@ -70,7 +73,8 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
     designQueue,
     monitorIssues: monitorIssues.map(monitorIssueOf),
     escapeMarkerIssues,
-    openAudits: openAudits.map(openAuditOf),
+    openAudits: openAudits.map(openKitIssueOf),
+    openRetros: openRetros.map(openKitIssueOf),
   };
 }
 
@@ -184,11 +188,11 @@ const ISSUES_OPENED_BY_QUERY = `
   }
 `;
 
-// The open Audits, whoever opened them: the summary keeps the Fabrik App's.
-const OPEN_AUDITS_QUERY = `
-  query ($owner: String!, $name: String!, $after: String, $audit: String!) {
+// The open Audits or Retros, by their label, whoever opened them: the summary keeps the Fabrik App's.
+const OPEN_KIT_ISSUES_QUERY = `
+  query ($owner: String!, $name: String!, $after: String, $label: String!) {
     repository(owner: $owner, name: $name) {
-      issues(states: OPEN, labels: [$audit], first: 25, after: $after) {
+      issues(states: OPEN, labels: [$label], first: 25, after: $after) {
         ${PAGE_INFO}
         nodes { number title createdAt author ${ACTOR} }
       }
@@ -289,7 +293,7 @@ interface RawOpenedIssue {
   author: RawActor | null;
 }
 
-interface RawAudit {
+interface RawOpenKitIssue {
   number: number;
   title: string;
   createdAt: string;
@@ -428,8 +432,8 @@ function monitorIssueOf(issue: RawMonitorIssue): MonitorIssueFacts {
   return { number: issue.number, author: loginOf(issue.author), body: issue.body };
 }
 
-function openAuditOf(audit: RawAudit): OpenAuditFacts {
-  return { number: audit.number, title: audit.title, author: loginOf(audit.author), createdAt: audit.createdAt };
+function openKitIssueOf(issue: RawOpenKitIssue): OpenAuditFacts & OpenRetroFacts {
+  return { number: issue.number, title: issue.title, author: loginOf(issue.author), createdAt: issue.createdAt };
 }
 
 function commentOf(comment: RawComment): CommentFacts {

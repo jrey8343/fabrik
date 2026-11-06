@@ -84,6 +84,8 @@ interface RawRepo {
   operatorIssues?: unknown[];
   /** The open issues with the fabrik:audit label. */
   openAudits?: unknown[];
+  /** The open issues with the fabrik:retro label. */
+  openRetros?: unknown[];
 }
 
 /** A read-only GraphQL API over `raw`, answering each facts query with one page. */
@@ -104,9 +106,10 @@ function repoWith(raw: RawRepo) {
         expect(variables["monitor"]).toBe("fabrik:monitor");
         return answer({ repository: { issues: page(raw.monitorIssues) } });
       }
-      if (query.includes("labels: [$audit]")) {
-        expect(variables["audit"]).toBe("fabrik:audit");
-        return answer({ repository: { issues: page(raw.openAudits) } });
+      if (query.includes("labels: [$label]")) {
+        if (variables["label"] === "fabrik:audit") return answer({ repository: { issues: page(raw.openAudits) } });
+        if (variables["label"] === "fabrik:retro") return answer({ repository: { issues: page(raw.openRetros) } });
+        throw new Error(`Unexpected label: ${String(variables["label"])}`);
       }
       if (query.includes("filterBy: { createdBy: $operator }")) {
         expect(variables["operator"]).toBe("jrey8343");
@@ -426,6 +429,22 @@ describe("Gathering a Product repo's GitHub facts", () => {
     expect(facts.openAudits).toEqual([
       { number: 90, title: "Audit: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-01T00:00:00Z" },
       { number: 91, title: "My own audit", author: "jrey8343", createdAt: "2026-11-03T00:00:00Z" },
+    ]);
+  });
+
+  it("holds the open fabrik:retro issues, with who opened them and when", async () => {
+    const github = repoWith({
+      openRetros: [
+        { number: 120, title: "Retro: week of 2026-11-02", createdAt: "2026-11-07T00:00:00Z", author: APP },
+        { number: 121, title: "My own retro", createdAt: "2026-11-08T00:00:00Z", author: OPERATOR },
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(facts.openRetros).toEqual([
+      { number: 120, title: "Retro: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-07T00:00:00Z" },
+      { number: 121, title: "My own retro", author: "jrey8343", createdAt: "2026-11-08T00:00:00Z" },
     ]);
   });
 

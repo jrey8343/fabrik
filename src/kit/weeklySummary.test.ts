@@ -10,6 +10,7 @@ import {
   anOpenIssue,
   anOpenMonitorIssue,
   anOpenPullRequest,
+  anOpenRetro,
   anAuditRunRecord,
   aRetroRunRecord,
   aReview,
@@ -52,6 +53,12 @@ describe("the Weekly summary", () => {
   it("isn't skipped in a week with no records but an open Audit", () => {
     const facts = [factsOf({ repo: "owner/quiet" }), factsOf({ openAudits: [anOpenAudit()] })];
     expect(weeklySummary(input({ facts })).kind).toBe("summary");
+  });
+
+  it("isn't skipped in a week with no records but an open Retro, once the Retro is switched on", () => {
+    const facts = [factsOf({ repo: "owner/quiet" }), factsOf({ openRetros: [anOpenRetro()] })];
+    expect(weeklySummary(input({ facts }), { retro: true }).kind).toBe("summary");
+    expect(weeklySummary(input({ facts }))).toEqual({ kind: "skip" });
   });
 
   it("covers Monday to Monday in the Operator's time zone, with last week beside it", () => {
@@ -309,6 +316,39 @@ describe("the Weekly summary", () => {
       it("never lists a fabrik:audit issue someone other than the Fabrik App opened", () => {
         const waiting = waitingIn({
           openAudits: [anOpenAudit({ author: "operator" }), anOpenAudit({ number: 91, author: "other-app[bot]" })],
+        });
+        expect(waiting).toEqual([]);
+      });
+    });
+
+    describe("with an open Retro, once the Retro is switched on", () => {
+      const switchedOn = (facts: Parameters<typeof factsOf>[0]) => {
+        const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }), { retro: true });
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result.summary.repos[0]?.waitingOnYou;
+      };
+
+      it("lists the Fabrik App's open Retro, filled or still pending, aged from when it was opened", () => {
+        const waiting = switchedOn({
+          openIssues: [anOpenIssue({ number: 13, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-06T20:00:00Z")] })],
+          openRetros: [anOpenRetro({ number: 120, title: "Retro: week of 2026-10-26", createdAt: "2026-10-31T20:00:00Z" })],
+        });
+        expect(waiting).toEqual([
+          {
+            kind: "retro",
+            number: 120,
+            title: "Retro: week of 2026-10-26",
+            url: "https://github.com/owner/product/issues/120",
+            since: "2026-10-31T20:00:00Z",
+            age: 8 * 24 * HOUR,
+          },
+          expect.objectContaining({ kind: "ready-for-human", number: 13 }),
+        ]);
+      });
+
+      it("never lists a fabrik:retro issue someone other than the Fabrik App opened", () => {
+        const waiting = switchedOn({
+          openRetros: [anOpenRetro({ author: "operator" }), anOpenRetro({ number: 121, author: "other-app[bot]" })],
         });
         expect(waiting).toEqual([]);
       });
@@ -1464,6 +1504,46 @@ describe("the Weekly summary", () => {
           ].join("\n"),
         ),
       });
+    });
+
+    it("lists an open Retro with how long it has been open, once the Retro is switched on", () => {
+      const facts = factsOf({ openIssues: [readyForHuman(13, 30)], openRetros: [anOpenRetro({ title: "Retro: week of 2026-11-02", createdAt: hoursAgo(44) })] });
+      const summary = weeklySummary(input({ records: [aRunRecord()], facts: [facts] }), { retro: true });
+      expect(summary).toMatchObject({
+        body: expect.stringContaining(
+          [
+            "### Waiting on you",
+            "",
+            "- [#120](https://github.com/owner/product/issues/120) Retro: week of 2026-11-02: Retro open for 44 hours",
+            "- [#13](https://github.com/owner/product/issues/13) Operator work 13: ready-for-human for 30 hours",
+            "",
+          ].join("\n"),
+        ),
+      });
+    });
+
+    it("names no score beside the open Retro: a low score reaches the Operator only through the Retro's proposals", () => {
+      const result = weeklySummary(
+        input({
+          records: [aRunRecord({ runId: 1, endedAt: hoursAgo(30) })],
+          scoreFiles: [aScoreFile({ runId: 1, entries: [aScoreEntry({ score: 0.1, pass: false, label: "dead-end-loop", rationale: "Looped on one failing test." })] })],
+          facts: [factsOf({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" })], openRetros: [anOpenRetro({ createdAt: hoursAgo(44) })] })],
+        }),
+        { retro: true },
+      );
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      expect(result.summary.repos).toMatchObject([{ waitingOnYou: [{ kind: "retro", number: 120 }], stuck: [] }]);
+      expect(result.body).toContain(
+        ["### Waiting on you", "", "- [#120](https://github.com/owner/product/issues/120) Retro: week of 2026-11-02: Retro open for 44 hours", ""].join("\n"),
+      );
+      expect(result.body).not.toMatch(/dead-end-loop|Looped|runs\/|scores\/|#7\b/);
+    });
+
+    it("shows no open Retro, and waits on it for nothing, until the Retro is switched on", () => {
+      const withRetro = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf({ openIssues: [readyForHuman(13, 30)], openRetros: [anOpenRetro()] })] }));
+      expect(withRetro).toMatchObject({ kind: "summary", summary: { repos: [{ waitingOnYou: [{ kind: "ready-for-human", number: 13 }] }] } });
+      expect(withRetro.kind === "summary" && withRetro.body).toBe(bodyOf(factsOf({ openIssues: [readyForHuman(13, 30)] })));
+      expect(withRetro).toMatchObject({ body: expect.not.stringMatching(/Retro|#120/) });
     });
 
     it("collapses the 11th item onward in a repo into details", () => {
