@@ -5,18 +5,37 @@
 // Operator's reply to it starts an ordinary turn.
 import { type CaptureFailure, code } from "../evidence/uiEvidence.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
+import { turnStartFrom } from "./design.ts";
 import { parsePrototypeTurnOutput, type PrototypeRoundOutput } from "./designOutput.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
-import type { Action, IssueContext, LoopEvent, Plan } from "./types.ts";
+import type { Action, IssueContext, LoopEvent, Plan, StartingComment } from "./types.ts";
 
 type PrototypeRunFinished = Extract<LoopEvent, { kind: "prototype-run-finished" }>;
 
 /** The capture failures that leave nothing to look at: the variants were never served. */
 const NOT_SERVED: readonly CaptureFailure[] = ["build-failed", "server-did-not-start"];
 
-/** The push job's decision on a prototype turn's branch and round. */
-export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operator }: IssueContext): Plan {
+/**
+ * The push job's decision on a prototype turn's branch and round. `found` is
+ * what the snapshot found of the Operator's reply that approved the
+ * prototype: like any Design-session turn, one whose reply was deleted posts nothing.
+ */
+export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operator }: IssueContext, found: StartingComment | null): Plan {
+  const start = turnStartFrom(event.request.reply ?? undefined, found);
+  if (start.kind === "unchecked-reply") {
+    return {
+      kind: "fail",
+      failure: "infrastructure",
+      reason: `The prototype turn on #${event.issue} answers a reply (comment ${start.comment}) the push job didn't check is still there`,
+    };
+  }
+  if (start.kind === "reply" && !start.comment.exists) {
+    return {
+      kind: "nothing",
+      reason: `The Operator's reply that approved the prototype on #${event.issue} (comment ${start.comment.id}) was deleted, so the prototype turn posts nothing`,
+    };
+  }
   const parsed = parsePrototypeTurnOutput(event.output);
   if (!parsed.ok) {
     return {

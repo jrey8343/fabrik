@@ -278,3 +278,32 @@ describe("Landing a prototype turn that made no commit", () => {
     expect(commentsOf(plan)[0]).toContain("The prototype turn on #7 built nothing:");
   });
 });
+
+describe("The Operator's reply that approved the prototype", () => {
+  it("deleted, the prototype turn posts nothing and pushes nothing, as any turn whose reply was deleted", () => {
+    const plan = planFor(finished(), inSession({}, { startingComment: { id: 9001, exists: false } }), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "The Operator's reply that approved the prototype on #7 (comment 9001) was deleted, so the prototype turn posts nothing",
+    });
+  });
+
+  it("fails the run when the push job didn't check it is still there", () => {
+    const plan = planFor(finished(), inSession({}, { startingComment: null }), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "fail",
+      failure: "infrastructure",
+      reason: "The prototype turn on #7 answers a reply (comment 9001) the push job didn't check is still there",
+    });
+  });
+
+  it("needs no check when agent:design started the turn that asked for the prototype, which no reply did", () => {
+    const request = { ...REQUEST, reply: null };
+
+    const plan = planFor(finished({ request }), inSession({ pendingPrototype: request }, { startingComment: null }), kitConfig());
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
+  });
+});

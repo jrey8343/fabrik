@@ -154,7 +154,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     case "research-run-finished":
       return withIssue(snapshot, (context) => landResearch(event, context));
     case "prototype-run-finished":
-      return withIssue(snapshot, (context) => applyPrototypeTurn(event, context));
+      return withIssue(snapshot, (context) => applyPrototypeTurn(event, context, snapshot.startingComment));
     case "pull-request-changes-requested":
       return requestChanges(event, snapshot, config);
     // Context for the next run that reads the PR, never a trigger (ADR-0007).
