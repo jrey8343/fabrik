@@ -6,7 +6,7 @@ import { type KitConfig, picksIn } from "../kit/config.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import { newIssueUrl } from "./followUps.ts";
 import { READY_FOR_HUMAN } from "./labels.ts";
-import { fencedRunsOf, fromRetroLine, retroMarker, retroMarksIn } from "./markers.ts";
+import { FROM_AUDIT_LINE, FROM_PULL_REQUEST_LINE, FROM_RETRO_LINE, fencedRunsOf, fromRetroLine, retroMarker, retroMarksIn } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import { isPendingRetro } from "./retro.ts";
 import { LOOSENING_STREAK_MINIMUM, type LooseningProposal, parseRetroOutput, type ProposalDirection, type ProposalKind, type RetroProposal, type Streak } from "./retroOutput.ts";
@@ -61,10 +61,12 @@ export function landRetro(event: RetroFinished, context: IssueContext, config: K
  * of its text, and no line a marker reader would take for the Kit's own, as
  * a Retro's are read anywhere in its body (src/loop/markers.ts). Its short
  * texts, set in a heading or beside a label, go on one line. Its problem and
- * change, each a block of Markdown, keep code in a closed fence as written,
- * since GitHub notifies nobody from code, so a change can be applied as
- * written; and each closes a fence it leaves open, so it can't swallow the
- * rest of the Retro or pair with a fence in the next text.
+ * change, each a block of Markdown, hold no trailer line either, so the issue
+ * they're filed in reads as filed from this Retro alone. They keep code in a
+ * closed fence as written, since GitHub notifies nobody from code, so a
+ * change can be applied as written; and each closes a fence it leaves open,
+ * so it can't swallow the rest of the Retro or pair with a fence in the next
+ * text.
  */
 function silenced(proposal: RetroProposal): RetroProposal {
   const texts = {
@@ -82,7 +84,7 @@ function oneLine(text: string): string {
 }
 
 function markdown(text: string): string {
-  const { runs, open } = fencedRunsOf(withoutMarkerLines(text));
+  const { runs, open } = fencedRunsOf(withoutTrailerLines(withoutMarkerLines(text)));
   const lines = runs.flatMap(({ code, lines }) => (code ? lines : lines.map(withoutMentions)));
   return [...lines, ...(open === null ? [] : [open])].join("\n");
 }
@@ -92,6 +94,19 @@ function withoutMarkerLines(text: string): string {
   return text
     .split("\n")
     .filter((line) => !/^<!--\s*fabrik:/.test(line.trim()))
+    .join("\n");
+}
+
+/**
+ * The text without any line that names where an issue came from, its outer
+ * whitespace trimmed: the Retro, Audit or PR a filed issue's trailer names.
+ * Inside code too, since cutting a filed issue's body short to fit its link
+ * can leave a fence open, and a fence that never closes quotes nothing.
+ */
+function withoutTrailerLines(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => ![FROM_RETRO_LINE, FROM_AUDIT_LINE, FROM_PULL_REQUEST_LINE].some((trailer) => trailer.test(line.trim())))
     .join("\n");
 }
 

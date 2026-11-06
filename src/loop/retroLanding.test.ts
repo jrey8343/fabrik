@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { kitConfig, notificationsOf, RETRO_WINDOW_END, retroBody, retroRunSnapshotOf } from "../__fixtures__/snapshots.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import { MAX_ISSUE_URL_LENGTH } from "./followUps.ts";
-import { fromRetroIn, linesOutsideCode, retroMarksIn } from "./markers.ts";
+import { fromAuditIn, fromPullRequestIn, fromRetroIn, linesOutsideCode, retroMarksIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent, Plan, RetroEvidence } from "./types.ts";
 
@@ -390,6 +390,18 @@ describe("Landing a Retro: the Open as issue link", () => {
 
     expect(bodies.map((body) => body.split("\n").slice(-2))).toEqual(Array(4).fill(["", "From retro #120"]));
     expect(bodies.map(fromRetroIn)).toEqual([120, 120, 120, 120]);
+  });
+
+  it("drops any From retro, From audit or From PR line from the Retro's problem and change, so the issue it files reads as filed from this Retro alone", () => {
+    const problem = "Escape #212 traced it to #140.\nFrom retro #80\n  From audit #97";
+    const change = "From PR #140\n\nForbid `pg` in `src/routes/**`.\n\n```\nFrom retro #81\n```";
+
+    const plan = planFor(retroFinished({ proposals: [aTightening({ problem, change })] }), retroRunSnapshotOf(), kitConfig());
+
+    const body = issueLinks(rewrittenBodyOf(plan))[0]?.searchParams.get("body") ?? "";
+    expect([fromRetroIn(body), fromAuditIn(body), fromPullRequestIn(body)]).toEqual([120, null, null]);
+    expect(body).toContain("Escape #212 traced it to #140.\n\n**Change**\n\n\nForbid `pg` in `src/routes/**`.\n\n```\n```\n\n**Evidence**");
+    expect([fromRetroIn(rewrittenBodyOf(plan)), fromAuditIn(rewrittenBodyOf(plan)), fromPullRequestIn(rewrittenBodyOf(plan))]).toEqual([null, null, null]);
   });
 
   it("cuts a long proposal short to fit GitHub's URL limit, keeping its label and its whole trailer, while the Retro shows all of it", () => {
