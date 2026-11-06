@@ -15,7 +15,7 @@ function implementRun(overrides: Partial<RunRecord> = {}): RunRecord {
 }
 
 describe("The scoring plan for a finished run", () => {
-  it.each(["triage", "design", "review", "audit", "retro", "score"] as const)("never samples a %s run", (role) => {
+  it.each(["triage", "design", "review", "audit", "research", "retro", "score"] as const)("never samples a %s run", (role) => {
     expect(scoringPlan(implementRun({ role, retry: 1, stepUp: true }))).toEqual({ kind: "not-sampled" });
   });
 

@@ -9,7 +9,8 @@
 #   `id-token: write`, and only the agent service account, which loads the
 #   Claude token, or for Implement only the implement service account, which
 #   also loads the repo's test secrets (ADR-0004). It passes its output out as
-#   an artifact, the Implementer's commits as a git bundle.
+#   an artifact, the Implementer's commits and the Researcher's findings
+#   branch as a git bundle.
 # - The push job runs on a fresh VM, loads the Fabrik App key through the push
 #   service account, mints an App token, and never checks out or runs Product
 #   code. It checks out only Fabrik itself, at the exact commit the caller
@@ -69,6 +70,7 @@ jobs:
       audit-timeout-minutes: ${{ steps.route.outputs.audit-timeout-minutes }}
       # Both of a Retro run's jobs, its evidence job and its Retro job, run within it.
       retro-timeout-minutes: ${{ steps.route.outputs.retro-timeout-minutes }}
+      research-timeout-minutes: ${{ steps.route.outputs.research-timeout-minutes }}
       dispatch-timeout-minutes: ${{ steps.route.outputs.dispatch-timeout-minutes }}
       # For a Review or a retry: the agent PR, and the Ticket its branch was cut for.
       # For a first Implement run: its Ticket, with no PR.
@@ -1003,6 +1005,129 @@ jobs:
           subscription: ${{ needs.kit.outputs.subscription }}
           model: ${{ needs.kit.outputs.model }}
           effort: ${{ needs.kit.outputs.effort }}
+
+  # The Researcher (#154). Read-only, like the Auditor: a checkout of the
+  # default branch, no GitHub write credential, and only the agent service
+  # account. It gets the Base skills alone and runs none of the code. The
+  # runner cuts the research Decision's throwaway branch, commits the findings
+  # file the agent wrote to it as the Fabrik Researcher, and passes it out as a
+  # bundle beside its result, as the Implement job does, for the push job to
+  # land. Gated off, and absent from the push job's needs, until Ideas and
+  # Maps' switch-on Ticket (#263) drops the `false && ` and adds it there.
+  # Named as Dispatch counts Research runs by (RESEARCH_JOB_NAME in src/github/snapshot.ts).
+  research:
+    name: Research
+    needs: kit
+    if: false && needs.kit.outputs.route == 'research'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.research-timeout-minutes) }}
+    # One Researcher run per Decision at a time, so two never race on one branch.
+    concurrency:
+      group: fabrik-research-${{ github.event.issue.number }}
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      # Read by the push job: a failed 1Password step means the agent never started.
+      secrets-step: ${{ steps.op.outcome }}
+      # For its Run record: the model and effort the runner passed, and the commit the run started from.
+      model: ${{ steps.agent.outputs.model }}
+      effort: ${{ steps.agent.outputs.effort }}
+      base-sha: ${{ steps.base.outputs.sha }}
+    steps:
+      # A fresh clone, with the history the bundle of the Decision's branch is cut from.
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Before the secrets load, so a run whose agent never started still names it.
+      - name: Note the commit the run starts from
+        id: base
+        run: echo "sha=$(git -C product rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # The research Decision, and its Map as the issue's parent in spec.json.
+      - name: Prepare the agent job
+        uses: ./kit/.github/actions/prepare-agent
+        with:
+          role: research
+          github-token: ${{ github.token }}
+          issue: ${{ github.event.issue.number }}
+
+      - name: Load the Claude token
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential
+
+      - name: Run the Researcher
+        id: agent
+        working-directory: product
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
+          FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          FABRIK_MODEL: ${{ needs.kit.outputs.model }}
+          FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
+        run: node ../kit/src/agent/run.ts research
+
+      # The result and the bundle of the Decision's branch (none if the run wrote nothing).
+      - name: Pass the Researcher's output and findings to the push job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-result
+          path: |
+            ${{ runner.temp }}/fabrik-out/agent-result.json
+            ${{ runner.temp }}/fabrik-out/agent-branch.bundle
+          if-no-files-found: error
+          retention-days: 7
+
+      # src/agent/run.ts writes this when it catches a failure, a reply that
+      # breaks the research contract included. A run cancelled by its timeout leaves none.
+      - name: Pass the failure report to the push job
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # The agent's stream-json transcript (src/agent/transcript.ts), written line by
+      # line as it ran, so it's kept when the run passed, failed or timed out. Not
+      # fabrik-agent-*: the push job downloads those and reads none as a timeout.
+      # continue-on-error: keeping it must never fail a run that passed.
+      - name: Gzip the agent's transcript
+        if: always()
+        continue-on-error: true
+        run: if [ -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl" ]; then gzip -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl"; fi
+
+      - name: Keep the agent's transcript
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-transcript-research
+          path: ${{ runner.temp }}/fabrik-out/transcript.jsonl.gz
+          if-no-files-found: ignore
+          retention-days: 7
 
   # The push job, after whichever agent job the Kit job routed to, or straight
   # after the Kit job when it routed here. What it applies, src/main.ts decides

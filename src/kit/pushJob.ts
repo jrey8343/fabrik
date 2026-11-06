@@ -76,8 +76,9 @@ export const RETRO_EVIDENCE_JOB = "retro-evidence";
 
 /**
  * What the push job applies. `eventIssue` is the Actions event's issue number,
- * the run's subject for Triage, Design, the Auditor and the Retro (whose
- * subjects are the pending Audit and the pending Retro the App opened), and
+ * the run's subject for Triage, Design, the Auditor, the Retro and the
+ * Researcher (whose subjects are the pending Audit and the pending Retro the
+ * App opened, and the research Decision agent:research went on), and
  * `eventComment` its comment's id when a comment on that issue started the
  * run; an Implement or Review run's Ticket and PR come from the Kit job's
  * plan, which no agent can rewrite.
@@ -95,7 +96,8 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
     case "design":
     case "implement":
     case "audit":
-    case "retro": {
+    case "retro":
+    case "research": {
       const issue = route === "implement" ? ticket : eventIssue;
       if (issue === null) return { kind: "nothing", reason: `the ${route} run names no issue` };
       // A Retro whose evidence job failed never ran its agent, and is that run's failure.
