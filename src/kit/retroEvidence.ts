@@ -665,8 +665,8 @@ export interface FiledProposalEvidence {
 
 /** The evidence bundle for one Retro: what it reads of one Product repo for its window. Pure, no I/O. */
 export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
-  const earlier = input.retros.filter((retro) => retro.number !== input.retro);
-  const window = { start: Date.parse(retroWindowStart(input.windowEnd, earlier)), end: Date.parse(input.windowEnd) };
+  const earlier = earlierRetrosOf(input);
+  const window = windowOf(input);
   // Only this repo's records, whatever the store gave.
   const records = input.records.filter((record) => record.repo === input.facts.repo);
   const metrics: MetricsInput = { records, facts: [input.facts], operator: input.operator };
@@ -684,6 +684,27 @@ export function evidenceBundle(input: RetroEvidenceInput): EvidenceBundle {
     trimmed: false,
   };
   return heldToBudget(whole, digests);
+}
+
+/**
+ * The earliest time a Retro's evidence reads, in milliseconds: 90 days before
+ * its window starts, so an escape opened at the start is counted against
+ * every agent PR it may name. A Retro held back for weeks starts its window
+ * long ago, so the facts it's given must reach back this far
+ * (gatherRetroFacts, src/github/facts.ts) for its window to be read whole.
+ */
+export function evidenceReachOf(input: Pick<RetroEvidenceInput, "retro" | "windowEnd" | "retros">): number {
+  return windowOf(input).start - ESCAPE_WINDOW_MS;
+}
+
+/** The Retros before the one being filled, which is left out: the gate takes a pending Retro for the last one. */
+function earlierRetrosOf({ retro, retros }: Pick<RetroEvidenceInput, "retro" | "retros">): readonly RetroIssueFacts[] {
+  return retros.filter(({ number }) => number !== retro);
+}
+
+/** The Retro's window: from the last Retro's window end, as the gate reads it (src/loop/retro.ts), to its own. */
+function windowOf(input: Pick<RetroEvidenceInput, "retro" | "windowEnd" | "retros">): Window {
+  return { start: Date.parse(retroWindowStart(input.windowEnd, earlierRetrosOf(input))), end: Date.parse(input.windowEnd) };
 }
 
 /** A ref the Retro may cite, and what it cites. */
@@ -814,10 +835,25 @@ function digestsOf(readTranscript: RetroEvidenceInput["readTranscript"]): Digest
 /** A Run record with its transcript's whole digest. */
 type Digested = (record: RunRecord) => DigestedRecordEvidence;
 
-/** The escapes opened in the window, each counted against the agent PRs merged in the 90 days to its end. */
+/**
+ * Every escape the Operator opened in the window, each counted, as the Weekly
+ * summary counts it, against the agent PRs merged in the 90 days to the
+ * window's end that its marker names; or, for one opened before those 90
+ * days, in a window that long, against those merged in the 90 days to it.
+ */
 function escapesOf(window: Window, metrics: MetricsInput, digested: Digested): EscapeEvidence[] {
-  return escapesIn({ start: window.end - ESCAPE_WINDOW_MS, end: window.end }, metrics)
-    .filter(({ issue }) => within(window, issue.createdAt))
+  const last90Days = { start: window.end - ESCAPE_WINDOW_MS, end: window.end };
+  return metrics.facts
+    .flatMap((repo) =>
+      repo.escapeMarkerIssues
+        .filter((issue) => within(window, issue.createdAt))
+        .flatMap((issue) => {
+          const at = Date.parse(issue.createdAt);
+          // A window holds its start but not its end, so the 90 days to an escape end just after it.
+          const counted = at >= last90Days.start ? last90Days : { start: at + 1 - ESCAPE_WINDOW_MS, end: at + 1 };
+          return escapesIn(counted, { ...metrics, facts: [{ ...repo, escapeMarkerIssues: [issue] }] });
+        }),
+    )
     .map(({ issue, strength, pullRequests }) => ({
       ref: `#${issue.number}`,
       number: issue.number,

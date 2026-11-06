@@ -626,7 +626,7 @@ describe("Gathering a Product repo's GitHub facts for a Retro", () => {
       },
     );
 
-    const facts = await gatherRetroFacts(github, repo, NOW, OPERATOR.login);
+    const facts = await gatherRetroFacts(github, repo, NOW, OPERATOR.login, NOW);
 
     expect(facts.pullRequests[0]?.commits.map((commit) => commit.patch)).toEqual([
       null,
@@ -645,5 +645,47 @@ describe("Gathering a Product repo's GitHub facts for a Retro", () => {
     ]);
     // Each once, in whatever order the reads went out.
     expect(read.toSorted()).toEqual(["2".repeat(40), "3".repeat(40)]);
+  });
+
+  // A Retro held back for weeks reads a window that starts more than 97 days before now.
+  it("reaches back to `from` when its evidence starts before the 97 days, for its PRs, the Operator's issues and the default branch's commits", async () => {
+    const from = Date.parse("2026-06-01T00:00:00Z");
+    const asked: unknown[] = [];
+    const { github } = retroRepoWith(
+      {
+        closedPullRequests: [aRawPullRequest({ number: 40, mergedAt: "2026-06-02T00:00:00Z", closedAt: "2026-06-02T00:00:00Z", updatedAt: "2026-06-02T00:00:00Z" })],
+        operatorIssues: [aRawOperatorIssue(60, "2026-06-03T00:00:00Z", "<!-- fabrik:escape strong #40 -->")],
+      },
+      {},
+    );
+    const watched = {
+      ...github,
+      graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        if (query.includes("history(")) asked.push(variables["since"]);
+        return github.graphql<T>(query, variables);
+      },
+    };
+
+    const facts = await gatherRetroFacts(watched, repo, NOW, OPERATOR.login, from);
+
+    expect(facts.pullRequests.map((pr) => pr.number)).toEqual([40]);
+    expect(facts.escapeMarkerIssues.map((issue) => issue.number)).toEqual([60]);
+    expect(asked).toEqual(["2026-06-01T00:00:00.000Z"]);
+  });
+
+  it("still reaches back the 97 days when its evidence starts later", async () => {
+    const asked: unknown[] = [];
+    const { github } = retroRepoWith({}, {});
+    const watched = {
+      ...github,
+      graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        if (query.includes("history(")) asked.push(variables["since"]);
+        return github.graphql<T>(query, variables);
+      },
+    };
+
+    await gatherRetroFacts(watched, repo, NOW, OPERATOR.login, Date.parse("2026-10-01T00:00:00Z"));
+
+    expect(asked).toEqual(["2026-08-03T20:00:00.000Z"]);
   });
 });

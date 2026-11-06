@@ -22,7 +22,7 @@ import { readKitConfigSources } from "../github/snapshot.ts";
 import { retroMarksIn } from "../loop/markers.ts";
 import { retroWindowEnd } from "../loop/retro.ts";
 import { resolveKitConfig } from "./config.ts";
-import { type EvidenceBundle, evidenceBundle, RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
+import { type EvidenceBundle, evidenceBundle, evidenceReachOf, RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { RUN_STORE_REPO, storeIsPrivate } from "./runStore.ts";
 import { readStoreRunRecords, readStoreScoreFiles, readStoreTranscripts } from "./storeCheckout.ts";
 
@@ -56,17 +56,21 @@ async function main(): Promise<string> {
   if (!config.ok) throw new Error(`The Kit config is invalid: ${config.errors.join("; ")}`);
   const operator = config.config.operator ?? owner;
 
+  // The Retros first: the window they give says how far back the facts must reach.
+  const history = await gatherRetroHistory(product, repo, `${required("FABRIK_APP_SLUG")}[bot]`);
+  const pending = history.retros.find((issue) => issue.number === retro);
+  if (pending === undefined) throw new Error(`#${retro} isn't among the repo's newest fabrik:retro issues`);
+  const windowEnd = retroWindowEnd({ createdAt: pending.createdAt, ...retroMarksIn(pending.body) });
+  const reach = evidenceReachOf({ retro, windowEnd, retros: history.retros });
+
   const storeDir = required("FABRIK_STORE_DIR");
-  const [records, scoreFiles, readTranscript, facts, history] = await Promise.all([
+  const [records, scoreFiles, readTranscript, facts] = await Promise.all([
     // A schema 1 record, written before runs were given a Subscription, reads as on the first this repo lists.
     readStoreRunRecords(storeDir, config.config.subscriptions),
     readStoreScoreFiles(storeDir),
     readStoreTranscripts(storeDir),
-    gatherRetroFacts(product, repo, Date.now(), operator),
-    gatherRetroHistory(product, repo, `${required("FABRIK_APP_SLUG")}[bot]`),
+    gatherRetroFacts(product, repo, Date.now(), operator, reach),
   ]);
-  const pending = history.retros.find((issue) => issue.number === retro);
-  if (pending === undefined) throw new Error(`#${retro} isn't among the repo's newest fabrik:retro issues`);
 
   const bundle = evidenceBundle({
     records: Object.values(records),
@@ -75,7 +79,7 @@ async function main(): Promise<string> {
     facts,
     operator,
     retro,
-    windowEnd: retroWindowEnd({ createdAt: pending.createdAt, ...retroMarksIn(pending.body) }),
+    windowEnd,
     retros: history.retros,
     fromRetroIssues: history.openIssues,
   });

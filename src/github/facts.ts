@@ -55,9 +55,14 @@ const WINDOW_MS = 37 * DAY_MS;
 const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 
 /** The GitHub facts the Weekly summary reads of one Product repo, as of `now`, with the Operator's login. */
-export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
+export function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
+  return gatherFacts(github, repo, now, operator, now - ESCAPE_WINDOWS_REACH_MS);
+}
+
+/** The GitHub facts of one Product repo, as of `now`, with its PRs, default-branch commits and the Operator's issues from `reach` on. */
+async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
-  const escapeSince = new Date(now - ESCAPE_WINDOWS_REACH_MS).toISOString();
+  const escapeSince = new Date(reach).toISOString();
   const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
@@ -96,10 +101,20 @@ export async function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: R
 /**
  * The GitHub facts a Retro reads of one Product repo, as of `now`: the
  * Weekly summary's, with the patch of each commit on an agent PR that the
- * Fabrik App didn't make, read one commit at a time.
+ * Fabrik App didn't make, read one commit at a time. Its PRs, default-branch
+ * commits and the Operator's issues reach back the summary's 97 days, or to
+ * `from`, the earliest time its evidence reads (evidenceReachOf,
+ * src/kit/retroEvidence.ts), when that's earlier, as for a Retro held back
+ * for weeks, so its window is read whole.
  */
-export async function gatherRetroFacts(github: Pick<GitHub, "graphql" | "rest">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
-  const facts = await gatherGitHubFacts(github, repo, now, operator);
+export async function gatherRetroFacts(
+  github: Pick<GitHub, "graphql" | "rest">,
+  repo: Repo,
+  now: number,
+  operator: string,
+  from: number,
+): Promise<GitHubFacts> {
+  const facts = await gatherFacts(github, repo, now, operator, Math.min(now - ESCAPE_WINDOWS_REACH_MS, from));
   const patches = new Map<string, Promise<string>>();
   const withPatch = async (commit: CommitFacts): Promise<CommitFacts> => {
     if (commit.byApp) return commit;

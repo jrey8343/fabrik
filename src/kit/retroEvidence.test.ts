@@ -35,6 +35,7 @@ import {
   type EvidenceBundle,
   escapesIn,
   evidenceBundle,
+  evidenceReachOf,
   mergedAgentPullRequestsIn,
   refsOf,
   type RetroIssueFacts,
@@ -336,6 +337,39 @@ describe("the evidence bundle", () => {
           ],
         },
       ]);
+    });
+
+    // A Retro held back for weeks reads a window longer than the 90 days escapes count PRs over.
+    it("holds each escape opened in a window longer than 90 days, one opened before its last 90 days counted against the agent PRs merged in the 90 days to it", () => {
+      const { window, escapes } = evidenceBundle(
+        aRetroEvidenceInput({
+          retros: [aPastRetro({ number: 100, body: retroBody("2026-06-01T00:00:00.000Z") }), theRetroBeingFilled("2026-11-07T00:00:00.000Z")],
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-05-20T00:00:00Z", { number: 40, ticket: 5 }), // 21 days before #70, before the window
+              aMergedPullRequest("2026-02-01T00:00:00Z", { number: 41, ticket: 6 }), // 129 days before #70
+              aMergedPullRequest("2026-10-01T00:00:00Z", { number: 50, ticket: 7 }),
+            ],
+            escapeMarkerIssues: [
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->", { number: 80, createdAt: "2026-11-03T00:00:00Z" }),
+              anEscapeMarkerIssue("<!-- fabrik:escape strong #40 #41 -->", { number: 70, createdAt: "2026-06-10T00:00:00Z" }),
+            ],
+          }),
+        }),
+      );
+      expect(window.start).toBe("2026-06-01T00:00:00.000Z");
+      expect(escapes.map(({ number, pullRequests }) => [number, pullRequests.map((pr) => pr.number)])).toEqual([
+        [80, [50]],
+        [70, [40]],
+      ]);
+    });
+
+    it("reads facts from 90 days before its window starts, so an escape opened at the start is counted against every PR it may name", () => {
+      const input = aRetroEvidenceInput({
+        retros: [aPastRetro({ number: 100, body: retroBody("2026-06-01T00:00:00.000Z") }), theRetroBeingFilled("2026-11-07T00:00:00.000Z")],
+      });
+
+      expect(new Date(evidenceReachOf(input)).toISOString()).toBe("2026-03-03T00:00:00.000Z");
     });
 
     it("counts no marker that names only people's PRs, and no marker in an issue anyone but the Operator opened", () => {
