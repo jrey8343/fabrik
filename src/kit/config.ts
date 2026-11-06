@@ -121,6 +121,40 @@ export const PREVIEW_PLACEHOLDERS = ["pr", "branch_slug", "sha"] as const;
 
 export type PreviewPlaceholder = (typeof PREVIEW_PLACEHOLDERS)[number];
 
+/** A pull request whose preview deployment the Kit links, as its push left it: what fills each placeholder in. */
+export interface PreviewOf {
+  readonly number: number;
+  /** Its head branch, such as fabrik/ticket-12. */
+  readonly branch: string;
+  /** The commit the push left that branch at. */
+  readonly headSha: string;
+}
+
+/**
+ * The pull request's preview deployment: `template` with `{pr}` its number,
+ * `{branch_slug}` its branch's slug (branchSlug) and `{sha}` its full head
+ * commit, written out as a parsed URL, so it is one line that can't break out of a link.
+ */
+export function previewUrl(template: string, { number, branch, headSha }: PreviewOf): string {
+  const url = URL.parse(fillPlaceholders(template, { pr: String(number), branch_slug: branchSlug(branch), sha: headSha }));
+  if (url === null) throw new Error(`The preview.url template ${template} doesn't fill in to a URL`);
+  return url.href;
+}
+
+/**
+ * `{branch_slug}`: the branch name in lower case, with each run of characters
+ * other than a letter or a digit (a to z, 0 to 9) made one `-`, and no `-` at
+ * either end. So the agent branch fabrik/ticket-12 is fabrik-ticket-12, a name
+ * that fits in a hostname, as hosts name a branch's preview. The Kit never
+ * shortens it, though a host may shorten a long one.
+ */
+export function branchSlug(branch: string): string {
+  return branch
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 /** The Sentry project the Monitor reads a Product repo's production errors from. */
 export interface MonitorErrors {
   readonly provider: "sentry";
@@ -549,6 +583,11 @@ const PLACEHOLDER_STAND_INS: Readonly<Record<PreviewPlaceholder, string>> = {
 
 const PLACEHOLDER = /\{([^{}]*)\}/g;
 
+/** The template with each placeholder filled in; one that isn't a placeholder stays as it is. */
+function fillPlaceholders(template: string, values: Readonly<Record<PreviewPlaceholder, string>>): string {
+  return template.replace(PLACEHOLDER, (token, name: string) => (isPreviewPlaceholder(name) ? values[name] : token));
+}
+
 function isPreviewPlaceholder(name: string): name is PreviewPlaceholder {
   return (PREVIEW_PLACEHOLDERS as readonly string[]).includes(name);
 }
@@ -560,7 +599,7 @@ function checkPreviewTemplate(template: string): string | null {
     const tokens = spelledList(unknown.map(([token]) => token));
     return `${tokens} ${unknown.length === 1 ? "is not a placeholder" : "are not placeholders"}; ${only}`;
   }
-  const filled = template.replace(PLACEHOLDER, (_, name: PreviewPlaceholder) => PLACEHOLDER_STAND_INS[name]);
+  const filled = fillPlaceholders(template, PLACEHOLDER_STAND_INS);
   if (/[{}]/.test(filled)) return `it has a { or } that isn't part of a placeholder; ${only}`;
   return checkHttpOrHttpsUrl(filled);
 }

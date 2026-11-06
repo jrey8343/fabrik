@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { REVIEWER_IMAGE_CAP, resolveKitConfig, UI_VIEWPORTS } from "./config.ts";
+import { previewUrl, REVIEWER_IMAGE_CAP, resolveKitConfig, UI_VIEWPORTS } from "./config.ts";
 
 const root = new URL("../../", import.meta.url);
 const template = readFileSync(new URL("templates/fabrik-config.json", root), "utf8");
@@ -1084,5 +1084,30 @@ describe("Visual evidence's Kit constants, which no Kit config can change", () =
     });
 
     expect(result).toEqual({ ok: false, errors: [`ui.${key} is not a Kit config field`] });
+  });
+});
+
+describe("Filling in a preview.url template for a pull request", () => {
+  const pullRequest = { number: 51, branch: "fabrik/ticket-7", headSha: "4f2b9c0e1d3a5b7c9e0f2a4b6c8d0e1f3a5b7c9d" };
+
+  it.each([
+    ["https://deploy-preview-{pr}--penrith-physio.netlify.app", "https://deploy-preview-51--penrith-physio.netlify.app/"],
+    ["https://{branch_slug}.penrith-physio.pages.dev/", "https://fabrik-ticket-7.penrith-physio.pages.dev/"],
+    [
+      "https://preview.example.dev/{pr}/{branch_slug}/{sha}?from={pr}",
+      "https://preview.example.dev/51/fabrik-ticket-7/4f2b9c0e1d3a5b7c9e0f2a4b6c8d0e1f3a5b7c9d?from=51",
+    ],
+    ["https://staging.penrithphysio.com.au", "https://staging.penrithphysio.com.au/"],
+  ])("fills %s in from the PR's number, its branch's slug and its head", (template, url) => {
+    expect(previewUrl(template, pullRequest)).toBe(url);
+  });
+
+  it.each([
+    ["fabrik/ticket-7", "fabrik-ticket-7"],
+    ["fabrik/ticket-1234", "fabrik-ticket-1234"],
+    ["Feature/Add_Waitlist--Page", "feature-add-waitlist-page"],
+    ["/fabrik//ticket-7/", "fabrik-ticket-7"],
+  ])("slugs the branch %s as %s: lower case, each run of anything but a letter or digit one -, none at either end", (branch, slug) => {
+    expect(previewUrl("https://{branch_slug}.example.dev", { ...pullRequest, branch })).toBe(`https://${slug}.example.dev/`);
   });
 });
