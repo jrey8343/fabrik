@@ -87,6 +87,27 @@ export function inSample(key: string, share: number): boolean {
   return digest.readUInt32BE(0) < share * 2 ** 32;
 }
 
+/** The Kit's rubrics as a scoring job read them from its Kit checkout, and the Kit commit it checked out. */
+export interface KitRubrics {
+  readonly sha: string;
+  readonly rubrics: readonly Rubric[];
+}
+
+/**
+ * The rubrics a run is scored, or skipped, under: always those of its pinned
+ * release, the Kit commit that ran and recorded it (its record's `kitSha`).
+ * A Replay's `kit` variant names a candidate Kit sha too, whose prompts and
+ * Base skills its agents loaded, but never its rubrics, so both arms' scores
+ * compare with each other and with live runs' (#156). Throws for rubrics read
+ * at any other commit, so a score file is never built under them.
+ */
+export function scoringRubrics(scored: RunRecord, kit: KitRubrics): readonly Rubric[] {
+  if (kit.sha === scored.kitSha) return kit.rubrics;
+  const run = `Run ${scored.runId}-${scored.runAttempt} is scored under the rubrics of its pinned release ${scored.kitSha}`;
+  if (kit.sha === scored.replay?.candidateSha) throw new Error(`${run}, never those of its candidate Kit sha ${kit.sha}`);
+  throw new Error(`${run}, not those read at ${kit.sha}`);
+}
+
 /** One rubric's answer in the judge's structured output. */
 export interface JudgeAnswer {
   /** The rubric's name, such as `efficiency`. */
