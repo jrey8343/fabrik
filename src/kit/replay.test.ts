@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfig } from "./config.ts";
-import { hiddenTests, type MergedFile, readReplayRequest, replayArms, type ReplayVariable, replayThisUrl } from "./replay.ts";
+import {
+  hiddenTests,
+  type MergedFile,
+  pickReplayTickets,
+  readReplayRequest,
+  replayArms,
+  type ReplayCandidate,
+  type ReplayVariable,
+  replayThisUrl,
+} from "./replay.ts";
 
 /** A Fabrik commit with a prompt change to try. */
 const CANDIDATE = "0123456789abcdef0123456789abcdef01234567";
@@ -199,6 +209,74 @@ describe("The Replay this link", () => {
     expect(`${url.origin}${url.pathname}`).toBe(`${PRODUCT}/issues/new`);
     expect(url.searchParams.get("labels")).toBe("fabrik:replay");
     expect(readReplayRequest(url.searchParams.get("body") ?? "")).toEqual({ ok: true, request: { variable, tickets: null } });
+  });
+});
+
+describe("Picking a Replay's Tickets", () => {
+  /** The commit Ticket `ticket`'s first Implement run started from. */
+  const baseOf = (ticket: number) => ticket.toString(16).padStart(40, "0");
+
+  /**
+   * Ticket `ticket`, merged in PR `ticket + 100` on day `ticket` of November
+   * with a test file, after one first Implement run costing $1: eligible, and
+   * flagged for nothing.
+   */
+  function aCandidate(ticket: number, overrides: Partial<ReplayCandidate> = {}): ReplayCandidate {
+    return {
+      ticket,
+      merged: {
+        number: ticket + 100,
+        mergedAt: `2026-10-${String(ticket).padStart(2, "0")}T12:00:00Z`,
+        reverted: false,
+        files: [
+          { path: "src/booking.ts", removed: false },
+          { path: "src/booking.test.ts", removed: false },
+        ],
+      },
+      records: [aRunRecord({ issue: ticket, pullRequest: null, baseSha: baseOf(ticket), endedAt: "2026-10-01T09:00:00Z" })],
+      humanTouches: 0,
+      lastEdited: { ticket: null, spec: null },
+      ...overrides,
+    };
+  }
+
+  it("picks a listed eligible Ticket to replay from its first Implement run's base, with its merged PR", () => {
+    expect(pickReplayTickets({ tickets: [12] }, [aCandidate(12)])).toEqual({
+      picked: [{ ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags: [] }],
+      leftOut: [],
+    });
+  });
+
+  describe("leaves out a listed Ticket that isn't eligible, with why", () => {
+    const merged = aCandidate(12).merged!;
+
+    it.each<[string, ReplayCandidate[], string]>([
+      ["no merged PR closed", [aCandidate(12, { merged: null })], "no merged PR closed it"],
+      ["the Kit found nothing of", [], "no merged PR closed it"],
+      ["whose merged PR was reverted", [aCandidate(12, { merged: { ...merged, reverted: true } })], "its merged PR #112 was reverted"],
+      [
+        "whose merged PR changed Trust-root files",
+        [aCandidate(12, { merged: { ...merged, files: [...merged.files, { path: ".fabrik/config.json", removed: false }, { path: "AGENTS.md", removed: false }] } })],
+        "its merged PR #112 changed .fabrik/config.json and AGENTS.md, which steer agents, so no agent may build it",
+      ],
+      [
+        "no Implement run built",
+        [aCandidate(12, { records: [aRunRecord({ role: "triage", issue: 12 }), aRunRecord({ role: "review", issue: 12, pullRequest: 112 })] })],
+        "the store holds no Implement run of it",
+      ],
+      [
+        "whose first Implement run left no record",
+        [aCandidate(12, { records: [aRunRecord({ issue: 12, pullRequest: 112, retry: 1 })] })],
+        "the store has no baseSha for its first Implement run",
+      ],
+      [
+        "whose first Implement run's record has no baseSha",
+        [aCandidate(12, { records: [aRunRecord({ issue: 12, pullRequest: null, baseSha: null })] })],
+        "the store has no baseSha for its first Implement run",
+      ],
+    ])("leaves out a Ticket %s", (_, candidates, reason) => {
+      expect(pickReplayTickets({ tickets: [12] }, candidates)).toEqual({ picked: [], leftOut: [{ ticket: 12, reason }] });
+    });
   });
 });
 

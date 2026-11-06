@@ -6,14 +6,14 @@
 // up to 10 Ticket numbers to replay in place of the default pick. A model or
 // effort is held to Kit config's own rules. The "Replay this" link files a
 // replay issue whose request names one variable. Pure, no I/O.
-import type { ChangedPath } from "../guard/trust-root.ts";
+import { type ChangedPath, checkTrustRoot } from "../guard/trust-root.ts";
 import { newIssueUrl } from "../loop/followUps.ts";
 import { REPLAY_LABEL } from "../loop/labels.ts";
 import { spelled } from "../loop/readable.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import { checkEffort, type KitConfig, refuseFable } from "./config.ts";
-import type { ReplayArm } from "./runRecord.ts";
+import type { ReplayArm, RunRecord } from "./runRecord.ts";
 
 /** A role whose model or effort a Replay can change. */
 export type ReplayRole = Extract<AgentRole, "implement" | "review">;
@@ -212,6 +212,96 @@ const CLAUDE_MODEL = /^claude-[a-z0-9][a-z0-9.[\]-]*$/;
 /** Why a replay won't run `model`: Kit config's rule first, then only Claude models, each named in full. */
 function refuseModel(model: string): string | null {
   return refuseFable(model) ?? (CLAUDE_MODEL.test(model) ? null : "a replay runs only a Claude model, named in full, such as claude-sonnet-5-5");
+}
+
+/** A Ticket a Replay might run, with what the pick weighs of it. */
+export interface ReplayCandidate {
+  readonly ticket: number;
+  /** The PR that closed the Ticket, or null when none merged. */
+  readonly merged: MergedTicketPullRequest | null;
+  /** The store's Run records whose subject is the Ticket, of any role. */
+  readonly records: readonly RunRecord[];
+  /** How many times the Operator stepped into the Ticket's path between Dispatch and the merge. */
+  readonly humanTouches: number;
+  /** When the Ticket and its Spec were last edited, ISO 8601; null for one never edited, or no Spec. */
+  readonly lastEdited: { readonly ticket: string | null; readonly spec: string | null };
+}
+
+/** The PR that closed a Ticket, merged. */
+export interface MergedTicketPullRequest {
+  readonly number: number;
+  /** ISO 8601. */
+  readonly mergedAt: string;
+  /** Whether a later change reverted it. */
+  readonly reverted: boolean;
+  /** Every file it changed. */
+  readonly files: readonly MergedFile[];
+}
+
+/** A Ticket a Replay runs. */
+export interface PickedTicket {
+  readonly ticket: number;
+  /** Its merged PR. */
+  readonly pullRequest: number;
+  /** Its first Implement run's base, which both arms start from. */
+  readonly baseSha: string;
+  readonly flags: readonly ReplayFlag[];
+}
+
+/** What a picked Ticket's results are weighed with. */
+export type ReplayFlag = never;
+
+/** Which Tickets a Replay runs, in the order it runs them. */
+export interface ReplayPick {
+  readonly picked: readonly PickedTicket[];
+  /** Each listed Ticket the Replay won't run, in the order listed, with why. */
+  readonly leftOut: readonly LeftOutTicket[];
+}
+
+/** A listed Ticket a Replay won't run. */
+export interface LeftOutTicket {
+  readonly ticket: number;
+  /** Why, a clause to show the Operator after the Ticket's number. */
+  readonly reason: string;
+}
+
+/**
+ * The Tickets a request's Replay runs, from the candidates: the listed ones
+ * that are eligible, in the order listed, each listed one left out named with
+ * why. A Ticket is eligible when its PR merged and stayed merged, an
+ * Implementer built it from a first Implement run whose record has a
+ * `baseSha`, and its merged PR changed no Trust-root file.
+ */
+export function pickReplayTickets(request: Pick<ReplayRequest, "tickets">, candidates: readonly ReplayCandidate[]): ReplayPick {
+  const picked: PickedTicket[] = [];
+  const leftOut: LeftOutTicket[] = [];
+  for (const ticket of request.tickets ?? []) {
+    const eligibility = eligibilityOf(candidates.find((candidate) => candidate.ticket === ticket));
+    if (typeof eligibility === "string") leftOut.push({ ticket, reason: eligibility });
+    else picked.push(eligibility);
+  }
+  return { picked, leftOut };
+}
+
+/** The candidate as a picked Ticket, or why it isn't eligible. */
+function eligibilityOf(candidate: ReplayCandidate | undefined): PickedTicket | string {
+  const merged = candidate?.merged ?? null;
+  if (candidate === undefined || merged === null) return "no merged PR closed it";
+  if (merged.reverted) return `its merged PR #${merged.number} was reverted`;
+  const guard = checkTrustRoot(merged.files);
+  if (guard.kind === "refuse") {
+    return `its merged PR #${merged.number} changed ${spelled(guard.paths, "and")}, which steer agents, so no agent may build it`;
+  }
+  const implementRuns = candidate.records.filter((record) => record.replay === null && record.role === "implement");
+  if (implementRuns.length === 0) return "the store holds no Implement run of it";
+  const baseSha = implementRuns.find(isFirstRun)?.baseSha ?? null;
+  if (baseSha === null) return "the store has no baseSha for its first Implement run";
+  return { ticket: candidate.ticket, pullRequest: merged.number, baseSha, flags: [] };
+}
+
+/** Whether an Implement run cut its Ticket's branch: not a Retry, a Step-up or a Request-changes run. */
+function isFirstRun(record: RunRecord): boolean {
+  return record.retry === 0 && !record.stepUp && !record.requestChanges;
 }
 
 /** A role's model and effort, as a Replay arm runs it; a null effort passes no --effort, as in Kit config. */
