@@ -486,16 +486,26 @@ export function evidenceSection(evidence: UiEvidence): string {
   ].join("\n");
 }
 
-/** Why capture failed, in plain words. */
-export const FAILURE_WORDS: Readonly<Record<CaptureFailure, string>> = {
-  "build-failed": "`sandbox.build` failed, so there was no build to serve",
-  "server-did-not-start": "the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran",
-  timeout: "it ran out of time",
-  "no-routes": "there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`",
-  "no-variants": "there was no variant to capture: the prototype turn's output named none",
-  error: "it hit an error the Kit didn't expect, which the Implement job's log shows",
-  "no-result": "it left no result the push job could read",
-};
+/**
+ * Why capture failed, in plain words, the one place each reason is worded:
+ * `job` is the job that captured, whose log shows an error the Kit didn't
+ * expect, the Implement job for a PR's evidence, the prototype job for a
+ * prototype round (#155).
+ */
+export function failureWords(job: string): Readonly<Record<CaptureFailure, string>> {
+  return {
+    "build-failed": "`sandbox.build` failed, so there was no build to serve",
+    "server-did-not-start": "the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran",
+    timeout: "it ran out of time",
+    "no-routes": "there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`",
+    "no-variants": "there was no variant to capture: the prototype turn's output named none",
+    error: `it hit an error the Kit didn't expect, which ${job}'s log shows`,
+    "no-result": "it left no result the push job could read",
+  };
+}
+
+/** Why a PR's capture failed, in the Implement job. */
+const FAILURE_WORDS = failureWords("the Implement job");
 
 /** A failed capture's reason, and the screenshots it took first: a failed capture keeps them. */
 function failureLine(reason: CaptureFailure, captures: readonly Capture[]): string {

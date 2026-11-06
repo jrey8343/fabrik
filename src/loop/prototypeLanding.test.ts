@@ -162,9 +162,9 @@ describe("Landing a prototype turn whose capture failed after it built", () => {
   const failed = (reason: string): CaptureResult => ({ ...CAPTURED, outcome: "failed", reason, captures: [] }) as CaptureResult;
 
   it.each([
-    ["timeout", "capture ran out of time"],
-    ["error", `capture hit an error the Kit didn't expect, which [the run](${RUN}) shows`],
-    ["no-variants", "capture found no variant to capture in the turn's output"],
+    ["timeout", "capture failed because it ran out of time"],
+    ["error", "capture failed because it hit an error the Kit didn't expect, which the prototype job's log shows"],
+    ["no-variants", "capture failed because there was no variant to capture: the prototype turn's output named none"],
   ])("still pushes the branch and asks \"Which variant?\", giving the reason in place of the gallery, when it failed with %s", (reason, words) => {
     const plan = planFor(finished({ capture: failed(reason), gallery: null }), inSession(), kitConfig());
 
@@ -217,11 +217,11 @@ describe("Landing a prototype turn whose build or dev server failed", () => {
     expect(notificationsOf(plan, "jrey")).toEqual(["mention on #7"]);
   });
 
-  it("says the dev server didn't start when it never answered", () => {
+  it("says the server didn't start when it never answered", () => {
     const [round] = commentsOf(planFor(finished({ capture: failed("server-did-not-start"), gallery: null }), inSession(), kitConfig()));
 
     expect(round).toContain(
-      "but the dev server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran, and nothing to look at.",
+      "but the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran, and nothing to look at.",
     );
     expect(round).toContain("**1. Carry on without a prototype, or try again?**");
   });

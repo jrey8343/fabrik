@@ -3,7 +3,7 @@
 // prototype round, whose one question, "Which variant?", the Kit writes. A
 // prototype round is a round of the same session: it never ends it, and the
 // Operator's reply to it starts an ordinary turn.
-import { type CaptureFailure, code, type PreviewLink } from "../evidence/uiEvidence.ts";
+import { type CaptureFailure, code, failureWords, type PreviewLink } from "../evidence/uiEvidence.ts";
 import { type PreviewConfig, previewNamesPullRequest } from "../kit/config.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { turnStartFrom, whileInSession } from "./design.ts";
@@ -105,7 +105,7 @@ export function applyPrototypeTurn(
   const { capture } = event;
   if (capture?.outcome === "failed" && NOT_SERVED.includes(capture.reason)) {
     // The branch is still worth a look: it holds what the agent wrote.
-    const said = `The Kit pushed the variants the prototype turn wrote to [\`${event.branch}\`](${branchUrl(event)}), but ${captureFailed(capture.reason, event.runUrl)}, and nothing to look at. [The run](${event.runUrl}) has the log.`;
+    const said = `The Kit pushed the variants the prototype turn wrote to [\`${event.branch}\`](${branchUrl(event)}), but ${CAPTURE_FAILED[capture.reason]}, and nothing to look at. [The run](${event.runUrl}) has the log.`;
     return { kind: "act", actions: [push, failed(said)] };
   }
   const roundPreview = previewOfRound(preview);
@@ -263,34 +263,17 @@ function previewLine(preview: Exclude<RoundPreview, { kind: "none" }>): string {
  * Where the variants can be seen: the gallery, which expires, or, when capture
  * failed after the build, why there's none. Either way the branch holds them.
  */
-function galleryLine({ capture, gallery, runUrl }: PrototypeRunFinished): string {
+function galleryLine({ capture, gallery }: PrototypeRunFinished): string {
   if (capture === undefined || capture.outcome === "failed") {
-    const why = capture === undefined ? "the prototype job passed out no capture result the push job could read" : captureFailed(capture.reason, runUrl);
+    const why = capture === undefined ? "the prototype job passed out no capture result the push job could read" : `capture failed because ${CAPTURE_FAILED[capture.reason]}`;
     return `There's no gallery: ${why}. The branch holds the variants, and this comment is the prototype's record.`;
   }
   if (gallery === null) return "The Kit kept no gallery of the captures, so this comment is the prototype's record.";
   return `[The gallery](${gallery}) of each variant's screenshots and videos. The gallery expires in about 30 days, so this comment is the prototype's record.`;
 }
 
-/** Why a prototype's capture failed, in plain words: its own, since a PR's (FAILURE_WORDS) speak of the Implement job. */
-function captureFailed(reason: CaptureFailure, runUrl: string): string {
-  switch (reason) {
-    case "build-failed":
-      return "`sandbox.build` failed, so there was no build to serve";
-    case "server-did-not-start":
-      return "the dev server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran";
-    case "timeout":
-      return "capture ran out of time";
-    case "no-variants":
-      return "capture found no variant to capture in the turn's output";
-    case "no-routes":
-      return "capture found no route to capture";
-    case "error":
-      return `capture hit an error the Kit didn't expect, which [the run](${runUrl}) shows`;
-    case "no-result":
-      return "capture left no result the push job could read";
-  }
-}
+/** Why a prototype's capture failed, in plain words, the prototype job having captured. */
+const CAPTURE_FAILED = failureWords("the prototype job");
 
 /** Each variant: its letter, its summary, and its component on the branch at the pushed head. */
 function variantLines({ variants }: PrototypeRoundOutput, { repoUrl, headSha }: PrototypeRunFinished): string[] {
