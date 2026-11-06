@@ -15,9 +15,8 @@ import {
   storeWriteSummary,
   writeStoreFiles,
 } from "./recordWriter.ts";
-import type { Rubric } from "./rubrics.ts";
 import type { RunRecord, RunRecordFiles } from "./runRecord.ts";
-import { type ScoreFile, type ScoreFileWithPath, scoreFileFor, type ScoreSkip, scoringPlan } from "./scorer.ts";
+import { type KitRubrics, type ScoreFile, type ScoreFileWithPath, scoreFileFor, type ScoreSkip, scoringPlan, scoringRubrics } from "./scorer.ts";
 
 /** A judge run's files, as the score-record job writes them. */
 export interface ScoreRecordFiles {
@@ -123,13 +122,14 @@ export type RecordedRunScoring =
 /**
  * The push job's part in scoring (#149): the scoring plan on the run whose
  * Run record it just wrote, or found already in the store. A skip's score file
- * it writes itself, create-only, with the store token it already holds; a
- * score it leaves to the judge job.
+ * it writes itself, create-only, with the store token it already holds, under
+ * the rubrics of the run's pinned release (scoringRubrics); a score it leaves
+ * to the judge job.
  */
 export async function scoreRecordedRun(
   store: StoreApi,
   recorded: { readonly files: RunRecordFiles | null; readonly write: RecordWrite },
-  rubrics: readonly Rubric[],
+  kit: KitRubrics,
   scoredAt: string,
   wait: (ms: number) => Promise<void>,
 ): Promise<RecordedRunScoring> {
@@ -143,7 +143,7 @@ export async function scoreRecordedRun(
     case "score":
       return { kind: "score", record: recordPath };
     case "skip": {
-      const score = scoreFileFor({ scored: record, scoredPath: recordPath, rubrics, scoredAt, outcome: plan });
+      const score = scoreFileFor({ scored: record, scoredPath: recordPath, rubrics: scoringRubrics(record, kit), scoredAt, outcome: plan });
       const write = await writeStoreFiles(store, [{ path: score.path, content: storeJson(score.file) }], storeCommitMessage(record), wait);
       return { kind: "skip", score: score.file, write };
     }

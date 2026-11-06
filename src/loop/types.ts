@@ -2,7 +2,9 @@
 // the resolved Kit config go in; a plan comes out.
 import type { CaptureResult, EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
+import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, ReplayTicketEnd } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
+import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { Label } from "./labels.ts";
 import type { PrototypeRequestMarker } from "./markers.ts";
@@ -316,6 +318,34 @@ export type LoopEvent =
       readonly commenterIsBot: boolean;
       /** Where it was made: a conversation comment, or a review, whose inline comments carry its reactions. */
       readonly on: PullRequestCommentPlace;
+    }
+  | {
+      /**
+       * A replay Ticket's run ended (#156): its replay-record job, the
+       * replay's push job, saw how both arms went and lands it on the replay
+       * issue (src/loop/replayRun.ts).
+       */
+      readonly kind: "replay-run-finished";
+      /** The replay issue. */
+      readonly issue: number;
+      /** The Ticket the run replayed. */
+      readonly ticket: number;
+      /** The Actions run its claim marked the Ticket in progress in. */
+      readonly run: number;
+      readonly end: ReplayTicketEnd;
+      /** The Actions run, which a weekly-limit issue links to. */
+      readonly runUrl: string;
+      /** The Subscription both arms ran on, from the Kit job's `subscription` output. Absent, it is read as the first listed. */
+      readonly subscription?: string;
+      /** For a weekly-limit refusal, when the limit resets (an ISO 8601 time), if the stream said. */
+      readonly resetsAt?: string;
+      /**
+       * What the store holds of the Replay once the job wrote this run's files,
+       * which its results are rewritten from (withReplayResults): this repo's
+       * Run records and score files, and each arm's gates. Null when the store
+       * couldn't be read, so the results the body shows stay as they are.
+       */
+      readonly outcomes: Omit<ReplayOutcomes, "open"> | null;
     }
   | { readonly kind: "pull-request-left-draft"; readonly pullRequest: number }
   | { readonly kind: "pull-request-closed"; readonly pullRequest: number }
@@ -633,6 +663,12 @@ export interface Snapshot {
   /** Gathered for a scheduled tick only: what the retro gate weighs. */
   readonly retro: RetroSnapshot | null;
   /**
+   * Gathered for a scheduled tick: what the replay step weighs. And for
+   * agent:replay added: every open replay issue alone, which a replay
+   * Ticket's claim weighs, with no capacity or acceptance read.
+   */
+  readonly replay: ReplaySnapshot | null;
+  /**
    * Gathered for an Audit run finishing only, whose Audit is `issue`: each PR
    * its reply names under "Introduced by" that GitHub has, in any order. A
    * number naming no PR isn't here.
@@ -728,6 +764,43 @@ export interface RetroSnapshot {
 
 /** A `fabrik:retro` issue, open or closed, as the adapter read it (src/loop/retro.ts). */
 export type RetroIssueSnapshot = WeeklyIssueSnapshot;
+
+/**
+ * What the replay step weighs on a scheduled tick (src/loop/replayGate.ts,
+ * #156). With no replay issue open, it holds none, and nothing else is read.
+ */
+export interface ReplaySnapshot {
+  /** Every open `fabrik:replay` issue, whoever filed it, in any order. */
+  readonly issues: readonly ReplayIssueSnapshot[];
+  /** What the spare-capacity gate weighs, read only while one of `issues` is the Operator's; else null. */
+  readonly capacity: ReplayCapacitySnapshot | null;
+  /** What accepting a waiting request weighs, read only while a valid one waits (replayReads); else null. */
+  readonly acceptance: ReplayAcceptance | null;
+}
+
+/**
+ * A replay issue as the adapter read it: its body whole, though the Operator
+ * filed it, since its request is the Operator's own text, and the Fabrik
+ * App's comments alone (ADR-0007).
+ */
+export interface ReplayIssueSnapshot extends ReplayIssue {
+  readonly labels: readonly string[];
+}
+
+/** What the spare-capacity gate weighs beside the Kit-owned issues (src/loop/replayGate.ts). */
+export interface ReplayCapacitySnapshot {
+  /** What Dispatch weighs: every open `ready-for-agent` issue, in any order. */
+  readonly tickets: readonly TicketSnapshot[];
+  /** And every open `wayfinder:research` issue, in any order. */
+  readonly researchDecisions: readonly ResearchDecisionSnapshot[];
+  /**
+   * The newest weekly-limit reading on each Subscription, from the store's
+   * Run records of the last two months, every Product repo's and Replay
+   * runs' included; a Subscription none read one for isn't here. Null when
+   * the store couldn't be read.
+   */
+  readonly weeklyLimits: Readonly<Record<string, RateLimitReading>> | null;
+}
 
 /** The Operator's reply that started a Design-session turn, as the adapter found it when the turn finished. */
 export interface StartingComment {
@@ -889,6 +962,50 @@ export type Action =
        * place for every role, so the builders of a run leave it out.
        */
       readonly subscription?: string;
+    }
+  | {
+      /**
+       * Starts a Replay Ticket's two arms (#156), baseline and variant; the
+       * workflow does this by routing to `replay` (src/kit/jobs.ts), not the
+       * adapter. A replay run is never held, so the core's holding leaves
+       * it alone, and never re-run on another Subscription.
+       */
+      readonly kind: "start-replay";
+      /** The replay issue. */
+      readonly issue: number;
+      /** The Ticket it replays, from the issue's plan, with what each arm runs it with. */
+      readonly ticket: PlannedTicket;
+      /** The Subscription both arms run on, which `planFor` gives it as it gives every run. */
+      readonly subscription?: string;
+    }
+  | {
+      /**
+       * Marks a replay issue's Ticket in progress in the run applying it, as
+       * its claim takes agent:replay off (#156): the adapter reads the body
+       * fresh and marks it with this Actions run's id and the time
+       * (withTicketStarted, src/kit/replay.ts), and fails, so the run's
+       * replay jobs never start, when the Ticket isn't waiting to run there,
+       * as when another run claimed it first.
+       */
+      readonly kind: "mark-replay-started";
+      readonly issue: number;
+      readonly ticket: number;
+    }
+  | {
+      /**
+       * Ends a replay Ticket's run that never landed (#156), as the tick
+       * found it in progress past the longest its run can last: the adapter
+       * reads the body fresh and ends run `run` as an Infrastructure failure
+       * with `reason` (withTicketFinished, src/kit/replay.ts), which leaves a
+       * run that landed since as it landed. When that ends the Replay's last
+       * Ticket, it posts `resultsReady`, the one comment that the results are in.
+       */
+      readonly kind: "release-replay-ticket";
+      readonly issue: number;
+      readonly ticket: number;
+      readonly run: number;
+      readonly reason: string;
+      readonly resultsReady: string;
     }
   | {
       /**

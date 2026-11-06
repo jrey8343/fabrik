@@ -10,6 +10,7 @@ import {
 } from "../__fixtures__/retroEvidence.ts";
 import { retroBody } from "../__fixtures__/snapshots.ts";
 import {
+  A_REPLAY,
   aComment,
   aCommit,
   aFollowUpIssue,
@@ -17,6 +18,7 @@ import {
   aLabelAdded,
   aMergedPullRequest,
   anOpenPullRequest,
+  aReplayRunRecord,
   aReview,
   aRunRecord,
   aScoreEntry,
@@ -520,6 +522,29 @@ describe("the evidence bundle", () => {
         lastPassingReview: { ref: "runs/owner/product/2026-11/1001-1-review.json", record: ours },
       });
     });
+
+    // A Replay re-runs a merged Ticket, so its records name that Ticket and PR, but no Replay run let the PR through.
+    it("never holds a Replay's runs on the Ticket, nor takes a Replay's passing Review for the last one that let the PR through", () => {
+      const live = aRunRecord({ runId: 1001, role: "review", verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
+      const replayed = [
+        aReplayRunRecord({ runId: 2000, role: "implement", endedAt: "2026-11-05T00:00:00Z" }),
+        aReplayRunRecord({ runId: 2000, role: "review", verdict: "pass", endedAt: "2026-11-05T01:00:00Z" }),
+      ];
+      const { escapes, streakTable } = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [live, ...replayed],
+          facts: factsOf({
+            pullRequests: [aMergedPullRequest("2026-11-02T00:00:00Z", { number: 50, ticket: 7 })],
+            escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->")],
+          }),
+        }),
+      );
+      expect(escapes[0]?.pullRequests[0]).toMatchObject({
+        records: [{ ref: "runs/owner/product/2026-11/1001-1-review.json", record: live }],
+        lastPassingReview: { ref: "runs/owner/product/2026-11/1001-1-review.json", record: live },
+      });
+      expect(streakTable.map(({ number }) => number)).toEqual([50]);
+    });
   });
 
   describe("the Operator's feedback on agent PRs", () => {
@@ -753,6 +778,20 @@ describe("the evidence bundle", () => {
         }),
       );
       expect(lowScores.map(({ ref, run }) => ({ ref, run }))).toEqual([{ ref: "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json", run: null }]);
+    });
+
+    it("leaves out a Replay arm's score file, however low it scored: live scores are about live work", () => {
+      const arm = aReplayRunRecord({ endedAt: "2026-11-03T00:00:00Z" });
+      const { lowScores } = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [arm],
+          scoreFiles: {
+            "scores/owner/product/2026-11/2000-1-implement-replay-baseline-a1b2c3.json": aScoreFile({ runId: 2000, replay: A_REPLAY, entries: [failing] }),
+            "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json": aScoreFile({ runId: 1000, scoredAt: "2026-11-03T00:05:00Z", entries: [failing] }),
+          },
+        }),
+      );
+      expect(lowScores.map(({ ref }) => ref)).toEqual(["scores/owner/product/2026-11/1000-1-implement-a1b2c3.json"]);
     });
 
     it("holds none when the repo has no score files", () => {

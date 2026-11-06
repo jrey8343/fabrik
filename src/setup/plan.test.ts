@@ -340,6 +340,7 @@ describe("Labels", () => {
     "fabrik:usage-credits",
     "fabrik:audit",
     "fabrik:retro",
+    "fabrik:replay",
     "fabrik:monitor",
     "wayfinder:map",
     "wayfinder:research",
@@ -347,6 +348,7 @@ describe("Labels", () => {
     "wayfinder:grilling",
     "wayfinder:task",
     "agent:research",
+    "agent:replay",
   ];
 
   function createdLabels(state: ProductState): string[] {

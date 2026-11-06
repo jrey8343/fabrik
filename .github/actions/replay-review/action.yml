@@ -1,0 +1,165 @@
+# Runs one arm's Review (#156): the Reviewer on the arm's change, its patch
+# laid as a local commit on a checkout of the replayed Ticket's baseSha
+# (src/kit/replay-patch-main.ts), with the Ticket and its Spec in place of a
+# PR and no Operator comments (src/agent/replay.ts). It has the Review job's
+# shape and credentials (ADR-0002, ADR-0004): only the read-only GITHUB_TOKEN,
+# which prepare-agent reads the Ticket with, and the agent service account,
+# which loads the Claude token of the Subscription the Kit job chose. It runs
+# none of the change's code, and whether or not the arm's gates passed, so
+# every arm gets a Verdict. For a `kit` variant, prepare-agent lays the
+# candidate sha's prompts over the Kit, since the Reviewer's is one of them.
+# A patch the Kit doesn't lay, as one that changes a Trust-root file, or an
+# arm whose Implement run left none, gets no Review, and its account says why.
+#
+# It leaves fabrik-review-replay-<arm> (its Verdict, a failure report and its
+# account of the run) and fabrik-transcript-review-replay-<arm>, whether it
+# passed, failed or was cancelled, for the replay-record job. Its job runs it
+# beside the arm's gates job once the arm's Implement job has ended, with
+# contents and issues read, within the Review timeout, after checking out the
+# Kit alone into kit/:
+#   - uses: ./kit/.github/actions/replay-review
+#     with:
+#       arm: ${{ matrix.arm }}
+#       op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
+#       github-token: ${{ github.token }}
+#       ticket: ${{ needs.kit.outputs.ticket }}
+#       base-sha: ${{ needs.kit.outputs.base-sha }}
+#       replay-arms: ${{ needs.kit.outputs.replay-arms }}
+#       subscription: ${{ needs.kit.outputs.subscription }}
+name: Run a replay arm's Reviewer
+description: Reviews one arm's diff from a replayed Ticket's baseSha against the Ticket, read-only, with only the agent service account.
+
+inputs:
+  arm:
+    description: The arm, baseline or variant (matrix.arm).
+    required: true
+  op-agent-token:
+    description: The agent service account's token (secrets.OP_AGENT_TOKEN), which reads the Claude token.
+    required: true
+  github-token:
+    description: The job's read-only GITHUB_TOKEN, to read the Ticket and its Spec, and a `kit` variant's candidate sha.
+    required: true
+  ticket:
+    description: The replayed Ticket (needs.kit.outputs.ticket).
+    required: true
+  base-sha:
+    description: The Ticket's baseSha, which the arm's patch is laid on (needs.kit.outputs.base-sha).
+    required: true
+  replay-arms:
+    description: Each arm's settings as one line of JSON (needs.kit.outputs.replay-arms). Its model names come from the replay issue's body, so it's read only through `with:` and `env:`.
+    required: true
+  subscription:
+    description: The Subscription whose Claude token the arm runs on, the Fabrik vault item name the Kit job chose (needs.kit.outputs.subscription).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24
+
+    # baseSha alone, one commit and no branch or tag, which the arm's patch is laid on: nothing that came
+    # after it, the merged PR included, is there for the Reviewer to read.
+    - name: Check out the Product repo at the Ticket's baseSha
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        path: product
+        ref: ${{ inputs.base-sha }}
+        fetch-depth: 1
+        persist-credentials: false
+
+    - name: Take the arm's patch
+      continue-on-error: true
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: fabrik-implement-replay-${{ inputs.arm }}
+        path: ${{ runner.temp }}/replay-implement
+
+    # A local commit on baseSha, which the Reviewer reads with `git diff baseSha HEAD`; laid before anything reads the checkout.
+    - name: Lay the arm's patch on baseSha
+      id: patch
+      shell: bash
+      env:
+        FABRIK_BASE_SHA: ${{ inputs.base-sha }}
+      run: node kit/src/kit/replay-patch-main.ts product "$RUNNER_TEMP/replay-implement"
+
+    # The Ticket and its Spec, with no PR; for a `kit` variant, its candidate's prompts and Base skills.
+    - name: Prepare the agent job
+      if: steps.patch.outputs.laid == 'true'
+      uses: ./kit/.github/actions/prepare-agent
+      with:
+        role: review
+        github-token: ${{ inputs.github-token }}
+        issue: ${{ inputs.ticket }}
+        kit-candidate: ${{ fromJSON(inputs.replay-arms)[inputs.arm].candidateSha }}
+
+    - name: Load the Claude token
+      id: op
+      if: steps.patch.outputs.laid == 'true'
+      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+      with:
+        export-env: false
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-agent-token }}
+        CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ inputs.subscription }}/credential
+
+    - name: Run the replay arm's Reviewer
+      id: agent
+      if: steps.patch.outputs.laid == 'true'
+      shell: bash
+      working-directory: product
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
+        FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+        FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
+        FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+        FABRIK_BASE_SHA: ${{ inputs.base-sha }}
+        FABRIK_MODEL: ${{ fromJSON(inputs.replay-arms)[inputs.arm].review.model }}
+        FABRIK_EFFORT: ${{ fromJSON(inputs.replay-arms)[inputs.arm].review.effort }}
+      run: node ../kit/src/agent/run.ts replay-review
+
+    # How the run went, or why it never started, for its Run record: the matrix's legs overwrite each other's job outputs.
+    - name: Note how the arm's Review went
+      if: always()
+      continue-on-error: true
+      shell: bash
+      env:
+        FABRIK_AGENT_STEP: ${{ steps.agent.outcome }}
+        FABRIK_SECRETS_STEP: ${{ steps.op.outcome }}
+        FABRIK_JOB_STATUS: ${{ job.status }}
+        FABRIK_RAN_MODEL: ${{ steps.agent.outputs.model }}
+        FABRIK_RAN_EFFORT: ${{ steps.agent.outputs.effort }}
+        FABRIK_NOT_RUN: ${{ steps.patch.outputs.why }}
+      run: node kit/src/kit/replay-arm-main.ts "$RUNNER_TEMP/fabrik-out/arm-job.json"
+
+    # Its Verdict, or its failure report (a reply with no valid Verdict line included), and the account.
+    - name: Pass the arm's Verdict on
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: fabrik-review-replay-${{ inputs.arm }}
+        path: |
+          ${{ runner.temp }}/fabrik-out/agent-result.json
+          ${{ runner.temp }}/fabrik-out/agent-failure.json
+          ${{ runner.temp }}/fabrik-out/arm-job.json
+        if-no-files-found: ignore
+        retention-days: 7
+
+    - name: Gzip the arm's transcript
+      if: always()
+      continue-on-error: true
+      shell: bash
+      run: if [ -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl" ]; then gzip -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl"; fi
+
+    - name: Keep the arm's transcript
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: fabrik-transcript-review-replay-${{ inputs.arm }}
+        path: ${{ runner.temp }}/fabrik-out/transcript.jsonl.gz
+        if-no-files-found: ignore
+        retention-days: 7

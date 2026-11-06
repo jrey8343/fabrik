@@ -28,6 +28,15 @@
 # Contents-read token and runs no agent and no Product code (ADR-0009's
 # addendum). The Retro job then runs the agent on that evidence, read-only.
 #
+# A replay Ticket's run (#156) starts when the scheduled tick adds agent:replay
+# to a replay issue. The claim job takes the label off and marks the Ticket in
+# progress in this run. Then each arm, baseline and variant, runs as a matrix
+# leg of four jobs: replay implement and replay gates, which hold no write
+# credential, replay review and replay score. None of them is named
+# `Implement`, so Dispatch never counts them. Last, the replay-record job, the
+# replay's own push job (ADR-0009's addendum), writes both arms to fabrik-runs
+# and lands the run on the replay issue. The push job never runs on it.
+#
 # The steps these jobs share are composite actions in .github/actions/, used
 # from the Kit's own checkout at kit/: prepare-agent readies an agent job, and
 # run-loop runs the Loop as the Fabrik App.
@@ -74,9 +83,15 @@ jobs:
       research-timeout-minutes: ${{ steps.route.outputs.research-timeout-minutes }}
       dispatch-timeout-minutes: ${{ steps.route.outputs.dispatch-timeout-minutes }}
       # For a Review or a retry: the agent PR, and the Ticket its branch was cut for.
-      # For a first Implement run: its Ticket, with no PR.
+      # For a first Implement run: its Ticket, with no PR. For a replay: the Ticket it replays, and its merged PR.
       pull-request: ${{ steps.route.outputs.pull-request }}
       ticket: ${{ steps.route.outputs.ticket }}
+      # For a replay (#156): the replay issue, and the Ticket's baseSha, which both arms start from.
+      replay-issue: ${{ steps.route.outputs.replay-issue }}
+      base-sha: ${{ steps.route.outputs.base-sha }}
+      # For a replay: each arm's settings, as one line of JSON. Its model names come from the replay
+      # issue's body, so a job reads it only through an action's inputs, never in a `run:` script.
+      replay-arms: ${{ steps.route.outputs.replay-arms }}
       # For a retry: the agent branch it builds on, which the Implement job checks out.
       branch: ${{ steps.route.outputs.branch }}
       # For a Request-changes run: the Operator's review, its input. It runs as a retry otherwise does.
@@ -592,16 +607,28 @@ jobs:
   # running job holds the slot), and agent:design off an issue as its Design
   # session's first turn, or a prototype turn, starts (the running turn, then
   # its round, hold the slot), marking a prototype turn's request started on
-  # the request's own comment (src/loop/design.ts). It applies the same plan
+  # the request's own comment (src/loop/design.ts), and agent:replay off a
+  # replay issue as its next Ticket's run starts, marking that Ticket in
+  # progress in this run (src/loop/replayRun.ts). It applies the same plan
   # the Kit job routed on; the run itself is the agent job's. Like the push
   # job, it never touches Product code.
   implement-claim:
     name: Claim the work
     needs: kit
-    if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')
+    if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || needs.kit.outputs.route == 'replay' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # One replay claim at a time across the repo, since one replay Ticket runs at a time across
+    # every replay issue: a claim waiting here reads the one before it. Every other claim runs at once.
+    concurrency:
+      group: ${{ needs.kit.outputs.route == 'replay' && 'fabrik-replay-claim' || format('fabrik-claim-{0}', github.run_id) }}
+      cancel-in-progress: false
+      queue: max
     permissions: {}
+    outputs:
+      # For a replay: the Ticket the claim marked in progress in this run, empty when it marked
+      # none, as when another run claimed it first. The replay jobs run only on that Ticket.
+      replay-ticket: ${{ steps.claim.outputs.replay-ticket }}
     steps:
       - name: Check out the Kit (never the Product repo)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -612,6 +639,7 @@ jobs:
           persist-credentials: false
 
       - name: Take the trigger label off as the run starts
+        id: claim
         uses: ./kit/.github/actions/run-loop
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
@@ -1352,6 +1380,202 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # A replay Ticket's Implement run (#156), one matrix leg per arm: the
+  # baseline, as the Ticket was built then, and the variant, with the one
+  # variable changed. It has the Implement job's shape and credentials
+  # (ADR-0002, ADR-0004): contents and issues read, no GitHub write
+  # credential, and only the implement service account, which its action
+  # loads the Claude token and the test secrets through. Its action checks out
+  # the Ticket's baseSha and passes the arm's commits out as a patch, never
+  # pushed. Never named `Implement`, so Dispatch's count of Implement runs in
+  # flight passes both arms by (IMPLEMENT_JOB_NAME in src/github/snapshot.ts).
+  # It runs only on the Ticket this run's claim marked in progress.
+  replay-implement:
+    name: "Replay implement (${{ matrix.arm }})"
+    needs: [kit, implement-claim]
+    if: needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket
+    runs-on: ubuntu-latest
+    # The Implement role's own timeout: a replay arm captures no UI evidence after it.
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
+    # Both arms run, whatever the other comes to: the replay-record job lands each.
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [baseline, variant]
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # It leaves its result, patch and account of the run, and its transcript, as artifacts carrying the arm.
+      - name: Run the arm's Implementer
+        uses: ./kit/.github/actions/replay-implement
+        with:
+          arm: ${{ matrix.arm }}
+          op-implement-token: ${{ secrets.OP_IMPLEMENT_TOKEN }}
+          github-token: ${{ github.token }}
+          ticket: ${{ needs.kit.outputs.ticket }}
+          base-sha: ${{ needs.kit.outputs.base-sha }}
+          replay-arms: ${{ needs.kit.outputs.replay-arms }}
+          subscription: ${{ needs.kit.outputs.subscription }}
+
+  # A replay arm's gates (#156): the Sandbox's setup, build and tests from Kit
+  # config at the Ticket's baseSha on the arm's patch, then the merged PR's
+  # hidden tests. It runs the arm's code, so it holds no write credential
+  # (ADR-0002): contents and pull requests read, and only the implement
+  # service account, for the test secrets, with no Claude token. It runs once
+  # the arm's Implement job has ended, whatever it came to: its action runs
+  # nothing for an arm that left no patch it can lay, and says why.
+  replay-gates:
+    name: "Replay gates (${{ matrix.arm }})"
+    needs: [kit, implement-claim, replay-implement]
+    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket }}
+    runs-on: ubuntu-latest
+    # Kit config has no gates timeout; they run what an Implement run's checks would.
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [baseline, variant]
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Run the arm's gates
+        uses: ./kit/.github/actions/replay-gates
+        with:
+          arm: ${{ matrix.arm }}
+          op-implement-token: ${{ secrets.OP_IMPLEMENT_TOKEN }}
+          github-token: ${{ github.token }}
+          ticket: ${{ needs.kit.outputs.ticket }}
+          pull-request: ${{ needs.kit.outputs.pull-request }}
+          base-sha: ${{ needs.kit.outputs.base-sha }}
+
+  # A replay arm's Review (#156): the Reviewer on the arm's diff from the
+  # Ticket's baseSha, against the Ticket and its Spec, with no PR. It has the
+  # Review job's shape and credentials: read-only, no GitHub write
+  # credential, and only the agent service account. It runs whether or not
+  # the arm's gates passed, so every arm gets a Verdict.
+  replay-review:
+    name: "Replay review (${{ matrix.arm }})"
+    needs: [kit, implement-claim, replay-implement]
+    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [baseline, variant]
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Run the arm's Reviewer
+        uses: ./kit/.github/actions/replay-review
+        with:
+          arm: ${{ matrix.arm }}
+          op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
+          github-token: ${{ github.token }}
+          ticket: ${{ needs.kit.outputs.ticket }}
+          base-sha: ${{ needs.kit.outputs.base-sha }}
+          replay-arms: ${{ needs.kit.outputs.replay-arms }}
+          subscription: ${{ needs.kit.outputs.subscription }}
+
+  # A replay arm's judge (#156): the scoring plan, which picks every replay
+  # Implement run it doesn't skip, then the existing judge on the arm's
+  # transcript, at the pinned release's rubrics, from this Kit checkout. Like
+  # the judge job, it holds no write credential: it reads the Ticket, and
+  # loads only the Claude token, through the agent service account. Never
+  # named like the Implement job.
+  replay-score:
+    name: "Replay score (${{ matrix.arm }})"
+    needs: [kit, implement-claim, replay-implement]
+    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket }}
+    runs-on: ubuntu-latest
+    # The Kit's, not Kit config's: JUDGE_TIMEOUT_MINUTES in src/kit/runStore.ts (a test holds the two together).
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [baseline, variant]
+    permissions:
+      # Only to read the Ticket the scored run built.
+      issues: read
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Score the arm's Implement run
+        uses: ./kit/.github/actions/replay-score
+        with:
+          arm: ${{ matrix.arm }}
+          kit-outputs: ${{ toJSON(needs.kit.outputs) }}
+          op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
+          github-token: ${{ github.token }}
+
+  # The replay's own push job (ADR-0009's addendum), once for both arms: it
+  # checks out only the Kit, runs no agent and no Product code, and through
+  # the push service account mints a store token, for fabrik-runs alone with
+  # Contents write, and the Fabrik App's token, for the replay issue. It
+  # writes each arm's patch, Run records, transcripts and judge's record and
+  # score file to the store, each create-only, then lands the run on the
+  # replay issue through the Loop. always(), so it runs once both arms' jobs
+  # have ended, whatever they came to and even when the run was cancelled: an
+  # arm that left no account of its run lands as an Infrastructure failure. A
+  # run this job can't land at all, the scheduled tick releases once its
+  # Ticket is in progress past the longest a run can last
+  # (src/loop/replayGate.ts). continue-on-error, so it never fails the run.
+  replay-record:
+    name: Replay record
+    needs: [kit, implement-claim, replay-implement, replay-gates, replay-review, replay-score]
+    if: always() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Write the replay's records and land the run
+        uses: ./kit/.github/actions/replay-record
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          kit-outputs: ${{ toJSON(needs.kit.outputs) }}
+
   # The push job, after whichever agent job the Kit job routed to, or straight
   # after the Kit job when it routed here. What it applies, src/main.ts decides
   # from how those jobs ended (src/kit/pushJob.ts): the agent job's result (for
@@ -1360,11 +1584,13 @@ jobs:
   # for a Research run, once its branch changes only its findings file), a
   # Review's red checks or Verdict, or, when the agent job failed or was
   # cancelled (its timeout-minutes included), the failure notice. always(), so
-  # it still runs after a cancelled agent job.
+  # it still runs after a cancelled agent job. Never on a replay, whose
+  # replay-record job is its push job, so the judge, score-record, Dispatch
+  # and Design queue jobs, which follow this one, skip a replay too.
   push:
     name: Push
     needs: [kit, triage, design, prototype, implement, review-checks, review, audit, retro-evidence, retro, research]
-    if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none'
+    if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions: {}

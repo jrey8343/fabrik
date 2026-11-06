@@ -2,8 +2,9 @@
 // proposals against the evidence it was given and fills in the pending Retro.
 // The Kit renders every word of layout; the Retro wrote only its proposals'
 // text. The Retro stays silent: no state label, no assignee, no mention.
+import { KIT_REPO } from "../kit/caller.ts";
 import { type KitConfig, picksIn } from "../kit/config.ts";
-import { RUN_STORE_REPO } from "../kit/runStore.ts";
+import { storeFileUrl } from "../kit/runStore.ts";
 import { newIssueUrl } from "./followUps.ts";
 import { READY_FOR_HUMAN } from "./labels.ts";
 import { FROM_AUDIT_LINE, FROM_PULL_REQUEST_LINE, FROM_RETRO_LINE, fencedRunsOf, fromRetroLine, retroMarker, retroMarksIn } from "./markers.ts";
@@ -15,9 +16,6 @@ import type { Action, IssueContext, LoopEvent, Plan, RetroEvidence } from "./typ
 import { failWeekly } from "./weeklyRuns.ts";
 
 type RetroFinished = Extract<LoopEvent, { kind: "retro-run-finished" }>;
-
-/** The Kit's own repo, as owner/name, where a proposal to change the Kit is filed. A Kit constant, like the run store. */
-export const KIT_REPO = "jrey8343/fabrik";
 
 const KIT_REPO_URL = `https://github.com/${KIT_REPO}`;
 
@@ -353,10 +351,5 @@ function evidenceLink(ref: string, { evidence, repoUrl }: RetroFinished): string
   const elsewhere = /^([^\s/#]+\/[^\s/#]+)#([1-9][0-9]*)$/.exec(ref);
   if (elsewhere !== null) return `[${ref}](https://github.com/${elsewhere[1]}/issues/${elsewhere[2]})`;
   const transcript = evidence.transcripts[ref];
-  return `[\`${ref}\`](${storeFile(ref)})${transcript === undefined ? "" : `, with its [transcript](${storeFile(transcript)})`}`;
-}
-
-/** A file in the fabrik-runs store, on its default branch. */
-function storeFile(path: string): string {
-  return `https://github.com/${RUN_STORE_REPO}/blob/HEAD/${path.split("/").map(encodeURIComponent).join("/")}`;
+  return `[\`${ref}\`](${storeFileUrl(ref)})${transcript === undefined ? "" : `, with its [transcript](${storeFileUrl(transcript)})`}`;
 }

@@ -1,4 +1,5 @@
-// Entry point for the Kit's push job, its claim job and the Dispatch job:
+// Entry point for the Kit's push job, its claim job, the Dispatch job and a
+// replay's replay-record job:
 // event + snapshot + config -> plan -> applied.
 // Run with `node src/main.ts` (Node 24 strips the types).
 import { appendFile, readFile } from "node:fs/promises";
@@ -8,7 +9,7 @@ import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult } from "./agen
 import { type AgentBranchGit, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { prototypeBranchFor } from "./loop/designOutput.ts";
-import { applyPlan, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
+import { applyPlan, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { GitHub, type Repo } from "./github/client.ts";
 import {
   agentFailureEventFrom,
@@ -25,6 +26,9 @@ import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
+import { readReplayRunEnded } from "./kit/replayRecord.ts";
+import { readStoreReplayGates, readStoreRunRecords, readStoreScoreFiles } from "./kit/storeCheckout.ts";
+import type { ReplayStore } from "./github/replaySlice.ts";
 import { planFor } from "./loop/rules.ts";
 import type { Action, KitConfig, LoopEvent, Plan } from "./loop/types.ts";
 
@@ -86,6 +90,12 @@ function describeAction(action: Action): string {
       return `- close #${action.issue} as superseded`;
     case "start-agent-run":
       return `- a ${action.role} run on #${action.issue}${action.pullRequest === undefined ? "" : `, ${action.requestChanges === undefined ? "retrying" : "with the Operator's requested changes on"} #${action.pullRequest}`} (${action.model}), which the Kit job routes to its agent job`;
+    case "start-replay":
+      return `- replay #${action.ticket.ticket} of replay #${action.issue}, both arms, which the Kit job routes to its replay jobs`;
+    case "mark-replay-started":
+      return `- mark #${action.ticket} in progress on replay #${action.issue} in this run`;
+    case "release-replay-ticket":
+      return `- end run ${action.run} of #${action.ticket} on replay #${action.issue}, which never landed, as an Infrastructure failure`;
     case "hold-agent-run":
       return `- hold the ${action.role} run on #${action.issue}${action.until === null ? "" : ` until ${action.until}`}, starting no agent job`;
     case "drop-held-run":
@@ -123,11 +133,14 @@ type EventSource = { event: LoopEvent | null; source: string; branch: AgentBranc
 
 /**
  * The Loop event this run applies: in the push job (FABRIK_NEEDS), what the
- * jobs before it left (src/kit/pushJob.ts); a Dispatch check in the Dispatch
- * job (FABRIK_DISPATCH_CHECK); a Design queue check in the Design queue job
- * (FABRIK_DESIGN_QUEUE_CHECK); otherwise the Actions event itself.
+ * jobs before it left (src/kit/pushJob.ts); in a replay's replay-record job
+ * (FABRIK_REPLAY_RUN_ENDED), how its run ended; a Dispatch check in the
+ * Dispatch job (FABRIK_DISPATCH_CHECK); a Design queue check in the Design
+ * queue job (FABRIK_DESIGN_QUEUE_CHECK); otherwise the Actions event itself.
  */
-async function loopEvent(repo: Repo): Promise<EventSource> {
+async function loopEvent(repo: Repo, config: KitConfig): Promise<EventSource> {
+  const replayEnded = process.env["FABRIK_REPLAY_RUN_ENDED"];
+  if (replayEnded !== undefined && replayEnded !== "") return replayRunEvent(replayEnded, config);
   if (process.env["FABRIK_DISPATCH_CHECK"] === "true") {
     return { event: { kind: "dispatch-check" }, source: "a Dispatch check", branch: null };
   }
@@ -262,6 +275,36 @@ async function failedRunEvent(
   return { event, source: `the failed ${input.role} run on #${input.issue}` };
 }
 
+/**
+ * The replay-record job's event (#156): how its replay Ticket's run ended, from
+ * the file its record step left at `path` (src/kit/replay-record-main.ts), and
+ * what the store holds of this repo's Replays, from the checkout of the store
+ * it made once its files were written (FABRIK_STORE_DIR). Without that
+ * checkout the results can't be read, and the body keeps those it shows.
+ */
+async function replayRunEvent(path: string, config: KitConfig): Promise<EventSource> {
+  const ended = readReplayRunEnded(await readFile(path, "utf8"));
+  // The claim marked the Ticket in progress in this workflow run, which the record step read its end in.
+  if (ended.run !== Number(required("GITHUB_RUN_ID"))) throw new Error(`${path} is run ${ended.run}'s, not this run's`);
+  const storeDir = process.env["FABRIK_STORE_DIR"] ?? "";
+  const thisRepo = required("GITHUB_REPOSITORY");
+  const outcomes =
+    storeDir === ""
+      ? null
+      : {
+          // Ticket numbers repeat across Product repos, so only this repo's count.
+          records: Object.values(await readStoreRunRecords(storeDir, config.subscriptions)).filter((record) => record.repo === thisRepo),
+          scoreFiles: Object.values(await readStoreScoreFiles(storeDir)).filter((file) => file.repo === thisRepo),
+          gates: await readStoreReplayGates(storeDir),
+        };
+  const { resetsAt, ...run } = ended;
+  return {
+    event: { kind: "replay-run-finished", ...run, ...(resetsAt === null ? {} : { resetsAt }), runUrl: thisRunUrl(), outcomes },
+    source: `the replay of #${ended.ticket} on replay #${ended.issue}`,
+    branch: null,
+  };
+}
+
 /** The Product repo's web address, which a pass's Follow-ups and an Audit's candidates open issues on, and a Retro's evidence links to. */
 function thisRepoUrl(): string {
   return `${required("GITHUB_SERVER_URL")}/${required("GITHUB_REPOSITORY")}`;
@@ -295,6 +338,17 @@ async function finishedReviewEvent(
   return {
     event,
     source: result === null ? `the red required checks on #${input.pullRequest}` : `the Review of #${input.pullRequest}`,
+  };
+}
+
+/**
+ * The fabrik-runs store's checkout at `dir`, read as the Weekly summary reads
+ * it, a schema 1 record as on the first listed Subscription; with no
+ * checkout, as when the Fabrik App isn't on the store, it can't be read.
+ */
+function storeCheckoutAt(dir: string | undefined, config: KitConfig): ReplayStore {
+  return {
+    records: async () => (dir === undefined || dir === "" ? null : Object.values(await readStoreRunRecords(dir, config.subscriptions))),
   };
 }
 
@@ -339,7 +393,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { event, source, branch } = await loopEvent(repo);
+  const { event, source, branch } = await loopEvent(repo, config);
   if (event === null) {
     await report(`Nothing to do: the Loop doesn't act on ${source}`);
     return;
@@ -357,11 +411,19 @@ async function main(): Promise<void> {
   // that reads only the store's metadata, so the retro gate weighs whether the store is private.
   const storeToken = process.env["FABRIK_STORE_METADATA_TOKEN"];
   const store = storeToken === undefined || storeToken === "" ? null : new GitHub(storeToken, process.env["GITHUB_API_URL"]);
-  const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store);
+  // The scheduled tick reads the store's Run records from its checkout, FABRIK_STORE_DIR, as the Weekly
+  // summary does, and only while a replay issue the Operator filed is open (gatherReplaySlice). The tick
+  // job checks the store out only while a replay issue is open (.github/actions/replay-store).
+  const replayStore = storeCheckoutAt(process.env["FABRIK_STORE_DIR"], config);
+  const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
   const plan = planFor(event, snapshot, config);
-  const { preview } = await applyPlan(github, repo, plan, branch);
+  // A replay Ticket's claim marks it in progress in this run, and fails when another run claimed it first.
+  const { preview } = await applyPlan(github, repo, plan, branch, { id: Number(required("GITHUB_RUN_ID")), at: new Date().toISOString() });
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
+  // The replay jobs run only on the Ticket this run's claim marked in progress, once it has.
+  const claimed = replayClaimIn(plan);
+  if (claimed !== null) await appendFile(required("GITHUB_OUTPUT"), `replay-ticket=${claimed}\n`);
   // The Design queue job runs the check likewise, once this plan has landed.
   if (wantsDesignQueueCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "design-queue=true\n");
   // The push job's preview step polls it and links it, once this plan has pushed (src/kit/previewLink.ts): a UI

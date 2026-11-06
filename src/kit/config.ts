@@ -714,10 +714,12 @@ function readStepUp(role: Reader, defaults: KitConfig["roles"]["stepUp"]): KitCo
 }
 
 /**
- * Fable can bill metered usage, so no AFK role may run it, even through an
- * override. `best` is refused too, because the CLI can resolve it to Fable.
+ * Why an AFK role may not run `model`, or null when it may. Fable can bill
+ * metered usage, so no AFK role may run it, even through an override. `best`
+ * is refused too, because the CLI can resolve it to Fable. A Replay's
+ * variable model is held to it too (src/kit/replayRequest.ts).
  */
-function refuseFable(model: string): string | null {
+export function refuseFable(model: string): string | null {
   const name = model.trim().toLowerCase();
   if (name.includes("fable") || name === "best") {
     return "Fable can bill metered usage, so the Kit never runs it in an AFK role";
@@ -728,7 +730,8 @@ function refuseFable(model: string): string | null {
 /** The Claude Code CLI's --effort levels. */
 const EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 
-function checkEffort(effort: string): string | null {
+/** Why `effort` isn't one of the CLI's --effort levels, or null when it is. A Replay's variable effort is held to it too. */
+export function checkEffort(effort: string): string | null {
   return EFFORTS.includes(effort) ? null : `effort must be one of ${EFFORTS.join(", ")}`;
 }
 

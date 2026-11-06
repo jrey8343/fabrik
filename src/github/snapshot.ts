@@ -9,6 +9,8 @@ import {
   type KitConfigSources,
   SKILLS_SOURCES_LOCK_PATH,
 } from "../kit/config.ts";
+import { isOperatorsReplay } from "../kit/replay.ts";
+import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
@@ -20,6 +22,8 @@ import {
   MAP_LABEL,
   NEEDS_DESIGN,
   READY_FOR_AGENT,
+  REPLAY_LABEL,
+  REPLAY_TRIGGER_LABEL,
   RESEARCH_DECISION_LABEL,
   RETRO_LABEL,
   WEEKLY_LIMIT_LABEL,
@@ -31,12 +35,15 @@ import type {
   AuditSnapshot,
   DesignQueueIssue,
   DesignQueueSnapshot,
+  DispatchSnapshot,
   HeldTargetSnapshot,
   KitIssueSnapshot,
   LoopEvent,
   NamedPullRequestSnapshot,
   ParentIssueSnapshot,
   PullRequestSnapshot,
+  ReplayIssueSnapshot,
+  ReplaySnapshot,
   ResearchDecisionSnapshot,
   RetroSnapshot,
   Snapshot,
@@ -46,6 +53,7 @@ import type {
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
 import { type GitHub, pagesOf, type Repo } from "./client.ts";
+import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
 import {
   countEmptyDiffs,
   designSessionOf,
@@ -347,7 +355,12 @@ export const PROTOTYPE_JOB_NAME = "Prototype turn";
  * Dispatch check also reads workflow runs, through `actions`: the Fabrik App
  * has no Actions permission (ADR-0002), so that is the Dispatch job's own
  * read-only GITHUB_TOKEN. A scheduled tick also reads whether the fabrik-runs
- * store is private, through `store` (see gatherRetroSlice).
+ * store is private, through `store` (see gatherRetroSlice), and the store's
+ * Run records through `replayStore`, only while a replay issue the Operator
+ * filed is open (see gatherReplaySlice). Only src/main.ts, which the tick
+ * runs, passes `replayStore`; the Kit job, which never routes a tick, doesn't.
+ * agent:replay added reads every open replay issue, which a replay Ticket's
+ * claim weighs, and nothing of the store.
  */
 export async function gatherSnapshot(
   github: GitHub,
@@ -357,6 +370,7 @@ export async function gatherSnapshot(
   appLogin: string | null,
   actions: GitHub | null = null,
   store: Pick<GitHub, "rest"> | null = null,
+  replayStore: ReplayStore | null = null,
 ): Promise<Snapshot> {
   const [{ owner, kitIssues }, part, startingComment, audit, namedPullRequests] = await Promise.all([
     gatherKitIssues(github, repo, appLogin),
@@ -375,9 +389,16 @@ export async function gatherSnapshot(
   // By default the Operator owns the Product repos they run Fabrik in.
   const theOperator = part?.operator ?? operator ?? owner;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
+  const replay =
+    event.kind === "scheduled-tick" && replayStore !== null
+      ? await gatherReplaySlice(github, repo, event.now, kitIssues, theOperator, appLogin, replayStore)
+      : // A replay Ticket's claim weighs every open replay issue, since one replay Ticket runs at a time across them all.
+        event.kind === "label-added" && event.label === REPLAY_TRIGGER_LABEL
+        ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
+        : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, namedPullRequests, held, openMaps }
-    : { ...part, spec, kitIssues, startingComment, audit, retro, namedPullRequests, held, openMaps };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps }
+    : { ...part, spec, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps };
 }
 
 /**
@@ -763,15 +784,18 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "namedPullRequests" | "held" | "openMaps">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "replay" | "namedPullRequests" | "held" | "openMaps">;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body author { login __typename } }";
+
+/** How many open Kit-owned issues every snapshot reads, oldest first: an issue past them isn't read. */
+const KIT_ISSUES_PAGE = 20;
 
 const KIT_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $labels: [String!]!) {
     repository(owner: $owner, name: $name) {
       owner { login }
-      issues(states: OPEN, labels: $labels, first: 20, orderBy: { field: CREATED_AT, direction: ASC }) {
+      issues(states: OPEN, labels: $labels, first: ${KIT_ISSUES_PAGE}, orderBy: { field: CREATED_AT, direction: ASC }) {
         nodes {
           number
           body
@@ -862,6 +886,78 @@ async function earlierComments(
     pageInfo = comments.pageInfo;
   }
   return earlier.flat();
+}
+
+// Every open replay issue, oldest first, with its body whole and the comments
+// the App's are read from, as the Kit-owned issues' are.
+const REPLAY_ISSUES_QUERY = `
+  query ($owner: String!, $name: String!, $replay: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, labels: [$replay], first: 50, orderBy: { field: CREATED_AT, direction: ASC }) {
+        nodes {
+          number
+          body
+          author { login __typename }
+          labels(first: 100) { nodes { name } }
+          comments(last: 100) { ${KIT_ISSUE_COMMENTS} }
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * What the replay step weighs on the scheduled tick at `now` (#156). With
+ * no replay issue among the open Kit-owned
+ * issues, it reads nothing new, unless that page is full, since one may be
+ * past it. Else it reads every open replay issue: its body whole, though the
+ * Operator files it, since the request is the Operator's own text, which the
+ * Kit-owned issues leave out (ADR-0007), and the App's comments alone. Only
+ * while one is the Operator's does it read what the spare-capacity gate
+ * weighs, the Tickets and research Decisions Dispatch weighs and the store's
+ * newest weekly-limit reading on each Subscription, and, while a valid
+ * request waits, what accepting it weighs (src/github/replaySlice.ts).
+ */
+async function gatherReplaySlice(
+  github: GitHub,
+  repo: Repo,
+  now: string,
+  kitIssues: readonly KitIssueSnapshot[],
+  operator: string,
+  appLogin: string | null,
+  store: ReplayStore,
+): Promise<ReplaySnapshot> {
+  const maybeOpen = kitIssues.length >= KIT_ISSUES_PAGE || kitIssues.some((issue) => issue.labels.includes(REPLAY_LABEL));
+  if (!maybeOpen) return { issues: [], capacity: null, acceptance: null };
+  const issues = await gatherReplayIssues(github, repo, appLogin);
+  if (!issues.some((issue) => isOperatorsReplay(issue, operator))) return { issues, capacity: null, acceptance: null };
+  const [dispatch, records] = await Promise.all([gatherDispatchCandidates(github, repo, appLogin), store.records()]);
+  const acceptance = await gatherReplayAcceptance(github, repo, now, { operator, issues }, records);
+  return { issues, capacity: { ...dispatch, weeklyLimits: records === null ? null : newestWeeklyLimits(records, now) }, acceptance };
+}
+
+interface ReplayIssuesQueryResult {
+  repository: {
+    issues: { nodes: { number: number; body: string; author: Actor; labels: { nodes: { name: string }[] }; comments: KitIssueComments }[] };
+  };
+}
+
+/** Every open replay issue, with who filed it, its body whole, its labels and the App's comments, every one. */
+async function gatherReplayIssues(github: GitHub, repo: Repo, appLogin: string | null): Promise<ReplayIssueSnapshot[]> {
+  const data = await github.graphql<ReplayIssuesQueryResult>(REPLAY_ISSUES_QUERY, { owner: repo.owner, name: repo.name, replay: REPLAY_LABEL });
+  return Promise.all(
+    data.repository.issues.nodes.map(async (issue): Promise<ReplayIssueSnapshot> => {
+      const comments = [...(await earlierComments(github, repo, issue.number, issue.comments)), ...issue.comments.nodes];
+      return {
+        number: issue.number,
+        open: true,
+        author: loginOf(issue.author),
+        body: issue.body,
+        comments: comments.filter((comment) => byAppOf(comment.author, appLogin)).map((comment) => comment.body),
+        labels: issue.labels.nodes.map((label) => label.name),
+      };
+    }),
+  );
 }
 
 interface HeldTargetNode {
@@ -1067,6 +1163,45 @@ async function gatherDispatch(
   operator: string | null,
   appLogin: string | null,
 ): Promise<EventPart> {
+  const [{ tickets, page }, runs, researchDecisions] = await Promise.all([
+    gatherDispatchTickets(github, repo),
+    countDispatchedRuns(actions, repo),
+    gatherResearchDecisions(github, repo, appLogin),
+  ]);
+  const openAgentDraftPullRequests = page.repository.pullRequests.nodes.filter(
+    (pr) => pr.isDraft && isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }),
+  ).length;
+  return {
+    issue: null,
+    pullRequest: null,
+    dispatch: {
+      tickets,
+      openAgentDraftPullRequests,
+      implementRunsInProgress: runs.implement,
+      researchDecisions,
+      researchRunsInProgress: runs.research,
+    },
+    designQueue: null,
+    operator: operator ?? page.repository.owner.login,
+  };
+}
+
+/**
+ * What a Dispatch check weighs releasing, slots aside: every open
+ * `ready-for-agent` issue and every open `wayfinder:research` issue. The
+ * replay step lets them go first (src/loop/replayGate.ts).
+ */
+export async function gatherDispatchCandidates(
+  github: GitHub,
+  repo: Repo,
+  appLogin: string | null,
+): Promise<Pick<DispatchSnapshot, "tickets" | "researchDecisions">> {
+  const [{ tickets }, researchDecisions] = await Promise.all([gatherDispatchTickets(github, repo), gatherResearchDecisions(github, repo, appLogin)]);
+  return { tickets, researchDecisions };
+}
+
+/** Every open `ready-for-agent` issue, and the query's last page, which also holds the repo's open PRs and its owner. */
+async function gatherDispatchTickets(github: GitHub, repo: Repo): Promise<{ tickets: TicketSnapshot[]; page: DispatchQueryResult }> {
   const tickets: TicketSnapshot[] = [];
   let after: string | null = null;
   let page: DispatchQueryResult;
@@ -1094,28 +1229,7 @@ async function gatherDispatch(
     }
     after = page.repository.issues.pageInfo.hasNextPage ? page.repository.issues.pageInfo.endCursor : null;
   } while (after !== null);
-
-  const openAgentDraftPullRequests = page.repository.pullRequests.nodes.filter(
-    (pr) => pr.isDraft && isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }),
-  ).length;
-
-  const [runs, researchDecisions] = await Promise.all([
-    countDispatchedRuns(actions, repo),
-    gatherResearchDecisions(github, repo, appLogin),
-  ]);
-  return {
-    issue: null,
-    pullRequest: null,
-    dispatch: {
-      tickets,
-      openAgentDraftPullRequests,
-      implementRunsInProgress: runs.implement,
-      researchDecisions,
-      researchRunsInProgress: runs.research,
-    },
-    designQueue: null,
-    operator: operator ?? page.repository.owner.login,
-  };
+  return { tickets, page };
 }
 
 /**

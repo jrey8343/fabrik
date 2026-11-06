@@ -15,6 +15,7 @@ import {
   NEEDS_TRIAGE,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
+  REPLAY_TRIGGER_LABEL,
   RESEARCH_LABEL,
   REVIEW_LABEL,
   WONTFIX,
@@ -34,6 +35,8 @@ import { startAgentRun } from "./runs.ts";
 import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
+import { replayGate } from "./replayGate.ts";
+import { landReplayRun, startReplay } from "./replayRun.ts";
 import { retroGate } from "./retroGate.ts";
 import { landRetro } from "./retroLanding.ts";
 import { WEEKLY_RUNS, weeklyRoleOf } from "./weeklyRuns.ts";
@@ -76,7 +79,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
         return weekly === null ? intake(event.issue, context.issue) : WEEKLY_RUNS[weekly].start(context, config);
       });
     case "label-added":
-      return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, snapshot.pullRequest, config));
+      return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, snapshot, config));
     case "issue-comment-created":
       // A needs-design issue is in a Design session; a needs-info one waits on its author.
       return withIssue(snapshot, (context) =>
@@ -137,6 +140,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withIssue(snapshot, (context) => landRetro(event, context, config));
     case "research-run-finished":
       return withIssue(snapshot, (context) => landResearch(event, context));
+    case "replay-run-finished":
+      return withIssue(snapshot, (context) => landReplayRun(event, context, config));
     case "prototype-run-finished":
       return withIssue(snapshot, (context) => applyPrototypeTurn(event, context, snapshot.startingComment, config.preview));
     case "pull-request-changes-requested":
@@ -172,7 +177,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // runs held until then, and opens the week's pending Audit and pending
       // Retro when each is due. It also catches a Design session slot freed by
       // an event the Loop doesn't watch, such as needs-design coming off by hand.
-      return thenCheckDesignQueue(scheduledTickWith([auditGate, retroGate], event.now, snapshot, config));
+      // It also takes the Replays' next step.
+      return thenCheckDesignQueue(scheduledTickWith([auditGate, retroGate, replayGate], event.now, snapshot, config));
   }
 }
 
@@ -252,13 +258,14 @@ function labelAdded(
   issueNumber: number,
   label: string,
   context: IssueContext,
-  pullRequest: PullRequestSnapshot | null,
+  { pullRequest, replay }: Pick<Snapshot, "pullRequest" | "replay">,
   config: KitConfig,
 ): Plan {
   if (label === NEEDS_DESIGN) return startSession(issueNumber, context);
   if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config);
   if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
   if (label === RESEARCH_LABEL) return startResearcher(issueNumber, context, config);
+  if (label === REPLAY_TRIGGER_LABEL) return startReplay(issueNumber, context, replay?.issues ?? null);
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }

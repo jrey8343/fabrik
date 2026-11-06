@@ -1,0 +1,124 @@
+# Runs one arm's gates (#156) on a fresh checkout of the replayed Ticket's
+# baseSha with the arm's patch laid on it (src/kit/replay-patch-main.ts): the
+# Sandbox's setup, build and tests from Kit config at baseSha, then the merged
+# PR's hidden tests, its own test files laid over the tree from the commit it
+# merged as, and the tests again (src/kit/replayGates.ts). It holds no write
+# credential (ADR-0002): only the read-only GITHUB_TOKEN, which reads the
+# merged PR before any Product code runs, and the implement service account,
+# which loads the test secrets Kit config at baseSha declares and no Claude
+# token, since no agent runs here. A patch the Kit doesn't lay, or an arm whose
+# Implement run left none, runs nothing. Kit config with no test command
+# reports "no test command" for the gates and the hidden tests.
+#
+# It leaves the arm's gates as fabrik-gates-replay-<arm>, for the
+# replay-record job. Its job runs it beside the arm's Review job once the arm's
+# Implement job has ended, with contents and pull-requests read, after
+# checking out the Kit alone into kit/:
+#   - uses: ./kit/.github/actions/replay-gates
+#     with:
+#       arm: ${{ matrix.arm }}
+#       op-implement-token: ${{ secrets.OP_IMPLEMENT_TOKEN }}
+#       github-token: ${{ github.token }}
+#       ticket: ${{ needs.kit.outputs.ticket }}
+#       pull-request: ${{ needs.kit.outputs.pull-request }}
+#       base-sha: ${{ needs.kit.outputs.base-sha }}
+name: Run a replay arm's gates
+description: Runs the Sandbox's setup, build and tests, then the merged PR's hidden tests, on one arm's diff, with no write credential and no Claude token.
+
+inputs:
+  arm:
+    description: The arm, baseline or variant (matrix.arm).
+    required: true
+  op-implement-token:
+    description: The implement service account's token (secrets.OP_IMPLEMENT_TOKEN), which reads the repo's test secrets.
+    required: true
+  github-token:
+    description: The job's read-only GITHUB_TOKEN, to read the merged PR's files and the commit it merged as.
+    required: true
+  ticket:
+    description: The replayed Ticket (needs.kit.outputs.ticket).
+    required: true
+  pull-request:
+    description: The Ticket's merged PR, whose test files are the hidden tests (needs.kit.outputs.pull-request).
+    required: true
+  base-sha:
+    description: The Ticket's baseSha, which the arm's patch is laid on (needs.kit.outputs.base-sha).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24
+
+    # With its history, which holds the commit the merged PR merged as, where the hidden tests come from.
+    - name: Check out the Product repo at the Ticket's baseSha
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        path: product
+        ref: ${{ inputs.base-sha }}
+        fetch-depth: 0
+        persist-credentials: false
+
+    # Before any Product code runs, in a step of its own, so the token reaches nothing else.
+    - name: Read the merged PR's hidden tests
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        FABRIK_PULL_REQUEST: ${{ inputs.pull-request }}
+      run: node kit/src/kit/replay-hidden-tests-main.ts "$RUNNER_TEMP/hidden-tests.json"
+
+    # From Kit config at baseSha, before the arm's patch is laid.
+    - name: List the test secrets to load
+      id: secrets
+      shell: bash
+      run: node kit/src/kit/secrets-main.ts product "$RUNNER_TEMP/fabrik-secrets.env"
+
+    - name: Take the arm's patch
+      continue-on-error: true
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: fabrik-implement-replay-${{ inputs.arm }}
+        path: ${{ runner.temp }}/replay-implement
+
+    - name: Lay the arm's patch on baseSha
+      id: patch
+      shell: bash
+      env:
+        FABRIK_BASE_SHA: ${{ inputs.base-sha }}
+      run: node kit/src/kit/replay-patch-main.ts product "$RUNNER_TEMP/replay-implement"
+
+    # The test secrets alone: no op:// reference beyond the env file, so no Claude token.
+    - name: Load the test secrets
+      id: op
+      if: steps.patch.outputs.laid == 'true' && steps.secrets.outputs.count != '0'
+      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+      with:
+        export-env: false
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-implement-token }}
+        OP_ENV_FILE: ${{ runner.temp }}/fabrik-secrets.env
+
+    - name: Run the arm's gates
+      shell: bash
+      env:
+        FABRIK_LAID: ${{ steps.patch.outputs.laid }}
+        FABRIK_BASE_SHA: ${{ inputs.base-sha }}
+        # Every value the 1Password step resolved, in this step's env only.
+        FABRIK_SECRETS: ${{ toJSON(steps.op.outputs) }}
+        FABRIK_HIDDEN_TESTS_FILE: ${{ runner.temp }}/hidden-tests.json
+        FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-gates
+        FABRIK_TICKET: ${{ inputs.ticket }}
+        FABRIK_ARM: ${{ inputs.arm }}
+      run: node kit/src/kit/replay-gates-main.ts product
+
+    - name: Pass the arm's gates on
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: fabrik-gates-replay-${{ inputs.arm }}
+        path: ${{ runner.temp }}/fabrik-gates/gates.json
+        if-no-files-found: ignore
+        retention-days: 7

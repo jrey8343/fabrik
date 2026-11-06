@@ -5,7 +5,9 @@
 // Retro's own (#151). The core writes them; the adapter reads a thread's
 // comments back through them into the snapshot (src/github/threads.ts), and
 // the body lines are read from the issues themselves, so the Loop's history
-// lives on GitHub alone.
+// lives on GitHub alone. A marker carrying JSON spells it with markerJson; the
+// Replay's markers, which only the Replay module reads and writes, live
+// beside its rules (src/kit/replay.ts).
 import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
 import type { Strength, VerdictRecord } from "./types.ts";
 
@@ -80,8 +82,17 @@ export interface PrototypeRequestMarker {
   readonly reply: number | null;
 }
 
-/** How a prototype request's marker spells the characters that could end its HTML comment early or mention someone. */
+/** How a marker's JSON spells the characters that could end its HTML comment early or mention someone. */
 const ESCAPED: Readonly<Record<string, string>> = { "<": "\\u003c", ">": "\\u003e", "@": "\\u0040" };
+
+/**
+ * A marker's value as one line of JSON that can neither end its HTML
+ * comment early nor mention anyone: `<`, `>` and `@` spelled as escapes,
+ * which JSON.parse reads back as they were.
+ */
+export function markerJson(value: unknown): string {
+  return JSON.stringify(value).replace(/[<>@]/g, (c) => ESCAPED[c] ?? c);
+}
 
 /**
  * A prototype request as one line of JSON: its route, variant count and
@@ -90,8 +101,13 @@ const ESCAPED: Readonly<Record<string, string>> = { "<": "\\u003c", ">": "\\u003
  * job's output that carries it to the prototype job (src/kit/jobs.ts), whose
  * GITHUB_OUTPUT lines can't hold a newline, which JSON escapes.
  */
-export function prototypeRequestJson({ request: { route, variants, brief }, reply }: PrototypeRequestMarker): string {
-  return JSON.stringify({ route, variants, brief, reply });
+export function prototypeRequestJson(marker: PrototypeRequestMarker): string {
+  return JSON.stringify(prototypeRequestValue(marker));
+}
+
+/** What a prototype request's JSON holds, in the order it holds it. */
+function prototypeRequestValue({ request: { route, variants, brief }, reply }: PrototypeRequestMarker): unknown {
+  return { route, variants, brief, reply };
 }
 
 /**
@@ -115,11 +131,11 @@ export function parsePrototypeRequest(json: string): PrototypeRequestMarker | nu
 
 /**
  * The marker a prototype request opens with, on one line, which
- * prototypeRequestIn reads back. Its JSON spells `<`, `>` and `@` as escapes,
- * so a brief can neither end the HTML comment early nor mention anyone.
+ * prototypeRequestIn reads back. Its JSON is markerJson's, so a brief can
+ * neither end the HTML comment early nor mention anyone.
  */
 export function prototypeRequestMarker(marker: PrototypeRequestMarker): string {
-  return `<!-- fabrik:prototype-request ${prototypeRequestJson(marker).replace(/[<>@]/g, (c) => ESCAPED[c] ?? c)} -->`;
+  return `<!-- fabrik:prototype-request ${markerJson(prototypeRequestValue(marker))} -->`;
 }
 
 /**

@@ -59,6 +59,15 @@ export function isObject(value: unknown): value is StreamMessage {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** A JSON text's value, or undefined when it doesn't parse, for a reader that checks what it holds. */
+export function parsedJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
 /** A line as a JSON object, or null if it is anything else. */
 export function streamMessageOf(line: string): StreamMessage | null {
   try {

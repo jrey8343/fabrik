@@ -2,8 +2,11 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
 import { anIssue, aPullRequest, AUDITED_SHA, auditBody, designQueueSnapshotOf, HEAD_SHA, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { aReading, acceptedBody } from "../__fixtures__/replay.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
+import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
 import { type CaptureResult, evidenceSection } from "../evidence/uiEvidence.ts";
+import type { RunRecord } from "../kit/runRecord.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
@@ -1919,5 +1922,187 @@ describe("Gathering the Kit-owned issues, whose markers steer agent runs (ADR-00
     const snapshot = await gatherSnapshot(github, repo, tick, null, "fabrik-app[bot]");
 
     expect(snapshot.kitIssues[0]?.comments).toEqual(comments.map((comment) => comment.body));
+  });
+});
+
+describe("Gathering a scheduled tick's replay slice (#156)", () => {
+  const tick = { kind: "scheduled-tick", now: "2026-11-11T04:00:00.000Z" } as const;
+  const OPERATOR = { login: "jrey8343", __typename: "User" };
+
+  /** An open issue node with these labels, as the Kit-issue and replay-issue queries answer for it. */
+  function anIssueNode(number: number, labels: readonly string[], overrides: Record<string, unknown> = {}) {
+    return {
+      number,
+      body: "",
+      author: OPERATOR,
+      labels: { nodes: labels.map((name) => ({ name })) },
+      comments: { pageInfo: { hasPreviousPage: false, startCursor: null }, nodes: [] },
+      ...overrides,
+    };
+  }
+
+  /**
+   * The read-only API, holding these open Kit-owned issues and these open
+   * replay issues, the ready Ticket #31 and no research Decision. The
+   * queries it was asked are in `asked`.
+   */
+  function githubWith(kitIssues: unknown[], replayIssues: unknown[] = kitIssues) {
+    const asked: string[] = [];
+    const none = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        asked.push(query);
+        if (query.includes("$replay")) return { repository: { issues: { nodes: replayIssues } } };
+        if (query.includes("$ready")) {
+          const ticket = { number: 31, state: "OPEN", labels: { nodes: [{ name: "ready-for-agent" }] }, subIssues: { totalCount: 0 }, blockedBy: { nodes: [] }, closedByPullRequestsReferences: { nodes: [] } };
+          return { repository: { owner: { login: "acme" }, issues: { ...none, nodes: [ticket] }, pullRequests: { nodes: [] } } };
+        }
+        if (query.includes("$research")) return { repository: { issues: none } };
+        if (query.includes("issueOrPullRequest")) return { repository: {} };
+        if (query.includes("labels: [$label]")) return { repository: { defaultBranchRef: null, issues: { nodes: [] } } };
+        const retro = nothingNewForTheRetro(query);
+        if (retro !== undefined) return retro;
+        if (query.includes("$labels")) return { repository: { owner: { login: "acme" }, issues: { nodes: kitIssues } } };
+        throw new Error(`Unexpected query with ${JSON.stringify(variables)}: ${query}`);
+      },
+    } as unknown as GitHub;
+    return { github, asked };
+  }
+
+  /** The store's Run records, counting each time they're read. */
+  function storeHolding(records: readonly RunRecord[] | null) {
+    const store = { reads: 0, records: async () => (store.reads++, records) };
+    return store;
+  }
+
+  it("isn't gathered without the store's records, which only the Loop's own run passes, never the Kit job", async () => {
+    const snapshot = await gatherSnapshot(githubWith([]).github, repo, tick, "jrey8343", "fabrik-app[bot]");
+
+    expect(snapshot.replay).toBeNull();
+  });
+
+  it("reads nothing new with no replay issue open: no replay issue, Ticket or store read", async () => {
+    const without = githubWith([anIssueNode(41, ["fabrik:weekly-limit"])]);
+    await gatherSnapshot(without.github, repo, tick, "jrey8343", "fabrik-app[bot]");
+    const { github, asked } = githubWith([anIssueNode(41, ["fabrik:weekly-limit"])]);
+    const store = storeHolding([]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, store);
+
+    expect(snapshot.replay).toEqual({ issues: [], capacity: null, acceptance: null });
+    expect(asked).toEqual(without.asked);
+    expect(store.reads).toBe(0);
+  });
+
+  it("reads the replay issues when the Kit-issue page is full, since one may be past it", async () => {
+    const full = Array.from({ length: 20 }, (_, at) => anIssueNode(41 + at, ["fabrik:audit"]));
+    const { github } = githubWith(full, [anIssueNode(140, ["fabrik:replay"], { body: acceptedBody() })]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding([]));
+
+    expect(snapshot.replay?.issues.map(({ number }) => number)).toEqual([140]);
+  });
+
+  describe("with a replay issue open", () => {
+    const replayNode = anIssueNode(140, ["fabrik:replay", "agent:replay"], {
+      body: acceptedBody(),
+      comments: {
+        pageInfo: { hasPreviousPage: false, startCursor: null },
+        nodes: [
+          { body: "This replay can't run.", author: APP_BOT },
+          { body: "Go on then.", author: OPERATOR },
+        ],
+      },
+    });
+    const someoneElses = anIssueNode(150, ["fabrik:replay"], { body: "```replay\nreview.effort: low\n```", author: { login: "mallory", __typename: "User" } });
+
+    it("holds each one with its body whole, though the Operator filed it, the App's comments only, and its labels", async () => {
+      const { github } = githubWith([replayNode, someoneElses]);
+
+      const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding([]));
+
+      expect(snapshot.replay?.issues).toEqual([
+        { number: 140, open: true, author: "jrey8343", body: acceptedBody(), comments: ["This replay can't run."], labels: ["fabrik:replay", "agent:replay"] },
+        { number: 150, open: true, author: "mallory", body: "```replay\nreview.effort: low\n```", comments: [], labels: ["fabrik:replay"] },
+      ]);
+    });
+
+    it("holds what the spare-capacity gate weighs: what Dispatch weighs, and each Subscription's newest weekly-limit reading in the store", async () => {
+      const records = [aRunRecord({ repo: "acme/clinic", endedAt: "2026-11-10T10:00:00Z", rateLimit: aReading(0.3) })];
+
+      const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding(records));
+
+      expect(snapshot.replay?.capacity).toEqual({
+        tickets: [{ number: 31, open: true, labels: ["ready-for-agent"], openBlockers: [], notPlannedBlockers: [], subIssues: 0, openLinkedPullRequests: [] }],
+        researchDecisions: [],
+        weeklyLimits: { "Claude token": aReading(0.3) },
+      });
+      expect(snapshot.replay?.acceptance).toBeNull();
+    });
+
+    it("holds no reading when the store can't be read", async () => {
+      const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding(null));
+
+      expect(snapshot.replay?.capacity?.weeklyLimits).toBeNull();
+    });
+
+    it("reads nothing more when only someone else's replay issue is open", async () => {
+      const store = storeHolding([]);
+
+      const snapshot = await gatherSnapshot(githubWith([someoneElses]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, store);
+
+      expect(snapshot.replay).toMatchObject({ capacity: null, acceptance: null });
+      expect(store.reads).toBe(0);
+    });
+
+    it("reads a waiting request's candidates from this repo's records alone, with none to read GitHub for when it has no Implement run there", async () => {
+      const waiting = anIssueNode(140, ["fabrik:replay"], { body: "```replay\nreview.effort: high\n```\n" });
+      const records = [aRunRecord({ repo: "acme/clinic", issue: 12, endedAt: "2026-11-10T10:00:00Z" })];
+      const { github, asked } = githubWith([waiting]);
+
+      const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding(records));
+
+      expect(snapshot.replay?.acceptance).toEqual({ candidates: [], baseConfigs: {}, fabrikCommits: {} });
+      expect(asked.some((query) => query.includes("mergedAt"))).toBe(false);
+    });
+  });
+});
+
+describe("Gathering a replay Ticket's claim (#156)", () => {
+  const claim = { kind: "label-added", issue: 98, label: "agent:replay" } as const;
+
+  /** The issue API, holding these open replay issues beside the labelled one, #98. */
+  function githubHolding(replayIssues: unknown[]): GitHub {
+    const issues = issueGitHub({ author: { login: "jrey8343", __typename: "User" }, labels: ["fabrik:replay", "agent:replay"] });
+    return {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("$replay")) return { repository: { issues: { nodes: replayIssues } } };
+        return issues.graphql(query, variables);
+      },
+    } as unknown as GitHub;
+  }
+
+  it("reads every open replay issue, with its body whole, so the claim can start none while a Ticket of any is in progress", async () => {
+    const other = {
+      number: 130,
+      body: acceptedBody([20], [{ ticket: 20, state: "in-progress", run: 8000, retrying: null, startedAt: "2026-11-11T03:00:00.000Z" }]),
+      author: { login: "jrey8343", __typename: "User" },
+      labels: { nodes: [{ name: "fabrik:replay" }] },
+      comments: { pageInfo: { hasPreviousPage: false, startCursor: null }, nodes: [] },
+    };
+
+    const snapshot = await gatherSnapshot(githubHolding([other]), repo, claim, "jrey8343", APP_LOGIN);
+
+    expect(snapshot.replay).toEqual({
+      issues: [{ number: 130, open: true, author: "jrey8343", body: other.body, comments: [], labels: ["fabrik:replay"] }],
+      capacity: null,
+      acceptance: null,
+    });
+  });
+
+  it("reads none for any other label", async () => {
+    const snapshot = await gatherSnapshot(githubHolding([]), repo, { ...claim, label: "agent:implement" }, "jrey8343", APP_LOGIN);
+
+    expect(snapshot.replay).toBeNull();
   });
 });

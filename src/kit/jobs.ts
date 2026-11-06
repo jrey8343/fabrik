@@ -6,6 +6,8 @@
 // need before they start, such as their timeout-minutes. Writes step outputs:
 //   route                    "triage", "design", "implement", "review", "audit", "retro" or "research" when the
 //                            plan starts that agent run (a Retro run's evidence job, then its Retro job),
+//                            "replay" when it starts a replay Ticket's two arms (#156), its claim and then
+//                            its replay jobs,
 //                            "push" when the push job has something to apply,
 //                            "none" when the plan is to do nothing
 //   triage-timeout-minutes   the Triage role's Kit config timeout
@@ -17,7 +19,14 @@
 //   retro-timeout-minutes    the Retro's Kit config timeout
 //   research-timeout-minutes the Researcher's Kit config timeout
 //   pull-request, ticket     for a Review or a retry, the agent PR and the Ticket its branch was cut for;
-//                            for a first Implement run, an empty PR and its Ticket; else empty
+//                            for a first Implement run, an empty PR and its Ticket; for a replay, its merged
+//                            PR and the Ticket it replays; else empty
+//   replay-issue, base-sha   for a replay, the replay issue and the Ticket's baseSha, which both arms start
+//                            from; else empty
+//   replay-arms              for a replay, each arm's settings as one line of JSON, {baseline, variant}, each
+//                            {implement: {model, effort}, review: {model, effort}, candidateSha}; else empty.
+//                            Its model names come from the replay issue's body, so a job reads it only
+//                            through `env:`, never in a `run:` script
 //   branch                   for a retry, the agent branch it builds on; else empty
 //   review                   for a Request-changes run, the Operator's review id; else empty
 //   audit-commit             for an Auditor run, the pending Audit's marked commit, which the Audit job
@@ -47,14 +56,14 @@
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
 import { appendFile, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { agentRunIn } from "../github/apply.ts";
+import { agentRunIn, replayRunIn } from "../github/apply.ts";
 import { GitHub, type Repo } from "../github/client.ts";
 import { loopEventFrom } from "../github/events.ts";
 import { gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { prototypeRequestJson } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
-import type { Plan } from "../loop/types.ts";
+import type { Action, Plan } from "../loop/types.ts";
 import { kitConfigErrors } from "../skills/pinnedManifests.ts";
 import { callerWorkflowPath, checkKit } from "./caller.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
@@ -72,6 +81,7 @@ function required(name: string): string {
 function routeOf(plan: Plan): string {
   const run = agentRunIn(plan);
   if (run !== null) return run.role;
+  if (replayRunIn(plan) !== null) return "replay";
   return plan.kind === "nothing" ? "none" : "push";
 }
 
@@ -137,9 +147,11 @@ async function main(productDir: string): Promise<void> {
  */
 export function kitJobOutputs(plan: Plan | null, ticket: number | null, config: KitConfig): Readonly<Record<string, string>> {
   const run = plan === null ? null : agentRunIn(plan);
+  const replay = plan === null ? null : replayRunIn(plan);
   // A Review's subject is the PR itself; a retry is an Implement run on the Ticket that fixes its PR.
   const pullRequest = run?.role === "review" ? run.issue : (run?.pullRequest ?? null);
   const builds = run?.role === "implement" ? run.issue : ticket;
+  if (replay !== null) return { ...kitJobOutputs(null, null, config), ...replayOutputs(replay) };
   return {
     route: plan === null ? "none" : routeOf(plan),
     "triage-timeout-minutes": String(config.roles.triage.timeoutMinutes),
@@ -180,6 +192,30 @@ export function kitJobOutputs(plan: Plan | null, ticket: number | null, config: 
     // The one output that holds agent text: the request's brief, written by the Design agent. One line of JSON,
     // whose newlines JSON.stringify escapes, as GITHUB_OUTPUT's key=value lines need; read only through `env:`.
     prototype_request: run?.prototype === undefined ? "" : prototypeRequestJson(run.prototype),
+    "replay-issue": "",
+    "base-sha": "",
+    "replay-arms": "",
+  };
+}
+
+/**
+ * The outputs a replay Ticket's jobs read, from the replay issue's plan the
+ * Kit wrote and read back (src/kit/replay.ts), never from an agent: the
+ * replay issue, the Ticket, its merged PR, its baseSha, each arm's settings
+ * and the Subscription both arms run on.
+ */
+function replayOutputs({ issue, ticket, subscription }: Extract<Action, { kind: "start-replay" }>): Readonly<Record<string, string>> {
+  if (subscription === undefined) throw new Error(`The replay of #${ticket.ticket} on #${issue} was given no Subscription`);
+  return {
+    route: "replay",
+    "replay-issue": String(issue),
+    ticket: String(ticket.ticket),
+    "pull-request": String(ticket.pullRequest),
+    // A full sha the plan's reader checked.
+    "base-sha": ticket.baseSha,
+    // One line of JSON, whose model names come from the issue's body, so a job reads it only through `env:`.
+    "replay-arms": JSON.stringify(ticket.arms),
+    subscription,
   };
 }
 

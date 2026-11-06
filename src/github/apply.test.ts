@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { acceptedBody } from "../__fixtures__/replay.ts";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
+import { replayMarksIn } from "../kit/replay.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
 import { applyPlan } from "./apply.ts";
@@ -535,5 +537,104 @@ describe("Marking whether a prototype request's prototype turn has started (#155
     await applyPlan(github, repo, mark(false));
 
     expect(github.calls).toEqual([`GET ${issues}/comments/9010`]);
+  });
+});
+
+/** A GitHub holding replay issue #140, accepted with Tickets 12 and 7, which a GET reads, a PATCH replaces and a POST comments on. */
+function holdingReplay(body = acceptedBody()) {
+  const issue = { body };
+  const calls: string[] = [];
+  const comments: string[] = [];
+  return {
+    issue,
+    calls,
+    comments,
+    async rest(method: string, path: string, sent?: unknown): Promise<unknown> {
+      calls.push(`${method} ${path}`);
+      if (path.endsWith("/labels/agent%3Areplay")) return null;
+      if (method === "POST" && path === `${issues}/140/comments`) {
+        comments.push((sent as { body: string }).body);
+        return { html_url: "https://github.com/acme/shop/issues/140#issuecomment-1", id: 1 };
+      }
+      expect(path).toBe(`${issues}/140`);
+      if (method === "GET") return { number: 140, body: issue.body };
+      if (method === "PATCH") issue.body = (sent as { body: string }).body;
+      return null;
+    },
+    async graphql(): Promise<never> {
+      throw new Error("no GraphQL expected");
+    },
+  };
+}
+
+/** The Actions run applying a replay plan, and when it applies it. */
+const RUN_9001 = { id: 9001, at: "2026-11-11T05:00:00.000Z" };
+
+describe("Marking a replay Ticket in progress as its run's claim takes agent:replay off (#156)", () => {
+  const claim: Plan = {
+    kind: "act",
+    actions: [
+      { kind: "remove-label", issue: 140, label: "agent:replay" },
+      { kind: "mark-replay-started", issue: 140, ticket: 12 },
+    ],
+  };
+
+  it("marks it in progress in the run applying the plan, and when, read fresh, after the label came off", async () => {
+    const github = holdingReplay();
+
+    await applyPlan(github, repo, claim, null, RUN_9001);
+
+    expect(replayMarksIn(github.issue.body)?.progress).toEqual([
+      { ticket: 12, state: "in-progress", run: 9001, retrying: null, startedAt: "2026-11-11T05:00:00.000Z" },
+      { ticket: 7, state: "pending" },
+    ]);
+    expect(github.calls).toEqual([`DELETE ${issues}/140/labels/agent%3Areplay`, `GET ${issues}/140`, `PATCH ${issues}/140`]);
+  });
+
+  it("fails, writing nothing, when the Ticket isn't waiting to run, as when another run claimed it first, so its replay jobs never start", async () => {
+    const github = holdingReplay(acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 8000, retrying: null, startedAt: "2026-11-11T04:00:00.000Z" }]));
+
+    await expect(applyPlan(github, repo, claim, null, RUN_9001)).rejects.toThrow("#12 isn't waiting to run on replay #140, so run 9001 doesn't claim it");
+    expect(github.calls.some((call) => call.startsWith("PATCH"))).toBe(false);
+  });
+
+  it("fails in a job that names no run to mark it in", async () => {
+    await expect(applyPlan(holdingReplay(), repo, claim)).rejects.toThrow("This job names no Actions run to mark #12 in progress in");
+  });
+});
+
+describe("Releasing a replay Ticket whose run never landed, as the tick found it (#156)", () => {
+  const STARTED = "2026-11-11T00:00:00.000Z";
+  const release: Plan = {
+    kind: "act",
+    actions: [{ kind: "release-replay-ticket", issue: 140, ticket: 12, run: 8000, reason: "run 8000 never landed", resultsReady: "@operator This Replay's results are in." }],
+  };
+
+  it("ends its run as an Infrastructure failure, read fresh, so the Ticket waits to run again, posting nothing", async () => {
+    const github = holdingReplay(acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 8000, retrying: null, startedAt: STARTED }]));
+
+    await applyPlan(github, repo, release);
+
+    expect(replayMarksIn(github.issue.body)?.progress[0]).toEqual({ ticket: 12, state: "retried", reason: "run 8000 never landed" });
+    expect(github.comments).toEqual([]);
+  });
+
+  it("fails it on its one retry, and posts that the results are in once that ends the Replay's last Ticket", async () => {
+    const github = holdingReplay(acceptedBody([12], [{ ticket: 12, state: "in-progress", run: 8000, retrying: "it crashed", startedAt: STARTED }]));
+
+    await applyPlan(github, repo, release);
+
+    expect(replayMarksIn(github.issue.body)?.progress[0]).toEqual({ ticket: 12, state: "failed", run: 8000, reason: "run 8000 never landed" });
+    expect(github.comments).toEqual(["@operator This Replay's results are in."]);
+  });
+
+  it("changes nothing, and posts nothing, when its run landed since the tick read the body", async () => {
+    const landed = acceptedBody([12], [{ ticket: 12, state: "done", run: 8000 }]);
+    const github = holdingReplay(landed);
+
+    await applyPlan(github, repo, release);
+
+    expect(github.issue.body).toBe(landed);
+    expect(github.calls).toEqual([`GET ${issues}/140`]);
   });
 });

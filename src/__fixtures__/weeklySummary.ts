@@ -1,6 +1,7 @@
 // Small builders for the Weekly summary's tests, matching anIssue, aPullRequest
 // and snapshotOf (./snapshots.ts): say only what a test cares about.
-import type { RunRecord } from "../kit/runRecord.ts";
+import { type ReplayProgress, replayBody } from "../kit/replay.ts";
+import type { ReplayRun, RunRecord } from "../kit/runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "../kit/scorer.ts";
 import type {
   AgentPullRequestFacts,
@@ -14,6 +15,7 @@ import type {
   OpenAuditFacts,
   OpenIssueFacts,
   OpenPullRequestFacts,
+  OpenReplayFacts,
   OpenRetroFacts,
   ReviewFacts,
   SpecFacts,
@@ -26,7 +28,7 @@ import { aMonitorIssueBody } from "./monitor.ts";
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
   return {
-    schema: 3,
+    schema: 4,
     kitSha: "f".repeat(40),
     repo: "owner/product",
     runId: 1000,
@@ -42,6 +44,7 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     stepUp: false,
     requestChanges: false,
     prototype: false,
+    replay: null,
     baseSha: "b".repeat(40),
     jobResult: "success",
     subtype: "success",
@@ -60,6 +63,14 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     transcript: null,
     ...overrides,
   };
+}
+
+/** Replay 140's baseline arm of Ticket 7, Replay 140 being the Operator's `fabrik:replay` issue. */
+export const A_REPLAY: ReplayRun = { issue: 140, arm: "baseline", ticket: 7, candidateSha: null };
+
+/** The baseline arm's Implement run in Replay 140, re-running Ticket 7 (merged as PR 50), costing $1, ended at `endedAt`. */
+export function aReplayRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
+  return aRunRecord({ runId: 2000, replay: A_REPLAY, ...overrides });
 }
 
 /** An Auditor's run on Audit 90 in `owner/product`, costing $1. */
@@ -88,7 +99,7 @@ export function aScoreEntry(overrides: Partial<ScoreEntry> = {}): ScoreEntry {
 /** The score file of aRunRecord()'s run, scored five minutes after it ended: passing Efficiency, Ticket compliance and Skill use. */
 export function aScoreFile(overrides: Partial<ScoreFile> = {}): ScoreFile {
   return {
-    schema: 1,
+    schema: 2,
     kitSha: "f".repeat(40),
     repo: "owner/product",
     runId: 1000,
@@ -96,6 +107,7 @@ export function aScoreFile(overrides: Partial<ScoreFile> = {}): ScoreFile {
     role: "implement",
     issue: 7,
     pullRequest: 50,
+    replay: null,
     record: "runs/owner/product/2026-11/1000-1-implement.json",
     scoredAt: "2026-11-04T12:05:00Z",
     rubrics: ["efficiency@1", "ticket-compliance@1", "skill-use@1"],
@@ -177,6 +189,7 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     followUpIssues: [],
     openAudits: [],
     openRetros: [],
+    openReplays: [],
     openMaps: [],
     ...overrides,
   };
@@ -200,6 +213,31 @@ export function anOpenAudit(overrides: Partial<OpenAuditFacts> = {}): OpenAuditF
 /** Retro 120, which the Fabrik App opened on Saturday 2026-11-07 and nobody has closed. */
 export function anOpenRetro(overrides: Partial<OpenRetroFacts> = {}): OpenRetroFacts {
   return { number: 120, title: "Retro: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-07T00:00:00Z", ...overrides };
+}
+
+/**
+ * Replay issue 140's body once the tick accepted its request, review.effort:
+ * high on Ticket 7 (merged as PR 50), with Ticket 7's replay `progress`.
+ */
+export function aReplayBody(progress: ReplayProgress): string {
+  const settings = { model: "claude-opus-5-5", effort: null };
+  const baseline = { implement: settings, review: settings, candidateSha: null };
+  const arms = { baseline, variant: { ...baseline, review: { ...settings, effort: "high" } } };
+  const plan = { variable: { kind: "effort", role: "review", effort: "high" }, tickets: [{ ticket: 7, pullRequest: 50, baseSha: "b".repeat(40), flags: [], arms }], leftOut: [] } as const;
+  return replayBody("```replay\nreview.effort: high\ntickets: 7\n```\n", { plan, progress: [{ ticket: 7, ...progress }] });
+}
+
+/** Replay issue 140, which the Operator opened on 2026-11-01, its one Ticket done and its results written on 2026-11-06. */
+export function anOpenReplay(overrides: Partial<OpenReplayFacts> = {}): OpenReplayFacts {
+  return {
+    number: 140,
+    title: "Replay review.effort: high",
+    author: "operator",
+    createdAt: "2026-11-01T00:00:00Z",
+    lastEditedAt: "2026-11-06T20:00:00Z",
+    body: aReplayBody({ state: "done", run: 2000 }),
+    ...overrides,
+  };
 }
 
 /** The Fabrik App's comment `body` at `at`; a person's with `{ author, byBot: false }`. */

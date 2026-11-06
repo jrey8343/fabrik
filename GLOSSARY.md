@@ -260,6 +260,18 @@ _Avoid_: architecture regression, design debt
 An experiment the Operator starts that re-runs merged Tickets from their original base commit, once as before and once with one thing changed, to compare the two.
 _Avoid_: benchmark, eval, rerun
 
+**Arm**:
+One of a Replay's two runs of a Ticket, each one Implement run and its Review: the **baseline**, run as the Ticket was built then, or the **variant**, run with the one thing the Replay changes. A Replay's variant is an Arm, never one of a Prototype's variants.
+_Avoid_: leg, treatment, control, experiment group
+
+**Hidden tests**:
+The test files a Ticket's merged pull request added or changed, which an Arm never sees while it works and is measured by afterwards. A merged pull request with none has no hidden tests, which is never a pass.
+_Avoid_: held-out tests, answer tests, merged tests
+
+**Candidate Kit sha**:
+A Fabrik commit not yet released, such as a Retro proposal's, whose prompts and Base skills a Replay's variant loads in place of the pinned release's.
+_Avoid_: candidate Kit, Kit variant, prompt branch
+
 **Weekly summary**:
 The one issue filed each week across all of the Operator's Product repos: the factory's metrics, and everything waiting on the Operator, held by a cap, or stuck.
 _Avoid_: inbox, Operator inbox, dashboard, report

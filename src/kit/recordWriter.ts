@@ -51,9 +51,10 @@ export async function writeStoreFiles(
   return { kind: "written", written, existing };
 }
 
-/** The commit message of a run's files in the store: the repo, the run and the role. */
+/** The commit message of a run's files in the store: the repo, the run and the role, and a Replay's arm. */
 export function storeCommitMessage(record: RunIdentity): string {
-  return `${record.repo} run ${record.runId}-${record.runAttempt} (${record.role})`;
+  const role = record.replay === null ? record.role : `${record.role}, replay ${record.replay.arm}`;
+  return `${record.repo} run ${record.runId}-${record.runAttempt} (${role})`;
 }
 
 /**

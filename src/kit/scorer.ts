@@ -5,10 +5,10 @@
 import { createHash } from "node:crypto";
 import { isObject } from "../agent/stream.ts";
 import { type Rubric, rubricSet } from "./rubrics.ts";
-import { type RateLimitReading, type RunRecord, type RunRecordRole, runStoreName } from "./runRecord.ts";
+import { isLive, type RateLimitReading, type ReplayRun, type RunRecord, type RunRecordRole, runStoreName } from "./runRecord.ts";
 
 /**
- * The share of first Implement runs scored: one in four. A run is in the
+ * The share of live first Implement runs scored: one in four. A run is in the
  * sample when the SHA-256 of its run id's decimal string falls in the lowest
  * quarter of the range, so every attempt of the run makes the same choice.
  */
@@ -17,6 +17,8 @@ export const SAMPLED_SHARE = 1 / 4;
 /**
  * The weekly-limit utilization, from 0 to 1, at or above which a run isn't
  * scored, so scoring never pushes the factory into its Subscription's limit.
+ * A Replay's own limit, REPLAY_UTILIZATION_LIMIT, sits with the replay step
+ * that weighs it (src/loop/replayGate.ts).
  */
 export const SCORING_UTILIZATION_LIMIT = 0.75;
 
@@ -52,22 +54,28 @@ export function scoringPlan(record: RunRecord): ScoringPlan {
   const failure = record.infrastructureFailure;
   if (failure !== null && failure !== "timeout") return { kind: "skip", skip: { reason: "infrastructure-failure" } };
   const rateLimit = record.rateLimit;
-  if (rateLimit !== null && nearWeeklyLimit(rateLimit)) return { kind: "skip", skip: { reason: "weekly-limit", rateLimit } };
+  if (rateLimit !== null && atOrOver(rateLimit, SCORING_UTILIZATION_LIMIT)) return { kind: "skip", skip: { reason: "weekly-limit", rateLimit } };
   return { kind: "score" };
 }
 
-/** Whether a weekly-limit reading says the Subscription is close to its limit: any status but `allowed`, or utilization at the limit. */
-function nearWeeklyLimit(reading: RateLimitReading): boolean {
-  return reading.status !== "allowed" || (reading.utilization !== null && reading.utilization >= SCORING_UTILIZATION_LIMIT);
+/**
+ * Whether a weekly-limit reading says the Subscription is at or over `limit`,
+ * a utilization from 0 to 1: any status but `allowed`, or a utilization at
+ * `limit` or above. An `allowed` reading that gives no utilization is under it.
+ */
+export function atOrOver(reading: RateLimitReading, limit: number): boolean {
+  return reading.status !== "allowed" || (reading.utilization !== null && reading.utilization >= limit);
 }
 
 /**
- * Whether scoring picks the run: only Implement runs, every Retry, Step-up
- * and Request-changes run among them, and the sample of first runs.
+ * Whether scoring picks the run: only Implement runs, every Replay arm's,
+ * Retry, Step-up and Request-changes run among them, and the sample of live
+ * first runs. A Replay arm's run is never sampled, so every arm has a
+ * process measure to compare (#156).
  */
 function picked(record: RunRecord): boolean {
   if (record.role !== "implement") return false;
-  return record.retry > 0 || record.stepUp || record.requestChanges || sampled(record.runId);
+  return !isLive(record) || record.retry > 0 || record.stepUp || record.requestChanges || sampled(record.runId);
 }
 
 /** Whether a first Implement run is in the sample, by the SHA-256 of its run id's decimal string. */
@@ -83,6 +91,27 @@ function sampled(runId: number): boolean {
 export function inSample(key: string, share: number): boolean {
   const digest = createHash("sha256").update(key).digest();
   return digest.readUInt32BE(0) < share * 2 ** 32;
+}
+
+/** The Kit's rubrics as a scoring job read them from its Kit checkout, and the Kit commit it checked out. */
+export interface KitRubrics {
+  readonly sha: string;
+  readonly rubrics: readonly Rubric[];
+}
+
+/**
+ * The rubrics a run is scored, or skipped, under: always those of its pinned
+ * release, the Kit commit that ran and recorded it (its record's `kitSha`).
+ * A Replay's `kit` variant names a candidate Kit sha too, whose prompts and
+ * Base skills its agents loaded, but never its rubrics, so both arms' scores
+ * compare with each other and with live runs' (#156). Throws for rubrics read
+ * at any other commit, so a score file is never built under them.
+ */
+export function scoringRubrics(scored: RunRecord, kit: KitRubrics): readonly Rubric[] {
+  if (kit.sha === scored.kitSha) return kit.rubrics;
+  const run = `Run ${scored.runId}-${scored.runAttempt} is scored under the rubrics of its pinned release ${scored.kitSha}`;
+  if (kit.sha === scored.replay?.candidateSha) throw new Error(`${run}, never those of its candidate Kit sha ${kit.sha}`);
+  throw new Error(`${run}, not those read at ${kit.sha}`);
 }
 
 /** One rubric's answer in the judge's structured output. */
@@ -152,9 +181,12 @@ export interface ScoreEntry {
   readonly rationale: string;
 }
 
-/** The scores of one picked run under one rubric set, or why it has none; schema 1. */
+/** The schema a score file is written at: 2 added `replay`. */
+export const SCORE_FILE_SCHEMA = 2;
+
+/** The scores of one picked run under one rubric set, or why it has none; schema 2. */
 export interface ScoreFile {
-  readonly schema: 1;
+  readonly schema: typeof SCORE_FILE_SCHEMA;
   readonly kitSha: string;
   readonly repo: string;
   readonly runId: number;
@@ -162,6 +194,8 @@ export interface ScoreFile {
   readonly role: RunRecordRole;
   readonly issue: number;
   readonly pullRequest: number | null;
+  /** The scored run's: null for a live run, else the Replay arm it was. */
+  readonly replay: ReplayRun | null;
   /** The scored run's Run record's store path. */
   readonly record: string;
   readonly scoredAt: string;
@@ -176,6 +210,18 @@ export interface ScoreFile {
   readonly entries: readonly ScoreEntry[] | null;
 }
 
+/**
+ * A score file as read back from the store, at the current schema: a schema 1
+ * file, written before there were Replays, as no replay's. Null for anything
+ * that isn't a score file of a schema the Kit knows.
+ */
+export function readScoreFile(stored: unknown): ScoreFile | null {
+  if (!isObject(stored)) return null;
+  if (stored["schema"] === SCORE_FILE_SCHEMA) return stored as unknown as ScoreFile;
+  if (stored["schema"] === 1) return { ...(stored as unknown as Omit<ScoreFile, "schema" | "replay">), schema: SCORE_FILE_SCHEMA, replay: null };
+  return null;
+}
+
 /** A score file and where it goes in the store. */
 export interface ScoreFileWithPath {
   readonly file: ScoreFile;
@@ -187,7 +233,7 @@ export function scoreFileFor(input: ScoreFileInput): ScoreFileWithPath {
   const { scored, rubrics, outcome } = input;
   const set = rubricSet(rubrics);
   const file: ScoreFile = {
-    schema: 1,
+    schema: SCORE_FILE_SCHEMA,
     kitSha: scored.kitSha,
     repo: scored.repo,
     runId: scored.runId,
@@ -195,6 +241,7 @@ export function scoreFileFor(input: ScoreFileInput): ScoreFileWithPath {
     role: scored.role,
     issue: scored.issue,
     pullRequest: scored.pullRequest,
+    replay: scored.replay,
     record: input.scoredPath,
     scoredAt: input.scoredAt,
     rubrics: set.pairs,

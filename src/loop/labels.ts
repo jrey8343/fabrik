@@ -55,13 +55,21 @@ export const AUDIT_LABEL = "fabrik:audit";
 /** The label on a Retro, which the scheduled tick opens for the Retro run to fill in (#151). */
 export const RETRO_LABEL = "fabrik:retro";
 
-/** Every label that marks an issue as the Kit's own, so the adapter reads it into the snapshot. */
+/**
+ * The label on a replay issue: the Operator's request for a Replay, whose body
+ * names the one variable to change (#156). Unlike the Kit's other issues, the
+ * Operator files it, not the App.
+ */
+export const REPLAY_LABEL = "fabrik:replay";
+
+/** Every label that marks an issue as the Kit's own, so Intake leaves it alone and the adapter reads it into the snapshot. */
 export const KIT_ISSUE_LABELS = [
   TOKEN_ROTATION_LABEL,
   WEEKLY_LIMIT_LABEL,
   USAGE_CREDITS_LABEL,
   AUDIT_LABEL,
   RETRO_LABEL,
+  REPLAY_LABEL,
 ] as const;
 export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
 
@@ -100,6 +108,14 @@ export const RESEARCH_DECISION_LABEL = "wayfinder:research" satisfies DecisionLa
  */
 export const RESEARCH_LABEL = "agent:research";
 
+/**
+ * The trigger label the scheduled tick adds to a replay issue to start its
+ * next pending Ticket, both arms (#156), as Dispatch adds agent:implement
+ * (ADR-0001). The label comes off as the run starts. A trigger label, not one
+ * of KIT_ISSUE_LABELS.
+ */
+export const REPLAY_TRIGGER_LABEL = "agent:replay";
+
 /** A label the Kit itself adds or removes. Labels read from GitHub stay plain strings: anyone can add any label. */
 export type Label =
   | StateLabel
@@ -111,7 +127,8 @@ export type Label =
   | typeof MONITOR_LABEL
   | typeof MAP_LABEL
   | DecisionLabel
-  | typeof RESEARCH_LABEL;
+  | typeof RESEARCH_LABEL
+  | typeof REPLAY_TRIGGER_LABEL;
 
 /** Every label the Kit uses, so the setup skill can create each one. */
 export const ALL_LABELS: readonly Label[] = [
@@ -120,6 +137,7 @@ export const ALL_LABELS: readonly Label[] = [
   DESIGN_LABEL,
   REVIEW_LABEL,
   RESEARCH_LABEL,
+  REPLAY_TRIGGER_LABEL,
   ...CATEGORY_LABELS,
   ...KIT_ISSUE_LABELS,
   MONITOR_LABEL,

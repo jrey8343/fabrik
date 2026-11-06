@@ -9,8 +9,9 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readTranscriptGzip } from "../agent/transcript.ts";
 import type { KitConfig } from "./config.ts";
+import { readReplayArmGates, type ReplayArmGates } from "./replay.ts";
 import { readRunRecord, type RunRecord } from "./runRecord.ts";
-import type { ScoreFile } from "./scorer.ts";
+import { readScoreFile, type ScoreFile } from "./scorer.ts";
 
 /** Every path under one of the checkout's directories ending in `suffix`, as a path in the store: none when the directory isn't there. */
 async function pathsIn(storeDir: string, directory: string, suffix: string): Promise<string[]> {
@@ -32,8 +33,9 @@ async function readStoreFiles(storeDir: string, directory: "runs" | "scores"): P
 /**
  * Every Run record under `runs/`, by its path in the store, at the current
  * schema: a schema 1 record, which names no Subscription, as being on the
- * first of `subscriptions`, and a schema 1 or 2 record as no prototype turn
- * (readRunRecord). A file of a schema the Kit doesn't know is left out.
+ * first of `subscriptions`, a schema 1 or 2 record as no prototype turn, and
+ * a schema 1, 2 or 3 record as no replay's (readRunRecord). A file of a schema
+ * the Kit doesn't know is left out.
  */
 export async function readStoreRunRecords(
   storeDir: string,
@@ -48,15 +50,38 @@ export async function readStoreRunRecords(
   );
 }
 
-/** Every schema 1 score file under `scores/`, by its path in the store. */
+/**
+ * Every score file under `scores/`, by its path in the store, at the current
+ * schema: a schema 1 file as no replay's (readScoreFile). A file of a schema
+ * the Kit doesn't know is left out.
+ */
 export async function readStoreScoreFiles(storeDir: string): Promise<Record<string, ScoreFile>> {
   const files = await readStoreFiles(storeDir, "scores");
   return Object.fromEntries(
-    files.filter((entry): entry is [string, ScoreFile] => {
-      const [, file] = entry;
-      return typeof file === "object" && file !== null && (file as { schema?: unknown }).schema === 1;
+    files.flatMap(([path, file]): [string, ScoreFile][] => {
+      const score = readScoreFile(file);
+      return score === null ? [] : [[path, score]];
     }),
   );
+}
+
+/**
+ * Every Replay arm's gates under `replays/`, beside its patch (replayGatesPath),
+ * whatever repo or replay issue: a file that doesn't read as an arm's gates is
+ * left out.
+ */
+export async function readStoreReplayGates(storeDir: string): Promise<ReplayArmGates[]> {
+  const paths = await pathsIn(storeDir, "replays", ".gates.json");
+  const files = await Promise.all(
+    paths.map(async (path) => {
+      try {
+        return readReplayArmGates(JSON.parse(await readFile(join(storeDir, path), "utf8")));
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return files.filter((gates) => gates !== null);
 }
 
 /**

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { aReplayIssue, replaySlice } from "../__fixtures__/replay.ts";
+import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest, tickSnapshot } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent } from "./types.ts";
 
@@ -66,6 +67,17 @@ describe("Intake", () => {
     });
   });
 
+  it("leaves the Operator's new fabrik:replay issue alone, because the Kit owns it, so Triage never sorts the experiment", () => {
+    const issue = anIssue({ number: 7, author: "operator", labels: ["fabrik:replay"] });
+
+    const plan = planFor({ kind: "issue-opened", issue: 7 }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "#7 has the label fabrik:replay, so the Kit owns it",
+    });
+  });
+
   it("leaves a new sub-issue alone, because a skill made it under its parent", () => {
     const issue = anIssue({ number: 7, parent: 3 });
 
@@ -75,6 +87,46 @@ describe("Intake", () => {
       kind: "nothing",
       reason: "#7 is a sub-issue of #3, so a skill made it",
     });
+  });
+});
+
+// The scheduled tick reads a replay issue's request and takes its next step; nothing on the issue itself is a trigger.
+describe("A replay issue (#156)", () => {
+  const replay = anIssue({ number: 130, author: "operator", labels: ["fabrik:replay"], body: "```replay\nreview.effort: high\n```" });
+  /** Sunday: the Audit's day, so the tick opens a pending Audit beside whatever the replay step does. */
+  const tick = { kind: "scheduled-tick", now: "2026-11-08T04:00:00.000Z" } as const;
+  const open = { number: 140, labels: ["fabrik:replay"], body: "", comments: [] };
+
+  it.each<[string, LoopEvent]>([
+    ["the label being added", { kind: "label-added", issue: 130, label: "fabrik:replay" }],
+    [
+      "the Operator's comment",
+      { kind: "issue-comment-created", issue: 130, commenter: "operator", commenterIsBot: false, body: "Go on then.", comment: 901 },
+    ],
+  ])("plans nothing on %s: no comment, run or label change", (_, event) => {
+    const plan = planFor(event, snapshotOf(replay), kitConfig());
+
+    expect(plan.kind).toBe("nothing");
+  });
+
+  it("is taken a step on by the scheduled tick, beside the Audit it opens: the Operator's accepted issue's next Ticket starts", () => {
+    const plan = planFor(tick, tickSnapshot({ kitIssues: [open], replay: replaySlice() }), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        expect.objectContaining({ kind: "open-issue", labels: ["fabrik:audit"] }),
+        { kind: "add-labels", issue: 140, labels: ["agent:replay"] },
+        { kind: "check-design-queue" },
+      ],
+    });
+  });
+
+  it("changes nothing the scheduled tick plans when it's someone else's, so nobody but the Operator spends a Subscription on one", () => {
+    const plan = planFor(tick, tickSnapshot({ kitIssues: [open], replay: replaySlice([aReplayIssue({ author: "someone-else" })]) }), kitConfig());
+
+    expect(plan).toEqual(planFor(tick, tickSnapshot(), kitConfig()));
+    expect(plan).toEqual({ kind: "act", actions: expect.arrayContaining([expect.objectContaining({ kind: "open-issue", labels: ["fabrik:audit"] })]) });
   });
 });
 

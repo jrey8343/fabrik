@@ -28,8 +28,9 @@ import {
   type Window,
   within,
 } from "./retroEvidence.ts";
+import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
+import { isLive, type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
 
 // The GitHub facts the metrics read are the Retro evidence module's (src/kit/retroEvidence.ts).
@@ -97,6 +98,20 @@ export interface OpenRetroFacts {
   readonly createdAt: string;
 }
 
+/** An open `fabrik:replay` issue, as Waiting on you reads it. */
+export interface OpenReplayFacts {
+  readonly number: number;
+  readonly title: string;
+  /** Who filed it: only the Operator's replay issues count, as only they run. */
+  readonly author: string;
+  /** ISO 8601. */
+  readonly createdAt: string;
+  /** When its body was last edited, ISO 8601: the Kit writing its results, once they're in. Null for a body never edited. */
+  readonly lastEditedAt: string | null;
+  /** Its body as it stands, whose markers say whether its results are in. */
+  readonly body: string;
+}
+
 /** What the summary reads of one Product repo on GitHub: what the metrics read, and the rest. */
 export interface GitHubFacts extends MetricFacts {
   readonly specs: readonly SpecFacts[];
@@ -116,6 +131,8 @@ export interface GitHubFacts extends MetricFacts {
   readonly openAudits: readonly OpenAuditFacts[];
   /** The repo's open `fabrik:retro` issues, whoever opened them. */
   readonly openRetros: readonly OpenRetroFacts[];
+  /** The repo's open `fabrik:replay` issues, whoever filed them. */
+  readonly openReplays: readonly OpenReplayFacts[];
   /** The repo's open Maps, by number, oldest first, read as the Map cap reads them: whoever charted them. */
   readonly openMaps: readonly number[];
 }
@@ -148,7 +165,11 @@ export interface CostFigure {
   readonly unknownCost: number;
 }
 
-/** The week's headline figures. */
+/**
+ * The week's headline figures. Every figure but `replaySpend` reads live runs
+ * only, leaving out Replay arms' records and score files and the judge's
+ * records for Replay runs.
+ */
 export interface WeeklySummary {
   /** The Monday the week began on, in the Operator's time zone, as `yyyy-mm-dd`. */
   readonly week: string;
@@ -156,6 +177,12 @@ export interface WeeklySummary {
   readonly cost: WeekOverWeek<number>;
   /** How many of the week's records the cost leaves out, their cost basis being unknown. */
   readonly unknownCost: WeekOverWeek<number>;
+  /**
+   * What the week's Replays cost: every Replay arm's record that ended in the
+   * week, the judge's runs scoring them included. Every other figure leaves
+   * Replays out. Null in a week with no Replay record.
+   */
+  readonly replaySpend: WeekOverWeek<ReplaySpend | null>;
   /**
    * For each agent PR merged in the week, the cost of every Implement, Retry,
    * Step-up and Review record on its Ticket, whatever week the run was in,
@@ -214,6 +241,13 @@ export interface WeeklySummary {
   readonly scoringCost: WeekOverWeek<ScoringCost>;
   /** One section per Product repo, in the order the facts came. */
   readonly repos: readonly RepoSection[];
+}
+
+/** The summed cost of a week's Replay records, in USD. */
+export interface ReplaySpend {
+  readonly usd: number;
+  /** How many Replay records it leaves out, their cost basis being unknown. */
+  readonly unknownCost: number;
 }
 
 /** The summed cost of a week's judge runs, in USD, and its share of the week's cost. */
@@ -308,6 +342,8 @@ export type WaitingItem =
   | (ItemBase & { readonly kind: "audit" })
   /** The Fabrik App's open Retro, filled or still pending, waiting since it was opened. */
   | (ItemBase & { readonly kind: "retro" })
+  /** The Operator's open replay issue whose results are in, waiting since the Kit wrote them for the Operator to act on and close it. */
+  | (ItemBase & { readonly kind: "replay" })
   /** An open Map, whoever charted it, waiting since it got `wayfinder:map`. */
   | (ItemBase & {
       readonly kind: "map";
@@ -404,14 +440,20 @@ export interface SubscriptionUsage {
 }
 
 /** The summary to file for the week that just ended, or skip. */
-export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
+export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResult {
+  // A Replay is an experiment: every figure leaves it out, and its spend gets a line of its own.
+  const { records, scoreFiles } = everything;
+  const input: WeeklySummaryInput = { ...everything, records: records.filter(isLive), scoreFiles: scoreFiles.filter(isLive) };
+  const replays = records.filter((record) => !isLive(record));
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
+  const replaySpend = { thisWeek: replaySpendOf(weeks.thisWeek, replays), lastWeek: replaySpendOf(weeks.lastWeek, replays) };
   const repos = input.facts.map((facts) => repoSectionOf(facts, input));
   // Held work counts too, so a queue never sits unseen through a week nothing ran.
   const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null);
-  if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && quiet) return { kind: "skip" };
+  // And a week only Replays ran in is no quiet week either, so what they cost still shows.
+  if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && replaySpend.thisWeek === null && quiet) return { kind: "skip" };
   const change = <K extends keyof WeekMetrics>(metric: K): WeekOverWeek<WeekMetrics[K]> => ({
     thisWeek: thisWeek[metric],
     lastWeek: lastWeek[metric],
@@ -420,6 +462,7 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     week: weeks.thisWeek.monday,
     cost: change("cost"),
     unknownCost: change("unknownCost"),
+    replaySpend,
     costPerMergedPullRequest: change("costPerMergedPullRequest"),
     costPerSpec: change("costPerSpec"),
     spendNeverMerged: change("spendNeverMerged"),
@@ -447,6 +490,12 @@ export function weeklySummary(input: WeeklySummaryInput): WeeklySummaryResult {
     repos,
   };
   return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
+}
+
+/** The summed cost of the Replay records that ended in the week, or null if none did. */
+function replaySpendOf(week: Week, replays: readonly RunRecord[]): ReplaySpend | null {
+  const ended = replays.filter((record) => within(week, record.endedAt));
+  return ended.length === 0 ? null : costOf(ended);
 }
 
 // The metrics: one week's figures, computed the same way for any week. Which
@@ -725,16 +774,17 @@ function hasUnknownCostBasis(record: RunRecord): boolean {
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
-function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: WeeklySummaryInput): RepoSection {
+function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: filedAt }: WeeklySummaryInput): RepoSection {
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
   return {
     repo: facts.repo,
-    // An open Audit, Retro or Map waits on the Operator, so it also keeps a quiet week from being skipped.
+    // An open Audit, Retro, finished Replay or Map waits on the Operator, so it also keeps a quiet week from being skipped.
     waitingOnYou: oldestFirst([
       ...waitingOnYou(facts, items),
       ...openAuditsOf(facts, appLogin, items),
       ...openRetrosOf(facts, appLogin, items),
+      ...finishedReplaysOf(facts, operator, items),
       ...openMapsOf(facts, items),
       ...failedResearchOf(facts, appLogin, items),
     ]),
@@ -751,6 +801,18 @@ function openAuditsOf({ openAudits }: GitHubFacts, appLogin: string, items: Item
 /** The Fabrik App's open Retros, filled or still pending, aged from when each was opened: a person's `fabrik:retro` issue is no Retro. */
 function openRetrosOf({ openRetros }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
   return openRetros.filter((retro) => retro.author === appLogin).map((retro) => ({ kind: "retro", ...items.issue(retro, retro.createdAt) }));
+}
+
+/**
+ * The Operator's open replay issues whose results are in, by the Replay
+ * module's own reading of their markers, aged from when the Kit last wrote
+ * the body, which is when it wrote the results: a replay issue someone else
+ * filed never runs.
+ */
+function finishedReplaysOf({ openReplays }: GitHubFacts, operator: string, items: Items): WaitingItem[] {
+  return openReplays
+    .filter((replay) => isOperatorsReplay(replay, operator) && replayResultsIn(replay.body))
+    .map((replay) => ({ kind: "replay", ...items.issue(replay, replay.lastEditedAt ?? replay.createdAt) }));
 }
 
 /** The Decision labels whose Decisions the Operator resolves live: all but research, which the Researcher resolves AFK. */
@@ -1023,7 +1085,7 @@ function localTime(time: number, timeZone: string): string {
 // Held shows what the Design-session, Monitor and Map caps hold.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
-  const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
+  const { cost, unknownCost, replaySpend, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
   const share = ({ reverted, merged }: RevertRate) => (merged === 0 ? null : reverted / merged);
   const revertCell = (rate: RevertRate) => orNone(share(rate), (value) => `${percent(value)} (${rate.reverted} of ${rate.merged})`);
   const revertChange = pointsChange({ thisWeek: share(revertRate.thisWeek), lastWeek: share(revertRate.lastWeek) });
@@ -1040,6 +1102,9 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     const change = thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, dollars);
     return `| ${name} | ${shown(thisWeek)} | ${shown(lastWeek)} | ${change} |`;
   };
+  // Replay spend sits under the cost it's left out of, in a week with any.
+  const replaySpendRows =
+    replaySpend.thisWeek === null ? [] : [row("Replay spend", { thisWeek: replaySpend.thisWeek.usd, lastWeek: replaySpend.lastWeek?.usd ?? null }, dollars)];
   const costFigures: [string, WeekOverWeek<CostFigure>][] = [
     ["cost per merged PR", costPerMergedPullRequest],
     ["cost per Spec", costPerSpec],
@@ -1051,6 +1116,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     "| | This week | Last week | Change |",
     "| --- | ---: | ---: | ---: |",
     row("API-equivalent cost", cost, dollars),
+    ...replaySpendRows,
     costRow("Cost per merged PR", costPerMergedPullRequest),
     costRow("Cost per Spec", costPerSpec),
     costRow("Spend that never merged", spendNeverMerged),
@@ -1073,6 +1139,8 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
       "",
     );
   }
+  const replaysLeftOut = replaySpend.thisWeek?.unknownCost ?? 0;
+  if (replaysLeftOut > 0) lines.push(`${runsWithUnknownCost(replaysLeftOut)} left out of replay spend.`, "");
   for (const [name, figure] of costFigures) {
     const leftOut = figure.thisWeek.unknownCost;
     if (leftOut > 0) lines.push(`${runsWithUnknownCost(leftOut)} left out of ${name}.`, "");
@@ -1200,6 +1268,8 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `Audit open for ${duration(item.age)}`);
     case "retro":
       return itemLine(item, `Retro open for ${duration(item.age)}`);
+    case "replay":
+      return itemLine(item, `Replay results in for ${duration(item.age)}`);
     case "map":
       return itemLine(item, `Map open for ${duration(item.age)}, ${decisions(item.decisionsWaiting)} waiting on you`);
     case "research-failed":

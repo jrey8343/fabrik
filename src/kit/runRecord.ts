@@ -1,13 +1,17 @@
 // The Run record (ADR-0009): from what the push job knows when an AFK agent
-// run ends, the one schema 3 record of that run, and the paths it and its
+// run ends, the one schema 4 record of that run, and the paths it and its
 // transcript take in the store, or no record when no agent run ended. A judge
 // run, scoring a finished run, gets a record too, in role `score`, from what
-// the score-record job knows when it ends. The stream is read through the one
-// stream-json reader (src/agent/stream.ts). The paths are inside the store,
-// RUN_STORE (src/kit/runStore.ts). A record read back from the store is read
-// at the current schema: a schema 1 record, written before runs were given a
-// Subscription, as being on the first listed one, and a schema 1 or 2 record,
-// written before prototype turns, as no prototype turn. Pure, no I/O.
+// the score-record job knows when it ends, and so does a Replay arm's
+// Implement or Review run (#156), from what the replay-record job knows, at
+// paths that name its arm, as its patch's path does. The stream is read
+// through the one stream-json reader (src/agent/stream.ts). The paths are
+// inside the store, RUN_STORE (src/kit/runStore.ts). A record read back from
+// the store is read at the current schema: a schema 1 record, written before
+// runs were given a Subscription, as being on the first listed one, a schema
+// 1 or 2 record, written before prototype turns, as no prototype turn, and a
+// schema 1, 2 or 3 record, written before Replays, as no replay's. Pure, no
+// I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
@@ -69,10 +73,53 @@ export interface RateLimitReading {
 /** A record's role: the agent role that ran, or `score` for a judge run scoring a finished run. */
 export type RunRecordRole = AgentRole | "score";
 
-/** The schema a Run record is written at: 2 added `subscription`, 3 added `prototype`. */
-export const RUN_RECORD_SCHEMA = 3;
+/** The schema a Run record is written at: 2 added `subscription`, 3 added `prototype`, 4 added `replay`. */
+export const RUN_RECORD_SCHEMA = 4;
 
-/** One AFK agent run, schema 3. */
+/** A Replay's two arms (#156): the baseline, run as the Ticket was built, and the variant, with the one variable changed. */
+export type ReplayArm = "baseline" | "variant";
+
+/** A Replay's two arms, in the order a Replay runs, writes and shows them. */
+export const REPLAY_ARMS: readonly ReplayArm[] = ["baseline", "variant"];
+
+export function isReplayArm(value: unknown): value is ReplayArm {
+  return (REPLAY_ARMS as readonly unknown[]).includes(value);
+}
+
+/**
+ * The roles a Replay arm runs, one Implement run and then one Review of its
+ * diff: the only roles whose model or effort a Replay can change.
+ */
+export type ReplayRole = Extract<AgentRole, "implement" | "review">;
+
+/** A Replay arm's roles, in the order it runs them. */
+export const REPLAY_ROLES: readonly ReplayRole[] = ["implement", "review"];
+
+/** Which Replay a run was an arm of, and of which Ticket. */
+export interface ReplayRun {
+  /** The replay issue, the `fabrik:replay` issue the Operator filed. */
+  readonly issue: number;
+  readonly arm: ReplayArm;
+  /** The replayed Ticket, the run's subject. */
+  readonly ticket: number;
+  /**
+   * For a `kit` variant only, the candidate Kit sha whose prompts and Base
+   * skills the arm loaded over the pinned release, which the record's own
+   * `kitSha` still names. null for a baseline and a model or effort variant.
+   */
+  readonly candidateSha: string | null;
+}
+
+/**
+ * Whether a Run record or score file is a live run's, not a Replay arm's.
+ * Every metric the Weekly summary and the Retro read leaves Replays out, so
+ * an experiment never counts as the factory's own work.
+ */
+export function isLive({ replay }: { readonly replay: ReplayRun | null }): boolean {
+  return replay === null;
+}
+
+/** One AFK agent run, schema 4. */
 export interface RunRecord {
   readonly schema: typeof RUN_RECORD_SCHEMA;
   readonly kitSha: string;
@@ -101,6 +148,8 @@ export interface RunRecord {
   readonly requestChanges: boolean;
   /** Whether the run was a Design session's prototype turn (#155), whose role stays `design`. */
   readonly prototype: boolean;
+  /** null for a live run, else the Replay arm the run was. */
+  readonly replay: ReplayRun | null;
   /**
    * The commit the run started from: an Implement branch's base, a Review's PR
    * head, the event's commit for Triage and Design, the Audit's marked commit
@@ -180,7 +229,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
   const { role, issue, pullRequest, job } = ran;
   const kit = end.needs["kit"]?.outputs ?? {};
   const agent = job?.outputs ?? {};
-  const { recordPath, transcriptPath } = pathsFor({ ...end, role }, end.transcript !== null);
+  const { recordPath, transcriptPath } = pathsFor({ ...end, role, replay: null }, end.transcript !== null);
   const implement = role === "implement";
   const facts: RunFacts = {
     kitSha: end.kitSha,
@@ -197,6 +246,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     stepUp: implement && kit["step-up"] === "true",
     requestChanges: implement && kit["request-changes"] === "true",
     prototype: isPrototypeTurn(end.needs, role),
+    replay: null,
     baseSha: nonEmpty(agent["base-sha"]),
     jobResult: job?.result ?? "unknown",
     infrastructureFailure: ran.failure,
@@ -225,8 +275,8 @@ export interface JudgeRunEnd {
 
 /**
  * The judge run's record, in role `score`, and its paths beside the scored
- * run's. Its subject is the scored run's; what ran, how it ended, the effort
- * it spent, its cost and its weekly-limit reading are its own.
+ * run's. Its subject and Replay are the scored run's; what ran, how it ended,
+ * the effort it spent, its cost and its weekly-limit reading are its own.
  */
 export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
   const { scored, judge } = end;
@@ -248,10 +298,76 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     stepUp: false,
     requestChanges: false,
     prototype: false,
+    // A Replay arm's judge run is the arm's too, so its cost counts as the Replay's.
+    replay: scored.replay,
     baseSha: null,
     jobResult: judge.result,
     infrastructureFailure: failureOf(judge.result, judge.outputs["secrets-step"], end.failureReport),
     verdict: null,
+  };
+  return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
+}
+
+/** What the replay-record job knows when one arm's Implement or Review run, replaying a merged Ticket, ends. */
+export interface ReplayRunEnd {
+  /** Which Replay, arm and Ticket the run was. */
+  readonly replay: ReplayRun;
+  readonly role: ReplayRole;
+  /** The replayed Ticket's merged PR. */
+  readonly pullRequest: number;
+  /** The Ticket's `baseSha`, its first Implement run's base, which both arms start from. */
+  readonly baseSha: string;
+  /** The Product repo, as `owner/name`. */
+  readonly repo: string;
+  /** The Actions run id and its attempt, which both arms share. */
+  readonly runId: number;
+  readonly runAttempt: number;
+  /** The pinned Kit release writing the record, whatever prompts and Base skills the arm loaded. */
+  readonly kitSha: string;
+  /** When the replay-record job ran, as an ISO 8601 time. */
+  readonly endedAt: string;
+  /** The arm's job for the role: how it ended, and the outputs it passed out as an agent job does (`secrets-step`, `model`, `effort`). */
+  readonly job: NeededJob;
+  /** The arm's model and effort for the role, which the record names when the job passed out none. */
+  readonly settings: { readonly model: string; readonly effort: string | null };
+  /** The Subscription the Kit job gave the Replay. */
+  readonly subscription: string;
+  /** The agent result artifact's text, or null if there was none. */
+  readonly agentResult: string | null;
+  /** The failure report artifact's text, or null if there was none. */
+  readonly failureReport: string | null;
+  /** The transcript's stream-json lines, or null if no transcript survived the run. */
+  readonly transcript: readonly string[] | null;
+}
+
+/**
+ * A Replay arm's run's record, at its arm's paths. It is a first run on the
+ * replayed Ticket and its merged PR, started from the Ticket's `baseSha`:
+ * never a Retry, Step-up or Request-changes run.
+ */
+export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
+  const { replay, role, job } = end;
+  const { recordPath, transcriptPath } = pathsFor({ ...end, role, replay }, end.transcript !== null);
+  const facts: RunFacts = {
+    kitSha: end.kitSha,
+    repo: end.repo,
+    runId: end.runId,
+    runAttempt: end.runAttempt,
+    role,
+    issue: replay.ticket,
+    pullRequest: end.pullRequest,
+    endedAt: end.endedAt,
+    ...whatRan(job.outputs, {}, end.settings),
+    subscription: end.subscription,
+    retry: 0,
+    stepUp: false,
+    requestChanges: false,
+    prototype: false,
+    replay,
+    baseSha: end.baseSha,
+    jobResult: job.result,
+    infrastructureFailure: failureOf(job.result, job.outputs["secrets-step"], end.failureReport),
+    verdict: role === "review" ? verdictOf(end.agentResult) : null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
 }
@@ -303,18 +419,21 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
 /**
  * A Run record as read back from the store, at the current schema: a schema 1
  * record, which names no Subscription, is read as being on the first listed
- * one, and a schema 1 or 2 record, written before there were prototype turns,
- * as no prototype turn. Null for anything that isn't a record of a schema the
- * Kit knows.
+ * one, a schema 1 or 2 record, written before there were prototype turns, as
+ * no prototype turn, and a schema 1, 2 or 3 record, written before there were
+ * Replays, as no replay's. Null for anything that isn't a record of a schema
+ * the Kit knows.
  */
 export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
   if (typeof stored !== "object" || stored === null) return null;
   const { schema } = stored as { schema?: unknown };
   if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
-  if (schema === 2) return { ...(stored as Omit<RunRecord, "schema" | "prototype">), schema: RUN_RECORD_SCHEMA, prototype: false };
+  const current: Pick<RunRecord, "schema" | "replay"> = { schema: RUN_RECORD_SCHEMA, replay: null };
+  if (schema === 3) return { ...(stored as Omit<RunRecord, "schema" | "replay">), ...current };
+  if (schema === 2) return { ...(stored as Omit<RunRecord, "schema" | "prototype" | "replay">), ...current, prototype: false };
   if (schema === 1) {
-    const record = stored as Omit<RunRecord, "schema" | "subscription" | "prototype">;
-    return { ...record, schema: RUN_RECORD_SCHEMA, subscription: firstSubscription({ subscriptions }), prototype: false };
+    const record = stored as Omit<RunRecord, "schema" | "subscription" | "prototype" | "replay">;
+    return { ...record, ...current, subscription: firstSubscription({ subscriptions }), prototype: false };
   }
   return null;
 }
@@ -405,11 +524,30 @@ export function recordPathOf(run: StoredRun): string {
 }
 
 /**
- * A run in one role, as the store tells it from every other: its repo, its
- * workflow run and attempt, and the role. Its record, transcript and score
- * files, and the commits that write them, all name it.
+ * Where a Replay arm's patch, its diff from the Ticket's `baseSha`, sits in
+ * the store: by the Product repo, the replay issue, the Ticket and the arm,
+ * so each arm of each Ticket has one.
  */
-export type RunIdentity = Pick<RunRecord, "repo" | "runId" | "runAttempt" | "role">;
+export function replayPatchPath(repo: string, { issue, ticket, arm }: Pick<ReplayRun, "issue" | "ticket" | "arm">): string {
+  return `replays/${repo}/${issue}/${ticket}-${arm}.patch`;
+}
+
+/**
+ * Where a Replay arm's gates sit in the store, beside its patch: how the
+ * Sandbox's setup, build and tests, and the merged PR's tests, went on its
+ * diff, which the results read back for every Ticket done (src/kit/replay.ts).
+ */
+export function replayGatesPath(repo: string, at: Pick<ReplayRun, "issue" | "ticket" | "arm">): string {
+  return replayPatchPath(repo, at).replace(/\.patch$/, ".gates.json");
+}
+
+/**
+ * A run in one role, as the store tells it from every other: its repo, its
+ * workflow run and attempt, the role, and for a Replay's run its arm, since
+ * both arms run in one workflow run. Its record, transcript and score files,
+ * and the commits that write them, all name it.
+ */
+export type RunIdentity = Pick<RunRecord, "repo" | "runId" | "runAttempt" | "role" | "replay">;
 
 /** A run as the store files it: who it is, and when it ended, whose month its files sit in. */
 export type StoredRun = RunIdentity & Pick<RunRecord, "endedAt">;
@@ -417,7 +555,7 @@ export type StoredRun = RunIdentity & Pick<RunRecord, "endedAt">;
 /**
  * A run's name in the store, which its record, its transcript and its score
  * files share: the run's repo, the month (UTC) it ended, its workflow run and
- * attempt, and the role.
+ * attempt, the role, and a Replay's arm.
  */
 export function runStoreName(run: StoredRun): string {
   const month = new Date(run.endedAt).toISOString().slice(0, 7);
@@ -429,9 +567,10 @@ export function runKey(run: RunIdentity): string {
   return `${run.repo}/${runName(run)}`;
 }
 
-/** A run's name within its repo and month: its workflow run, attempt and role. */
-function runName({ runId, runAttempt, role }: RunIdentity): string {
-  return `${runId}-${runAttempt}-${role}`;
+/** A run's name within its repo and month: its workflow run, attempt and role, and a Replay's arm after them. */
+function runName({ runId, runAttempt, role, replay }: RunIdentity): string {
+  const name = `${runId}-${runAttempt}-${role}`;
+  return replay === null ? name : `${name}-replay-${replay.arm}`;
 }
 
 /** A positive whole number from a job output, or null. */

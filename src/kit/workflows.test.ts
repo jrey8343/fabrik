@@ -2,11 +2,16 @@
 // files it names, since nothing runs the workflows before a release.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { kitJobOutputs } from "./jobs.ts";
 import { JUDGE_JOB } from "./judge.ts";
 import { PREVIEW_POLL_MINUTES } from "./previewLink.ts";
 import { PROTOTYPE_JOB, RETRO_EVIDENCE_JOB } from "./pushJob.ts";
+import { REPLAY_ARMS } from "./runRecord.ts";
 import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
+import { kitConfig } from "../__fixtures__/snapshots.ts";
+import { IMPLEMENT_JOB_NAME } from "../github/snapshot.ts";
+import { REPLAY_ROUTE_JOB_MINUTES } from "../loop/replayGate.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE, PROTOTYPE_GALLERY_FILE } from "../evidence/capture.ts";
 import { MAP_INPUTS_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
@@ -256,6 +261,23 @@ describe("The Kit's workflows", () => {
     expect(fetch).toContain("FABRIK_ROLE: ${{ inputs.role }}");
     expect(fetch).toContain('node kit/src/skills/fetch.ts product "$FABRIK_ROLE"');
     expect(prepareAgent).not.toContain("load-secrets-action");
+  });
+
+  it("prepare-agent lays a replay arm's candidate Kit sha over the Kit through its read-only token, before it fetches the skills, and only when given one", () => {
+    const steps = prepareAgent.split(/\n(?=    - )/);
+    const overlay = steps.findIndex((step) => step.includes("src/kit/overlay-main.ts"));
+    const fetch = steps.findIndex((step) => step.includes("src/skills/fetch.ts"));
+
+    expect(prepareAgent).toMatch(/\n  kit-candidate:\n\s+description: .*\n\s+required: false\n\s+default: ""\n/);
+    expect(overlay).toBeGreaterThan(steps.findIndex((step) => step.includes("npm ci")));
+    expect(overlay).toBeLessThan(fetch);
+    expect(steps[overlay]).toContain("if: inputs.kit-candidate != ''");
+    expect(steps[overlay]).toContain("GH_TOKEN: ${{ inputs.github-token }}");
+    expect(steps[overlay]).toContain('run: node kit/src/kit/overlay-main.ts kit "$FABRIK_KIT_CANDIDATE"');
+  });
+
+  it("no live job lays a candidate Kit sha over its Kit", () => {
+    for (const { text } of workflows) expect(text).not.toContain("kit-candidate");
   });
 
   describe("schedule.yml's weekly skills bump job", () => {
@@ -1165,13 +1187,13 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
 });
 
 describe("loop.yml's claim job", () => {
-  it("is named for what it claims of any run, a Ticket's, a research Decision's or a Design session's, keeping its job id", () => {
+  it("is named for what it claims of any run, a Ticket's, a research Decision's, a Design session's or a replay Ticket's, keeping its job id", () => {
     expect(job("implement-claim")).toMatch(/^ {2}implement-claim:\n {4}name: Claim the work\n/);
   });
 
-  it("takes agent:design off as the Design session's first turn starts, and agent:research as a Research run starts, as it takes agent:implement off", () => {
+  it("takes agent:design off as the Design session's first turn starts, agent:research as a Research run starts and agent:replay as a replay Ticket's run starts, as it takes agent:implement off", () => {
     expect(job("implement-claim")).toContain(
-      "if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')",
+      "if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || needs.kit.outputs.route == 'replay' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')",
     );
   });
 });
@@ -1890,4 +1912,303 @@ describe("The Subscription each agent job runs on", () => {
       expect(text).not.toContain("op://Fabrik/Claude token");
     },
   );
+
+  it.each(["replay-implement", "replay-review"])("loop.yml's %s job loads no Claude token itself: its action loads the Kit job's Subscription's, which the job passes in", (name) => {
+    const body = jobIn(loop, name);
+
+    expect(claudeTokensIn(body)).toEqual([]);
+    expect(body).toContain("subscription: ${{ needs.kit.outputs.subscription }}");
+    expect(claudeTokensIn(actionNamed(name).text)).toEqual(["op://Fabrik/${{ inputs.subscription }}/credential"]);
+  });
+});
+
+// A Replay Ticket's run (#156): the claim, then each arm's Implement, gates, Review and judge jobs as a
+// matrix, then the replay-record job, the replay's own push job (ADR-0009's addendum). The composite actions
+// they run hold their own steps' wiring (src/kit/replayActions.test.ts); these hold the jobs' own.
+describe("loop.yml's replay jobs", () => {
+  /** Only on the Ticket this run's claim marked in progress, which the Kit job routed on. */
+  const CLAIMED = "needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket";
+  const ARM_JOBS = ["replay-implement", "replay-gates", "replay-review", "replay-score"];
+  const REPLAY_JOBS = [...ARM_JOBS, "replay-record"];
+  /** Every write credential, or way to one, a job that runs an agent or Product code must never hold (ADR-0002). */
+  const WRITE_CREDENTIALS = /create-github-app-token|OP_PUSH_TOKEN|op-push-token|id-token|actions\/store-token|actions\/run-loop|actions\/replay-record|: write\b/;
+  /** A job's YAML without its comments, which name other jobs' credentials. */
+  const codeOf = (body: string) => body.split("\n").filter((line) => !line.trimStart().startsWith("#")).join("\n");
+  const secretsIn = (body: string) => [...body.matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1]);
+  const usesIn = (body: string) => [...body.matchAll(/uses: \.\/kit\/\.github\/actions\/([a-z-]+)/g)].map((match) => match[1]);
+  const needsOf = (body: string) => /\n    needs: \[(.*)\]\n/.exec(body)?.[1]?.split(", ") ?? [];
+
+  it("the Kit job passes out every output its routing writes, a replay's included: the replay issue, the Ticket's baseSha and each arm's settings", () => {
+    const kit = jobIn(loop, "kit");
+
+    for (const output of Object.keys(kitJobOutputs(null, null, kitConfig()))) {
+      expect(kit, output).toContain(`\n      ${output}: \${{ steps.route.outputs.${output} }}\n`);
+    }
+  });
+
+  // Each arm's settings hold the replay issue's model names, the Operator's text: in a run: script they could inject a command.
+  it("reads each arm's settings only through an action's inputs, never in a run: script", () => {
+    const lines = loop.split("\n").filter((line) => line.includes("replay-arms") && !line.trimStart().startsWith("#"));
+
+    expect(lines).toContainEqual("      replay-arms: ${{ steps.route.outputs.replay-arms }}");
+    for (const line of lines.filter((use) => !use.includes("steps.route.outputs"))) expect(line).toBe("          replay-arms: ${{ needs.kit.outputs.replay-arms }}");
+  });
+
+  it("claims the replay Ticket with the claim job, which passes out the Ticket it marked in progress in this run", () => {
+    const claim = job("implement-claim");
+    const loopStep = stepsOf(claim).find((step) => step.includes("uses: ./kit/.github/actions/run-loop"));
+
+    expect(claim).toMatch(/\n    if: .*needs\.kit\.outputs\.route == 'replay'/);
+    expect(claim).toContain("\n      replay-ticket: ${{ steps.claim.outputs.replay-ticket }}\n");
+    expect(loopStep).toContain("id: claim\n");
+    expect(actionNamed("run-loop").text).toMatch(/\n  replay-ticket:\n\s+description: .*\n\s+value: \$\{\{ steps\.loop\.outputs\.replay-ticket \}\}\n/);
+    expect(readFileSync(new URL("src/main.ts", root), "utf8")).toContain("`replay-ticket=${claimed}\\n`");
+  });
+
+  it("claims one replay Ticket at a time across the repo, so two replay issues' claims can't both find none in progress, and holds back no other claim", () => {
+    expect(job("implement-claim")).toContain(
+      "\n    concurrency:\n      group: ${{ needs.kit.outputs.route == 'replay' && 'fabrik-replay-claim' || format('fabrik-claim-{0}', github.run_id) }}\n      cancel-in-progress: false\n      queue: max\n",
+    );
+  });
+
+  it.each(REPLAY_JOBS)("%s runs only on the Ticket the claim marked in progress in this run, once the claim has", (name) => {
+    expect(needsOf(job(name))).toEqual(expect.arrayContaining(["kit", "implement-claim"]));
+    expect(/\n    if: (.*)\n/.exec(job(name))?.[1]).toContain(CLAIMED);
+  });
+
+  it.each(ARM_JOBS)("%s runs both arms as a matrix, neither one's failure cancelling the other's", (name) => {
+    expect(job(name)).toContain(`\n    strategy:\n      fail-fast: false\n      matrix:\n        arm: [${REPLAY_ARMS.join(", ")}]\n`);
+    expect(job(name)).toMatch(/\n    name: "Replay [a-z]+ \(\$\{\{ matrix\.arm \}\}\)"\n/);
+    for (const step of stepsOf(job(name)).filter((one) => one.includes("uses: ./kit/.github/actions/replay-"))) {
+      expect(step).toContain("arm: ${{ matrix.arm }}");
+    }
+  });
+
+  it("runs the gates, Review and judge of each arm once its Implement job has ended, whatever it came to, unless the run was cancelled", () => {
+    for (const name of ["replay-gates", "replay-review", "replay-score"]) {
+      expect(needsOf(job(name)), name).toEqual(["kit", "implement-claim", "replay-implement"]);
+      expect(job(name), name).toContain(`\n    if: \${{ !cancelled() && ${CLAIMED} }}\n`);
+      // A matrix job's result covers both legs: each action sorts out its own arm.
+      expect(job(name), name).not.toContain("needs.replay-implement.result");
+    }
+  });
+
+  it.each(REPLAY_JOBS)("%s checks out the Kit alone into kit/, at its pinned commit, before the replay action it runs", (name) => {
+    const steps = stepsOf(job(name));
+    const checkouts = steps.filter((step) => step.includes("uses: actions/checkout@"));
+
+    expect(checkouts).toHaveLength(1);
+    expect(checkouts[0]).toContain("repository: jrey8343/fabrik\n");
+    expect(checkouts[0]).toContain("ref: ${{ needs.kit.outputs.sha }}");
+    expect(checkouts[0]).toContain("path: kit");
+    expect(checkouts[0]).toContain("persist-credentials: false");
+    expect(steps.indexOf(checkouts[0]!)).toBe(0);
+    expect(usesIn(job(name))).toEqual([name]);
+  });
+
+  it.each(REPLAY_JOBS)("%s leaves reading and writing GitHub to its action, never inline gh calls or shell steps", (name) => {
+    expect(job(name)).not.toMatch(/\bgh (api|issue|pr|repo|release|run|workflow) /);
+    expect(job(name)).not.toMatch(/\n\s+run: /);
+  });
+
+  it.each(REPLAY_JOBS)("%s gives its action every input the action requires, and no other", (name) => {
+    const step = stepsOf(job(name)).find((one) => one.includes(`uses: ./kit/.github/actions/${name}`)) ?? "";
+    const given = [...step.matchAll(/^ {10}([a-z-]+): /gm)].map((match) => match[1]);
+    const required = [...actionNamed(name).text.matchAll(/^ {2}([a-z-]+):\n\s+description: .*\n\s+required: true$/gm)].map((match) => match[1]);
+
+    expect(required.length).toBeGreaterThan(0);
+    expect(given.toSorted()).toEqual(required.toSorted());
+  });
+
+  describe("replay implement", () => {
+    const implement = () => job("replay-implement");
+
+    it("is never named Implement, so Dispatch's count of Implement runs in flight passes both arms by", () => {
+      const name = /\n    name: "(.*)"\n/.exec(implement())?.[1] ?? "";
+
+      expect(name).not.toBe("");
+      for (const arm of REPLAY_ARMS) {
+        const shown = name.replace("${{ matrix.arm }}", arm);
+        expect(shown).not.toBe(IMPLEMENT_JOB_NAME);
+        expect(`fabrik / ${shown}`.endsWith(` / ${IMPLEMENT_JOB_NAME}`)).toBe(false);
+      }
+    });
+
+    it("holds no write credential: read permissions, and only the implement service account", () => {
+      expect(permissionsIn(implement())).toEqual(["contents: read", "issues: read"]);
+      expect(secretsIn(implement())).toEqual(["OP_IMPLEMENT_TOKEN"]);
+      expect(codeOf(implement())).not.toMatch(WRITE_CREDENTIALS);
+    });
+
+    it("runs within the Implement role's timeout, on the Kit job's Ticket, baseSha, arms and Subscription", () => {
+      const step = stepsOf(implement()).find((one) => one.includes("uses: ./kit/.github/actions/replay-implement"));
+
+      expect(implement()).toContain("\n    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}\n");
+      for (const input of ["ticket", "base-sha", "replay-arms", "subscription"]) expect(step).toContain(`${input}: \${{ needs.kit.outputs.${input} }}`);
+      expect(step).toContain("op-implement-token: ${{ secrets.OP_IMPLEMENT_TOKEN }}");
+      expect(step).toContain("github-token: ${{ github.token }}");
+    });
+  });
+
+  describe("replay gates", () => {
+    const gates = () => job("replay-gates");
+
+    it("is never named Implement, and holds no write credential: read permissions, and only the implement service account, for the test secrets", () => {
+      expect(/\n    name: "(.*)"\n/.exec(gates())?.[1]).not.toContain(IMPLEMENT_JOB_NAME);
+      expect(permissionsIn(gates())).toEqual(["contents: read", "pull-requests: read"]);
+      expect(secretsIn(gates())).toEqual(["OP_IMPLEMENT_TOKEN"]);
+      expect(codeOf(gates())).not.toMatch(WRITE_CREDENTIALS);
+    });
+
+    it("runs within the Implement role's timeout, on the Kit job's Ticket, merged PR and baseSha", () => {
+      const step = stepsOf(gates()).find((one) => one.includes("uses: ./kit/.github/actions/replay-gates"));
+
+      expect(gates()).toContain("\n    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}\n");
+      for (const input of ["ticket", "pull-request", "base-sha"]) expect(step).toContain(`${input}: \${{ needs.kit.outputs.${input} }}`);
+    });
+  });
+
+  describe("replay review", () => {
+    const review = () => job("replay-review");
+
+    it("holds only the agent service account, with read permissions and no write credential", () => {
+      expect(permissionsIn(review())).toEqual(["contents: read", "issues: read"]);
+      expect(secretsIn(review())).toEqual(["OP_AGENT_TOKEN"]);
+      expect(codeOf(review())).not.toMatch(WRITE_CREDENTIALS);
+    });
+
+    it("runs within the Review role's timeout, on the Kit job's Ticket, baseSha, arms and Subscription", () => {
+      const step = stepsOf(review()).find((one) => one.includes("uses: ./kit/.github/actions/replay-review"));
+
+      expect(review()).toContain("\n    timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}\n");
+      for (const input of ["ticket", "base-sha", "replay-arms", "subscription"]) expect(step).toContain(`${input}: \${{ needs.kit.outputs.${input} }}`);
+    });
+  });
+
+  it("scores each arm with only the agent service account, reading the Ticket and nothing else, within the Kit's judge timeout", () => {
+    const score = job("replay-score");
+
+    expect(permissionsIn(score)).toEqual(["issues: read"]);
+    expect(secretsIn(score)).toEqual(["OP_AGENT_TOKEN"]);
+    expect(codeOf(score)).not.toMatch(WRITE_CREDENTIALS);
+    expect(score).toContain(`\n    timeout-minutes: ${JUDGE_TIMEOUT_MINUTES}\n`);
+    expect(stepsOf(score).find((one) => one.includes("uses: ./kit/.github/actions/replay-score"))).toContain("kit-outputs: ${{ toJSON(needs.kit.outputs) }}");
+  });
+
+  // The tick releases a Ticket in progress longer than these jobs can take end to end (replayRunLimitMinutes).
+  it("runs within the timeouts the tick counts a replay Ticket's run lasting at most", () => {
+    const { kit, claim, record } = REPLAY_ROUTE_JOB_MINUTES;
+
+    expect(job("kit")).toContain(`\n    timeout-minutes: ${kit}\n`);
+    expect(job("implement-claim")).toContain(`\n    timeout-minutes: ${claim}\n`);
+    expect(job("replay-record")).toContain(`\n    timeout-minutes: ${record}\n`);
+    for (const name of ["replay-implement", "replay-gates"]) expect(job(name)).toContain("\n    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}\n");
+    expect(job("replay-review")).toContain("\n    timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}\n");
+  });
+
+  describe("replay record, the replay's push job", () => {
+    const record = () => job("replay-record");
+
+    it("runs once, after every arm job, whatever they came to and even when the run was cancelled, so no Ticket stays in progress, and never fails the run", () => {
+      expect(needsOf(record())).toEqual(["kit", "implement-claim", ...ARM_JOBS]);
+      expect(record()).toContain(`\n    if: always() && ${CLAIMED}\n`);
+      expect(record()).toContain("\n    continue-on-error: true\n");
+      expect(record()).not.toContain("strategy:");
+    });
+
+    // Its action mints the store's token through store-token and the App token through run-loop (src/kit/replayActions.test.ts).
+    it("checks out only the Kit and holds no permission of its own: only the push service account, which mints the store's token", () => {
+      const step = stepsOf(record()).find((one) => one.includes("uses: ./kit/.github/actions/replay-record"));
+
+      expect(permissionsIn(record())).toEqual(["{}"]);
+      expect(secretsIn(record())).toEqual(["OP_PUSH_TOKEN"]);
+      expect(step).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
+      expect(step).toContain("kit-outputs: ${{ toJSON(needs.kit.outputs) }}");
+      expect(actionNamed("replay-record").text).toContain("uses: ./kit/.github/actions/store-token");
+      expect(record()).not.toMatch(/OP_AGENT_TOKEN|OP_IMPLEMENT_TOKEN|create-github-app-token|id-token/);
+    });
+  });
+
+  it("keeps the push job off the replay route, so the judge, score-record, Dispatch and Design queue jobs skip by themselves", () => {
+    expect(job("push")).toContain("\n    if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay'\n");
+    expect(pushNeeds().filter((need) => need.startsWith("replay-"))).toEqual([]);
+  });
+});
+
+// The replay step's store reads (#156): the tick checks out the store only while a replay issue is open.
+describe("schedule.yml's tick, which takes the Replays' next step", () => {
+  const steps = () => stepsOf(jobIn(schedule, "tick"));
+
+  it("checks out the store for the replay step before the Loop runs, and hands the Loop that checkout, never failing the tick on it", () => {
+    const store = steps().findIndex((step) => step.includes("uses: ./kit/.github/actions/replay-store"));
+    const run = steps().findIndex((step) => step.includes("uses: ./kit/.github/actions/run-loop"));
+
+    expect(store).toBeGreaterThan(0);
+    expect(store).toBeLessThan(run);
+    expect(steps()[store]).toContain("id: replay-store\n");
+    expect(steps()[store]).toContain("continue-on-error: true");
+    expect(steps()[store]).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
+    expect(steps()[run]).toContain("store-dir: ${{ steps.replay-store.outputs.store-dir }}");
+  });
+
+  it("is the only job that checks the store out for the replay step", () => {
+    expect([...workflows.map(({ text }) => text).join("\n").matchAll(/actions\/replay-store\b/g)]).toHaveLength(1);
+  });
+});
+
+describe("The replay-store action, which checks out the store for the tick's replay step", () => {
+  const { text, steps } = actionNamed("replay-store");
+  const at = (pattern: string) => steps.findIndex((step) => step.includes(pattern));
+  const open = () => steps[at("replay-store-main.ts")] ?? "";
+  const checkout = () => steps[at("uses: actions/checkout@")] ?? "";
+
+  it("loads the Fabrik App key through the push service account, and nothing else", () => {
+    const loads = steps.filter((step) => step.includes("1password/load-secrets-action@"));
+
+    expect(loads).toHaveLength(1);
+    expect(loads[0]).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}");
+    expect([...loads[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual([
+      "op://Fabrik App/Fabrik App/client-id",
+      "op://Fabrik App/Fabrik App/private-key",
+    ]);
+  });
+
+  it("looks for an open replay issue with a token that only reads this repo's issues, before it finds or reads the store", () => {
+    const product = steps[at("id: product\n")];
+
+    expect(permissionsOf(product)).toEqual(["issues: read"]);
+    expect(product).not.toContain("repositories:");
+    expect(open()).toContain("GH_TOKEN: ${{ steps.product.outputs.token }}");
+    expect(open()).toContain("id: open\n");
+    expect(at("replay-store-main.ts")).toBeLessThan(at("find-store-main.ts"));
+  });
+
+  it("finds the store, and mints a token that only reads it, only while a replay issue is open, so a repo with none reads nothing new", () => {
+    const store = steps[at("id: store\n")];
+
+    expect(steps[at("find-store-main.ts")]).toContain("if: steps.open.outputs.open == 'true'");
+    expect(store).toContain("if: steps.find-store.outputs.installed == 'true'");
+    expect(store).toContain("repositories: fabrik-runs");
+    expect(permissionsOf(store)).toEqual(["contents: read"]);
+    expect(text).not.toMatch(/permission-[a-z-]+: write/);
+  });
+
+  it("checks out only the Run records the replay step reads, with that token and no credential left behind", () => {
+    expect(checkout()).toContain("if: steps.store.outputs.token != ''");
+    expect(checkout()).toContain("repository: jrey8343/fabrik-runs");
+    expect(checkout()).toContain("token: ${{ steps.store.outputs.token }}");
+    expect(checkout()).toContain("sparse-checkout: ${{ steps.open.outputs.paths }}");
+    expect(checkout()).toContain("sparse-checkout-cone-mode: false");
+    expect(checkout()).toContain("persist-credentials: false");
+    expect(text).toMatch(/\n  store-dir:\n\s+description: .*\n\s+value: \$\{\{ steps\.checked-out\.outputs\.store-dir \}\}\n/);
+    expect(steps[at("id: checked-out\n")]).toContain("if: steps.checkout.outcome == 'success'");
+    expect(steps[at("id: checked-out\n")]).toContain('run: echo "store-dir=$GITHUB_WORKSPACE/store" >>"$GITHUB_OUTPUT"');
+    expect(at("id: checked-out\n")).toBeGreaterThan(at("uses: actions/checkout@"));
+  });
+
+  it("never fails the tick on a store that isn't there or can't be read: each step past the key goes on", () => {
+    for (const pattern of ["replay-store-main.ts", "find-store-main.ts", "id: store\n", "uses: actions/checkout@"]) {
+      expect(steps[at(pattern)], pattern).toContain("continue-on-error: true");
+    }
+  });
 });
