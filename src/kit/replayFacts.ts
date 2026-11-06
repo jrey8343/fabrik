@@ -4,7 +4,7 @@
 // spare-capacity gate weighs, and a waiting request's candidate Tickets,
 // which the Replay module picks from (src/kit/replay.ts). Pure, no I/O.
 import type { MergedFile, ReplayCandidate } from "./replay.ts";
-import { type RateLimitReading, type RunRecord, WEEKLY_LIMIT } from "./runRecord.ts";
+import { isLive, type RateLimitReading, type RunRecord, WEEKLY_LIMIT } from "./runRecord.ts";
 
 /**
  * The newest weekly-limit reading on each Subscription among these Run
@@ -50,7 +50,7 @@ function lastMonthStart(now: string): number {
  * Never another repo's, since Ticket numbers repeat across Product repos.
  */
 export function replayTicketsIn(records: readonly RunRecord[], repo: string): number[] {
-  const tickets = records.filter((record) => record.repo === repo && record.role === "implement" && record.replay === null).map(({ issue }) => issue);
+  const tickets = records.filter((record) => record.repo === repo && record.role === "implement" && isLive(record)).map(({ issue }) => issue);
   return [...new Set(tickets)].toSorted((a, b) => a - b);
 }
 

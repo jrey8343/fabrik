@@ -9,6 +9,7 @@ import {
   type KitConfigSources,
   SKILLS_SOURCES_LOCK_PATH,
 } from "../kit/config.ts";
+import { isOperatorsReplay } from "../kit/replay.ts";
 import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
@@ -929,7 +930,7 @@ async function gatherReplaySlice(
   const maybeOpen = kitIssues.length >= KIT_ISSUES_PAGE || kitIssues.some((issue) => issue.labels.includes(REPLAY_LABEL));
   if (!maybeOpen) return { issues: [], capacity: null, acceptance: null };
   const issues = await gatherReplayIssues(github, repo, appLogin);
-  if (!issues.some((issue) => issue.author === operator)) return { issues, capacity: null, acceptance: null };
+  if (!issues.some((issue) => isOperatorsReplay(issue, operator))) return { issues, capacity: null, acceptance: null };
   const [dispatch, records] = await Promise.all([gatherDispatchCandidates(github, repo, appLogin), store.records()]);
   const acceptance = await gatherReplayAcceptance(github, repo, now, { operator, issues }, records);
   return { issues, capacity: { ...dispatch, weeklyLimits: records === null ? null : newestWeeklyLimits(records, now) }, acceptance };

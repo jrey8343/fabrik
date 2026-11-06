@@ -28,7 +28,7 @@ import {
   type Window,
   within,
 } from "./retroEvidence.ts";
-import { replayResultsIn } from "./replay.ts";
+import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
 import { isLive, type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
@@ -811,7 +811,7 @@ function openRetrosOf({ openRetros }: GitHubFacts, appLogin: string, items: Item
  */
 function finishedReplaysOf({ openReplays }: GitHubFacts, operator: string, items: Items): WaitingItem[] {
   return openReplays
-    .filter((replay) => replay.author === operator && replayResultsIn(replay.body))
+    .filter((replay) => isOperatorsReplay(replay, operator) && replayResultsIn(replay.body))
     .map((replay) => ({ kind: "replay", ...items.issue(replay, replay.lastEditedAt ?? replay.createdAt) }));
 }
 

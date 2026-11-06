@@ -27,7 +27,7 @@ import type { Verdict } from "../loop/types.ts";
 import { FULL_SHA, shortSha } from "../skills/lock.ts";
 import { checkEffort, type KitConfig, refuseFable } from "./config.ts";
 import { SCORERS } from "./rubrics.ts";
-import { isReplayArm, REPLAY_ARMS, REPLAY_ROLES, type ReplayArm, type ReplayRole, replayPatchPath, type RunRecord } from "./runRecord.ts";
+import { isLive, isReplayArm, REPLAY_ARMS, REPLAY_ROLES, type ReplayArm, type ReplayRole, replayPatchPath, type RunRecord } from "./runRecord.ts";
 import { storeFileUrl } from "./runStore.ts";
 import type { ScoreFile } from "./scorer.ts";
 
@@ -374,7 +374,7 @@ function eligibilityOf(candidate: ReplayCandidate | undefined): Eligible | strin
     return `its merged PR #${merged.number} changed ${files}, ${spelled(guard.paths, "and")}, which no agent may change`;
   }
   // A past Replay's runs on the Ticket are never the original's.
-  const originalRuns = candidate.records.filter((record) => record.replay === null && (record.role === "implement" || record.role === "review"));
+  const originalRuns = candidate.records.filter((record) => isLive(record) && (record.role === "implement" || record.role === "review"));
   const implementRuns = originalRuns.filter((record) => record.role === "implement");
   if (implementRuns.length === 0) return "the store holds no Implement run of it";
   const first = firstRunOf(implementRuns);
@@ -1157,7 +1157,7 @@ function ticketResultOf(ticket: number, run: number, outcomes: ReplayOutcomes): 
  * Replay's runs.
  */
 function originalOf(ticket: number, records: readonly RunRecord[]): OriginalResult {
-  const original = records.filter((record) => record.replay === null && record.issue === ticket);
+  const original = records.filter((record) => isLive(record) && record.issue === ticket);
   const first = firstRunOf(original.filter((record) => record.role === "implement"));
   const review =
     first === undefined
@@ -1175,11 +1175,7 @@ function latest(records: readonly RunRecord[]): RunRecord | undefined {
 
 /** What runs spent together: their cost, turns and duration, each unknown when any run's is, or a run is missing. */
 function spentBy(runs: readonly (RunRecord | undefined)[]): Pick<ArmResult, "costUsd" | "turns" | "durationMs"> {
-  const sum = (figure: (record: RunRecord) => number | null) =>
-    runs.reduce<number | null>((total, run) => {
-      const value = run === undefined ? null : figure(run);
-      return total === null || value === null ? null : total + value;
-    }, 0);
+  const sum = (figure: (record: RunRecord) => number | null) => sumOf(runs.map((run) => (run === undefined ? null : figure(run))));
   return { costUsd: sum((run) => run.totalCostUsd), turns: sum((run) => run.turns), durationMs: sum((run) => run.durationMs) };
 }
 

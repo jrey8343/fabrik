@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { isObject } from "../agent/stream.ts";
 import { type Rubric, rubricSet } from "./rubrics.ts";
-import { type RateLimitReading, type ReplayRun, type RunRecord, type RunRecordRole, runStoreName } from "./runRecord.ts";
+import { isLive, type RateLimitReading, type ReplayRun, type RunRecord, type RunRecordRole, runStoreName } from "./runRecord.ts";
 
 /**
  * The share of live first Implement runs scored: one in four. A run is in the
@@ -80,7 +80,7 @@ export function atOrOver(reading: RateLimitReading, limit: number): boolean {
  */
 function picked(record: RunRecord): boolean {
   if (record.role !== "implement") return false;
-  return record.replay !== null || record.retry > 0 || record.stepUp || record.requestChanges || sampled(record.runId);
+  return !isLive(record) || record.retry > 0 || record.stepUp || record.requestChanges || sampled(record.runId);
 }
 
 /** Whether a first Implement run is in the sample, by the SHA-256 of its run id's decimal string. */
