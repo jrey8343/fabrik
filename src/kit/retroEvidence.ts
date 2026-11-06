@@ -15,7 +15,7 @@ import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts
 import { followUpsIn } from "../loop/followUps.ts";
 import { escapeMarkerIn, fromPullRequestIn, fromRetroIn } from "../loop/markers.ts";
 import { retrosIn, retroWindowStart } from "../loop/retro.ts";
-import { type RetroIssueSnapshot, STRENGTHS, type Strength, type Verdict, type VerdictRecord } from "../loop/types.ts";
+import { type RetroEvidence, type RetroIssueSnapshot, STRENGTHS, type Strength, type Verdict, type VerdictRecord } from "../loop/types.ts";
 import { recordPathOf, type RunRecord, runKey } from "./runRecord.ts";
 import { inSample, type ScoreFile } from "./scorer.ts";
 import { cutMarker, cutTo, digestOf, largestCap, type TranscriptDigest } from "./transcriptDigest.ts";
@@ -723,6 +723,71 @@ export function refsOf(bundle: EvidenceBundle): EvidenceRef[] {
   const once = new Map<string, EvidenceRef>();
   for (const each of refs) if (!once.has(each.ref)) once.set(each.ref, each);
   return [...once.values()];
+}
+
+/**
+ * What landing a Retro reads of the bundle its run was given
+ * (src/loop/retroLanding.ts): the window, every ref a proposal may cite, the
+ * streak table, and the transcript of each Run record among the refs that
+ * left one. The push job reads these from the evidence job's artifact, never
+ * from the Retro's output.
+ */
+export function retroEvidenceOf(bundle: EvidenceBundle): RetroEvidence {
+  const records = [
+    ...bundle.escapes.flatMap(({ pullRequests }) => pullRequests.flatMap(({ records, lastPassingReview }) => [...records, ...(lastPassingReview === null ? [] : [lastPassingReview])])),
+    ...bundle.lowScores.flatMap(({ run }) => (run === null ? [] : [run])),
+    ...bundle.sample.flatMap(({ records }) => records),
+  ];
+  const transcripts: Record<string, string> = {};
+  for (const { ref, record } of records) if (record.transcript !== null) transcripts[ref] = record.transcript;
+  return { window: bundle.window, refs: refsOf(bundle), streakTable: bundle.streakTable, transcripts };
+}
+
+/** The evidence job's artifact's one file: the bundle as JSON, which the Retro agent job and the push job each read. */
+export const RETRO_EVIDENCE_FILE = "evidence.json";
+
+/**
+ * Reads the evidence artifact's text back into its bundle, refusing anything
+ * that isn't one in the parts landing a Retro relies on. The Kit's evidence
+ * job wrote it, so this checks its shape, not every field.
+ */
+export function readEvidenceBundle(text: string): EvidenceBundle {
+  const fail = (why: string): never => {
+    throw new Error(`${RETRO_EVIDENCE_FILE} ${why}`);
+  };
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return fail("is not JSON");
+  }
+  if (!isObject(value)) return fail("is not a JSON object");
+  const { window, streakTable, history } = value;
+  if (!isObject(window) || !isTime(window["start"]) || !isTime(window["end"])) return fail("has no window from one ISO 8601 time to another");
+  for (const part of ["escapes", "feedback", "followUps", "lowScores", "sample"] as const) {
+    if (!Array.isArray(value[part])) fail(`has no ${part} list`);
+  }
+  if (!Array.isArray(streakTable) || !streakTable.every(isStreakRow)) return fail("has no streak table of PRs, each with its ref, number and flags");
+  if (!isObject(history) || !Array.isArray(history["retros"]) || !Array.isArray(history["filed"])) return fail("has no history of earlier Retros");
+  return value as unknown as EvidenceBundle;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTime(value: unknown): value is string {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+}
+
+function isStreakRow(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  const { ref, number, escaped, reverted, requestChanges } = value;
+  return (
+    typeof ref === "string" &&
+    Number.isInteger(number) &&
+    [escaped, reverted, requestChanges].every((flag) => typeof flag === "boolean")
+  );
 }
 
 /** A run's transcript's digest held to a budget, or null when the store holds no transcript of it. */
