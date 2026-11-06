@@ -84,6 +84,12 @@ describe("Product intent in the Triage prompt", () => {
     expect(wontfix).toContain("an idea on none of its lists, with your comment saying it isn't on the Roadmap");
   });
 
+  it("counts the Vision and Roadmap's folder among the trust roots of test 5", async () => {
+    const decision = section(await prompt("triage"), "The decision");
+    const test5 = decision.split("\n").find((line) => line.startsWith("5. ")) ?? "";
+    expect(test5).toContain("`docs/product/`");
+  });
+
   it("reads the Vision and the Roadmap if they exist, and lets the Roadmap gate nothing", async () => {
     const rules = section(await prompt("triage"), "What you can and can't do");
     expect(rules).toContain("`docs/product/vision.md`");
