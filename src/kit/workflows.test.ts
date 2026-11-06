@@ -767,6 +767,48 @@ describe("loop.yml's prototype job", () => {
   });
 });
 
+// A Design session's prototype turn builds the issue's prototype branch (#155),
+// but only the push job writes it, after the trust-root guard (ADR-0005).
+describe("prototype/<issue>, which only the push job writes", () => {
+  const kitFiles = [...workflows, ...actions.map(({ name, text }) => ({ path: `.github/actions/${name}/action.yml`, text }))];
+  /** Every line of the Kit's workflows and actions that names a prototype branch, past their comments. */
+  const naming = kitFiles.flatMap(({ path, text }) =>
+    text
+      .split("\n")
+      .filter((line) => line.includes("prototype/") && !line.trimStart().startsWith("#"))
+      .map((line) => `${path}: ${line.trim()}`),
+  );
+
+  it("is pushed by no step of the Kit's workflows or actions: they run no git push, leaving every branch to the Loop's push job", () => {
+    for (const { text } of kitFiles) expect(text).not.toMatch(/git push/);
+  });
+
+  it("is named only where the prototype job checks it out, to read an earlier round's branch", () => {
+    const step = stepsOf(job(PROTOTYPE_JOB)).find((text) => text.includes("BRANCH: prototype/")) ?? "";
+
+    expect(naming).toEqual([`.github/workflows/loop.yml: BRANCH: ${prototypeBranchFor(7).replace("7", "${{ github.event.issue.number }}")}`]);
+    expect(step).toContain('git checkout --quiet -B "$BRANCH" "refs/remotes/origin/$BRANCH"');
+  });
+
+  it("is written by the push job alone: the only job that runs the Loop as the Fabrik App on what an agent job left", () => {
+    const loopJobs = loop.split(/\n(?=  [a-z-]+:\n)/).filter((section) => section.includes("uses: ./kit/.github/actions/run-loop"));
+    const onAgentResults = loopJobs.filter((section) => section.includes("FABRIK_NEEDS: ${{ toJSON(needs) }}"));
+
+    expect(onAgentResults.map((section) => /^ {2}([a-z-]+):\n/.exec(section)?.[1])).toEqual(["push"]);
+    expect(schedule).not.toContain("FABRIK_NEEDS");
+  });
+
+  it("can't be written by the prototype job that builds it: read-only permissions, no Fabrik App token, and no credential left in its checkout", () => {
+    const permissions = /\n    permissions:\n((?: {6}.*\n)+)/.exec(job(PROTOTYPE_JOB))?.[1] ?? "";
+    const checkouts = stepsOf(job(PROTOTYPE_JOB)).filter((step) => step.includes("uses: actions/checkout@"));
+
+    expect(permissions).not.toMatch(/write/);
+    expect(job(PROTOTYPE_JOB)).not.toMatch(/OP_PUSH_TOKEN|create-github-app-token|run-loop/);
+    expect(checkouts.length).toBeGreaterThan(0);
+    for (const checkout of checkouts) expect(checkout).toContain("persist-credentials: false");
+  });
+});
+
 // A UI PR's Review (#153): the Kit job passes out where its marker says the
 // UI evidence is kept, and the Review job downloads it for the Reviewer.
 describe("loop.yml's Review job on a UI PR", () => {
