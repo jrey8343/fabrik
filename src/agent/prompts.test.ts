@@ -15,6 +15,7 @@ import { readTriageOutput } from "../loop/triageOutput.ts";
 import { STRENGTHS } from "../loop/types.ts";
 import { CONSIDERED_PREFIX, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
+import { MAP_CAP_HEADING } from "./design.ts";
 import { OPERATOR_COMMENTS_HEADING } from "./operatorComments.ts";
 import { RETRO_ISSUE_HEADING, RETRO_SECTIONS } from "./retro.ts";
 
@@ -234,6 +235,50 @@ describe("Product intent in the Design prompt", () => {
     const turn = section(await prompt("design"), "Your turn");
     const trustRoots = lineStarting(turn, "Keep in mind what an Implementer can't change: the trust-root files");
     expect(trustRoots).toContain("anything under `docs/product/` at the repo root");
+  });
+});
+
+describe("The Map question in the Design prompt", () => {
+  it("asks in round 1 whether to chart a Map, with a recommendation, when the cap has room and Triage flagged fog or Design judges it so", async () => {
+    const maps = section(await prompt("design"), "Maps");
+    const round1 = lineStarting(maps, "- **Ask in round 1 when the cap has room.**");
+    expect(round1).toContain(`"${MAP_CAP_HEADING}" says this session may offer a Map`);
+    expect(round1).toContain(`Triage's comment carries the line \`${FOG_LINE}\``);
+    expect(round1).toContain("or you judge the destination can't be designed in one session");
+    expect(round1).toContain('round 1 asks "Chart this as a Map instead?" with your recommendation');
+  });
+
+  it("lets any later round end in a Map when the Operator asks for one, while the cap has room", async () => {
+    const later = lineStarting(section(await prompt("design"), "Maps"), "- **End in a Map in any later round when the Operator asks for one**");
+    expect(later).toContain(`while "${MAP_CAP_HEADING}" still says you may`);
+  });
+
+  it("asks no Map question on an issue one session can design, clear but large ones included", async () => {
+    const ordinary = lineStarting(section(await prompt("design"), "Maps"), "- **Ask no Map question on an issue this session can design**");
+    expect(ordinary).toContain("clear but large ones included");
+  });
+
+  it("doesn't offer a Map while the cap is full, and says which open Map holds it", async () => {
+    const full = lineStarting(section(await prompt("design"), "Maps"), "- **When the cap is full, don't offer a Map.**");
+    expect(full).toContain("say in the next round's intro which open Map holds the cap");
+    expect(full).toContain("Never end in `map` then");
+  });
+
+  it("names the part the Map cap arrives under, after the issue", async () => {
+    expect(section(await prompt("design"), "Maps")).toContain(`"${MAP_CAP_HEADING}", which follows the issue at the end of this prompt`);
+  });
+
+  it("finishes with a Map only on the Operator's yes, and only on an issue with no parent Spec", async () => {
+    const finish = lineStarting(section(await prompt("design"), "Your turn"), "- **Finish with a Map**");
+    expect(finish).toContain("once the Operator has said yes to charting the issue as a Map");
+    expect(finish).toContain("Only an issue with no parent Spec finishes this way.");
+  });
+
+  it("keeps a map example the Kit reads, its Decisions of the four types", async () => {
+    const text = await prompt("design");
+    const examples = [...text.matchAll(/<design>\n([\s\S]*?)\n<\/design>/g)].map((match) => readDesignTurnOutput(JSON.parse(match[1] ?? "null")));
+    expect(examples).toContainEqual(expect.objectContaining({ ok: true, output: expect.objectContaining({ kind: "map" }) }));
+    expect(lineStarting(section(text, "Your output"), "- In `map`")).toContain("`research`, `prototype`, `grilling` or `task`");
   });
 });
 

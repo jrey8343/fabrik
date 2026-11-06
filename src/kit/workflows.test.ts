@@ -8,6 +8,7 @@ import { RETRO_EVIDENCE_JOB } from "./pushJob.ts";
 import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE } from "../evidence/capture.ts";
+import { MAP_INPUTS_FILE } from "../agent/inputs.ts";
 
 const root = new URL("../../", import.meta.url);
 const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml", ".github/workflows/weekly-summary.yml"].map((path) => ({
@@ -182,6 +183,14 @@ describe("The Kit's workflows", () => {
 
     expect(prepareAgent).toMatch(/\n  audit-commit:\n\s+description: .*\n\s+required: false\n\s+default: ""\n/);
     expect(inputs).toContain("FABRIK_AUDIT_COMMIT: ${{ inputs.audit-commit }}");
+  });
+
+  it("prepare-agent hands its role to the agent-inputs step, which reads a Design turn's Map inputs, and the Design job gives the agent that file", () => {
+    const inputs = prepareAgent.split(/\n(?=    - )/).find((step) => step.includes("src/agent/inputs.ts"));
+    const agent = stepsOf(jobIn(loop, "design")).find((step) => step.includes("src/agent/run.ts design"));
+
+    expect(inputs).toContain("FABRIK_ROLE: ${{ inputs.role }}");
+    expect(agent).toContain(`FABRIK_MAP_FILE: \${{ runner.temp }}/${MAP_INPUTS_FILE}`);
   });
 
   it("prepare-agent installs the Base skills plus its role's Extra skills, and holds no secret", () => {

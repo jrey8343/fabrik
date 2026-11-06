@@ -19,7 +19,8 @@
 // its comments, whose latest Verdict holds the findings to fix. A Request-changes
 // run is a retry with FABRIK_REVIEW_FILE too: the Operator's review, its input.
 // A Design-session turn takes the issue's parent Spec from FABRIK_SPEC_FILE (null if none),
-// and, for a Ticket back in design, the agent PR it came back from in the issue's sentBack.
+// for a Ticket back in design, the agent PR it came back from in the issue's sentBack,
+// and whether it may offer a Map from FABRIK_MAP_FILE.
 // A Review runs in a checkout of the PR's head: FABRIK_ISSUE_FILE is its
 // Ticket, FABRIK_SPEC_FILE the Ticket's Spec and FABRIK_PULL_REQUEST_FILE the
 // PR, and its result is the Reviewer's reply, a Verdict line first. A UI PR's
@@ -66,7 +67,7 @@ import {
 } from "./implement.ts";
 import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
-import { sentBackContext } from "./design.ts";
+import { mapCapContext, sentBackContext } from "./design.ts";
 import { claudeArgs, leaveFailureReport, readyHook, schemaOf, setAgentEnv, streamWatch } from "./launch.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
@@ -103,7 +104,8 @@ interface RoleSpec<T> {
   readonly issueHeading?: string;
   /**
    * A Design session weighs the issue's parent Spec, from FABRIK_SPEC_FILE, if
-   * it has one, and the agent PR it came back from, if it did.
+   * it has one, and the agent PR it came back from, if it did, and is told
+   * whether it may offer a Map, from FABRIK_MAP_FILE.
    */
   readonly readsParentSpec?: boolean;
   /** The Implementer builds on a branch, which it passes out as a bundle. */
@@ -264,6 +266,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...sentBack);
     // A Design turn on an issue that was never sent back is given none, and its result says nothing of them.
     if (sentBackComments.length > 0) given = sentBackComments;
+    extra.push(...mapCapContext(JSON.parse(await readFile(required("FABRIK_MAP_FILE"), "utf8"))));
   }
   // The hot-spot window an Auditor run was given, which its result passes out for the Audit to name.
   let window: AuditWindow | null = null;
