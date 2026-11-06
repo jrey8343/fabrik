@@ -88,6 +88,16 @@ export interface UiConfig {
   readonly defaultRoutes: readonly string[];
 }
 
+/**
+ * Whether a value is a route: a path on the site captured under `ui.url`,
+ * starting with exactly one `/`, since `//host/...` would leave it for another
+ * host. Kit config's `ui.default_routes`, the Implementer's routes, a Ticket's
+ * and the capture result's are all routes by this one rule.
+ */
+export function isRoute(value: unknown): value is string {
+  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//");
+}
+
 /** A browser viewport UI evidence is captured at. */
 export interface Viewport {
   readonly name: "mobile" | "desktop";
@@ -585,9 +595,8 @@ function checkServe(command: string): string | null {
   return command.trim() === "" ? "the command that serves the branch can't be blank" : null;
 }
 
-/** A path on the site captured under `ui.url`; `//` would leave it for another host. */
 function checkRoute(route: string): string | null {
-  return route.startsWith("/") && !route.startsWith("//") ? null : "a route must be a path starting with one /, such as /book";
+  return isRoute(route) ? null : "a route must be a path starting with one /, such as /book";
 }
 
 function checkHttpOrHttpsUrl(url: string): string | null {

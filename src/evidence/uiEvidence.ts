@@ -7,7 +7,7 @@
 // which keeps both out of agent text. The gallery is beside it
 // (src/evidence/gallery.ts). Pure, no I/O.
 import { posix } from "node:path";
-import { REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+import { isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 import { FULL_SHA } from "../skills/lock.ts";
@@ -34,8 +34,10 @@ export interface ChosenRoute {
 /** An inline code span in a Ticket body: text between single backticks on one line. */
 const CODE_SPAN = /`([^`\n]+)`/g;
 
-/** A route a Ticket names: a path starting with a single `/` (so never `//host/...`), with no spaces. */
-const TICKET_ROUTE = /^\/(?!\/)\S*$/;
+/** A route a Ticket names: a route (isRoute), and with no spaces, so `/book now` is prose, not a route. */
+function isTicketRoute(text: string): boolean {
+  return isRoute(text) && !/\s/.test(text);
+}
 
 /**
  * The routes a Ticket body names, in the order it names them. A Ticket names
@@ -48,7 +50,7 @@ const TICKET_ROUTE = /^\/(?!\/)\S*$/;
 function ticketRoutes(body: string): string[] {
   return linesOutsideCode(body)
     .flatMap((line) => [...line.matchAll(CODE_SPAN)].map(([, text = ""]) => text))
-    .filter((text) => TICKET_ROUTE.test(text));
+    .filter(isTicketRoute);
 }
 
 /**
@@ -174,7 +176,7 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | nu
   const { route, reason, viewport, side, status, image } = value;
   const before = errors.length;
   // As the Implementer output reads a route, so a route it named never makes its capture unreadable.
-  if (typeof route !== "string" || !route.startsWith("/") || route.startsWith("//")) {
+  if (!isRoute(route)) {
     errors.push(`${at}.route must be a path starting with one /, such as /book`);
   }
   if (!isOneOf(ROUTE_REASONS, reason)) errors.push(`${at}.reason must be ${spelled(ROUTE_REASONS)}`);
