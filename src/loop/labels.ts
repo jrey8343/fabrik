@@ -55,13 +55,21 @@ export const AUDIT_LABEL = "fabrik:audit";
 /** The label on a Retro, which the scheduled tick opens for the Retro run to fill in (#151). */
 export const RETRO_LABEL = "fabrik:retro";
 
-/** Every label that marks an issue as the Kit's own, so the adapter reads it into the snapshot. */
+/**
+ * The label on a replay issue: the Operator's request for a Replay, whose body
+ * names the one variable to change (#156). Unlike the Kit's other issues, the
+ * Operator files it, not the App.
+ */
+export const REPLAY_LABEL = "fabrik:replay";
+
+/** Every label that marks an issue as the Kit's own, so Intake leaves it alone and the adapter reads it into the snapshot. */
 export const KIT_ISSUE_LABELS = [
   TOKEN_ROTATION_LABEL,
   WEEKLY_LIMIT_LABEL,
   USAGE_CREDITS_LABEL,
   AUDIT_LABEL,
   RETRO_LABEL,
+  REPLAY_LABEL,
 ] as const;
 export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
 
