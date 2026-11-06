@@ -29,6 +29,7 @@ const KIT_FILES: Readonly<Record<string, string>> = {
   "prompts/review.md": "You are the Reviewer.\n",
   "prompts/audit.md": "You are the Auditor.\n",
   "prompts/retro.md": "You run the Retro.\n",
+  "prompts/research.md": "You are the Researcher.\n",
   "prompts/scorers/efficiency.md": "---\nname: efficiency\n---\nScore how directly the run worked.\n",
   "prompts/scorers/ticket-compliance.md": "---\nname: ticket-compliance\n---\nScore how closely it kept to its Ticket.\n",
   "prompts/scorers/skill-use.md": "---\nname: skill-use\n---\nScore how it used its skills.\n",

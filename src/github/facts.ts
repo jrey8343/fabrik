@@ -31,6 +31,7 @@ import { CALLER_PATH } from "../setup/shims.ts";
 import { type GitHub, GitHubError, pagesOf, type Repo } from "./client.ts";
 import {
   gatherDesignQueueSlice,
+  gatherOpenMaps,
   loginOf,
   type RawWeeklyIssue,
   weeklyIssueOf,
@@ -63,7 +64,7 @@ export function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, n
 async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(reach).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, openMaps] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
@@ -76,6 +77,8 @@ async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: num
     gatherOperatorIssues(github, repo, operator, escapeSince),
     pagesOf<RawOpenKitIssue>(github, OPEN_KIT_ISSUES_QUERY, repo, { label: AUDIT_LABEL }, (data) => data.repository.issues),
     pagesOf<RawOpenKitIssue>(github, OPEN_KIT_ISSUES_QUERY, repo, { label: RETRO_LABEL }, (data) => data.repository.issues),
+    // The Map cap's own read, so Held and the cap can't disagree.
+    gatherOpenMaps(github, repo),
   ]);
   const issues = [...new Map([...updatedIssues, ...openIssues].map((issue) => [issue.number, issue])).values()];
   return {
@@ -95,6 +98,7 @@ async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: num
       .map(({ number, title, author, body }) => ({ number, title, author: loginOf(author), body })),
     openAudits: openAudits.map(openKitIssueOf),
     openRetros: openRetros.map(openKitIssueOf),
+    openMaps: openMaps.map((map) => map.number),
   };
 }
 
@@ -611,6 +615,7 @@ function openIssueOf(issue: RawIssue): OpenIssueFacts {
     createdAt: issue.createdAt,
     comments: issue.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(issue.timelineItems.nodes),
+    subIssues: issue.subIssues.nodes.map((subIssue) => subIssue.number),
   };
 }
 

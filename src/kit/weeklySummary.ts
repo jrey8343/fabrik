@@ -2,12 +2,17 @@
 // a GitHub facts snapshot per Product repo, the Operator and now, the one issue
 // filed for the week that just ended, or skip in a quiet week. Pure, no I/O, no
 // model call.
+import { researchRunFailedIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
-import { NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN } from "../loop/labels.ts";
+import { DECISION_TYPES, decisionLabel, type DecisionLabel, MAP_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, RESEARCH_LABEL } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
+import { mapCapFull } from "../loop/mapCap.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
+import { spelled } from "../loop/readable.ts";
+import { whyNotResearchable } from "../loop/research.ts";
 import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
+import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import {
   type ArchitecturalEscape,
   type CommentFacts,
@@ -60,6 +65,8 @@ export interface OpenIssueFacts {
   /** Oldest first. */
   readonly comments: readonly CommentFacts[];
   readonly labelEvents: readonly LabelEvent[];
+  /** Its sub-issues, open or closed, by number: a Map's Decisions, or a Spec's Tickets. */
+  readonly subIssues: readonly number[];
 }
 
 /** An open `fabrik:monitor` issue, as Held reads the Monitor's held count from it. */
@@ -109,6 +116,8 @@ export interface GitHubFacts extends MetricFacts {
   readonly openAudits: readonly OpenAuditFacts[];
   /** The repo's open `fabrik:retro` issues, whoever opened them. */
   readonly openRetros: readonly OpenRetroFacts[];
+  /** The repo's open Maps, by number, oldest first, read as the Map cap reads them: whoever charted them. */
+  readonly openMaps: readonly number[];
 }
 
 export interface WeeklySummaryInput {
@@ -254,6 +263,8 @@ export interface Held {
   readonly designSessions: HeldDesignSessions | null;
   /** The Sentry error groups waiting for a slot under the Monitor's cap of open error issues (caps.monitor_issues). */
   readonly monitor: HeldMonitor | null;
+  /** The open Maps filling the Map cap (caps.maps), so no Design session offers a new one. */
+  readonly maps: HeldMaps | null;
 }
 
 export interface HeldDesignSessions {
@@ -270,6 +281,11 @@ export interface HeldMonitor {
   readonly groups: number;
   /** The open error issue whose stats block shows that count: the newest with a stats block. */
   readonly issue: number;
+}
+
+export interface HeldMaps {
+  /** Every open Map, whoever charted it, lowest number first. */
+  readonly open: readonly number[];
 }
 
 interface ItemBase {
@@ -292,6 +308,14 @@ export type WaitingItem =
   | (ItemBase & { readonly kind: "audit" })
   /** The Fabrik App's open Retro, filled or still pending, waiting since it was opened. */
   | (ItemBase & { readonly kind: "retro" })
+  /** An open Map, whoever charted it, waiting since it got `wayfinder:map`. */
+  | (ItemBase & {
+      readonly kind: "map";
+      /** How many of its Decisions wait on the Operator: its open grilling, prototype and task Decisions. */
+      readonly decisionsWaiting: number;
+    })
+  /** A research Decision on an open Map whose last run failed, waiting since the Kit's failure notice for the Operator to re-add agent:research. */
+  | (ItemBase & { readonly kind: "research-failed" })
   /** An agent PR out of draft with a passing Verdict at its head, waiting since that Verdict. */
   | (ItemBase & {
       readonly kind: "merge-gate";
@@ -706,8 +730,14 @@ function repoSectionOf(facts: GitHubFacts, { records, appLogin, now: filedAt }: 
   const items = itemsIn(facts.repo, now);
   return {
     repo: facts.repo,
-    // An open Audit or Retro waits on the Operator, so it also keeps a quiet week from being skipped.
-    waitingOnYou: oldestFirst([...waitingOnYou(facts, items), ...openAuditsOf(facts, appLogin, items), ...openRetrosOf(facts, appLogin, items)]),
+    // An open Audit, Retro or Map waits on the Operator, so it also keeps a quiet week from being skipped.
+    waitingOnYou: oldestFirst([
+      ...waitingOnYou(facts, items),
+      ...openAuditsOf(facts, appLogin, items),
+      ...openRetrosOf(facts, appLogin, items),
+      ...openMapsOf(facts, items),
+      ...failedResearchOf(facts, appLogin, items),
+    ]),
     stuck: stuck(facts, records, items, now),
     held: heldIn(facts, appLogin, now),
   };
@@ -723,11 +753,67 @@ function openRetrosOf({ openRetros }: GitHubFacts, appLogin: string, items: Item
   return openRetros.filter((retro) => retro.author === appLogin).map((retro) => ({ kind: "retro", ...items.issue(retro, retro.createdAt) }));
 }
 
+/** The Decision labels whose Decisions the Operator resolves live: all but research, which the Researcher resolves AFK. */
+const OPERATOR_DECISION_LABELS: readonly DecisionLabel[] = DECISION_TYPES.filter((type) => type !== "research").map(decisionLabel);
+
+/**
+ * Each open Map, read as the Map cap reads them (gatherOpenMaps), aged from
+ * when it got `wayfinder:map` (or was opened, for one labelled as it was
+ * opened), with how many of its open Decisions wait on the Operator.
+ */
+function openMapsOf({ openIssues, openMaps }: GitHubFacts, items: Items): WaitingItem[] {
+  return openIssues.filter((issue) => openMaps.includes(issue.number)).map((map) => ({
+    kind: "map",
+    ...items.issue(map, lastAdded(map.labelEvents, MAP_LABEL) ?? map.createdAt),
+    decisionsWaiting: openIssues.filter(
+      (issue) => map.subIssues.includes(issue.number) && OPERATOR_DECISION_LABELS.some((label) => issue.labels.includes(label)),
+    ).length,
+  }));
+}
+
+/**
+ * Each research Decision on an open Map whose last run failed, aged from the
+ * Kit's failure notice: by the Kit's own rules for which Decisions the
+ * Researcher may run on (whyNotResearchable) and whose last run failed
+ * (researchRunFailedIn), so the summary lists just the Decisions Dispatch
+ * won't run again until the Operator re-adds agent:research. As Dispatch
+ * does, it reads only the comments of the Fabrik App, whose bot login is
+ * `appLogin`.
+ */
+function failedResearchOf({ openIssues }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
+  return openIssues.flatMap((decision): WaitingItem[] => {
+    // A closed parent isn't among the open issues, so it reads as none: no open Map either way.
+    const parent = openIssues.find((issue) => issue.subIssues.includes(decision.number));
+    const parentIssue = parent === undefined ? null : { number: parent.number, open: true, labels: parent.labels };
+    const comments = decision.comments.map((comment) => ({ ...comment, byApp: comment.author === appLogin }));
+    if (whyNotResearchable({ ...decision, open: true, parentIssue }) !== null || !researchRunFailedIn(comments)) return [];
+    const notice = comments.findLast((comment) => comment.byApp);
+    const readded = lastAdded(decision.labelEvents, RESEARCH_LABEL);
+    // Re-added since, it waits on its run again, not on the Operator.
+    if (notice === undefined || (readded !== null && Date.parse(readded) > Date.parse(notice.at))) return [];
+    return [{ kind: "research-failed", ...items.issue(decision, notice.at) }];
+  });
+}
+
 /** What a cap holds in the repo, or null when nothing is held. */
-function heldIn({ designQueue, monitorIssues }: GitHubFacts, appLogin: string, now: number): Held | null {
+function heldIn({ designQueue, monitorIssues, openMaps }: GitHubFacts, appLogin: string, now: number): Held | null {
   const designSessions = heldDesignSessionsOf(designQueue, now);
   const monitor = heldMonitorOf(monitorIssues, appLogin);
-  return designSessions === null && monitor === null ? null : { designSessions, monitor };
+  const mapCap = heldMapsOf(openMaps);
+  return designSessions === null && monitor === null && mapCap === null ? null : { designSessions, monitor, maps: mapCap };
+}
+
+/**
+ * The open Maps, when they fill the Map cap: read and counted as the cap
+ * reads and counts them (gatherOpenMaps, mapCapFull), so the summary and the
+ * Map landing's check can't disagree. Null while the cap has room, or with no
+ * Map open to name. The summary has no Product's Kit config, so it holds the
+ * open Maps to the Kit's default cap: a repo's cap only tightens it, so Maps
+ * that fill the default fill every repo's cap too.
+ */
+function heldMapsOf(openMaps: readonly number[]): HeldMaps | null {
+  const open = openMaps.toSorted((a, b) => a - b);
+  return open.length > 0 && mapCapFull(open, DEFAULT_KIT_CONFIG) ? { open } : null;
 }
 
 /**
@@ -930,12 +1016,11 @@ function localTime(time: number, timeZone: string): string {
   return new Date(wallClock(time, timeZone).asUtc).toISOString().slice(0, 16).replace("T", " ");
 }
 
-// Rendering. Only shipped features get a section: the Map and Monitor issues
-// add theirs when their Specs ship. The open Retro gets no section, only its
-// line in Waiting on you. Scores shows
-// only in a week with score files, and never a run's own scores. Held shows
-// what the Design-session and Monitor caps hold, until the Ideas and Maps
-// caps add their lines.
+// Rendering. Only shipped features get a section: the Monitor issues add
+// theirs when their Spec ships. The open Retro gets no section, only its line
+// in Waiting on you, and so do an open Map and a failed research Decision.
+// Scores shows only in a week with score files, and never a run's own scores.
+// Held shows what the Design-session, Monitor and Map caps hold.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
   const { cost, unknownCost, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
@@ -1067,6 +1152,11 @@ function heldLines(repos: readonly RepoSection[]): string[] {
       const groups = monitor.groups === 1 ? "1 error group" : `${monitor.groups} error groups`;
       shown.push(`- ${repo}: ${groups} waiting for a Monitor issue slot, counted in [#${monitor.issue}](https://github.com/${repo}/issues/${monitor.issue})`);
     }
+    const maps = held?.maps ?? null;
+    if (maps !== null) {
+      const open = spelled(maps.open.map((map) => `[#${map}](https://github.com/${repo}/issues/${map})`), "and");
+      shown.push(`- ${repo}: the Map cap is full with ${open} open, so Design sessions offer no new Map`);
+    }
     return shown;
   });
   return lines.length === 0 ? [] : ["## Held", "", ...lines, ""];
@@ -1110,6 +1200,10 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `Audit open for ${duration(item.age)}`);
     case "retro":
       return itemLine(item, `Retro open for ${duration(item.age)}`);
+    case "map":
+      return itemLine(item, `Map open for ${duration(item.age)}, ${decisions(item.decisionsWaiting)} waiting on you`);
+    case "research-failed":
+      return itemLine(item, `research run failed ${duration(item.age)} ago, waiting for you to re-add ${RESEARCH_LABEL}`);
     case "merge-gate":
       return itemLine(item, `at the Merge gate, Operator wait ${duration(item.operatorWait)}`);
   }
@@ -1124,6 +1218,11 @@ function stuckLine(item: StuckItem): string {
     case "infrastructure-failure":
       return itemLine(item, `last run ended in an Infrastructure failure (${item.failure}) ${duration(item.age)} ago`);
   }
+}
+
+/** `no Decisions`, `1 Decision` or `2 Decisions`. */
+function decisions(count: number): string {
+  return count === 0 ? "no Decisions" : count === 1 ? "1 Decision" : `${count} Decisions`;
 }
 
 function itemLine({ number, url, title }: ItemBase, state: string): string {

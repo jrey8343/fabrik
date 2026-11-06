@@ -17,8 +17,10 @@ import {
   AUDIT_LABEL,
   DESIGN_LABEL,
   KIT_ISSUE_LABELS,
+  MAP_LABEL,
   NEEDS_DESIGN,
   READY_FOR_AGENT,
+  RESEARCH_DECISION_LABEL,
   RETRO_LABEL,
   WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
@@ -33,7 +35,9 @@ import type {
   KitIssueSnapshot,
   LoopEvent,
   NamedPullRequestSnapshot,
+  ParentIssueSnapshot,
   PullRequestSnapshot,
+  ResearchDecisionSnapshot,
   RetroSnapshot,
   Snapshot,
   SpecSnapshot,
@@ -42,7 +46,15 @@ import type {
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
 import { type GitHub, pagesOf, type Repo } from "./client.ts";
-import { countEmptyDiffs, designSessionOf, designTurnFailedIn, pushedSinceVerdictIn, requestChangesRunIn, verdictsIn } from "./threads.ts";
+import {
+  countEmptyDiffs,
+  designSessionOf,
+  designTurnFailedIn,
+  pushedSinceVerdictIn,
+  requestChangesRunIn,
+  researchRunFailedIn,
+  verdictsIn,
+} from "./threads.ts";
 
 const ISSUE_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -50,11 +62,12 @@ const ISSUE_QUERY = `
       owner { login }
       issue(number: $number) {
         number
+        title
         state
         author { login __typename }
         body
         labels(first: 100) { nodes { name } }
-        parent { number }
+        parent { number state labels(first: 100) { nodes { name } } }
         comments(last: 100) { nodes { body createdAt author { __typename } } }
         timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT], last: 100) {
           nodes {
@@ -76,11 +89,12 @@ interface IssueQueryResult {
     owner: { login: string };
     issue: {
       number: number;
+      title: string;
       state: "OPEN" | "CLOSED";
       author: { login: string; __typename: string } | null;
       body: string;
       labels: { nodes: { name: string }[] };
-      parent: { number: number } | null;
+      parent: ParentNode | null;
       comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
       // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
       timelineItems: { nodes: LabelTimelineItem[] };
@@ -89,6 +103,18 @@ interface IssueQueryResult {
       blocking: DependencyEdges;
     } | null;
   };
+}
+
+/** A sub-issue's parent, as a query reads it with `parent { number state labels(first: 100) { nodes { name } } }`. */
+interface ParentNode {
+  number: number;
+  state: "OPEN" | "CLOSED";
+  labels: { nodes: { name: string }[] };
+}
+
+function parentIssueOf(parent: ParentNode | null): ParentIssueSnapshot | null {
+  if (parent === null) return null;
+  return { number: parent.number, open: parent.state === "OPEN", labels: parent.labels.nodes.map((label) => label.name) };
 }
 
 /** One direction of an issue's native dependencies, as the issue query reads it. */
@@ -189,6 +215,44 @@ interface DispatchQueryResult {
   };
 }
 
+// Pages through every open wayfinder:research issue, with its parent, which
+// the core checks is an open Map, and the thread its last run's word is in.
+const RESEARCH_DECISIONS_QUERY = `
+  query ($owner: String!, $name: String!, $after: String, $research: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, labels: [$research], first: 50, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          number
+          state
+          labels(first: 100) { nodes { name } }
+          assignees(first: 10) { nodes { login } }
+          blockedBy(first: 50) { nodes { number state } }
+          parent { number state labels(first: 100) { nodes { name } } }
+          comments(last: 100) { nodes { body author { login __typename } } }
+        }
+      }
+    }
+  }
+`;
+
+interface ResearchDecisionsQueryResult {
+  repository: {
+    issues: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: {
+        number: number;
+        state: "OPEN" | "CLOSED";
+        labels: { nodes: { name: string }[] };
+        assignees: { nodes: { login: string }[] };
+        blockedBy: { nodes: { number: number; state: "OPEN" | "CLOSED" }[] };
+        parent: ParentNode | null;
+        comments: { nodes: { body: string; author: { login: string; __typename: string } | null }[] };
+      }[];
+    };
+  };
+}
+
 // Pages through every open needs-design issue, with the thread and label
 // timeline that say whether it holds a Design session slot and how long it has waited.
 const DESIGN_QUEUE_QUERY = `
@@ -248,6 +312,14 @@ interface DesignQueueQueryResult {
 export const IMPLEMENT_JOB_NAME = "Implement";
 
 /**
+ * The name of the Research job in .github/workflows/loop.yml (a test holds
+ * the two together), which Dispatch counts Research runs by as it counts
+ * Implement runs by IMPLEMENT_JOB_NAME. Called from a Product repo's caller
+ * workflow, it shows up as `<caller job> / Research`.
+ */
+export const RESEARCH_JOB_NAME = "Research";
+
+/**
  * The name of the Design job in .github/workflows/loop.yml, which follows it
  * with ` #<issue>` (a test holds the two together). Called from a Product
  * repo's caller workflow, it shows up as `<caller job> / Design-session turn #7`.
@@ -282,6 +354,9 @@ export async function gatherSnapshot(
     event.kind === "scheduled-tick" ? gatherAuditSlice(github, repo, appLogin) : null,
     event.kind === "audit-run-finished" ? gatherNamedPullRequests(github, repo, event.output) : null,
   ]);
+  // A Design turn's Map is weighed against the Map cap, which counts every open Map.
+  const openMaps =
+    event.kind === "agent-run-finished" && event.role === "design" ? (await gatherOpenMaps(github, repo)).map(({ number }) => number) : null;
   // A closed Ticket may be its Spec's last.
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
@@ -290,8 +365,8 @@ export async function gatherSnapshot(
   const theOperator = part?.operator ?? operator ?? owner;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, namedPullRequests, held }
-    : { ...part, spec, kitIssues, startingComment, audit, retro, namedPullRequests, held };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, namedPullRequests, held, openMaps }
+    : { ...part, spec, kitIssues, startingComment, audit, retro, namedPullRequests, held, openMaps };
 }
 
 /**
@@ -525,6 +600,41 @@ async function gatherNamedPullRequests(github: GitHub, repo: Repo, output: strin
 }
 
 /**
+ * The open `wayfinder:map` issues, oldest first, whoever opened them. One
+ * page is enough: the Map cap is never above its default of 1, so the first
+ * 50 hold every Map that fills it.
+ */
+const OPEN_MAPS_QUERY = `
+  query ($owner: String!, $name: String!, $map: String!) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, labels: [$map], first: 50, orderBy: { field: CREATED_AT, direction: ASC }) {
+        nodes { number title }
+      }
+    }
+  }
+`;
+
+/** An open Map, as the Map cap counts it and a Design turn's inputs name it. */
+export interface OpenMap {
+  readonly number: number;
+  readonly title: string;
+}
+
+/**
+ * The open Maps in the repo, oldest first, made by the Kit or by the Operator
+ * by hand: what the Map cap counts (src/loop/mapCap.ts). Read for a
+ * Design-session turn landing, and for the turn's inputs (src/agent/inputs.ts).
+ */
+export async function gatherOpenMaps(github: Pick<GitHub, "graphql">, repo: Repo): Promise<OpenMap[]> {
+  const data = await github.graphql<{ repository: { issues: { nodes: OpenMap[] } } }>(OPEN_MAPS_QUERY, {
+    owner: repo.owner,
+    name: repo.name,
+    map: MAP_LABEL,
+  });
+  return data.repository.issues.nodes.map(({ number, title }) => ({ number, title }));
+}
+
+/**
  * For a Design-session turn the Operator's reply started: whether that reply
  * is still on the issue. Only a 404 means it was deleted; any other failed
  * read fails the run, as every failed read does, and never counts as deleted.
@@ -615,7 +725,7 @@ async function gatherEventPart(
       return gatherPullRequest(github, repo, event.pullRequest, operator, appLogin);
     case "dispatch-check":
       if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");
-      return gatherDispatch(github, actions, repo, operator);
+      return gatherDispatch(github, actions, repo, operator, appLogin);
     case "design-queue-check":
       return gatherDesignQueue(github, actions, repo, operator);
     case "kit-config-changed":
@@ -641,7 +751,7 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "namedPullRequests" | "held">;
+type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "namedPullRequests" | "held" | "openMaps">;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body author { login __typename } }";
 
@@ -850,12 +960,14 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
   return {
     issue: {
       number: issue.number,
+      title: issue.title,
       open: issue.state === "OPEN",
       author: issue.author?.login ?? "ghost",
       byApp: byAppOf(issue.author, appLogin),
       body: issue.body,
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
+      parentIssue: parentIssueOf(issue.parent),
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
       designRounds: designSessionOf(thisSession).designRounds,
       sentBack: designSessionOf(comments).sentBack,
@@ -936,6 +1048,7 @@ async function gatherDispatch(
   actions: GitHub,
   repo: Repo,
   operator: string | null,
+  appLogin: string | null,
 ): Promise<EventPart> {
   const tickets: TicketSnapshot[] = [];
   let after: string | null = null;
@@ -969,17 +1082,57 @@ async function gatherDispatch(
     (pr) => pr.isDraft && isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }),
   ).length;
 
+  const [runs, researchDecisions] = await Promise.all([
+    countDispatchedRuns(actions, repo),
+    gatherResearchDecisions(github, repo, appLogin),
+  ]);
   return {
     issue: null,
     pullRequest: null,
     dispatch: {
       tickets,
       openAgentDraftPullRequests,
-      implementRunsInProgress: await countImplementRuns(actions, repo),
+      implementRunsInProgress: runs.implement,
+      researchDecisions,
+      researchRunsInProgress: runs.research,
     },
     designQueue: null,
     operator: operator ?? page.repository.owner.login,
   };
+}
+
+/**
+ * Every open wayfinder:research issue, with what says whether the Researcher
+ * may run on it (#154), its last run's word read from the comments of the
+ * Fabrik App, whose bot login is `appLogin` (see byAppOf).
+ */
+async function gatherResearchDecisions(github: GitHub, repo: Repo, appLogin: string | null): Promise<ResearchDecisionSnapshot[]> {
+  const decisions: ResearchDecisionSnapshot[] = [];
+  let after: string | null = null;
+  do {
+    const page: ResearchDecisionsQueryResult = await github.graphql<ResearchDecisionsQueryResult>(RESEARCH_DECISIONS_QUERY, {
+      owner: repo.owner,
+      name: repo.name,
+      after,
+      research: RESEARCH_DECISION_LABEL,
+    });
+    for (const issue of page.repository.issues.nodes) {
+      decisions.push({
+        number: issue.number,
+        open: issue.state === "OPEN",
+        labels: issue.labels.nodes.map((label) => label.name),
+        assignees: issue.assignees.nodes.map((assignee) => assignee.login),
+        openBlockers: issue.blockedBy.nodes.filter((b) => b.state === "OPEN").map((b) => b.number),
+        parentIssue: parentIssueOf(issue.parent),
+        // Only the App's own notice counts, so nobody, another bot included, can fake a failure or clear one.
+        lastRunFailed: researchRunFailedIn(
+          issue.comments.nodes.map((comment) => ({ body: comment.body, byApp: byAppOf(comment.author, appLogin) })),
+        ),
+      });
+    }
+    after = page.repository.issues.pageInfo.hasNextPage ? page.repository.issues.pageInfo.endCursor : null;
+  } while (after !== null);
+  return decisions;
 }
 
 /** A Design queue check's slice, and the repo's owner, the Operator unless one is named. */
@@ -1102,16 +1255,19 @@ interface Job {
 }
 
 /**
- * Implement jobs not yet finished, across every workflow run in the repo:
- * running, and also queued or waiting (behind its concurrency group, say)
- * after its claim took agent:implement off the Ticket, so no slot goes
- * uncounted between the label coming off and the run starting.
+ * The Implement and Research jobs not yet finished, across every workflow
+ * run in the repo: running, and also queued or waiting (behind its
+ * concurrency group, say) after its claim took the trigger label off, so no
+ * slot goes uncounted between the label coming off and the run starting.
  */
-export async function countImplementRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<number> {
-  const jobs = await jobsOfUnfinishedRuns(github, repo);
-  return jobs
-    .filter((job) => job.status !== "completed")
-    .filter(({ name }) => name === IMPLEMENT_JOB_NAME || name.endsWith(` / ${IMPLEMENT_JOB_NAME}`)).length;
+export async function countDispatchedRuns(
+  github: Pick<GitHub, "rest">,
+  repo: Repo,
+): Promise<{ implement: number; research: number }> {
+  const unfinished = (await jobsOfUnfinishedRuns(github, repo)).filter((job) => job.status !== "completed");
+  const named = (jobName: string) =>
+    unfinished.filter(({ name }) => name === jobName || name.endsWith(` / ${jobName}`)).length;
+  return { implement: named(IMPLEMENT_JOB_NAME), research: named(RESEARCH_JOB_NAME) };
 }
 
 const DESIGN_JOB = new RegExp(`^(?:.+ / )?${DESIGN_JOB_NAME} #([1-9][0-9]*)$`);

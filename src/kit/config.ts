@@ -29,6 +29,8 @@ export interface KitConfig {
     readonly audit: AgentRole;
     /** The Retro; it takes no Extra skills (ADR-0008). */
     readonly retro: AgentRole;
+    /** The Researcher; it takes no Extra skills (ADR-0008). */
+    readonly research: AgentRole;
     readonly dispatch: { readonly timeoutMinutes: number };
     readonly stepUp: { readonly model: string; readonly effort: string | null };
   };
@@ -40,6 +42,8 @@ export interface KitConfig {
     readonly designSessions: number;
     /** How many open error issues the Monitor keeps at once; 0 pauses new error filings (#148). */
     readonly monitorIssues: number;
+    /** How many open Maps the repo may have at once, whoever charted them; 0 stops new Maps (#154). */
+    readonly maps: number;
   };
   /** What the Monitor watches in this Product repo (#148). */
   readonly monitor: {
@@ -63,7 +67,7 @@ export interface KitConfig {
    * the name of a `Fabrik` vault item holding that Subscription's token.
    */
   readonly subscriptions: readonly string[];
-  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's and the Retro's included. */
+  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's, the Retro's and the Researcher's included. */
   readonly instructions: Readonly<Record<InstructedRole, string | null>>;
   /** The Product repo's own Skills sources, from .fabrik/skills.lock.json. */
   readonly skillsSources: readonly SkillsSource[];
@@ -229,8 +233,8 @@ export function isPhase(role: AgentRoleName): role is Phase {
 
 /**
  * The roles a Product repo can give its own instructions in .fabrik/<role>.md:
- * every AFK role, so every Phase, the Auditor and the Retro, which take no
- * Extra skills (ADR-0008) and so are no Phase.
+ * every AFK role, so every Phase, the Auditor, the Retro and the Researcher,
+ * which take no Extra skills (ADR-0008) and so are no Phase.
  */
 export type InstructedRole = AgentRoleName;
 
@@ -276,11 +280,12 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     review: { model: OPUS, effort: null, timeoutMinutes: 30 },
     audit: { model: OPUS, effort: null, timeoutMinutes: 45 },
     retro: { model: OPUS, effort: null, timeoutMinutes: 45 },
+    research: { model: OPUS, effort: null, timeoutMinutes: 30 },
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: OPUS, effort: null },
   },
   maxInFlight: 2,
-  caps: { designSessions: 2, monitorIssues: 5 },
+  caps: { designSessions: 2, monitorIssues: 5, maps: 1 },
   monitor: { errors: null, redMain: true },
   // Sunday, so a fresh Audit is open by Monday's Weekly summary and misses the Monday skills bump.
   audit: { day: "sunday" },
@@ -290,7 +295,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   operator: null,
   // The V1 vault item, so a repo that lists none keeps the one Subscription it always ran on.
   subscriptions: ["Claude token"],
-  instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null, research: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
   // Visual evidence is off until a Product repo turns it on with /fabrik-setup.
@@ -488,6 +493,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
       review: readPickingRole(roles.object("review"), defaults.roles.review, picks, "review"),
       audit: readAgentRole(roles.object("audit"), defaults.roles.audit),
       retro: readAgentRole(roles.object("retro"), defaults.roles.retro),
+      research: readAgentRole(roles.object("research"), defaults.roles.research),
       dispatch: readDispatch(roles.object("dispatch"), defaults.roles.dispatch),
       stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp),
     },
@@ -538,6 +544,7 @@ function readCaps(caps: Reader, defaults: KitConfig["caps"]): KitConfig["caps"] 
   return {
     designSessions: caps.cap("design_sessions", defaults.designSessions) ?? defaults.designSessions,
     monitorIssues: caps.cap("monitor_issues", defaults.monitorIssues) ?? defaults.monitorIssues,
+    maps: caps.cap("maps", defaults.maps) ?? defaults.maps,
   };
 }
 

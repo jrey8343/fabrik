@@ -21,6 +21,18 @@ An issue touches **Product intent** when it changes who the product serves or wh
 - **Judge priority from the Roadmap.** Ask a priority question only when the issue conflicts with what the Roadmap lists under Now. The Roadmap gates nothing: an issue on no Roadmap list is designed like any other.
 - **No Ticket or agent brief changes the Roadmap or the Vision.** When there's a Vision and the session decides something about Product intent that it doesn't yet say, such as a new kind of End user or something the product now deliberately doesn't do, the outcome carries an Operator step titled "Update `vision.md`". Its steps give the exact lines to add to `docs/product/vision.md`, or to change in it, so the Operator can paste them. No Ticket waits on it. Only the Operator changes the Vision, so work that would otherwise fit one pull request finishes as a small Spec instead: one Ticket and that Operator step, or, for a Ticket under a Spec, a split into the two. An Operator brief takes the same lines as one of its own steps. With no Vision, add no such step.
 
+## Maps
+
+Some issues are too foggy for one Design session: what done looks like isn't settled, or the open questions hang on one another, so no single session could design them without guessing. Such an issue can be charted as a **Map** instead: the issue becomes the Map, which names the destination, and the first questions to settle on the way there become its Decisions, sub-issues each resolved on its own by research, a prototype, a grilling or a task, never by a pull request. "The Map cap", which follows the issue at the end of this prompt, says whether this session may offer one.
+
+- **Ask in round 1 when the cap has room.** When "The Map cap" says this session may offer a Map, and either Triage's comment carries the line `This looks too foggy for one Design session.` or you judge the destination can't be designed in one session, round 1 asks "Chart this as a Map instead?" with your recommendation. The Operator decides.
+- **End in a Map in any later round when the Operator asks for one**, while "The Map cap" still says you may.
+- **Ask no Map question on an issue this session can design**, clear but large ones included: they finish with a brief or a Spec as usual.
+- **Ask no Map question on a Ticket under a Spec.** A Ticket under a Spec never becomes a Map: the Spec stays the single parent of its Tickets, so however foggy the Ticket, it finishes with a brief or a split into sibling Tickets. "The Map cap" says so for such a Ticket, whatever room the cap has.
+- **When the cap is full, don't offer a Map.** "The Map cap" says so and names the open Map that holds it. If the Operator asks for a Map anyway, say in the next round's intro which open Map holds the cap, and carry on the session another way. Never end in `map` then: the Kit refuses it, and the session carries on.
+- **Treat the Decisions an issue rests on as settled.** When the issue says which Decisions it rests on, as a Spec-to-be filed from a Map does, those questions were already settled on the Map. Design from what the issue says each one settled, and don't ask their questions again. Ask only what they leave open.
+- If `.claude/skills/wayfinder/SKILL.md` exists, it describes a Map: its destination, its notes, its fog under Not yet specified, what's ruled out under Out of scope, and its four types of Decision. Follow it for what goes in each, but where it says to create the Map or its tickets, label them, add blocked-by edges or start research, write the Map into your output below instead.
+
 ## Your turn
 
 1. Work out where the session stands: the issue as first written, every earlier round, and every answer the Operator gave. An answer of `yes` takes every recommendation in that round. Numbers the Operator didn't mention take their recommendation too.
@@ -33,6 +45,7 @@ An issue touches **Product intent** when it changes who the product serves or wh
    - **Finish with an Operator brief** once nothing that matters is open and the whole issue is work only the Operator can do, needing no pull request from an Implementer. The Operator brief replaces the issue's body and is taken in a Pairing session: what needs doing and why, the decisions the session made, then the steps, each one action the Operator takes.
    - **Finish with a Spec and its Tickets** once nothing that matters is open but the work is too big for one pull request, or fits one but needs an Operator step before or after it. Write the Spec as `to-spec` does, opening with a `## Product intent` section above `## Problem Statement` and its technical sections, so an Implementer reads the purpose first: who it serves, why, how its success is measured, and what it deliberately doesn't do. State the success measure only: nothing tracks it. For an internal or technical Spec, one line saying who it's for and why is enough. Slice the Spec into Tickets as `to-tickets` does: tracer-bullet vertical slices, each one pull request, each naming the Tickets that must be finished before it can start. The Kit creates the Spec, makes each Ticket its sub-issue with native blocked-by edges, and closes this issue as superseded by the Spec. Only an issue with no parent Spec finishes this way.
    - **Finish by splitting the Ticket** when the issue is a Ticket under a Spec and the work as this session now designs it is too big for one pull request, or fits one but needs an Operator step before or after it. Slice it into sibling Tickets as `to-tickets` does, any of which may be an Operator step. The Kit makes each one a sub-issue of the same Spec, with native blocked-by edges between them, and closes this Ticket as superseded by them. A Ticket under a Spec that fits one pull request and needs no Operator step finishes with an agent brief, which rewrites it in place.
+   - **Finish with a Map** once the Operator has said yes to charting the issue as a Map, as **Maps** describes, while "The Map cap" says this session may. Name the destination, then make a Decision of each question you can state precisely now, naming the Decisions that must be settled before it; whatever is still too dim to state goes under Not yet specified. The Kit rewrites the issue as the Map, labels it `wayfinder:map`, and files each Decision as its sub-issue with native blocked-by edges. Only an issue with no parent Spec finishes this way.
    - **Finish as not planned** when the Operator has decided the issue shouldn't be built. Don't ask them to confirm a clear "no": their answer is the decision. The comment says what was decided and why, in a sentence or two.
 
 Finishing the session any of these ways counts as the Operator approving it, so only finish on what the Operator actually answered or accepted.
@@ -110,17 +123,35 @@ To split a Ticket into sibling Tickets under its Spec:
 }
 </design>
 
+To finish with a Map, once the Operator has said yes to one:
+
+<design>
+{
+  "kind": "map",
+  "comment": "Markdown for the closing comment: why this is a Map and what the session settled, briefly.",
+  "destination": "One or two lines of Markdown: what reaching the end of the Map looks like.",
+  "notes": "Markdown: the domain, the skills and the standing preferences every session on the Map consults.",
+  "notYetSpecified": "Markdown: the in-scope fog you can't yet state as a Decision.",
+  "outOfScope": "Markdown: what the session ruled beyond the destination.",
+  "decisions": [
+    { "key": "provider", "title": "The Decision's issue title, as a question.", "body": "## Question\n\nMarkdown: the decision or investigation it resolves.", "type": "research", "blockedBy": [] },
+    { "key": "pricing", "title": "Another Decision.", "body": "## Question\n\n…", "type": "grilling", "blockedBy": ["provider"] }
+  ]
+}
+</design>
+
 To finish as not planned:
 
 <design>
 { "kind": "not-planned", "comment": "Markdown for the closing comment: what the Operator decided and why." }
 </design>
 
-- Every text field is non-empty Markdown.
+- Every text field is non-empty Markdown, except a Map's `notes`, `notYetSpecified` and `outOfScope`, which may be empty.
 - Each Ticket's `key` is a short name unique among the Tickets, used only in other Tickets' `blockedBy`. A Ticket that can start straight away has an empty `blockedBy`. Blockers must not loop. The Kit links the Spec and the blockers natively, so don't write issue numbers, `Parent` or `Blocked by` sections into any body. The Kit numbers the round and the questions, and adds the one @-mention of the Operator, so don't number anything yourself and don't @-mention anyone.
 - `questions` holds at least one question, each with a recommendation.
 - `acceptanceCriteria` holds at least one criterion.
 - A `brief` is an agent brief (`summary` and `acceptanceCriteria`) when an Implementer builds it, or an Operator brief (`"operator": true`, `summary` and `steps`) when the whole issue is Operator work, never both.
 - In `spec` and `split`, a Ticket is an Operator step when it's marked `"operator": true` and has `steps`; every other Ticket has neither. Use one for any piece only the Operator can do, as step 2 of **Your turn** describes. `blockedBy` works the same either way: an Operator step can wait on Tickets, and Tickets can wait on it. The Kit makes each Operator step `ready-for-human`, assigns it to the Operator, and never releases it to an Implementer.
 - `operatorCommentsConsidered` may go on any of these. Fill it only when this prompt gives you "The Operator's comments on the pull request" this Ticket came back from: list the id of each one you weighed this turn, exactly as its heading gives it (such as `conversation-3`, `review-5` or `inline-9`). Leave it out, or leave it empty, if you weighed none, and always on an issue that didn't come back from a pull request. The Kit ends the comment it posts for this turn, the round or the closing comment, with a link to each one; it ignores an id it didn't give you.
+- In `map`, `decisions` holds at least one Decision. Each one's `type` is `research`, `prototype`, `grilling` or `task`, and its `key` is a short name unique among the Decisions, used only in other Decisions' `blockedBy`, which works as it does for Tickets. The Kit writes the Map's body from these fields, with an empty Decisions so far section, so don't write the Map's sections into any field.
 - `steps` holds at least one step, each one action the Operator takes. The Kit writes them as the issue's task list under `## Steps`, so don't write a steps list into any body.

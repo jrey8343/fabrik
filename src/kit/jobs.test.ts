@@ -54,6 +54,41 @@ describe("The Kit job's routing", () => {
     expect(outputs).toMatchObject({ route: "none", "implement-timeout-minutes": "60", "retro-timeout-minutes": "45" });
   });
 
+  // The Research job runs within it (#154), and names the Decision's branch itself, from the title it starts with.
+  it("routes agent:research on a research Decision to the Research job, within roles.research's timeout, on its model and effort, with no Ticket, PR, branch or commit", () => {
+    const research = kitConfig({
+      roles: { ...DEFAULT_KIT_CONFIG.roles, research: { model: "claude-researcher", effort: "high", timeoutMinutes: 25 } },
+    });
+    const decision = anIssue({
+      number: 42,
+      labels: ["wayfinder:research", "agent:research"],
+      parent: 12,
+      parentIssue: { number: 12, open: true, labels: ["wayfinder:map"] },
+    });
+
+    const plan = planFor({ kind: "label-added", issue: 42, label: "agent:research" }, snapshotOf(decision), research);
+
+    expect(kitJobOutputs(plan, null, research)).toMatchObject({
+      route: "research",
+      "research-timeout-minutes": "25",
+      model: "claude-researcher",
+      effort: "high",
+      subscription: "Claude token",
+      "pull-request": "",
+      ticket: "",
+      branch: "",
+      review: "",
+      "audit-commit": "",
+      retry: "",
+      "step-up": "false",
+      "request-changes": "false",
+    });
+  });
+
+  it("passes out roles.research's timeout whatever it routes to: the Researcher's 30 minutes by default", () => {
+    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ route: "none", "research-timeout-minutes": "30" });
+  });
+
   // The Review job downloads the screenshots, and its Reviewer hears why capture failed when there are none to read (#153).
   it.each<[string, EvidenceMarker | null, Record<string, string>]>([
     ["a UI PR whose capture captured", { run: 9100, artifact: 9202, failure: null }, { "ui-evidence-run": "9100", "ui-evidence-artifact": "9202", "ui-evidence-failure": "" }],

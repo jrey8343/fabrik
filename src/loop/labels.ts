@@ -72,6 +72,34 @@ export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
  */
 export const MONITOR_LABEL = "fabrik:monitor";
 
+/**
+ * The label on a Map: an issue charting the way to a destination still in fog,
+ * whose children are Decisions (#154). A Design session that ends in a Map puts
+ * it on in place of needs-design.
+ */
+export const MAP_LABEL = "wayfinder:map";
+
+/** How a Decision on a Map gets resolved. Each names the `wayfinder:<type>` label the Decision carries. */
+export const DECISION_TYPES = ["research", "prototype", "grilling", "task"] as const;
+export type DecisionType = (typeof DECISION_TYPES)[number];
+/** A Decision's label, which says how it gets resolved. A Decision carries no state or category label. */
+export type DecisionLabel = `wayfinder:${DecisionType}`;
+
+/** The label a Decision of this type carries, typed as that one label when the type is known. */
+export function decisionLabel<Type extends DecisionType>(type: Type): `wayfinder:${Type}` {
+  return `wayfinder:${type}`;
+}
+
+/** The label on a research Decision: one the Researcher resolves AFK, under an open Map (#154). */
+export const RESEARCH_DECISION_LABEL = "wayfinder:research" satisfies DecisionLabel;
+
+/**
+ * The trigger label that starts a Researcher run on a research Decision
+ * (ADR-0001), as Dispatch adds agent:implement to a Ticket. The label comes
+ * off as the run starts, so re-adding it runs the Decision again (#154).
+ */
+export const RESEARCH_LABEL = "agent:research";
+
 /** A label the Kit itself adds or removes. Labels read from GitHub stay plain strings: anyone can add any label. */
 export type Label =
   | StateLabel
@@ -80,7 +108,10 @@ export type Label =
   | typeof DESIGN_LABEL
   | typeof REVIEW_LABEL
   | KitIssueLabel
-  | typeof MONITOR_LABEL;
+  | typeof MONITOR_LABEL
+  | typeof MAP_LABEL
+  | DecisionLabel
+  | typeof RESEARCH_LABEL;
 
 /** Every label the Kit uses, so the setup skill can create each one. */
 export const ALL_LABELS: readonly Label[] = [
@@ -88,9 +119,12 @@ export const ALL_LABELS: readonly Label[] = [
   DISPATCH_LABEL,
   DESIGN_LABEL,
   REVIEW_LABEL,
+  RESEARCH_LABEL,
   ...CATEGORY_LABELS,
   ...KIT_ISSUE_LABELS,
   MONITOR_LABEL,
+  MAP_LABEL,
+  ...DECISION_TYPES.map(decisionLabel),
 ];
 
 export function isStateLabel(label: string): label is StateLabel {

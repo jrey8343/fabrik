@@ -7,9 +7,9 @@ import type { SentBack } from "./backToDesign.ts";
 import type { Label } from "./labels.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
-export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" | "retro";
+export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" | "retro" | "research";
 
-export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit", "retro"];
+export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit", "retro", "research"];
 
 /** How an agent job says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
 export type ReportedFailure =
@@ -107,10 +107,10 @@ export type LoopEvent =
   | {
       readonly kind: "agent-run-finished";
       /**
-       * Implement, Review, Auditor and Retro runs finish through their own
-       * events, which carry what their push jobs hold.
+       * Implement, Review, Auditor, Retro and Researcher runs finish through
+       * their own events, which carry what their push jobs hold.
        */
-      readonly role: Exclude<AgentRole, "implement" | "review" | "audit" | "retro">;
+      readonly role: Exclude<AgentRole, "implement" | "review" | "audit" | "retro" | "research">;
       readonly issue: number;
       /** The text the agent emitted as its structured output, unparsed. */
       readonly output: string;
@@ -231,6 +231,22 @@ export type LoopEvent =
       readonly repoUrl: string;
     }
   | {
+      /** A Researcher run finished on a research Decision; its push job has the branch it built, not yet pushed (#154). */
+      readonly kind: "research-run-finished";
+      /** The Decision. */
+      readonly issue: number;
+      /** The Researcher's structured output, the `<research>` tag's JSON, unparsed (src/loop/researchOutput.ts). */
+      readonly output: string;
+      /** The research branch the run built (src/loop/researchPaths.ts), which names the one findings file it may change. */
+      readonly branch: string;
+      /** What the branch changes, read from the bundle the agent job passed out. */
+      readonly changes: BranchChanges;
+      /** The Actions run, which the resolution and a refused branch's failure notice link to. */
+      readonly runUrl: string;
+      /** The Product repo's web address, by which the resolution links the findings file on the branch. */
+      readonly repoUrl: string;
+    }
+  | {
       /** A review that requests changes was submitted on a PR: at the Merge gate, the Operator's ask for another run. */
       readonly kind: "pull-request-changes-requested";
       readonly pullRequest: number;
@@ -306,6 +322,8 @@ export type PullRequestCommentPlace =
 /** An issue as the core sees it, gathered fresh by the GitHub adapter. */
 export interface IssueSnapshot {
   readonly number: number;
+  /** Its title as it stands: a research Decision's line in its Map's Decisions so far names it by this (src/loop/researchLanding.ts). */
+  readonly title: string;
   readonly open: boolean;
   readonly author: string;
   /**
@@ -327,6 +345,11 @@ export interface IssueSnapshot {
   readonly labels: readonly string[];
   /** The parent issue's number, or null if it isn't a sub-issue. */
   readonly parent: number | null;
+  /**
+   * The parent issue as it stands, or null if it isn't a sub-issue: a
+   * research Decision's must be an open Map (src/loop/research.ts).
+   */
+  readonly parentIssue: ParentIssueSnapshot | null;
   /** The open pull requests linked to close this issue, oldest first. */
   readonly openPullRequests: readonly number[];
   /** How many rounds the Kit has posted in the issue's current Design session (src/loop/design.ts). */
@@ -351,6 +374,13 @@ export interface IssueSnapshot {
   readonly openBlockers: readonly number[];
   /** The open issues it blocks. */
   readonly openBlocking: readonly number[];
+}
+
+/** A sub-issue's parent, as the adapter read it with the sub-issue: whether it's open, and its labels, which say whether it's a Map. */
+export interface ParentIssueSnapshot {
+  readonly number: number;
+  readonly open: boolean;
+  readonly labels: readonly string[];
 }
 
 /** A pull request as the core sees it. */
@@ -437,12 +467,39 @@ export interface TicketSnapshot {
   readonly openLinkedPullRequests: readonly number[];
 }
 
+/**
+ * An open `wayfinder:research` issue that a Dispatch check weighs: a research
+ * Decision, which the Researcher resolves AFK when it's under an open Map
+ * (src/loop/research.ts, #154).
+ */
+export interface ResearchDecisionSnapshot {
+  readonly number: number;
+  readonly open: boolean;
+  readonly labels: readonly string[];
+  /** The logins it's assigned to: the Operator assigning themselves claims it, as in `/wayfinder`. */
+  readonly assignees: readonly string[];
+  /** The issues blocking it that are still open. */
+  readonly openBlockers: readonly number[];
+  /** Its parent, which must be an open Map, or null when it isn't a sub-issue. */
+  readonly parentIssue: ParentIssueSnapshot | null;
+  /**
+   * Whether the Kit's research failure notice is its latest run's word, read
+   * from the Kit's comments on it: only the Operator re-adding agent:research
+   * runs it again then.
+   */
+  readonly lastRunFailed: boolean;
+}
+
 /** What a Dispatch check needs: the Tickets it may release and the work already in flight. */
 export interface DispatchSnapshot {
   /** Every open `ready-for-agent` issue, in any order. */
   readonly tickets: readonly TicketSnapshot[];
   readonly openAgentDraftPullRequests: number;
   readonly implementRunsInProgress: number;
+  /** Every open `wayfinder:research` issue, in any order: the core weighs which are research Decisions on an open Map. */
+  readonly researchDecisions: readonly ResearchDecisionSnapshot[];
+  /** Research jobs not yet finished: they hold slots under max_in_flight with the Implement runs. */
+  readonly researchRunsInProgress: number;
 }
 
 /** An open `needs-design` issue that a Design queue check weighs (src/loop/designQueue.ts). */
@@ -512,6 +569,12 @@ export interface Snapshot {
    * (src/loop/resume.ts). A number naming nothing GitHub has isn't here.
    */
   readonly held: readonly HeldTargetSnapshot[] | null;
+  /**
+   * Gathered for a Design-session turn finishing only: the open `wayfinder:map`
+   * issues, by number, oldest first, whoever made them, the Kit or the
+   * Operator by hand. What the Map cap counts (src/loop/mapCap.ts).
+   */
+  readonly openMaps: readonly number[] | null;
 }
 
 /** An issue or PR a held run is on, as the adapter read it on a scheduled tick (src/loop/resume.ts). */
@@ -685,13 +748,27 @@ export type Action =
       readonly key?: string;
     }
   | {
-      /** Comments on an issue, linking comments posted earlier in the plan. */
+      /** Comments on an issue, linking comments posted or issues created earlier in the plan. */
       readonly kind: "comment-linking";
       readonly issue: number;
-      /** The comment's Markdown, with each posted comment written as its URL. */
-      readonly body: readonly (string | PostedComment)[];
+      /** The comment's Markdown, with each posted comment written as its URL and each created issue as its `#number`. */
+      readonly body: readonly (string | PostedComment | CreatedIssue)[];
     }
   | { readonly kind: "edit-issue-body"; readonly issue: number; readonly body: string }
+  | {
+      /**
+       * Appends one line to a Map's Decisions so far. The core never sends the
+       * Map's body: the adapter reads it as it stands right before it writes,
+       * and inserts the line at the end of that section, or under the heading
+       * it adds at the end of the body when the section is missing. Every other
+       * byte stays, so what the Operator edited after the plan was made survives.
+       */
+      readonly kind: "append-to-decisions-so-far";
+      /** The Map. */
+      readonly issue: number;
+      /** The line's Markdown, one line, with each posted comment written as its URL: a resolution posted earlier in the plan, say. */
+      readonly line: readonly (string | PostedComment)[];
+    }
   | { readonly kind: "assign"; readonly issue: number; readonly assignee: string }
   | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" | "completed" }
   | {

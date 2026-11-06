@@ -13,15 +13,28 @@ import {
 } from "./designOutput.ts";
 import {
   DESIGN_LABEL,
+  decisionLabel,
   isCategoryLabel,
   type Label,
+  MAP_LABEL,
   MONITOR_LABEL,
   NEEDS_DESIGN,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
   WONTFIX,
 } from "./labels.ts";
-import { designRoundMarker, LIVE_OUTCOME_MARKER, type MonitorMarker, monitorMarkerIn, monitorMarkerLine, SESSION_FINISHED } from "./markers.ts";
+import {
+  DECISIONS_SO_FAR_HEADING,
+  DESIGN_TURN_FAILED_MARKER,
+  designRoundMarker,
+  LIVE_OUTCOME_MARKER,
+  type MonitorMarker,
+  monitorMarkerIn,
+  monitorMarkerLine,
+  SESSION_FINISHED,
+} from "./markers.ts";
+import { spelled } from "./readable.ts";
+import type { MapCap } from "./mapCap.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { AgentBrief } from "./triageOutput.ts";
 import { startAgentRun } from "./runs.ts";
@@ -109,7 +122,7 @@ export function answerRound(
  */
 function landLiveOutcome(issueNumber: number, outcome: string, operator: string): Plan {
   const leaveSession: Action = { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN };
-  // A brief or a Spec leaves new ready work, so see whether it can start.
+  // A brief, a Spec or a Map leaves new ready work, so see whether it can start.
   switch (outcome) {
     case "brief":
       return {
@@ -138,10 +151,22 @@ function landLiveOutcome(issueNumber: number, outcome: string, operator: string)
         kind: "act",
         actions: [leaveSession, { kind: "close", issue: issueNumber, reason: "completed" }, { kind: "check-dispatch" }, CHECK_DESIGN_QUEUE],
       };
+    case "map":
+      // The live session rewrote the body as the Map and filed its first
+      // Decisions before posting the marker, so only the labels move here.
+      return {
+        kind: "act",
+        actions: [
+          leaveSession,
+          { kind: "add-labels", issue: issueNumber, labels: [MAP_LABEL] },
+          { kind: "check-dispatch" },
+          CHECK_DESIGN_QUEUE,
+        ],
+      };
     default:
       return {
         kind: "nothing",
-        reason: `The live Design session on #${issueNumber} posted the outcome ${outcome}, which isn't brief or spec, so the Kit left the issue as it is`,
+        reason: `The live Design session on #${issueNumber} posted the outcome ${outcome}, which isn't brief, operator-brief, spec or map, so the Kit left the issue as it is`,
       };
   }
 }
@@ -165,15 +190,17 @@ export function turnStartFrom(comment: number | undefined, found: StartingCommen
 /**
  * A finished turn posts the next round, or ends the session with its outcome.
  * A turn whose starting reply the Operator deleted posts nothing: it answered
- * a reply that is no longer there. Whichever comment it posts ends with the
- * Operator comments it weighed, among those on the PR it came back from that
- * it was `given` (ADR-0007).
+ * a reply that is no longer there. A Map is weighed against `mapCap`, the
+ * Map cap over the open Maps the snapshot holds. Whichever comment it posts ends
+ * with the Operator comments it weighed, among those on the PR it came back
+ * from that it was `given` (ADR-0007).
  */
 export function applyTurn(
   issueNumber: number,
   text: string,
   snapshot: IssueContext,
   start: TurnStart,
+  mapCap: MapCap | null,
   given: readonly GivenOperatorComment[] = [],
 ): Plan {
   if (start.kind === "unchecked-reply") {
@@ -197,7 +224,7 @@ export function applyTurn(
       reason: `The Design-session turn on #${issueNumber} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
     };
   }
-  const plan = landTurn(issueNumber, parsed.output, snapshot);
+  const plan = landTurn(issueNumber, parsed.output, snapshot, mapCap);
   if (plan.kind !== "act") return plan;
   const considered = consideredSection(parsed.output.operatorCommentsConsidered ?? [], given);
   return considered.length === 0 ? plan : { ...plan, actions: plan.actions.map((action) => endedWith(action, considered)) };
@@ -207,11 +234,12 @@ export function applyTurn(
 function endedWith(action: Action, lines: readonly string[]): Action {
   const tail = lines.join("\n");
   if (action.kind === "comment") return { ...action, body: `${action.body}\n${tail}` };
+  if (action.kind === "comment-linking") return { ...action, body: [...action.body, `\n${tail}`] };
   if (action.kind === "close-as-superseded") return { ...action, comment: [...action.comment, `\n${tail}`] };
   return action;
 }
 
-function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: IssueContext): Plan {
+function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: IssueContext, mapCap: MapCap | null): Plan {
   const notNow = whileInSession(issueNumber, snapshot.issue);
   if (notNow !== null) return notNow;
 
@@ -230,16 +258,24 @@ function landTurn(issueNumber: number, output: DesignTurnOutput, snapshot: Issue
     return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, output.comment, snapshot.issue.openBlocking), CHECK_DESIGN_QUEUE] };
   }
   // The Spec stays the single parent of its work: a Ticket under one splits into
-  // siblings, and only an issue with no Spec above it gets a Spec of its own.
+  // siblings, and only an issue with no Spec above it gets a Spec, or a Map, of its own.
   const { parent } = snapshot.issue;
-  if (output.kind === "spec" && parent !== null) {
-    return wrongOutcome(issueNumber, `#${issueNumber} is a Ticket under the Spec #${parent}, so it splits into sibling Tickets, never a Spec of its own`);
+  if ((output.kind === "spec" || output.kind === "map") && parent !== null) {
+    const own = output.kind === "spec" ? "a Spec" : "a Map";
+    return wrongOutcome(issueNumber, `#${issueNumber} is a Ticket under the Spec #${parent}, so it splits into sibling Tickets, never ${own} of its own`);
   }
   if (output.kind === "split" && parent === null) {
     return wrongOutcome(issueNumber, `#${issueNumber} has no Spec above it, so it can't split into sibling Tickets; finish with a Spec instead`);
   }
   // Every outcome but an Operator brief leaves new ready work, so see whether it can start.
   const checkDispatch: Action = { kind: "check-dispatch" };
+  if (output.kind === "map") {
+    if (mapCap === null) return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the open Maps" };
+    // The cap holds even when the turn ignored what its inputs said of it.
+    if (mapCap.kind === "full") return heldByMapCap(issueNumber, mapCap);
+    // A Map's research Decisions are work the Researcher can start on its own.
+    return { kind: "act", actions: [...chartAsMap(issueNumber, output, snapshot.issue), checkDispatch, CHECK_DESIGN_QUEUE] };
+  }
   if (output.kind === "brief") {
     // Only the Operator can do an Operator brief's work, so it waits for them, not Dispatch.
     return "operator" in output.brief
@@ -292,6 +328,23 @@ function wrongOutcome(issueNumber: number, why: string): Plan {
     failure: "infrastructure",
     reason: `The Design-session turn on #${issueNumber} emitted output that breaks its contract: ${why}`,
   };
+}
+
+/**
+ * A Map the Map cap holds: a wrong outcome that, unlike the others, the Kit
+ * says so of on the issue, naming the open Map, and the Design session
+ * carries on. Nothing else changes. Its comment opens like a failed turn's
+ * notice, so the session keeps its slot while the Operator's reply is the
+ * next move (src/github/threads.ts), and mentions nobody: the cap holds
+ * silently (src/loop/mapCap.ts).
+ */
+function heldByMapCap(issueNumber: number, { openMaps, cap }: Extract<MapCap, { kind: "full" }>): Plan {
+  const maps = openMaps.map((map) => `#${map}`);
+  const said =
+    cap === 0
+      ? `This turn ended in a Map, but \`caps.maps\` is 0, so the Kit charts no new Map in this repo. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way.`
+      : `This turn ended in a Map, but the Map cap is full: ${spelled(maps, "and")} ${maps.length === 1 ? "is the open Map" : "are the open Maps"}, and \`caps.maps\` is ${cap}. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way, or close ${maps.length === 1 ? maps[0] : "an open Map"} first and ask for the Map again.`;
+  return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body: [DESIGN_TURN_FAILED_MARKER, said].join("\n") }] };
 }
 
 /**
@@ -452,6 +505,62 @@ function rewriteAsBrief(issueNumber: number, comment: string, brief: AgentBrief,
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
     { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] },
   ];
+}
+
+/**
+ * The foggy outcome: the issue becomes a Map, rewritten in place, and its
+ * first Decisions its sub-issues, blockers first so each blocked-by edge
+ * points at an issue that exists. A Decision carries only its
+ * `wayfinder:<type>` label, never a state or category label: it is a skill's
+ * work, so Intake leaves it alone. The Map keeps its category label and its
+ * own edges, and its closing comment lists the Decisions filed.
+ */
+function chartAsMap(issueNumber: number, output: Extract<DesignTurnOutput, { kind: "map" }>, issue: IssueSnapshot): Action[] {
+  const decisionIssue = (key: string): CreatedIssue => ({ created: `decision:${key}` });
+  // The contract has already refused blockers that loop, so there is always an order.
+  const decisions = dependencyOrder(output.decisions) ?? [];
+  return [
+    { kind: "edit-issue-body", issue: issueNumber, body: rewrittenBody(mapBody(output), issue) },
+    ...decisions.map(
+      (decision): Action => ({
+        kind: "create-issue",
+        key: decisionIssue(decision.key).created,
+        title: withoutMentions(decision.title),
+        body: withoutMentions(decision.body),
+        labels: [decisionLabel(decision.type)],
+        parent: issueNumber,
+        blockedBy: decision.blockedBy.map(decisionIssue),
+      }),
+    ),
+    {
+      kind: "comment-linking",
+      issue: issueNumber,
+      body: [
+        `${SESSION_FINISHED} This issue is now a Map, with ${count(decisions.length, "Decision", "Decisions")} filed under it:\n`,
+        ...decisions.flatMap((decision) => ["\n- ", decisionIssue(decision.key), ` ${withoutMentions(decision.title)} (${decision.type})`]),
+        `\n\n${closingNote(output.comment)}`,
+      ],
+    },
+    { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
+    { kind: "add-labels", issue: issueNumber, labels: [MAP_LABEL] },
+  ];
+}
+
+/**
+ * A Map body in the shape the wayfinder skill works with. Decisions so far
+ * starts empty: each resolved Decision adds its line there. Any other section
+ * the session left empty is its heading alone.
+ */
+function mapBody(output: Extract<DesignTurnOutput, { kind: "map" }>): string {
+  const section = (heading: string, text: string) => (text.trim() === "" ? heading : `${heading}\n\n${withoutMentions(text)}`);
+  return [
+    section("## Destination", output.destination),
+    section("## Notes", output.notes),
+    DECISIONS_SO_FAR_HEADING,
+    section("## Not yet specified", output.notYetSpecified),
+    section("## Out of scope", output.outOfScope),
+    "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
+  ].join("\n\n");
 }
 
 const SPEC: CreatedIssue = { created: "spec" };

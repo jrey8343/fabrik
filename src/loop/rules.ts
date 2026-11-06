@@ -15,6 +15,7 @@ import {
   NEEDS_TRIAGE,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
+  RESEARCH_LABEL,
   REVIEW_LABEL,
   WONTFIX,
 } from "./labels.ts";
@@ -25,6 +26,9 @@ import { heldOf } from "./heldRun.ts";
 import { scheduledTick } from "./kitIssues.ts";
 import { resumingHeldRuns } from "./resume.ts";
 import { heldWhileUsedUp } from "./hold.ts";
+import { mapCapOf } from "./mapCap.ts";
+import { startResearcher } from "./research.ts";
+import { landResearch } from "./researchLanding.ts";
 import { startAgentRun } from "./runs.ts";
 import { onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
@@ -90,6 +94,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
               event.output,
               context,
               turnStartFrom(event.startedBy, snapshot.startingComment),
+              snapshot.openMaps === null ? null : mapCapOf(snapshot.openMaps, config),
               event.operatorComments,
             ),
           );
@@ -128,6 +133,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withIssue(snapshot, (context) => landAudit(event, context, snapshot.namedPullRequests));
     case "retro-run-finished":
       return withIssue(snapshot, (context) => landRetro(event, context, config));
+    case "research-run-finished":
+      return withIssue(snapshot, (context) => landResearch(event, context));
     case "pull-request-changes-requested":
       return requestChanges(event, snapshot, config);
     // Context for the next run that reads the PR, never a trigger (ADR-0007).
@@ -144,7 +151,10 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     case "dispatch-check":
       return snapshot.dispatch === null
         ? missingFromSnapshot("the Tickets a Dispatch check weighs")
-        : dispatch(snapshot.dispatch, config, heldOf("implement", snapshot.kitIssues));
+        : dispatch(snapshot.dispatch, config, {
+            implement: heldOf("implement", snapshot.kitIssues),
+            research: heldOf("research", snapshot.kitIssues),
+          });
     case "design-queue-check":
       return snapshot.designQueue === null
         ? missingFromSnapshot("the needs-design issues a Design queue check weighs")
@@ -226,8 +236,10 @@ function missingFromSnapshot(what: string): Plan {
 
 /**
  * Adding needs-triage starts Triage; adding needs-design asks for a Design
- * queue check, whose agent:design starts the Design session's first turn; and
- * adding agent:implement starts (or resumes) an Implement run.
+ * queue check, whose agent:design starts the Design session's first turn;
+ * adding agent:implement starts (or resumes) an Implement run; and adding
+ * agent:research starts a Researcher run, whether Dispatch added it to
+ * release a research Decision or the Operator re-added it by hand.
  */
 function labelAdded(
   issueNumber: number,
@@ -239,6 +251,7 @@ function labelAdded(
   if (label === NEEDS_DESIGN) return startSession(issueNumber, context);
   if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config);
   if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
+  if (label === RESEARCH_LABEL) return startResearcher(issueNumber, context, config);
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }

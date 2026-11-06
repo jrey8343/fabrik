@@ -36,10 +36,18 @@ export function designRoundMarker(round: number): string {
 }
 
 /**
- * The first line of the Kit's failure notice for a Design-session turn: the
- * session keeps its slot while that notice is the Operator's move (#147).
+ * The first line of the Kit's failure notice for a Design-session turn, and
+ * of its refusal of a Map the Map cap holds (src/loop/design.ts): the session
+ * keeps its slot while that notice is the Operator's move (#147).
  */
 export const DESIGN_TURN_FAILED_MARKER = "<!-- fabrik:design-turn-failed -->";
+
+/**
+ * The first line of the Kit's failure notice for a Researcher run on a
+ * Decision (#154): while that notice is the Decision's latest run's word,
+ * Dispatch leaves it for the Operator to re-add agent:research.
+ */
+export const RESEARCH_RUN_FAILED_MARKER = "<!-- fabrik:research-run-failed -->";
 
 /** How the comment that ends a Design session starts, either way it ends. */
 export const SESSION_FINISHED = "**Design session finished.**";
@@ -52,6 +60,9 @@ export const LIVE_OUTCOME_MARKER = /^<!-- fabrik:live-outcome (\S+) -->/;
 
 /** The first line of the Kit's note that a Ticket came back to design from an agent PR. */
 export const BACK_TO_DESIGN_MARKER = /^<!-- fabrik:back-to-design ([1-9][0-9]*) (https:\/\/\S+|operator) -->/;
+
+/** The heading of a Map's Decisions so far: one line under it per Decision resolved. */
+export const DECISIONS_SO_FAR_HEADING = "## Decisions so far";
 
 /** What a Monitor issue's marker line says it tracks (#148): a Sentry group, or red main. */
 export type MonitorMarker = { readonly kind: "sentry"; readonly group: string } | { readonly kind: "red-main" };

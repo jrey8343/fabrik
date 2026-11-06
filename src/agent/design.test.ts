@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { agentRunEventFrom } from "../github/events.ts";
+import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { planFor } from "../loop/rules.ts";
-import { sentBackContext } from "./design.ts";
+import { MAP_CAP_HEADING, mapCapContext, sentBackContext } from "./design.ts";
+import { readMapOffer } from "./inputs.ts";
 import { readAgentRunResult } from "./result.ts";
 
 const issue = { number: 7, title: "Add a waitlist", body: "As a patient…", comments: [] };
@@ -114,4 +116,68 @@ describe("A Design session's context from the PR a Ticket came back from", () =>
     );
     expect(round).not.toContain("conversation-4");
   });
+});
+
+describe("What a Design-session turn's prompt says of the Map cap", () => {
+  const said = (offer: unknown) => mapCapContext(offer).join("\n\n");
+
+  it("sets the Map cap out under its own heading", () => {
+    expect(mapCapContext({ kind: "may-offer" })[0]).toBe(`## ${MAP_CAP_HEADING}`);
+  });
+
+  it("lets the turn offer a Map while the cap has room", () => {
+    expect(said({ kind: "may-offer" })).toContain("The Map cap has room, so this session may offer to chart the issue as a Map.");
+  });
+
+  it("names the open Map holding a full cap, by number and title, and tells the turn not to offer one", () => {
+    const text = said({ kind: "cap-full", cap: 1, openMaps: [{ number: 12, title: "Group classes" }] });
+
+    expect(text).toContain("The Map cap is full: `caps.maps` is 1, and #12 (Group classes) is the open Map.");
+    expect(text).toContain("Don't offer a Map, and never end in `map`: the Kit would refuse it.");
+    expect(text).toContain("If the Operator asks for one, say in your next round's intro that #12 holds the cap");
+  });
+
+  it("names every open Map when more than one holds the cap", () => {
+    const text = said({ kind: "cap-full", cap: 1, openMaps: [{ number: 12, title: "Group classes" }, { number: 14, title: "Online intake" }] });
+
+    expect(text).toContain("#12 (Group classes) and #14 (Online intake) are the open Maps.");
+    expect(text).toContain("that #12 and #14 hold the cap");
+  });
+
+  it("says caps.maps of 0 stops new Maps, with no Map to name", () => {
+    const text = said({ kind: "cap-full", cap: 0, openMaps: [] });
+
+    expect(text).toContain("`caps.maps` is 0, so this repo charts no new Map.");
+    expect(text).toContain("Don't offer a Map, and never end in `map`: the Kit would refuse it.");
+  });
+
+  it("lets a turn offer a Map, from the file the inputs step writes, while no Map is open", async () => {
+    const github = {
+      graphql: async <T>() => ({ repository: { issues: { nodes: [] } } }) as T,
+    };
+    const written = JSON.stringify(await readMapOffer(github, { owner: "acme", name: "shop" }, DEFAULT_KIT_CONFIG, null));
+
+    expect(said(JSON.parse(written))).toContain("The Map cap has room, so this session may offer to chart the issue as a Map.");
+  });
+
+  it("tells a turn on a Ticket under a Spec, from the file the inputs step writes, not to offer a Map, and why", async () => {
+    const github = {
+      graphql: async <T>(): Promise<T> => {
+        throw new Error("a Ticket under a Spec reads no open Maps");
+      },
+    };
+    const written = JSON.stringify(await readMapOffer(github, { owner: "acme", name: "shop" }, DEFAULT_KIT_CONFIG, { number: 3 }));
+    const text = said(JSON.parse(written));
+
+    expect(text).toContain("This issue is a Ticket under the Spec #3, and a Ticket under a Spec never becomes a Map: the Spec stays the single parent of its Tickets.");
+    expect(text).toContain("Don't offer a Map, and never end in `map`: the Kit would refuse it.");
+    expect(text).not.toContain("The Map cap has room");
+  });
+
+  it.each([null, {}, { kind: "maybe" }, { kind: "cap-full", cap: "1", openMaps: [] }, { kind: "cap-full", cap: 1 }, { kind: "under-a-spec" }])(
+    "fails the turn on inputs it can't read: %j",
+    (offer) => {
+      expect(() => mapCapContext(offer)).toThrow("map.json doesn't say whether this turn may offer a Map");
+    },
+  );
 });

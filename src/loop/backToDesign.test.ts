@@ -131,7 +131,7 @@ describe("The Kit's note on the Ticket", () => {
     expect(note).toMatchObject({ issue: 7 });
     const text =
       note?.kind === "comment-linking"
-        ? note.body.map((part) => (typeof part === "string" ? part : `<${part.posted}>`)).join("")
+        ? note.body.map((part) => (typeof part === "string" ? part : `<${"posted" in part ? part.posted : part.created}>`)).join("")
         : "";
     expect(text).toContain("#50");
     expect(text).toContain("[the Verdict](<verdict>)");
@@ -214,7 +214,9 @@ function commentsOf(plan: Plan): string[] {
       ? [action.body]
       : action.kind === "close-as-superseded"
         ? [action.comment.map((part) => (typeof part === "string" ? part : "#?")).join("")]
-        : [],
+        : action.kind === "comment-linking"
+          ? [action.body.map((part) => (typeof part === "string" ? part : "#?")).join("")]
+          : [],
   );
 }
 
@@ -287,9 +289,19 @@ describe("The Design session after a Ticket comes back names the Operator commen
 
   it("ends the closing comment of a Spec with the comments it weighed", () => {
     const spec = { kind: "spec", comment: "A Spec.", spec: { title: "Totals", body: "The Spec." }, tickets: [ticket] };
-    const plan = planFor(turnNaming(spec, ["conversation-3"]), snapshotOf({ ...returnedTicket, parent: null }), kitConfig());
+    const plan = planFor(turnNaming(spec, ["conversation-3"]), snapshotOf(anIssue({ ...returnedTicket, parent: null, parentIssue: null })), kitConfig());
 
     const [closing] = commentsOf(plan).filter((body) => body.includes("**Design session finished.**"));
     expect(closing).toMatch(/### Operator comments considered\n\n- \[`conversation-3`\]\([^)]+issuecomment-3\)$/);
+  });
+
+  it("ends the closing comment of a Map with the comments it weighed, after the Decisions it lists", () => {
+    const decision = { key: "why", title: "Why did it come back?", body: "The question.", type: "grilling", blockedBy: [] };
+    const map = { kind: "map", comment: "A Map.", destination: "Totals.", notes: "", notYetSpecified: "", outOfScope: "", decisions: [decision] };
+    const plan = planFor(turnNaming(map, ["conversation-3"]), snapshotOf(anIssue({ ...returnedTicket, parent: null, parentIssue: null }), { openMaps: [] }), kitConfig());
+
+    const closing = commentsOf(plan).filter((body) => body.includes("**Design session finished.**"));
+    expect(closing).toHaveLength(1);
+    expect(closing[0]).toMatch(/A Map\.\n\n### Operator comments considered\n\n- \[`conversation-3`\]\([^)]+issuecomment-3\)$/);
   });
 });

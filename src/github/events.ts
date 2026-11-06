@@ -143,6 +143,7 @@ export function agentRunEventFrom(
   if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
   if (result.role === "audit") throw new Error("An Auditor's result is applied through auditEventFrom");
   if (result.role === "retro") throw new Error("A Retro's result is applied through retroEventFrom");
+  if (result.role === "research") throw new Error("A Researcher's result is applied through researchEventFrom");
   if (result.role !== "implement") {
     const finished = {
       kind: "agent-run-finished",
@@ -246,6 +247,20 @@ export function auditEventFrom(result: AgentRunResult, runUrl: string, repoUrl: 
 export function retroEventFrom(result: AgentRunResult, bundle: EvidenceBundle, runUrl: string, repoUrl: string): LoopEvent {
   if (result.role !== "retro") throw new Error(`A Retro's push job was handed a ${result.role} result`);
   return { kind: "retro-run-finished", issue: result.issue, output: result.output, evidence: retroEvidenceOf(bundle), runUrl, repoUrl };
+}
+
+/**
+ * Turns a Researcher's result into the Loop event its push job applies, which
+ * lands its findings on the research Decision and its Map. `changes` is what
+ * the push job read rebuilding the result's branch from its bundle; `runUrl`
+ * is that push job's run, and `repoUrl` the Product repo the resolution links
+ * the findings file in. The core checks the branch is the Decision's and
+ * changes only its findings file.
+ */
+export function researchEventFrom(result: AgentRunResult, changes: BranchChanges, runUrl: string, repoUrl: string): LoopEvent {
+  if (result.role !== "research") throw new Error(`A research run's push job was handed a ${result.role} result`);
+  if (result.branch === undefined) throw new Error(`The Researcher's result for #${result.issue} names no branch it built`);
+  return { kind: "research-run-finished", issue: result.issue, output: result.output, branch: result.branch.name, changes, runUrl, repoUrl };
 }
 
 /** The Operator comments a run was given, for its event to carry; nothing when its result has none. */

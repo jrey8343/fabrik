@@ -115,7 +115,7 @@ The AFK step that sorts each incoming issue (not ones the Loop's own skills crea
 _Avoid_: sorting
 
 **Design session**:
-A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets, or ends as not planned when the Operator decides it won't be built: the issue gets `wontfix` and closes as not planned.
+A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets, charts it as a Map when its destination is too foggy for one session, or ends as not planned when the Operator decides it won't be built: the issue gets `wontfix` and closes as not planned.
 _Avoid_: redesign, planning meeting
 
 **Spec**:
@@ -159,7 +159,7 @@ Triage sending an issue straight to an Implementer, skipping the Design session.
 _Avoid_: fast-track, easy fix
 
 **Dispatch**:
-The Kit releasing a ready, unblocked Ticket to an Implementer.
+The Kit releasing a ready, unblocked Ticket to an Implementer, or an unblocked research Decision on an open Map to the Researcher.
 _Avoid_: kick off, assign
 
 **Verdict**:

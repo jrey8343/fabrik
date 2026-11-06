@@ -16,9 +16,9 @@ import { isPendingAudit } from "./audit.ts";
 import { type HeldRun, heldInOrder, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
 import { canHold, heldAfterKill } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
-import { DESIGN_TURN_FAILED_MARKER } from "./markers.ts";
+import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
-import type { InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
+import type { AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 import { failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
@@ -32,6 +32,17 @@ type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
  * Design-session turn, which starts the turn again (src/loop/design.ts).
  */
 const RERUN_FAILURES: readonly InfrastructureFailure[] = ["weekly-limit", "usage-credits"];
+
+/**
+ * The first line of a failure notice the snapshot reads back: a failed
+ * Design-session turn keeps its session's slot (#147), and a failed
+ * Researcher run keeps Dispatch off its Decision until the Operator re-adds
+ * agent:research (#154).
+ */
+const FAILURE_MARKERS: Partial<Record<AgentRole, string>> = {
+  design: DESIGN_TURN_FAILED_MARKER,
+  research: RESEARCH_RUN_FAILED_MARKER,
+};
 
 /**
  * Which Infrastructure failure this was, from what the agent job left and how
@@ -166,12 +177,18 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       ],
     };
   }
+  const marker = FAILURE_MARKERS[run.role];
+  // A research Decision has no retries to count against, and Dispatch leaves it alone once its run failed.
+  const notRetried =
+    run.role === "research"
+      ? "neither the Loop nor Dispatch runs it again by itself"
+      : "the Loop won't retry it and it doesn't count against the Ticket's retries";
   const body = [
-    ...(run.role === "design" ? [DESIGN_TURN_FAILED_MARKER] : []),
+    ...(marker === undefined ? [] : [marker]),
     `${repoWide === null ? `@${operator} ` : ""}${failedRun} failed: ${howItFailed(failure, run, config)}.`,
     ...detail,
     "",
-    `This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. ${resume}`,
+    `This is an Infrastructure failure, so ${notRetried}. ${resume}`,
     ...(repoWide === null ? [] : ["", repoWide.pointer]),
     "",
     `[The run](${run.runUrl})`,

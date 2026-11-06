@@ -9,7 +9,15 @@ import { type AgentBranchGit, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { applyPlan, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { GitHub, type Repo } from "./github/client.ts";
-import { agentFailureEventFrom, agentRunEventFrom, auditEventFrom, loopEventFrom, retroEventFrom, reviewEventFrom } from "./github/events.ts";
+import {
+  agentFailureEventFrom,
+  agentRunEventFrom,
+  auditEventFrom,
+  loopEventFrom,
+  researchEventFrom,
+  retroEventFrom,
+  reviewEventFrom,
+} from "./github/events.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
@@ -57,6 +65,8 @@ function describeAction(action: Action): string {
       return `- open the issue "${action.title}"${action.assignees.length > 0 ? `, assigned to ${action.assignees.join(", ")}` : ""}`;
     case "edit-issue-body":
       return `- rewrite the body of #${action.issue}`;
+    case "append-to-decisions-so-far":
+      return `- append a line to the Decisions so far of Map #${action.issue}`;
     case "create-issue":
       return [
         `- create "${action.title}" (${action.labels.join(", ")})`,
@@ -153,7 +163,7 @@ async function loopEvent(repo: Repo): Promise<EventSource> {
 /**
  * The push job's event: the result an agent job passed out. The agent could
  * have rewritten that artifact, so its issue must be the one this run is for,
- * and an Implement run's branch is rebuilt from its bundle and checked here.
+ * and an Implement or Researcher run's branch is rebuilt from its bundle and checked here.
  */
 async function agentResultEvent(
   input: Extract<PushJobInput, { kind: "agent-result" }>,
@@ -164,12 +174,24 @@ async function agentResultEvent(
   if (result.role !== input.role) throw new Error(`The agent's result is a ${result.role} result, not ${input.role}`);
   if (result.issue !== input.issue) throw new Error(`The agent's result is for #${result.issue}, not #${input.issue}`);
   const source = `the ${result.role} run on #${result.issue}`;
+  const bundlePath = join(dirname(resultPath), AGENT_BUNDLE_FILE);
+  const remote = () => ({ serverUrl: required("GITHUB_SERVER_URL"), repo, token: required("FABRIK_APP_TOKEN") });
   if (result.role === "audit") return { event: auditEventFrom(result, thisRunUrl(), thisRepoUrl()), source, branch: null };
   if (result.role === "retro") {
     // What the Retro was given comes from the evidence job's artifact, which the agent can't rewrite, never from its result.
     const evidenceDir = process.env["FABRIK_RETRO_EVIDENCE_DIR"] || join(required("RUNNER_TEMP"), "retro-evidence");
     const bundle = readEvidenceBundle(await readFile(join(evidenceDir, RETRO_EVIDENCE_FILE), "utf8"));
     return { event: retroEventFrom(result, bundle, thisRunUrl(), thisRepoUrl()), source, branch: null };
+  }
+  if (result.role === "research") {
+    // The core checks the branch is the Decision's and names its findings file (src/loop/researchLanding.ts).
+    // Rebuilt as a first run is, so every path it changes from the default branch counts as the run's own.
+    const built = result.branch;
+    if (built === undefined || built.base.ref === built.name) {
+      throw new Error(`The research run on #${result.issue} didn't cut its branch from the default branch`);
+    }
+    const branch = await rebuildAgentBranch(built, bundlePath, remote());
+    return { event: researchEventFrom(result, branch.changes, thisRunUrl(), thisRepoUrl()), source, branch };
   }
   if (result.role !== "implement") {
     return { event: agentRunEventFrom(result, null, null, input.startedBy), source, branch: null };
@@ -191,11 +213,7 @@ async function agentResultEvent(
         : `The retry on #${retry.pullRequest} didn't build on ${built.name}`,
     );
   }
-  const branch = await rebuildAgentBranch(built, join(dirname(resultPath), AGENT_BUNDLE_FILE), {
-    serverUrl: required("GITHUB_SERVER_URL"),
-    repo,
-    token: required("FABRIK_APP_TOKEN"),
-  });
+  const branch = await rebuildAgentBranch(built, bundlePath, remote());
   // The capture result and artifact ids come from the Implement job's outputs; the core decides whether the run is UI.
   const capture = input.capture ?? { result: null, artifact: null, galleryArtifact: null };
   const evidence = { ...capture, run: Number(required("GITHUB_RUN_ID")), repoUrl: thisRepoUrl() };

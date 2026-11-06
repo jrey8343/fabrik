@@ -3,6 +3,7 @@ import {
   aDesignQueueIssue,
   anIssue,
   aPullRequest,
+  aResearchDecision,
   aTicket,
   auditBody,
   AUDITED_SHA,
@@ -104,6 +105,24 @@ const STARTS: readonly (readonly [
     ],
     98,
     null,
+  ],
+  [
+    "research",
+    "Research",
+    (kitIssues) => [
+      { kind: "label-added", issue: 12, label: "agent:research" },
+      snapshotOf(
+        anIssue({
+          number: 12,
+          labels: ["wayfinder:research", "agent:research"],
+          parent: 3,
+          parentIssue: { number: 3, open: true, labels: ["wayfinder:map"] },
+        }),
+        { kitIssues },
+      ),
+    ],
+    12,
+    "agent:research",
   ],
 ];
 
@@ -239,7 +258,7 @@ describe("A held run, under Dispatch's max_in_flight cap and the Design session 
     kitIssues: [{ ...BOTH_USED_UP[0]!, comments: markers }, BOTH_USED_UP[1]!],
   });
   const ONE_IN_FLIGHT = kitConfig({ subscriptions: ["Claude token", "Claude token 2"], maxInFlight: 1 });
-  const ONE_SESSION = kitConfig({ subscriptions: ["Claude token", "Claude token 2"], caps: { designSessions: 1, monitorIssues: DEFAULT_KIT_CONFIG.caps.monitorIssues } });
+  const ONE_SESSION = kitConfig({ subscriptions: ["Claude token", "Claude token 2"], caps: { ...DEFAULT_KIT_CONFIG.caps, designSessions: 1 } });
 
   it("a held Implement run counts as in flight, so Dispatch neither dispatches its Ticket again nor another past the cap", () => {
     const snapshot = withHeld(
@@ -251,6 +270,21 @@ describe("A held run, under Dispatch's max_in_flight cap and the Design session 
 
     expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("max_in_flight is 1 and 1 are in flight") });
     expect(plan.kind === "nothing" && plan.reason).toContain("1 held");
+  });
+
+  it("a held Research run counts as in flight, so Dispatch neither releases its research Decision again nor another past the cap", () => {
+    const snapshot = withHeld(
+      dispatchSnapshotOf([aTicket({ number: 12 })], { researchDecisions: [aResearchDecision({ number: 7 })] }),
+      heldMarker(7, "research", "agent:research"),
+    );
+
+    const plan = planFor({ kind: "dispatch-check" }, snapshot, ONE_IN_FLIGHT);
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason:
+        "max_in_flight is 1 and 1 are in flight (0 open agent draft PRs, 0 Implement runs in progress, 0 dispatched and waiting, 1 held), so #12 wait",
+    });
   });
 
   it("a held Implement run the tick has resumed frees its slot", () => {

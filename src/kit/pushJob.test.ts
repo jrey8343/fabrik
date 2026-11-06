@@ -65,6 +65,22 @@ describe("What the push job applies", () => {
     });
   });
 
+  it("applies a Researcher run's result for the event's issue, the research Decision agent:research went on, once the Research job succeeded", () => {
+    expect(pushJobInput(needs("research", { research: ok() }), 42)).toEqual({
+      kind: "agent-result",
+      role: "research",
+      issue: 42,
+      pullRequest: null,
+      review: null,
+      startedBy: null,
+    });
+  });
+
+  // loop.yml's push job needs the Research job (src/kit/workflows.test.ts), so this is only ever a miswiring.
+  it("applies nothing for a research route whose needs don't name the Research job, rather than guess at a result", () => {
+    expect(pushJobInput(needs("research"), 42)).toEqual({ kind: "nothing", reason: "the research job ended unknown" });
+  });
+
   // loop.yml's push job needs both of a Retro run's jobs (src/kit/workflows.test.ts), so this is only ever a miswiring.
   it("applies nothing for a Retro route whose needs name neither of the Retro's jobs, rather than guess at a result", () => {
     expect(pushJobInput(needs("retro"), 120)).toEqual({ kind: "nothing", reason: "the retro job ended unknown" });
@@ -182,6 +198,13 @@ describe("What the push job applies", () => {
     const input = pushJobInput(needs("retro", { "retro-evidence": ok(), retro: { result, outputs: { "secrets-step": "success" } } }), 120);
 
     expect(input).toEqual({ kind: "agent-failure", role: "retro", issue: 120, jobResult: result, secretsStep: "success" });
+  });
+
+  // The Research job's timeout cancels it; either way the Decision gets the research failure notice, which Dispatch won't release again past.
+  it.each(["failure", "cancelled"])("gives a Researcher run's failure on the research Decision when the Research job's result is %s", (result) => {
+    const input = pushJobInput(needs("research", { research: { result, outputs: { "secrets-step": "success" } } }), 42);
+
+    expect(input).toEqual({ kind: "agent-failure", role: "research", issue: 42, jobResult: result, secretsStep: "success" });
   });
 
   // The Retro job never starts without its evidence, so the Retro would otherwise stay pending and block the next one.

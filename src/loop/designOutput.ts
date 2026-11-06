@@ -5,7 +5,10 @@
 // (large), or, for a Ticket already under a Spec, sibling Tickets under that
 // Spec. Any Ticket in an outcome may instead be an Operator step. Or the
 // session ends as not planned: the Operator decided the issue won't be built.
+// Or, when the destination is too foggy to design in one session, the issue
+// becomes a Map with its first Decisions.
 import { isCommentIdList } from "./considered.ts";
+import { DECISION_TYPES, type DecisionType } from "./labels.ts";
 import type { AgentBrief } from "./triageOutput.ts";
 
 export interface RoundQuestion {
@@ -63,7 +66,35 @@ type DesignTurnOutcome =
       readonly kind: "not-planned";
       /** What the Operator decided and why, for the closing comment. */
       readonly comment: string;
+    }
+  | {
+      /** The foggy outcome: the issue is rewritten in place as a Map, with its first Decisions as its sub-issues. */
+      readonly kind: "map";
+      /** What the session decided, for the closing comment. */
+      readonly comment: string;
+      /** What reaching the end of the Map looks like. The Kit writes the Map body from these sections. */
+      readonly destination: string;
+      /** The domain, skills and standing preferences every session on the Map consults; may be empty. */
+      readonly notes: string;
+      /** In-scope fog that can't be a Decision yet; may be empty. */
+      readonly notYetSpecified: string;
+      /** Work ruled beyond the destination; may be empty. */
+      readonly outOfScope: string;
+      /** Each Decision, with the keys of the Decisions that block it. Any order. */
+      readonly decisions: readonly MapDecision[];
     };
+
+/** A Decision as a Design session writes it, before it is a sub-issue of its Map. */
+export interface MapDecision {
+  /** Names the Decision for other Decisions' `blockedBy`; unique within the outcome. */
+  readonly key: string;
+  readonly title: string;
+  /** The question it resolves. */
+  readonly body: string;
+  /** How it gets resolved, which its `wayfinder:<type>` label says. */
+  readonly type: DecisionType;
+  readonly blockedBy: readonly string[];
+}
 
 /**
  * The small outcome when the whole issue is Operator work that fits one
@@ -197,33 +228,70 @@ function readTickets(value: unknown, errors: string[], outcome: "spec" | "split"
   return tickets;
 }
 
-/** Each Ticket's blockers must be other Tickets in the outcome, and no chain of them may loop. */
-function checkBlockers(tickets: readonly SpecTicket[], errors: string[]): void {
+function readDecisions(value: unknown, errors: string[]): MapDecision[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    errors.push("a map needs at least one decision");
+    return [];
+  }
+  const decisions: MapDecision[] = [];
+  value.forEach((item, i) => {
+    if (
+      !isObject(item) ||
+      !isText(item.key) ||
+      !isText(item.title) ||
+      !isText(item.body) ||
+      !Array.isArray(item.blockedBy) ||
+      !item.blockedBy.every(isText)
+    ) {
+      errors.push(`decision ${i + 1} needs non-empty key, title and body text, and a blockedBy list of keys`);
+    } else if (!isDecisionType(item.type)) {
+      errors.push(
+        `decision ${JSON.stringify(item.key)} has the type ${JSON.stringify(item.type)}, which must be one of ${DECISION_TYPES.join(", ")}`,
+      );
+    } else {
+      decisions.push({ key: item.key, title: item.title, body: item.body, type: item.type, blockedBy: item.blockedBy });
+    }
+  });
+  return decisions;
+}
+
+function isDecisionType(value: unknown): value is DecisionType {
+  return (DECISION_TYPES as readonly unknown[]).includes(value);
+}
+
+/** What the blocked-by edges within an outcome link: its Tickets, or its Decisions. */
+interface Blocked {
+  readonly key: string;
+  readonly blockedBy: readonly string[];
+}
+
+/** Each item's blockers must be other items in the outcome, and no chain of them may loop. */
+function checkBlockers(items: readonly Blocked[], errors: string[], noun: "ticket" | "decision"): void {
   const keys = new Set<string>();
-  for (const { key } of tickets) {
-    if (keys.has(key)) errors.push(`ticket key ${JSON.stringify(key)} is used more than once`);
+  for (const { key } of items) {
+    if (keys.has(key)) errors.push(`${noun} key ${JSON.stringify(key)} is used more than once`);
     keys.add(key);
   }
-  for (const { key, blockedBy } of tickets) {
+  for (const { key, blockedBy } of items) {
     for (const blocker of blockedBy) {
-      if (blocker === key) errors.push(`ticket ${JSON.stringify(key)} blocks itself`);
+      if (blocker === key) errors.push(`${noun} ${JSON.stringify(key)} blocks itself`);
       else if (!keys.has(blocker)) {
-        errors.push(`ticket ${JSON.stringify(key)} is blocked by ${JSON.stringify(blocker)}, which isn't a ticket here`);
+        errors.push(`${noun} ${JSON.stringify(key)} is blocked by ${JSON.stringify(blocker)}, which isn't a ${noun} here`);
       }
     }
   }
-  if (errors.length === 0 && dependencyOrder(tickets) === null) errors.push("the tickets' blockers form a cycle");
+  if (errors.length === 0 && dependencyOrder(items) === null) errors.push(`the ${noun}s' blockers form a cycle`);
 }
 
 /**
- * The Tickets with every blocker before the Tickets it blocks, otherwise in
- * the order given; null if the blockers form a cycle.
+ * The Tickets or Decisions with every blocker before the ones it blocks,
+ * otherwise in the order given; null if the blockers form a cycle.
  */
-export function dependencyOrder(tickets: readonly SpecTicket[]): SpecTicket[] | null {
-  const ordered: SpecTicket[] = [];
+export function dependencyOrder<T extends Blocked>(items: readonly T[]): T[] | null {
+  const ordered: T[] = [];
   const placed = new Set<string>();
-  while (ordered.length < tickets.length) {
-    const next = tickets.find(
+  while (ordered.length < items.length) {
+    const next = items.find(
       ({ key, blockedBy }) => !placed.has(key) && blockedBy.every((blocker) => placed.has(blocker)),
     );
     if (next === undefined) return null;
@@ -260,14 +328,14 @@ function readTurn(value: unknown): DesignTurnOutputResult {
       if (!isText(value.comment)) errors.push("a spec needs non-empty comment text");
       const spec = readSpec(value.spec, errors);
       const tickets = readTickets(value.tickets, errors, "spec");
-      if (errors.length === 0) checkBlockers(tickets, errors);
+      if (errors.length === 0) checkBlockers(tickets, errors, "ticket");
       if (errors.length > 0 || spec === null) return { ok: false, errors };
       return { ok: true, output: { kind: "spec", comment: value.comment as string, spec, tickets } };
     }
     case "split": {
       if (!isText(value.comment)) errors.push("a split needs non-empty comment text");
       const tickets = readTickets(value.tickets, errors, "split");
-      if (errors.length === 0) checkBlockers(tickets, errors);
+      if (errors.length === 0) checkBlockers(tickets, errors, "ticket");
       if (errors.length > 0) return { ok: false, errors };
       return { ok: true, output: { kind: "split", comment: value.comment as string, tickets } };
     }
@@ -275,8 +343,33 @@ function readTurn(value: unknown): DesignTurnOutputResult {
       if (!isText(value.comment)) return { ok: false, errors: ["not-planned needs non-empty comment text"] };
       return { ok: true, output: { kind: "not-planned", comment: value.comment } };
     }
+    case "map": {
+      if (!isText(value.comment)) errors.push("a map needs non-empty comment text");
+      if (!isText(value.destination)) errors.push("a map needs non-empty destination text");
+      for (const section of ["notes", "notYetSpecified", "outOfScope"] as const) {
+        if (typeof value[section] !== "string") errors.push(`a map needs ${section} text, which may be empty`);
+      }
+      const decisions = readDecisions(value.decisions, errors);
+      if (errors.length === 0) checkBlockers(decisions, errors, "decision");
+      if (errors.length > 0) return { ok: false, errors };
+      return {
+        ok: true,
+        output: {
+          kind: "map",
+          comment: value.comment as string,
+          destination: value.destination as string,
+          notes: value.notes as string,
+          notYetSpecified: value.notYetSpecified as string,
+          outOfScope: value.outOfScope as string,
+          decisions,
+        },
+      };
+    }
     default:
-      return { ok: false, errors: [`kind must be round, brief, spec, split or not-planned, not ${JSON.stringify(value.kind)}`] };
+      return {
+        ok: false,
+        errors: [`kind must be round, brief, spec, split, not-planned or map, not ${JSON.stringify(value.kind)}`],
+      };
   }
 }
 

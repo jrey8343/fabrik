@@ -1,9 +1,60 @@
 // What a Design-session turn's prompt carries beyond the issue: when the
 // Ticket came back to design from an agent PR, that PR as src/agent/inputs.ts
 // read it into the issue's `sentBack`, set out as Markdown, and the Operator
-// comments on that PR it gives the run, which the run's result passes out.
+// comments on that PR it gives the run, which the run's result passes out;
+// and what the inputs say of the Map cap.
+import { spelled } from "../loop/readable.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
+import { MAP_INPUTS_FILE, type MapOffer } from "./inputs.ts";
 import { givenOperatorComments, operatorCommentsSection } from "./operatorComments.ts";
+
+/** The heading the Map cap is set out under, which prompts/design.md names. */
+export const MAP_CAP_HEADING = "The Map cap";
+
+/**
+ * The Map cap as the turn's inputs read it (MAP_INPUTS_FILE): whether the
+ * turn may offer a Map, and when it can't, why: the issue is a Ticket under a
+ * Spec, or the cap is full, naming the open Maps that hold it, so the turn
+ * can tell the Operator which.
+ */
+export function mapCapContext(offer: unknown): string[] {
+  return [`## ${MAP_CAP_HEADING}`, mapCapSaid(readOffer(offer))];
+}
+
+function mapCapSaid(offer: MapOffer): string {
+  const refuse = "Don't offer a Map, and never end in `map`: the Kit would refuse it.";
+  switch (offer.kind) {
+    case "may-offer":
+      return "The Map cap has room, so this session may offer to chart the issue as a Map.";
+    case "under-a-spec":
+      return `This issue is a Ticket under the Spec #${offer.spec}, and a Ticket under a Spec never becomes a Map: the Spec stays the single parent of its Tickets. ${refuse}`;
+    case "cap-full": {
+      if (offer.cap === 0) {
+        return `\`caps.maps\` is 0, so this repo charts no new Map. ${refuse} If the Operator asks for one, say in your next round's intro that the Kit config stops new Maps.`;
+      }
+      const named = spelled(offer.openMaps.map((map) => `#${map.number} (${map.title})`), "and");
+      const numbers = spelled(offer.openMaps.map((map) => `#${map.number}`), "and");
+      const one = offer.openMaps.length === 1;
+      return [
+        `The Map cap is full: \`caps.maps\` is ${offer.cap}, and ${named} ${one ? "is the open Map" : "are the open Maps"}.`,
+        refuse,
+        `If the Operator asks for one, say in your next round's intro that ${numbers} ${one ? "holds" : "hold"} the cap, and that closing ${one ? "it" : "one"} frees it.`,
+      ].join(" ");
+    }
+  }
+}
+
+/** The inputs step's MapOffer, or a failed turn: a turn never guesses whether it may offer a Map. */
+function readOffer(value: unknown): MapOffer {
+  const offer = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+  if (offer["kind"] === "may-offer") return { kind: "may-offer" };
+  const { cap, openMaps, spec } = offer;
+  if (offer["kind"] === "under-a-spec" && typeof spec === "number") return { kind: "under-a-spec", spec };
+  if (offer["kind"] === "cap-full" && typeof cap === "number" && Array.isArray(openMaps)) {
+    return { kind: "cap-full", cap, openMaps: openMaps.map((map: { number?: unknown; title?: unknown }) => ({ number: Number(map.number), title: text(map.title) })) };
+  }
+  throw new Error(`${MAP_INPUTS_FILE} doesn't say whether this turn may offer a Map`);
+}
 
 interface SentBackInput {
   readonly pullRequest?: { readonly number?: unknown; readonly title?: unknown; readonly baseRefName?: unknown; readonly headRefName?: unknown };

@@ -96,7 +96,7 @@ describe("Spec closing", () => {
   });
 
   it("an issue with no parent Spec only runs a Dispatch check", () => {
-    expect(planFor(closed, snapshotOf({ ...ticket, parent: null }), kitConfig())).toEqual({
+    expect(planFor(closed, snapshotOf(anIssue({ ...ticket, parent: null, parentIssue: null })), kitConfig())).toEqual({
       kind: "act",
       actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }],
     });

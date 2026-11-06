@@ -401,6 +401,103 @@ describe("The Run record a run's end yields", () => {
     });
   });
 
+  describe("a Researcher run's record is for the research Decision, with no PR, starting from the default branch commit it cut its branch from", () => {
+    /** The Research job on the research Decision #42 ended `result`; its base-sha is the default branch commit it checked out. */
+    const research = (result: string, overrides: Partial<RunEnd> = {}) =>
+      runRecordFor(
+        runEnd({
+          needs: needs("research", { research: job(result, { "base-sha": DEFAULT_BRANCH_SHA }) }),
+          eventIssue: 42,
+          agentResult: result === "success" ? agentResult("research", 42) : null,
+          ...overrides,
+        }),
+      );
+
+    it("a Researcher run is for the Decision, with its model and cost, and no PR, Retry, Step-up, Request changes or Verdict", () => {
+      const files = research("success");
+
+      expect(files?.record).toMatchObject({
+        schema: 2,
+        role: "research",
+        issue: 42,
+        pullRequest: null,
+        model: "claude-opus-5-5",
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: DEFAULT_BRANCH_SHA,
+        verdict: null,
+        jobResult: "success",
+        infrastructureFailure: null,
+        turns: 12,
+        totalCostUsd: 1.25,
+      });
+      expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-research.json");
+      expect(files?.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-1-research.jsonl.gz");
+    });
+
+    it("a failed Researcher run whose 1Password load failed is recorded on roles.research's model, the agent never having started", () => {
+      const files = research("failure", {
+        needs: needs(
+          "research",
+          { research: job("failure", { "secrets-step": "failure", "base-sha": DEFAULT_BRANCH_SHA, model: "", effort: "" }) },
+          { model: "", effort: "" },
+        ),
+        roles: { ...roles, research: { model: "claude-sonnet-5-5", effort: "high", timeoutMinutes: 30 } },
+        transcript: null,
+      });
+
+      expect(files?.record).toMatchObject({
+        role: "research",
+        issue: 42,
+        pullRequest: null,
+        model: "claude-sonnet-5-5",
+        effort: "high",
+        baseSha: DEFAULT_BRANCH_SHA,
+        jobResult: "failure",
+        infrastructureFailure: "unreachable-1password",
+        verdict: null,
+        turns: null,
+        transcript: null,
+      });
+      expect(files?.transcriptPath).toBeNull();
+    });
+
+    it("a failed Researcher run is recorded as the Infrastructure failure its report names", () => {
+      const files = research("failure", { failureReport: JSON.stringify({ failure: "missing-output", detail: "no <research> tag" }), transcript: [init] });
+
+      expect(files?.record).toMatchObject({ role: "research", issue: 42, pullRequest: null, jobResult: "failure", infrastructureFailure: "missing-output" });
+    });
+
+    it("a Researcher run timed out by its timeout-minutes, with its transcript, gets a record with no result fields", () => {
+      const files = research("cancelled", { transcript: [init] });
+
+      expect(files?.record).toMatchObject({
+        role: "research",
+        issue: 42,
+        pullRequest: null,
+        retry: 0,
+        stepUp: false,
+        requestChanges: false,
+        baseSha: DEFAULT_BRANCH_SHA,
+        verdict: null,
+        jobResult: "cancelled",
+        infrastructureFailure: "timeout",
+        subtype: null,
+        durationMs: null,
+        turns: null,
+        totalCostUsd: null,
+        modelUsage: {},
+        transcript: "transcripts/acme/widgets/2026-11/9001-1-research.jsonl.gz",
+      });
+    });
+
+    // loop.yml's push job needs the Research job (src/kit/workflows.test.ts), so this is only ever a miswiring.
+    it("no record is written for a research route whose needs don't name the Research job, rather than guess at one", () => {
+      expect(runRecordFor(runEnd({ needs: needs("research"), eventIssue: 42, agentResult: null, transcript: null }))).toBeNull();
+    });
+  });
+
   describe("an Implement run says which run it was", () => {
     const implement = (kitOutputs: Record<string, string>) =>
       runRecordFor(

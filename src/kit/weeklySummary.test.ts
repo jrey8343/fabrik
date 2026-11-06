@@ -26,6 +26,7 @@ import {
 } from "../__fixtures__/weeklySummary.ts";
 import { aMonitorIssueBody, AGROUP_STATS } from "../__fixtures__/monitor.ts";
 import { aDesignQueueIssue } from "../__fixtures__/snapshots.ts";
+import { RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
 import { readRunRecord, type RunRecord } from "./runRecord.ts";
 import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
@@ -58,6 +59,11 @@ describe("the Weekly summary", () => {
 
   it("isn't skipped in a week with no records but an open Retro", () => {
     const facts = [factsOf({ repo: "owner/quiet" }), factsOf({ openRetros: [anOpenRetro()] })];
+    expect(weeklySummary(input({ facts })).kind).toBe("summary");
+  });
+
+  it("isn't skipped in a week with no records but an open Map", () => {
+    const facts = [factsOf({ repo: "owner/quiet" }), factsOf({ openIssues: [anOpenIssue({ number: 30, labels: ["wayfinder:map"] })], openMaps: [30] })];
     expect(weeklySummary(input({ facts })).kind).toBe("summary");
   });
 
@@ -410,6 +416,145 @@ describe("the Weekly summary", () => {
           openRetros: [anOpenRetro({ author: "operator" }), anOpenRetro({ number: 121, author: "other-app[bot]" })],
         });
         expect(waiting).toEqual([]);
+      });
+    });
+
+    describe("with Maps", () => {
+      const waitingWith = (facts: Parameters<typeof factsOf>[0]) => {
+        const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result.summary.repos[0]?.waitingOnYou;
+      };
+
+      it("lists each open Map, waiting since it got wayfinder:map, with how many of its Decisions wait on the Operator: its open grilling, prototype and task ones", () => {
+        const waiting = waitingWith({
+          openIssues: [
+            anOpenIssue({
+              number: 30,
+              title: "Let patients book group classes",
+              labels: ["enhancement", "wayfinder:map"],
+              labelEvents: [aLabelAdded("needs-design", "2026-10-20T20:00:00Z"), aLabelAdded("wayfinder:map", "2026-11-03T20:00:00Z")],
+              // 35 is closed, so it isn't among the open issues.
+              subIssues: [31, 32, 33, 34, 35],
+            }),
+            anOpenIssue({ number: 31, labels: ["wayfinder:grilling"] }),
+            anOpenIssue({ number: 32, labels: ["wayfinder:prototype"] }),
+            anOpenIssue({ number: 33, labels: ["wayfinder:task"] }),
+            // The Researcher's, not the Operator's.
+            anOpenIssue({ number: 34, labels: ["wayfinder:research"] }),
+            // On no Map.
+            anOpenIssue({ number: 36, labels: ["wayfinder:grilling"] }),
+            // Charted by hand, labelled as it was opened.
+            anOpenIssue({ number: 40, title: "Move intake online", labels: ["wayfinder:map"], createdAt: "2026-11-05T20:00:00Z", subIssues: [41] }),
+            anOpenIssue({ number: 41, labels: ["wayfinder:task"] }),
+          ],
+          openMaps: [30, 40],
+        });
+        expect(waiting).toEqual([
+          {
+            kind: "map",
+            number: 30,
+            title: "Let patients book group classes",
+            url: "https://github.com/owner/product/issues/30",
+            since: "2026-11-03T20:00:00Z",
+            age: 5 * 24 * HOUR,
+            decisionsWaiting: 3,
+          },
+          {
+            kind: "map",
+            number: 40,
+            title: "Move intake online",
+            url: "https://github.com/owner/product/issues/40",
+            since: "2026-11-05T20:00:00Z",
+            age: 3 * 24 * HOUR,
+            decisionsWaiting: 1,
+          },
+        ]);
+      });
+
+      const failureNotice = (decision: number, at: string) =>
+        aComment(`${RESEARCH_RUN_FAILED_MARKER}\n@operator The Research run on #${decision} failed: it timed out.`, at);
+      const mapOf = (number: number, decisions: readonly number[]) =>
+        anOpenIssue({ number, labels: ["wayfinder:map"], labelEvents: [aLabelAdded("wayfinder:map", "2026-11-07T20:00:00Z")], subIssues: decisions });
+
+      it("lists each research Decision on an open Map whose last run failed, waiting since the failure notice for the Operator to re-add agent:research", () => {
+        const waiting = waitingWith({
+          openIssues: [
+            mapOf(30, [31, 32, 33]),
+            anOpenIssue({
+              number: 31,
+              title: "Which booking providers take group payments?",
+              labels: ["wayfinder:research"],
+              // A person's reply leaves the notice standing.
+              comments: [failureNotice(31, "2026-11-06T20:00:00Z"), aComment("Odd, it ran fine last time.", "2026-11-07T08:00:00Z", { author: "operator", byBot: false })],
+            }),
+            // A later run's word, such as its resolution, answers the failure.
+            anOpenIssue({
+              number: 32,
+              labels: ["wayfinder:research"],
+              comments: [failureNotice(32, "2026-11-04T20:00:00Z"), aComment("Resolved: Stripe and Square both do.", "2026-11-05T20:00:00Z")],
+            }),
+            // Its run never failed.
+            anOpenIssue({ number: 33, labels: ["wayfinder:research"] }),
+          ],
+          openMaps: [30],
+        });
+        expect(waiting).toEqual([
+          {
+            kind: "research-failed",
+            number: 31,
+            title: "Which booking providers take group payments?",
+            url: "https://github.com/owner/product/issues/31",
+            since: "2026-11-06T20:00:00Z",
+            age: 2 * 24 * HOUR,
+          },
+          expect.objectContaining({ kind: "map", number: 30, decisionsWaiting: 0 }),
+        ]);
+      });
+
+      it("reads a research Decision's last run from the Fabrik App's comments alone, so another bot's comment neither clears the failure nor fakes one", () => {
+        const otherBot = { author: "dependabot[bot]", byBot: true };
+        const waiting = waitingWith({
+          openIssues: [
+            mapOf(30, [31, 32]),
+            // Another bot's comment after the notice leaves it standing, and the age still runs from the notice.
+            anOpenIssue({
+              number: 31,
+              labels: ["wayfinder:research"],
+              comments: [failureNotice(31, "2026-11-06T20:00:00Z"), aComment("Bumped a dependency.", "2026-11-07T08:00:00Z", otherBot)],
+            }),
+            // Another bot's look-alike notice is no failure.
+            anOpenIssue({
+              number: 32,
+              labels: ["wayfinder:research"],
+              comments: [aComment(`${RESEARCH_RUN_FAILED_MARKER}\nA look-alike.`, "2026-11-06T20:00:00Z", otherBot)],
+            }),
+          ],
+          openMaps: [30],
+        });
+        expect(waiting).toEqual([
+          expect.objectContaining({ kind: "research-failed", number: 31, since: "2026-11-06T20:00:00Z" }),
+          expect.objectContaining({ kind: "map", number: 30 }),
+        ]);
+      });
+
+      it("never lists a failed research Decision the Operator has re-added agent:research to since, or one on no open Map", () => {
+        const failed = (number: number, overrides: Parameters<typeof anOpenIssue>[0] = {}) =>
+          anOpenIssue({ number, labels: ["wayfinder:research"], comments: [failureNotice(number, "2026-11-06T20:00:00Z")], ...overrides });
+        const waiting = waitingWith({
+          openIssues: [
+            mapOf(30, [31]),
+            // Re-added, so its run has started again or soon will.
+            failed(31, { labelEvents: [aLabelAdded("agent:research", "2026-11-07T20:00:00Z", { actor: "operator" })] }),
+            // Its Map is closed, or it never had one.
+            failed(32),
+            // Its parent is a Spec, not a Map.
+            anOpenIssue({ number: 3, labels: ["ready-for-agent"], subIssues: [33] }),
+            failed(33),
+          ],
+          openMaps: [30],
+        });
+        expect(waiting).toEqual([expect.objectContaining({ kind: "map", number: 30 })]);
       });
     });
   });
@@ -1597,6 +1742,48 @@ describe("the Weekly summary", () => {
       expect(result.body).not.toMatch(/dead-end-loop|Looped|runs\/|scores\/|#7\b/);
     });
 
+    describe("with Maps", () => {
+      it("lists each open Map with how many of its Decisions wait on the Operator, and each failed research Decision, with their ages", () => {
+        const body = bodyOf(
+          factsOf({
+            openIssues: [
+              anOpenIssue({
+                number: 30,
+                title: "Let patients book group classes",
+                labels: ["wayfinder:map"],
+                labelEvents: [aLabelAdded("wayfinder:map", hoursAgo(100))],
+                subIssues: [31, 32, 33],
+              }),
+              anOpenIssue({
+                number: 31,
+                title: "Which booking providers take group payments?",
+                labels: ["wayfinder:research"],
+                comments: [aComment(`${RESEARCH_RUN_FAILED_MARKER}\n@operator The Research run on #31 failed: it timed out.`, hoursAgo(30))],
+              }),
+              anOpenIssue({ number: 32, labels: ["wayfinder:grilling"] }),
+              anOpenIssue({ number: 33, labels: ["wayfinder:prototype"] }),
+              anOpenIssue({ number: 40, title: "Move intake online", labels: ["wayfinder:map"], createdAt: hoursAgo(20), subIssues: [41] }),
+              anOpenIssue({ number: 41, labels: ["wayfinder:task"] }),
+              anOpenIssue({ number: 50, title: "Pick a CRM", labels: ["wayfinder:map"], createdAt: hoursAgo(10) }),
+            ],
+            openMaps: [30, 40, 50],
+          }),
+        );
+        expect(body).toContain(
+          [
+            "### Waiting on you",
+            "",
+            "- [#30](https://github.com/owner/product/issues/30) Let patients book group classes: Map open for 4 days, 2 Decisions waiting on you",
+            "- [#31](https://github.com/owner/product/issues/31) Which booking providers take group payments?: research run failed 30 hours ago, waiting for you to re-add agent:research",
+            "- [#40](https://github.com/owner/product/issues/40) Move intake online: Map open for 20 hours, 1 Decision waiting on you",
+            "- [#50](https://github.com/owner/product/issues/50) Pick a CRM: Map open for 10 hours, no Decisions waiting on you",
+            "",
+          ].join("\n"),
+        );
+        expect(body.match(/@operator\b/g)).toHaveLength(1);
+      });
+    });
+
     it("collapses the 11th item onward in a repo into details", () => {
       const body = bodyOf(factsOf({ openIssues: Array.from({ length: 12 }, (_, i) => readyForHuman(100 + i, 100 - i)) }));
       const shown = body.slice(0, body.indexOf("<details>"));
@@ -1687,7 +1874,7 @@ describe("the Weekly summary", () => {
           },
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR }, monitor: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR }, monitor: null, maps: null });
       expect(result.body).toContain(["## Held", "", "- owner/product: 2 needs-design issues waiting for a Design session slot, the oldest for 3 days", ""].join("\n"));
     });
 
@@ -1706,7 +1893,7 @@ describe("the Weekly summary", () => {
           },
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR }, monitor: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR }, monitor: null, maps: null });
       expect(result.body).toContain("- owner/product: 1 needs-design issue waiting for a Design session slot, for 5 hours");
     });
 
@@ -1717,7 +1904,7 @@ describe("the Weekly summary", () => {
       );
       expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
         ["owner/quiet", null],
-        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR }, monitor: null }],
+        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR }, monitor: null, maps: null }],
       ]);
       expect(result.body).toContain(["## Held", "", "- owner/busy: 1 needs-design issue waiting for a Design session slot, for 30 hours", ""].join("\n"));
       expect(result.body).not.toContain("- owner/quiet:");
@@ -1743,7 +1930,7 @@ describe("the Weekly summary", () => {
 
     it("counts the error groups the Monitor holds from the held line in its newest open error issue's stats block, linking that issue", () => {
       const result = summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) })] }));
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 } });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null });
       expect(result.body).toContain(
         ["## Held", "", "- owner/product: 3 error groups waiting for a Monitor issue slot, counted in [#41](https://github.com/owner/product/issues/41)", ""].join("\n"),
       );
@@ -1759,7 +1946,7 @@ describe("the Weekly summary", () => {
       );
       expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
         ["owner/quiet", null],
-        ["owner/busy", { designSessions: null, monitor: { groups: 3, issue: 41 } }],
+        ["owner/busy", { designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null }],
       ]);
       expect(result.body).not.toContain("- owner/quiet:");
     });
@@ -1770,6 +1957,7 @@ describe("the Weekly summary", () => {
       expect(summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), quoted] })).summary.repos[0]?.held).toEqual({
         designSessions: null,
         monitor: { groups: 3, issue: 41 },
+        maps: null,
       });
     });
 
@@ -1782,14 +1970,14 @@ describe("the Weekly summary", () => {
           ],
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 2, issue: 45 } });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 2, issue: 45 }, maps: null });
       expect(summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), anOpenMonitorIssue({ number: 45 })] })).summary.repos[0]?.held).toBeNull();
     });
 
     it("passes over an open issue with no stats block, such as a Spec that kept its marker, as the Monitor does", () => {
       const spec = anOpenMonitorIssue({ number: 60, body: "<!-- fabrik:monitor sentry:4504 -->\n## Problem Statement\n\nBookings fail." });
       const result = summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), spec] }));
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 } });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null });
     });
 
     it("never reads red main's issue, which takes no slot under the cap", () => {
@@ -1825,9 +2013,48 @@ describe("the Weekly summary", () => {
     it.each([
       ["Design work", factsOf({ designQueue: { issues: [aDesignQueueIssue()], designTurnsInProgress: [] } })],
       ["error groups", factsOf({ monitorIssues: [anOpenMonitorIssue({ body: heldBody(HELD_3) })] })],
+      ["a full Map cap", factsOf({ openMaps: [30] })],
     ])("keeps a week with no records but held %s from being skipped", (_, facts) => {
       const result = weeklySummary(input({ facts: [facts] }));
       expect(result.kind).toBe("summary");
+    });
+
+    describe("the Map cap", () => {
+      const summaryOf = (...facts: GitHubFacts[]) => {
+        const result = weeklySummary(input({ records: [aRunRecord()], facts }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result;
+      };
+
+      it("names the open Map when open Maps fill caps.maps, so the Operator knows why no Map was offered", () => {
+        const result = summaryOf(factsOf({ openMaps: [30] }));
+        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30] } });
+        expect(result.body).toContain(
+          ["## Held", "", "- owner/product: the Map cap is full with [#30](https://github.com/owner/product/issues/30) open, so Design sessions offer no new Map", ""].join(
+            "\n",
+          ),
+        );
+      });
+
+      it("names every open Map, lowest number first, one charted by hand beyond the cap among them", () => {
+        const result = summaryOf(factsOf({ openMaps: [40, 30] }));
+        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30, 40] } });
+        expect(result.body).toContain(
+          "- owner/product: the Map cap is full with [#30](https://github.com/owner/product/issues/30) and [#40](https://github.com/owner/product/issues/40) open, so Design sessions offer no new Map",
+        );
+      });
+
+      it("gives a repo whose Map cap has room no Maps line", () => {
+        const result = summaryOf(
+          factsOf({ repo: "owner/quiet", openIssues: [anOpenIssue({ number: 31, labels: ["wayfinder:grilling"] })] }),
+          factsOf({ repo: "owner/busy", openMaps: [30] }),
+        );
+        expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
+          ["owner/quiet", null],
+          ["owner/busy", { designSessions: null, monitor: null, maps: { open: [30] } }],
+        ]);
+        expect(result.body).not.toContain("- owner/quiet:");
+      });
     });
   });
 

@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Live Design session
 
-The Operator is taking the Design session on issue `$ARGUMENTS` live, in this cloud or local session, instead of answering numbered rounds on the issue. It must end the way an async session does, so the Loop can carry on: the issue becomes its agent brief or its Operator brief, or a Spec and its Tickets (some of which may be Operator steps) replace it.
+The Operator is taking the Design session on issue `$ARGUMENTS` live, in this cloud or local session, instead of answering numbered rounds on the issue. It must end the way an async session does, so the Loop can carry on: the issue becomes its agent brief, its Operator brief or a Map with its first Decisions, or a Spec and its Tickets (some of which may be Operator steps) replace it.
 
 This session runs with the Operator's own GitHub credentials, so you publish the outcome yourself with `gh` (see `docs/agents/issue-tracker.md`). If `gh auth status` fails, stop and tell the Operator before doing anything else.
 
@@ -31,6 +31,9 @@ An issue touches **Product intent** when it changes who the product serves or wh
 
 - **Post nothing to the issue until the end, and change none of its labels.** Every comment the Operator's account posts on a `needs-design` issue starts an async turn, and the Kit moves the labels when your outcome comment lands.
 - Grill the Operator as `.claude/skills/grilling/SKILL.md` describes: one decision at a time, each with your recommended answer. Never ask what the repository can answer.
+- **Treat the Decisions an issue rests on as settled.** When the issue says which Decisions it rests on, as a Spec-to-be filed from a Map does, read each one and its resolution (`gh issue view <decision> --comments`). Those questions were already settled on the Map: design from them, and don't ask them again. Ask only what they leave open.
+- **Offer a Map when the destination is foggy.** Some issues are too foggy for one Design session: what done looks like isn't settled, or the open questions hang on one another, so no single session could design them without guessing. Such an issue can be charted as a **Map** instead: the issue becomes the Map, which names the destination, and the first questions to settle on the way there become its Decisions, sub-issues each resolved on its own by research, a prototype, a grilling or a task, never by a pull request. When the Map cap has room (see the next point) and either Triage's comment carries the line `This looks too foggy for one Design session.` or you judge the destination can't be designed in one session, ask "Chart this as a Map instead?" with your recommendation in your first exchange with the Operator. The Operator decides, and may also ask for a Map later in the session. Ask no Map question on an issue this session can design, clear but large ones included, and never on an issue with a parent: a Ticket under a Spec never becomes a Map.
+- **Check the Map cap before you offer a Map.** The cap is `caps.maps` in `.fabrik/config.json` (1 when the file or the field is missing; 0 stops new Maps). Count the repo's open Maps, whoever made them: `gh issue list --state open --label wayfinder:map --json number,title`. When they already reach the cap, don't offer a Map. If the Operator asks for one anyway, tell them which open Map holds the cap and that closing it frees the cap (or, at 0, that the Kit config stops new Maps), and carry on the session another way.
 - **Facts only the Operator can fetch** (IDs, prices or settings held in another system) don't hold the session up. Settle the decisions without them and end with a Spec in which an Operator step gathers the facts and commits them, through its Pairing session's pull request, to a file in the Product repo that the code reads. The step's last task names that file and the shape the Tickets expect. Only the Tickets that read that file are blocked by it. If the Operator says they have the facts to hand, take them now and add no step.
 
 ## Ending the session
@@ -42,7 +45,7 @@ When there's a Vision and the session decides something about Product intent tha
 Some lines of the issue's old body mark it for something that reads it later, so carry them forward into the body you write in its place, each exactly as the old body had it:
 
 - Keep any `<!-- fabrik:monitor … -->` line as the first line of the issue's rewritten body (`gh issue edit`), and nothing else of the Monitor's. The Monitor finds the error it filed the issue for by that line, and would file it again without it.
-- Carry any `From audit #<n>` line, `<!-- fabrik:escape … -->` line and `From retro #<n>` or `From retro <owner>/<repo>#<n>` line into the rewritten brief or the Spec that supersedes it. After everything else, its `<sub>` line included, add a blank line and then each of those lines, in the old body's order. The next Audit reads `From audit` to skip the issue, the Weekly summary counts the escape line as an Architectural escape, and the next Retro reads `From retro` to skip the proposal the issue was filed from, so all of them must survive the rewrite.
+- Carry any `From audit #<n>` line, `<!-- fabrik:escape … -->` line and `From retro #<n>` or `From retro <owner>/<repo>#<n>` line into the rewritten brief or Map, or the Spec that supersedes it. After everything else, its `<sub>` line included, add a blank line and then each of those lines, in the old body's order. The next Audit reads `From audit` to skip the issue, the Weekly summary counts the escape line as an Architectural escape, and the next Retro reads `From retro` to skip the proposal the issue was filed from, so all of them must survive the rewrite.
 - Carry only lines outside fenced code blocks. A fenced block opens on a line starting with `` ``` `` or `~~~` and ends on the line that closes that fence; indenting a line leaves it outside one. A line inside one is quoted data, such as the Sentry error title a Monitor issue quotes, never a line to carry, whatever it says. A fence that never closes quotes nothing, so the lines after it are carried as usual: a filed Audit candidate whose body was cut short inside a code block ends with its `From audit` and escape lines below that open fence, and both are carried.
 
 ### The work fits one pull request: an agent brief
@@ -120,6 +123,51 @@ Use this when only the Operator can do the work (a secret, a repo setting, a tru
 
 3. Don't close the issue or remove its labels. The Kit does that when it sees the comment.
 
+### The destination is foggy: a Map
+
+Only once the Operator has said yes to charting the issue as a Map, and only on an issue with no parent.
+
+1. Check the Map cap again, as **While the session runs** describes, since a Map may have opened since you offered one. If it's full now, chart nothing: tell the Operator which open Map holds the cap, and end the session another way.
+2. Rewrite the issue's body as the Map (`gh issue edit <n> --body-file …`), in this shape. If `.claude/skills/wayfinder/SKILL.md` exists, follow it for what goes in each section and each Decision, but publish them as these steps say. Leave Decisions so far empty: each resolved Decision adds its line there. A section with nothing in it is its heading alone.
+
+   ```
+   ## Destination
+
+   <one or two lines: what reaching the end of the Map looks like>
+
+   ## Notes
+
+   <the domain, the skills and the standing preferences every session on the Map consults>
+
+   ## Decisions so far
+
+   ## Not yet specified
+
+   <the fog: what's still too dim to state as a Decision>
+
+   ## Out of scope
+
+   <what the Map deliberately leaves out>
+
+   <sub>Written by a live Fabrik Design session. The original issue is in this issue's edit history.</sub>
+   ```
+
+3. File each question you can state precisely now as a Decision, at least one, blockers first so each blocked-by edge points at an issue that exists:
+   - Each Decision is a sub-issue of the Map with one label, `wayfinder:<type>`, where `<type>` is how it gets resolved: `research`, `prototype`, `grilling` or `task` (`gh issue create --parent <n> --label wayfinder:<type> …`). Give it no state or category label, so Intake leaves it alone, and assign it to nobody, since an assignee claims it.
+   - Each blocker is a native blocked-by edge between Decisions (see **Blocking** in `docs/agents/issue-tracker.md`). Add every edge before step 4: your outcome comment starts Dispatch, which releases each research Decision with no open blocker to the Researcher.
+4. Post the outcome comment last, listing the Decisions as the Kit does. Its first line is exactly the marker:
+
+   ```
+   <!-- fabrik:live-outcome map -->
+   **Design session finished live.** This issue is now a Map, with <count> Decisions filed under it:
+
+   - #<decision> <title> (<type>)
+
+   <why this is a Map and what the session settled, briefly>
+   ```
+
+5. Don't remove `needs-design` or add `wayfinder:map`. The Kit does that when it sees the comment.
+
 ### Stopping before it's finished
 
 Post one comment, with no marker, that lists every decision the session made and the questions still open. That comment counts as the Operator's answer, so the async session takes its next turn from there and posts the next round.
@@ -129,3 +177,5 @@ Post one comment, with no marker, that lists every decision the session made and
 The Fabrik App sees the marker on the Operator's comment. For `brief` it swaps `needs-design` for `ready-for-agent`; for `spec` it removes `needs-design` and closes this issue as completed. Either way it then runs a Dispatch check, so the new Tickets start as they would after an async session. Dispatch never releases an Operator step: it's `ready-for-human`.
 
 For `operator-brief` it swaps `needs-design` for `ready-for-human` and assigns the issue to the Operator, ready for a Pairing session. It runs no Dispatch check.
+
+For `map` it swaps `needs-design` for `wayfinder:map` and runs a Dispatch check, so the Researcher starts on the Map's unblocked research Decisions, and a Design queue check, so the Design session slot this one held goes to the next waiting issue. The other Decisions wait for the Operator in `/wayfinder`. The Kit never closes a Map: the Operator does, once the Map's last Decision has filed each Spec-to-be as a `needs-design` issue.

@@ -4,8 +4,8 @@
 // agent starts on an invalid Kit; asks the Loop rules core what this event
 // calls for; and tells the workflow which job it routes to and the settings its jobs
 // need before they start, such as their timeout-minutes. Writes step outputs:
-//   route                    "triage", "design", "implement", "review", "audit" or "retro" when the plan starts
-//                            that agent run (a Retro run's evidence job, then its Retro job),
+//   route                    "triage", "design", "implement", "review", "audit", "retro" or "research" when the
+//                            plan starts that agent run (a Retro run's evidence job, then its Retro job),
 //                            "push" when the push job has something to apply,
 //                            "none" when the plan is to do nothing
 //   triage-timeout-minutes   the Triage role's Kit config timeout
@@ -15,6 +15,7 @@
 //   review-timeout-minutes   the Review role's Kit config timeout
 //   audit-timeout-minutes    the Auditor's Kit config timeout
 //   retro-timeout-minutes    the Retro's Kit config timeout
+//   research-timeout-minutes the Researcher's Kit config timeout
 //   pull-request, ticket     for a Review or a retry, the agent PR and the Ticket its branch was cut for;
 //                            for a first Implement run, an empty PR and its Ticket; else empty
 //   branch                   for a retry, the agent branch it builds on; else empty
@@ -142,6 +143,7 @@ export function kitJobOutputs(plan: Plan | null, ticket: number | null, config: 
     "audit-timeout-minutes": String(config.roles.audit.timeoutMinutes),
     // Both of a Retro run's jobs, its evidence job and its Retro job, run within it.
     "retro-timeout-minutes": String(config.roles.retro.timeoutMinutes),
+    "research-timeout-minutes": String(config.roles.research.timeoutMinutes),
     "pull-request": pullRequest === null ? "" : String(pullRequest),
     ticket: (run?.role === "review" || run?.role === "implement") && builds !== null ? String(builds) : "",
     // A retry checks out its PR's branch; a first Implement run cuts it from the default branch.

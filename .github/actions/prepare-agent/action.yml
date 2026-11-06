@@ -2,9 +2,10 @@
 # Sandcastle and Claude Code CLI, fetches the pinned skills (the Base skills
 # plus its role's Extra skills) into the Product checkout's .claude/skills, and
 # reads what the agent is given (the issue, its parent Spec, for Implement
-# and Review runs the PR and the Operator's review, and for an Auditor run its
-# inputs) into $RUNNER_TEMP, through the job's read-only token. The agent
-# itself never gets a GitHub token.
+# and Review runs the PR and the Operator's review, for a Design-session turn
+# whether it may offer a Map, and for an Auditor run its inputs) into
+# $RUNNER_TEMP, through the job's read-only token. The agent itself never
+# gets a GitHub token.
 #
 # Use it after checking out the Product repo into `product/` and the Kit at
 # the pinned commit into `kit/`:
@@ -16,7 +17,7 @@ description: Installs the Kit, fetches the pinned skills and reads the agent's i
 
 inputs:
   role:
-    description: The agent's role (triage, design, implement, review, audit or retro), whose Extra skills it gets beside the Base skills; the Auditor and the Retro get the Base skills alone. A Step-up run is an implement run.
+    description: The agent's role (triage, design, implement, review, audit, retro or research), whose Extra skills it gets beside the Base skills; the Auditor, the Retro and the Researcher get the Base skills alone. A Step-up run is an implement run.
     required: true
   github-token:
     description: The job's read-only GITHUB_TOKEN.
@@ -66,6 +67,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
+        FABRIK_ROLE: ${{ inputs.role }}
         FABRIK_ISSUE: ${{ inputs.issue }}
         FABRIK_PULL_REQUEST: ${{ inputs.pull-request }}
         FABRIK_PULL_REQUEST_COMMENTS: ${{ inputs.pull-request-comments }}

@@ -8,6 +8,7 @@ import { RETRO_EVIDENCE_JOB } from "./pushJob.ts";
 import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE } from "../evidence/capture.ts";
+import { MAP_INPUTS_FILE } from "../agent/inputs.ts";
 
 const root = new URL("../../", import.meta.url);
 const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml", ".github/workflows/weekly-summary.yml"].map((path) => ({
@@ -66,7 +67,7 @@ describe("The Kit's workflows", () => {
 
   // Kept for reading a failed or timed-out run. Never fabrik-agent-*: the push job
   // downloads those, and reads an empty download as a timeout.
-  it.each(["triage", "design", "implement", "review", "audit"])(
+  it.each(["triage", "design", "implement", "review", "audit", "research"])(
     "loop.yml's %s job always uploads its gzipped transcript, apart from the push job's artifacts",
     (job) => {
       const body = loop.split(/\n(?=  [a-z-]+:\n)/).find((section) => section.startsWith(`  ${job}:\n`))!;
@@ -122,7 +123,7 @@ describe("The Kit's workflows", () => {
     });
   });
 
-  it.each(["triage", "design", "implement", "review", "audit"])(
+  it.each(["triage", "design", "implement", "review", "audit", "research"])(
     "loop.yml's %s job passes out the model and effort it ran and the commit it started from",
     (job) => {
       const body = jobIn(loop, job);
@@ -164,7 +165,7 @@ describe("The Kit's workflows", () => {
   });
 
   // A Step-up run is an Implement run on a stronger model, so it gets implement's Extra skills.
-  it.each(["triage", "design", "implement", "review", "audit"])(
+  it.each(["triage", "design", "implement", "review", "audit", "research"])(
     "loop.yml's %s job passes its role to prepare-agent, which fetches the skills before any secret loads",
     (role) => {
       const steps = stepsOf(jobIn(loop, role));
@@ -182,6 +183,14 @@ describe("The Kit's workflows", () => {
 
     expect(prepareAgent).toMatch(/\n  audit-commit:\n\s+description: .*\n\s+required: false\n\s+default: ""\n/);
     expect(inputs).toContain("FABRIK_AUDIT_COMMIT: ${{ inputs.audit-commit }}");
+  });
+
+  it("prepare-agent hands its role to the agent-inputs step, which reads a Design turn's Map inputs, and the Design job gives the agent that file", () => {
+    const inputs = prepareAgent.split(/\n(?=    - )/).find((step) => step.includes("src/agent/inputs.ts"));
+    const agent = stepsOf(jobIn(loop, "design")).find((step) => step.includes("src/agent/run.ts design"));
+
+    expect(inputs).toContain("FABRIK_ROLE: ${{ inputs.role }}");
+    expect(agent).toContain(`FABRIK_MAP_FILE: \${{ runner.temp }}/${MAP_INPUTS_FILE}`);
   });
 
   it("prepare-agent installs the Base skills plus its role's Extra skills, and holds no secret", () => {
@@ -437,6 +446,96 @@ describe("loop.yml's Audit job", () => {
     const needs = /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ");
 
     expect(needs).toContain("audit");
+  });
+});
+
+// The Researcher (#154): read-only like the Auditor, but it hands the push job
+// a branch, its findings, as a bundle beside its result, as the Implementer does.
+describe("loop.yml's Research job", () => {
+  const research = (): string => job("research");
+  const steps = (): readonly string[] => stepsOf(research());
+  const stepWith = (text: string): string => steps().find((step) => step.includes(text)) ?? "";
+  const checkout = (): string => steps().find((step) => step.includes("uses: actions/checkout@") && !step.includes("repository:"))!;
+
+  it("holds only read permissions, on the Product repo's contents and its issues", () => {
+    const permissions = /\n    permissions:\n((?: {6}.*\n)+)/.exec(research())?.[1] ?? "";
+
+    expect(permissions.trim().split("\n").map((line) => line.trim())).toEqual(["contents: read", "issues: read"]);
+  });
+
+  it("holds only the agent service account, which loads the Claude token: no GitHub credential and no production secrets", () => {
+    expect(research()).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}");
+    expect(research()).not.toMatch(/OP_PUSH_TOKEN|OP_IMPLEMENT_TOKEN|id-token|GH_TOKEN|create-github-app-token/);
+    // The Sandbox's test secrets: neither listed nor handed to the runner, as only the Implement job's are.
+    expect(research()).not.toMatch(/secrets-main\.ts|OP_ENV_FILE|FABRIK_SECRETS/);
+  });
+
+  it("checks out the Product repo's default branch, with its full history for the bundle, and no credential left behind", () => {
+    expect(checkout()).toContain("path: product");
+    expect(checkout()).toContain("ref: ${{ github.event.repository.default_branch }}");
+    expect(checkout()).toContain("fetch-depth: 0");
+    expect(checkout()).toContain("persist-credentials: false");
+  });
+
+  it("runs only when the Kit job routed to it, within the Researcher's timeout", () => {
+    expect(research()).toMatch(/\n    needs: kit\n/);
+    expect(research()).toContain("\n    if: needs.kit.outputs.route == 'research'\n");
+    expect(research()).toContain("timeout-minutes: ${{ fromJSON(needs.kit.outputs.research-timeout-minutes) }}");
+    expect(job("kit")).toContain("research-timeout-minutes: ${{ steps.route.outputs.research-timeout-minutes }}");
+  });
+
+  it("runs one Researcher run per Decision at a time, queueing the next", () => {
+    expect(research()).toMatch(
+      /\n    concurrency:\n {6}group: fabrik-research-\$\{\{ github\.event\.issue\.number \}\}\n {6}cancel-in-progress: false\n {6}queue: max\n/,
+    );
+  });
+
+  it("readies the agent for the research Decision the label went on, which reads its Map as the issue's parent", () => {
+    const prepare = stepWith("uses: ./kit/.github/actions/prepare-agent");
+
+    expect(prepare).toContain("github-token: ${{ github.token }}");
+    expect(prepare).toContain("issue: ${{ github.event.issue.number }}");
+  });
+
+  it("runs the Researcher from the Product checkout on the Decision and its Map, on the model and effort the Kit job's plan chose", () => {
+    const agent = stepWith("run: node ../kit/src/agent/run.ts research");
+
+    expect(agent).toContain("CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}");
+    expect(agent).toContain("FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json");
+    expect(agent).toContain("FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json");
+    expect(agent).toContain("FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out");
+    expect(agent).toContain("FABRIK_MODEL: ${{ needs.kit.outputs.model }}");
+    expect(agent).toContain("FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}");
+  });
+
+  it("passes its result and the bundle of its findings branch to the push job, as the Implement job passes its commits", () => {
+    const upload = stepWith("name: fabrik-agent-result\n");
+
+    expect(upload).toContain("uses: actions/upload-artifact@");
+    expect(upload).toContain("${{ runner.temp }}/fabrik-out/agent-result.json");
+    expect(upload).toContain("${{ runner.temp }}/fabrik-out/agent-branch.bundle");
+    expect(upload).toContain("if-no-files-found: error");
+  });
+
+  it("passes the push job its failure report when it fails, and how its secrets loaded", () => {
+    const failure = stepWith("name: fabrik-agent-failure\n");
+
+    expect(failure).toContain("if: failure()");
+    expect(failure).toContain("${{ runner.temp }}/fabrik-out/agent-failure.json");
+    expect(research()).toContain("secrets-step: ${{ steps.op.outcome }}");
+  });
+
+  it("keeps fabrik-transcript-research, which the push job's record step takes on the research route", () => {
+    expect(stepWith("name: fabrik-transcript-research\n")).toContain("if: always()");
+    expect(stepsOf(job("push")).find((step) => step.includes("uses: ./kit/.github/actions/write-run-record"))).toContain(
+      "role: ${{ needs.kit.outputs.route }}",
+    );
+  });
+
+  it("is in the push job's needs, so the push job lands the findings or posts the failure notice once it has ended", () => {
+    const needs = /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ");
+
+    expect(needs).toContain("research");
   });
 });
 
@@ -719,9 +818,13 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
 });
 
 describe("loop.yml's claim job", () => {
-  it("takes agent:design off as the Design session's first turn starts, as it takes agent:implement off", () => {
+  it("is named for what it claims of any run, a Ticket's, a research Decision's or a Design session's, keeping its job id", () => {
+    expect(job("implement-claim")).toMatch(/^ {2}implement-claim:\n {4}name: Claim the work\n/);
+  });
+
+  it("takes agent:design off as the Design session's first turn starts, and agent:research as a Research run starts, as it takes agent:implement off", () => {
     expect(job("implement-claim")).toContain(
-      "if: needs.kit.outputs.route == 'implement' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')",
+      "if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')",
     );
   });
 });
@@ -1390,7 +1493,7 @@ describe("The Subscription each agent job runs on", () => {
     expect(jobIn(loop, "kit")).toContain("subscription: ${{ steps.route.outputs.subscription }}");
   });
 
-  it.each(["triage", "design", "implement", "review", "audit"])(
+  it.each(["triage", "design", "implement", "review", "audit", "research"])(
     "loop.yml's %s job loads one Claude token: the Kit job's Subscription's",
     (name) => {
       const job = jobIn(loop, name);
