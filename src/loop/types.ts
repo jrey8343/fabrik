@@ -285,8 +285,8 @@ export interface IssueSnapshot {
    * (src/loop/audit.ts, src/loop/retro.ts), and
    * only then does a Design session keep its body's Monitor marker (src/loop/design.ts).
    * The Kit job, which only routes and doesn't know the App's login, takes any
-   * bot for the App, so another bot's look-alike pending Audit costs one
-   * Auditor run, whose result the push job, which knows the login, drops
+   * bot for the App, so another bot's look-alike pending Audit or Retro costs
+   * one run, whose result the push job, which knows the login, drops
    * (src/github/snapshot.ts's byAppOf).
    */
   readonly byApp: boolean;
