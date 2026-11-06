@@ -38,6 +38,12 @@ outputs:
   preview-pull-request:
     description: The PR whose preview-url to link.
     value: ${{ steps.loop.outputs.preview-pull-request }}
+  prototype-preview-url:
+    description: For a prototype round whose Kit config declares preview.url, the route's page on the preview the plan asked to link, filled in for the issue's prototype branch as its push left it; empty otherwise.
+    value: ${{ steps.loop.outputs.prototype-preview-url }}
+  prototype-preview-round:
+    description: The prototype round's comment id, whose variants link prototype-preview-url.
+    value: ${{ steps.loop.outputs.prototype-preview-round }}
 
 runs:
   using: composite

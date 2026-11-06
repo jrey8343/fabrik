@@ -3,30 +3,41 @@
 // prototype round, whose one question, "Which variant?", the Kit writes. A
 // prototype round is a round of the same session: it never ends it, and the
 // Operator's reply to it starts an ordinary turn.
-import { type CaptureFailure, code } from "../evidence/uiEvidence.ts";
+import { type CaptureFailure, code, type PreviewLink } from "../evidence/uiEvidence.ts";
+import { type PreviewConfig, previewNamesPullRequest } from "../kit/config.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { turnStartFrom, whileInSession } from "./design.ts";
 import { parsePrototypeTurnOutput, prototypeBranchFor, type PrototypeRoundOutput } from "./designOutput.ts";
 import {
+  DESIGN_ROUND_MARKER,
   designRoundMarker,
   PROTOTYPE_FAILURE_ROUND_MARKER,
   PROTOTYPE_ROUND_MARKER,
   type PrototypeRequestMarker,
 } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
-import type { Action, IssueContext, LoopEvent, Plan, StartingComment } from "./types.ts";
+import type { Action, IssueContext, LoopEvent, Plan, PostedComment, StartingComment } from "./types.ts";
 
 type PrototypeRunFinished = Extract<LoopEvent, { kind: "prototype-run-finished" }>;
 
 /** The capture failures that leave nothing to look at: the variants were never served. */
 const NOT_SERVED: readonly CaptureFailure[] = ["build-failed", "server-did-not-start"];
 
+/** The prototype round's comment, as the plan posts it for its preview to be linked in. */
+const ROUND_COMMENT: PostedComment = { posted: "prototype-round" };
+
 /**
  * The push job's decision on a prototype turn's branch and round. `found` is
  * what the snapshot found of the Operator's reply that approved the
- * prototype: like any Design-session turn, one whose reply was deleted posts nothing.
+ * prototype: like any Design-session turn, one whose reply was deleted posts
+ * nothing. `preview` is Kit config's, whose link the round waits on.
  */
-export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operator }: IssueContext, found: StartingComment | null): Plan {
+export function applyPrototypeTurn(
+  event: PrototypeRunFinished,
+  { issue, operator }: IssueContext,
+  found: StartingComment | null,
+  preview: PreviewConfig | null,
+): Plan {
   const start = turnStartFrom(event.request.reply ?? undefined, found);
   if (start.kind === "unchecked-reply") {
     return {
@@ -90,7 +101,27 @@ export function applyPrototypeTurn(event: PrototypeRunFinished, { issue, operato
     const said = `The Kit pushed the variants the prototype turn wrote to [\`${event.branch}\`](${branchUrl(event)}), but ${captureFailed(capture.reason, event.runUrl)}, and nothing to look at. [The run](${event.runUrl}) has the log.`;
     return { kind: "act", actions: [push, failed(said)] };
   }
-  return { kind: "act", actions: [push, comment(prototypeRound(round, parsed.output, event, operator))] };
+  const roundPreview = previewOfRound(preview);
+  const body = prototypeRound(round, parsed.output, event, operator, roundPreview);
+  if (roundPreview.kind !== "pending") return { kind: "act", actions: [push, comment(body)] };
+  // The push job polls the preview once the round is posted, and links it there only once it answers.
+  const { route } = event.request.request;
+  return {
+    kind: "act",
+    actions: [
+      push,
+      { kind: "comment", issue: event.issue, body, key: ROUND_COMMENT.posted },
+      { kind: "link-prototype-preview", issue: event.issue, round: ROUND_COMMENT, template: roundPreview.template, route },
+    ],
+  };
+}
+
+/** Kit config's preview as a prototype round has it: none declared, one to link once it answers, or one only a PR can fill in. */
+type RoundPreview = { readonly kind: "none" } | { readonly kind: "pending"; readonly template: string } | { readonly kind: "needs-pull-request" };
+
+function previewOfRound(preview: PreviewConfig | null): RoundPreview {
+  if (preview === null) return { kind: "none" };
+  return previewNamesPullRequest(preview.url) ? { kind: "needs-pull-request" } : { kind: "pending", template: preview.url };
 }
 
 function sameRequest({ request: a, reply: replyA }: PrototypeRequestMarker, { request: b, reply: replyB }: PrototypeRequestMarker): boolean {
@@ -123,7 +154,13 @@ function failureRound(round: number, operator: string, said: string): string {
  * describes each variant and links its component on the branch at the head
  * the push left, which outlives it.
  */
-function prototypeRound(round: number, output: PrototypeRoundOutput, event: PrototypeRunFinished, operator: string): string {
+function prototypeRound(
+  round: number,
+  output: PrototypeRoundOutput,
+  event: PrototypeRunFinished,
+  operator: string,
+  preview: RoundPreview,
+): string {
   return [
     designRoundMarker(round),
     PROTOTYPE_ROUND_MARKER,
@@ -135,9 +172,65 @@ function prototypeRound(round: number, output: PrototypeRoundOutput, event: Prot
     "",
     ...variantLines(output, event),
     "",
+    ...(preview.kind === "none" ? [] : [previewLine(preview), ""]),
     "**1. Which variant?**",
     `➡️ Recommended: ${withoutMentions(output.recommendation)}`,
   ].join("\n");
+}
+
+/** What the round says of its preview until the push job has polled it. */
+const PREVIEW_PENDING = "Each variant's preview is linked beside it once the preview deployment answers.";
+
+/** A variant's line in the round, as the Kit writes it, with the variant's letter. */
+const VARIANT_LINE = /^- \*\*([A-Z])\.\*\* /;
+
+/**
+ * The prototype round with what came of its preview, once the push job has
+ * polled it (src/kit/previewLink.ts): each variant's line links the route's
+ * page with `?variant=` and the variant's letter, and the line saying the
+ * previews are linked once it answers goes; or that line says it never
+ * answered. Null when the body isn't a prototype round still waiting on its
+ * preview. Every URL is the Kit's, from Kit config and the approved route,
+ * never the agent's.
+ */
+export function withVariantPreviews(body: string, preview: Extract<PreviewLink, { kind: "linked" | "never-answered" }>): string | null {
+  // An Operator's edit on GitHub may end its lines in \r\n.
+  const lines = body.split("\n").map((line) => (line.endsWith("\r") ? { text: line.slice(0, -1), end: "\r" } : { text: line, end: "" }));
+  if (!DESIGN_ROUND_MARKER.test(body) || lines[1]?.text.trim() !== PROTOTYPE_ROUND_MARKER) return null;
+  // The Kit writes it under the variants, one blank line between.
+  const underVariants = (i: number) => lines[i - 1]?.text.trim() === "" && VARIANT_LINE.test(lines[i - 2]?.text ?? "");
+  const at = lines.findIndex(({ text }, i) => text.trim() === PREVIEW_PENDING && underVariants(i));
+  if (at === -1) return null;
+  if (preview.kind === "never-answered") {
+    lines[at] = { ...lines[at]!, text: `No preview links: the preview at ${code(preview.url)} never answered.` };
+  } else {
+    for (let i = at - 2; i >= 0; i--) {
+      const line = lines[i]!;
+      const letter = VARIANT_LINE.exec(line.text)?.[1];
+      if (letter === undefined) break;
+      lines[i] = { ...line, text: `${line.text} · [Preview](${variantPreviewUrl(preview.url, letter)})` };
+    }
+    // The pending line, and the blank line above it.
+    lines.splice(at - 1, 2);
+  }
+  return lines.map(({ text, end }) => `${text}${end}`).join("\n");
+}
+
+/** The route's page showing one variant: `?variant=` and its letter, with a `(` or `)` escaped, so it can't end the link early. */
+function variantPreviewUrl(page: string, letter: string): string {
+  const url = new URL(page);
+  url.searchParams.set("variant", letter);
+  return withParensEscaped(url.href);
+}
+
+/** What the round says of the preview Kit config declares. */
+function previewLine(preview: Exclude<RoundPreview, { kind: "none" }>): string {
+  switch (preview.kind) {
+    case "pending":
+      return PREVIEW_PENDING;
+    case "needs-pull-request":
+      return "There's no preview for prototypes: Kit config's `preview.url` names the pull request, as `{pr}`, and a prototype has none.";
+  }
 }
 
 /**
@@ -192,6 +285,11 @@ function branchUrl({ repoUrl, branch }: PrototypeRunFinished): string {
 function pathInUrl(path: string): string {
   return path
     .split("/")
-    .map((segment) => encodeURIComponent(segment).replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`))
+    .map((segment) => withParensEscaped(encodeURIComponent(segment)))
     .join("/");
+}
+
+/** The URL text with each `(` and `)` percent-encoded, which a URL leaves as they are, but which could end a Markdown link. */
+function withParensEscaped(url: string): string {
+  return url.replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }

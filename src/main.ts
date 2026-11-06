@@ -96,6 +96,8 @@ function describeAction(action: Action): string {
       return "- run a Design queue check";
     case "link-preview":
       return `- link the preview deployment of ${action.pullRequest === null ? "the PR it opens" : `#${action.pullRequest}`} once it answers, or say it never answered`;
+    case "link-prototype-preview":
+      return `- link each variant's preview in #${action.issue}'s prototype round once it answers, or say it never answered`;
     case "push-branch":
       return `- push ${action.branch}`;
     case "push-prototype-branch":
@@ -360,9 +362,15 @@ async function main(): Promise<void> {
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
   // The Design queue job runs the check likewise, once this plan has landed.
   if (wantsDesignQueueCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "design-queue=true\n");
-  // The push job's preview step polls it and links it, once this plan has pushed (src/kit/previewLink.ts).
+  // The push job's preview step polls it and links it, once this plan has pushed (src/kit/previewLink.ts): a UI
+  // PR's in its evidence section, or a prototype round's beside each variant, each step with a token for its own.
   if (preview !== null) {
-    await appendFile(required("GITHUB_OUTPUT"), `preview-url=${preview.url}\npreview-pull-request=${preview.pullRequest}\n`);
+    await appendFile(
+      required("GITHUB_OUTPUT"),
+      "round" in preview
+        ? `prototype-preview-url=${preview.url}\nprototype-preview-round=${preview.round}\n`
+        : `preview-url=${preview.url}\npreview-pull-request=${preview.pullRequest}\n`,
+    );
   }
   await report(describe(plan));
   if (plan.kind === "fail") {

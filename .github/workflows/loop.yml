@@ -1428,6 +1428,23 @@ jobs:
           url: ${{ steps.loop.outputs.preview-url }}
           pull-request: ${{ steps.loop.outputs.preview-pull-request }}
 
+      # A prototype round's preview (#155), as a UI PR's: when the plan pushed
+      # prototype/<issue> and posted its round, with Kit config declaring a
+      # preview.url that names no PR, polls the route's page it filled in, for
+      # a few minutes at most, and links it beside each variant, or says in the
+      # round it never answered. One plan lands one run, so it and the step
+      # above never both poll. continue-on-error, and a timeout of its own, as
+      # above; its token can edit issues, as the round is an issue comment.
+      - name: Link the prototype's previews
+        if: steps.loop.outputs.prototype-preview-url != ''
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: ./kit/.github/actions/link-prototype-preview
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          url: ${{ steps.loop.outputs.prototype-preview-url }}
+          round: ${{ steps.loop.outputs.prototype-preview-round }}
+
       # The run's Run record and transcript, to the fabrik-runs store (ADR-0009).
       # always(), so a Loop that failed still leaves its record; continue-on-error,
       # so a store problem never fails the push job or stalls the Loop. Without

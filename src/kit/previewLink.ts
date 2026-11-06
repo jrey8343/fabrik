@@ -4,9 +4,16 @@
 // for PREVIEW_POLL_MINUTES at most, then edits the PR's evidence section to
 // link it, or to say it never answered. It fetches only that URL: never a
 // hosting provider's API, and it waits on no deployment status.
-import type { PreviewToLink } from "../github/apply.ts";
+//
+// Its prototype preview step (#155; .github/actions/link-prototype-preview)
+// does the same for a prototype round, once Run the Loop has pushed
+// prototype/<issue> and posted the round: it polls the route's page there,
+// then edits the round to link it beside each variant, or to say it never
+// answered.
+import type { PreviewToLink, PrototypePreviewToLink } from "../github/apply.ts";
 import type { GitHub, Repo } from "../github/client.ts";
 import { type PreviewLink, withPreviewLink } from "../evidence/uiEvidence.ts";
+import { withVariantPreviews } from "../loop/prototypeLanding.ts";
 
 /**
  * How long the preview step polls before it says the preview never answered:
@@ -60,6 +67,28 @@ export async function linkPreview(
 }
 
 /**
+ * Polls a prototype round's preview until it answers, then edits the round,
+ * read once the polling is done, so each variant's line links its preview, or
+ * the round says the preview never answered. Only the line the Kit wrote to
+ * say the previews are linked once it answers changes it, and only while the
+ * round still says so; the rest of the round stays as it was.
+ */
+export async function linkPrototypePreview(
+  github: Pick<GitHub, "rest">,
+  repo: Repo,
+  { round, url }: PrototypePreviewToLink,
+  poller: PreviewPoller,
+): Promise<PreviewLinkOutcome> {
+  const answered = await answersWithin(url, PREVIEW_POLL_MINUTES * 60_000, poller);
+  const path = `/repos/${repo.owner}/${repo.name}/issues/comments/${round}`;
+  const { body } = (await github.rest("GET", path)) as { body: string | null };
+  const edited = withVariantPreviews(body ?? "", answered ? { kind: "linked", url } : { kind: "never-answered", url });
+  if (edited === null) return { kind: "unchanged" };
+  await github.rest("PATCH", path, { body: edited });
+  return { kind: answered ? "linked" : "never-answered" };
+}
+
+/**
  * Whether the URL answers with a page (a 2xx, once redirects are followed)
  * within `budgetMs`, polling it at once, then every POLL_INTERVAL_MS, and one
  * last time when the budget runs out. Anything else, a 404 from a host still
@@ -96,5 +125,17 @@ export function previewLinkSummary(pullRequest: number, url: string, outcome: Pr
       return `#${pullRequest}'s preview at ${url} never answered in ${PREVIEW_POLL_MINUTES} minutes, so its evidence section says so.`;
     case "unchanged":
       return `#${pullRequest}'s body holds no evidence section of this run waiting on its preview, so the Kit left it as it was.`;
+  }
+}
+
+/** The prototype preview step's summary line for what came of the round's preview. */
+export function prototypePreviewSummary(round: number, url: string, outcome: PreviewLinkOutcome): string {
+  switch (outcome.kind) {
+    case "linked":
+      return `Linked each variant's preview in the prototype round, comment ${round}, as its preview answered at ${url}.`;
+    case "never-answered":
+      return `The prototype's preview at ${url} never answered in ${PREVIEW_POLL_MINUTES} minutes, so its round, comment ${round}, says so.`;
+    case "unchanged":
+      return `Comment ${round} is no prototype round waiting on its preview, so the Kit left it as it was.`;
   }
 }
