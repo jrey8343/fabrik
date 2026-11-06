@@ -93,6 +93,24 @@ describe("The Kit's workflows", () => {
     expect(kit).toContain("request-changes: ${{ steps.route.outputs.request-changes }}");
   });
 
+  // For the prototype job (#155), which runs a prototype turn in the design job's place.
+  it("loop.yml's Kit job passes out whether the Design run is a prototype turn, and its request", () => {
+    const kit = jobIn(loop, "kit");
+
+    expect(kit).toContain("prototype: ${{ steps.route.outputs.prototype }}");
+    expect(kit).toContain("prototype_request: ${{ steps.route.outputs.prototype_request }}");
+  });
+
+  // The request's brief is the Design agent's text: in a run: script it could inject a command.
+  it("loop.yml reads the prototype request only through env:, never in a run: script", () => {
+    const uses = loop.split("\n").filter((line) => line.includes("outputs.prototype_request"));
+
+    expect(uses).toContainEqual("      prototype_request: ${{ steps.route.outputs.prototype_request }}");
+    for (const line of uses.filter((use) => !use.includes("steps.route.outputs"))) {
+      expect(line).toMatch(/^\s+[A-Z][A-Z0-9_]*: \$\{\{ needs\.kit\.outputs\.prototype_request \}\}$/);
+    }
+  });
+
   // The preview link (#153): bounded and never failing, so a slow or broken host costs the push job nothing.
   describe("loop.yml's push job's preview step", () => {
     const push = jobIn(loop, "push");
