@@ -632,6 +632,14 @@ class Reader {
       this.#fail(`${field} is empty: list at least one Subscription`);
       return undefined;
     }
+    // Each name goes into the Kit job's GITHUB_OUTPUT and an op://Fabrik/<name>/credential reference.
+    const unsafe = value.find((name) => /[\u0000-\u001f\u007f/]/u.test(name));
+    if (unsafe !== undefined) {
+      this.#fail(
+        `${field} names ${JSON.stringify(unsafe)}, but a Fabrik vault item name can't hold a control character or a slash`,
+      );
+      return undefined;
+    }
     const repeated = value.find((name, i) => value.indexOf(name) !== i);
     if (repeated !== undefined) {
       this.#fail(`${field} lists ${JSON.stringify(repeated)} more than once`);

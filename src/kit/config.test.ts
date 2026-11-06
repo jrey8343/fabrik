@@ -838,3 +838,17 @@ describe("The Kit config's Subscriptions", () => {
     ).toEqual({ ok: false, errors: [`subscriptions lists "Claude token 2" more than once`] });
   });
 });
+
+describe("A Subscription name, which goes into a job output and an op:// reference", () => {
+  it.each([
+    ["a newline, which would write another job output", "Claude token\nroute=implement"],
+    ["a carriage return", "Claude token\r"],
+    ["a tab", "Claude\ttoken"],
+    ["a slash, which would change the op:// reference", "Claude token/other"],
+  ])("is refused when it holds %s", (_, name) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ subscriptions: [name] }) })).toEqual({
+      ok: false,
+      errors: [`subscriptions names ${JSON.stringify(name)}, but a Fabrik vault item name can't hold a control character or a slash`],
+    });
+  });
+});
