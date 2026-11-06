@@ -293,7 +293,12 @@ async function applyToIssue(
       return;
     }
     case "comment-linking": {
-      const body = action.body.map((part) => (typeof part === "string" ? part : postedIn(posted, part))).join("");
+      const body = action.body
+        .map((part) => {
+          if (typeof part === "string") return part;
+          return "posted" in part ? postedIn(posted, part) : `#${createdIn(created, part).number}`;
+        })
+        .join("");
       await github.rest("POST", `${issue}/comments`, { body });
       return;
     }
