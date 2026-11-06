@@ -238,8 +238,8 @@ function missingFromSnapshot(what: string): Plan {
  * Adding needs-triage starts Triage; adding needs-design asks for a Design
  * queue check, whose agent:design starts the Design session's first turn;
  * adding agent:implement starts (or resumes) an Implement run; and adding
- * agent:research starts a Researcher run. Nothing adds agent:research yet
- * but the Operator, by hand (#154).
+ * agent:research starts a Researcher run, whether Dispatch added it to
+ * release a research Decision or the Operator re-added it by hand.
  */
 function labelAdded(
   issueNumber: number,

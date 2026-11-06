@@ -178,4 +178,4 @@ The Fabrik App sees the marker on the Operator's comment. For `brief` it swaps `
 
 For `operator-brief` it swaps `needs-design` for `ready-for-human` and assigns the issue to the Operator, ready for a Pairing session. It runs no Dispatch check.
 
-For `map` it swaps `needs-design` for `wayfinder:map` and runs a Dispatch check, so the Researcher starts on the Map's unblocked research Decisions. The other Decisions wait for the Operator in `/wayfinder`. The Kit never closes a Map: the Operator does, once the Map's last Decision has filed each Spec-to-be as a `needs-design` issue.
+For `map` it swaps `needs-design` for `wayfinder:map` and runs a Dispatch check, so the Researcher starts on the Map's unblocked research Decisions, and a Design queue check, so the Design session slot this one held goes to the next waiting issue. The other Decisions wait for the Operator in `/wayfinder`. The Kit never closes a Map: the Operator does, once the Map's last Decision has filed each Spec-to-be as a `needs-design` issue.
