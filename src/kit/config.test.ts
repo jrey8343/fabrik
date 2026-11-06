@@ -567,6 +567,10 @@ describe("The Kit config template", () => {
     });
   });
 
+  it("spells out subscriptions at its Kit default, the one V1 Subscription", () => {
+    expect(JSON.parse(template)).toMatchObject({ subscriptions: ["Claude token"] });
+  });
+
   it("resolves to every Kit default", () => {
     expect(resolveKitConfig({ config: template })).toEqual({ ok: true, config: DEFAULTS });
   });
@@ -812,13 +816,25 @@ describe("The Kit config's Subscriptions", () => {
 
   it.each([
     [["Claude token", "Claude token 2"]],
+    [["Claude token 2", "Claude token"]],
     [["Claude token", "Claude token 2", "Claude token 3"]],
-  ])("refuses %j, because Subscription rotation isn't available yet", (subscriptions) => {
+  ])("reads %j as written, in the Operator's order", (subscriptions) => {
     expect(resolveKitConfig({ config: JSON.stringify({ subscriptions }) })).toEqual({
-      ok: false,
-      errors: [
-        `subscriptions lists ${subscriptions.length} Subscriptions, but Subscription rotation isn't available yet: list one`,
-      ],
+      ok: true,
+      config: { ...DEFAULTS, subscriptions },
     });
+  });
+
+  it("refuses a two-item list with an empty name, naming the field", () => {
+    expect(resolveKitConfig({ config: `{ "subscriptions": ["Claude token", ""] }` })).toEqual({
+      ok: false,
+      errors: ["subscriptions must be a list of Fabrik vault item names"],
+    });
+  });
+
+  it("refuses a longer list that names one vault item twice", () => {
+    expect(
+      resolveKitConfig({ config: `{ "subscriptions": ["Claude token", "Claude token 2", "Claude token 2"] }` }),
+    ).toEqual({ ok: false, errors: [`subscriptions lists "Claude token 2" more than once`] });
   });
 });
