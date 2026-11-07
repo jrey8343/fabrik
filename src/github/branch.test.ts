@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkTrustRoot } from "../guard/trust-root.ts";
-import { rebuildAgentBranch } from "./branch.ts";
+import { rebaseBranchOntoMain, rebuildAgentBranch } from "./branch.ts";
 
 const run = promisify(execFile);
 const BRANCH = "fabrik/ticket-7";
@@ -466,4 +466,79 @@ describe("A prototype turn's branch", () => {
     await expect(branch.push("main")).rejects.toThrow(/bundle holds prototype\/7/);
     expect(await git(remote, "rev-parse", "refs/heads/main")).toBe(main);
   });
+});
+
+describe("Rebasing an agent PR's branch onto main, with no agent (#304)", () => {
+  const remoteOf = () => ({ serverUrl: `file://${root}`, repo: { owner: "acme", name: "shop" }, token: "unused" });
+  const remoteSha = (ref: string) => git(remote, "rev-parse", ref);
+
+  it("replays the PR's commits onto main's head when that's clean, and its push puts the rebased branch on the remote", async () => {
+    const main = await remoteSha("main");
+
+    const rebased = await rebaseBranchOntoMain(BRANCH, main, remoteOf());
+    expect(rebased.outcome).toBe("rebased");
+    await rebased.push();
+
+    const head = await remoteSha(BRANCH);
+    expect(head).not.toBe(prHead);
+    await git(remote, "merge-base", "--is-ancestor", main, head);
+    expect(await git(remote, "show", `${head}:src/feature.ts`)).toBe("feature v1");
+    expect(await git(remote, "show", `${head}:src/cart.ts`)).toBe("cart v2");
+    // The PR's own commit, replayed: still one commit on top of main, with its message.
+    expect(await git(remote, "log", "--format=%s", `${main}..${head}`)).toBe("First run");
+  });
+
+  it("pushes nothing when the PR's commits conflict with main", async () => {
+    const seed = join(root, "seed");
+    await git(seed, "checkout", "--quiet", "main");
+    await commit(seed, { "src/shared.ts": "shared from main\n" }, "Main changes the same lines");
+    await git(seed, "push", "--quiet", "origin", "main");
+
+    const rebased = await rebaseBranchOntoMain(BRANCH, await remoteSha("main"), remoteOf());
+
+    expect(rebased.outcome).toBe("conflicted");
+    await expect(rebased.push()).rejects.toThrow();
+    expect(await remoteSha(BRANCH)).toBe(prHead);
+  });
+
+  it("finds a branch that already holds main's head up to date", async () => {
+    const rebased = await rebaseBranchOntoMain(BRANCH, await git(remote, "rev-parse", `${prHead}~1`), remoteOf());
+
+    expect(rebased.outcome).toBe("up-to-date");
+  });
+
+  it("pushes with a lease, so a branch that moved since it was read is never overwritten", async () => {
+    const rebased = await rebaseBranchOntoMain(BRANCH, await remoteSha("main"), remoteOf());
+    const seed = join(root, "seed");
+    await git(seed, "checkout", "--quiet", BRANCH);
+    const operatorPush = await commit(seed, { "src/feature.ts": "the Operator's\n" }, "Operator pushes");
+    await git(seed, "push", "--quiet", "origin", BRANCH);
+
+    await expect(rebased.push()).rejects.toThrow();
+    expect(await remoteSha(BRANCH)).toBe(operatorPush);
+  });
+});
+
+describe("A conflict-only run that rebases its PR onto main (#304)", () => {
+  it("counts a conflict it resolved inside a Trust-root file as its own change, so the guard refuses it", async () => {
+    // The Operator's commit on the PR touched a workflow, which main has moved on too.
+    const seed = join(root, "seed");
+    await git(seed, "checkout", "--quiet", BRANCH);
+    const base = await commit(seed, { ".github/workflows/ci.yml": "ci from the Operator\n" }, "Operator tweaks CI");
+    await git(seed, "push", "--quiet", "origin", BRANCH);
+    await git(clone, "fetch", "--quiet", "origin");
+    await git(clone, "checkout", "--quiet", "-B", BRANCH, `origin/${BRANCH}`);
+
+    // The run rebases onto main and resolves the workflow's conflict.
+    const noEditor = { ...env, GIT_EDITOR: "true" };
+    await run("git", ["rebase", "origin/main"], { cwd: clone, env: noEditor }).catch(() => undefined);
+    await writeFile(join(clone, ".github/workflows/ci.yml"), "ci resolved\n");
+    await git(clone, "add", "-A");
+    await run("git", ["rebase", "--continue"], { cwd: clone, env: noEditor });
+
+    const branch = await rebuild(base);
+
+    expect(branch.changes.updatedFromMain).toBe(true);
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toMatchObject({ kind: "refuse", paths: [".github/workflows/ci.yml"] });
+  }, 20_000);
 });

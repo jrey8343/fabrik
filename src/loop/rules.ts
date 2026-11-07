@@ -2,6 +2,7 @@ import { auditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
 import { failureNotice } from "./failures.ts";
+import { checkConflicts } from "./conflicts.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
   DESIGN_LABEL,
@@ -168,17 +169,21 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return snapshot.designQueue === null
         ? missingFromSnapshot("the needs-design issues a Design queue check weighs")
         : checkDesignQueue(snapshot.designQueue, config, heldOf("design", snapshot.kitIssues));
+    // Main moved, so an agent PR at the Merge gate may now conflict with it (#304).
+    case "main-pushed":
+      return conflictCheck(snapshot);
     case "kit-config-changed":
       // max_in_flight or caps.design_sessions may have gone up, or from 0 back
-      // above it, so see what can start now.
-      return { kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] };
+      // above it, so see what can start now. It's a push to main too.
+      return alongside({ kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] }, conflictCheck(snapshot));
     case "scheduled-tick":
       // The tick closes each weekly-limit issue after its reset, resuming the
       // runs held until then, and opens the week's pending Audit and pending
       // Retro when each is due. It also catches a Design session slot freed by
       // an event the Loop doesn't watch, such as needs-design coming off by hand.
-      // It also takes the Replays' next step.
-      return thenCheckDesignQueue(scheduledTickWith([auditGate, retroGate, replayGate], event.now, snapshot, config));
+      // It also takes the Replays' next step, and catches an agent PR left
+      // conflicting with main that a push to main missed (#304).
+      return thenCheckDesignQueue(scheduledTickWith([auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config));
   }
 }
 
@@ -195,6 +200,18 @@ function thenCheckDesignQueue(plan: Plan): Plan {
     case "fail":
       return plan;
   }
+}
+
+/** The conflict check (src/loop/conflicts.ts) on the snapshot's conflict slice, which a push to main and the tick gather. */
+function conflictCheck(snapshot: Snapshot): Plan {
+  return snapshot.conflicts === null
+    ? missingFromSnapshot("the open agent PRs a conflict check weighs")
+    : checkConflicts(snapshot.conflicts, snapshot.operator);
+}
+
+/** The conflict check as one of the tick's gates. */
+function conflictGate(_now: string, snapshot: Snapshot): Plan {
+  return conflictCheck(snapshot);
 }
 
 /** A gate the scheduled tick runs, the audit gate or the retro gate: what it opens this tick, or why it opens nothing. */

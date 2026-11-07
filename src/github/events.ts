@@ -24,8 +24,8 @@ export function loopEventFrom(
 ): LoopEvent | null {
   // The scheduled Kit workflow (schedule.yml), for the Loop's time-based rules.
   if (eventName === "schedule") return { kind: "scheduled-tick", now: now.toISOString() };
-  // The caller workflow's push trigger, filtered to the Kit config's path.
-  if (eventName === "push") return changesKitConfig(payload) ? { kind: "kit-config-changed" } : null;
+  // The caller workflow's push trigger: only a push to the default branch counts.
+  if (eventName === "push") return defaultBranchPushed(payload);
   if (eventName === "issues" && payload["action"] === "opened") {
     const issue = payload["issue"] as { number: number };
     return { kind: "issue-opened", issue: issue.number };
@@ -107,14 +107,21 @@ function pullRequestCommented(
 }
 
 /**
- * Whether a push to the default branch, whose Kit config the Loop reads,
- * added, changed or removed .fabrik/config.json (removing it restores the defaults).
+ * A push to the default branch, or null for any other push. Whatever it
+ * touches, main moved, so an agent PR may now conflict with it (#304). One
+ * that added, changed or removed .fabrik/config.json, whose Kit config the
+ * Loop reads (removing it restores the defaults), is a Kit config change,
+ * which the core treats as main moving too. A push deleting the branch leaves
+ * no head to bring a PR up to date with.
  */
-function changesKitConfig(payload: Record<string, unknown>): boolean {
+function defaultBranchPushed(payload: Record<string, unknown>): LoopEvent | null {
   const defaultBranch = (payload["repository"] as { default_branch: string }).default_branch;
-  if (payload["ref"] !== `refs/heads/${defaultBranch}`) return false;
+  if (payload["ref"] !== `refs/heads/${defaultBranch}` || payload["deleted"] === true) return null;
+  const head = payload["after"];
+  if (typeof head !== "string" || !/^[0-9a-f]{40}$/.test(head)) return null;
   const commits = payload["commits"] as { added: string[]; modified: string[]; removed: string[] }[];
-  return commits.some((commit) => [...commit.added, ...commit.modified, ...commit.removed].includes(KIT_CONFIG_PATH));
+  const kitConfigChanged = commits.some((commit) => [...commit.added, ...commit.modified, ...commit.removed].includes(KIT_CONFIG_PATH));
+  return { kind: kitConfigChanged ? "kit-config-changed" : "main-pushed", head };
 }
 
 /**
@@ -137,7 +144,7 @@ export interface PushJobEvidence extends CaptureOutputs {
 export function agentRunEventFrom(
   result: AgentRunResult,
   changes: BranchChanges | null = null,
-  retry: { readonly pullRequest: number; readonly runUrl: string; readonly requestChanges?: boolean } | null = null,
+  retry: { readonly pullRequest: number; readonly runUrl: string; readonly requestChanges?: boolean; readonly conflict?: string } | null = null,
   startedBy: number | null = null,
   evidence: PushJobEvidence | null = null,
 ): LoopEvent {
@@ -321,6 +328,8 @@ export interface FailedJob {
   readonly subscription?: string;
   /** For a Design-session turn: true when it was the session's prototype turn (#155). */
   readonly prototype?: true;
+  /** For a conflict-only run (#304): its PR and the main head it was started for, from the Kit job's outputs. */
+  readonly conflict?: { readonly pullRequest: number; readonly main: string };
 }
 
 const SECRETS_OUTCOMES = ["success", "failure", "cancelled", "skipped"] as const;
@@ -338,5 +347,6 @@ export function agentFailureEventFrom(job: FailedJob): LoopEvent {
     report: job.report,
     ...(job.subscription === undefined ? {} : { subscription: job.subscription }),
     ...(job.prototype === true ? { prototype: true } : {}),
+    ...(job.conflict === undefined ? {} : { conflict: job.conflict }),
   };
 }

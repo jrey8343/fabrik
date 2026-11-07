@@ -22,12 +22,15 @@ on:
   # agent PR can't change: the Kit refuses agent branches that touch them.
   pull_request_review:
     types: [submitted]
-  # A change to the Kit config, which runs a Dispatch check so raising
-  # max_in_flight (from 0, to resume Dispatch) takes effect straight away.
-  # branches keeps tag pushes out; the loop job's if skips other branches.
+  # A push to the default branch, whatever it touches: an agent PR waiting at
+  # the Merge gate may now conflict with main, which the Kit then resolves
+  # (ADR-0011). A change to the Kit config among them also runs a Dispatch
+  # check, so raising max_in_flight (from 0, to resume Dispatch) takes effect
+  # straight away. GitHub takes one push filter, so there's no path filter;
+  # a branch filter keeps tag pushes out, branches-ignore keeps the Kit's own
+  # branches from starting runs, and the loop job's if skips any other branch.
   push:
-    branches: ["**"]
-    paths: [.fabrik/config.json]
+    branches-ignore: ["fabrik/**", "prototype/**", "research/**"]
   # The Loop's time-based rules, such as closing the weekly-limit issue after its reset.
   schedule:
     - cron: "17 * * * *"
@@ -36,7 +39,7 @@ permissions: {}
 
 jobs:
   loop:
-    # Only the default branch's Kit config is the Product's, so a push elsewhere runs nothing.
+    # Only a push to the default branch moves main, whose Kit config is the Product's, so a push elsewhere runs nothing.
     if: >-
       github.event_name != 'schedule' &&
       (github.event_name != 'push' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))

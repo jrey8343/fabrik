@@ -164,14 +164,20 @@ export function verdictActions(
     readonly considered?: readonly string[];
   },
 ): Action[] {
-  const record: VerdictRecord = { verdict, source, requestChanges: pullRequest.requestChangesRun, headSha: event.headSha };
+  const record: VerdictRecord = {
+    verdict,
+    source,
+    requestChanges: pullRequest.requestChangesRun,
+    ...(pullRequest.conflictRun ? { conflictRun: true as const } : {}),
+    headSha: event.headSha,
+  };
   const by = BY[source];
   const next = nextAfter(verdict, pullRequest);
   const body = [
     verdictMarker(record),
     `## Verdict: ${HEADINGS[verdict]}`,
     "",
-    `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}.`,
+    `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}${record.conflictRun === true ? ", after a conflict-only run, so it uses no retry" : ""}.`,
     ...(findings === "" ? [] : ["", findings]),
     ...followUps,
     ...(next === null ? [] : ["", next.line]),

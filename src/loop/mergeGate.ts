@@ -12,8 +12,9 @@ type ChangesRequested = Extract<LoopEvent, { kind: "pull-request-changes-request
 /**
  * The Operator's Request changes on an agent PR at the Merge gate. The PR goes
  * back to draft, so the run's push starts a Review, and a pass requests the
- * Operator's review again. Conflicts after another PR merged take this path
- * too: the Operator asks for the rebase in their review.
+ * Operator's review again. A conflict with main after another PR merged
+ * doesn't need it: the Kit resolves that itself (src/loop/conflicts.ts,
+ * ADR-0011), and hands the PR back here only when it can't.
  */
 export function requestChanges(event: ChangesRequested, snapshot: Snapshot, config: KitConfig): Plan {
   const { pullRequest, operator } = snapshot;

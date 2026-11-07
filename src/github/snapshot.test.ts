@@ -13,7 +13,44 @@ import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
-import { countDispatchedRuns, DESIGN_JOB_NAME, designTurnsInProgress, gatherSnapshot, IMPLEMENT_JOB_NAME, PROTOTYPE_JOB_NAME, readKitConfigSources, RESEARCH_JOB_NAME } from "./snapshot.ts";
+import {
+  countDispatchedRuns,
+  DESIGN_JOB_NAME,
+  designTurnsInProgress,
+  gatherSnapshot as gatherFrom,
+  IMPLEMENT_JOB_NAME,
+  MERGEABLE_READS,
+  MERGEABLE_WAIT_MS,
+  PROTOTYPE_JOB_NAME,
+  readKitConfigSources,
+  RESEARCH_JOB_NAME,
+} from "./snapshot.ts";
+
+/** The conflict check's query (#304), which reads each open PR's mergeable state. */
+const isConflictsQuery = (query: string) => /\bmergeable\b/.test(query);
+
+/** Marks a fake GitHub as answering the conflict check's query itself. */
+const ANSWERS_CONFLICTS = Symbol("answers the conflict check's query");
+
+/**
+ * gatherSnapshot, where a fake GitHub not marked as answering the conflict
+ * check's query, as every one written before it, reads as a repo with no
+ * open PR. Its retries wait no time.
+ */
+function gatherSnapshot(github: GitHub, ...rest: Parameters<typeof gatherFrom> extends [unknown, ...infer R] ? R : never) {
+  const answering =
+    ANSWERS_CONFLICTS in github
+      ? github
+      : ({
+          ...github,
+          async graphql(query: string, variables: Record<string, unknown>) {
+            if (isConflictsQuery(query)) return { repository: { defaultBranchRef: null, pullRequests: { nodes: [] } } };
+            return github.graphql(query, variables);
+          },
+        } as unknown as GitHub);
+  const [repoArg, event, operator, appLogin, actions = null, store = null, replayStore = null, wait = async () => undefined] = rest;
+  return gatherFrom(answering, repoArg, event, operator, appLogin, actions, store, replayStore, wait);
+}
 
 const repo = { owner: "acme", name: "shop" };
 
@@ -1312,7 +1349,7 @@ describe("Gathering a scheduled tick's audit slice", () => {
   });
 
   it("isn't gathered for any other event", async () => {
-    const snapshot = await gatherSnapshot(githubWith({ target: { oid: HEAD } }, []), repo, { kind: "kit-config-changed" }, null, "fabrik-app[bot]");
+    const snapshot = await gatherSnapshot(githubWith({ target: { oid: HEAD } }, []), repo, { kind: "kit-config-changed", head: "f".repeat(40) }, null, "fabrik-app[bot]");
 
     expect(snapshot.audit).toBeNull();
   });
@@ -1491,7 +1528,7 @@ describe("Gathering a scheduled tick's retro slice", () => {
   });
 
   it("isn't gathered for any other event", async () => {
-    const snapshot = await gatherSnapshot(githubWith().github, repo, { kind: "kit-config-changed" }, null, "fabrik-app[bot]", null, storeThatIs("private"));
+    const snapshot = await gatherSnapshot(githubWith().github, repo, { kind: "kit-config-changed", head: "f".repeat(40) }, null, "fabrik-app[bot]", null, storeThatIs("private"));
 
     expect(snapshot.retro).toBeNull();
   });
@@ -1585,7 +1622,7 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick", 
   it("isn't gathered for any other event", async () => {
     const { github } = githubWith([heldMarker(7, "triage", "needs-triage")], {});
 
-    const snapshot = await gatherSnapshot(github, repo, { kind: "kit-config-changed" }, null, "fabrik-app[bot]");
+    const snapshot = await gatherSnapshot(github, repo, { kind: "kit-config-changed", head: "f".repeat(40) }, null, "fabrik-app[bot]");
 
     expect(snapshot.held).toBeNull();
   });
@@ -1689,7 +1726,7 @@ describe("Gathering the PRs an Auditor named", () => {
   });
 
   it("isn't gathered for any other event", async () => {
-    const snapshot = await gatherSnapshot(githubWith({}), repo, { kind: "kit-config-changed" }, null, "fabrik-app[bot]");
+    const snapshot = await gatherSnapshot(githubWith({}), repo, { kind: "kit-config-changed", head: "f".repeat(40) }, null, "fabrik-app[bot]");
 
     expect(snapshot.namedPullRequests).toBeNull();
   });
@@ -2104,5 +2141,93 @@ describe("Gathering a replay Ticket's claim (#156)", () => {
     const snapshot = await gatherSnapshot(githubHolding([]), repo, { ...claim, label: "agent:implement" }, "jrey8343", APP_LOGIN);
 
     expect(snapshot.replay).toBeNull();
+  });
+});
+
+describe("Gathering the open agent PRs the conflict check weighs (#304)", () => {
+  const MAIN = "9".repeat(40);
+  const node = (number: number, mergeable: string, overrides: Record<string, unknown> = {}) => ({
+    number,
+    state: "OPEN",
+    isDraft: false,
+    headRefName: `fabrik/ticket-${number - 43}`,
+    headRefOid: HEAD_SHA,
+    author: APP_BOT,
+    body: "",
+    labels: { nodes: [] },
+    comments: { nodes: [{ body: `<!-- fabrik:conflict-attempt ${"8".repeat(40)} rebased -->\nRebased.`, author: { __typename: "Bot" } }] },
+    reviews: { nodes: [] },
+    mergeable,
+    ...overrides,
+  });
+
+  /** A GitHub whose open PRs read as each of `reads` in turn, the last one from then on; it counts the waits between reads. */
+  function githubReading(reads: unknown[][]) {
+    let read = 0;
+    const waits: number[] = [];
+    const github = {
+      [ANSWERS_CONFLICTS]: true,
+      async graphql(query: string) {
+        if (isConflictsQuery(query)) {
+          const nodes = reads[Math.min(read, reads.length - 1)];
+          read += 1;
+          return { repository: { defaultBranchRef: { target: { oid: "d".repeat(40) } }, pullRequests: { nodes } } };
+        }
+        // Every other slice a tick reads finds nothing.
+        const none = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+        return { repository: { owner: { login: "acme" }, defaultBranchRef: null, issues: none, pullRequests: none } };
+      },
+    } as unknown as GitHub;
+    const wait = async (ms: number) => void waits.push(ms);
+    return { github, waits, wait, reads: () => read };
+  }
+
+  it("holds main's head from a push, and every open agent PR with its mergeable state and the Kit's attempts on it", async () => {
+    const { github } = githubReading([[node(50, "CONFLICTING"), node(51, "MERGEABLE"), node(60, "CONFLICTING", { headRefName: "feature", author: { login: "jrey", __typename: "User" } })]]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN);
+
+    expect(snapshot.conflicts?.main).toBe(MAIN);
+    expect(snapshot.conflicts?.pullRequests.map(({ pullRequest, mergeable }) => [pullRequest.number, mergeable])).toEqual([
+      [50, false],
+      [51, true],
+    ]);
+    expect(snapshot.conflicts?.pullRequests[0]?.pullRequest).toMatchObject({ draft: false, ticket: 7, conflictAttempts: ["8".repeat(40)], conflictRunInFlight: null });
+  });
+
+  it("holds the default branch's head on a scheduled tick, which names none", async () => {
+    const { github } = githubReading([[]]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "scheduled-tick", now: "2026-11-07T10:17:00Z" }, null, APP_LOGIN);
+
+    expect(snapshot.conflicts).toEqual({ main: "d".repeat(40), pullRequests: [] });
+  });
+
+  it("reads again while GitHub is still working out whether a PR conflicts, until it knows", async () => {
+    const { github, waits, wait } = githubReading([[node(50, "UNKNOWN")], [node(50, "UNKNOWN")], [node(50, "CONFLICTING")]]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, null, null, null, wait);
+
+    expect(snapshot.conflicts?.pullRequests[0]?.mergeable).toBe(false);
+    expect(waits).toEqual([MERGEABLE_WAIT_MS, MERGEABLE_WAIT_MS]);
+  });
+
+  it("stops after a bounded number of reads, leaving a PR still unknown as unknown, for the scheduled tick", async () => {
+    const { github, waits, wait, reads } = githubReading([[node(50, "UNKNOWN")]]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, null, null, null, wait);
+
+    expect(snapshot.conflicts?.pullRequests[0]?.mergeable).toBeNull();
+    expect(reads()).toBe(MERGEABLE_READS);
+    expect(waits).toHaveLength(MERGEABLE_READS - 1);
+  });
+
+  it("isn't gathered for any other event", async () => {
+    const { github, reads } = githubReading([[node(50, "CONFLICTING")]]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "dispatch-check" }, null, APP_LOGIN).catch(() => null);
+
+    expect(snapshot?.conflicts ?? null).toBeNull();
+    expect(reads()).toBe(0);
   });
 });

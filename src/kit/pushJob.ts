@@ -40,6 +40,8 @@ export type PushJobInput =
       readonly pullRequest: number | null;
       /** For a Request-changes run: the Operator's review. */
       readonly review: number | null;
+      /** For an Implement run: the default branch head a conflict-only run (#304) was started for, else null. */
+      readonly conflict?: string | null;
       /** For a Design-session turn the Operator's reply started: that comment, which must still exist for the turn to post. */
       readonly startedBy: number | null;
       /** For an Implement run: what its job passed out about UI evidence. */
@@ -67,6 +69,8 @@ export type PushJobInput =
       readonly subscription?: string;
       /** For a Design-session turn: true when it was the session's prototype turn, which the prototype job ran. */
       readonly prototype?: true;
+      /** For a conflict-only run (#304): its PR and the default branch head it was started for. */
+      readonly conflict?: { readonly pullRequest: number; readonly main: string };
     }
   | { readonly kind: "nothing"; readonly reason: string };
 
@@ -139,9 +143,11 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       if (evidence !== undefined && FAILED.includes(evidence.result)) return failure(route, issue, evidence, kit);
       const job = routedJob(needs, route);
       const prototype = isPrototypeTurn(needs, route);
+      const conflict = route === "implement" ? shaOr(kit.outputs["conflict"]) : null;
       if (job !== undefined && FAILED.includes(job.result)) {
         const failed = failure(route, issue, job, kit);
-        return prototype ? { ...failed, prototype: true } : failed;
+        if (prototype) return { ...failed, prototype: true };
+        return conflict === null || pullRequest === null ? failed : { ...failed, conflict: { pullRequest, main: conflict } };
       }
       if (job?.result !== "success") return { kind: "nothing", reason: `the ${route} job ended ${job?.result ?? "unknown"}` };
       return {
@@ -150,6 +156,7 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
         issue,
         pullRequest: route === "implement" ? pullRequest : null,
         review: route === "implement" ? numberOr(kit.outputs["review"]) : null,
+        ...(route === "implement" ? { conflict } : {}),
         // A Design turn routed from a comment answers that reply (src/loop/design.ts).
         startedBy: route === "design" ? eventComment : null,
         ...(route === "implement" ? { capture: captureOutputs(job.outputs) } : {}),
@@ -205,6 +212,11 @@ function captureOutputs(outputs: NeededJob["outputs"]): CaptureOutputs {
 /** The prototype request the Kit job passed out, as one line of JSON, or null when it doesn't read. */
 function requestOf(text: string | undefined): PrototypeRequestMarker | null {
   return text === undefined || text === "" ? null : parsePrototypeRequest(text);
+}
+
+/** A full commit sha, as the Kit job passes one out, or null for anything else. */
+function shaOr(text: string | undefined): string | null {
+  return text !== undefined && /^[0-9a-f]{40}$/.test(text) ? text : null;
 }
 
 function numberOr(text: string | undefined): number | null {

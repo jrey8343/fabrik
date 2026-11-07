@@ -33,6 +33,8 @@ import { retroWindowStart } from "../loop/retro.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
   AuditSnapshot,
+  ConflictCandidate,
+  ConflictSnapshot,
   DesignQueueIssue,
   DesignQueueSnapshot,
   DispatchSnapshot,
@@ -60,6 +62,9 @@ import {
   designTurnFailedIn,
   pendingPrototypeIn,
   unansweredPrototypesIn,
+  conflictAttemptsIn,
+  conflictRunIn,
+  conflictRunInFlightIn,
   pushedSinceVerdictIn,
   requestChangesRunIn,
   researchRunFailedIn,
@@ -144,11 +149,8 @@ function openIssueNumbersIn(repo: Repo, edges: DependencyEdges): number[] {
     .map((issue) => issue.number);
 }
 
-const PULL_REQUEST_QUERY = `
-  query ($owner: String!, $name: String!, $number: Int!) {
-    repository(owner: $owner, name: $name) {
-      owner { login }
-      pullRequest(number: $number) {
+/** What the snapshot reads of a PR, by itself or as one of the open agent PRs the conflict check weighs. */
+const PULL_REQUEST_FIELDS = `
         number
         state
         isDraft
@@ -158,7 +160,13 @@ const PULL_REQUEST_QUERY = `
         body
         labels(first: 100) { nodes { name } }
         comments(last: 100) { nodes { body author { __typename } } }
-        reviews(last: 1, states: [CHANGES_REQUESTED]) { nodes { databaseId author { login __typename } commit { oid } } }
+        reviews(last: 1, states: [CHANGES_REQUESTED]) { nodes { databaseId author { login __typename } commit { oid } } }`;
+
+const PULL_REQUEST_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      owner { login }
+      pullRequest(number: $number) {${PULL_REQUEST_FIELDS}
       }
     }
   }
@@ -371,6 +379,7 @@ export async function gatherSnapshot(
   actions: GitHub | null = null,
   store: Pick<GitHub, "rest"> | null = null,
   replayStore: ReplayStore | null = null,
+  wait: (ms: number) => Promise<void> = sleep,
 ): Promise<Snapshot> {
   const [{ owner, kitIssues }, part, startingComment, audit, namedPullRequests] = await Promise.all([
     gatherKitIssues(github, repo, appLogin),
@@ -386,6 +395,13 @@ export async function gatherSnapshot(
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
   const held = event.kind === "scheduled-tick" ? await gatherHeld(github, repo, kitIssues, appLogin) : null;
+  // A push to the default branch may leave an agent PR conflicting with it; the tick catches any the push missed (#304).
+  const conflicts =
+    event.kind === "main-pushed" || event.kind === "kit-config-changed"
+      ? await gatherConflicts(github, repo, event.head, appLogin, wait)
+      : event.kind === "scheduled-tick"
+        ? await gatherConflicts(github, repo, null, appLogin, wait)
+        : null;
   // By default the Operator owns the Product repos they run Fabrik in.
   const theOperator = part?.operator ?? operator ?? owner;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
@@ -397,8 +413,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps }
-    : { ...part, spec, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps, conflicts }
+    : { ...part, spec, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps, conflicts };
 }
 
 /**
@@ -761,6 +777,7 @@ async function gatherEventPart(
       return gatherDispatch(github, actions, repo, operator, appLogin);
     case "design-queue-check":
       return gatherDesignQueue(github, actions, repo, operator);
+    case "main-pushed":
     case "kit-config-changed":
     case "scheduled-tick":
       return null;
@@ -784,7 +801,10 @@ async function gatherEventPart(
   }
 }
 
-type EventPart = Omit<Snapshot, "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "replay" | "namedPullRequests" | "held" | "openMaps">;
+type EventPart = Omit<
+  Snapshot,
+  "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "replay" | "namedPullRequests" | "held" | "openMaps" | "conflicts"
+>;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body author { login __typename } }";
 
@@ -1114,38 +1134,107 @@ async function gatherPullRequest(
   if (pullRequest === null) {
     throw new Error(`Pull request #${number} not found in ${repo.owner}/${repo.name}`);
   }
-  const botComments = pullRequest.comments.nodes
-    .filter((comment) => comment.author?.__typename === "Bot")
-    .map((comment) => comment.body);
   return {
     issue: null,
-    pullRequest: {
-      number: pullRequest.number,
-      isAgent: isAgentPullRequest({
-        headRef: pullRequest.headRefName,
-        authorIsBot: pullRequest.author?.__typename === "Bot",
-      }),
-      ticket: ticketOfAgentBranch(pullRequest.headRefName),
-      open: pullRequest.state === "OPEN",
-      draft: pullRequest.isDraft,
-      headSha: pullRequest.headRefOid,
-      labels: pullRequest.labels.nodes.map((label) => label.name),
-      // Only a bot's markers count, so nobody can fake a Verdict or a Request-changes run by quoting one.
-      verdicts: verdictsIn(botComments),
-      requestChangesRun: requestChangesRunIn(botComments),
-      pushedSinceVerdict: pushedSinceVerdictIn(botComments),
-      changesRequested: changesRequestedOf(pullRequest.reviews.nodes[0]),
-      // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
-      uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
-    },
+    pullRequest: pullRequestSnapshotOf(pullRequest, appLogin),
     dispatch: null,
     designQueue: null,
     operator: operator ?? data.repository.owner.login,
   };
 }
 
+/** What the PR query reads of one PR, which the conflict check's query reads of each open one too. */
+type PullRequestNode = NonNullable<PullRequestQueryResult["repository"]["pullRequest"]>;
+
+/** A PR as the core sees it, from what PULL_REQUEST_FIELDS read of it. */
+function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | null): PullRequestSnapshot {
+  const botComments = pullRequest.comments.nodes
+    .filter((comment) => comment.author?.__typename === "Bot")
+    .map((comment) => comment.body);
+  return {
+    number: pullRequest.number,
+    isAgent: isAgentPullRequest({
+      headRef: pullRequest.headRefName,
+      authorIsBot: pullRequest.author?.__typename === "Bot",
+    }),
+    ticket: ticketOfAgentBranch(pullRequest.headRefName),
+    open: pullRequest.state === "OPEN",
+    draft: pullRequest.isDraft,
+    headSha: pullRequest.headRefOid,
+    labels: pullRequest.labels.nodes.map((label) => label.name),
+    // Only a bot's markers count, so nobody can fake a Verdict or a Request-changes run by quoting one.
+    verdicts: verdictsIn(botComments),
+    requestChangesRun: requestChangesRunIn(botComments),
+    conflictRun: conflictRunIn(botComments),
+    conflictAttempts: conflictAttemptsIn(botComments),
+    conflictRunInFlight: conflictRunInFlightIn(botComments),
+    pushedSinceVerdict: pushedSinceVerdictIn(botComments),
+    changesRequested: changesRequestedOf(pullRequest.reviews.nodes[0]),
+    // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
+    uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
+  };
+}
+
+/** How many times the conflict check reads open agent PRs while GitHub still works out whether one merges cleanly (#304). */
+export const MERGEABLE_READS = 5;
+
+/** How long it waits between those reads, in milliseconds: 12 seconds at most in all. */
+export const MERGEABLE_WAIT_MS = 3000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const CONFLICTS_QUERY = `
+  query ($owner: String!, $name: String!) {
+    repository(owner: $owner, name: $name) {
+      defaultBranchRef { target { oid } }
+      pullRequests(states: OPEN, first: 50, orderBy: { field: CREATED_AT, direction: ASC }) {
+        nodes { ${PULL_REQUEST_FIELDS} mergeable }
+      }
+    }
+  }
+`;
+
+interface ConflictsQueryResult {
+  repository: {
+    defaultBranchRef: { target: { oid: string } } | null;
+    pullRequests: { nodes: (PullRequestNode & { mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" })[] };
+  };
+}
+
+/**
+ * What the conflict check weighs (#304): the default branch's head, `main`
+ * when the event names it, and every open agent PR with whether it merges
+ * cleanly into it. GitHub works `mergeable` out in the background once asked,
+ * so while any agent PR's is unknown, it reads again, MERGEABLE_READS times
+ * at most; one still unknown after that is left for the scheduled tick.
+ */
+async function gatherConflicts(
+  github: Pick<GitHub, "graphql">,
+  repo: Repo,
+  main: string | null,
+  appLogin: string | null,
+  wait: (ms: number) => Promise<void>,
+): Promise<ConflictSnapshot> {
+  let candidates: ConflictCandidate[] = [];
+  let head: string | null = main;
+  for (let read = 1; read <= MERGEABLE_READS; read += 1) {
+    if (read > 1) await wait(MERGEABLE_WAIT_MS);
+    const data = await github.graphql<ConflictsQueryResult>(CONFLICTS_QUERY, { owner: repo.owner, name: repo.name });
+    head = main ?? data.repository.defaultBranchRef?.target.oid ?? null;
+    candidates = data.repository.pullRequests.nodes.flatMap((node) => {
+      const pullRequest = pullRequestSnapshotOf(node, appLogin);
+      if (!pullRequest.isAgent) return [];
+      return [{ pullRequest, mergeable: node.mergeable === "UNKNOWN" ? null : node.mergeable === "MERGEABLE" }];
+    });
+    if (candidates.every(({ mergeable }) => mergeable !== null)) break;
+  }
+  return { main: head, pullRequests: candidates };
+}
+
 function changesRequestedOf(
-  review: NonNullable<PullRequestQueryResult["repository"]["pullRequest"]>["reviews"]["nodes"][number] | undefined,
+  review: PullRequestNode["reviews"]["nodes"][number] | undefined,
 ): PullRequestSnapshot["changesRequested"] {
   if (review === undefined || review.author === null || review.commit === null) return null;
   return {

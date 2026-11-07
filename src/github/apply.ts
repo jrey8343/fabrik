@@ -35,6 +35,15 @@ export interface BranchPusher {
   push(branch: string): Promise<void>;
 }
 
+/**
+ * Rebases an agent PR's branch onto the default branch's head, with no agent
+ * (src/github/branch.ts, #304): whether that was clean, conflicted, or found
+ * the branch already holding that head, and, when clean, its push.
+ */
+export interface MainRebaser {
+  rebase(branch: string, onto: string): Promise<{ readonly outcome: "rebased" | "conflicted" | "up-to-date"; push(): Promise<void> }>;
+}
+
 /** A UI PR's preview deployment, which the push job's preview step polls and links (src/kit/previewLink.ts). */
 export interface PreviewToLink {
   readonly pullRequest: number;
@@ -66,6 +75,8 @@ export interface ApplyingRun {
  * hands on from it. Only the push job of an Implement run, a Researcher run or
  * a prototype turn has a branch to push. `run` is the Actions run applying
  * it, which a replay Ticket's claim marks it in progress in, from then.
+ * `rebaser` carries out a rebase onto main, which a push to main's or the
+ * tick's plan may ask for.
  */
 export async function applyPlan(
   github: GitHubApi,
@@ -73,12 +84,25 @@ export async function applyPlan(
   plan: Plan,
   branches: BranchPusher | null = null,
   run: ApplyingRun | null = null,
+  rebaser: MainRebaser | null = null,
 ): Promise<AppliedPlan> {
   if (plan.kind !== "act") return { preview: null };
   const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run };
-  for (const action of plan.actions) {
-    await apply(github, repo, action, made, branches);
-  }
+  const applyEach = async (actions: readonly Action[]): Promise<void> => {
+    for (const action of actions) {
+      if (action.kind !== "rebase-onto-main") {
+        await apply(github, repo, action, made, branches);
+        continue;
+      }
+      if (rebaser === null) throw new Error(`This job can't rebase ${action.branch} onto main`);
+      const rebased = await rebaser.rebase(action.branch, action.onto);
+      if (rebased.outcome === "up-to-date") continue;
+      // The clean actions land first: the PR is in draft before the push starts its Review.
+      await applyEach(rebased.outcome === "rebased" ? action.clean : action.conflicted);
+      if (rebased.outcome === "rebased") await rebased.push();
+    }
+  };
+  await applyEach(plan.actions);
   return { preview: made.preview };
 }
 
@@ -233,6 +257,9 @@ async function apply(
         assignees: action.assignees,
       });
       return;
+    // applyPlan carries it out, since what follows it depends on how the rebase went.
+    case "rebase-onto-main":
+      throw new Error("A rebase onto main is applied by applyPlan");
     case "push-branch":
       if (branches === null) throw new Error(`This job holds no branch to push (${action.branch})`);
       await branches.push(action.branch);

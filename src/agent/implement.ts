@@ -197,6 +197,38 @@ export async function requestChangesContext(pullRequestFile: string, reviewFile:
 }
 
 /**
+ * What a conflict-only run's prompt carries beyond the Ticket (#304): the PR
+ * and its current description, the default branch head `main` it rebases
+ * onto, and the Operator's comments and any Request changes, as context for
+ * resolving the conflicts the way the PR meant. It isn't a Retry or a
+ * Request-changes run, so it gets no findings and no new requirements.
+ */
+export async function conflictContext(pullRequestFile: string, main: string): Promise<PullRequestRunContext> {
+  if (!/^[0-9a-f]{40}$/.test(main)) throw new Error(`FABRIK_CONFLICT_MAIN isn't a full commit sha: ${JSON.stringify(main)}`);
+  const { number, title, body, operatorComments, requestedChanges } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
+    number?: unknown;
+    title?: unknown;
+    body?: unknown;
+    operatorComments?: unknown;
+    requestedChanges?: unknown;
+  };
+  if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
+  const fromOperator = operatorInputSections({ operatorComments, requestedChanges });
+  return {
+    pullRequest: number,
+    parts: [
+      "## The pull request you're bringing up to date with main",
+      `#${number}: ${String(title ?? "")}`,
+      ...currentDescription(body),
+      "## A conflict-only run",
+      `\`main\` moved to ${main} and this PR now conflicts with it. Rebase the branch onto it (\`git rebase origin/main\`), resolve the conflicts, and change nothing else. Your \`fix\` must list every conflicted file and say how you resolved each conflict.`,
+      ...fromOperator.parts,
+    ],
+    operatorComments: fromOperator.given,
+  };
+}
+
+/**
  * Bundles the commits made on the run's branch (the Implementer's, or the
  * Researcher's findings, which the Kit commits) into `outDir`. With none,
  * there's no bundle and the head stays null: the push job reads that as an
@@ -245,7 +277,8 @@ export interface ImplementInput {
  * An Implement run's input, from the Product checkout and the input files the
  * agent-inputs step wrote (src/agent/inputs.ts): the Ticket's Spec, and for a
  * run on an existing PR that PR (`pullRequest`, "" for a first run) and a
- * Request-changes run's review (`review`, "" otherwise). A first run cuts the
+ * Request-changes run's review (`review`, "" otherwise), or a conflict-only
+ * run's main head (`conflict`, "" or absent otherwise, #304). A first run cuts the
  * Ticket's agent branch from the checkout's commit; a run on a PR carries on
  * the PR's branch with the findings to fix, or the Operator's review.
  */
@@ -253,13 +286,19 @@ export async function implementInput(
   productDir: string,
   ticket: number,
   config: KitConfig,
-  files: { readonly spec: string; readonly pullRequest: string; readonly review: string },
+  files: { readonly spec: string; readonly pullRequest: string; readonly review: string; readonly conflict?: string },
 ): Promise<ImplementInput> {
   const onPullRequest = files.pullRequest !== "";
   const branch = onPullRequest ? await continueAgentBranch(productDir, ticket) : await startAgentBranch(productDir, ticket);
   const parts = await implementContext(productDir, files.spec, config);
   if (!onPullRequest) return { branch, parts, onPullRequest, operatorComments: null };
-  const context = files.review === "" ? await retryContext(files.pullRequest) : await requestChangesContext(files.pullRequest, files.review);
+  const conflict = files.conflict ?? "";
+  const context =
+    conflict !== ""
+      ? await conflictContext(files.pullRequest, conflict)
+      : files.review === ""
+        ? await retryContext(files.pullRequest)
+        : await requestChangesContext(files.pullRequest, files.review);
   return { branch, parts: [...parts, ...context.parts], onPullRequest, operatorComments: context.operatorComments };
 }
 

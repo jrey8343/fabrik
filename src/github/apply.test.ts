@@ -638,3 +638,91 @@ describe("Releasing a replay Ticket whose run never landed, as the tick found it
     expect(github.calls).toEqual([`GET ${issues}/140`]);
   });
 });
+
+describe("Applying a plan that rebases an agent PR onto main (#304)", () => {
+  const MAIN = "9".repeat(40);
+
+  /** A rebaser that finds the branch rebases with this outcome, and records what it was asked and what it pushed. */
+  function fakeRebaser(outcome: "rebased" | "conflicted" | "up-to-date") {
+    const asked: [string, string][] = [];
+    const pushed: string[] = [];
+    return {
+      asked,
+      pushed,
+      async rebase(branch: string, onto: string) {
+        asked.push([branch, onto]);
+        return { outcome, push: async () => void pushed.push(branch) };
+      },
+    };
+  }
+
+  const plan: Plan = {
+    kind: "act",
+    actions: [
+      {
+        kind: "rebase-onto-main",
+        pullRequest: 50,
+        branch: "fabrik/ticket-7",
+        onto: MAIN,
+        clean: [{ kind: "comment", issue: 50, body: "clean" }],
+        conflicted: [
+          { kind: "comment", issue: 50, body: "conflicted" },
+          { kind: "add-labels", issue: 7, labels: ["agent:implement"] },
+        ],
+      },
+    ],
+  };
+
+  it("when the rebase is clean, applies the clean actions first, then pushes the rebased branch", async () => {
+    const github = fakeGitHub();
+    const rebaser = fakeRebaser("rebased");
+    const order: string[] = [];
+    const watched = {
+      ...github,
+      async rest(method: string, path: string, body?: unknown) {
+        order.push(`${method} ${path}`);
+        return github.rest(method, path, body);
+      },
+    };
+    const pushOrder = {
+      async rebase(branch: string, onto: string) {
+        const result = await rebaser.rebase(branch, onto);
+        return { ...result, push: async () => (order.push("push"), result.push()) };
+      },
+    };
+
+    await applyPlan(watched, repo, plan, null, null, pushOrder);
+
+    expect(rebaser.asked).toEqual([["fabrik/ticket-7", MAIN]]);
+    expect(order).toEqual([`POST ${issues}/50/comments`, "push"]);
+    expect(github.calls.map(({ body }) => body)).toEqual([{ body: "clean" }]);
+    expect(rebaser.pushed).toEqual(["fabrik/ticket-7"]);
+  });
+
+  it("when it conflicts, applies the conflicted actions instead and pushes nothing", async () => {
+    const github = fakeGitHub();
+    const rebaser = fakeRebaser("conflicted");
+
+    await applyPlan(github, repo, plan, null, null, rebaser);
+
+    expect(github.calls.map(({ path, body }) => [path, body])).toEqual([
+      [`${issues}/50/comments`, { body: "conflicted" }],
+      [`${issues}/7/labels`, { labels: ["agent:implement"] }],
+    ]);
+    expect(rebaser.pushed).toEqual([]);
+  });
+
+  it("when the branch already holds main, does neither", async () => {
+    const github = fakeGitHub();
+    const rebaser = fakeRebaser("up-to-date");
+
+    await applyPlan(github, repo, plan, null, null, rebaser);
+
+    expect(github.calls).toEqual([]);
+    expect(rebaser.pushed).toEqual([]);
+  });
+
+  it("fails rather than guess when the job holds no way to rebase", async () => {
+    await expect(applyPlan(fakeGitHub(), repo, plan)).rejects.toThrow(/rebase/);
+  });
+});

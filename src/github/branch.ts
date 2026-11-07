@@ -55,9 +55,28 @@ export async function rebuildAgentBranch(
   bundlePath: string,
   remote: Remote,
 ): Promise<AgentBranchGit> {
+  const { git, url } = await emptyRepository(remote);
+  if (branch.head === null) {
+    return {
+      changes: { net: [], commits: [], updatedFromMain: false },
+      head: null,
+      push: () => Promise.reject(new Error(`${branch.name} has no commits to push`)),
+    };
+  }
+  if (isPrototypeBranch(branch.name)) return fastForwardOnly(git, url, branch, bundlePath);
+  return branch.base.ref === branch.name
+    ? onItsOwnBranch(git, url, branch, bundlePath)
+    : cutFromMain(git, url, branch, bundlePath);
+}
+
+/**
+ * An empty repository to work in, with a git that reaches `remote` as the
+ * Fabrik App: the token goes in an env-only config entry, so it never lands
+ * on disk or in argv, and hooks are off.
+ */
+async function emptyRepository(remote: Remote): Promise<{ readonly git: Git; readonly url: string }> {
   const dir = await mkdtemp(join(tmpdir(), "fabrik-branch-"));
   const url = `${remote.serverUrl}/${remote.repo.owner}/${remote.repo.name}.git`;
-  // The token goes in an env-only config entry, so it never lands on disk or in argv.
   const env = {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
@@ -73,19 +92,44 @@ export async function rebuildAgentBranch(
     async (...args: string[]) =>
       (await run("git", args, { cwd: dir, env: { ...env, ...more }, maxBuffer: 64 * 1024 * 1024 })).stdout;
   const git: Git = Object.assign(runIn({}), { with: runIn });
-
   await git("init", "--quiet", "--template=");
-  if (branch.head === null) {
-    return {
-      changes: { net: [], commits: [], updatedFromMain: false },
-      head: null,
-      push: () => Promise.reject(new Error(`${branch.name} has no commits to push`)),
-    };
-  }
-  if (isPrototypeBranch(branch.name)) return fastForwardOnly(git, url, branch, bundlePath);
-  return branch.base.ref === branch.name
-    ? onItsOwnBranch(git, url, branch, bundlePath)
-    : cutFromMain(git, url, branch, bundlePath);
+  return { git, url };
+}
+
+/** How a mechanical rebase onto main went (#304), and, when clean, its push. */
+export interface MainRebase {
+  readonly outcome: "rebased" | "conflicted" | "up-to-date";
+  /** Pushes the rebased branch, with a lease on the head it rebased; refuses unless the rebase was clean. */
+  push(): Promise<void>;
+}
+
+/**
+ * Rebases an agent PR's branch onto `onto`, the default branch's head, with no
+ * agent (#304): the PR's commits since it last met main are replayed onto it
+ * without a working tree, as a retry's are onto a moved branch (rebaseOnto).
+ * Nothing from the Product repo runs. A branch already holding `onto` is up
+ * to date, and one whose commits conflict with it, or that's gone, is left as
+ * it is. The push replaces the branch only while it's still at the head that
+ * was rebased.
+ */
+export async function rebaseBranchOntoMain(branch: string, onto: string, remote: Remote): Promise<MainRebase> {
+  const { git, url } = await emptyRepository(remote);
+  const ref = `refs/heads/${branch}`;
+  const refuse = (why: string) => () => Promise.reject(new Error(why));
+  await git("fetch", "--quiet", url, onto);
+  const head = await headNow(git, url, branch);
+  if (head === null) return { outcome: "conflicted", push: refuse(`${branch} is gone, so there's nothing to rebase`) };
+  if (await isAncestor(git, onto, head)) return { outcome: "up-to-date", push: refuse(`${branch} already holds ${onto}`) };
+  const base = (await git("merge-base", head, onto)).trim();
+  const rebased = await rebaseOnto(git, base, head, onto);
+  if (rebased === null) return { outcome: "conflicted", push: refuse(`${branch} conflicts with ${onto}, so there's nothing to push`) };
+  await git("update-ref", ref, rebased);
+  return {
+    outcome: "rebased",
+    async push() {
+      await git("push", "--quiet", `--force-with-lease=${ref}:${head}`, url, `${ref}:${ref}`);
+    },
+  };
 }
 
 /**
@@ -211,7 +255,7 @@ async function onItsOwnBranch(git: Git, url: string, branch: BuiltBranch, bundle
   await git("fetch", "--quiet", url, `+HEAD:${MAIN_REF}`);
   const built = await fetchBundle(git, branch, bundlePath);
   const main = (await git("rev-parse", "--verify", `${MAIN_REF}^{commit}`)).trim();
-  const head = (await headNow(git, url, branch)) ?? branch.base.sha;
+  const head = (await headNow(git, url, branch.name)) ?? branch.base.sha;
   const moved = head !== branch.base.sha;
 
   let tip = built;
@@ -250,9 +294,9 @@ async function onItsOwnBranch(git: Git, url: string, branch: BuiltBranch, bundle
 }
 
 /** Where the PR's branch is on the remote now, or null if it's gone. */
-async function headNow(git: Git, url: string, branch: BuiltBranch): Promise<string | null> {
+async function headNow(git: Git, url: string, branch: string): Promise<string | null> {
   try {
-    await git("fetch", "--quiet", url, `+refs/heads/${branch.name}:${HEAD_REF}`);
+    await git("fetch", "--quiet", url, `+refs/heads/${branch}:${HEAD_REF}`);
   } catch {
     return null;
   }

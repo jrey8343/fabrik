@@ -15,32 +15,39 @@ import {
 } from "./events.ts";
 
 describe("A push", () => {
+  const HEAD = "9".repeat(40);
   const push = (overrides: Record<string, unknown> = {}) => ({
     ref: "refs/heads/main",
+    after: HEAD,
     repository: { default_branch: "main" },
     commits: [{ added: [], modified: [".fabrik/config.json"], removed: [] }],
     ...overrides,
   });
 
-  it("to the default branch that changes the Kit config is a Kit config change", () => {
-    expect(loopEventFrom("push", push())).toEqual({ kind: "kit-config-changed" });
+  it("to the default branch that changes the Kit config is a Kit config change, carrying main's new head", () => {
+    expect(loopEventFrom("push", push())).toEqual({ kind: "kit-config-changed", head: HEAD });
   });
 
   it.each([
     ["adds", { added: [".fabrik/config.json"], modified: [], removed: [] }],
     ["removes, restoring the defaults,", { added: [], modified: [], removed: [".fabrik/config.json"] }],
   ])("that %s the Kit config is a Kit config change too", (_, commit) => {
-    expect(loopEventFrom("push", push({ commits: [commit] }))).toEqual({ kind: "kit-config-changed" });
+    expect(loopEventFrom("push", push({ commits: [commit] }))).toEqual({ kind: "kit-config-changed", head: HEAD });
   });
 
-  it("to another branch isn't one, since only the default branch's Kit config is read", () => {
+  it("to another branch is nothing, since only the default branch's Kit config is read and only main moving can leave a PR conflicting", () => {
     expect(loopEventFrom("push", push({ ref: "refs/heads/tweak-config" }))).toBeNull();
   });
 
-  it("that leaves the Kit config alone isn't one", () => {
+  // #304: whatever it touches, a push to main may leave an agent PR conflicting with it.
+  it("to the default branch that leaves the Kit config alone is main moving, carrying its new head", () => {
     const commits = [{ added: [], modified: [".fabrik/implement.md"], removed: [] }];
 
-    expect(loopEventFrom("push", push({ commits }))).toBeNull();
+    expect(loopEventFrom("push", push({ commits }))).toEqual({ kind: "main-pushed", head: HEAD });
+  });
+
+  it("that deletes the default branch is nothing: there's no head to bring a PR up to date with", () => {
+    expect(loopEventFrom("push", push({ after: "0".repeat(40), deleted: true, commits: [] }))).toBeNull();
   });
 });
 
