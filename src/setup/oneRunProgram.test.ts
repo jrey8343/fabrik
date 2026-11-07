@@ -1229,6 +1229,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     git("switch", "-q", "main");
     git("pull", "-q", "origin", "main");
     expect(() => git("cat-file", "-e", `${originGit("rev-parse", BRANCH).trim()}^{commit}`)).toThrow();
+    const tracking = git("rev-parse", `refs/remotes/origin/${BRANCH}`);
 
     for (const _ of [1, 2]) {
       world.labels.delete("needs-triage");
@@ -1239,6 +1240,8 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(git("branch", "--show-current").trim()).toBe("main");
     }
     expect(world.prs).toHaveLength(1);
+    // Only origin's commits came in: the clone's copy of origin's setup branch didn't move.
+    expect(git("rev-parse", `refs/remotes/origin/${BRANCH}`)).toBe(tracking);
   });
 
   it("on the setup branch, a repair that writes no file and goes back to a default branch with a commit of its own here says to make it origin's", async () => {
