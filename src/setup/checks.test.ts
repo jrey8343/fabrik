@@ -54,8 +54,14 @@ describe("The checks before setup plans anything", () => {
     });
   });
 
-  it("stop on Node before 24", async () => {
-    expect(await problem({}, { nodeVersion: "22.11.0" })).toMatch(/Node 24 or later.*22\.11\.0/);
+  it.each(["22.11.0", "24.2.0"])("stop on Node before 24.3, such as %s", async (nodeVersion) => {
+    expect(await problem({}, { nodeVersion })).toBe(
+      `Setup needs Node 24.3 or later, and this is Node ${nodeVersion}. Install Node 24.3 or later, then run setup again.`,
+    );
+  });
+
+  it.each(["24.3.0", "25.0.0"])("pass on Node %s", async (nodeVersion) => {
+    expect((await check({}, { nodeVersion }).result).ok).toBe(true);
   });
 
   it("stop when OP_SERVICE_ACCOUNT_TOKEN is set, asking to be run without it, and leave it set", async () => {

@@ -2,11 +2,11 @@
 # Fabrik's bootstrap script. The Operator runs Setup with it, in their own
 # terminal, from the root of the Product repo's clone:
 #   curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- [release] [setup's flags]
-# It checks for Node 24 and gh, finds the release (Fabrik's latest unless one
-# is named, as an exact tag), downloads it into a temporary folder, runs that
-# release's setup program with every other argument, and deletes the folder
-# whatever the outcome. It does nothing else: everything that acts is in the
-# release, so the release's pin works as before, and this script barely
+# It checks for Node 24.3 or later and gh, finds the release (Fabrik's latest
+# unless one is named, as an exact tag), downloads it into a temporary folder,
+# runs that release's setup program with every other argument, and deletes the
+# folder whatever the outcome. It does nothing else: everything that acts is in
+# the release, so the release's pin works as before, and this script barely
 # changes between releases. Every step is inside fabrik_setup, called on the
 # last line, so bash has read the whole script before it runs any of it.
 set -euo pipefail
@@ -21,7 +21,7 @@ stop() {
 }
 
 fabrik_setup() {
-  local release="" node_version gh_said
+  local release="" node_version major rest minor gh_said
   # The release comes first, when it's named: every flag is setup's.
   if [[ $# -gt 0 && $1 != -* ]]; then
     release=$1
@@ -29,11 +29,16 @@ fabrik_setup() {
   fi
 
   command -v node >/dev/null 2>&1 ||
-    stop "Setup needs Node 24 or later, and node isn't installed. Install Node 24, then run setup again."
+    stop "Setup needs Node 24.3 or later, and node isn't installed. Install Node 24.3 or later, then run setup again."
   node_version=$(node --version 2>/dev/null || true)
   node_version=${node_version#v}
-  if [[ ! ${node_version%%.*} =~ ^[0-9]+$ ]] || ((${node_version%%.*} < 24)); then
-    stop "Setup needs Node 24 or later, and this is Node $node_version. Install Node 24, then run setup again."
+  # From 24.3, import.meta.main is true for the program's .ts entry point. Before
+  # it, the program would load and exit having done nothing, its own check included.
+  major=${node_version%%.*}
+  rest=${node_version#*.}
+  minor=${rest%%.*}
+  if [[ ! $major =~ ^[0-9]+$ || ! $minor =~ ^[0-9]+$ ]] || ((major < 24 || (major == 24 && minor < 3))); then
+    stop "Setup needs Node 24.3 or later, and this is Node $node_version. Install Node 24.3 or later, then run setup again."
   fi
   command -v gh >/dev/null 2>&1 ||
     stop "Setup needs gh, GitHub's CLI, and it isn't installed. Install it from https://cli.github.com, then run setup again."

@@ -1,4 +1,4 @@
-// The setup program's checks, before any planning: Node 24, op as the Operator
+// The setup program's checks, before any planning: Node 24.3, op as the Operator
 // rather than a service account, the root of the Product repo's clone, gh as
 // the repo's admin with the workflow scope, and a clean, up-to-date branch.
 // The first that fails stops setup, with a message naming what to fix. Once
@@ -69,9 +69,11 @@ export function setupBranch(release: string): string {
   return `fabrik/setup-${release}`;
 }
 
+/** From 24.3, import.meta.main is true for setup's .ts entry point. */
 function checkNode(version: string): string | null {
-  const major = Number(version.split(".")[0]);
-  return major >= 24 ? null : `Setup needs Node 24 or later, and this is Node ${version}. Install Node 24, then run setup again.`;
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  if (major > 24 || (major === 24 && minor >= 3)) return null;
+  return `Setup needs Node 24.3 or later, and this is Node ${version}. Install Node 24.3 or later, then run setup again.`;
 }
 
 /** Setup acts with the Operator's own 1Password access, which a service account's token would limit. It never unsets the token. */
