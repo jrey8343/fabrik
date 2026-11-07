@@ -6,7 +6,7 @@ Any Request-changes run whose pull request conflicts with `main`, delivered or n
 
 We chose to act rather than ask the Operator to resubmit because of jrey8343/penrith-physiotherapy-sports-centre#60. That pull request was `dirty` after #59 merged, and the Operator's Request changes started no run. Asking for a resubmit leaves the work stalled until they notice. Worse, with ADR-0011 the Kit's own rebase would push and start a Review of a head without the amendment. That Reviewer, reading the review as part of the Ticket (ADR-0010), can give an Execution flaw for the unbuilt change and so use a Retry. ADR-0010 says a Request changes must never cost one.
 
-The run merges rather than rebases because it is the Implementer's work on a pull request the Operator has already reviewed, like a Retry. A merge leaves the commits they reviewed as they were. A conflict-only run rebases only because it finishes the plain rebase the Kit tried first (ADR-0011), and no plain rebase comes first here.
+The run merges rather than rebases because it is the Implementer's work on a pull request the Operator has already reviewed, like a Retry. A merge leaves the commits they reviewed as they were. This holds even when the Operator's review asks for a rebase. How the branch takes in `main` is how the Kit keeps a pull request current (ADR-0011), not part of the Ticket, so a Request changes amends what the pull request builds (ADR-0010), not how its history is kept. A Request changes on a pull request that doesn't conflict is unchanged: the run brings in `main` as the review asks. A conflict-only run rebases only because it finishes the plain rebase the Kit tried first (ADR-0011), and no plain rebase comes first here.
 
 ## Considered options
 

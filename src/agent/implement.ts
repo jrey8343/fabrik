@@ -127,13 +127,7 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
     requestedChanges?: unknown;
   };
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
-  // Only a bot's markers count, as in the core's snapshot, so nobody can plant findings by quoting one.
-  const verdicts = (comments ?? []).flatMap((comment) =>
-    comment.author?.__typename === "Bot" && typeof comment.body === "string" && verdictsIn([comment.body]).length === 1
-      ? [comment.body]
-      : [],
-  );
-  const latest = verdicts.at(-1);
+  const latest = latestVerdictIn(comments);
   if (latest === undefined) throw new Error(`#${number} has no Verdict for the retry to fix`);
   const fromOperator = operatorInputSections({ operatorComments, requestedChanges });
   return {
@@ -149,6 +143,21 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
     ],
     operatorComments: fromOperator.given,
   };
+}
+
+/** A comment on the PR as its input file records it. */
+interface PullRequestComment {
+  readonly body?: unknown;
+  readonly author?: { readonly __typename?: unknown } | null;
+}
+
+/** The latest Verdict comment on the PR, or undefined. Only a bot's markers count, as in the core's snapshot, so nobody can plant findings by quoting one. */
+function latestVerdictIn(comments: readonly PullRequestComment[] | undefined): string | undefined {
+  return (comments ?? [])
+    .flatMap((comment) =>
+      comment.author?.__typename === "Bot" && typeof comment.body === "string" && verdictsIn([comment.body]).length === 1 ? [comment.body] : [],
+    )
+    .at(-1);
 }
 
 /**
@@ -169,9 +178,13 @@ export async function requestChangesContext(pullRequestFile: string, reviewFile:
     body?: unknown;
     operatorComments?: unknown;
     requestedChanges?: unknown;
+    comments?: PullRequestComment[];
   };
   const { number, title } = pullRequest;
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
+  // An Execution flaw that gave way to this run (#341) called for no Retry, so its findings are this run's to fix too.
+  const latest = latestVerdictIn(pullRequest.comments);
+  const gaveWay = latest !== undefined && verdictsIn([latest])[0]?.requestChangesFirst === true ? latest : null;
   const { review, comments } = (JSON.parse(await readFile(reviewFile, "utf8")) ?? {}) as {
     review?: { id?: unknown; body?: unknown; state?: unknown };
     comments?: { id?: unknown; path?: unknown; line?: unknown; body?: unknown }[];
@@ -215,6 +228,13 @@ export async function requestChangesContext(pullRequestFile: string, reviewFile:
       "## The Operator's requested changes",
       body === "" ? "(The review has no summary; see its comments below.)" : body,
       ...(inline.length === 0 ? [] : ["## The Operator's comments on the code", ...inline]),
+      ...(gaveWay === null
+        ? []
+        : [
+            "## The findings to fix",
+            "The latest Verdict on the PR, posted by the Kit before this run started. It gave way to the Operator's requested changes, so fix these findings too, without undoing a requested change:",
+            gaveWay.trimEnd(),
+          ]),
       ...requestedChangesSection(earlier),
       ...operatorCommentsSection(others),
     ],

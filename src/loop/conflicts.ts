@@ -29,9 +29,13 @@ export function checkConflicts(conflicts: ConflictSnapshot, operator: string): P
       actions.push(...undelivered);
       continue;
     }
-    const why = main === null ? "The default branch has no head, so no PR can conflict with it" : whyNotRebased(candidate, main, operator);
+    if (main === null) {
+      reasons.push("The default branch has no head, so no PR can conflict with it");
+      continue;
+    }
+    const why = whyNotRebased(candidate, main, operator);
     if (why !== null) reasons.push(why);
-    else actions.push(rebaseOntoMain(candidate.pullRequest, main as string));
+    else actions.push(rebaseOntoMain(candidate.pullRequest, main));
   }
   if (actions.length > 0) return { kind: "act", actions };
   return { kind: "nothing", reason: reasons.length === 0 ? "No agent PR is open, so none conflicts with main" : reasons.join("; ") };
