@@ -18,8 +18,8 @@ export interface CheckInputs {
   readonly env: Env;
   /** This Node's version, such as 24.11.0. */
   readonly nodeVersion: string;
-  /** Every file setup writes, which its own branch may hold uncommitted after a run that stopped partway. */
-  readonly setupPaths: readonly string[];
+  /** Every file setup may write, which its own branch may hold uncommitted after a run that stopped partway. */
+  readonly setupWrites: readonly string[];
 }
 
 export type Checked =
@@ -149,7 +149,7 @@ function repoOf(view: RepoView): ProductState["repo"] {
  * with nothing uncommitted but setup's own files. "The same as on origin" is
  * read with git ls-remote, so the checks fetch nothing and write no refs.
  */
-async function checkBranch({ run, productDir, release, setupPaths }: CheckInputs, defaultBranch: string, current: string): Promise<string | null> {
+async function checkBranch({ run, productDir, release, setupWrites }: CheckInputs, defaultBranch: string, current: string): Promise<string | null> {
   const cwd = productDir;
   const ownBranch = setupBranch(release);
   if (current !== defaultBranch && current !== ownBranch) {
@@ -161,7 +161,7 @@ async function checkBranch({ run, productDir, release, setupPaths }: CheckInputs
   if (current === defaultBranch && changed.length > 0) {
     return `This clone has uncommitted changes (${changed.join(", ")}). Commit or stash them, then run setup again.`;
   }
-  const others = changed.filter((path) => !setupPaths.includes(path));
+  const others = changed.filter((path) => !setupWrites.includes(path));
   if (current === ownBranch && others.length > 0) {
     return `${ownBranch} has uncommitted changes setup didn't make (${others.join(", ")}). Commit or stash them, then run setup again.`;
   }

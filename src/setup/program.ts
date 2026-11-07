@@ -20,7 +20,7 @@ import { closingLines } from "./finish.ts";
 import { gatherState, vaultItems } from "./gather.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type OneRunSteps, readinessOf, runOnce } from "./oneRun.ts";
-import { FABRIK_APP_VAULT, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths } from "./plan.ts";
+import { FABRIK_APP_VAULT, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths, setupWrites } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 import { askQuestions } from "./questions.ts";
 import { commitSetupFiles, earlierSetupRun, publishSetupPr, pushSetupBranch, switchToSetupBranch } from "./setupBranch.ts";
@@ -63,7 +63,14 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
 
     const before: Run = (command, commandArgs, options) => io.run(command, commandArgs, { ...options, env: io.env });
     const paths = setupPaths(kit);
-    const checked = await checkSetup({ run: before, productDir, release: args.release, env: io.env, nodeVersion: io.nodeVersion, setupPaths: paths });
+    const checked = await checkSetup({
+      run: before,
+      productDir,
+      release: args.release,
+      env: io.env,
+      nodeVersion: io.nodeVersion,
+      setupWrites: setupWrites(kit),
+    });
     if (!checked.ok) return stop(io, checked.problem);
     await offerToDeleteOldSetupSkill({ env: io.env, prompt: args.plan ? null : io.prompt, say: io.say });
     const chosen = await chooseAccount({
@@ -181,7 +188,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
         readiness: readinessOf({ repo: repoName, report: wizardReport, fabrikItems: now.fabrikItems, appItems }),
       };
     },
-    commit: async () => void (await commitSetupFiles(run, cwd, paths, release)),
+    commit: async () => void (await commitSetupFiles(run, cwd, setupWrites(kit), release)),
     push: () => pushSetupBranch(run, cwd, branch),
     publish: (summary) => publishSetupPr({ run, cwd, branch, defaultBranch: repo.defaultBranch, release, summary }),
   };

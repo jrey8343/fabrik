@@ -16,7 +16,7 @@ import {
 } from "../__fixtures__/setupCommands.ts";
 import { checkSetup } from "./checks.ts";
 
-const SETUP_PATHS = [".github/workflows/fabrik.yml", ".fabrik/config.json", "docs/agents/domain.md", "AGENTS.md"];
+const SETUP_WRITES = [".github/workflows/fabrik.yml", ".fabrik/config.json", "docs/agents/domain.md", "AGENTS.md"];
 
 let productDir: string;
 
@@ -32,7 +32,7 @@ function check(overrides: Record<string, Answer> = {}, options: { env?: Record<s
     release: "v1.4.2",
     env: options.env ?? {},
     nodeVersion: options.nodeVersion ?? "24.11.0",
-    setupPaths: SETUP_PATHS,
+    setupWrites: SETUP_WRITES,
   });
   return { result, commands };
 }

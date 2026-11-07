@@ -265,6 +265,37 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(world.prs).toHaveLength(1);
   });
 
+  it.each(["package.json", ".fabrik/skills.lock.json"])(
+    "on the setup branch, stops at an uncommitted %s, a file setup reads but never writes",
+    async (path) => {
+      const world = aWorld();
+      world.failingLabels.add("needs-info");
+      await setupOnce(world);
+      world.failingLabels.clear();
+      await writeFile(join(checkout, path), "{}\n");
+
+      const { code, complaints, log } = await setupOnce(world);
+
+      expect(code).toBe(1);
+      expect(complaints[0]).toBe(`${BRANCH} has uncommitted changes setup didn't make (${path}). Commit or stash them, then run setup again.`);
+      expect(log.filter((line) => /^git commit/.test(line))).toEqual([]);
+    },
+  );
+
+  it("leaves out of the setup commit a file setup reads but never writes, edited while the wizard ran", async () => {
+    const world = aWorld();
+    const editsPackageJson: Wizard = async (world, wizardEnv) => {
+      await walksEveryStage(world, wizardEnv);
+      await writeFile(join(checkout, "package.json"), '{ "name": "clinic" }\n');
+    };
+
+    const { code } = await setupOnce(world, { wizard: editsPackageJson });
+
+    expect(code).toBe(0);
+    expect(filesOnOrigin()).not.toContain("package.json");
+    expect(git("status", "--porcelain")).toBe("?? package.json\n");
+  });
+
   it("a run on a working install plans nothing, opens no PR and says the install is complete", async () => {
     const world = aWorld();
     await setupOnce(world);
