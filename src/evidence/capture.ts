@@ -2,8 +2,8 @@
 // agent has ended, and a prototype turn's variants (#155) in the prototype
 // job, after its agent has ended: every decision the capture step makes,
 // behind the Capturer, which does what capture does to the runner. The
-// Playwright shell (src/evidence/capture-main.ts) is the real Capturer, and
-// tests fake it. Pure, no I/O.
+// Playwright shell (src/evidence/playwrightCapturer.ts, which
+// src/evidence/capture-main.ts runs) is the real Capturer, and tests fake it. Pure, no I/O.
 import { type CaptureIdentity, captureIdentityOf, slug, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import type { PrototypeVariant } from "../loop/designOutput.ts";
 import { parseImplementOutput } from "../loop/implementOutput.ts";
@@ -100,7 +100,7 @@ export interface VariantTake {
  * can load, its command failed or ran past its time, or it left no file, or
  * one that doesn't read as a storage state (isStorageState).
  */
-export type SignedIn = "signed-in" | "failed" | "timed-out" | "no-state" | "bad-state";
+export type SignInEnd = "signed-in" | "failed" | "timed-out" | "no-state" | "bad-state";
 
 /** What a signed-in shot or take reports when its page landed on `ui.sign_in_path`, its image thrown away. */
 export const ON_SIGN_IN = "on-sign-in";
@@ -126,7 +126,7 @@ export interface Capturer {
    * the evidence folder to write a storage state to, which every later shot
    * and take signed in as it loads.
    */
-  signIn(identity: CaptureIdentity, command: string, timeoutMs: number): Promise<SignedIn>;
+  signIn(identity: CaptureIdentity, command: string, timeoutMs: number): Promise<SignInEnd>;
   /**
    * Loads the shot's URL at its viewport, signed in when it says so, and
    * saves its screenshot: the HTTP status the page answered; or, for a
@@ -367,7 +367,7 @@ async function serveBranch(
 }
 
 /** How a sign-in that failed ended, for the log. */
-const SIGN_IN_ENDS: Readonly<Record<Exclude<SignedIn, "signed-in">, string>> = {
+const SIGN_IN_ENDS: Readonly<Record<Exclude<SignInEnd, "signed-in">, string>> = {
   failed: "its `ui.sign_in` command failed",
   "timed-out": `its \`ui.sign_in\` command ran past its ${SIGN_IN_MS / 60_000} minutes`,
   "no-state": "its `ui.sign_in` command wrote nothing to FABRIK_STORAGE_STATE",

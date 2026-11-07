@@ -21,7 +21,7 @@ import {
   ON_SIGN_IN,
   servedAt,
   type Shot,
-  type SignedIn,
+  type SignInEnd,
   type SignedInAs,
   type VariantTake,
 } from "./capture.ts";
@@ -115,7 +115,7 @@ export class PlaywrightCapturer implements Capturer {
     return exited ? "exited" : "timed-out";
   }
 
-  async signIn(identity: CaptureIdentity, command: string, timeoutMs: number): Promise<SignedIn> {
+  async signIn(identity: CaptureIdentity, command: string, timeoutMs: number): Promise<SignInEnd> {
     this.stateDir ??= await mkdtemp(join(tmpdir(), "fabrik-sign-in-"));
     const state = join(this.stateDir, `${identity}.json`);
     await rm(state, { force: true });

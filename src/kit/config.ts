@@ -116,6 +116,7 @@ export interface SignedInRoute {
 /** A Capture identity's name: letters, digits, `-` and `_`, starting with a letter or digit, so it reads plainly wherever it's named. */
 const CAPTURE_IDENTITY = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
+/** Whether a value is a Capture identity's name, as `ui.sign_in` keys it and the capture result records it. */
 export function isCaptureIdentity(value: unknown): value is CaptureIdentity {
   return typeof value === "string" && CAPTURE_IDENTITY.test(value);
 }

@@ -120,7 +120,7 @@ describe("The gallery of a route viewed signed in", () => {
 
     expect(html).toContain("<h2><code>/today</code>, named by the Ticket, signed in as <code>owner</code></h2>");
     expect(html).toContain(
-      "<p>Signed in as <code>owner</code>, so there's no Before: Before is the production site, and the Kit only ever signs in to the Sandbox's own server.</p>",
+      "<p>Signed in as <code>owner</code>, so it never has a Before: the Kit only ever signs in to the Sandbox's own server, never to the production site Before is taken from.</p>",
     );
     expect(html).toContain("<figcaption>After, signed in as owner</figcaption>");
   });
@@ -130,6 +130,6 @@ describe("The gallery of a route viewed signed in", () => {
 
     expect(html).toContain("<h2><code>/pricing</code>, named by the Ticket</h2>");
     expect(html).toContain("<figcaption>Before</figcaption>");
-    expect(html.match(/no Before/g)).toHaveLength(1);
+    expect(html.match(/never has a Before/g)).toHaveLength(1);
   });
 });

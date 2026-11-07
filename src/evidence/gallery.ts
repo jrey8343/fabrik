@@ -116,7 +116,7 @@ function routeSection({ route, reason, identity }: GalleryShot, captures: readon
   const noBefore =
     identity === undefined
       ? []
-      : [`<p>Signed in as ${htmlCode(identity)}, so there's no Before: Before is the production site, and the Kit only ever signs in to the Sandbox's own server.</p>`];
+      : [`<p>Signed in as ${htmlCode(identity)}, so it never has a Before: the Kit only ever signs in to the Sandbox's own server, never to the production site Before is taken from.</p>`];
   return ["<section>", heading, ...noBefore, ...rows, "</section>"];
 }
 
