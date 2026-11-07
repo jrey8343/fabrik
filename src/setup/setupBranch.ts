@@ -117,6 +117,9 @@ async function forcePushedHeads(run: Run, cwd: string, repo: string, pr: number)
  * yet, here or on origin: the run picks up from there, not from the default
  * branch, so it doesn't plan that run's files again over the Operator's edits.
  * Null when there's none. The tips are as the checks found them on origin.
+ * Origin's can be a commit this clone never fetched, as one another clone
+ * pushed: then origin's setup branch is fetched first, moving no branch, so
+ * merge-tree can read it.
  */
 export async function earlierSetupRun(
   run: Run,
@@ -131,12 +134,25 @@ export async function earlierSetupRun(
   if (local.code === 0 && !(await merged(local.stdout.trim()))) {
     return `${branch} holds an earlier run of setup that isn't on ${defaultBranch} yet. Switch to it with git switch ${branch}, then run setup again: it picks up where that run stopped.`;
   }
-  if (origin.setupBranch === null || (await merged(origin.setupBranch))) return null;
+  if (origin.setupBranch === null) return null;
+  await fetchMissing(run, cwd, branch, origin.setupBranch);
+  if (await merged(origin.setupBranch)) return null;
   // A copy of the branch in this clone is merged by now, so the + lets the fetch replace it, even when origin's doesn't build on it.
   return (
     `origin's ${branch} holds an earlier run of setup that isn't on ${defaultBranch} yet. ` +
     `Fetch it and switch to it with git fetch origin +${branch}:${branch} && git switch ${branch}, then run setup again: it picks up where that run stopped.`
   );
+}
+
+/**
+ * Fetches origin's branch when the clone lacks its tip. Only the commits come
+ * in: no branch, remote-tracking branch, tag or FETCH_HEAD moves. A fetch that
+ * fails, or doesn't bring the tip, as when the branch moved since, leaves the
+ * tip to the merged setup PRs' heads.
+ */
+async function fetchMissing(run: Run, cwd: string, branch: string, tip: string): Promise<void> {
+  if ((await run("git", ["cat-file", "-e", `${tip}^{commit}`], { cwd })).code === 0) return;
+  await run("git", ["fetch", "-q", "--no-tags", "--no-write-fetch-head", "--refmap=", "origin", `refs/heads/${branch}`], { cwd });
 }
 
 /**

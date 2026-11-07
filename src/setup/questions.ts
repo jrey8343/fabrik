@@ -5,7 +5,7 @@
 // keeps what it holds.
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import type { FlagAnswers } from "./args.ts";
-import { isTimeZone, pausesDispatch, type ProductState, type SetupAnswers } from "./plan.ts";
+import { isTimeZone, pausesDispatch, type ProductState, type SetupAnswers, subscriptionsTheKitReads } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "./shims.ts";
 
@@ -25,7 +25,7 @@ export type QuestionAnswers = Pick<SetupAnswers, "timeZone" | "secondSubscriptio
 
 export async function askQuestions({ flags, state, wroteStarter, machineTimeZone, prompt, say }: QuestionInputs): Promise<QuestionAnswers> {
   const timeZone = flags.timeZone !== undefined ? flags.timeZone : await askTimeZone(state, machineTimeZone, prompt, say);
-  const secondSubscription = flags.secondSubscription ?? (await askSecondSubscription(prompt, say));
+  const secondSubscription = await askSecondSubscription(flags.secondSubscription, state, prompt, say);
   const paused = flags.paused ?? (await askPaused(state, wroteStarter, prompt, say));
   return {
     ...(timeZone === null ? {} : { timeZone }),
@@ -49,7 +49,20 @@ async function askTimeZone(state: ProductState, machineTimeZone: string, prompt:
   }
 }
 
-async function askSecondSubscription(prompt: Prompt | null, say: (line: string) => void): Promise<boolean> {
+/**
+ * A Kit config that lists two or more Subscriptions is a rotation setup never
+ * adds to, so it isn't asked about, and --second-subscription does nothing
+ * for it but say so.
+ */
+async function askSecondSubscription(flag: boolean | undefined, state: ProductState, prompt: Prompt | null, say: (line: string) => void): Promise<boolean> {
+  const listed = subscriptionsTheKitReads(state.files[KIT_CONFIG_PATH] ?? null);
+  if (listed.length > 1) {
+    const lists = `${KIT_CONFIG_PATH} already lists ${listed.length} Subscriptions, and Setup leaves a list of two or more as it is`;
+    if (flag === true) say(`--second-subscription has no effect: ${lists}.`);
+    else if (flag === undefined && prompt !== null) say(`${lists}, so it doesn't ask about a second.`);
+    return false;
+  }
+  if (flag !== undefined) return flag;
   if (prompt === null) return false;
   say("A second Subscription is a second Claude account. Runs move to it when the first is used up, so they wait only once both are.");
   return isYes(await prompt.ask("Add a second Subscription? [y/N] "));

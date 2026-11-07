@@ -336,6 +336,23 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(world.prs[0]?.body).toContain("Don't merge this yet.");
   });
 
+  it("with the Claude token stage skipped, asks for the merge when the Kit config lists only a Subscription under another name, as the Kit never reads the Claude token", async () => {
+    await mkdir(join(checkout, ".fabrik"));
+    await writeFile(join(checkout, ".fabrik", "config.json"), '{\n  "subscriptions": ["Claude backup"]\n}\n');
+    git("add", ".fabrik/config.json");
+    git("commit", "-q", "-m", "Our Kit config");
+    git("push", "-q", "origin", "main");
+    const world = aWorld();
+    store(world, "Fabrik", "Claude backup");
+
+    const { code, said } = await setupOnce(world, { wizard: skipsTheClaudeToken });
+
+    expect(code).toBe(0);
+    expect(said.some((line) => line.startsWith("Merge it yourself once its gating checks pass."))).toBe(true);
+    expect(said).not.toContain('- the Claude token, in the "Fabrik" vault');
+    expect(world.prs[0]?.body).not.toContain("Don't merge this yet.");
+  });
+
   it("with a second Subscription, the setup PR lists it in the Kit config once the wizard's stage has stored its token", async () => {
     const world = aWorld();
     const starter = await readFile(join(KIT_DIR, "templates", "fabrik-config.json"), "utf8");
@@ -824,6 +841,106 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       }
     });
 
+    /** The Operator lists the Subscriptions the Kit runs on in the Product's Kit config on main. */
+    async function listOnMain(subscriptions: readonly string[]): Promise<void> {
+      const config = JSON.parse(await readFile(join(checkout, ".fabrik/config.json"), "utf8")) as Record<string, unknown>;
+      await writeFile(join(checkout, ".fabrik/config.json"), `${JSON.stringify({ ...config, subscriptions }, null, 2)}\n`);
+      git("commit", "-q", "-am", "Our own Subscription");
+      git("push", "-q", "origin", "main");
+    }
+
+    it.each([
+      ["in a terminal", {}],
+      ["with --plan", { args: [...FLAGS, "--plan"] }],
+    ])("listing one Subscription under its own name, which 1Password lacks, %s says the install is complete and to store it by hand", async (_, options) => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, () => listOnMain(["Claude backup"]));
+
+      const { code, said, questions } = await setupOnce(world, { answers: [], ...options });
+
+      expect(code).toBe(0);
+      expect(said).toContain(COMPLETE);
+      expect(said).toContain(
+        '- .fabrik/config.json lists "Claude backup" in subscriptions, but the "Fabrik" vault has no item of that name: run `claude setup-token` on that Subscription\'s Claude account and save the token as the "Claude backup" API Credential, with its expiry date, in the "Fabrik" vault yourself, since the wizard stores only "Claude token" and "Claude token 2".',
+      );
+      expect(questions).toEqual([]);
+    });
+
+    it("listing only Subscriptions under other names, says the install is complete with 1Password lacking the Claude token, which the Kit never reads", async () => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, async (lacking) => {
+        store(lacking, "Fabrik", "Claude backup");
+        unstore(lacking, "Fabrik", "Claude token");
+        await listOnMain(["Claude backup"]);
+      });
+
+      const { code, said, log, questions } = await setupOnce(world, { answers: [] });
+
+      expect(code).toBe(0);
+      expect(said).toContain(COMPLETE);
+      expect(said.join("\n")).not.toContain("Claude token");
+      expect(questions).toEqual([]);
+      expect(log).not.toContain("wizard");
+    });
+
+    describe("listing two Subscriptions, a rotation setup never adds to", () => {
+      const LEFT_AS_IT_IS = ".fabrik/config.json already lists 2 Subscriptions, and Setup leaves a list of two or more as it is";
+      const withTheFlag = ["--no-time-zone", "--second-subscription", "--no-paused"];
+
+      async function aRotationOnMain(world: World): Promise<void> {
+        await aMergedInstallLacking(world, async (lacking) => {
+          store(lacking, "Fabrik", "Claude backup");
+          await listOnMain(["Claude token", "Claude backup"]);
+        });
+      }
+
+      it("doesn't ask about a second Subscription, and says it leaves that list as it is", async () => {
+        const world = aWorld();
+        await aRotationOnMain(world);
+
+        const { code, said, questions } = await setupOnce(world, { answers: [], args: ["--no-time-zone", "--no-paused"] });
+
+        expect(code).toBe(0);
+        expect(questions).toEqual([]);
+        expect(said).toContain(`${LEFT_AS_IT_IS}, so it doesn't ask about a second.`);
+        expect(said).toContain(COMPLETE);
+      });
+
+      it("takes --second-subscription as doing nothing, and says so", async () => {
+        const world = aWorld();
+        await aRotationOnMain(world);
+
+        const { code, said, questions, log } = await setupOnce(world, { answers: [], args: withTheFlag });
+
+        expect(code).toBe(0);
+        expect(said).toContain(`--second-subscription has no effect: ${LEFT_AS_IT_IS}.`);
+        expect(said).toContain(COMPLETE);
+        expect(questions).toEqual([]);
+        expect(log).not.toContain("wizard");
+      });
+
+      it("with --second-subscription, tells the wizard setup lists no second Subscription, when it walks it for the Claude token", async () => {
+        const world = aWorld();
+        await aRotationOnMain(world);
+        unstore(world, "Fabrik", "Claude token");
+
+        const { code, wizardRuns } = await setupOnce(world, { args: withTheFlag });
+
+        expect(code).toBe(0);
+        expect(wizardRuns[0]?.env[WIZARD_SECOND_SUBSCRIPTION_ENV]).toBe("no");
+      });
+    });
+
+    it("with --second-subscription and a Kit config that lists the second Subscription alone, tells the wizard setup lists nothing, as it's listed", async () => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, () => listOnMain(["Claude token 2"]));
+
+      const { code, wizardRuns } = await setupOnce(world, { args: ["--no-time-zone", "--second-subscription", "--no-paused"], wizard: addsASecondSubscription });
+
+      expect(code).toBe(0);
+      expect(wizardRuns[0]?.env[WIZARD_SECOND_SUBSCRIPTION_ENV]).toBe("no");
+    });
+
     it.each([
       ["without a terminal", { terminal: false }],
       ["with --plan", { args: [...FLAGS, "--plan"] }],
@@ -1098,6 +1215,33 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(said).toContain("- create the label needs-triage");
     }
     expect(world.prs).toHaveLength(1);
+  });
+
+  it("after its PR was squash-merged behind another PR, and another clone pulled the default branch into origin's setup branch, every repair run from the default branch gets past origin's copy, which this clone never fetched", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    await anotherPrOnGitHub();
+    await squashOnGitHub(world);
+    const other = await aGitHubClone();
+    other.git("switch", "-q", BRANCH);
+    other.git("pull", "-q", "--no-rebase", "origin", "main");
+    other.git("push", "-q", "origin", BRANCH);
+    git("switch", "-q", "main");
+    git("pull", "-q", "origin", "main");
+    expect(() => git("cat-file", "-e", `${originGit("rev-parse", BRANCH).trim()}^{commit}`)).toThrow();
+    const tracking = git("rev-parse", `refs/remotes/origin/${BRANCH}`);
+
+    for (const _ of [1, 2]) {
+      world.labels.delete("needs-triage");
+      const { code, said, complaints } = await setupOnce(world);
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said).toContain("- create the label needs-triage");
+      expect(git("branch", "--show-current").trim()).toBe("main");
+    }
+    expect(world.prs).toHaveLength(1);
+    // Only origin's commits came in: the clone's copy of origin's setup branch didn't move.
+    expect(git("rev-parse", `refs/remotes/origin/${BRANCH}`)).toBe(tracking);
   });
 
   it("on the setup branch, a repair that writes no file and goes back to a default branch with a commit of its own here says to make it origin's", async () => {

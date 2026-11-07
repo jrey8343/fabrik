@@ -111,6 +111,41 @@ describe("Setup's questions", () => {
     expect(answers).toEqual({});
   });
 
+  describe("with a Kit config that lists two or more Subscriptions, a rotation setup never adds to", () => {
+    const rotation = aCleanProduct({ files: { ".fabrik/config.json": '{ "subscriptions": ["Claude token", "Claude backup"] }\n' } });
+
+    it("doesn't ask about a second Subscription, and says it leaves that list as it is", async () => {
+      const prompt = scripted();
+      const { answers, said } = await ask({ timeZone: null }, prompt, rotation);
+
+      expect(prompt.questions).toEqual([]);
+      expect(said).toContain(".fabrik/config.json already lists 2 Subscriptions, and Setup leaves a list of two or more as it is, so it doesn't ask about a second.");
+      expect(answers).toEqual({});
+    });
+
+    it("takes --second-subscription as doing nothing, and says so, in a terminal or not", async () => {
+      for (const prompt of [neverAsked, null]) {
+        const { answers, said } = await ask({ timeZone: null, secondSubscription: true, paused: false }, prompt, rotation);
+
+        expect(said).toEqual(["--second-subscription has no effect: .fabrik/config.json already lists 2 Subscriptions, and Setup leaves a list of two or more as it is."]);
+        expect(answers).toEqual({});
+      }
+    });
+
+    it("says nothing about it without a terminal, or with --no-second-subscription", async () => {
+      expect((await ask({ timeZone: null, paused: false }, null, rotation)).said).toEqual([]);
+      expect((await ask({ timeZone: null, secondSubscription: false, paused: false }, neverAsked, rotation)).said).toEqual([]);
+    });
+
+    it("still asks for a Kit config that lists one, or leaves subscriptions to its default", async () => {
+      for (const config of ['{ "subscriptions": ["Claude backup"] }\n', '{ "max_in_flight": 1 }\n']) {
+        const prompt = scripted("n");
+        await ask({ timeZone: null }, prompt, aCleanProduct({ files: { ".fabrik/config.json": config } }));
+        expect(prompt.questions).toEqual(["Add a second Subscription? [y/N] "]);
+      }
+    });
+  });
+
   describe("with the starter setup wrote on its branch, which is still setup's own", () => {
     const withStarter = (maxInFlight: number) => aCleanProduct({ readyForAgent: 2, files: { ".fabrik/config.json": `{\n  "max_in_flight": ${maxInFlight}\n}\n` } });
     const PAUSE_DEFAULT_YES = "Install with Dispatch paused, so no Implementer starts until you raise max_in_flight? [Y/n] ";

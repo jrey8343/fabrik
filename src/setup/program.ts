@@ -23,7 +23,17 @@ import { appliedLines, closingLines, setupCommand } from "./finish.ts";
 import { gatherState, vaultItems } from "./gather.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type OneRunSteps, readinessOf, runOnce, wizardGaps } from "./oneRun.ts";
-import { FABRIK_APP_VAULT, pausesDispatch, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths } from "./plan.ts";
+import {
+  FABRIK_APP_VAULT,
+  listedSubscriptions,
+  pausesDispatch,
+  planSetup,
+  type ProductState,
+  type SetupAnswers,
+  type SetupPlan,
+  setupPaths,
+  takesSecondSubscription,
+} from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 import { askQuestions } from "./questions.ts";
 import {
@@ -235,7 +245,9 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
       const dir = await mkdtemp(join(tmpdir(), "fabrik-wizard-"));
       const reportPath = join(dir, "report");
       try {
-        const secondSubscription = answers.secondSubscription === true ? "yes" : "no";
+        // Yes only when setup lists the token the stage stores: a list of one, or the starter's.
+        const listed = listedSubscriptions(state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig);
+        const secondSubscription = answers.secondSubscription === true && listed !== null && takesSecondSubscription(listed) ? "yes" : "no";
         await io.wizard({ cwd, env: { ...env, [WIZARD_REPORT_ENV]: reportPath, [WIZARD_SECOND_SUBSCRIPTION_ENV]: secondSubscription } });
         wizardReport = await readFile(reportPath, "utf8").catch(() => "");
       } finally {
@@ -250,7 +262,14 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
       gapsAfter = wizardGaps(now, answers, appItems);
       return {
         plan: planSetup(now, kit, answers, { wroteStarter }),
-        readiness: readinessOf({ repo: repoName, report: wizardReport, earlierPr, fabrikItems: now.fabrikItems, appItems }),
+        readiness: readinessOf({
+          repo: repoName,
+          report: wizardReport,
+          earlierPr,
+          fabrikItems: now.fabrikItems,
+          appItems,
+          kitConfig: now.files[KIT_CONFIG_PATH] ?? null,
+        }),
       };
     },
     commit: (written) => commitSetupFiles(run, cwd, written, release),

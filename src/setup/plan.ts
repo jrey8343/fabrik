@@ -96,8 +96,9 @@ export interface SetupAnswers {
   /**
    * Whether the Operator wants a second Subscription, so runs fail over to it
    * when the first reaches its weekly limit. With it, setup lists the second
-   * Subscription in the Kit config once its token is in the vault. Without it
-   * setup says nothing about Subscriptions, so the second stays an opt-in step.
+   * Subscription in a Kit config that lists one, once its token is in the
+   * vault. Without it setup says nothing about a second Subscription, so it
+   * stays an opt-in step.
    */
   readonly secondSubscription?: boolean;
   /**
@@ -328,10 +329,21 @@ export function listedSubscriptions(text: string): readonly string[] | null {
 }
 
 /**
- * A second Subscription (Spec #152): its account and token are the Operator's
- * to make, in the wizard, so they're planned as notes. Once the token is in
- * the vault, kitConfig() lists it. The agent and implement accounts already
- * read the whole `Fabrik` vault, so it needs no new service account.
+ * The Subscriptions whose tokens the Kit reads, from the Kit config's text:
+ * the ones it lists. A repo with none gets the starter, which lists the
+ * default, the Claude token alone, and a list setup can't read counts as the
+ * default too.
+ */
+export function subscriptionsTheKitReads(text: string | null): readonly string[] {
+  return (text === null ? null : listedSubscriptions(text)) ?? DEFAULT_KIT_CONFIG.subscriptions;
+}
+
+/**
+ * Each listed Subscription the vault lacks, and a second Subscription (Spec
+ * #152): its account and token are the Operator's to make, in the wizard, so
+ * they're planned as notes. Once the token is in the vault, kitConfig() lists
+ * it. The agent and implement accounts already read the whole `Fabrik` vault,
+ * so it needs no new service account.
  */
 function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers, { wizardNext = false }: PlanContext): string[] {
   const read = listedSubscriptions(state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig);
@@ -339,17 +351,15 @@ function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers
   const stored = new Set(state.fabrikItems);
   // Once the setup PR is merged, setup's command is the way to the wizard, which it walks while 1Password lacks the token.
   const command = setupCommand(kit.release);
-  if (listed.length > 1) {
-    return listed
-      .filter((name) => !stored.has(name))
-      .map(
-        (name) =>
-          `${KIT_CONFIG_PATH} lists ${JSON.stringify(name)} in subscriptions, but the "${FABRIK_VAULT}" vault has no item of that name: ${toStore(name, wizardNext, command)}`,
-      );
-  }
-  if (answers.secondSubscription !== true) return [];
+  // The Kit reads each listed one. The default, the Claude token alone, is the install's own, whose token the merge rule names.
+  const isDefault = listed.length === 1 && listed[0] === CLAUDE_TOKEN_ITEM;
+  const lacking = (isDefault ? [] : listed.filter((name) => !stored.has(name))).map(
+    (name) =>
+      `${KIT_CONFIG_PATH} lists ${JSON.stringify(name)} in subscriptions, but the "${FABRIK_VAULT}" vault has no item of that name: ${toStore(name, wizardNext, command)}`,
+  );
+  if (answers.secondSubscription !== true || !takesSecondSubscription(listed)) return lacking;
   if (stored.has(SECOND_SUBSCRIPTION)) {
-    if (read !== null) return [];
+    if (read !== null) return lacking;
     return [
       `${KIT_CONFIG_PATH} isn't a JSON object whose subscriptions is a list of names, so setup didn't list "${SECOND_SUBSCRIPTION}" in it: fix it, then run setup again.`,
     ];
@@ -358,6 +368,7 @@ function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers
     ? `Setup then lists it in subscriptions in ${KIT_CONFIG_PATH}, in the setup PR.`
     : `Running setup again walks it, then lists it in subscriptions in ${KIT_CONFIG_PATH}: ${command}`;
   return [
+    ...lacking,
     `Walk ${SECOND_SUBSCRIPTION_STAGE}: create a second Claude account, run \`claude setup-token\` on it, save the token as the "${SECOND_SUBSCRIPTION}" API Credential, with its expiry date, in the "${FABRIK_VAULT}" vault, and turn usage credits off on every account. ${listing}`,
   ];
 }
@@ -375,14 +386,24 @@ function toStore(name: string, wizardNext: boolean, command: string): string {
 /**
  * The Kit config's text with the second Subscription listed after the one it
  * lists, every other byte kept, or null when there's nothing to write: the
- * Operator didn't say yes, its token isn't in the vault yet, or it's listed.
+ * Operator didn't say yes, its token isn't in the vault yet, or the list
+ * doesn't take it.
  */
 function withSecondSubscription(text: string, state: ProductState, answers: SetupAnswers): string | null {
   if (answers.secondSubscription !== true || !state.fabrikItems.includes(SECOND_SUBSCRIPTION)) return null;
   const listed = listedSubscriptions(text);
-  // A list of two or more is a rotation the Operator wrote: setup never adds a third.
-  if (listed === null || listed.length > 1 || listed.includes(SECOND_SUBSCRIPTION)) return null;
+  if (listed === null || !takesSecondSubscription(listed)) return null;
   return withMember(text, ["subscriptions"], [...listed, SECOND_SUBSCRIPTION]);
+}
+
+/**
+ * Whether setup lists the second Subscription after these, on the Operator's
+ * yes once its token is stored: a list of one that doesn't name it already. A
+ * list of two or more is a rotation the Operator wrote, or setup on an earlier
+ * yes, which setup leaves as it is.
+ */
+export function takesSecondSubscription(listed: readonly string[]): boolean {
+  return listed.length === 1 && !listed.includes(SECOND_SUBSCRIPTION);
 }
 
 /**
