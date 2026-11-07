@@ -209,9 +209,9 @@ finish() {
 # them (ADR-0004).
 
 # operator_app_slugs prints, one per line, the slug of each App owned by the
-# signed-in gh user that has commented on or filed issues in $REPO (or the
-# fabrik-runs store), from the latest of each. It prints nothing when gh can't
-# tell: no access, a rate limit, or no comments yet.
+# signed-in gh user that made one of the 100 latest comments or issues in $REPO
+# (or the fabrik-runs store). It prints nothing when gh can't tell: no access, a
+# rate limit, or nothing the App has commented on or filed yet.
 operator_app_slugs() {
   local login path repo
   login=$(gh api user 2>/dev/null | node -e '
@@ -257,8 +257,12 @@ stage "Install the Fabrik App on $REPO"
 say "Every label, comment and push the Loop makes comes from the Fabrik App."
 say "It needs Issues, Pull requests and Contents (read and write), Checks (read), and never 'workflows'."
 say "Checks (read) is how the Monitor sees main go red."
-FOUND_APPS=$(operator_app_slugs || true)
-if [[ -n "$FOUND_APPS" && "$FOUND_APPS" != *$'\n'* ]]; then
+# A slug from an earlier run is ask's own default, so it isn't looked up again.
+FOUND_APPS=""
+_existing FABRIK_APP_SLUG >/dev/null || FOUND_APPS=$(operator_app_slugs || true)
+if _existing FABRIK_APP_SLUG >/dev/null; then
+  ask FABRIK_APP_SLUG "The Fabrik App's slug:"
+elif [[ -n "$FOUND_APPS" && "$FOUND_APPS" != *$'\n'* ]]; then
   say "Your App ${BOLD}$FOUND_APPS${RESET} already acts on $REPO, so that's likely the Fabrik App."
   ask FABRIK_APP_SLUG "The Fabrik App's slug [Enter for $FOUND_APPS]:"
   [[ -n "$FABRIK_APP_SLUG" ]] || FABRIK_APP_SLUG="$FOUND_APPS"

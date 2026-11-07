@@ -70,6 +70,17 @@ interface Walk {
   opened: string[];
 }
 
+interface WalkOptions {
+  /** `op item create` fails. */
+  createFails?: boolean;
+  /** What `gh api` answers, by path without its query. */
+  ghApi?: Record<string, unknown>;
+  /** The fabrik-runs store exists. */
+  store?: boolean;
+  /** The checkout's .env, when it has one. */
+  dotEnv?: string;
+}
+
 async function stub(bin: string, name: string, script: string): Promise<void> {
   await writeFile(join(bin, name), script);
   await chmod(join(bin, name), 0o755);
@@ -92,7 +103,7 @@ async function walk(
   items: string[],
   answers: string[],
   kitConfig?: string,
-  { createFails = false, ghApi = {}, store = false }: { createFails?: boolean; ghApi?: Record<string, unknown>; store?: boolean } = {},
+  { createFails = false, ghApi = {}, store = false, dotEnv }: WalkOptions = {},
 ): Promise<Walk> {
   const bin = await tempDir("wizard-bin");
   await stub(bin, "op", FAKE_OP);
@@ -103,6 +114,7 @@ async function walk(
     await mkdir(join(checkout, ".fabrik"));
     await writeFile(join(checkout, ".fabrik", "config.json"), kitConfig);
   }
+  if (dotEnv !== undefined) await writeFile(join(checkout, ".env"), dotEnv);
   const run = spawnSync("bash", [WIZARD], {
     cwd: checkout,
     input: answers.map((a) => `${a}\n`).join(""),
@@ -148,15 +160,17 @@ describe("The setup wizard's Fabrik App stage", () => {
     expect(w.stdout).toContain("https://github.com/settings/apps/fabrik-factory/permissions");
   });
 
-  /** A comment the App owned by `owner` made on an issue. */
-  const commentBy = (slug: string, owner: string) => ({ body: "…", performed_via_github_app: { slug, owner: { login: owner } } });
+  /** A comment or issue made through the App `slug`, which the GitHub user `owner` owns. */
+  const actedOnBy = (slug: string, owner: string) => ({ body: "…", performed_via_github_app: { slug, owner: { login: owner } } });
   const OPERATOR = { user: { login: "jrey8343" } };
   /** The answers to the App stage that take the default slug, then the rest of TO_THE_SENTRY_STAGE. */
   const TAKING_THE_DEFAULT = ["", "", "", "", "n", ""];
+  /** TAKING_THE_DEFAULT, with the fabrik-runs store's installation stage after the repo's. */
+  const TAKING_THE_DEFAULT_WITH_THE_STORE = ["", "", "", "", "", "n", ""];
 
   it("offers the slug of the Operator's own App that has commented on the repo as the default", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, TAKING_THE_DEFAULT, undefined, {
-      ghApi: { ...OPERATOR, "repos/acme/clinic/issues/comments": [commentBy("fabrik-factory", "jrey8343"), { body: "a human" }] },
+      ghApi: { ...OPERATOR, "repos/acme/clinic/issues/comments": [actedOnBy("fabrik-factory", "jrey8343"), { body: "a human" }] },
     });
 
     expect(w.status).toBe(0);
@@ -167,9 +181,9 @@ describe("The setup wizard's Fabrik App stage", () => {
   });
 
   it("offers the Operator's App that has acted only on the fabrik-runs store, such as by filing the Weekly summary", async () => {
-    const w = await walk(THE_APP_AND_CLAUDE, ["", "", "", "", "", "n", ""], undefined, {
+    const w = await walk(THE_APP_AND_CLAUDE, TAKING_THE_DEFAULT_WITH_THE_STORE, undefined, {
       store: true,
-      ghApi: { ...OPERATOR, "repos/jrey8343/fabrik-runs/issues": [commentBy("fabrik-factory", "jrey8343")] },
+      ghApi: { ...OPERATOR, "repos/jrey8343/fabrik-runs/issues": [actedOnBy("fabrik-factory", "jrey8343")] },
     });
 
     expect(w.stdout).toContain("Your App fabrik-factory already acts on acme/clinic");
@@ -180,7 +194,7 @@ describe("The setup wizard's Fabrik App stage", () => {
     const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, {
       ghApi: {
         ...OPERATOR,
-        "repos/acme/clinic/issues/comments": [commentBy("github-actions", "github"), commentBy("dependabot", "github")],
+        "repos/acme/clinic/issues/comments": [actedOnBy("github-actions", "github"), actedOnBy("dependabot", "github")],
       },
     });
 
@@ -205,8 +219,8 @@ describe("The setup wizard's Fabrik App stage", () => {
     const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, {
       ghApi: {
         ...OPERATOR,
-        "repos/acme/clinic/issues/comments": [commentBy("fabrik-factory", "jrey8343"), commentBy("fabrik-factory", "jrey8343")],
-        "repos/acme/clinic/issues": [commentBy("other-bot", "jrey8343")],
+        "repos/acme/clinic/issues/comments": [actedOnBy("fabrik-factory", "jrey8343"), actedOnBy("fabrik-factory", "jrey8343")],
+        "repos/acme/clinic/issues": [actedOnBy("other-bot", "jrey8343")],
       },
     });
 
@@ -215,14 +229,34 @@ describe("The setup wizard's Fabrik App stage", () => {
     expect(w.opened).toContain("https://github.com/apps/fabrik-factory/installations/new");
   });
 
-  it("falls back to the guided prompt, not an exit, when gh can't look the Apps up", async () => {
-    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, {
-      ghApi: { ...OPERATOR, "repos/acme/clinic/issues/comments": "rate limited" },
-    });
+  it.each([
+    ["gh api fails on every lookup", {}],
+    ["gh api answers with something other than a list", { ...OPERATOR, "repos/acme/clinic/issues/comments": { message: "API rate limit exceeded" } }],
+  ])("falls back to the guided prompt, not an exit, when %s", async (_, ghApi) => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, { ghApi });
 
     expect(w.status).toBe(0);
     expect(w.opened[0]).toBe("https://github.com/settings/apps");
     expect(w.stdout).toContain("Setup complete");
+  });
+
+  it("takes a slug the Operator types over the one it found", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, ["", "my-other-app", "", "", "n", ""], undefined, {
+      ghApi: { ...OPERATOR, "repos/acme/clinic/issues/comments": [actedOnBy("fabrik-factory", "jrey8343")] },
+    });
+
+    expect(w.opened).toContain("https://github.com/apps/my-other-app/installations/new");
+    expect(w.opened).not.toContain("https://github.com/apps/fabrik-factory/installations/new");
+  });
+
+  it("keeps a slug saved in .env by an earlier run as the default, without looking it up or opening the Apps list", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TAKING_THE_DEFAULT, undefined, {
+      dotEnv: "FABRIK_APP_SLUG='saved-app'\n",
+      ghApi: { ...OPERATOR, "repos/acme/clinic/issues/comments": [actedOnBy("fabrik-factory", "jrey8343")] },
+    });
+
+    expect(w.stdout).not.toContain("Your App");
+    expect(w.opened[0]).toBe("https://github.com/apps/saved-app/installations/new");
   });
 });
 
