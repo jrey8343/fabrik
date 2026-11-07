@@ -76,7 +76,7 @@ Every Product repo in this 1Password account, the one Setup uses, shares its `Fa
 
 Setup leaves Visual evidence off. Once the setup PR is merged, the Operator turns it on by running `/fabrik-visual-evidence` in a Claude session in the repo, where the `SessionStart` hook has installed it (see `ui` in the [Kit config](#kit-config)).
 
-Running Setup again on a working install changes nothing. On a broken one it repairs only what's missing: a missing label is created, and a missing secret gets a new service account (1Password shows a token only once, so delete the old account by hand). After a run that stopped partway, Setup picks up on its `fabrik/setup-<release>` branch, and says to switch to it when the clone is on the default branch. To migrate to a new major release, name that release:
+Running Setup again on a working install changes nothing. On a broken one it repairs only what's missing: a missing label is created, and a missing secret gets a new service account (1Password shows a token only once, so delete the old account by hand). A repair that writes no file opens no setup PR, and leaves the clone on the default branch. After a run that stopped partway, Setup picks up on its `fabrik/setup-<release>` branch, and says to switch to it when the clone is on the default branch. To migrate to a new major release, name that release:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v2.0.0
