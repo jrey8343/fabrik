@@ -381,6 +381,25 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(body).not.toContain("Merge this PR yourself");
   });
 
+  it("with the Kit config listing a rotation whose later Subscription 1Password lacks, asks for the merge, as the first runs read only the first, and notes the other", async () => {
+    await mkdir(join(checkout, ".fabrik"));
+    await writeFile(join(checkout, ".fabrik", "config.json"), '{\n  "subscriptions": ["Claude token", "Claude token 2"]\n}\n');
+    git("add", ".fabrik/config.json");
+    git("commit", "-q", "-m", "Our Kit config");
+    git("push", "-q", "origin", "main");
+    const world = aWorld();
+
+    const { code, said } = await setupOnce(world);
+
+    expect(code).toBe(0);
+    expect(said.some((line) => line.startsWith("Merge it yourself once its gating checks pass."))).toBe(true);
+    expect(said.some((line) => line.startsWith("Don't merge it yet."))).toBe(false);
+    expect(said.some((line) => line.includes('lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name'))).toBe(true);
+    const body = world.prs[0]?.body ?? "";
+    expect(body).toContain("Merge this PR yourself once its gating checks pass.");
+    expect(body).not.toContain("Don't merge this yet.");
+  });
+
   it("with a second Subscription, the setup PR lists it in the Kit config once the wizard's stage has stored its token", async () => {
     const world = aWorld();
     const starter = await readFile(join(KIT_DIR, "templates", "fabrik-config.json"), "utf8");

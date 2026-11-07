@@ -191,17 +191,26 @@ describe("What the merge waits for, read after the wizard", () => {
     const listing = (...names: string[]) => `${JSON.stringify({ subscriptions: names })}\n`;
 
     expect(readinessOf({ ...after, fabrikItems: ["Claude backup"], kitConfig: listing("Claude backup") })).toEqual(READY);
-    expect(readinessOf({ ...after, fabrikItems: ["Claude backup"], kitConfig: listing("Claude backup", "Claude token") }).tokensLacking).toEqual(["Claude token"]);
     expect(readinessOf({ ...after, fabrikItems: [], kitConfig: '{ "max_in_flight": 1 }\n' }).tokensLacking).toEqual(["Claude token"]);
   });
 
-  it("names each Subscription the Kit config lists whose token the vault lacks, in its order, under whatever name", () => {
+  it("names the first Subscription the Kit config lists while the vault lacks its token, under whatever name, as the first runs read only that one", () => {
     const listing = (...names: string[]) => `${JSON.stringify({ subscriptions: names })}\n`;
 
     expect(readinessOf({ ...after, fabrikItems: [], kitConfig: listing("Claude backup") }).tokensLacking).toEqual(["Claude backup"]);
-    expect(
-      readinessOf({ ...after, fabrikItems: ["Claude token"], kitConfig: listing("Claude backup", "Claude token", "Claude token 2") }).tokensLacking,
-    ).toEqual(["Claude backup", "Claude token 2"]);
+    expect(readinessOf({ ...after, fabrikItems: [], kitConfig: listing("Claude backup", "Claude token", "Claude token 2") }).tokensLacking).toEqual([
+      "Claude backup",
+    ]);
+    expect(readinessOf({ ...after, fabrikItems: ["Claude token"], kitConfig: listing("Claude token 2", "Claude token") }).tokensLacking).toEqual([
+      "Claude token 2",
+    ]);
+  });
+
+  it("doesn't wait for a later Subscription's token, which the Kit reads only once the ones before it are used up", () => {
+    const listing = (...names: string[]) => `${JSON.stringify({ subscriptions: names })}\n`;
+
+    expect(readinessOf({ ...after, fabrikItems: ["Claude token"], kitConfig: listing("Claude token", "Claude token 2") })).toEqual(READY);
+    expect(readinessOf({ ...after, fabrikItems: ["Claude backup"], kitConfig: listing("Claude backup", "Claude token") })).toEqual(READY);
   });
 });
 
@@ -287,11 +296,14 @@ describe("The merge rule", () => {
     expect(mergeBlockers({ ...READY, ...missing }, "acme/clinic")).toEqual([named]);
   });
 
-  it("holds the merge back with each listed Subscription's token the vault lacks, the wizard's stages' among what the wizard finishes, any other's to store by hand", () => {
-    const readiness = { ...READY, tokensLacking: ["Claude backup", "Claude token 2"] };
+  it("holds the merge back with the first listed Subscription's token the vault lacks, among what the wizard finishes when a stage stores it, else to store by hand", () => {
+    const second = { ...READY, tokensLacking: ["Claude token 2"] };
+    const backup = { ...READY, tokensLacking: ["Claude backup"] };
 
-    expect(mergeBlockers(readiness, "acme/clinic")).toEqual(['the second Subscription\'s token, "Claude token 2", in the "Fabrik" vault']);
-    expect(tokensByHand(readiness)).toEqual(['the "Claude backup" Subscription\'s token, in the "Fabrik" vault']);
+    expect(mergeBlockers(second, "acme/clinic")).toEqual(['the second Subscription\'s token, "Claude token 2", in the "Fabrik" vault']);
+    expect(tokensByHand(second)).toEqual([]);
+    expect(mergeBlockers(backup, "acme/clinic")).toEqual([]);
+    expect(tokensByHand(backup)).toEqual(['the "Claude backup" Subscription\'s token, in the "Fabrik" vault']);
     expect(tokensByHand(READY)).toEqual([]);
   });
 });

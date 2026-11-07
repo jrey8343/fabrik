@@ -28,7 +28,7 @@ export interface Readiness {
   readonly appInstalled: boolean;
   /** The "Fabrik App" item is in the "Fabrik App" vault. */
   readonly appKeyStored: boolean;
-  /** Each Subscription the Kit config the setup PR merges lists, in its order, whose token the "Fabrik" vault lacks. The Kit reads every one it lists. */
+  /** The first Subscription the Kit config the setup PR merges lists, while the "Fabrik" vault lacks its token: the first runs read it, and a later one only once those before it are used up. */
   readonly tokensLacking: readonly string[];
 }
 
@@ -95,7 +95,9 @@ export function readinessOf({ repo, report, earlierPr = null, fabrikItems, appIt
     // A user's gh can't read an App's installations, so a later run's wizard needn't be walked again to keep it.
     appInstalled: appInstalledIn(report, repo) || (earlierPr !== null && appConfirmedIn(earlierPr, repo)),
     appKeyStored: appItems.includes(FABRIK_APP_ITEM),
-    tokensLacking: subscriptionsTheKitReads(kitConfig).filter((name) => !fabrikItems.includes(name)),
+    tokensLacking: subscriptionsTheKitReads(kitConfig)
+      .slice(0, 1)
+      .filter((name) => !fabrikItems.includes(name)),
   };
 }
 
@@ -201,8 +203,9 @@ export async function runOnce({ plan, repo, earlierDone = [] }: OneRun, steps: O
 
 /**
  * What the merge waits for that the wizard finishes: the Fabrik App on the
- * repo, its key, and the token of each Subscription the Kit reads that a
- * wizard stage stores. Sentry, notifications and watching don't hold it back.
+ * repo, its key, and the first listed Subscription's token when a wizard stage
+ * stores it. Sentry, a later Subscription, notifications and watching don't
+ * hold it back.
  */
 export function mergeBlockers(readiness: Readiness, repo: string): string[] {
   return [
@@ -212,7 +215,7 @@ export function mergeBlockers(readiness: Readiness, repo: string): string[] {
   ];
 }
 
-/** The token of each Subscription the Kit reads that the merge also waits for, under a name no wizard stage stores, so the Operator stores it by hand. */
+/** The first listed Subscription's token the merge also waits for, under a name no wizard stage stores, so the Operator stores it by hand. */
 export function tokensByHand(readiness: Readiness): string[] {
   return readiness.tokensLacking
     .filter((name) => !WIZARD_TOKENS.has(name))
