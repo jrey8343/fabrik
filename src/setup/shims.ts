@@ -3,7 +3,7 @@
 // Product's own content, so re-running setup puts back only what Fabrik owns.
 // Pure, no I/O.
 import { checkCallerWorkflow } from "../kit/caller.ts";
-import { printJson } from "./json.ts";
+import { layoutOf, printJson } from "./json.ts";
 
 /** What to do with one file: nothing, write this content, or tell the Operator why not. */
 export type FileUpdate = { readonly content: string } | { readonly note: string } | null;
@@ -100,7 +100,9 @@ export function settingsUpdate(existing: string | null, template: string): FileU
     hooks: { ...hooks, SessionStart: mergedSessionStart },
     enabledPlugins: { ...plugins, ...ours.enabledPlugins },
   };
-  return JSON.stringify(merged) === JSON.stringify(parsed) ? null : { content: `${printJson(merged)}\n` };
+  if (JSON.stringify(merged) === JSON.stringify(parsed)) return null;
+  const layout = layoutOf(existing);
+  return { content: `${printJson(merged, layout)}${layout.eol}` };
 }
 
 function isFabrikEntry(entry: unknown): boolean {

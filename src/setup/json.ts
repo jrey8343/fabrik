@@ -1,58 +1,71 @@
-/**
- * JSON text as Prettier 3 prints JSON with its default options, for files setup
- * writes into a Product repo, whose `prettier --check` must pass on setup's PR.
- *
- * Every non-empty object is printed expanded, one member per line: Prettier keeps
- * an object expanded once it is. An array goes on one line, as `["a", "b"]`, when
- * that line, trailing comma and all, fits in 80 columns; otherwise each item goes
- * on its own line. Empty ones print as `[]` and `{}`.
- *
- * Not covered, as setup writes none of it: Prettier's packed (fill) printing of
- * arrays of numbers, and the extra width of wide (East Asian) characters.
- */
-export function printJson(value: unknown, at: JsonPosition = {}): string {
-  const { indent = "  ", eol = "\n", level = 0, before = "", trailing = 0 } = at;
-  const pad = (n: number) => indent.repeat(n);
-  const width = (text: string) => [...text].reduce((sum, char) => sum + (char === "\t" ? TAB_WIDTH : 1), 0);
+// JSON text as Prettier 3 prints JSON with its default options, for every JSON
+// file setup writes or rewrites in a Product repo, whose `prettier --check` must
+// pass on setup's PR. Use it there in place of `JSON.stringify(value, null, 2)`.
+// Pure, no I/O.
+//
+// Every non-empty object is printed expanded, one member per line: Prettier keeps
+// an object expanded once it is. An array goes on one line, as `["a", "b"]`, when
+// that line, trailing comma and all, fits in 80 columns; otherwise each item goes
+// on its own line. Empty ones print as `[]` and `{}`.
+//
+// Not covered, as setup writes none of it: Prettier's packed (fill) printing of
+// arrays of numbers, and the extra width of wide (East Asian) characters.
 
-  function print(node: unknown, depth: number, start: number, after: number): string {
-    if (Array.isArray(node)) {
-      if (node.length === 0) return "[]";
-      const flat = flatArray(node);
-      if (flat !== null && start + width(flat) + after <= PRINT_WIDTH) return flat;
-      const inner = pad(depth + 1);
-      const items = node.map((item, i) => `${inner}${print(item, depth + 1, width(inner), i < node.length - 1 ? 1 : 0)}`);
-      return `[${eol}${items.join(`,${eol}`)}${eol}${pad(depth)}]`;
-    }
-    if (isObject(node)) {
-      const members = Object.entries(node).filter(([, v]) => v !== undefined);
-      if (members.length === 0) return "{}";
-      const inner = pad(depth + 1);
-      const lines = members.map(([key, v], i) => {
-        const head = `${inner}${JSON.stringify(key)}: `;
-        return `${head}${print(v, depth + 1, width(head), i < members.length - 1 ? 1 : 0)}`;
-      });
-      return `{${eol}${lines.join(`,${eol}`)}${eol}${pad(depth)}}`;
-    }
-    return JSON.stringify(node) ?? "null";
-  }
-
-  return print(value, level, width(before), trailing);
+/** A JSON file's own indent unit and line ending. */
+export interface JsonLayout {
+  readonly indent: string;
+  readonly eol: string;
 }
 
-/** Where a value sits: the file's indent and line ending, its nesting level, and what's before and after it on its line. */
-export interface JsonPosition {
-  readonly indent?: string;
-  readonly eol?: string;
-  readonly level?: number;
-  /** The line's text before the value, as `  "ui": `. */
-  readonly before?: string;
-  /** Characters after the value on its line, as 1 for a trailing comma. */
-  readonly trailing?: number;
+/** The layout a JSON file's text already uses: the indent of its first indented member, two spaces when it has none. */
+export function layoutOf(text: string): JsonLayout {
+  return { indent: /\n([ \t]+)"/.exec(text)?.[1] ?? "  ", eol: text.includes("\r\n") ? "\r\n" : "\n" };
+}
+
+/** A whole JSON value, printed at the top level of a file with this layout. */
+export function printJson(value: unknown, layout: JsonLayout = { indent: "  ", eol: "\n" }): string {
+  return printValue(value, layout, 0, 0, false);
+}
+
+/**
+ * Object members, one per line at this nesting level (1 for a top-level
+ * object's members), joined by commas, with no comma after the last.
+ */
+export function printMembers(members: readonly (readonly [string, unknown])[], layout: JsonLayout, level: number): string {
+  const kept = members.filter(([, value]) => value !== undefined);
+  return kept
+    .map(([key, value], i) => {
+      const head = `${layout.indent.repeat(level)}${JSON.stringify(key)}: `;
+      return `${head}${printValue(value, layout, level, widthOf(head), i < kept.length - 1)}`;
+    })
+    .join(`,${layout.eol}`);
+}
+
+/** A value whose line is `column` wide before it, at this nesting level, followed on its line by a comma or not. */
+function printValue(value: unknown, layout: JsonLayout, level: number, column: number, comma: boolean): string {
+  const { indent, eol } = layout;
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]";
+    const flat = flatArray(value);
+    if (flat !== null && column + widthOf(flat) + (comma ? 1 : 0) <= PRINT_WIDTH) return flat;
+    const inner = indent.repeat(level + 1);
+    const items = value.map((item, i) => `${inner}${printValue(item, layout, level + 1, widthOf(inner), i < value.length - 1)}`);
+    return `[${eol}${items.join(`,${eol}`)}${eol}${indent.repeat(level)}]`;
+  }
+  if (isObject(value)) {
+    const members = printMembers(Object.entries(value), layout, level + 1);
+    return members === "" ? "{}" : `{${eol}${members}${eol}${indent.repeat(level)}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 const PRINT_WIDTH = 80;
+// Prettier's default tabWidth, which it counts each tab as.
 const TAB_WIDTH = 2;
+
+function widthOf(text: string): number {
+  return [...text].reduce((sum, char) => sum + (char === "\t" ? TAB_WIDTH : 1), 0);
+}
 
 /**
  * An array on one line, or null when Prettier would never print it so: it holds

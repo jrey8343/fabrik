@@ -865,7 +865,7 @@ describe("Visual evidence, the opt-in step for UI evidence on UI pull requests",
     );
   });
 
-  it("rewrites the whole Kit config, with two-space indents, only when a block it already has must change", () => {
+  it("rewrites the whole Kit config only when a block it already has must change, two-space indented when it was all on one line", () => {
     const off = '{ "operator": "jrey8343", "ui": null }\n';
     const only = { visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } };
 
@@ -889,7 +889,7 @@ describe("Visual evidence, the opt-in step for UI evidence on UI pull requests",
     );
   });
 
-  // A Product repo that runs `prettier --check .` over `.fabrik/` must pass it on setup's PR (#319).
+  // A Product repo that runs `prettier --check .` over `.fabrik/` must pass it on setup's PR.
   describe("printed as Prettier prints JSON, so the Product repo's Prettier check passes", () => {
     const pilot = {
       visualEvidence: {
@@ -907,6 +907,29 @@ describe("Visual evidence, the opt-in step for UI evidence on UI pull requests",
       const prettier = readFileSync(resolve(import.meta.dirname, "..", "__fixtures__", "starterWithVisualEvidence.prettier.json"), "utf8");
 
       expect(written(planSetup(aCleanProduct(), kit, pilot).actions, ".fabrik/config.json")).toBe(prettier);
+    });
+
+    it("keeps the Kit config's own indent and line endings when rewriting the whole of it", () => {
+      const tabbed = '{\r\n\t"operator": "jrey8343",\r\n\t"ui": null\r\n}\r\n';
+
+      expect(written(planSetup(withConfig(tabbed), kit, pilot).actions, ".fabrik/config.json")).toBe(
+        [
+          "{",
+          '\t"operator": "jrey8343",',
+          '\t"ui": {',
+          '\t\t"paths": ["src/pages/**", "src/components/**"],',
+          '\t\t"serve": "npm run preview",',
+          '\t\t"url": "http://localhost:4321",',
+          '\t\t"before_url": "https://clinic.example.com",',
+          '\t\t"default_routes": ["/"]',
+          "\t},",
+          '\t"preview": {',
+          '\t\t"url": "https://deploy-preview-{pr}--clinic.netlify.app"',
+          "\t}",
+          "}",
+          "",
+        ].join("\r\n"),
+      );
     });
 
     it("puts each array that fits in 80 columns on one line when adding the blocks to a Kit config", () => {
