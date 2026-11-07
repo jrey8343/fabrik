@@ -117,10 +117,12 @@ describe("The setup program without a terminal", { timeout: 60_000 }, () => {
     expect(git("status", "--porcelain")).toBe("");
   });
 
-  it("run again on the setup branch, with setup's own files uncommitted as a run that stopped partway leaves them, still plans", async () => {
+  it("run again on the setup branch, with the files it wrote uncommitted as a run that stopped partway leaves them, still plans", async () => {
     git("switch", "-q", "-c", "fabrik/setup-v1.4.2");
     await mkdir(join(checkout, ".fabrik"));
     await writeFile(join(checkout, ".fabrik", "config.json"), "{}\n");
+    // What that run applied, as it records it in the clone's git directory.
+    await writeFile(join(checkout, ".git", "fabrik-setup-v1.4.2.done"), "write .fabrik/config.json (a starter Kit config with every v1 default)\n");
 
     const { status, stdout, stderr } = await setup([".", "v1.4.2"]);
 

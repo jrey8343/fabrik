@@ -113,3 +113,8 @@ export function describeAction(action: SetupAction): string {
       return `write ${action.path} in ${action.repo} (${action.why})`;
   }
 }
+
+/** The files in the Product checkout these steps wrote, as describeAction words them. A step of any other kind names none. */
+export function writtenPaths(steps: readonly string[]): string[] {
+  return [...new Set(steps.flatMap((step) => /^write (\S+) \(/.exec(step)?.[1] ?? []))];
+}

@@ -1,6 +1,6 @@
 // The setup branch and the setup PR, with the Operator's own git and gh: the
 // run switches to fabrik/setup-<release>, commits only the files setup
-// writes, pushes the branch, and opens the setup PR or updates the one
+// wrote, pushes the branch, and opens the setup PR or updates the one
 // already open from it.
 import { appendFile, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -104,7 +104,7 @@ export async function switchToSetupBranch(run: Run, cwd: string, branch: string,
   await ok(run, "git", ["switch", "-C", branch], { cwd });
 }
 
-/** Commits whichever of setup's files changed, and nothing else the clone has. Returns whether there was anything to commit. */
+/** Commits whichever of these files, the ones setup wrote, changed, and nothing else the clone has. Returns whether there was anything to commit. */
 export async function commitSetupFiles(run: Run, cwd: string, paths: readonly string[], release: string): Promise<boolean> {
   const changed = (await uncommittedPaths(run, cwd)).filter((path) => paths.includes(path));
   if (changed.length === 0) return false;

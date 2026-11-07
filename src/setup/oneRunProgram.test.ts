@@ -359,6 +359,36 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     },
   );
 
+  it("on the setup branch, stops at an uncommitted CLAUDE.md, a file setup writes only in some repos and the earlier run didn't", async () => {
+    const world = aWorld();
+    world.failingLabels.add("needs-info");
+    const first = await setupOnce(world);
+    expect(writtenIn(first.said)).toContain("AGENTS.md");
+    world.failingLabels.clear();
+    await writeFile(join(checkout, "CLAUDE.md"), "# My own notes, half written\n");
+
+    const { code, complaints, log } = await setupOnce(world);
+
+    expect(code).toBe(1);
+    expect(complaints[0]).toBe(`${BRANCH} has uncommitted changes setup didn't make (CLAUDE.md). Commit or stash them, then run setup again.`);
+    expect(log.filter((line) => /^git commit/.test(line))).toEqual([]);
+  });
+
+  it("leaves out of the setup commit a file setup writes only in some repos, made while the wizard ran in a run that didn't write it", async () => {
+    const world = aWorld();
+    const startsClaudeMd: Wizard = async (world, wizardEnv) => {
+      await walksEveryStage(world, wizardEnv);
+      await writeFile(join(checkout, "CLAUDE.md"), "# My own notes, half written\n");
+    };
+
+    const { code } = await setupOnce(world, { wizard: startsClaudeMd });
+
+    expect(code).toBe(0);
+    expect(filesOnOrigin()).toContain("AGENTS.md");
+    expect(filesOnOrigin()).not.toContain("CLAUDE.md");
+    expect(git("status", "--porcelain")).toBe("?? CLAUDE.md\n");
+  });
+
   it("leaves out of the setup commit a file setup reads but never writes, edited while the wizard ran", async () => {
     const world = aWorld();
     const editsPackageJson: Wizard = async (world, wizardEnv) => {

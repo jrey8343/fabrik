@@ -413,23 +413,17 @@ function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, no
   return actions;
 }
 
-/** Every file planSetup reads from the Product checkout: what it writes, and what it only reads. */
+/** Every file planSetup reads from the Product checkout. */
 export function setupPaths(kit: SetupKit): readonly string[] {
-  return [...setupWrites(kit), ...PRETTIER_DETECTION_PATHS, SKILLS_SOURCES_LOCK_PATH];
-}
-
-/**
- * Every file planSetup may write in the Product checkout. The setup commit
- * takes only these, and only these may be uncommitted on the setup branch.
- */
-export function setupWrites(kit: SetupKit): readonly string[] {
   return [
     CALLER_PATH,
     SETTINGS_PATH,
     GITIGNORE_PATH,
     PRETTIERIGNORE_PATH,
+    ...PRETTIER_DETECTION_PATHS,
     DEPENDABOT_PATH,
     KIT_CONFIG_PATH,
+    SKILLS_SOURCES_LOCK_PATH,
     ...Object.keys(kit.templates.docsAgents).map((name) => `docs/agents/${name}`),
     "AGENTS.md",
     "CLAUDE.md",

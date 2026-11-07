@@ -16,7 +16,7 @@ import {
 } from "../__fixtures__/setupCommands.ts";
 import { checkSetup } from "./checks.ts";
 
-const SETUP_WRITES = [".github/workflows/fabrik.yml", ".fabrik/config.json", "docs/agents/domain.md", "AGENTS.md"];
+const EARLIER_WRITES = [".github/workflows/fabrik.yml", ".fabrik/config.json", "docs/agents/domain.md", "AGENTS.md"];
 
 let productDir: string;
 
@@ -32,7 +32,7 @@ function check(overrides: Record<string, Answer> = {}, options: { env?: Record<s
     release: "v1.4.2",
     env: options.env ?? {},
     nodeVersion: options.nodeVersion ?? "24.11.0",
-    setupWrites: SETUP_WRITES,
+    earlierWrites: async () => EARLIER_WRITES,
   });
   return { result, commands };
 }
@@ -167,7 +167,7 @@ describe("The checks before setup plans anything", () => {
       expect((await check(onSetupBranch).result).ok).toBe(true);
     });
 
-    it("pass with setup's own files uncommitted, as a run that stopped partway leaves them", async () => {
+    it("pass with the files an earlier run wrote uncommitted, as a run that stopped partway leaves them", async () => {
       const status = { stdout: "?? .github/workflows/fabrik.yml\0?? docs/agents/domain.md\0 M AGENTS.md\0" };
 
       expect((await check({ ...onSetupBranch, [STATUS]: status }).result).ok).toBe(true);

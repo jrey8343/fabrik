@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { checkOp, chooseAccount } from "./account.ts";
-import { apply, describeAction } from "./apply.ts";
+import { apply, describeAction, writtenPaths } from "./apply.ts";
 import { parseSetupArgs, SETUP_USAGE } from "./args.ts";
 import { checkSetup, offerToDeleteOldSetupSkill, type OriginTips } from "./checks.ts";
 import { type Env, ok, type Run } from "./exec.ts";
@@ -21,11 +21,12 @@ import { appliedLines, closingLines } from "./finish.ts";
 import { gatherState, vaultItems } from "./gather.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type OneRunSteps, readinessOf, runOnce } from "./oneRun.ts";
-import { FABRIK_APP_VAULT, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths, setupWrites } from "./plan.ts";
+import { FABRIK_APP_VAULT, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 import { askQuestions } from "./questions.ts";
 import {
   commitSetupFiles,
+  type DoneRecord,
   doneRecord,
   earlierSetupRun,
   openSetupPr,
@@ -73,13 +74,15 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
 
     const before: Run = (command, commandArgs, options) => io.run(command, commandArgs, { ...options, env: io.env });
     const paths = setupPaths(kit);
+    // What runs on the setup branch applied since their last setup PR, which that PR lists too.
+    const record = doneRecord(before, productDir, args.release);
     const checked = await checkSetup({
       run: before,
       productDir,
       release: args.release,
       env: io.env,
       nodeVersion: io.nodeVersion,
-      setupWrites: setupWrites(kit),
+      earlierWrites: async () => writtenPaths(await record.read()),
     });
     if (!checked.ok) return stop(io, checked.problem);
     await offerToDeleteOldSetupSkill({ env: io.env, prompt: args.plan ? null : io.prompt, say: io.say });
@@ -122,6 +125,7 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
       env,
       kit,
       paths,
+      record,
       answers,
       plan,
       state,
@@ -142,6 +146,7 @@ interface OneRunInputs {
   readonly env: Env;
   readonly kit: SetupKit;
   readonly paths: readonly string[];
+  readonly record: DoneRecord;
   readonly answers: SetupAnswers;
   readonly plan: SetupPlan;
   readonly state: ProductState;
@@ -154,7 +159,7 @@ interface OneRunInputs {
 
 /** The plan, the Operator's yes, and one run from there to the setup PR. */
 async function oneRun(inputs: OneRunInputs): Promise<number> {
-  const { io, run, env, kit, paths, answers, state, release, current, origin, productDir } = inputs;
+  const { io, run, env, kit, paths, record, answers, state, release, current, origin, productDir } = inputs;
   const cwd = productDir;
   const branch = setupBranch(release);
   const { repo } = state;
@@ -174,7 +179,6 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
   io.say("");
 
   // A run on the setup branch picks up from one that stopped before its PR, which the PR lists too.
-  const record = doneRecord(run, cwd, release);
   const earlierDone = current === branch ? await record.read() : [];
   let wizardReport = "";
   const steps: OneRunSteps = {
@@ -222,7 +226,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
         readiness: readinessOf({ repo: repoName, report: wizardReport, earlierPr, fabrikItems: now.fabrikItems, appItems }),
       };
     },
-    commit: () => commitSetupFiles(run, cwd, setupWrites(kit), release),
+    commit: (written) => commitSetupFiles(run, cwd, written, release),
     somethingToPublish: async () => {
       const ahead = Number((await ok(run, "git", ["rev-list", "--count", `${origin.defaultBranch}..HEAD`], { cwd })).trim());
       return ahead > 0 || (await openSetupPr(run, cwd, branch)) !== null;
