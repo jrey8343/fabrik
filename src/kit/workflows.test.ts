@@ -662,6 +662,35 @@ describe("loop.yml's Research job", () => {
 
 // A Design session's prototype turn (#155): the Kit job's plan says whether the
 // Design run is one, and the prototype job runs it in the design job's place.
+// #328: a turn of a Design session on a Ticket sent back from an agent PR
+// reads that closed PR in its input step (readSentBack in src/agent/inputs.ts),
+// which takes pull-requests: read. Without it the turn fails before its agent
+// starts. Triage reads it too, should the Operator add needs-triage to such a
+// Ticket. None of them holds a write permission (ADR-0002).
+describe("The agent jobs whose input step may read a sent-back Ticket's PR", () => {
+  const permissionsOfJob = (name: string): string[] =>
+    (/\n    permissions:\n((?: {6}.*\n)+)/.exec(job(name))?.[1] ?? "")
+      .trim()
+      .split("\n")
+      .map((line) => line.trim());
+
+  it.each(["design", "prototype", "triage"])("the %s job holds exactly contents, issues and pull-requests read, and no write", (name) => {
+    expect(permissionsOfJob(name)).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
+    expect(job(name)).not.toMatch(/: write\b|id-token|create-github-app-token/);
+  });
+
+  it("the input step leaves its failure report where the job's failure upload looks for it", () => {
+    const read = actionNamed("prepare-agent").steps.find((step) => step.includes("run: node kit/src/agent/inputs.ts")) ?? "";
+
+    expect(read).toContain("FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out\n");
+    for (const name of ["design", "prototype", "triage"]) {
+      expect(stepsOf(job(name)).find((step) => step.includes("name: fabrik-agent-failure"))).toContain(
+        "path: ${{ runner.temp }}/fabrik-out/agent-failure.json",
+      );
+    }
+  });
+});
+
 describe("loop.yml's prototype job", () => {
   // Keyed as the push job and the Run record pick it by (src/kit/pushJob.ts).
   const prototype = (): string => job(PROTOTYPE_JOB);
@@ -692,10 +721,8 @@ describe("loop.yml's prototype job", () => {
     );
   });
 
-  it("holds only read permissions, on the Product repo's contents and its issues: no GitHub write access", () => {
-    const permissions = /\n    permissions:\n((?: {6}.*\n)+)/.exec(prototype())?.[1] ?? "";
-
-    expect(permissions.trim().split("\n").map((line) => line.trim())).toEqual(["contents: read", "issues: read"]);
+  // Its permissions are pinned with the other jobs that may read a sent-back Ticket's PR, above (#328).
+  it("holds no GitHub credential beyond its read-only token", () => {
     expect(prototype()).not.toMatch(/OP_PUSH_TOKEN|id-token|GH_TOKEN|create-github-app-token/);
   });
 

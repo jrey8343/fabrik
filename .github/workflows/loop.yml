@@ -184,9 +184,12 @@ jobs:
     concurrency:
       group: fabrik-triage-${{ github.event.issue.number }}
       cancel-in-progress: false
+    # pull-requests: read for the input step: the Operator may add needs-triage to
+    # a Ticket sent back from an agent PR, whose closed PR it reads (#328).
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     outputs:
       # Read by the push job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}
@@ -292,9 +295,13 @@ jobs:
       group: fabrik-design-${{ github.event.issue.number }}
       cancel-in-progress: false
       queue: max
+    # pull-requests: read for the input step: on a Ticket sent back from an agent
+    # PR, it reads that closed PR into issue.json's sentBack (readSentBack in
+    # src/agent/inputs.ts). Without it the turn fails before its agent starts (#328).
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     outputs:
       # Read by the push job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}
@@ -412,9 +419,12 @@ jobs:
       group: fabrik-design-${{ github.event.issue.number }}
       cancel-in-progress: false
       queue: max
+    # pull-requests: read for the input step, as the design job's: a prototype
+    # turn on a Ticket sent back from an agent PR reads that closed PR (#328).
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     outputs:
       # Read by the push job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}

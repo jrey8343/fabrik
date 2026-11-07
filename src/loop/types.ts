@@ -23,7 +23,9 @@ export type ReportedFailure =
   | "weekly-limit"
   | "metered-billing"
   /** With rotation on, the stream watch stopped a run whose stream showed overage. */
-  | "usage-credits";
+  | "usage-credits"
+  /** The Kit's input step couldn't read the agent's inputs from GitHub, so the agent never started (#328). */
+  | "unread-inputs";
 
 /** Every kind of Infrastructure failure: what the agent job reported, or what the push job saw. */
 export type InfrastructureFailure = ReportedFailure | "timeout" | "unreachable-1password";
@@ -35,6 +37,12 @@ export interface FailureReport {
   readonly detail: string;
   /** For the weekly limit, when it resets (an ISO 8601 time), if the stream said. */
   readonly resetsAt?: string;
+  /**
+   * For unread inputs: true when GitHub refused the request (a 4xx that isn't
+   * a rate limit), which it does again each time the run goes again, until the Kit is fixed.
+   * Absent for a 5xx, a rate limit or a call GitHub never answered.
+   */
+  readonly refused?: true;
 }
 
 /**

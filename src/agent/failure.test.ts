@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { failureReportFor, MissingVerdictError, readFailureReport } from "./failure.ts";
+import { GitHubError } from "../github/client.ts";
+import { failureReportFor, inputsFailureReportFor, MissingVerdictError, readFailureReport } from "./failure.ts";
 
 const line = (message: unknown) => JSON.stringify(message);
 const init = line({ type: "system", subtype: "init", apiKeySource: "none" });
@@ -150,10 +151,59 @@ describe("Reading the failure report in the push job", () => {
     expect(readFailureReport(JSON.stringify(report))).toEqual(report);
   });
 
+  it("reads back an unread-inputs report, refused or not", () => {
+    const refused = { failure: "unread-inputs", detail: "GET /repos/acme/shop/pulls/84: 403 Resource not accessible by integration", refused: true };
+    const failed = { failure: "unread-inputs", detail: "POST /graphql: 502 Bad Gateway" };
+
+    expect(readFailureReport(JSON.stringify(refused))).toEqual(refused);
+    expect(readFailureReport(JSON.stringify(failed))).toEqual(failed);
+    expect(readFailureReport(JSON.stringify({ ...failed, refused: "yes" }))).toEqual(failed);
+  });
+
   it.each(["", "not json", JSON.stringify({ failure: "timeout" })])(
     "treats an unreadable report (%j) as a crash, so a notice still goes out",
     (text) => {
       expect(readFailureReport(text).failure).toBe("crash");
     },
   );
+});
+
+describe("How the input step reports a failed GitHub call (#328)", () => {
+  const github = (status: number, body: string, request = "GET /repos/acme/shop/pulls/84", rateLimitRemaining: string | null = "4000") =>
+    new GitHubError(`GitHub ${request} failed: ${status} ${body}`, status, { body, request, rateLimitRemaining });
+  const message = (text: string) => JSON.stringify({ message: text, documentation_url: "https://docs.github.com/rest" });
+
+  it("a 4xx GitHub refuses again every time the run goes again: refused, naming the request, the status and GitHub's message", () => {
+    expect(inputsFailureReportFor(github(403, message("Resource not accessible by integration")))).toEqual({
+      failure: "unread-inputs",
+      detail: "GET /repos/acme/shop/pulls/84: 403 Resource not accessible by integration",
+      refused: true,
+    });
+  });
+
+  it.each([
+    ["a 5xx", github(502, "Bad Gateway"), "GET /repos/acme/shop/pulls/84: 502 Bad Gateway"],
+    ["a rate limit", github(403, message("API rate limit exceeded"), "GET /repos/acme/shop/pulls/84", "0"), "GET /repos/acme/shop/pulls/84: 403 API rate limit exceeded"],
+    ["a 429", github(429, message("Too many requests")), "GET /repos/acme/shop/pulls/84: 429 Too many requests"],
+    ["a call GitHub never answered", new GitHubError("GitHub POST /graphql failed: fetch failed", 0, { body: "fetch failed", request: "POST /graphql" }), "POST /graphql: fetch failed"],
+  ])("%s isn't refused: running it again may get through", (_case, error, detail) => {
+    expect(inputsFailureReportFor(error)).toEqual({ failure: "unread-inputs", detail });
+  });
+
+  it("names a GraphQL query's errors by their messages", () => {
+    const error = new GitHubError("GitHub GraphQL query failed", 403, {
+      body: JSON.stringify({ errors: [{ type: "FORBIDDEN", message: "Resource not accessible by integration" }] }),
+      request: "POST /graphql",
+    });
+
+    expect(inputsFailureReportFor(error)).toEqual({
+      failure: "unread-inputs",
+      detail: "POST /graphql: 403 Resource not accessible by integration",
+      refused: true,
+    });
+  });
+
+  it("reports nothing for an error that isn't a GitHub call's, which the push job reads as a crash", () => {
+    expect(inputsFailureReportFor(new Error("FABRIK_ISSUE is not set"))).toBeNull();
+  });
 });

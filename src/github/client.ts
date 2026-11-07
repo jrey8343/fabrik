@@ -6,20 +6,90 @@ export interface Repo {
   readonly name: string;
 }
 
-/** A failed GitHub REST call, with the status it failed with. */
+/**
+ * A failed GitHub call, with the status it failed with: a REST call's HTTP
+ * status, a GraphQL query's error type as the status GitHub's REST API gives
+ * for it (see GRAPHQL_STATUS), or 0 when GitHub never answered.
+ */
 export class GitHubError extends Error {
   readonly status: number;
   /** The body GitHub answered with, such as its JSON `message`. */
   readonly body: string;
   /** GitHub's `x-ratelimit-remaining` header, or null when it gave none. */
   readonly rateLimitRemaining: string | null;
+  /** The request that failed, such as `GET /repos/acme/shop/pulls/84`, or "" when the thrower didn't say. */
+  readonly request: string;
 
-  constructor(message: string, status: number, answer: { readonly body?: string; readonly rateLimitRemaining?: string | null } = {}) {
+  constructor(
+    message: string,
+    status: number,
+    answer: { readonly body?: string; readonly rateLimitRemaining?: string | null; readonly request?: string } = {},
+  ) {
     super(message);
     this.name = "GitHubError";
     this.status = status;
     this.body = answer.body ?? "";
     this.rateLimitRemaining = answer.rateLimitRemaining ?? null;
+    this.request = answer.request ?? "";
+  }
+}
+
+/**
+ * What GitHub said of a failed call: the `message` of its JSON body, or for
+ * a GraphQL query its errors' messages, or else the body itself; for a call
+ * GitHub never answered, why.
+ */
+export function gitHubMessageOf(error: GitHubError): string {
+  try {
+    const body: unknown = JSON.parse(error.body);
+    if (typeof body === "object" && body !== null) {
+      const { message, errors } = body as { message?: unknown; errors?: unknown };
+      if (typeof message === "string") return message;
+      if (Array.isArray(errors)) {
+        const messages = errors.map((e) => (typeof e === "object" && e !== null ? (e as { message?: unknown }).message : undefined));
+        if (messages.every((m) => typeof m === "string") && messages.length > 0) return messages.join("; ");
+      }
+    }
+  } catch {
+    // Not JSON: the body as GitHub sent it.
+  }
+  return error.body.trim() === "" ? error.message : error.body.trim();
+}
+
+/**
+ * The REST status matching a GraphQL error's `type`, for those GitHub names.
+ * An error with no type, or one not listed, is read as GitHub's own failure.
+ */
+const GRAPHQL_STATUS: Readonly<Record<string, number>> = {
+  FORBIDDEN: 403,
+  NOT_FOUND: 404,
+  UNPROCESSABLE: 422,
+  RATE_LIMITED: 429,
+};
+
+function graphqlStatusOf(errors: unknown): number {
+  const [first] = Array.isArray(errors) ? errors : [];
+  const type = typeof first === "object" && first !== null ? (first as { type?: unknown }).type : undefined;
+  return (typeof type === "string" ? GRAPHQL_STATUS[type] : undefined) ?? 502;
+}
+
+/** The GitHubError for a response GitHub answered with a failing status. */
+async function failedResponse(request: string, response: Response): Promise<GitHubError> {
+  const text = await response.text();
+  return new GitHubError(`GitHub ${request} failed: ${response.status} ${text}`, response.status, {
+    body: text,
+    rateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
+    request,
+  });
+}
+
+/** A fetch GitHub never answered, such as a network error, as a GitHubError with status 0. */
+async function fetched(request: string, url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (cause) {
+    const why = cause instanceof Error ? cause.message : String(cause);
+    throw new GitHubError(`GitHub ${request} failed: ${why}`, 0, { body: why, request });
   }
 }
 
@@ -67,18 +137,15 @@ export class GitHub {
 
   /** A REST call; with `allowNotFound`, a 404 (say, removing a label already gone) returns null. */
   async rest(method: string, path: string, body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<unknown> {
-    const response = await fetch(`${this.#apiUrl}${path}`, {
+    const request = `${method} ${path}`;
+    const response = await fetched(request, `${this.#apiUrl}${path}`, {
       method,
       headers: this.#headers(),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     if (response.status === 404 && options.allowNotFound === true) return null;
     if (!response.ok) {
-      const text = await response.text();
-      throw new GitHubError(`GitHub ${method} ${path} failed: ${response.status} ${text}`, response.status, {
-        body: text,
-        rateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
-      });
+      throw await failedResponse(request, response);
     }
     return response.status === 204 ? null : response.json();
   }
@@ -89,7 +156,11 @@ export class GitHub {
       errors?: unknown[];
     };
     if (result.errors !== undefined || result.data === undefined) {
-      throw new Error(`GitHub GraphQL query failed: ${JSON.stringify(result.errors)}`);
+      const errors = JSON.stringify(result.errors);
+      throw new GitHubError(`GitHub GraphQL query failed: ${errors}`, graphqlStatusOf(result.errors), {
+        body: JSON.stringify({ errors: result.errors ?? [] }),
+        request: "POST /graphql",
+      });
     }
     return result.data;
   }
@@ -97,10 +168,11 @@ export class GitHub {
   /** A file's text from the repo at `ref`, or null if it doesn't exist there. Reads only; never runs it. */
   async fileText(repo: Repo, path: string, ref: string): Promise<string | null> {
     const url = `${this.#apiUrl}/repos/${repo.owner}/${repo.name}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`;
-    const response = await fetch(url, { headers: { ...this.#headers(), accept: "application/vnd.github.raw+json" } });
+    const request = `GET ${path}@${ref}`;
+    const response = await fetched(request, url, { headers: { ...this.#headers(), accept: "application/vnd.github.raw+json" } });
     if (response.status === 404) return null;
     if (!response.ok) {
-      throw new Error(`GitHub GET ${path}@${ref} failed: ${response.status} ${await response.text()}`);
+      throw await failedResponse(request, response);
     }
     return response.text();
   }
