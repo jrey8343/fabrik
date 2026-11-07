@@ -61,6 +61,39 @@ describe("The Kit's workflows", () => {
     expect(new Set(kitCheckouts)).toEqual(new Set(["kit"]));
   });
 
+  // A Product pins an annotated tag (docs/releasing.md), whose job_workflow_sha claim names the
+  // tag object, not the commit. The Kit job peels it, so every job and Run record names the commit (#324).
+  describe.each(workflows)("$path's Kit job", ({ text }) => {
+    const kit = jobIn(text, "kit");
+    const steps = stepsOf(kit);
+    const at = (needle: string) => steps.findIndex((step) => step.includes(needle));
+    const claim = steps[at("name: Read the Kit's workflow ref from the OIDC token")] ?? "";
+    const checkout = at("repository: jrey8343/fabrik");
+    const peel = at("git -C kit rev-parse HEAD");
+
+    it("checks the Kit out at the OIDC token's workflow sha, then passes out the commit that checkout landed on", () => {
+      expect(claim).toContain("jq -r .job_workflow_sha");
+      expect(claim).toContain("workflow-sha=$sha");
+      expect(claim).not.toMatch(/echo "sha=/);
+      expect(steps[checkout]).toContain("ref: ${{ steps.kit.outputs.workflow-sha }}");
+      expect(peel, "the Kit job never peels the checked-out commit").toBeGreaterThan(checkout);
+      expect(steps[peel]).toContain("id: commit");
+      expect(steps[peel]).toContain('echo "sha=$sha" >>"$GITHUB_OUTPUT"');
+      expect(kit).toContain("      sha: ${{ steps.commit.outputs.sha }}\n");
+    });
+
+    it("logs both the workflow ref it was called at and the commit it runs", () => {
+      expect(claim).toContain("workflow-ref=$ref");
+      expect(steps[peel]).toContain("KIT_REF: ${{ steps.kit.outputs.workflow-ref }}");
+      expect(steps[peel]).toContain('echo "Kit: $KIT_REF at commit $sha"');
+    });
+
+    it("needs no token beyond the OIDC one: its Kit checkout keeps no credentials", () => {
+      expect(steps[checkout]).toContain("persist-credentials: false");
+      expect(steps[checkout]).not.toContain("token:");
+    });
+  });
+
   it.each(workflows)("$path uses only composite actions the Kit ships", ({ text }) => {
     const local = [...text.matchAll(/uses: \.\/kit\/(\S+)/g)].map((match) => match[1]!);
 
