@@ -48,6 +48,10 @@ _Avoid_: target repo, client repo, project
 The first Product repo used to prove the Kit against real stakes: Penrith Physiotherapy & Sports Centre.
 _Avoid_: test repo, demo
 
+**Kit adoption**:
+A repository becoming a Product repo: its tracker, checks and skills brought into line with the Loop, the Kit installed, and its first Tickets run through the Loop.
+_Avoid_: cutover, migration, onboarding
+
 ## The product
 
 **Product intent**:
