@@ -1,6 +1,7 @@
-// The setup program's checks, before any planning: Node 24.3, op as the Operator
-// rather than a service account, the root of the Product repo's clone, gh as
-// the repo's admin with the workflow scope, and a clean, up-to-date branch.
+// The setup program's checks, before any planning: Node 24.3, op as the
+// Operator rather than a service account, the root of the Product repo's
+// clone, gh as the repo's admin with the workflow scope, and a clean,
+// up-to-date branch.
 // The first that fails stops setup, with a message naming what to fix. Once
 // they pass, setup offers to delete an old personal copy of the fabrik-setup
 // skill.
