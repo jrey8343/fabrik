@@ -14,9 +14,10 @@ export const WIZARD_PATH = fileURLToPath(new URL("./wizard.sh", import.meta.url)
 export const WIZARD_REPORT_ENV = "FABRIK_WIZARD_REPORT";
 
 /**
- * The environment variable holding the Operator's answer to setup's second
- * Subscription question, yes or no. With yes, setup lists the token the
- * wizard's stage stores, so the stage says so instead of asking for a hand edit.
+ * The environment variable saying whether setup lists the token the wizard's
+ * second Subscription stage stores, yes or no: yes on the Operator's yes to
+ * setup's question, with a Kit config that lists one Subscription, or the
+ * starter. With yes, the stage says setup lists it.
  */
 export const WIZARD_SECOND_SUBSCRIPTION_ENV = "FABRIK_SECOND_SUBSCRIPTION";
 

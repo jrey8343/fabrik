@@ -463,11 +463,16 @@ fi
 # implement service accounts already read, so it needs no new service account.
 # Setup lists it in the Kit config once the token is stored, on the Operator's
 # yes to its second Subscription question, which it passes in as
-# FABRIK_SECOND_SUBSCRIPTION.
+# FABRIK_SECOND_SUBSCRIPTION. A list of two or more Setup leaves as it is.
 stage "A second Subscription"
 SECOND="Claude token 2"
 say "With a second Subscription, a run refused on the first one's weekly limit is"
 say "re-run on the second, and runs wait only once both are used up."
+# What .fabrik/config.json lists: "both" for two or more with this one among them, "rotation" for two or more without it, else "one".
+LISTING=$(node -e '
+  const { subscriptions } = JSON.parse(require("node:fs").readFileSync(".fabrik/config.json", "utf8"));
+  const two = Array.isArray(subscriptions) && subscriptions.length > 1;
+  process.stdout.write(two ? (subscriptions.includes(process.argv[1]) ? "both" : "rotation") : "one");' "$SECOND" 2>/dev/null || echo one)
 SECOND_EXISTS=0
 op item get "$SECOND" --vault "Fabrik" >/dev/null 2>&1 && SECOND_EXISTS=1
 SECOND_STORED=$SECOND_EXISTS
@@ -531,18 +536,25 @@ if (( SECOND_EXISTS || ADDING_SECOND )); then
   open_url "https://claude.ai/settings/usage"
   step "Signed in as each account in turn, turn usage credits (extra usage) off."
   pause "Press Enter once usage credits are off on every account."
-  if node -e '
-    const { subscriptions } = JSON.parse(require("node:fs").readFileSync(".fabrik/config.json", "utf8"));
-    process.exit(Array.isArray(subscriptions) && subscriptions.length > 1 && subscriptions.includes(process.argv[1]) ? 0 : 1);' "$SECOND" 2>/dev/null; then
+  if [[ "$LISTING" == both ]]; then
     say "${GREEN}✓${RESET} .fabrik/config.json lists both Subscriptions."
   elif (( SECOND_STORED )); then
-    if [[ "${FABRIK_SECOND_SUBSCRIPTION:-}" == yes ]]; then
+    if [[ "$LISTING" == rotation ]]; then
+      step "Setup leaves the subscriptions list in .fabrik/config.json as it is, since it lists two or more. To run on '$SECOND' too, add it to that list yourself."
+      SKIPPED+=("list \"$SECOND\" in subscriptions in .fabrik/config.json yourself: Setup leaves a list of two or more as it is")
+    elif [[ "${FABRIK_SECOND_SUBSCRIPTION:-}" == yes ]]; then
       say "Setup lists it in subscriptions in .fabrik/config.json, after the first, in the setup PR."
     else
       step "To list it in subscriptions in .fabrik/config.json, run Setup again and say yes to a second Subscription."
       SKIPPED+=("list \"$SECOND\" in subscriptions in .fabrik/config.json: run Setup again and say yes to a second Subscription")
     fi
   fi
+  pause
+elif [[ "$LISTING" == rotation ]]; then
+  say "Skipping the second Subscription. .fabrik/config.json already lists two or more Subscriptions, and Setup leaves that list as it is."
+  pause
+elif [[ "$LISTING" == both ]]; then
+  say "Skipping the second Subscription. .fabrik/config.json lists '$SECOND' already, so running Setup again walks this stage while 1Password lacks its token."
   pause
 else
   say "Skipping the second Subscription. To add one later, run Setup again and say yes to a second Subscription: it walks this stage while 1Password lacks the token."

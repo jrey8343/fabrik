@@ -575,6 +575,40 @@ describe("The setup wizard's second Subscription stage", () => {
     expect(w.stdout).not.toContain("Re-run the wizard");
   });
 
+  describe("with .fabrik/config.json listing two or more Subscriptions, which Setup leaves as they are", () => {
+    const ROTATION = '{ "subscriptions": ["Claude token", "Claude backup"] }\n';
+
+    it("says to list the token it stored by hand, not that Setup lists it or to say yes to Setup", async () => {
+      for (const secondSubscription of [true, false]) {
+        const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT, ROTATION, { bySetup: true, secondSubscription });
+
+        expect(w.status).toBe(0);
+        expect(w.stdout).toContain(
+          "Setup leaves the subscriptions list in .fabrik/config.json as it is, since it lists two or more. To run on 'Claude token 2' too, add it to that list yourself.",
+        );
+        expect(w.stdout).toMatch(/still to do by hand:\n.*list "Claude token 2" in subscriptions in \.fabrik\/config\.json yourself: Setup leaves a list of two or more as it is/);
+        expect(w.stdout).not.toMatch(/Setup lists it|say yes to a second Subscription/);
+      }
+    });
+
+    it("skipped, says Setup leaves that list as it is, not how Setup adds one later", async () => {
+      const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SECOND_SUBSCRIPTION, ROTATION, { bySetup: true });
+
+      expect(w.status).toBe(0);
+      expect(w.stdout).toContain("Skipping the second Subscription. .fabrik/config.json already lists two or more Subscriptions, and Setup leaves that list as it is.");
+      expect(w.stdout).not.toContain("say yes to a second Subscription");
+    });
+
+    it("skipped while the list names the second Subscription, says running Setup again walks this stage, with no yes to give", async () => {
+      const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SECOND_SUBSCRIPTION, BOTH_LISTED, { bySetup: true });
+
+      expect(w.stdout).toContain(
+        "Skipping the second Subscription. .fabrik/config.json lists 'Claude token 2' already, so running Setup again walks this stage while 1Password lacks its token.",
+      );
+      expect(w.stdout).not.toContain("say yes to a second Subscription");
+    });
+  });
+
   const REPLACING_IT = [...TO_THE_SECOND_SUBSCRIPTION, "y", "sk-ant-oat01-new", ""];
 
   it("replaces the second token by storing the new one first, then archiving the old item by its id", async () => {

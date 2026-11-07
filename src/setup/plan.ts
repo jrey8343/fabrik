@@ -96,8 +96,9 @@ export interface SetupAnswers {
   /**
    * Whether the Operator wants a second Subscription, so runs fail over to it
    * when the first reaches its weekly limit. With it, setup lists the second
-   * Subscription in the Kit config once its token is in the vault. Without it
-   * setup says nothing about Subscriptions, so the second stays an opt-in step.
+   * Subscription in a Kit config that lists one, once its token is in the
+   * vault. Without it setup says nothing about a second Subscription, so it
+   * stays an opt-in step.
    */
   readonly secondSubscription?: boolean;
   /**
@@ -356,7 +357,7 @@ function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers
     (name) =>
       `${KIT_CONFIG_PATH} lists ${JSON.stringify(name)} in subscriptions, but the "${FABRIK_VAULT}" vault has no item of that name: ${toStore(name, wizardNext, command)}`,
   );
-  if (listed.length > 1 || answers.secondSubscription !== true) return lacking;
+  if (answers.secondSubscription !== true || !takesSecondSubscription(listed)) return lacking;
   if (stored.has(SECOND_SUBSCRIPTION)) {
     if (read !== null) return lacking;
     return [
@@ -385,14 +386,24 @@ function toStore(name: string, wizardNext: boolean, command: string): string {
 /**
  * The Kit config's text with the second Subscription listed after the one it
  * lists, every other byte kept, or null when there's nothing to write: the
- * Operator didn't say yes, its token isn't in the vault yet, or it's listed.
+ * Operator didn't say yes, its token isn't in the vault yet, or the list
+ * doesn't take it.
  */
 function withSecondSubscription(text: string, state: ProductState, answers: SetupAnswers): string | null {
   if (answers.secondSubscription !== true || !state.fabrikItems.includes(SECOND_SUBSCRIPTION)) return null;
   const listed = listedSubscriptions(text);
-  // A list of two or more is a rotation the Operator wrote: setup never adds a third.
-  if (listed === null || listed.length > 1 || listed.includes(SECOND_SUBSCRIPTION)) return null;
+  if (listed === null || !takesSecondSubscription(listed)) return null;
   return withMember(text, ["subscriptions"], [...listed, SECOND_SUBSCRIPTION]);
+}
+
+/**
+ * Whether setup lists the second Subscription after these, on the Operator's
+ * yes once its token is stored: a list of one that doesn't name it already. A
+ * list of two or more is a rotation the Operator wrote, or setup on an earlier
+ * yes, which setup leaves as it is.
+ */
+export function takesSecondSubscription(listed: readonly string[]): boolean {
+  return listed.length === 1 && !listed.includes(SECOND_SUBSCRIPTION);
 }
 
 /**

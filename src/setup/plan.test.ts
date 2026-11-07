@@ -854,6 +854,15 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     }
   });
 
+  it("on a yes, only names the second Subscription's token for a list that names it alone, which setup lists nothing after", () => {
+    const { actions, notes } = planSetup(withConfig('{ "subscriptions": ["Claude token 2"] }\n', ["Claude token"]), kit, operator);
+
+    expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+    expect(notes.filter((note) => note.includes("Claude token 2"))).toEqual([
+      '.fabrik/config.json lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name: run setup again to walk the wizard\'s "A second Subscription" stage for it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2',
+    ]);
+  });
+
   it("gives the Claude token no note in the default list, the Claude token alone, whose token the merge rule names", () => {
     for (const config of [oneListed, '{ "max_in_flight": 1 }\n']) {
       expect(planSetup(withConfig(config, []), kit).notes.join("\n")).not.toContain("subscriptions");

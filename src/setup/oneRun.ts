@@ -18,6 +18,7 @@ import {
   type SetupAnswers,
   type SetupPlan,
   subscriptionsTheKitReads,
+  takesSecondSubscription,
 } from "./plan.ts";
 import { appInstalledIn } from "./wizard.ts";
 
@@ -54,7 +55,7 @@ export function wizardGaps(state: ProductState, answers: SetupAnswers, appItems:
   const config = state.files[KIT_CONFIG_PATH] ?? null;
   const listed = subscriptionsTheKitReads(config);
   // As the plan has it: a yes adds the second Subscription only to a list of one.
-  const second = listed.includes(SECOND_SUBSCRIPTION) || (answers.secondSubscription === true && listed.length === 1);
+  const second = listed.includes(SECOND_SUBSCRIPTION) || (answers.secondSubscription === true && takesSecondSubscription(listed));
   const read = resolveKitConfig({ config, skillsLock: state.files[SKILLS_SOURCES_LOCK_PATH] ?? null });
   const readsSentry = read.ok && read.config.monitor.errors !== null;
   return [

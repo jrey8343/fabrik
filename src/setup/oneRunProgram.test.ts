@@ -883,6 +883,64 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(log).not.toContain("wizard");
     });
 
+    describe("listing two Subscriptions, a rotation setup never adds to", () => {
+      const LEFT_AS_IT_IS = ".fabrik/config.json already lists 2 Subscriptions, and Setup leaves a list of two or more as it is";
+      const withTheFlag = ["--no-time-zone", "--second-subscription", "--no-paused"];
+
+      async function aRotationOnMain(world: World): Promise<void> {
+        await aMergedInstallLacking(world, async (lacking) => {
+          store(lacking, "Fabrik", "Claude backup");
+          await listOnMain(["Claude token", "Claude backup"]);
+        });
+      }
+
+      it("doesn't ask about a second Subscription, and says it leaves that list as it is", async () => {
+        const world = aWorld();
+        await aRotationOnMain(world);
+
+        const { code, said, questions } = await setupOnce(world, { answers: [], args: ["--no-time-zone", "--no-paused"] });
+
+        expect(code).toBe(0);
+        expect(questions).toEqual([]);
+        expect(said).toContain(`${LEFT_AS_IT_IS}, so it doesn't ask about a second.`);
+        expect(said).toContain(COMPLETE);
+      });
+
+      it("takes --second-subscription as doing nothing, and says so", async () => {
+        const world = aWorld();
+        await aRotationOnMain(world);
+
+        const { code, said, questions, log } = await setupOnce(world, { answers: [], args: withTheFlag });
+
+        expect(code).toBe(0);
+        expect(said).toContain(`--second-subscription has no effect: ${LEFT_AS_IT_IS}.`);
+        expect(said).toContain(COMPLETE);
+        expect(questions).toEqual([]);
+        expect(log).not.toContain("wizard");
+      });
+
+      it("with --second-subscription, tells the wizard setup lists no second Subscription, when it walks it for the Claude token", async () => {
+        const world = aWorld();
+        await aRotationOnMain(world);
+        unstore(world, "Fabrik", "Claude token");
+
+        const { code, wizardRuns } = await setupOnce(world, { args: withTheFlag });
+
+        expect(code).toBe(0);
+        expect(wizardRuns[0]?.env[WIZARD_SECOND_SUBSCRIPTION_ENV]).toBe("no");
+      });
+    });
+
+    it("with --second-subscription and a Kit config that lists the second Subscription alone, tells the wizard setup lists nothing, as it's listed", async () => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, () => listOnMain(["Claude token 2"]));
+
+      const { code, wizardRuns } = await setupOnce(world, { args: ["--no-time-zone", "--second-subscription", "--no-paused"], wizard: addsASecondSubscription });
+
+      expect(code).toBe(0);
+      expect(wizardRuns[0]?.env[WIZARD_SECOND_SUBSCRIPTION_ENV]).toBe("no");
+    });
+
     it.each([
       ["without a terminal", { terminal: false }],
       ["with --plan", { args: [...FLAGS, "--plan"] }],
