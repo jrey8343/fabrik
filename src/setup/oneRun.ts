@@ -12,12 +12,12 @@ import {
   CLAUDE_TOKEN_ITEM,
   FABRIK_APP_VAULT,
   FABRIK_VAULT,
-  listedSubscriptions,
   type ProductState,
   SECOND_SUBSCRIPTION,
   type SetupAction,
   type SetupAnswers,
   type SetupPlan,
+  subscriptionsTheKitReads,
 } from "./plan.ts";
 import { appInstalledIn } from "./wizard.ts";
 
@@ -27,7 +27,7 @@ export interface Readiness {
   readonly appInstalled: boolean;
   /** The "Fabrik App" item is in the "Fabrik App" vault. */
   readonly appKeyStored: boolean;
-  /** The "Claude token" item is in the "Fabrik" vault. */
+  /** The "Claude token" item is in the "Fabrik" vault, or the Kit never reads it, as the Kit config the setup PR merges lists only other Subscriptions. */
   readonly claudeTokenStored: boolean;
 }
 
@@ -41,23 +41,25 @@ const CLAUDE_TOKEN = `the Claude token, in the "${FABRIK_VAULT}" vault`;
 
 /**
  * What a wizard stage stores that 1Password lacks, as setup names it for the
- * Operator: the Fabrik App's key, the Claude token, the second Subscription's
- * token once the Kit config lists it or setup would list it on the Operator's
- * yes, and the Sentry token once monitor.errors names Sentry. The wizard
- * stores no other Subscription's token, so one the Kit config lists under
- * another name is the plan's note, not a gap. The App's install and the GitHub
- * settings stages leave nothing setup can read, so they're never among them.
+ * Operator: the Fabrik App's key, the Claude token once the Kit config lists
+ * it, the second Subscription's token once the Kit config lists it or setup
+ * would list it on the Operator's yes, and the Sentry token once
+ * monitor.errors names Sentry. The Kit reads only the Subscriptions listed,
+ * and the wizard stores no other Subscription's token, so one the Kit config
+ * lists under another name is the plan's note, not a gap. The App's install
+ * and the GitHub settings stages leave nothing setup can read, so they're
+ * never among them.
  */
 export function wizardGaps(state: ProductState, answers: SetupAnswers, appItems: readonly string[]): string[] {
   const config = state.files[KIT_CONFIG_PATH] ?? null;
-  const listed = config === null ? [] : (listedSubscriptions(config) ?? []);
+  const listed = subscriptionsTheKitReads(config);
   // As the plan has it: a yes adds the second Subscription only to a list of one.
-  const second = listed.includes(SECOND_SUBSCRIPTION) || (answers.secondSubscription === true && listed.length <= 1);
+  const second = listed.includes(SECOND_SUBSCRIPTION) || (answers.secondSubscription === true && listed.length === 1);
   const read = resolveKitConfig({ config, skillsLock: state.files[SKILLS_SOURCES_LOCK_PATH] ?? null });
   const readsSentry = read.ok && read.config.monitor.errors !== null;
   return [
     ...(appItems.includes(FABRIK_APP_ITEM) ? [] : [APP_KEY]),
-    ...(state.fabrikItems.includes(CLAUDE_TOKEN_ITEM) ? [] : [CLAUDE_TOKEN]),
+    ...(listed.includes(CLAUDE_TOKEN_ITEM) && !state.fabrikItems.includes(CLAUDE_TOKEN_ITEM) ? [CLAUDE_TOKEN] : []),
     ...(second && !state.fabrikItems.includes(SECOND_SUBSCRIPTION)
       ? [`the second Subscription's token, "${SECOND_SUBSCRIPTION}", in the "${FABRIK_VAULT}" vault`]
       : []),
@@ -78,15 +80,17 @@ export interface AfterWizard {
   readonly fabrikItems: readonly string[];
   /** The "Fabrik App" vault's item titles. */
   readonly appItems: readonly string[];
+  /** The Kit config the setup PR merges, the setup branch's, whose subscriptions the Kit reads. Null leaves them to the starter's. */
+  readonly kitConfig?: string | null;
 }
 
 /** The merge rule's three facts, from what the wizard left behind rather than how it ended. */
-export function readinessOf({ repo, report, earlierPr = null, fabrikItems, appItems }: AfterWizard): Readiness {
+export function readinessOf({ repo, report, earlierPr = null, fabrikItems, appItems, kitConfig = null }: AfterWizard): Readiness {
   return {
     // A user's gh can't read an App's installations, so a later run's wizard needn't be walked again to keep it.
     appInstalled: appInstalledIn(report, repo) || (earlierPr !== null && appConfirmedIn(earlierPr, repo)),
     appKeyStored: appItems.includes(FABRIK_APP_ITEM),
-    claudeTokenStored: fabrikItems.includes(CLAUDE_TOKEN_ITEM),
+    claudeTokenStored: fabrikItems.includes(CLAUDE_TOKEN_ITEM) || !subscriptionsTheKitReads(kitConfig).includes(CLAUDE_TOKEN_ITEM),
   };
 }
 
@@ -187,7 +191,7 @@ export async function runOnce({ plan, repo, earlierDone = [] }: OneRun, steps: O
   return { kind: "done", ...published };
 }
 
-/** What the merge waits for: the Fabrik App on the repo, its key and the Claude token. Sentry, notifications and watching don't hold it back. */
+/** What the merge waits for: the Fabrik App on the repo, its key and the Claude token while the Kit reads it. Sentry, notifications and watching don't hold it back. */
 export function mergeBlockers(readiness: Readiness, repo: string): string[] {
   return [
     ...(readiness.appInstalled ? [] : [`the Fabrik App, installed on ${repo}`]),

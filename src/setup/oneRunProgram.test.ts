@@ -336,6 +336,23 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(world.prs[0]?.body).toContain("Don't merge this yet.");
   });
 
+  it("with the Claude token stage skipped, asks for the merge when the Kit config lists only a Subscription under another name, as the Kit never reads the Claude token", async () => {
+    await mkdir(join(checkout, ".fabrik"));
+    await writeFile(join(checkout, ".fabrik", "config.json"), '{\n  "subscriptions": ["Claude backup"]\n}\n');
+    git("add", ".fabrik/config.json");
+    git("commit", "-q", "-m", "Our Kit config");
+    git("push", "-q", "origin", "main");
+    const world = aWorld();
+    store(world, "Fabrik", "Claude backup");
+
+    const { code, said } = await setupOnce(world, { wizard: skipsTheClaudeToken });
+
+    expect(code).toBe(0);
+    expect(said.some((line) => line.startsWith("Merge it yourself once its gating checks pass."))).toBe(true);
+    expect(said).not.toContain('- the Claude token, in the "Fabrik" vault');
+    expect(world.prs[0]?.body).not.toContain("Don't merge this yet.");
+  });
+
   it("with a second Subscription, the setup PR lists it in the Kit config once the wizard's stage has stored its token", async () => {
     const world = aWorld();
     const starter = await readFile(join(KIT_DIR, "templates", "fabrik-config.json"), "utf8");
@@ -822,6 +839,48 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
         expect(questions).toEqual([]);
         expect(log.filter((line) => /^gh pr (create|edit)|^git (switch|commit|push)|^wizard$/.test(line))).toEqual([]);
       }
+    });
+
+    /** The Operator lists the Subscriptions the Kit runs on in the Product's Kit config on main. */
+    async function listOnMain(subscriptions: readonly string[]): Promise<void> {
+      const config = JSON.parse(await readFile(join(checkout, ".fabrik/config.json"), "utf8")) as Record<string, unknown>;
+      await writeFile(join(checkout, ".fabrik/config.json"), `${JSON.stringify({ ...config, subscriptions }, null, 2)}\n`);
+      git("commit", "-q", "-am", "Our own Subscription");
+      git("push", "-q", "origin", "main");
+    }
+
+    it.each([
+      ["in a terminal", {}],
+      ["with --plan", { args: [...FLAGS, "--plan"] }],
+    ])("listing one Subscription under its own name, which 1Password lacks, %s says the install is complete and to store it by hand", async (_, options) => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, () => listOnMain(["Claude backup"]));
+
+      const { code, said, questions } = await setupOnce(world, { answers: [], ...options });
+
+      expect(code).toBe(0);
+      expect(said).toContain(COMPLETE);
+      expect(said).toContain(
+        '- .fabrik/config.json lists "Claude backup" in subscriptions, but the "Fabrik" vault has no item of that name: run `claude setup-token` on that Subscription\'s Claude account and save the token as the "Claude backup" API Credential, with its expiry date, in the "Fabrik" vault yourself, since the wizard stores only "Claude token" and "Claude token 2".',
+      );
+      expect(questions).toEqual([]);
+    });
+
+    it("listing only Subscriptions under other names, says the install is complete with 1Password lacking the Claude token, which the Kit never reads", async () => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, async (lacking) => {
+        store(lacking, "Fabrik", "Claude backup");
+        unstore(lacking, "Fabrik", "Claude token");
+        await listOnMain(["Claude backup"]);
+      });
+
+      const { code, said, log, questions } = await setupOnce(world, { answers: [] });
+
+      expect(code).toBe(0);
+      expect(said).toContain(COMPLETE);
+      expect(said.join("\n")).not.toContain("Claude token");
+      expect(questions).toEqual([]);
+      expect(log).not.toContain("wizard");
     });
 
     it.each([

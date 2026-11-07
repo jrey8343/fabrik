@@ -844,6 +844,22 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     }
   });
 
+  it("names a Subscription the Fabrik vault lacks in a list of one under its own name, which the Kit reads in place of the Claude token", () => {
+    const byHand =
+      '.fabrik/config.json lists "Claude backup" in subscriptions, but the "Fabrik" vault has no item of that name: run `claude setup-token` on that Subscription\'s Claude account and save the token as the "Claude backup" API Credential, with its expiry date, in the "Fabrik" vault yourself, since the wizard stores only "Claude token" and "Claude token 2".';
+
+    for (const fabrikItems of [["Claude token"], []]) {
+      const { notes } = planSetup(withConfig('{ "subscriptions": ["Claude backup"] }\n', fabrikItems), kit);
+      expect(notes.filter((note) => note.includes("subscriptions"))).toEqual([byHand]);
+    }
+  });
+
+  it("gives the Claude token no note in the default list, the Claude token alone, whose token the merge rule names", () => {
+    for (const config of [oneListed, '{ "max_in_flight": 1 }\n']) {
+      expect(planSetup(withConfig(config, []), kit).notes.join("\n")).not.toContain("subscriptions");
+    }
+  });
+
   it("creates no service account: the agent and implement accounts already read the Fabrik vault", () => {
     const state = withConfig(oneListed, ["Claude token"]);
 

@@ -177,6 +177,14 @@ describe("What the merge waits for, read after the wizard", () => {
   it("reads the App's key and the Claude token from the vaults' items, not from how the wizard ended", () => {
     expect(readinessOf({ ...after, appItems: [], fabrikItems: ["Claude token 2"] })).toEqual({ ...READY, appKeyStored: false, claudeTokenStored: false });
   });
+
+  it("needs the Claude token only while the Kit config the setup PR merges lists it, as the Kit reads no other", () => {
+    const listing = (...names: string[]) => `${JSON.stringify({ subscriptions: names })}\n`;
+
+    expect(readinessOf({ ...after, fabrikItems: ["Claude backup"], kitConfig: listing("Claude backup") })).toEqual(READY);
+    expect(readinessOf({ ...after, fabrikItems: ["Claude backup"], kitConfig: listing("Claude backup", "Claude token") }).claudeTokenStored).toBe(false);
+    expect(readinessOf({ ...after, fabrikItems: [], kitConfig: '{ "max_in_flight": 1 }\n' }).claudeTokenStored).toBe(false);
+  });
 });
 
 describe("What a wizard stage stores that 1Password lacks", () => {
@@ -203,6 +211,19 @@ describe("What a wizard stage stores that 1Password lacks", () => {
 
       expect(wizardGaps(state, {}, ["Fabrik App"])).toEqual([]);
     }
+  });
+
+  it("leaves out the Claude token when the Kit config lists only Subscriptions under other names, as the Kit never reads it", () => {
+    const state = installed({ files: { ".fabrik/config.json": listing("Claude backup") }, fabrikItems: ["Claude backup"] });
+
+    expect(wizardGaps(state, {}, ["Fabrik App"])).toEqual([]);
+    expect(wizardGaps({ ...state, fabrikItems: [] }, {}, ["Fabrik App"])).toEqual([]);
+  });
+
+  it("names the Claude token for a Kit config that leaves subscriptions to its default", () => {
+    const state = installed({ files: { ".fabrik/config.json": '{ "max_in_flight": 1 }\n' }, fabrikItems: [] });
+
+    expect(wizardGaps(state, {}, ["Fabrik App"])).toEqual(['the Claude token, in the "Fabrik" vault']);
   });
 
   it("names the second Subscription's token only on the Operator's yes", () => {

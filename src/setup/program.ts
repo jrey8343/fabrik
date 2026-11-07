@@ -250,7 +250,14 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
       gapsAfter = wizardGaps(now, answers, appItems);
       return {
         plan: planSetup(now, kit, answers, { wroteStarter }),
-        readiness: readinessOf({ repo: repoName, report: wizardReport, earlierPr, fabrikItems: now.fabrikItems, appItems }),
+        readiness: readinessOf({
+          repo: repoName,
+          report: wizardReport,
+          earlierPr,
+          fabrikItems: now.fabrikItems,
+          appItems,
+          kitConfig: now.files[KIT_CONFIG_PATH] ?? null,
+        }),
       };
     },
     commit: (written) => commitSetupFiles(run, cwd, written, release),
