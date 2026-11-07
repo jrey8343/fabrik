@@ -307,7 +307,7 @@ function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers
  * exists with the Fabrik App installed on it (the wizard's stage).
  */
 /** Whether GitHub's schedule `timezone:` takes it: an IANA name the runtime's time zone data knows. */
-function isTimeZone(name: string): boolean {
+export function isTimeZone(name: string): boolean {
   if (!/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(name)) return false;
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: name });
