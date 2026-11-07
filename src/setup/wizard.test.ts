@@ -8,14 +8,18 @@ import { describe, expect, it } from "vitest";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
 import { WIZARD_PATH as WIZARD, WIZARD_REPORT_ENV, WIZARD_SECOND_SUBSCRIPTION_ENV } from "./wizard.ts";
 
-/** An `op` that holds the given "vault/title" items, and logs each call with the template it was given. */
+/**
+ * An `op` that holds the given "vault/title" items, and logs each call with the
+ * template it was given, from a file or, after a lone -, on stdin.
+ */
 const FAKE_OP = `#!/usr/bin/env node
 const { appendFileSync, readFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 const flag = (name) => { const i = args.indexOf(name); return i < 0 ? null : args[i + 1]; };
-const template = flag("--template");
+const file = flag("--template");
+const text = file !== null ? readFileSync(file, "utf8") : args.includes("-") ? readFileSync(0, "utf8") : null;
 appendFileSync(process.env.STUB_DIR + "/op.log", JSON.stringify({
-  args, template: template === null ? null : JSON.parse(readFileSync(template, "utf8")),
+  args, templateFile: file, template: text === null ? null : JSON.parse(text),
 }) + "\\n");
 if (args[0] === "item" && args[1] === "get") {
   const items = JSON.parse(process.env.STUB_OP_ITEMS);
@@ -59,6 +63,8 @@ const THE_APP_AND_CLAUDE = ["Fabrik App/Fabrik App", "Fabrik/Claude token"];
 
 interface OpCall {
   args: string[];
+  /** Where the template was, when op was given one by its path. */
+  templateFile: string | null;
   template: unknown;
 }
 
@@ -287,6 +293,35 @@ describe("The setup wizard's Fabrik App stage", () => {
 
     expect(w.stdout).not.toContain("Your App");
     expect(w.opened[0]).toBe("https://github.com/apps/saved-app/installations/new");
+  });
+});
+
+describe("The setup wizard's Fabrik App key stage", () => {
+  const PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0fabrik\n-----END RSA PRIVATE KEY-----\n";
+
+  it("stores the Client ID and the key file's private key as the 'Fabrik App' item, the key never in op's arguments", async () => {
+    const downloads = await tempDir("wizard-downloads");
+    const key = join(downloads, "fabrik.pem");
+    await writeFile(key, PEM);
+
+    const w = await walk(["Fabrik/Claude token"], ["", "fabrik-factory", "", "Iv1.0123abcd", key, "n", "n", ""]);
+
+    expect(w.status).toBe(0);
+    expect(created(w)).toEqual([
+      {
+        vault: "Fabrik App",
+        item: {
+          title: "Fabrik App",
+          category: "SECURE_NOTE",
+          fields: [
+            { id: "client-id", type: "STRING", label: "client-id", value: "Iv1.0123abcd" },
+            { id: "private-key", type: "CONCEALED", label: "private-key", value: PEM },
+          ],
+        },
+      },
+    ]);
+    expect(w.op.filter((c) => c.args.some((arg) => arg.includes("PRIVATE KEY")))).toEqual([]);
+    expect(w.stdout).toContain("stored the 'Fabrik App' item in 1Password");
   });
 });
 

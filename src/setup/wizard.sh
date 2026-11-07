@@ -330,8 +330,14 @@ else
     warn "There's no file at $FABRIK_APP_KEY_FILE."
     SKIPPED+=("the 'Fabrik App' item in the 'Fabrik App' vault (fields client-id and private-key)")
   else
-    op item create --vault "Fabrik App" --category "Secure Note" --title "Fabrik App" \
-      "client-id[text]=$FABRIK_APP_CLIENT_ID" "private-key[concealed]=$(cat "$FABRIK_APP_KEY_FILE")" >/dev/null
+    # The item goes to op on stdin, node reading the key itself, so the key is in no command line.
+    FABRIK_APP_CLIENT_ID="$FABRIK_APP_CLIENT_ID" FABRIK_APP_KEY_FILE="$FABRIK_APP_KEY_FILE" node -e '
+      const item = { title: "Fabrik App", category: "SECURE_NOTE", fields: [
+        { id: "client-id", type: "STRING", label: "client-id", value: process.env.FABRIK_APP_CLIENT_ID },
+        { id: "private-key", type: "CONCEALED", label: "private-key",
+          value: require("node:fs").readFileSync(process.env.FABRIK_APP_KEY_FILE, "utf8") },
+      ] };
+      process.stdout.write(JSON.stringify(item));' | op item create --vault "Fabrik App" - >/dev/null
     say "${GREEN}✓ stored${RESET} the 'Fabrik App' item in 1Password"
     if confirm "Delete the downloaded $FABRIK_APP_KEY_FILE now that 1Password holds it?"; then
       rm -f "$FABRIK_APP_KEY_FILE"
