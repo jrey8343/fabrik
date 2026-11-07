@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { PENRITH_59_REPO, PENRITH_59_REQUEST, PENRITH_59_TICKET_PRACTITIONERS, penrith59 } from "../__fixtures__/requestedChanges.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { verdictMarker } from "../loop/markers.ts";
-import { implementContext, requestChangesContext, retryContext } from "./implement.ts";
+import { conflictContext, implementContext, requestChangesContext, retryContext } from "./implement.ts";
 import { readPullRequest } from "./inputs.ts";
 
 async function fileOf(value: unknown): Promise<string> {
@@ -188,5 +188,31 @@ describe("A retry on a PR the Operator requested changes on is given the amended
     const text = (await retryContext(await fileOf(pullRequest))).parts.join("\n");
 
     expect(text).not.toContain("which amend the Ticket");
+  });
+});
+
+describe("A conflict-only run (#304)", () => {
+  const MAIN = "9".repeat(40);
+
+  it("is told it's a conflict-only run: rebase onto main, resolve the conflicts, change nothing else, and list each conflicted file in its fix", async () => {
+    const text = (await conflictContext(await fileOf(pullRequest), MAIN)).parts.join("\n");
+
+    expect(text).toContain("## The pull request you're bringing up to date with main");
+    expect(text).toContain("## A conflict-only run");
+    expect(text).toContain(MAIN);
+    expect(text).toContain("git rebase origin/main");
+    expect(text).toMatch(/every conflicted file/);
+  });
+
+  it("is given no findings to fix and no new requirements, as neither a Retry nor a Request-changes run", async () => {
+    const text = (await conflictContext(await fileOf(pullRequest), MAIN)).parts.join("\n");
+
+    expect(text).not.toContain("## The findings to fix");
+    expect(text).not.toContain("- The empty cart throws.");
+    expect(text).not.toContain("## The Operator's requested changes");
+  });
+
+  it("refuses a main head that isn't a full commit sha", async () => {
+    await expect(conflictContext(await fileOf(pullRequest), "main")).rejects.toThrow(/FABRIK_CONFLICT_MAIN/);
   });
 });

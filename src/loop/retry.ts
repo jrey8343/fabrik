@@ -19,10 +19,11 @@ export function stepsUp(retry: number): boolean {
 /**
  * Which retry an Execution flaw calls for, given the Verdicts posted before it:
  * one more than the earlier Execution flaws. Verdicts from a Request-changes
- * run don't count, and an Infrastructure failure posts no Verdict at all.
+ * run or a conflict-only run (#304) don't count, and an Infrastructure failure
+ * posts no Verdict at all.
  */
 export function retryNumber(earlier: readonly VerdictRecord[]): number {
-  return 1 + earlier.filter((record) => record.verdict === "execution-flaw" && !record.requestChanges).length;
+  return 1 + earlier.filter((record) => record.verdict === "execution-flaw" && !record.requestChanges && record.conflictRun !== true).length;
 }
 
 /**
@@ -42,7 +43,9 @@ export function retryAfterFlaw(pullRequest: PullRequestSnapshot): { readonly lin
 /** The Implement run an agent PR's latest Verdict, or the Operator's review, called for, that hasn't pushed yet. */
 export type RunInFlight =
   | { readonly kind: "retry"; readonly retry: number }
-  | { readonly kind: "request-changes"; readonly review: number };
+  | { readonly kind: "request-changes"; readonly review: number }
+  /** A conflict-only run (#304), started for this default branch head. */
+  | { readonly kind: "conflict"; readonly main: string };
 
 /**
  * The run in flight on this PR, read from its comments alone, or null. A
@@ -51,9 +54,12 @@ export type RunInFlight =
  * one). A Request-changes run is in flight from the Operator's review
  * requesting changes on the head that passed until its push. An
  * Infrastructure failure posts no outcome, so the run stays in flight until
- * agent:implement resumes it; a trust-root refusal closes the PR.
+ * agent:implement resumes it; a trust-root refusal closes the PR. A
+ * conflict-only run (#304) is in flight from the Kit's note that started it
+ * until its push, or its note that it ended without one.
  */
 export function runInFlight(pullRequest: PullRequestSnapshot, operator: string): RunInFlight | null {
+  if (pullRequest.conflictRunInFlight !== null) return { kind: "conflict", main: pullRequest.conflictRunInFlight };
   const latest = pullRequest.verdicts.at(-1);
   if (latest === undefined || pullRequest.pushedSinceVerdict) return null;
   if (latest.verdict === "execution-flaw") {
@@ -67,7 +73,14 @@ export function runInFlight(pullRequest: PullRequestSnapshot, operator: string):
 
 /** How the Kit's comments name a run in flight, at the start of a sentence. */
 export function runName(run: RunInFlight): string {
-  return run.kind === "retry" ? `Retry ${run.retry} of ${MAX_RETRIES}` : "The Operator's Request-changes run";
+  switch (run.kind) {
+    case "retry":
+      return `Retry ${run.retry} of ${MAX_RETRIES}`;
+    case "request-changes":
+      return "The Operator's Request-changes run";
+    case "conflict":
+      return "The conflict-only run";
+  }
 }
 
 /** Why a Review on this PR posts no Verdict, while a run is in flight on it; otherwise null. */

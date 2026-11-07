@@ -7,7 +7,20 @@ import { UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "../loop/rules.ts";
 import type { LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
-import { countEmptyDiffs, designSessionOf, designTurnFailedIn, pendingPrototypeIn, requestChangesRunIn, unansweredPrototypesIn, verdictsIn } from "./threads.ts";
+import {
+  conflictAttemptsIn,
+  conflictRunIn,
+  conflictRunInFlightIn,
+  countEmptyDiffs,
+  designSessionOf,
+  designTurnFailedIn,
+  pendingPrototypeIn,
+  pushedSinceVerdictIn,
+  requestChangesRunIn,
+  unansweredPrototypesIn,
+  verdictsIn,
+} from "./threads.ts";
+import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, CONFLICT_RUN_MARKER, verdictMarker } from "../loop/markers.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const VERDICT_URL = "https://github.com/acme/shop/pull/50#issuecomment-9001";
@@ -390,5 +403,43 @@ describe("Reading an issue's pending prototype request in the current session", 
       expect(unansweredPrototypesIn([requested(), other(prototypeRound(2, PROTOTYPE_ROUND_MARKER).body)])).toHaveLength(1);
       expect(unansweredPrototypesIn([requested(), app([designRoundMarker(2), "@jrey **Round 2.**", PROTOTYPE_ROUND_MARKER].join("\n"))])).toHaveLength(1);
     });
+  });
+});
+
+describe("Reading a PR's conflict attempts and conflict-only run (#304)", () => {
+  const MAIN = "9".repeat(40);
+  const NEXT = "7".repeat(40);
+  const started = (main: string) => `${conflictAttemptMarker({ main, outcome: "conflict-run" })}\nA conflict-only run starts.`;
+  const rebased = (main: string) => `${conflictAttemptMarker({ main, outcome: "rebased" })}\nRebased cleanly.`;
+  const verdict = (conflictRun: boolean) =>
+    verdictMarker({ verdict: "pass", source: "reviewer", requestChanges: false, ...(conflictRun ? { conflictRun: true as const } : {}), headSha: "b".repeat(40) });
+
+  it("reads every main head the Kit tried, oldest first, however each attempt went", () => {
+    expect(conflictAttemptsIn([rebased(MAIN), "Some comment", started(NEXT)])).toEqual([MAIN, NEXT]);
+  });
+
+  it("reads only a note's first line, so quoting a marker further down doesn't count", () => {
+    expect(conflictAttemptsIn([`Quoting:\n${rebased(MAIN)}`])).toEqual([]);
+  });
+
+  it("has a conflict-only run in flight from the note that started it until its push note or its ended note", () => {
+    expect(conflictRunInFlightIn([started(MAIN)])).toBe(MAIN);
+    expect(conflictRunInFlightIn([started(MAIN), `${CONFLICT_RUN_MARKER}\nPushed.`])).toBeNull();
+    expect(conflictRunInFlightIn([started(MAIN), `${CONFLICT_RUN_ENDED_MARKER}\nIt failed.`])).toBeNull();
+    expect(conflictRunInFlightIn([rebased(MAIN)])).toBeNull();
+  });
+
+  it("counts a conflict-only run's push as a run's push, and marks the next Verdict as from it until one lands", () => {
+    const pushed = [started(MAIN), `${CONFLICT_RUN_MARKER}\nPushed.`];
+
+    expect(pushedSinceVerdictIn(pushed)).toBe(true);
+    expect(conflictRunIn(pushed)).toBe(true);
+    expect(conflictRunIn([...pushed, verdict(true)])).toBe(false);
+  });
+
+  it("reads a Verdict marked as from a conflict-only run, and an older marker without the mark as from none", () => {
+    expect(verdictsIn([verdict(true)])).toEqual([expect.objectContaining({ conflictRun: true })]);
+    expect(verdictsIn([verdict(false)])[0]).not.toHaveProperty("conflictRun");
+    expect(verdict(false)).not.toContain("conflictRun");
   });
 });

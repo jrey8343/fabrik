@@ -12,6 +12,7 @@
 // usage-credits issue keeps the Kit off that Subscription. An Auditor or Retro
 // run is never re-run or held: the tick can't start one at a reset, so its
 // Audit or Retro fails, for the tick to try again.
+import { conflictRunEnded } from "./conflicts.ts";
 import { prototypeRole } from "./design.ts";
 import { heldInOrder, type HoldableRun, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
 import { canHold, heldAfterKill } from "./hold.ts";
@@ -140,6 +141,18 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       resetsAt: run.report?.resetsAt ?? null,
       ranOn,
     });
+  }
+  // A failed conflict-only run (#304) isn't resumed: its PR goes to the Operator until main moves.
+  if (run.conflict !== undefined && !(RERUN_FAILURES.includes(failure) && anotherSubscriptionFree(context.kitIssues, ranOn))) {
+    const { pullRequest: conflicted, main } = run.conflict;
+    const detail = run.report?.detail.trim() ?? "";
+    return {
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: run.issue, label: RESUME_LABELS.implement },
+        ...conflictRunEnded(conflicted, main, operator, `it failed, as an Infrastructure failure: ${howItFailed(failure, run, config)}${detail === "" ? "" : ` (${detail})`}`, run.runUrl),
+      ],
+    };
   }
   const pullRequest = issue.openPullRequests[0];
   const target = pullRequest ?? run.issue;

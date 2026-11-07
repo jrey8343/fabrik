@@ -7,7 +7,8 @@ import { parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
-import { EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, UNMARKED_RETRY_PUSH } from "./markers.ts";
+import { conflictRunEnded, owedConflictRun } from "./conflicts.ts";
+import { CONFLICT_RUN_MARKER, EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { owedRequestChangesRun } from "./mergeGate.ts";
 import { MAX_RETRIES, owedRetry, runInFlight, runName, stepsUp } from "./retry.ts";
 import { verdictActions } from "./review.ts";
@@ -31,7 +32,8 @@ const CHECK_DISPATCH: Action = { kind: "check-dispatch" };
  * so the open draft PR, not the label, shows the Ticket is in progress. On a
  * Ticket whose agent PR is open, it resumes that PR's Implement run instead:
  * the retry an Execution flaw is owed, or the Operator's Request-changes run,
- * so re-adding it recovers either after an Infrastructure failure. It never
+ * so re-adding it recovers either after an Infrastructure failure, or the
+ * conflict-only run the Kit started when main moved under the PR (#304). It never
  * starts a second branch beside an open PR. The label always comes off, so it
  * never claims work that isn't running.
  */
@@ -47,7 +49,7 @@ export function startImplementer(
     const resumed =
       pullRequest === null || pullRequest.number !== open || pullRequest.ticket !== issueNumber
         ? null
-        : (owedRetry(pullRequest, operator, config) ?? owedRequestChangesRun(pullRequest, operator, config));
+        : (owedConflictRun(pullRequest, config) ?? owedRetry(pullRequest, operator, config) ?? owedRequestChangesRun(pullRequest, operator, config));
     return { kind: "act", actions: resumed === null ? [removeLabel] : [removeLabel, resumed] };
   }
   if (whyNotBuildable(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
@@ -130,18 +132,28 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   const { issue, pullRequest, operator } = snapshot;
   if (fixes === undefined) throw new Error("A first Implement run lands through applyImplementation");
   const parsed = parseImplementOutput(event.output, true);
+  // A conflict-only run that can't land still ends, or it would stay in flight for good, its PR withheld from every Verdict (#304).
+  const conflictEnds = (why: string): Plan | null =>
+    fixes.conflict !== undefined && pullRequest !== null && pullRequest.open && pullRequest.number === fixes.pullRequest && pullRequest.conflictRunInFlight === fixes.conflict
+      ? { kind: "act", actions: conflictRunEnded(pullRequest.number, fixes.conflict, operator, why, fixes.runUrl, pullRequest.draft) }
+      : null;
   if (!parsed.ok) {
-    return {
-      kind: "fail",
-      failure: "infrastructure",
-      reason: `The Implementer's retry on #${fixes.pullRequest} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
-    };
+    return (
+      conflictEnds(`its output broke the Implementer's contract (${parsed.errors.join("; ")}), so the Kit didn't push it`) ?? {
+        kind: "fail",
+        failure: "infrastructure",
+        reason: `The Implementer's retry on #${fixes.pullRequest} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
+      }
+    );
   }
   if (issue === null || pullRequest === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the Ticket or the PR its retry fixes" };
   }
   const stale = whyNotRetriedOnto(issueNumber, issue, fixes, pullRequest);
-  if (stale !== null) return { kind: "nothing", reason: `${stale}, so the retry's branch isn't pushed` };
+  if (stale !== null) {
+    return conflictEnds(`${stale}, so the Kit didn't push it`) ?? { kind: "nothing", reason: `${stale}, so the retry's branch isn't pushed` };
+  }
+  if (fixes.conflict !== undefined) return applyConflictRun(event, fixes.conflict, pullRequest, operator, parsed.output, config);
   // The push job rebased the run's own commits if the branch moved (ADR-0006). If the branch moves again,
   // the push's lease refuses it, and the run stays in flight as after an Infrastructure failure.
   if (changes.rebase?.conflicted === true) return startAgain(event, fixes, pullRequest, operator, changes.rebase.onto);
@@ -187,6 +199,65 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           // Present: the on-a-PR contract above requires it.
           withoutMentions(parsed.output.fix ?? ""),
           ...consideredSection(parsed.output.operatorCommentsConsidered ?? [], fixes.operatorComments),
+        ].join("\n"),
+      },
+      { kind: "push-branch", branch },
+      ...previewToLink(evidence, config, branch, pullRequest.number),
+    ],
+  };
+}
+
+/**
+ * The push job's decision on a conflict-only run's branch (#304): a run that
+ * brought main in, by rebasing onto it, with no trust-root change of its own,
+ * lands as the PR's new head, and its push starts a full Review whose Verdict
+ * uses no retry. A conflict resolved inside a Trust-root file is the run's own
+ * change, so the guard refuses it. Anything short of a push (a branch that
+ * moved while it ran, no change, main not brought in, a refusal) hands the PR
+ * to the Operator, open, and the Kit doesn't try again until main moves.
+ */
+function applyConflictRun(
+  event: ImplementRunFinished,
+  main: string,
+  pullRequest: PullRequestSnapshot,
+  operator: string,
+  output: { readonly summary: string; readonly fix?: string; readonly operatorCommentsConsidered?: readonly string[] },
+  config: KitConfig,
+): Plan {
+  const { changes, branch, fixes } = event;
+  if (fixes === undefined) throw new Error("A conflict-only run lands on the PR it fixes");
+  if (pullRequest.conflictRunInFlight !== main) {
+    return { kind: "nothing", reason: `#${pullRequest.number} has no conflict-only run in flight for main at ${main.slice(0, 7)}, so the run's branch isn't pushed` };
+  }
+  const handOff = (why: string): Plan => ({ kind: "act", actions: conflictRunEnded(pullRequest.number, main, operator, why, fixes.runUrl) });
+  if (changes.rebase?.conflicted === true) {
+    return handOff(`\`${branch}\` moved to ${changes.rebase.onto.slice(0, 7)} while it ran, so the Kit discarded its work`);
+  }
+  const guard = checkTrustRoot([...changes.net, ...changes.commits]);
+  if (guard.kind === "refuse") {
+    return handOff(
+      `its resolution changes files that steer or judge the agents, which only you change (ADR-0005), so the Kit didn't push it: ${guard.paths.map((path) => `\`${path}\``).join(", ")}`,
+    );
+  }
+  if (changes.net.length === 0 && changes.updatedFromMain !== true) return handOff(`it committed no change to \`${branch}\``);
+  if (changes.updatedFromMain !== true) return handOff(`it didn't rebase onto \`main\`, so \`${branch}\` still doesn't hold it`);
+  const evidence = evidenceFor(event, config, pullRequest.uiEvidenceMarker !== null);
+  // As for a retry, the body and the note go first: the push starts a Review, which must see the run's outcome.
+  return {
+    kind: "act",
+    actions: [
+      { kind: "edit-issue-body", issue: pullRequest.number, body: pullRequestBody(output.summary, event.issue, evidence) },
+      {
+        kind: "comment",
+        issue: pullRequest.number,
+        body: [
+          // Marks the push as the run's outcome, and the next Verdict as from a conflict-only run, which uses no retry.
+          CONFLICT_RUN_MARKER,
+          `The Implementer rebased \`${branch}\` onto \`main\` at ${main.slice(0, 7)} and resolved its conflicts; Review runs again on it, and its Verdict uses no retry.`,
+          "",
+          // Present: the on-a-PR contract requires it. It lists each conflicted file and how it was resolved.
+          withoutMentions(output.fix ?? ""),
+          ...consideredSection(output.operatorCommentsConsidered ?? [], fixes.operatorComments),
         ].join("\n"),
       },
       { kind: "push-branch", branch },

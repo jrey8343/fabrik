@@ -15,12 +15,54 @@ import type { Strength, VerdictRecord } from "./types.ts";
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
 
 export function verdictMarker(record: VerdictRecord): string {
-  const { verdict, source, requestChanges, headSha } = record;
-  return `<!-- fabrik:verdict ${JSON.stringify({ verdict, source, requestChanges, headSha })} -->`;
+  const { verdict, source, requestChanges, conflictRun, headSha } = record;
+  // Only a conflict-only run's Verdict says so (#304), so every other marker reads as it always has.
+  const fields = conflictRun === true ? { verdict, source, requestChanges, conflictRun, headSha } : { verdict, source, requestChanges, headSha };
+  return `<!-- fabrik:verdict ${JSON.stringify(fields)} -->`;
 }
 
 /** The first line of the Kit's note on a PR that a Request-changes run pushed to it. */
 export const REQUEST_CHANGES_RUN_MARKER = "<!-- fabrik:request-changes-run -->";
+
+/**
+ * The first line of the Kit's note on a PR that a conflict-only run pushed to
+ * it (#304): that run's outcome, which ends its time in flight, and marks the
+ * next Verdict as from a conflict-only run, which uses no retry.
+ */
+export const CONFLICT_RUN_MARKER = "<!-- fabrik:conflict-run -->";
+
+/**
+ * How the Kit records an attempt to bring an agent PR up to date with the
+ * default branch (#304), on the PR, as its note's first line, carrying the
+ * default branch head it tried: `rebased` when the mechanical rebase was
+ * clean and pushed, `conflict-run` when it conflicted and a conflict-only run
+ * started. Either way the Kit tries that PR no more until the head moves.
+ */
+const CONFLICT_ATTEMPT_MARKER = /^<!-- fabrik:conflict-attempt ([0-9a-f]{40}) (rebased|conflict-run) -->/;
+
+/** What a conflict attempt's note records: the default branch head, and how the attempt went. */
+export interface ConflictAttempt {
+  readonly main: string;
+  readonly outcome: "rebased" | "conflict-run";
+}
+
+export function conflictAttemptMarker({ main, outcome }: ConflictAttempt): string {
+  return `<!-- fabrik:conflict-attempt ${main} ${outcome} -->`;
+}
+
+/** The conflict attempt a comment's first line records, or null when it records none. */
+export function conflictAttemptIn(body: string): ConflictAttempt | null {
+  const match = CONFLICT_ATTEMPT_MARKER.exec(body);
+  if (match === null) return null;
+  return { main: match[1] as string, outcome: match[2] as ConflictAttempt["outcome"] };
+}
+
+/**
+ * The first line of the Kit's note that a conflict-only run ended without
+ * pushing (#304): it failed, changed nothing, or was refused. It ends the
+ * run's time in flight, and hands the PR to the Operator.
+ */
+export const CONFLICT_RUN_ENDED_MARKER = "<!-- fabrik:conflict-run-ended -->";
 
 /** The first line of the Kit's note on a PR that a Retry pushed to it: the Retry's outcome, which ends its time in flight. */
 export const RETRY_PUSH_MARKER = "<!-- fabrik:retry-push -->";

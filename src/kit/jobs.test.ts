@@ -171,3 +171,29 @@ describe("The Kit job's routing", () => {
     expect(kitJobOutputs(plan, 7, kitConfig())).toMatchObject({ route: "review", ...evidence });
   });
 });
+
+describe("The Kit job's routing of a conflict-only run (#304)", () => {
+  const MAIN = "9".repeat(40);
+  const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] });
+  const pullRequest = aPullRequest({ conflictAttempts: [MAIN], conflictRunInFlight: MAIN });
+  const plan = planFor({ kind: "label-added", issue: 7, label: "agent:implement" }, snapshotOf(ticket, { pullRequest }), kitConfig());
+
+  it("routes it to the Implement job on the PR's branch, on the Step-up model, as neither a Retry nor a Request-changes run, with the main head it rebases onto", () => {
+    expect(kitJobOutputs(plan, 7, kitConfig())).toMatchObject({
+      route: "implement",
+      ticket: "7",
+      "pull-request": "50",
+      branch: "fabrik/ticket-7",
+      review: "",
+      model: kitConfig().roles.stepUp.model,
+      retry: "0",
+      "step-up": "false",
+      "request-changes": "false",
+      conflict: MAIN,
+    });
+  });
+
+  it("passes out no main head for any other run", () => {
+    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ conflict: "" });
+  });
+});

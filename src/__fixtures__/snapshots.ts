@@ -64,7 +64,7 @@ function parentOf({ parent, parentIssue }: Partial<IssueSnapshot>): Pick<IssueSn
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, ...overrides };
+  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, conflicts: null, ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
@@ -82,6 +82,9 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     labels: [],
     verdicts: [],
     requestChangesRun: false,
+    conflictRun: false,
+    conflictAttempts: [],
+    conflictRunInFlight: null,
     pushedSinceVerdict: false,
     changesRequested: null,
     uiEvidenceMarker: null,
@@ -92,9 +95,9 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
 /** A snapshot of this pull request. */
 export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
-  overrides: Partial<Pick<Snapshot, "operator" | "kitIssues">> = {},
+  overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "conflicts">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, ...overrides };
+  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, conflicts: null, ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -152,6 +155,7 @@ export function dispatchSnapshotOf(
     namedPullRequests: null,
     held: null,
     openMaps: null,
+    conflicts: null,
   };
 }
 
@@ -188,12 +192,13 @@ export function designQueueSnapshotOf(
     namedPullRequests: null,
     held: null,
     openMaps: null,
+    conflicts: null,
   };
 }
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
-export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, ...overrides };
+export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts">> = {}): Snapshot {
+  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, conflicts: null, ...overrides };
 }
 
 /**
@@ -203,8 +208,9 @@ export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kit
  * new to read, so the retro gate opens nothing. Its replay slice is the one
  * a tick gathers with no replay issue open, unless a test gives one.
  */
-export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held">> = {}): Snapshot {
+export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts">> = {}): Snapshot {
   return repoSnapshot({
+    conflicts: { main: HEAD_SHA, pullRequests: [] },
     audit: { head: HEAD_SHA, issues: [] },
     retro: { storeReady: true, issues: [], agentPullRequestClosed: false, escapeFiled: false },
     replay: { issues: [], capacity: null, acceptance: null },

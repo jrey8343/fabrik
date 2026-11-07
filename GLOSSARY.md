@@ -226,6 +226,10 @@ _Avoid_: approval, sign-off
 The Operator's review asking for changes on an agent pull request at the Merge gate, which amends the Ticket for that pull request: the Implementer builds it, and the Reviewer judges against the Ticket as amended, a later one winning over an earlier one and over the Ticket. However large the change, it's built: sending a Ticket to a Design session instead is Send it back.
 _Avoid_: change request, revision, feedback
 
+**Conflict-only run**:
+An Implementer run, on the Step-up model, that brings an agent pull request at the Merge gate up to date after main moved and left it conflicting, once a plain rebase by the Kit conflicted too: it rebases onto main, resolves the conflicts and changes nothing else. It's neither a Retry nor a Request changes, so it uses no retry and adds no requirement. Each pull request gets one attempt per main head.
+_Avoid_: rebase run, conflict retry
+
 **Send it back**:
 The Operator's move at the Merge gate that closes an agent pull request unmerged and sends its Ticket to a Design session, for a change too large or too foggy to build as a Request changes.
 _Avoid_: reject, redesign

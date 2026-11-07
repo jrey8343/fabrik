@@ -5,6 +5,7 @@ import {
   designQueueSnapshotOf,
   kitConfig,
   notificationsOf,
+  HEAD_SHA,
   repoSnapshot,
   snapshotOf,
   tickSnapshot,
@@ -302,7 +303,7 @@ describe("What triggers a Design queue check", () => {
   });
 
   it("a change to the Kit config, since caps.design_sessions may have gone up", () => {
-    const plan = planFor({ kind: "kit-config-changed" }, repoSnapshot(), kitConfig());
+    const plan = planFor({ kind: "kit-config-changed", head: HEAD_SHA }, repoSnapshot({ conflicts: { main: HEAD_SHA, pullRequests: [] } }), kitConfig());
 
     expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
   });

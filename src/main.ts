@@ -6,7 +6,7 @@ import { appendFile, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { AGENT_FAILURE_FILE, readFailureReport } from "./agent/failure.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult } from "./agent/result.ts";
-import { type AgentBranchGit, rebuildAgentBranch } from "./github/branch.ts";
+import { type AgentBranchGit, rebaseBranchOntoMain, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { prototypeBranchFor } from "./loop/designOutput.ts";
 import { applyPlan, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
@@ -89,7 +89,7 @@ function describeAction(action: Action): string {
     case "close-as-superseded":
       return `- close #${action.issue} as superseded`;
     case "start-agent-run":
-      return `- a ${action.role} run on #${action.issue}${action.pullRequest === undefined ? "" : `, ${action.requestChanges === undefined ? "retrying" : "with the Operator's requested changes on"} #${action.pullRequest}`} (${action.model}), which the Kit job routes to its agent job`;
+      return `- a ${action.role} run on #${action.issue}${action.pullRequest === undefined ? "" : `, ${action.conflict !== undefined ? "resolving its conflict with main on" : action.requestChanges === undefined ? "retrying" : "with the Operator's requested changes on"} #${action.pullRequest}`} (${action.model}), which the Kit job routes to its agent job`;
     case "start-replay":
       return `- replay #${action.ticket.ticket} of replay #${action.issue}, both arms, which the Kit job routes to its replay jobs`;
     case "mark-replay-started":
@@ -110,6 +110,8 @@ function describeAction(action: Action): string {
       return `- link each variant's preview in #${action.issue}'s prototype round once it answers, or say it never answered`;
     case "push-branch":
       return `- push ${action.branch}`;
+    case "rebase-onto-main":
+      return `- rebase ${action.branch} of #${action.pullRequest} onto main at ${action.onto.slice(0, 7)}, with no agent: pushed with a lease if clean, else a conflict-only run starts`;
     case "push-prototype-branch":
       return `- push ${prototypeBranchFor(action.issue)}, only as a fast-forward`;
     case "mark-prototype-request":
@@ -237,11 +239,16 @@ async function agentResultEvent(
   if (built === undefined || built.name !== agentBranchFor(result.issue)) {
     throw new Error(`The Implement run on #${result.issue} didn't build ${agentBranchFor(result.issue)}`);
   }
-  // A retry's PR, and whether it was a Request-changes run, come from the Kit job's plan, which the agent can't rewrite.
+  // A retry's PR, and whether it was a Request-changes or conflict-only run, come from the Kit job's plan, which the agent can't rewrite.
   const retry =
     input.pullRequest === null
       ? null
-      : { pullRequest: input.pullRequest, runUrl: thisRunUrl(), requestChanges: input.review !== null };
+      : {
+          pullRequest: input.pullRequest,
+          runUrl: thisRunUrl(),
+          requestChanges: input.review !== null,
+          ...(input.conflict === null || input.conflict === undefined ? {} : { conflict: input.conflict }),
+        };
   if ((retry !== null) !== (built.base.ref === built.name)) {
     throw new Error(
       retry === null
@@ -271,6 +278,7 @@ async function failedRunEvent(
     report: reportText === null ? null : readFailureReport(reportText),
     ...(input.subscription === undefined ? {} : { subscription: input.subscription }),
     ...(input.prototype === undefined ? {} : { prototype: input.prototype }),
+    ...(input.conflict === undefined ? {} : { conflict: input.conflict }),
   });
   return { event, source: `the failed ${input.role} run on #${input.issue}` };
 }
@@ -418,7 +426,17 @@ async function main(): Promise<void> {
   const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
   const plan = planFor(event, snapshot, config);
   // A replay Ticket's claim marks it in progress in this run, and fails when another run claimed it first.
-  const { preview } = await applyPlan(github, repo, plan, branch, { id: Number(required("GITHUB_RUN_ID")), at: new Date().toISOString() });
+  // A push to main's or the tick's plan may rebase an agent PR onto main, as the Fabrik App (#304).
+  const remote = { serverUrl: required("GITHUB_SERVER_URL"), repo, token: required("FABRIK_APP_TOKEN") };
+  const rebaser = { rebase: (name: string, onto: string) => rebaseBranchOntoMain(name, onto, remote) };
+  const { preview } = await applyPlan(
+    github,
+    repo,
+    plan,
+    branch,
+    { id: Number(required("GITHUB_RUN_ID")), at: new Date().toISOString() },
+    rebaser,
+  );
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
   // The replay jobs run only on the Ticket this run's claim marked in progress, once it has.
