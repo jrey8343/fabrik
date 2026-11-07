@@ -209,7 +209,8 @@ export function dependabotUpdate(existing: string | null, template: string): Fil
  * Operator's to fix.
  */
 function groupedFabrikPins(existing: string, template: string): FileUpdate {
-  if (/^\s+fabrik:\n\s+patterns:\n\s+- "jrey8343\/fabrik\*"/m.test(existing)) return null;
+  // Whatever quotes the Product's formatter puts on the pattern, or none, and any comment after it.
+  if (/^\s+fabrik:\n\s+patterns:\n\s+- (["']?)jrey8343\/fabrik\*\1(?:\s|$)/m.test(existing)) return null;
   const groupBlock = /^ {4}# Each pinned Fabrik workflow[\s\S]*?- "jrey8343\/fabrik\*"\n/m;
   if (existing === template.replace(groupBlock, "")) return { content: template };
   return {
