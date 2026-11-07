@@ -270,6 +270,117 @@ describe("The Visual evidence writer", () => {
     });
   });
 
+  describe("an app whose pages sit behind a sign-in", () => {
+    /** The sign-in answers, as the skill gives them once the Operator confirms each. */
+    const signedIn = {
+      sign_in: { owner: "npm run sign-in -- owner", client: "npm run sign-in -- client" },
+      sign_in_path: "/login",
+      signed_in_routes: [
+        { route: "/book/**", as: null },
+        { route: "/admin/**", as: "owner" },
+        { route: "/**", as: "client" },
+      ],
+    };
+    const theirs = lines(
+      "{",
+      '  "operator": "jrey8343",',
+      '  "ui": {',
+      '    "paths": ["src/**"],',
+      '    "serve": "npm run preview",',
+      '    "url": "http://localhost:4321",',
+      '    "before_url": "https://clinic.example.com",',
+      '    "default_routes": ["/"]',
+      "  }",
+      "}",
+      "",
+    );
+
+    // Each rule is printed expanded, as every object the writer prints is: Prettier keeps an expanded object so.
+    it("adds the sign-in fields to the ui block it has, keeping every other byte", () => {
+      expect(write(theirs, { ui: signedIn })).toEqual({
+        ok: true,
+        written: ["ui"],
+        config: lines(
+          "{",
+          '  "operator": "jrey8343",',
+          '  "ui": {',
+          '    "paths": ["src/**"],',
+          '    "serve": "npm run preview",',
+          '    "url": "http://localhost:4321",',
+          '    "before_url": "https://clinic.example.com",',
+          '    "default_routes": ["/"],',
+          '    "sign_in": {',
+          '      "owner": "npm run sign-in -- owner",',
+          '      "client": "npm run sign-in -- client"',
+          "    },",
+          '    "sign_in_path": "/login",',
+          '    "signed_in_routes": [',
+          "      {",
+          '        "route": "/book/**",',
+          '        "as": null',
+          "      },",
+          "      {",
+          '        "route": "/admin/**",',
+          '        "as": "owner"',
+          "      },",
+          "      {",
+          '        "route": "/**",',
+          '        "as": "client"',
+          "      }",
+          "    ]",
+          "  }",
+          "}",
+          "",
+        ),
+      });
+    });
+
+    it("writes them with the rest of a new ui block", () => {
+      const written = write(lines("{", '  "operator": "jrey8343"', "}", ""), { ui: { ...answers.ui, ...signedIn } });
+
+      expect(written.ok && JSON.parse(written.config)).toEqual({ operator: "jrey8343", ui: { ...answers.ui, ...signedIn } });
+    });
+
+    it("writes nothing when run again with the same answers, however the identities are ordered", () => {
+      const once = write(theirs, { ui: signedIn });
+      const config = once.ok ? once.config : "";
+      const reordered = { ...signedIn, sign_in: { client: signedIn.sign_in.client, owner: signedIn.sign_in.owner } };
+
+      expect(write(config, { ui: reordered })).toEqual({ ok: true, written: [], config });
+    });
+
+    it("replaces the identities and rules it has with the answers', rather than merging them", () => {
+      const once = write(theirs, { ui: signedIn });
+      const config = once.ok ? once.config : "";
+      const narrowed = { sign_in: { owner: "npm run sign-in -- owner" }, signed_in_routes: [{ route: "/**", as: "owner" }] };
+
+      const again = write(config, { ui: narrowed });
+
+      expect(again.ok && again.written).toEqual(["ui"]);
+      expect(again.ok && JSON.parse(again.config).ui).toEqual({ ...JSON.parse(config).ui, ...narrowed });
+    });
+
+    it("writes nothing for a sign-in the Kit config would refuse, naming every problem", () => {
+      const deployed = lines(
+        "{",
+        '  "ui": { "paths": ["src/**"], "serve": "npm run preview", "url": "https://staging.clinic.example.com" }',
+        "}",
+        "",
+      );
+      const wrong = { sign_in: { owner: " " }, signed_in_routes: [{ route: "/**", as: "admin" }] };
+
+      expect(write(deployed, { ui: wrong })).toEqual({
+        ok: false,
+        problems: [
+          "ui.sign_in.owner is \" \": a sign-in command can't be blank",
+          "ui.sign_in_path is missing: with ui.sign_in, name the route the app sends a signed-out visitor to",
+          'ui.signed_in_routes[0].as is "admin": it must be null or one of ui.sign_in\'s identities, owner',
+          'ui.url is "https://staging.clinic.example.com": a ui with sign_in serves on a loopback address, such as http://localhost:4321, so a sign-in only ever reaches the Sandbox\'s own server',
+        ],
+      });
+    });
+  });
+
   describe("run again with the same answers", () => {
     const theirs = '{\n  "max_in_flight": 1,\n  "operator": "jrey8343"\n}\n';
 
