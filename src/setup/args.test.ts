@@ -70,15 +70,8 @@ describe("The setup program's flags", () => {
     expect(parsed("--apply").apply).toBe(true);
   });
 
-  it("still takes the Visual evidence flags as the setup skill passes them", () => {
-    const args = parsed("--ui-path=src/pages/**", "--ui-path=src/components/**", "--ui-serve=npm run preview", "--ui-url=http://localhost:4321");
-
-    expect(args.visualEvidence).toEqual({
-      paths: ["src/pages/**", "src/components/**"],
-      serve: "npm run preview",
-      url: "http://localhost:4321",
-      defaultRoutes: [],
-    });
+  it("refuses the Visual evidence flags, which /fabrik-visual-evidence took over", () => {
+    expect(refused(".", "v1.4.2", "--ui-path=src/pages/**")).toBe("Unknown flag --ui-path=src/pages/**.");
   });
 
   it("refuses a missing release", () => {
@@ -115,12 +108,6 @@ describe("The setup program's flags", () => {
       "--no-second-subscription",
       "--paused",
       "--no-paused",
-      "--ui-path=",
-      "--ui-serve=",
-      "--ui-url=",
-      "--ui-before-url=",
-      "--ui-default-route=",
-      "--preview-url=",
       "--plan",
       "--apply",
     ];
@@ -133,12 +120,6 @@ describe("The setup program's flags", () => {
     const values: Record<string, string> = {
       "--account=": "my.1password.com",
       "--time-zone=": "Europe/London",
-      "--ui-path=": "src/**",
-      "--ui-serve=": "npm run preview",
-      "--ui-url=": "http://localhost:4321",
-      "--ui-before-url=": "https://acme.example",
-      "--ui-default-route=": "/",
-      "--preview-url=": "https://deploy-preview-{pr}--acme.netlify.app",
     };
 
     for (const [flag] of SETUP_USAGE.matchAll(/--[a-z-]+=?/g)) {

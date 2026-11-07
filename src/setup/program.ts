@@ -38,7 +38,8 @@ export interface SetupIo {
 export async function runSetup(argv: readonly string[], io: SetupIo): Promise<number> {
   const parsed = parseSetupArgs(argv);
   if (!parsed.ok) {
-    io.complain(parsed.error);
+    // Run with nothing, it only shows how it's run.
+    if (argv.length > 0) io.complain(parsed.error);
     io.complain(SETUP_USAGE);
     return 2;
   }
@@ -71,7 +72,7 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
 
     const state = await gatherState(run, productDir, checked.repo, paths);
     const answers = await askQuestions({ flags: args.answers, state, machineTimeZone: io.machineTimeZone, prompt: io.prompt, say: io.say });
-    const plan = planSetup(state, kit, { ...answers, ...(args.visualEvidence === undefined ? {} : { visualEvidence: args.visualEvidence }) });
+    const plan = planSetup(state, kit, answers);
 
     io.say(`Setup uses the 1Password account ${chosen.account.name}.`);
     io.say("");

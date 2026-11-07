@@ -242,6 +242,15 @@ describe("The setup program", () => {
     expect(calls).toEqual([]);
   });
 
+  it("run with no arguments, prints only the usage line", async () => {
+    const { code, complaints, calls } = await setup([]);
+
+    expect(code).toBe(2);
+    expect(complaints).toHaveLength(1);
+    expect(complaints[0]).toMatch(/^Usage: node src\/setup\/main\.ts /);
+    expect(calls).toEqual([]);
+  });
+
   it("refuses a release that isn't an exact tag, before running anything", async () => {
     const { code, complaints, calls } = await setup([".", "v1"]);
 

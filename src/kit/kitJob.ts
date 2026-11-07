@@ -33,7 +33,7 @@ export function kitJobSummary(
   }
   // Said here, from the Kit config this job checked, so it's said whether or not the Implement job captures.
   if (run?.role === "implement" && config.ui === null) {
-    lines.push("Visual evidence is off until Kit config has a `ui` block: `/fabrik-setup` turns it on.");
+    lines.push("Visual evidence is off until Kit config has a `ui` block: `/fabrik-visual-evidence` turns it on.");
   }
   return `### Fabrik Kit job\n\n${lines.join("\n\n")}\n`;
 }

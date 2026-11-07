@@ -1,7 +1,7 @@
 // The setup skill's planner. Pure, no I/O: given what a Product repo holds now
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
-import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH, type UiConfig } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
 import {
   ALL_LABELS,
   AUDIT_LABEL,
@@ -29,7 +29,6 @@ import {
   WONTFIX,
 } from "../loop/labels.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
-import { layoutOf, printJson, printMembers } from "./json.ts";
 import type { SetupKit } from "./kit.ts";
 import {
   CALLER_PATH,
@@ -99,29 +98,12 @@ export interface SetupAnswers {
    */
   readonly secondSubscription?: boolean;
   /**
-   * The Visual evidence step (Spec #153): which files make a pull request UI,
-   * how the Sandbox serves the branch, and where the production site and
-   * preview deployments are. Without it setup leaves the Kit config's `ui` and
-   * `preview` blocks alone, so Visual evidence stays an opt-in step.
-   */
-  readonly visualEvidence?: VisualEvidenceAnswers;
-  /**
    * Whether to install with Dispatch paused: the starter Kit config is written
    * with `max_in_flight: 0`, so no Implementer starts until the Operator raises
    * it. An existing Kit config is the Product's, so it's never changed.
    */
   readonly paused?: boolean;
 }
-
-/**
- * The Operator's answers to the Visual evidence step, which setup writes as
- * the Kit config's `ui` and `preview` blocks: the `ui` block's, with
- * `before_url` and `default_routes` left out when the Operator gives none,
- * and `preview.url`, a template that may use `{pr}`, `{branch_slug}` and
- * `{sha}` (src/kit/config.ts), left out when no preview is linked.
- */
-export type VisualEvidenceAnswers = Pick<UiConfig, "paths" | "serve" | "url"> &
-  Partial<Pick<UiConfig, "beforeUrl" | "defaultRoutes">> & { readonly previewUrl?: string };
 
 export interface BranchProtection {
   readonly requiredChecks: readonly string[];
@@ -224,22 +206,19 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
 
 /**
  * The Kit config is the Product's: setup writes the starter once, when the repo
- * lacks one, and otherwise changes only what the Operator's answers to an
- * opt-in step ask for. Visual evidence is that step: its `ui` and `preview`
- * blocks go into the starter, or into the Kit config the repo already has.
+ * lacks one, and never changes it after that. Visual evidence, the one block
+ * that needs judgment, is /fabrik-visual-evidence's to write (Spec #330).
  */
 function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, notes: string[]): SetupAction[] {
   const existing = state.files[KIT_CONFIG_PATH] ?? null;
   const paused = answers.paused === true;
-  const text = existing ?? (paused ? pausedStarter(kit.templates.kitConfig) : kit.templates.kitConfig);
-  const updated = answers.visualEvidence === undefined ? null : withVisualEvidence(text, answers.visualEvidence, notes);
-  if (existing === null && !paused) notes.push(...readyForAgentWarning(state.readyForAgent));
-  if (existing !== null && paused) notes.push(pausedHadNoEffect(existing));
-  if (existing === null) {
-    const why = `a starter Kit config with every v1 default${paused ? " but Dispatch paused (max_in_flight 0)" : ""}`;
-    return [updated === null ? write(KIT_CONFIG_PATH, text, why) : write(KIT_CONFIG_PATH, updated, `${why}, and Visual evidence on`)];
+  if (existing !== null) {
+    if (paused) notes.push(pausedHadNoEffect(existing));
+    return [];
   }
-  return updated === null ? [] : [write(KIT_CONFIG_PATH, updated, "the Visual evidence step's ui and preview blocks")];
+  if (!paused) notes.push(...readyForAgentWarning(state.readyForAgent));
+  const why = `a starter Kit config with every v1 default${paused ? " but Dispatch paused (max_in_flight 0)" : ""}`;
+  return [write(KIT_CONFIG_PATH, paused ? pausedStarter(kit.templates.kitConfig) : kit.templates.kitConfig, why)];
 }
 
 /** The warning that an unpaused install puts the tracker's ready-for-agent issues straight into Dispatch's queue. */
@@ -266,59 +245,6 @@ function pausedStarter(starter: string): string {
   const member = /("max_in_flight"\s*:\s*)\d+/;
   if (!member.test(starter)) throw new Error("The starter Kit config has no max_in_flight to pause.");
   return starter.replace(member, (_, key: string) => `${key}0`);
-}
-
-/**
- * The Kit config with its `ui` and `preview` blocks as the Visual evidence
- * step's answers spell them, or null when it already holds them or the
- * answers are ones the Kit config would refuse. The file is the Operator's:
- * a block it lacks is added before its closing brace, every other byte kept,
- * and only when a block it has must change is the whole file rewritten.
- */
-function withVisualEvidence(text: string, answers: VisualEvidenceAnswers, notes: string[]): string | null {
-  const blocks = {
-    ui: {
-      paths: answers.paths,
-      serve: answers.serve,
-      url: answers.url,
-      before_url: answers.beforeUrl ?? null,
-      default_routes: answers.defaultRoutes ?? [],
-    },
-    preview: { url: answers.previewUrl ?? null },
-  };
-  const checked = resolveKitConfig({ config: JSON.stringify(blocks) });
-  if (!checked.ok) {
-    notes.push(
-      `The Visual evidence answers weren't written to ${KIT_CONFIG_PATH}, because the Kit config would refuse them: ${checked.errors.join("; ")}. Run setup again with them fixed.`,
-    );
-    return null;
-  }
-  const config = jsonObject(text);
-  if (config === null) {
-    notes.push(`${KIT_CONFIG_PATH} isn't a JSON object, so the Visual evidence answers weren't written to it: fix it and run setup again.`);
-    return null;
-  }
-  const entries = Object.entries(blocks);
-  const changes = entries.some(([key, value]) => Object.hasOwn(config, key) && JSON.stringify(config[key]) !== JSON.stringify(value));
-  if (changes) {
-    const layout = layoutOf(text);
-    return `${printJson({ ...config, ...blocks }, layout)}${layout.eol}`;
-  }
-  const absent = entries.filter(([key]) => !Object.hasOwn(config, key));
-  return absent.length === 0 ? null : withMembers(text, absent);
-}
-
-/**
- * A JSON object's text with these members added before its closing brace,
- * indented as its own members are, and every byte of it kept as it was.
- */
-function withMembers(text: string, members: readonly (readonly [string, unknown])[]): string {
-  const layout = layoutOf(text);
-  const { eol } = layout;
-  // Everything up to the end of its last member, then the closing brace with whatever whitespace is around it.
-  const head = text.slice(0, text.lastIndexOf("}")).trimEnd();
-  const tail = text.slice(head.length);
-  return `${head}${head.endsWith("{") ? "" : ","}${eol}${printMembers(members, layout, 1)}${tail.startsWith(eol) ? "" : eol}${tail}`;
 }
 
 function jsonObject(text: string): Record<string, unknown> | null {

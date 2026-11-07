@@ -6,11 +6,10 @@
 // It runs its checks first, then chooses the 1Password account (--account=, or
 // OP_ACCOUNT, or the only one, or asks), then asks the questions the flags
 // left out: --time-zone=<IANA zone>, --second-subscription and --paused, each
-// with a --no- form. It asks only when stdin is a terminal. The Visual evidence
-// flags (--ui-path=<glob>, repeated, --ui-serve, --ui-url, and optionally
-// --ui-before-url, --ui-default-route=<route>, repeated, and --preview-url)
-// write the Kit config's ui and preview blocks. Thin by design: the program is
-// in program.ts, and every decision about the repo is in the planner (plan.ts).
+// with a --no- form. It asks only when stdin is a terminal. Visual evidence
+// isn't setup's: /fabrik-visual-evidence turns it on. Thin by design: the
+// program is in program.ts, and every decision about the repo is in the
+// planner (plan.ts).
 import { resolve } from "node:path";
 import { spawnRun } from "./exec.ts";
 import { runSetup } from "./program.ts";
