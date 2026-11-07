@@ -191,13 +191,16 @@ describe("The checks before setup plans anything", () => {
 
     it("stop, saying to go back to the default branch, when a merged setup PR's head holds it, as after GitHub moved the head on and the PR was squash-merged", async () => {
       const movedHead = "c0ffee5ddb22b046e26455e4f9c9b3aaaf62212d";
-      const merged = { stdout: JSON.stringify([{ headRefOid: movedHead, isCrossRepository: false }]) };
+      const merged = { stdout: JSON.stringify([{ number: 1, headRefOid: movedHead, isCrossRepository: false }]) };
+      const noForcePush = { stdout: JSON.stringify({ data: { repository: { pullRequest: { timelineItems: { nodes: [] } } } } }) };
 
       expect(
         await problem({
           ...onSetupBranch,
           [lsRemote("v1.4.2")]: { stdout: `${OTHER_SHA}\trefs/heads/main\n` },
           "gh pr list --head fabrik/setup-v1.4.2 --state merged": merged,
+          "gh pr list --head fabrik/setup-v1.4.2 --state open": { stdout: "[]" },
+          "gh api graphql": noForcePush,
           [`gh api repos/acme/clinic/compare/${HEAD_SHA}...${movedHead}`]: { stdout: "ahead\n" },
         }),
       ).toBe("fabrik/setup-v1.4.2's setup PR is merged. Switch to main with git switch main && git pull, then run setup again.");

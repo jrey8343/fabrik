@@ -5,9 +5,19 @@
 // nothing the default branch lacks, there's no PR: the run goes back to the
 // default branch. Each step is injected, so this module does no git, gh, op or
 // terminal work itself.
+import { KIT_CONFIG_PATH, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
 import { describeAction, writtenPaths } from "./apply.ts";
 import { appConfirmedIn, lastOfEach } from "./finish.ts";
-import { FABRIK_APP_VAULT, FABRIK_VAULT, type SetupAction, type SetupPlan } from "./plan.ts";
+import {
+  FABRIK_APP_VAULT,
+  FABRIK_VAULT,
+  listedSubscriptions,
+  type ProductState,
+  SECOND_SUBSCRIPTION,
+  type SetupAction,
+  type SetupAnswers,
+  type SetupPlan,
+} from "./plan.ts";
 import { appInstalledIn } from "./wizard.ts";
 
 /** What the Kit's first runs need before the setup PR merges, read after the wizard. */
@@ -24,6 +34,39 @@ export interface Readiness {
 export const FABRIK_APP_ITEM = "Fabrik App";
 /** The first Subscription's token, in the "Fabrik" vault. */
 export const CLAUDE_TOKEN_ITEM = "Claude token";
+/** The token the Monitor reads Sentry with, in the "Fabrik App" vault. */
+export const SENTRY_TOKEN_ITEM = "Sentry token";
+
+const APP_KEY = `the Fabrik App's key, in the "${FABRIK_APP_VAULT}" vault`;
+const CLAUDE_TOKEN = `the Claude token, in the "${FABRIK_VAULT}" vault`;
+
+/**
+ * What a wizard stage stores that 1Password lacks, as setup names it for the
+ * Operator: the Fabrik App's key, the Claude token, each Subscription the Kit
+ * config lists or the Operator said yes to, and the Sentry token once
+ * monitor.errors names Sentry. The App's install and the GitHub settings
+ * stages leave nothing setup can read, so they're never among them.
+ */
+export function wizardGaps(state: ProductState, answers: SetupAnswers, appItems: readonly string[]): string[] {
+  const config = state.files[KIT_CONFIG_PATH] ?? null;
+  const listed = config === null ? [] : (listedSubscriptions(config) ?? []);
+  const tokens = new Set([CLAUDE_TOKEN_ITEM, ...listed, ...(answers.secondSubscription === true ? [SECOND_SUBSCRIPTION] : [])]);
+  const read = resolveKitConfig({ config, skillsLock: state.files[SKILLS_SOURCES_LOCK_PATH] ?? null });
+  const readsSentry = read.ok && read.config.monitor.errors !== null;
+  return [
+    ...(appItems.includes(FABRIK_APP_ITEM) ? [] : [APP_KEY]),
+    ...[...tokens].filter((token) => !state.fabrikItems.includes(token)).map(tokenGap),
+    ...(readsSentry && !appItems.includes(SENTRY_TOKEN_ITEM)
+      ? [`the Sentry token, in the "${FABRIK_APP_VAULT}" vault, which monitor.errors in ${KIT_CONFIG_PATH} reads`]
+      : []),
+  ];
+}
+
+function tokenGap(token: string): string {
+  if (token === CLAUDE_TOKEN_ITEM) return CLAUDE_TOKEN;
+  if (token === SECOND_SUBSCRIPTION) return `the second Subscription's token, "${SECOND_SUBSCRIPTION}", in the "${FABRIK_VAULT}" vault`;
+  return `"${token}", which ${KIT_CONFIG_PATH} lists in subscriptions, in the "${FABRIK_VAULT}" vault`;
+}
 
 export interface AfterWizard {
   /** The Product repo, as owner/name. */
@@ -149,7 +192,7 @@ export async function runOnce({ plan, repo, earlierDone = [] }: OneRun, steps: O
 export function mergeBlockers(readiness: Readiness, repo: string): string[] {
   return [
     ...(readiness.appInstalled ? [] : [`the Fabrik App, installed on ${repo}`]),
-    ...(readiness.appKeyStored ? [] : [`the Fabrik App's key, in the "${FABRIK_APP_VAULT}" vault`]),
-    ...(readiness.claudeTokenStored ? [] : [`the Claude token, in the "${FABRIK_VAULT}" vault`]),
+    ...(readiness.appKeyStored ? [] : [APP_KEY]),
+    ...(readiness.claudeTokenStored ? [] : [CLAUDE_TOKEN]),
   ];
 }

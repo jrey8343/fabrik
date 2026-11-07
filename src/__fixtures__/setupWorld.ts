@@ -16,6 +16,8 @@ export interface PullRequest {
   merged?: boolean;
   /** The head's commit when it merged. */
   headRefOid?: string;
+  /** The heads a force-push replaced while it was open, as GitHub's "Update with rebase" does, which its timeline keeps. */
+  forcePushedFrom?: string[];
 }
 
 export interface World {
@@ -109,6 +111,15 @@ export function worldScript(world: World, origin?: Origin): Record<string, Answe
       if (compared === null || origin?.compare === undefined) throw new Error(`The world has no answer for: gh ${args.join(" ")}`);
       const status = origin.compare(compared[1]!, compared[2]!);
       return status === null ? { code: 1, stderr: "gh: Not Found (HTTP 404)" } : { stdout: `${status}\n` };
+    },
+    // A PR's force-pushes, as its timeline's HeadRefForcePushedEvents give them.
+    "gh api graphql": ({ args }) => {
+      if (!args.some((arg) => arg.startsWith("query=") && arg.includes("HEAD_REF_FORCE_PUSHED_EVENT"))) {
+        throw new Error(`The world has no answer for: gh ${args.join(" ")}`);
+      }
+      const pr = world.prs.find((candidate) => `number=${candidate.number}` === valueOf(args, "-F"));
+      const nodes = (pr?.forcePushedFrom ?? []).map((oid) => ({ beforeCommit: { oid } }));
+      return json({ data: { repository: { pullRequest: pr === undefined ? null : { timelineItems: { nodes } } } } });
     },
     "gh pr list": ({ args }) =>
       json(

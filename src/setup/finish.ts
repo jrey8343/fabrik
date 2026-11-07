@@ -114,14 +114,21 @@ export function closingLines({ release, defaultBranch, url, summary }: ClosingIn
   ];
 }
 
-/** The run's last lines when it wrote no file the default branch lacks, so there's no setup PR. */
-export function appliedLines(defaultBranch: string, summary: RunSummary): string[] {
+/**
+ * The run's last lines when it wrote no file the default branch lacks, so
+ * there's no setup PR. upToDate says whether the default branch it switched
+ * back to is origin's, as setup brings it up to date when it can.
+ */
+export function appliedLines(defaultBranch: string, summary: RunSummary, upToDate = true): string[] {
+  const noPr = `Every file setup writes is already on ${defaultBranch}, so there's no setup PR to open.`;
   return [
     "What setup did:",
     ...(summary.done.length === 0 ? ["- nothing new in this run"] : bullets(summary.done)),
     ...(summary.notes.length === 0 ? [] : ["", "For the Operator:", ...bullets(summary.notes)]),
     "",
-    `Every file setup writes is already on ${defaultBranch}, so there's no setup PR to open. Setup switched back to ${defaultBranch}.`,
+    upToDate
+      ? `${noPr} Setup switched back to ${defaultBranch}.`
+      : `${noPr} Setup switched back to ${defaultBranch}, which here isn't the same as on origin: pull or push so they match, then run setup again.`,
   ];
 }
 
@@ -144,8 +151,9 @@ function guidance(release: string, paused: boolean): string[] {
       'Pick skills under roles.<role>.skills in .fabrik/config.json ("owner/name/skill", for triage, design, implement or review), and say when to use each in that phase\'s .fabrik/<phase>.md. ' +
       "The README's Extra skills section has the details.",
     "The Monitor files an issue for Triage when the default branch goes red, once the Fabrik App's Checks: read is accepted. " +
-      'It files one for each production error Sentry reports, once monitor.errors in .fabrik/config.json names the provider, org and project ({ "provider": "sentry", "org": "<org slug>", "project": "<project slug>" }) and the wizard has stored the Sentry token. ' +
-      "Until then each source stays dormant, with a quiet note in the hourly tick's step summary.",
+      'It files one for each production error Sentry reports, once monitor.errors in .fabrik/config.json names the provider, org and project ({ "provider": "sentry", "org": "<org slug>", "project": "<project slug>" }) and 1Password holds the Sentry token. ' +
+      "Until then each source stays dormant, with a quiet note in the hourly tick's step summary. " +
+      `Once monitor.errors names it, running setup again walks the wizard's Sentry stage to store the token: ${command}`,
     "With Visual evidence on, each PR whose diff touches ui.paths gets an evidence section linking a gallery of its screenshots, and the Reviewer sees them. " +
       "Once the setup PR is merged, turn it on, or change its answers, by running /fabrik-visual-evidence in a Claude session in this repo.",
     ...(paused

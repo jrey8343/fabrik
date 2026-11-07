@@ -2,8 +2,9 @@
 // when it ran: the yes, the setup branch, apply, the wizard, reading again,
 // then commit, push and the setup PR.
 import { describe, expect, it } from "vitest";
-import { mergeBlockers, type OneRunSteps, type Readiness, readinessOf, runOnce } from "./oneRun.ts";
-import type { SetupAction, SetupPlan } from "./plan.ts";
+import { aCleanProduct } from "../__fixtures__/productState.ts";
+import { mergeBlockers, type OneRunSteps, type Readiness, readinessOf, runOnce, wizardGaps } from "./oneRun.ts";
+import type { ProductState, SetupAction, SetupPlan } from "./plan.ts";
 
 const READY: Readiness = { appInstalled: true, appKeyStored: true, claudeTokenStored: true };
 
@@ -175,6 +176,40 @@ describe("What the merge waits for, read after the wizard", () => {
 
   it("reads the App's key and the Claude token from the vaults' items, not from how the wizard ended", () => {
     expect(readinessOf({ ...after, appItems: [], fabrikItems: ["Claude token 2"] })).toEqual({ ...READY, appKeyStored: false, claudeTokenStored: false });
+  });
+});
+
+describe("What a wizard stage stores that 1Password lacks", () => {
+  const twoListed = '{ "subscriptions": ["Claude token", "Claude token B"] }\n';
+  const installed = (overrides: Partial<ProductState> = {}) =>
+    aCleanProduct({ files: { ".fabrik/config.json": twoListed }, fabrikItems: ["Claude token", "Claude token B"], ...overrides });
+
+  it("is nothing once 1Password holds the App's key and every Subscription the Kit config lists", () => {
+    expect(wizardGaps(installed(), {}, ["Fabrik App"])).toEqual([]);
+  });
+
+  it("names a Subscription the Kit config lists by its own name, and the Claude token once", () => {
+    expect(wizardGaps(installed({ fabrikItems: [] }), {}, ["Fabrik App"])).toEqual([
+      'the Claude token, in the "Fabrik" vault',
+      '"Claude token B", which .fabrik/config.json lists in subscriptions, in the "Fabrik" vault',
+    ]);
+  });
+
+  it("names the second Subscription's token only on the Operator's yes", () => {
+    const gap = 'the second Subscription\'s token, "Claude token 2", in the "Fabrik" vault';
+
+    expect(wizardGaps(installed(), { secondSubscription: true }, ["Fabrik App"])).toEqual([gap]);
+    expect(wizardGaps(installed(), {}, ["Fabrik App"])).toEqual([]);
+  });
+
+  it("names the Sentry token only once monitor.errors names a Sentry project", () => {
+    const sentry = '{ "monitor": { "errors": { "provider": "sentry", "org": "acme", "project": "clinic" } } }\n';
+    const state = aCleanProduct({ files: { ".fabrik/config.json": sentry }, fabrikItems: ["Claude token"] });
+    const gap = 'the Sentry token, in the "Fabrik App" vault, which monitor.errors in .fabrik/config.json reads';
+
+    expect(wizardGaps(state, {}, ["Fabrik App"])).toEqual([gap]);
+    expect(wizardGaps(state, {}, ["Fabrik App", "Sentry token"])).toEqual([]);
+    expect(wizardGaps(installed(), {}, ["Fabrik App"])).toEqual([]);
   });
 });
 

@@ -3,9 +3,13 @@
 // left out. Anything it doesn't know is refused, with the usage line.
 import { setupCommand } from "./finish.ts";
 
-/** How the Operator runs setup: through the bootstrap command, which gives the program the checkout and the release. */
+/**
+ * How the Operator runs setup: through the bootstrap command, which gives the
+ * program the checkout and the release. The bootstrap takes the release first,
+ * or as --release=, which it never passes on.
+ */
 export const SETUP_USAGE =
-  `Usage: ${setupCommand("[release]")} [--account=<1Password account>]` +
+  `Usage: ${setupCommand("[release | --release=<release>]")} [--account=<1Password account>]` +
   " [--time-zone=<IANA zone> | --no-time-zone] [--second-subscription | --no-second-subscription] [--paused | --no-paused]" +
   " [--plan]";
 

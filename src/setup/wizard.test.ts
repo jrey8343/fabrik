@@ -415,12 +415,16 @@ describe("The setup wizard's Sentry token stage", () => {
     expect(w.stdout).not.toContain("still to do by hand");
   });
 
-  it("is skipped for a repo that doesn't report to Sentry, which still finishes setup", async () => {
+  it("is skipped for a repo that doesn't report to Sentry, which still finishes setup, and says Setup walks it once monitor.errors names Sentry", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_SENTRY_STAGE, "n"]);
 
     expect(w.status).toBe(0);
     expect(created(w)).toEqual([]);
     expect(w.stdout).toContain("Setup complete");
+    expect(w.stdout).toContain(
+      "Skipping the Sentry token. Once acme/clinic reports to Sentry, name its project in monitor.errors in .fabrik/config.json and run Setup again: it walks this stage while 1Password lacks the token.",
+    );
+    expect(w.stdout).not.toContain("Re-run the wizard");
   });
 
   it("keeps the Sentry token 1Password already holds, which every Product repo in this 1Password account shares", async () => {
@@ -558,13 +562,17 @@ describe("The setup wizard's second Subscription stage", () => {
     expect(w.stdout).not.toMatch(/lists it in subscriptions|To list it|"subscriptions": \[/);
   });
 
-  it("is skipped unless the Operator asks for a second Subscription, which still finishes setup", async () => {
+  it("is skipped unless the Operator asks for a second Subscription, which still finishes setup, and says how Setup adds one later", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SECOND_SUBSCRIPTION);
 
     expect(w.status).toBe(0);
     expect(created(w)).toEqual([]);
     expect(w.stdout).not.toContain("Create a second Claude account");
     expect(w.stdout).toContain("Setup complete");
+    expect(w.stdout).toContain(
+      "Skipping the second Subscription. To add one later, run Setup again and say yes to a second Subscription: it walks this stage while 1Password lacks the token.",
+    );
+    expect(w.stdout).not.toContain("Re-run the wizard");
   });
 
   const REPLACING_IT = [...TO_THE_SECOND_SUBSCRIPTION, "y", "sk-ant-oat01-new", ""];

@@ -2,8 +2,9 @@
 # Fabrik's bootstrap script. The Operator runs Setup with it, in their own
 # terminal, from the root of the Product repo's clone:
 #   curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- [release] [setup's flags]
-# It checks for Node 24.3 or later and gh, finds the release (Fabrik's latest
-# unless one is named, as an exact tag), downloads it into a temporary folder,
+# The release can also be named as --release=<release>, anywhere among the
+# flags. It checks for Node 24.3 or later and gh, finds the release (Fabrik's
+# latest unless one is named, as an exact tag), downloads it into a temporary folder,
 # runs that release's setup program with every other argument, and deletes the
 # folder whatever the outcome. It does nothing else: everything that acts is in
 # the release, so the release's pin works as before, and this script barely
@@ -21,12 +22,31 @@ stop() {
 }
 
 fabrik_setup() {
-  local release="" node_version major rest minor gh_said
+  local release="" node_version major rest minor gh_said arg named
+  local flags=()
   # The release comes first, when it's named: every flag is setup's.
   if [[ $# -gt 0 && $1 != -* ]]; then
     release=$1
     shift
   fi
+  # Or it's --release=<release>, anywhere among them, which is this script's
+  # alone: the program never sees it.
+  for arg in "$@"; do
+    case $arg in
+      --release=*)
+        named=${arg#--release=}
+        [[ -n $named ]] ||
+          stop "--release= names no release. Name one from $RELEASES, such as --release=v1.2.3, or leave it out for the latest."
+        [[ -z $release || $release == "$named" ]] ||
+          stop "The release is named twice, as $release and $named. Name it once, then run setup again."
+        release=$named
+        ;;
+      --release) stop "--release takes its release after an =, such as --release=v1.2.3." ;;
+      *) flags+=("$arg") ;;
+    esac
+  done
+  # bash before 4.4, as macOS has, counts an empty array as unset.
+  set -- ${flags[@]+"${flags[@]}"}
 
   command -v node >/dev/null 2>&1 ||
     stop "Setup needs Node 24.3 or later, and node isn't installed. Install Node 24.3 or later, then run setup again."

@@ -29,6 +29,7 @@ import {
   WONTFIX,
 } from "../loop/labels.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
+import { setupCommand } from "./finish.ts";
 import { withMember } from "./json.ts";
 import type { SetupKit } from "./kit.ts";
 import {
@@ -311,7 +312,7 @@ const SECOND_SUBSCRIPTION_STAGE = 'the wizard\'s "A second Subscription" stage';
  * listed. Null when it isn't a JSON object or its list isn't a non-empty one
  * of names: protection() already tells the Operator the Kit config is invalid.
  */
-function listedSubscriptions(text: string): readonly string[] | null {
+export function listedSubscriptions(text: string): readonly string[] | null {
   const config = jsonObject(text);
   if (config === null) return null;
   const listed = config["subscriptions"] === undefined ? DEFAULT_KIT_CONFIG.subscriptions : config["subscriptions"];
@@ -328,13 +329,13 @@ function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers
   const read = listedSubscriptions(state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig);
   const listed = read ?? DEFAULT_KIT_CONFIG.subscriptions;
   const stored = new Set(state.fabrikItems);
+  // Once the setup PR is merged, setup's command is the way to the wizard, which it walks while 1Password lacks the token.
+  const command = setupCommand(kit.release);
   if (listed.length > 1) {
+    const toWalk = wizardNext ? `walk ${SECOND_SUBSCRIPTION_STAGE} for it.` : `run setup again to walk ${SECOND_SUBSCRIPTION_STAGE} for it: ${command}`;
     return listed
       .filter((name) => !stored.has(name))
-      .map(
-        (name) =>
-          `${KIT_CONFIG_PATH} lists ${JSON.stringify(name)} in subscriptions, but the "${FABRIK_VAULT}" vault has no item of that name: walk ${SECOND_SUBSCRIPTION_STAGE}, then run setup again.`,
-      );
+      .map((name) => `${KIT_CONFIG_PATH} lists ${JSON.stringify(name)} in subscriptions, but the "${FABRIK_VAULT}" vault has no item of that name: ${toWalk}`);
   }
   if (answers.secondSubscription !== true) return [];
   if (stored.has(SECOND_SUBSCRIPTION)) {
@@ -345,7 +346,7 @@ function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers
   }
   const listing = wizardNext
     ? `Setup then lists it in subscriptions in ${KIT_CONFIG_PATH}, in the setup PR.`
-    : `Then run setup again, and it lists it in subscriptions in ${KIT_CONFIG_PATH}.`;
+    : `Running setup again walks it, then lists it in subscriptions in ${KIT_CONFIG_PATH}: ${command}`;
   return [
     `Walk ${SECOND_SUBSCRIPTION_STAGE}: create a second Claude account, run \`claude setup-token\` on it, save the token as the "${SECOND_SUBSCRIPTION}" API Credential, with its expiry date, in the "${FABRIK_VAULT}" vault, and turn usage credits off on every account. ${listing}`,
   ];

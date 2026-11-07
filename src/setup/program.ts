@@ -3,8 +3,10 @@
 // 1Password account, reads the Product repo, asks the questions the flags left
 // out, and prints the plan with the account on its first line. In a terminal
 // it then asks the Operator's yes and makes one run of it (oneRun.ts): apply
-// on the setup branch, the wizard, then the setup PR. Without a terminal, or
-// with --plan, it stops at the plan. The command runner, environment, prompt
+// on the setup branch, the wizard, then the setup PR. On the default branch
+// with nothing to apply, the run is the wizard's alone, offered only while
+// 1Password lacks what a stage stores. Without a terminal, or with --plan, it
+// stops at the plan. The command runner, environment, prompt
 // and wizard come in from main.ts, so the tests run it all without real gh,
 // op or a terminal.
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -17,10 +19,10 @@ import { apply, describeAction, writtenPaths } from "./apply.ts";
 import { parseSetupArgs, SETUP_USAGE } from "./args.ts";
 import { checkSetup, offerToDeleteOldSetupSkill, type OriginTips } from "./checks.ts";
 import { type Env, ok, type Run } from "./exec.ts";
-import { appliedLines, closingLines } from "./finish.ts";
+import { appliedLines, closingLines, setupCommand } from "./finish.ts";
 import { gatherState, vaultItems } from "./gather.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
-import { type OneRunSteps, readinessOf, runOnce } from "./oneRun.ts";
+import { type OneRunSteps, readinessOf, runOnce, wizardGaps } from "./oneRun.ts";
 import { FABRIK_APP_VAULT, pausesDispatch, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 import { askQuestions } from "./questions.ts";
@@ -108,17 +110,24 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
     const wroteStarter = config.code !== 0;
     const answers = await askQuestions({ flags: args.answers, state, wroteStarter, machineTimeZone: io.machineTimeZone, prompt: io.prompt, say: io.say });
     const plan = planSetup(state, kit, answers, { wroteStarter });
+    const branch = setupBranch(args.release);
+    // On the default branch, nothing to apply is a working install, but for what a wizard stage stores.
+    const gaps = nothingToApply(plan, checked.branch, branch) ? wizardGaps(state, answers, await appVaultItems(run, productDir, state)) : [];
 
     io.say(`Setup uses the 1Password account ${chosen.account.name}.`);
     io.say("");
     if (io.prompt === null || args.plan) {
+      if (nothingToApply(plan, checked.branch, branch)) {
+        const toWalk = `Run setup in a terminal to walk the wizard for them: ${setupCommand(args.release)}`;
+        io.say(withNotes(gaps.length === 0 ? [COMPLETE] : [...gapLines(gaps), "", toWalk], plan));
+        return 0;
+      }
       const toDoIt = args.plan ? "Run setup again without --plan to do it." : "Setup carries the plan out only on your yes, so run it in a terminal to do it.";
-      const branch = setupBranch(args.release);
       const left =
         plan.actions.length === 0
           ? [heldBy(branch), `What's left is the wizard, then pushing ${branch} and opening or updating the setup PR.`]
           : stepsOf(plan);
-      io.say(withNotes(isComplete(plan, checked.branch, branch) ? [COMPLETE] : [...left, "", toDoIt], plan));
+      io.say(withNotes([...left, "", toDoIt], plan));
       return 0;
     }
     const inTerminal = { ...io, prompt: io.prompt };
@@ -132,6 +141,7 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
       answers,
       wroteStarter,
       plan,
+      gaps,
       state,
       release: args.release,
       current: checked.branch,
@@ -155,6 +165,8 @@ interface OneRunInputs {
   /** Whether the repo's Kit config is the starter setup wrote on its branch, which every plan of the run is told. */
   readonly wroteStarter: boolean;
   readonly plan: SetupPlan;
+  /** On the default branch with nothing to apply, what a wizard stage stores that 1Password lacks. */
+  readonly gaps: readonly string[];
   readonly state: ProductState;
   readonly release: string;
   /** The branch the checks found the clone on. */
@@ -171,29 +183,37 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
   const { repo } = state;
   const repoName = `${repo.owner}/${repo.name}`;
 
-  if (isComplete(inputs.plan, current, branch)) {
+  // On the default branch with nothing to apply, the run is the wizard's alone, and only for what 1Password lacks.
+  const wizardOnly = nothingToApply(inputs.plan, current, branch);
+  if (wizardOnly && inputs.gaps.length === 0) {
     io.say(withNotes([COMPLETE], inputs.plan));
     return 0;
   }
   if (current !== branch) {
-    const earlier = await earlierSetupRun(run, cwd, repoName, branch, repo.defaultBranch, origin.setupBranch);
+    const earlier = await earlierSetupRun(run, cwd, repoName, branch, repo.defaultBranch, origin);
     if (earlier !== null) return stop(io, earlier);
   }
   // The same actions, with notes that say what this run does once its wizard has run.
   const plan = planSetup(state, kit, answers, { wizardNext: true, wroteStarter });
-  io.say(withNotes(plan.actions.length === 0 ? [heldBy(branch)] : stepsOf(plan), plan));
+  io.say(withNotes(wizardOnly ? gapLines(inputs.gaps) : plan.actions.length === 0 ? [heldBy(branch)] : stepsOf(plan), plan));
   io.say("");
 
   // A run on the setup branch picks up from one that stopped before its PR, which the PR lists too.
   const earlierDone = current === branch ? await record.read() : [];
   let wizardReport = "";
+  // What 1Password still lacks once the wizard has run.
+  let gapsAfter: readonly string[] = [];
+  // Whether the default branch the run left the setup branch for is origin's.
+  let upToDate = true;
   const steps: OneRunSteps = {
     confirm: async () =>
       isYes(
         await io.prompt.ask(
-          plan.actions.length === 0
-            ? `Nothing's left to apply. Walk the wizard, then push ${branch} and open the setup PR? [y/N] `
-            : `Apply this plan on ${branch}, walk the wizard, then push it and open the setup PR? [y/N] `,
+          wizardOnly
+            ? "Walk the wizard now? [y/N] "
+            : plan.actions.length === 0
+              ? `Nothing's left to apply. Walk the wizard, then push ${branch} and open the setup PR? [y/N] `
+              : `Apply this plan on ${branch}, walk the wizard, then push it and open the setup PR? [y/N] `,
         ),
       ),
     switchToSetupBranch: async () => {
@@ -225,8 +245,9 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     afterWizard: async () => {
       // Read again and planned again: a second Subscription's token the wizard stored gets its subscriptions line from this plan.
       const now = await gatherState(run, cwd, repo, paths);
-      const appItems = now.vaults.includes(FABRIK_APP_VAULT) ? await vaultItems(run, cwd, FABRIK_APP_VAULT) : [];
+      const appItems = await appVaultItems(run, cwd, now);
       const earlierPr = (await openSetupPr(run, cwd, branch))?.body ?? null;
+      gapsAfter = wizardGaps(now, answers, appItems);
       return {
         plan: planSetup(now, kit, answers, { wroteStarter }),
         readiness: readinessOf({ repo: repoName, report: wizardReport, earlierPr, fabrikItems: now.fabrikItems, appItems }),
@@ -240,6 +261,9 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     },
     leaveSetupBranch: async () => {
       await ok(run, "git", ["switch", "-q", repo.defaultBranch], { cwd });
+      // From the setup branch, the default branch here can be behind origin's, whose tip the setup branch holds.
+      await run("git", ["merge", "-q", "--ff-only", origin.defaultBranch], { cwd });
+      upToDate = (await ok(run, "git", ["rev-parse", "HEAD"], { cwd })).trim() === origin.defaultBranch;
       await ok(run, "git", ["branch", "-q", "-D", branch], { cwd });
       await record.clear();
     },
@@ -261,7 +285,11 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
   }
   io.say("");
   if (result.kind === "applied") {
-    for (const line of appliedLines(repo.defaultBranch, result.summary)) io.say(line);
+    for (const line of appliedLines(repo.defaultBranch, result.summary, upToDate)) io.say(line);
+    if (wizardOnly) {
+      io.say("");
+      io.say(gapsAfter.length === 0 ? COMPLETE : [...gapLines(gapsAfter, true), `Run setup again to walk the wizard for them: ${setupCommand(release)}`].join("\n"));
+    }
     return 0;
   }
   for (const line of closingLines({ release, defaultBranch: repo.defaultBranch, url: result.url, summary: result.summary })) io.say(line);
@@ -276,11 +304,24 @@ function stop(io: SetupIo, problem: string): number {
 const COMPLETE = "Nothing to do: this repo's Fabrik install is complete.";
 
 /**
- * On the default branch, nothing to plan is a working install. On the setup
- * branch, an earlier run stopped partway: the wizard and the setup PR are left.
+ * Whether the plan has nothing to apply on the default branch: a working
+ * install, once 1Password holds what each wizard stage stores. An empty plan
+ * on the setup branch isn't one, as an earlier run stopped partway there: the
+ * wizard and the setup PR are left.
  */
-function isComplete(plan: SetupPlan, current: string, branch: string): boolean {
+function nothingToApply(plan: SetupPlan, current: string, branch: string): boolean {
   return plan.actions.length === 0 && current !== branch;
+}
+
+/** The Fabrik App vault's item titles, none when the account lacks it. */
+async function appVaultItems(run: Run, cwd: string, state: ProductState): Promise<string[]> {
+  return state.vaults.includes(FABRIK_APP_VAULT) ? await vaultItems(run, cwd, FABRIK_APP_VAULT) : [];
+}
+
+/** What a wizard stage stores that 1Password lacks, on the default branch with nothing to apply: before the wizard, or still after it. */
+function gapLines(gaps: readonly string[], after = false): string[] {
+  const heading = after ? "1Password still lacks what the wizard stores:" : "Nothing's left to apply, but 1Password lacks what the wizard stores:";
+  return [heading, ...gaps.map((gap) => `- ${gap}`)];
 }
 
 /** What an empty plan on the setup branch means. */

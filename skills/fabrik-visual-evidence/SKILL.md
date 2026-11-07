@@ -88,11 +88,12 @@ It writes only those two blocks of `.fabrik/config.json`, in place or before its
 
 ## 4. Open the pull request
 
-1. Commit `.fabrik/config.json` alone. When step 3 found an earlier run's PR open, push with `git push origin fabrik/visual-evidence`, which updates that PR. Otherwise push with `git push --force-with-lease -u origin fabrik/visual-evidence`, which replaces a branch GitHub kept from a merged or closed PR, and open a PR to the default branch with `gh pr create`. Its body lists each answer, and says the check that `sandbox.build` and `ui.serve` work without `sandbox.secrets` was made.
-2. Remove the temporary Fabrik folder.
-3. Tell the Operator to merge the PR themselves. The push job reads the `ui` block from the default branch, so capture starts on the first UI PR after the merge. Then tell them:
+1. The writer prints for Prettier's default width, 80 columns. If the Product's own Prettier settings set another (`printWidth` in `.prettierrc` or in `package.json`'s `prettier` key, or `max_line_length` in `.editorconfig`), run the Product's own `prettier --write .fabrik/config.json`, so the PR passes its `prettier --check`.
+2. Commit `.fabrik/config.json` alone. When step 3 found an earlier run's PR open, push with `git push origin fabrik/visual-evidence`, which updates that PR. Otherwise push with `git push --force-with-lease -u origin fabrik/visual-evidence`, which replaces a branch GitHub kept from a merged or closed PR, and open a PR to the default branch with `gh pr create`. Its body lists each answer, and says the check that `sandbox.build` and `ui.serve` work without `sandbox.secrets` was made.
+3. Remove the temporary Fabrik folder.
+4. Tell the Operator to merge the PR themselves. The push job reads the `ui` block from the default branch, so capture starts on the first UI PR after the merge. Then tell them:
    - That with Visual evidence on, each PR whose diff touches `ui.paths` gets an evidence section linking a gallery of its screenshots, and the Reviewer sees them.
-   - That the setup wizard's "Visual evidence" stage says it's on once the PR is merged.
+   - That the merge is all it needs: Setup and its wizard needn't run again for it.
    - That running `/fabrik-visual-evidence` again changes its answers, and with the same answers it writes nothing.
 
 **Done when:** the PR is open, and the Operator has its link.

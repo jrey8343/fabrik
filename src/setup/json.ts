@@ -169,6 +169,10 @@ function printValue(value: unknown, layout: JsonLayout, level: number, column: n
   return JSON.stringify(value) ?? "null";
 }
 
+// Prettier's default printWidth, whatever the Product's own Prettier settings
+// say: a Product that sets another, in .prettierrc, package.json's prettier
+// key or .editorconfig's max_line_length, can fail `prettier --check` on what
+// this writes until it runs its own `prettier --write` on the file.
 const PRINT_WIDTH = 80;
 // Prettier's default tabWidth, which it counts each tab as.
 const TAB_WIDTH = 2;
