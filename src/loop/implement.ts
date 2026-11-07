@@ -7,7 +7,7 @@ import { parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
-import { conflictRunEnded, owedConflictRun } from "./conflicts.ts";
+import { conflictRunEnded, owedConflictRun, requestChangesRunEnded } from "./conflicts.ts";
 import { CONFLICT_RUN_MARKER, EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { owedRequestChangesRun } from "./mergeGate.ts";
 import { MAX_RETRIES, owedRetry, runInFlight, runName, stepsUp } from "./retry.ts";
@@ -33,7 +33,9 @@ const CHECK_DISPATCH: Action = { kind: "check-dispatch" };
  * Ticket whose agent PR is open, it resumes that PR's Implement run instead:
  * the retry an Execution flaw is owed, or the Operator's Request-changes run,
  * so re-adding it recovers either after an Infrastructure failure, or the
- * conflict-only run the Kit started when main moved under the PR (#304). It never
+ * conflict-only run the Kit started when main moved under the PR (#304), or the
+ * Request-changes run the Kit started for an undelivered Request changes, which
+ * ranks first (#341). It never
  * starts a second branch beside an open PR. The label always comes off, so it
  * never claims work that isn't running.
  */
@@ -49,7 +51,7 @@ export function startImplementer(
     const resumed =
       pullRequest === null || pullRequest.number !== open || pullRequest.ticket !== issueNumber
         ? null
-        : (owedConflictRun(pullRequest, config) ?? owedRetry(pullRequest, operator, config) ?? owedRequestChangesRun(pullRequest, operator, config));
+        : (owedRequestChangesRun(pullRequest, operator, config) ?? owedConflictRun(pullRequest, config) ?? owedRetry(pullRequest, operator, config));
     return { kind: "act", actions: resumed === null ? [removeLabel] : [removeLabel, resumed] };
   }
   if (whyNotBuildable(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
@@ -158,9 +160,37 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   // the push's lease refuses it, and the run stays in flight as after an Infrastructure failure.
   if (changes.rebase?.conflicted === true) return startAgain(event, fixes, pullRequest, operator, changes.rebase.onto);
 
-  const guard = checkTrustRoot([...changes.net, ...changes.commits]);
-  if (guard.kind === "refuse") return refuse(issueNumber, guard.paths, operator, pullRequest.number);
   const requestChanges = fixes.requestChanges === true;
+  // A Request-changes run on a head that conflicted with main was told to merge main in (#341). One that can't land
+  // hands the PR to the Operator, open, as a conflict-only run does (ADR-0011), rather than closing it.
+  const mergesMain = requestChanges ? changes.conflictsWithMain : undefined;
+  const guard = checkTrustRoot([...changes.net, ...changes.commits]);
+  if (guard.kind === "refuse") {
+    return mergesMain === undefined
+      ? refuse(issueNumber, guard.paths, operator, pullRequest.number)
+      : {
+          kind: "act",
+          actions: requestChangesRunEnded(
+            pullRequest.number,
+            mergesMain,
+            operator,
+            `its changes touch files that steer or judge the agents, which only you change (ADR-0005), so the Kit didn't push it: ${guard.paths.map((path) => `\`${path}\``).join(", ")}`,
+            fixes.runUrl,
+          ),
+        };
+  }
+  if (mergesMain !== undefined && changes.updatedFromMain !== true) {
+    return {
+      kind: "act",
+      actions: requestChangesRunEnded(
+        pullRequest.number,
+        mergesMain,
+        operator,
+        `it didn't merge \`main\` in, so \`${branch}\` still conflicts with it`,
+        fixes.runUrl,
+      ),
+    };
+  }
   // Merging main in or rebasing onto it, to fix a conflict, is a change even with none of the run's own.
   if (changes.net.length === 0 && changes.updatedFromMain !== true) {
     return {
@@ -174,6 +204,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           source: "empty-diff",
           findings: `The Implementer's ${requestChanges ? "Request-changes run" : "retry"} on \`${branch}\` committed no change, so there was nothing to review.`,
         },
+        operator,
       ),
     };
   }
@@ -193,7 +224,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
           requestChanges ? REQUEST_CHANGES_RUN_MARKER : RETRY_PUSH_MARKER,
           requestChanges
-            ? `The Implementer pushed the Operator's requested changes to \`${branch}\`; Review runs again on it.`
+            ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mergesMain === undefined ? "" : `, and merged \`main\` at ${mergesMain.slice(0, 7)} in to resolve the conflict`}; Review runs again on it.`
             : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
           "",
           // Present: the on-a-PR contract above requires it.

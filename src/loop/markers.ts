@@ -15,9 +15,17 @@ import type { Strength, VerdictRecord } from "./types.ts";
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
 
 export function verdictMarker(record: VerdictRecord): string {
-  const { verdict, source, requestChanges, conflictRun, headSha } = record;
-  // Only a conflict-only run's Verdict says so (#304), so every other marker reads as it always has.
-  const fields = conflictRun === true ? { verdict, source, requestChanges, conflictRun, headSha } : { verdict, source, requestChanges, headSha };
+  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, headSha } = record;
+  // Only a conflict-only run's Verdict says so (#304), and only one that gave way to an undelivered Request
+  // changes (#341), so every other marker reads as it always has.
+  const fields = {
+    verdict,
+    source,
+    requestChanges,
+    ...(conflictRun === true ? { conflictRun } : {}),
+    ...(requestChangesFirst === true ? { requestChangesFirst } : {}),
+    headSha,
+  };
   return `<!-- fabrik:verdict ${JSON.stringify(fields)} -->`;
 }
 
@@ -63,6 +71,42 @@ export function conflictAttemptIn(body: string): ConflictAttempt | null {
  * run's time in flight, and hands the PR to the Operator.
  */
 export const CONFLICT_RUN_ENDED_MARKER = "<!-- fabrik:conflict-run-ended -->";
+
+/**
+ * The first line of the Kit's note on an undelivered Request changes (#341):
+ * the Operator's reviews GitHub started no run for, by id. The note starts
+ * their Request-changes run, which is in flight from then until its outcome,
+ * and the Kit never notes the same review twice.
+ */
+const UNDELIVERED_MARKER = /^<!-- fabrik:undelivered-request-changes ([1-9][0-9]*(?:,[1-9][0-9]*)*) -->/;
+
+export function undeliveredMarker(reviews: readonly number[]): string {
+  return `<!-- fabrik:undelivered-request-changes ${reviews.join(",")} -->`;
+}
+
+/** The review ids an undelivered-review note's first line names, or null when it isn't one. */
+export function undeliveredReviewsIn(body: string): number[] | null {
+  const match = UNDELIVERED_MARKER.exec(body);
+  return match === null ? null : (match[1] as string).split(",").map(Number);
+}
+
+/**
+ * The first line of the Kit's note that a Request-changes run told to merge
+ * main in ended without pushing (#341): it couldn't bring main in, or was
+ * refused. It carries the default branch head it was against, which counts as
+ * that head's conflict attempt, ends the run's time in flight, and hands the PR
+ * to the Operator.
+ */
+const REQUEST_CHANGES_RUN_ENDED_MARKER = /^<!-- fabrik:request-changes-run-ended ([0-9a-f]{40}) -->/;
+
+export function requestChangesRunEndedMarker(main: string): string {
+  return `<!-- fabrik:request-changes-run-ended ${main} -->`;
+}
+
+/** The default branch head a Request-changes run's ended note names, or null when it isn't one. */
+export function requestChangesRunEndedIn(body: string): string | null {
+  return REQUEST_CHANGES_RUN_ENDED_MARKER.exec(body)?.[1] ?? null;
+}
 
 /** The first line of the Kit's note on a PR that a Retry pushed to it: the Retry's outcome, which ends its time in flight. */
 export const RETRY_PUSH_MARKER = "<!-- fabrik:retry-push -->";

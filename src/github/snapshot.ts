@@ -65,8 +65,10 @@ import {
   conflictAttemptsIn,
   conflictRunIn,
   conflictRunInFlightIn,
+  type PullRequestHistoryItem,
   pushedSinceVerdictIn,
   requestChangesRunIn,
+  requestChangesSinceRunIn,
   researchRunFailedIn,
   verdictsIn,
 } from "./threads.ts";
@@ -159,8 +161,12 @@ const PULL_REQUEST_FIELDS = `
         author { login __typename }
         body
         labels(first: 100) { nodes { name } }
-        comments(last: 100) { nodes { body author { __typename } } }
-        reviews(last: 1, states: [CHANGES_REQUESTED]) { nodes { databaseId author { login __typename } commit { oid } } }`;
+        comments(last: 100) { nodes { body createdAt author { __typename } } }
+        reviews(last: 1, states: [CHANGES_REQUESTED]) { nodes { databaseId author { login __typename } commit { oid } } }
+        changesRequests: reviews(last: 50, states: [CHANGES_REQUESTED]) { nodes { databaseId submittedAt author { login __typename } } }
+        draftEvents: timelineItems(last: 100, itemTypes: [CONVERT_TO_DRAFT_EVENT, READY_FOR_REVIEW_EVENT]) {
+          nodes { __typename ... on ConvertToDraftEvent { createdAt } ... on ReadyForReviewEvent { createdAt } }
+        }`;
 
 const PULL_REQUEST_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -184,10 +190,14 @@ interface PullRequestQueryResult {
       author: { login: string; __typename: string } | null;
       body: string;
       labels: { nodes: { name: string }[] };
-      comments: { nodes: { body: string; author: { __typename: string } | null }[] };
+      comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
       reviews: {
         nodes: { databaseId: number; author: { login: string; __typename: string } | null; commit: { oid: string } | null }[];
       };
+      changesRequests: {
+        nodes: { databaseId: number; submittedAt: string | null; author: { login: string; __typename: string } | null }[];
+      };
+      draftEvents: { nodes: { __typename: string; createdAt?: string }[] };
     } | null;
   };
 }
@@ -398,9 +408,9 @@ export async function gatherSnapshot(
   // A push to the default branch may leave an agent PR conflicting with it; the tick catches any the push missed (#304).
   const conflicts =
     event.kind === "main-pushed" || event.kind === "kit-config-changed"
-      ? await gatherConflicts(github, repo, event.head, appLogin, wait)
+      ? await gatherConflicts(github, repo, event.head, new Date().toISOString(), appLogin, wait)
       : event.kind === "scheduled-tick"
-        ? await gatherConflicts(github, repo, null, appLogin, wait)
+        ? await gatherConflicts(github, repo, null, event.now, appLogin, wait)
         : null;
   // By default the Operator owns the Product repos they run Fabrik in.
   const theOperator = part?.operator ?? operator ?? owner;
@@ -1148,9 +1158,8 @@ type PullRequestNode = NonNullable<PullRequestQueryResult["repository"]["pullReq
 
 /** A PR as the core sees it, from what PULL_REQUEST_FIELDS read of it. */
 function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | null): PullRequestSnapshot {
-  const botComments = pullRequest.comments.nodes
-    .filter((comment) => comment.author?.__typename === "Bot")
-    .map((comment) => comment.body);
+  const fromBots = pullRequest.comments.nodes.filter((comment) => comment.author?.__typename === "Bot");
+  const botComments = fromBots.map((comment) => comment.body);
   return {
     number: pullRequest.number,
     isAgent: isAgentPullRequest({
@@ -1170,9 +1179,24 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     conflictRunInFlight: conflictRunInFlightIn(botComments),
     pushedSinceVerdict: pushedSinceVerdictIn(botComments),
     changesRequested: changesRequestedOf(pullRequest.reviews.nodes[0]),
+    ...requestChangesSinceRunIn(historyOf(pullRequest, fromBots)),
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
     uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
   };
+}
+
+/** What tells whether an agent PR's Request changes have been built (#341): the Kit's comments, the reviews, and its draft changes. */
+function historyOf(pullRequest: PullRequestNode, fromBots: PullRequestNode["comments"]["nodes"]): PullRequestHistoryItem[] {
+  const comments = fromBots.map(({ body, createdAt }): PullRequestHistoryItem => ({ kind: "bot-comment", at: createdAt, body }));
+  const reviews = pullRequest.changesRequests.nodes.flatMap(({ databaseId, submittedAt, author }): PullRequestHistoryItem[] =>
+    submittedAt === null || author === null
+      ? []
+      : [{ kind: "changes-requested", at: submittedAt, review: databaseId, reviewer: author.login, reviewerIsBot: author.__typename === "Bot" }],
+  );
+  const drafts = pullRequest.draftEvents.nodes.flatMap(({ __typename, createdAt }): PullRequestHistoryItem[] =>
+    createdAt === undefined ? [] : [{ kind: __typename === "ConvertToDraftEvent" ? "draft" : "ready", at: createdAt }],
+  );
+  return [...comments, ...reviews, ...drafts];
 }
 
 /** How many times the conflict check reads open agent PRs while GitHub still works out whether one merges cleanly (#304). */
@@ -1214,6 +1238,7 @@ async function gatherConflicts(
   github: Pick<GitHub, "graphql">,
   repo: Repo,
   main: string | null,
+  now: string,
   appLogin: string | null,
   wait: (ms: number) => Promise<void>,
 ): Promise<ConflictSnapshot> {
@@ -1230,7 +1255,7 @@ async function gatherConflicts(
     });
     if (candidates.every(({ mergeable }) => mergeable !== null)) break;
   }
-  return { main: head, pullRequests: candidates };
+  return { main: head, now, pullRequests: candidates };
 }
 
 function changesRequestedOf(

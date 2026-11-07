@@ -57,6 +57,7 @@ export function aVerdictWithFollowUps(
     { headSha: "a".repeat(40), runUrl: "https://github.com/owner/product/actions/runs/1000/attempts/1" },
     aPullRequest({ number: pullRequest }),
     { verdict, source: "reviewer", findings: "### Checked\n\nThe cart totals its lines.", followUps: followUpsSection(followUps, "https://github.com/owner/product", pullRequest) },
+    "operator",
   );
   const comment = actions.find((action) => action.kind === "comment");
   if (comment === undefined) throw new Error("A Verdict always posts its comment");

@@ -68,6 +68,13 @@ export interface BranchChanges {
    */
   readonly rebase?: { readonly onto: string; readonly conflicted: boolean };
   /**
+   * For a run on its agent PR's own branch: the default branch head that the
+   * head the run started on conflicted with (#341), as the push job saw it;
+   * absent when it didn't conflict. A Request-changes run on such a head was
+   * told to merge main in.
+   */
+  readonly conflictsWithMain?: string;
+  /**
    * For a prototype turn's branch (#155) that moved while the turn ran, as a
    * live Design session's push may move it: the head the turn started on
    * (null when it cut the branch afresh, there being none) and where the
@@ -563,10 +570,31 @@ export interface PullRequestSnapshot {
   /** The latest review that requested changes on it, if any: what a stalled Request-changes run resumes from. */
   readonly changesRequested: ChangesRequestedReview | null;
   /**
+   * The reviews requesting changes on it, oldest first, that were submitted
+   * while it was out of draft and that no Request-changes run has had an
+   * outcome since: none has pushed, been given a Verdict, or ended (#341).
+   */
+  readonly unbuiltChangesRequests: readonly UnbuiltChangesRequest[];
+  /**
+   * Since that same point, the review ids each of the Kit's notes on an
+   * undelivered Request changes names, oldest note first (#341). Any note
+   * at all means the Request-changes run it started is in flight.
+   */
+  readonly undeliveredNotices: readonly (readonly number[])[];
+  /**
    * Where its UI evidence is kept, read from the marker in the body the Fabrik
    * App wrote (src/evidence/uiEvidence.ts), or null when it has none: not a UI PR.
    */
   readonly uiEvidenceMarker: EvidenceMarker | null;
+}
+
+/** A review requesting changes on an agent PR that no Request-changes run has built yet (#341). */
+export interface UnbuiltChangesRequest {
+  readonly review: number;
+  readonly reviewer: string;
+  readonly reviewerIsBot: boolean;
+  /** When it was submitted, as an ISO 8601 time. */
+  readonly submittedAt: string;
 }
 
 /** A review requesting changes on a PR, as GitHub records it. */
@@ -608,6 +636,11 @@ export interface VerdictRecord {
    * a retry either; absent otherwise, as on every marker from before them.
    */
   readonly conflictRun?: true;
+  /**
+   * True on an Execution flaw that gave way to an undelivered Request changes
+   * (#341): it called for no Retry, and doesn't count as one; absent otherwise.
+   */
+  readonly requestChangesFirst?: true;
   /** The head commit it was given on. */
   readonly headSha: string;
 }
@@ -752,6 +785,8 @@ export interface Snapshot {
 export interface ConflictSnapshot {
   /** The default branch's head commit, or null when it has none. */
   readonly main: string | null;
+  /** When the adapter read it, as an ISO 8601 time: what an undelivered Request changes' grace period is measured to (#341). */
+  readonly now: string;
   /** Every open agent PR, with whether GitHub says it merges cleanly into the default branch. */
   readonly pullRequests: readonly ConflictCandidate[];
 }

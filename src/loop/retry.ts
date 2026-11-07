@@ -19,11 +19,17 @@ export function stepsUp(retry: number): boolean {
 /**
  * Which retry an Execution flaw calls for, given the Verdicts posted before it:
  * one more than the earlier Execution flaws. Verdicts from a Request-changes
- * run or a conflict-only run (#304) don't count, and an Infrastructure failure
- * posts no Verdict at all.
+ * run or a conflict-only run (#304) don't count, nor does one that gave way to
+ * an undelivered Request changes (#341), and an Infrastructure failure posts
+ * no Verdict at all.
  */
 export function retryNumber(earlier: readonly VerdictRecord[]): number {
-  return 1 + earlier.filter((record) => record.verdict === "execution-flaw" && !record.requestChanges && record.conflictRun !== true).length;
+  return (
+    1 +
+    earlier.filter(
+      (record) => record.verdict === "execution-flaw" && !record.requestChanges && record.conflictRun !== true && record.requestChangesFirst !== true,
+    ).length
+  );
 }
 
 /**
@@ -59,9 +65,14 @@ export type RunInFlight =
  * until its push, or its note that it ended without one.
  */
 export function runInFlight(pullRequest: PullRequestSnapshot, operator: string): RunInFlight | null {
+  // The Kit's note on an undelivered Request changes started its run (#341), for the latest review it names.
+  const noted = pullRequest.undeliveredNotices.at(-1);
+  if (noted !== undefined) return { kind: "request-changes", review: Math.max(...noted) };
   if (pullRequest.conflictRunInFlight !== null) return { kind: "conflict", main: pullRequest.conflictRunInFlight };
   const latest = pullRequest.verdicts.at(-1);
   if (latest === undefined || pullRequest.pushedSinceVerdict) return null;
+  // One that gave way to an undelivered Request changes (#341) called for no Retry: the conflict check starts that run.
+  if (latest.requestChangesFirst === true) return null;
   if (latest.verdict === "execution-flaw") {
     const retry = retryNumber(pullRequest.verdicts.slice(0, -1));
     return retry > MAX_RETRIES ? null : { kind: "retry", retry };

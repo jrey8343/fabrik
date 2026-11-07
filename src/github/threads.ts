@@ -18,13 +18,15 @@ import {
   prototypeRequestIn,
   prototypeStartedIn,
   REQUEST_CHANGES_RUN_MARKER,
+  requestChangesRunEndedIn,
   RESEARCH_RUN_FAILED_MARKER,
   RETRY_PUSH_MARKER,
   SESSION_FINISHED,
+  undeliveredReviewsIn,
   UNMARKED_RETRY_PUSH,
   VERDICT_MARKER,
 } from "../loop/markers.ts";
-import type { IssueSnapshot, PendingPrototype, Verdict, VerdictRecord } from "../loop/types.ts";
+import type { IssueSnapshot, PendingPrototype, PullRequestSnapshot, UnbuiltChangesRequest, Verdict, VerdictRecord } from "../loop/types.ts";
 import { VERDICTS } from "../loop/verdict.ts";
 
 /** The Verdicts recorded in these comments, oldest first. Comments without a valid marker are skipped. */
@@ -45,12 +47,20 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const { verdict, source, requestChanges, conflictRun = false, headSha } = value as Record<string, unknown>;
+  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst = false, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
   if (source !== "reviewer" && source !== "ci" && source !== "empty-diff") return null;
-  // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one.
-  if (typeof requestChanges !== "boolean" || typeof conflictRun !== "boolean" || typeof headSha !== "string") return null;
-  return { verdict: verdict as Verdict, source, requestChanges, ...(conflictRun ? { conflictRun: true as const } : {}), headSha };
+  // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one; likewise requestChangesFirst (#341).
+  if (typeof requestChanges !== "boolean" || typeof conflictRun !== "boolean" || typeof requestChangesFirst !== "boolean") return null;
+  if (typeof headSha !== "string") return null;
+  return {
+    verdict: verdict as Verdict,
+    source,
+    requestChanges,
+    ...(conflictRun ? { conflictRun: true as const } : {}),
+    ...(requestChangesFirst ? { requestChangesFirst: true as const } : {}),
+    headSha,
+  };
 }
 
 /**
@@ -84,8 +94,9 @@ export function conflictRunIn(commentBodies: readonly string[]): boolean {
 /** The default branch heads the Kit's attempt notes on a PR record (#304), oldest first. */
 export function conflictAttemptsIn(commentBodies: readonly string[]): string[] {
   return commentBodies.flatMap((body) => {
-    const attempt = conflictAttemptIn(body);
-    return attempt === null ? [] : [attempt.main];
+    const attempt = conflictAttemptIn(body)?.main ?? requestChangesRunEndedIn(body);
+    // A Request-changes run that couldn't bring main in (#341) counts as that head's attempt too.
+    return attempt === null ? [] : [attempt];
   });
 }
 
@@ -108,12 +119,13 @@ export function conflictRunInFlightIn(commentBodies: readonly string[]): string 
  * Whether a Retry or Request-changes run has pushed to a PR since its latest
  * Verdict, from the Fabrik App's comments on it, oldest first: the Kit's note
  * of such a push comes after the last Verdict. A Retry's note from before the
- * marker counts by its opening words.
+ * marker counts by its opening words. A Request-changes run that ended
+ * without pushing (#341) has had its outcome too.
  */
 export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean {
   let pushed = false;
   for (const body of commentBodies) {
-    if (isPushNote(body)) pushed = true;
+    if (isPushNote(body) || requestChangesRunEndedIn(body) !== null) pushed = true;
     else if (verdictsIn([body]).length > 0) pushed = false;
   }
   return pushed;
@@ -127,6 +139,64 @@ function isPushNote(body: string): boolean {
     body.startsWith(CONFLICT_RUN_MARKER) ||
     body.startsWith(UNMARKED_RETRY_PUSH)
   );
+}
+
+/** One thing in an agent PR's history that tells whether a Request changes has been built (#341). */
+export type PullRequestHistoryItem =
+  | { readonly kind: "bot-comment"; readonly at: string; readonly body: string }
+  | {
+      readonly kind: "changes-requested";
+      readonly at: string;
+      readonly review: number;
+      readonly reviewer: string;
+      readonly reviewerIsBot: boolean;
+    }
+  /** The PR went to draft, or came out of it. */
+  | { readonly kind: "draft" | "ready"; readonly at: string };
+
+/**
+ * The reviews requesting changes on an agent PR that no Request-changes run
+ * has built yet, and the Kit's undelivered-review notes since (#341), from its
+ * history in any order. A review counts only if the PR was out of draft when
+ * it was submitted, as the event path's Request changes only acts on one at
+ * the Merge gate; an agent PR opens as a draft. A Request-changes run's
+ * outcome (its push, its Verdict, or its ended note) starts both afresh.
+ */
+export function requestChangesSinceRunIn(
+  history: readonly PullRequestHistoryItem[],
+): Pick<PullRequestSnapshot, "unbuiltChangesRequests" | "undeliveredNotices"> {
+  // Stable, so items at the same time keep the order they were read in.
+  const ordered = [...history].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  let draft = true;
+  let reviews: UnbuiltChangesRequest[] = [];
+  let notices: number[][] = [];
+  for (const item of ordered) {
+    switch (item.kind) {
+      case "draft":
+      case "ready":
+        draft = item.kind === "draft";
+        break;
+      case "changes-requested":
+        if (!draft) reviews.push({ review: item.review, reviewer: item.reviewer, reviewerIsBot: item.reviewerIsBot, submittedAt: item.at });
+        break;
+      case "bot-comment": {
+        const noted = undeliveredReviewsIn(item.body);
+        if (noted !== null) notices.push(noted);
+        else if (isRequestChangesOutcome(item.body)) {
+          reviews = [];
+          notices = [];
+        }
+        break;
+      }
+    }
+  }
+  return { unbuiltChangesRequests: reviews, undeliveredNotices: notices };
+}
+
+/** Whether a Kit comment is a Request-changes run's outcome: its push note, its Verdict, or its ended note. */
+function isRequestChangesOutcome(body: string): boolean {
+  if (body.startsWith(REQUEST_CHANGES_RUN_MARKER) || requestChangesRunEndedIn(body) !== null) return true;
+  return verdictsIn([body]).some((record) => record.requestChanges);
 }
 
 /**

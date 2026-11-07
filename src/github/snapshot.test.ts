@@ -854,6 +854,8 @@ function pullRequestGitHub({
             labels: { nodes: [] },
             comments: { nodes: [] },
             reviews: { nodes: [] },
+            changesRequests: { nodes: [] },
+            draftEvents: { nodes: [] },
           },
         },
       };
@@ -2155,8 +2157,10 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     author: APP_BOT,
     body: "",
     labels: { nodes: [] },
-    comments: { nodes: [{ body: `<!-- fabrik:conflict-attempt ${"8".repeat(40)} rebased -->\nRebased.`, author: { __typename: "Bot" } }] },
+    comments: { nodes: [{ body: `<!-- fabrik:conflict-attempt ${"8".repeat(40)} rebased -->\nRebased.`, createdAt: "2026-01-01T00:00:00Z", author: { __typename: "Bot" } }] },
     reviews: { nodes: [] },
+    changesRequests: { nodes: [] },
+    draftEvents: { nodes: [] },
     mergeable,
     ...overrides,
   });
@@ -2200,7 +2204,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "scheduled-tick", now: "2026-11-07T10:17:00Z" }, null, APP_LOGIN);
 
-    expect(snapshot.conflicts).toEqual({ main: "d".repeat(40), pullRequests: [] });
+    expect(snapshot.conflicts).toEqual({ main: "d".repeat(40), now: "2026-11-07T10:17:00Z", pullRequests: [] });
   });
 
   it("reads again while GitHub is still working out whether a PR conflicts, until it knows", async () => {

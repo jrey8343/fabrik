@@ -9,6 +9,7 @@ import { followUpsSection } from "./followUps.ts";
 import { REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw, whyAwaitingRun } from "./retry.ts";
+import { unnotedChangesRequests } from "./undelivered.ts";
 import { verdictMarker } from "./markers.ts";
 import { parseVerdict } from "./verdict.ts";
 import type {
@@ -65,7 +66,7 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot): Plan {
       "",
       ...event.failed.map((name) => `- \`${name.replace(/`/g, "'")}\``),
     ].join("\n");
-    return { kind: "act", actions: verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings }) };
+    return { kind: "act", actions: verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings }, snapshot.operator) };
   });
 }
 
@@ -88,7 +89,7 @@ export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
       findings: parsed.verdict === "pass" && findings !== "" ? `### Checked\n\n${findings}` : findings,
       followUps: followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number),
       considered: consideredSection(parsed.considered, event.operatorComments),
-    });
+    }, snapshot.operator);
     if (parsed.verdict !== "pass") return { kind: "act", actions };
     return {
       kind: "act",
@@ -163,16 +164,19 @@ export function verdictActions(
     readonly followUps?: readonly string[];
     readonly considered?: readonly string[];
   },
+  operator: string,
 ): Action[] {
+  const first = verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator) : null;
   const record: VerdictRecord = {
     verdict,
     source,
     requestChanges: pullRequest.requestChangesRun,
     ...(pullRequest.conflictRun ? { conflictRun: true as const } : {}),
+    ...(first === null ? {} : { requestChangesFirst: true as const }),
     headSha: event.headSha,
   };
   const by = BY[source];
-  const next = nextAfter(verdict, pullRequest);
+  const next = first ?? nextAfter(verdict, pullRequest);
   const body = [
     verdictMarker(record),
     `## Verdict: ${HEADINGS[verdict]}`,
@@ -193,6 +197,24 @@ export function verdictActions(
     { kind: "comment", issue: pullRequest.number, body, key: VERDICT_COMMENT.posted },
     ...(next?.actions ?? []),
   ];
+}
+
+/**
+ * What an Execution flaw leads to when the Operator has a Request changes on
+ * the PR that GitHub never delivered (#341): it gives way, calling for no
+ * Retry and using none, and the conflict check starts the Request-changes run
+ * in its place, which reads these findings with the review. Null when the
+ * flaw is a Request-changes run's own, or there's no such review.
+ */
+function requestChangesFirst(pullRequest: PullRequestSnapshot, operator: string): { line: string; actions: Action[] } | null {
+  if (pullRequest.requestChangesRun) return null;
+  const reviews = unnotedChangesRequests(pullRequest, operator);
+  if (reviews.length === 0) return null;
+  const links = reviews.map(({ review }) => `[review ${review}](#pullrequestreview-${review})`).join(", ");
+  return {
+    line: `The Operator's Request changes on #${pullRequest.number} (${links}) hasn't been built: GitHub started no run for it. It goes first: the Kit's next check starts its Request-changes run, which reads these findings too, and this Execution flaw uses no retry.`,
+    actions: [],
+  };
 }
 
 /** What a Verdict leads to beyond its comment: a retry, back to design, or (for a pass) nothing here. */

@@ -87,6 +87,8 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     conflictRunInFlight: null,
     pushedSinceVerdict: false,
     changesRequested: null,
+    unbuiltChangesRequests: [],
+    undeliveredNotices: [],
     uiEvidenceMarker: null,
     ...overrides,
   };
@@ -210,7 +212,7 @@ export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kit
  */
 export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts">> = {}): Snapshot {
   return repoSnapshot({
-    conflicts: { main: HEAD_SHA, pullRequests: [] },
+    conflicts: { main: HEAD_SHA, now: "2026-01-01T00:00:00Z", pullRequests: [] },
     audit: { head: HEAD_SHA, issues: [] },
     retro: { storeReady: true, issues: [], agentPullRequestClosed: false, escapeFiled: false },
     replay: { issues: [], capacity: null, acceptance: null },

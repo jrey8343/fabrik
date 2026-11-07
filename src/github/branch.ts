@@ -174,6 +174,21 @@ function isAncestor(git: Git, ancestor: string, of: string): Promise<boolean> {
   );
 }
 
+/**
+ * Whether merging `of` and `main` conflicts (#341), worked out without a work
+ * tree. Exit status 1 is a conflicted merge; any other failure is the push
+ * job's to report, not a conflict.
+ */
+async function conflicts(git: Git, of: string, main: string): Promise<boolean> {
+  try {
+    await git("merge-tree", "--write-tree", "--no-messages", of, main);
+    return false;
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 1) return true;
+    throw error;
+  }
+}
+
 /** A first run, cut from main: everything it changes is its own. Its push replaces whatever an earlier run left on the agent branch. */
 async function cutFromMain(git: Git, url: string, branch: BuiltBranch, bundlePath: string): Promise<AgentBranchGit> {
   const ref = `refs/heads/${branch.name}`;
@@ -285,6 +300,8 @@ async function onItsOwnBranch(git: Git, url: string, branch: BuiltBranch, bundle
       commits: await commitsIn(git, tip, `^${main}`, `^${head}`),
       updatedFromMain: !(await isAncestor(git, main, head)) && (await isAncestor(git, main, tip)),
       ...(moved ? { rebase: { onto: head, conflicted: false } } : {}),
+      // The head the run started on, which a Request-changes run was told to merge main into when they conflict (#341).
+      ...((await conflicts(git, branch.base.sha, main)) ? { conflictsWithMain: main } : {}),
     },
     head: tip,
     async push(name) {
