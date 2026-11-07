@@ -69,6 +69,8 @@ export interface ProductState {
   readonly mergeGate: MergeGateRuleset | null;
   /** The fabrik-runs store every Product repo shares. Its Fabrik App vault is in `vaults`, the same 1Password account's. */
   readonly store: RunStoreState;
+  /** How many open issues are labelled ready-for-agent: Dispatch releases them once the caller workflow is on the default branch. */
+  readonly readyForAgent: number;
 }
 
 /** What setup reads about the fabrik-runs store (ADR-0009). */
@@ -102,6 +104,12 @@ export interface SetupAnswers {
    * `preview` blocks alone, so Visual evidence stays an opt-in step.
    */
   readonly visualEvidence?: VisualEvidenceAnswers;
+  /**
+   * Whether to install with Dispatch paused: the starter Kit config is written
+   * with `max_in_flight: 0`, so no Implementer starts until the Operator raises
+   * it. An existing Kit config is the Product's, so it's never changed.
+   */
+  readonly paused?: boolean;
 }
 
 /**
@@ -221,16 +229,42 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
  */
 function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, notes: string[]): SetupAction[] {
   const existing = state.files[KIT_CONFIG_PATH] ?? null;
-  const text = existing ?? kit.templates.kitConfig;
+  const paused = answers.paused === true;
+  const text = existing ?? (paused ? pausedStarter(kit.templates.kitConfig) : kit.templates.kitConfig);
   const updated = answers.visualEvidence === undefined ? null : withVisualEvidence(text, answers.visualEvidence, notes);
+  if (existing === null && !paused) notes.push(...readyForAgentWarning(state.readyForAgent));
+  if (existing !== null && paused) notes.push(pausedHadNoEffect(existing));
   if (existing === null) {
-    return [
-      updated === null
-        ? write(KIT_CONFIG_PATH, text, "a starter Kit config with every v1 default")
-        : write(KIT_CONFIG_PATH, updated, "a starter Kit config with every v1 default, and Visual evidence on"),
-    ];
+    const why = `a starter Kit config with every v1 default${paused ? " but Dispatch paused (max_in_flight 0)" : ""}`;
+    return [updated === null ? write(KIT_CONFIG_PATH, text, why) : write(KIT_CONFIG_PATH, updated, `${why}, and Visual evidence on`)];
   }
   return updated === null ? [] : [write(KIT_CONFIG_PATH, updated, "the Visual evidence step's ui and preview blocks")];
+}
+
+/** The warning that an unpaused install puts the tracker's ready-for-agent issues straight into Dispatch's queue. */
+function readyForAgentWarning(count: number): string[] {
+  if (count === 0) return [];
+  const one = count === 1;
+  return [
+    `${count} open ${one ? "issue is" : "issues are"} labelled ${READY_FOR_AGENT}: Dispatch starts releasing ${one ? "it to an Implementer" : "them to Implementers"} as soon as the setup PR merges. Run setup with --paused to hold ${one ? "it" : "them"} back.`,
+  ];
+}
+
+/** Why --paused changed nothing: the Kit config is the Product's, and setup never edits its max_in_flight. */
+function pausedHadNoEffect(existing: string): string {
+  const prefix = `--paused had no effect: ${KIT_CONFIG_PATH} already exists`;
+  const config = jsonObject(existing);
+  if (config === null) return `${prefix}. Set max_in_flight to 0 in it by hand to pause Dispatch.`;
+  const value = config["max_in_flight"] ?? DEFAULT_KIT_CONFIG.maxInFlight;
+  if (value === 0) return `${prefix}, with max_in_flight 0, so Dispatch is already paused.`;
+  return `${prefix}, with max_in_flight ${JSON.stringify(value)}. Set it to 0 by hand to pause Dispatch.`;
+}
+
+/** The starter Kit config with `max_in_flight` set to 0, every other byte kept. */
+function pausedStarter(starter: string): string {
+  const member = /("max_in_flight"\s*:\s*)\d+/;
+  if (!member.test(starter)) throw new Error("The starter Kit config has no max_in_flight to pause.");
+  return starter.replace(member, (_, key: string) => `${key}0`);
 }
 
 /**

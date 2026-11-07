@@ -12,6 +12,7 @@ export function aCleanProduct(overrides: Partial<ProductState> = {}): ProductSta
     protection: null,
     mergeGate: null,
     store: noStore(),
+    readyForAgent: 0,
     ...overrides,
   };
 }
