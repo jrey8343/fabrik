@@ -25,6 +25,8 @@ describe("A Dependabot config that already groups the Fabrik pins", () => {
     ["double quotes", '"jrey8343/fabrik*"'],
     ["single quotes", "'jrey8343/fabrik*'"],
     ["no quotes", "jrey8343/fabrik*"],
+    ["double quotes with a trailing comment", '"jrey8343/fabrik*" # every Fabrik pin'],
+    ["no quotes with a trailing comment", "jrey8343/fabrik* # every Fabrik pin"],
   ])("is left alone with no note when the pattern is in %s", (_style, pattern) => {
     const existing = withPattern(pattern);
     expect(existing).toContain(`patterns:\n          - ${pattern}\n`);
