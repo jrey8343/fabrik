@@ -208,8 +208,9 @@ async function checkBranch(
   const holds = async (sha: string) => (await run("git", ["merge-base", "--is-ancestor", sha, "HEAD"], { cwd })).code === 0;
   if (!(await holds(originDefault))) {
     // A squash or rebase merge leaves the branch's own commits off the default branch, and pulling it in would only open a PR again.
+    // Files setup wrote and left uncommitted are a run that stopped partway here, which pulling the default branch in picks up.
     const head = (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
-    if (await mergedSetupTip(run, cwd, `${repo.owner}/${repo.name}`, ownBranch, originDefault)(head)) {
+    if (changed.length === 0 && (await mergedSetupTip(run, cwd, `${repo.owner}/${repo.name}`, ownBranch, originDefault)(head))) {
       return `${ownBranch}'s setup PR is merged. Switch to ${defaultBranch} with git switch ${defaultBranch} && git pull, then run setup again.`;
     }
     // Without --no-rebase, git's default config refuses to pull into a branch that has commits of its own.

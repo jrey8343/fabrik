@@ -598,6 +598,29 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(closing).toContain("- create the label needs-triage");
   });
 
+  it.each([
+    ["", false],
+    [", which the clone fetched", true],
+  ])("on the setup branch after applying stopped partway and another PR landed on main%s, says to merge main in, which works, then picks up", async (_, fetched) => {
+    const world = aWorld();
+    world.failingLabels.add("needs-info");
+    await setupOnce(world);
+    world.failingLabels.clear();
+    await anotherPrOnGitHub();
+    if (fetched) git("fetch", "-q", "origin");
+
+    const behind = await setupOnce(world);
+
+    expect(behind.complaints[0]).toMatch(new RegExp(`^${BRANCH} doesn't hold origin's latest main \\(\\w{7}\\)\\. Merge it in with git pull --no-rebase origin main, then run setup again\\.$`));
+    follow(behind.complaints[0]);
+    const { code, complaints, said } = await setupOnce(world);
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(said).toContain("- create the label needs-info");
+    expect(filesOnOrigin()).toEqual(expect.arrayContaining(["CHANGELOG.md", ".github/workflows/fabrik.yml", ".fabrik/config.json"]));
+    expect(world.prs).toHaveLength(1);
+  });
+
   it.each(["package.json", ".fabrik/skills.lock.json"])(
     "on the setup branch, stops at an uncommitted %s, a file setup reads but never writes",
     async (path) => {
