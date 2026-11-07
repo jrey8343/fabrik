@@ -200,13 +200,34 @@ finish() {
 
 
 # Fabrik setup wizard: the steps of adopting the Kit that only the Operator can
-# take. The fabrik-setup skill hands it over after it has written the Kit files,
-# created the labels, vaults and service accounts, and protected the branch.
-# Run it from the Product repo's checkout:
-#   bash .claude/skills/fabrik-setup/wizard.sh
+# take. Setup runs it in the same terminal, from the Product repo's checkout,
+# once it has written the Kit files, created the labels, vaults and service
+# accounts, and protected the branch. Then it opens the setup PR, when the run
+# wrote a file the default branch lacks. Running Setup again walks the wizard
+# again, and once the setup PR is merged it offers the wizard while 1Password
+# lacks what a stage stores here.
 # Nothing it captures is written to disk: the Fabrik App's key, the Claude token
 # and the Sentry token go straight into 1Password, where the Kit's jobs read
 # them (ADR-0004).
+
+# report LINE tells Setup, when Setup runs the wizard, something a stage did
+# that Setup can't read for itself. Setup names the file in FABRIK_WIZARD_REPORT.
+report() {
+  [[ -z "${FABRIK_WIZARD_REPORT:-}" ]] || printf '%s\n' "$1" >> "$FABRIK_WIZARD_REPORT"
+}
+
+# wizard_done ends the wizard as finish does when Setup runs it, but saying the
+# wizard is done, not Setup: Setup carries on, and opens the setup PR only when
+# the run wrote a file. The stages leave only SKIPPED to show.
+wizard_done() {
+  _clear
+  printf '\n%s%s  ✓ The wizard is done%s\n' "$BOLD" "$GREEN" "$RESET"
+  if (( ${#SKIPPED[@]} )); then
+    printf '\n'; warn "still to do by hand:"
+    for s in "${SKIPPED[@]}"; do note "  - $s"; done
+  fi
+  printf '\n'
+}
 
 # operator_app_slugs prints, one per line, the slug of each App owned by the
 # signed-in gh user that made one of the 100 latest comments or issues in $REPO
@@ -237,6 +258,11 @@ run_wizard() {
 
 TOTAL_STAGES=8
 
+# A token stage's 0600 item template, removed however the wizard ends: a
+# failed op item create or a Ctrl-C included.
+TEMPLATE=""
+trap 'rm -f "${TEMPLATE:-}"' EXIT
+
 for tool in gh op; do
   command -v "$tool" >/dev/null 2>&1 || { warn "$tool isn't installed; install it and sign in, then re-run."; exit 1; }
 done
@@ -249,6 +275,13 @@ STORE="jrey8343/fabrik-runs"
 HAS_STORE=0
 gh repo view "$STORE" >/dev/null 2>&1 && HAS_STORE=1
 (( HAS_STORE )) && TOTAL_STAGES=$((TOTAL_STAGES + 1))
+
+# op reads OP_ACCOUNT itself, so every op call here uses the 1Password account
+# Setup passed in, or op's own default without one. One account per Product is
+# a normal setup (ADR-0013), so what the account holds is shared only by the
+# Product repos in it.
+THIS_ACCOUNT="this 1Password account"
+[[ -n "${OP_ACCOUNT:-}" ]] && THIS_ACCOUNT+=" ($OP_ACCOUNT)"
 
 banner "Fabrik setup for $REPO"
 
@@ -282,7 +315,10 @@ open_url "https://github.com/apps/${FABRIK_APP_SLUG}/installations/new"
 step "Pick the account that owns $REPO."
 step "Choose 'Only select repositories', add $REPO (keep the repos it already has), then Install or Save."
 step "If GitHub shows a request for new permissions (Checks: read), review it and accept."
-pause "Press Enter once $REPO is in the App's repository list."
+# pause, except that only a pressed Enter tells Setup the App is installed:
+# your gh can't read an App's installations, so this is Setup's one sign of it.
+printf '  %s%s%s ' "$DIM" "Press Enter once $REPO is in the App's repository list." "$RESET"
+if read -r _; then report "app-installed $REPO"; fi
 
 # ── 1b. The Fabrik App on the fabrik-runs store ───────────────────────────
 if (( HAS_STORE )); then
@@ -303,6 +339,7 @@ if op item get "Fabrik App" --vault "Fabrik App" --fields label=client-id >/dev/
   pause
 else
   say "The push jobs mint their App token from the 'Fabrik App' item in the 'Fabrik App' vault."
+  say "There's no 'Fabrik App' item in $THIS_ACCOUNT yet. That's expected for a new account."
   open_url "https://github.com/settings/apps/${FABRIK_APP_SLUG}"
   step "Under 'About', copy the Client ID."
   ask FABRIK_APP_CLIENT_ID "Paste the Client ID:"
@@ -313,8 +350,14 @@ else
     warn "There's no file at $FABRIK_APP_KEY_FILE."
     SKIPPED+=("the 'Fabrik App' item in the 'Fabrik App' vault (fields client-id and private-key)")
   else
-    op item create --vault "Fabrik App" --category "Secure Note" --title "Fabrik App" \
-      "client-id[text]=$FABRIK_APP_CLIENT_ID" "private-key[concealed]=$(cat "$FABRIK_APP_KEY_FILE")" >/dev/null
+    # The item goes to op on stdin, node reading the key itself, so the key is in no command line.
+    FABRIK_APP_CLIENT_ID="$FABRIK_APP_CLIENT_ID" FABRIK_APP_KEY_FILE="$FABRIK_APP_KEY_FILE" node -e '
+      const item = { title: "Fabrik App", category: "SECURE_NOTE", fields: [
+        { id: "client-id", type: "STRING", label: "client-id", value: process.env.FABRIK_APP_CLIENT_ID },
+        { id: "private-key", type: "CONCEALED", label: "private-key",
+          value: require("node:fs").readFileSync(process.env.FABRIK_APP_KEY_FILE, "utf8") },
+      ] };
+      process.stdout.write(JSON.stringify(item));' | op item create --vault "Fabrik App" - >/dev/null
     say "${GREEN}✓ stored${RESET} the 'Fabrik App' item in 1Password"
     if confirm "Delete the downloaded $FABRIK_APP_KEY_FILE now that 1Password holds it?"; then
       rm -f "$FABRIK_APP_KEY_FILE"
@@ -329,29 +372,42 @@ say "It lives in the 'Claude token' API Credential in the 'Fabrik' vault, with i
 say "so 1Password's Watchtower warns you before it runs out."
 CLAUDE_TOKEN_EXISTS=0
 op item get "Claude token" --vault "Fabrik" >/dev/null 2>&1 && CLAUDE_TOKEN_EXISTS=1
-if (( CLAUDE_TOKEN_EXISTS )) && ! confirm "1Password already holds a Claude token, which every Product repo shares. Replace it with a new one?"; then
+if (( CLAUDE_TOKEN_EXISTS )) && ! confirm "1Password already holds a Claude token, which every Product repo in $THIS_ACCOUNT shares. Replace it with a new one?"; then
   say "Keeping the current token."
   pause
 else
+  if (( ! CLAUDE_TOKEN_EXISTS )); then
+    say "There's no Claude token in $THIS_ACCOUNT yet. That's expected for a new account."
+  fi
   step "In another terminal, run: claude setup-token"
   step "Sign in with the account that has your subscription. It prints a token that lasts one year."
   ask_secret CLAUDE_TOKEN "Paste the token (hidden):"
-  EXPIRES=$(date -v+1y +%Y-%m-%d 2>/dev/null || date -d "+1 year" +%Y-%m-%d)
-  if (( CLAUDE_TOKEN_EXISTS )); then
-    # Archived, not deleted, so the old token stays in the item's history.
-    op item delete "Claude token" --vault "Fabrik" --archive
+  # An empty token would count as stored, so nothing is archived or created for one.
+  if [[ -z "$CLAUDE_TOKEN" ]]; then
+    warn "No token pasted."
+    if (( CLAUDE_TOKEN_EXISTS )); then
+      say "Keeping the current token."
+    else
+      SKIPPED+=("the 'Claude token' API Credential in the 'Fabrik' vault (claude setup-token)")
+    fi
+  else
+    EXPIRES=$(date -v+1y +%Y-%m-%d 2>/dev/null || date -d "+1 year" +%Y-%m-%d)
+    if (( CLAUDE_TOKEN_EXISTS )); then
+      # Archived, not deleted, so the old token stays in the item's history.
+      op item delete "Claude token" --vault "Fabrik" --archive
+    fi
+    TEMPLATE=$(umask 077 && mktemp)
+    CLAUDE_TOKEN="$CLAUDE_TOKEN" EXPIRES="$EXPIRES" node -e '
+      const item = { title: "Claude token", category: "API_CREDENTIAL", fields: [
+        { id: "credential", type: "CONCEALED", label: "credential", value: process.env.CLAUDE_TOKEN },
+        { id: "expires", type: "DATE", label: "expires", value: process.env.EXPIRES },
+      ] };
+      process.stdout.write(JSON.stringify(item));' > "$TEMPLATE"
+    op item create --vault "Fabrik" --template "$TEMPLATE" >/dev/null
+    rm -f "$TEMPLATE"
+    say "${GREEN}✓ stored${RESET} the Claude token, expiring $EXPIRES"
   fi
-  TEMPLATE=$(umask 077 && mktemp)
-  CLAUDE_TOKEN="$CLAUDE_TOKEN" EXPIRES="$EXPIRES" node -e '
-    const item = { title: "Claude token", category: "API_CREDENTIAL", fields: [
-      { id: "credential", type: "CONCEALED", label: "credential", value: process.env.CLAUDE_TOKEN },
-      { id: "expires", type: "DATE", label: "expires", value: process.env.EXPIRES },
-    ] };
-    process.stdout.write(JSON.stringify(item));' > "$TEMPLATE"
-  op item create --vault "Fabrik" --template "$TEMPLATE" >/dev/null
-  rm -f "$TEMPLATE"
   unset CLAUDE_TOKEN
-  say "${GREEN}✓ stored${RESET} the Claude token, expiring $EXPIRES"
   pause
 fi
 
@@ -362,11 +418,11 @@ say "monitor.errors in .fabrik/config.json names your Sentry org and project."
 say "It reads Sentry with the 'Sentry token' API Credential in the 'Fabrik App' vault."
 SENTRY_TOKEN_EXISTS=0
 op item get "Sentry token" --vault "Fabrik App" >/dev/null 2>&1 && SENTRY_TOKEN_EXISTS=1
-if (( SENTRY_TOKEN_EXISTS )) && ! confirm "1Password already holds a Sentry token, which every Product repo shares. Replace it with a new one?"; then
+if (( SENTRY_TOKEN_EXISTS )) && ! confirm "1Password already holds a Sentry token, which every Product repo in $THIS_ACCOUNT shares. Replace it with a new one?"; then
   say "Keeping the current Sentry token."
   pause
 elif (( ! SENTRY_TOKEN_EXISTS )) && ! confirm "Does $REPO report production errors to Sentry?"; then
-  say "Skipping the Sentry token. Re-run the wizard once $REPO reports to Sentry."
+  say "Skipping the Sentry token. Once $REPO reports to Sentry, name its project in monitor.errors in .fabrik/config.json and run Setup again: it walks this stage while 1Password lacks the token."
   pause
 else
   open_url "https://sentry.io/settings/account/api/auth-tokens/new-token/"
@@ -405,13 +461,22 @@ fi
 # weekly limit is re-run on the next, and runs wait only when every one is used
 # up. Its token is one more item in the 'Fabrik' vault, which the agent and
 # implement service accounts already read, so it needs no new service account.
+# Setup lists it in the Kit config once the token is stored, on the Operator's
+# yes to its second Subscription question, which it passes in as
+# FABRIK_SECOND_SUBSCRIPTION. A list of two or more Setup leaves as it is, and
+# one that names it already has nothing to list.
 stage "A second Subscription"
 SECOND="Claude token 2"
-LIST='"subscriptions": ["Claude token", "Claude token 2"]'
 say "With a second Subscription, a run refused on the first one's weekly limit is"
 say "re-run on the second, and runs wait only once both are used up."
+# What .fabrik/config.json lists: "listed" when it names this one, whatever else it lists, "rotation" for two or more without it, else "one".
+LISTING=$(node -e '
+  const { subscriptions } = JSON.parse(require("node:fs").readFileSync(".fabrik/config.json", "utf8"));
+  const listed = Array.isArray(subscriptions) ? subscriptions : [];
+  process.stdout.write(listed.includes(process.argv[1]) ? "listed" : listed.length > 1 ? "rotation" : "one");' "$SECOND" 2>/dev/null || echo one)
 SECOND_EXISTS=0
 op item get "$SECOND" --vault "Fabrik" >/dev/null 2>&1 && SECOND_EXISTS=1
+SECOND_STORED=$SECOND_EXISTS
 ADDING_SECOND=0
 if (( SECOND_EXISTS )); then
   if confirm "1Password already holds the '$SECOND' item. Replace it with a new token?"; then
@@ -463,6 +528,7 @@ if (( SECOND_EXISTS || ADDING_SECOND )); then
         op item delete "$OLD_ID" --vault "Fabrik" --archive
       fi
       say "${GREEN}✓ stored${RESET} the '$SECOND' token, expiring $EXPIRES"
+      SECOND_STORED=1
     fi
     unset SECOND_TOKEN
   fi
@@ -471,24 +537,35 @@ if (( SECOND_EXISTS || ADDING_SECOND )); then
   open_url "https://claude.ai/settings/usage"
   step "Signed in as each account in turn, turn usage credits (extra usage) off."
   pause "Press Enter once usage credits are off on every account."
-  if node -e '
-    const { subscriptions } = JSON.parse(require("node:fs").readFileSync(".fabrik/config.json", "utf8"));
-    process.exit(Array.isArray(subscriptions) && subscriptions.length > 1 && subscriptions.includes(process.argv[1]) ? 0 : 1);' "$SECOND" 2>/dev/null; then
-    say "${GREEN}✓${RESET} .fabrik/config.json lists both Subscriptions."
-  else
-    step "List it in the Kit config, after the first: $LIST in .fabrik/config.json."
-    SKIPPED+=("list \"$SECOND\" in subscriptions in .fabrik/config.json: $LIST")
+  if [[ "$LISTING" == listed ]]; then
+    say "${GREEN}✓${RESET} .fabrik/config.json lists '$SECOND' already."
+  elif (( SECOND_STORED )); then
+    if [[ "$LISTING" == rotation ]]; then
+      step "Setup leaves the subscriptions list in .fabrik/config.json as it is, since it lists two or more. To run on '$SECOND' too, add it to that list yourself."
+      SKIPPED+=("list \"$SECOND\" in subscriptions in .fabrik/config.json yourself: Setup leaves a list of two or more as it is")
+    elif [[ "${FABRIK_SECOND_SUBSCRIPTION:-}" == yes ]]; then
+      say "Setup lists it in subscriptions in .fabrik/config.json, after the first, in the setup PR."
+    else
+      step "To list it in subscriptions in .fabrik/config.json, run Setup again and say yes to a second Subscription."
+      SKIPPED+=("list \"$SECOND\" in subscriptions in .fabrik/config.json: run Setup again and say yes to a second Subscription")
+    fi
   fi
   pause
+elif [[ "$LISTING" == rotation ]]; then
+  say "Skipping the second Subscription. .fabrik/config.json already lists two or more Subscriptions, and Setup leaves that list as it is."
+  pause
+elif [[ "$LISTING" == listed ]]; then
+  say "Skipping the second Subscription. .fabrik/config.json lists '$SECOND' already, so running Setup again walks this stage while 1Password lacks its token."
+  pause
 else
-  say "Skipping the second Subscription. Re-run the wizard to add one later."
+  say "Skipping the second Subscription. To add one later, run Setup again and say yes to a second Subscription: it walks this stage while 1Password lacks the token."
   pause
 fi
 
 # ── 4c. Visual evidence ───────────────────────────────────────────────────
-# Opt-in: the ui block in the Kit config turns it on. /fabrik-setup writes it,
-# and the preview block, from the Operator's answers in its setup PR, so this
-# stage writes nothing: it explains the step and checks for the block.
+# Opt-in: the ui block in the Kit config turns it on. /fabrik-visual-evidence
+# writes it, and the preview block, from the Operator's answers in its own PR,
+# so this stage writes nothing: it points to the skill and checks for the block.
 stage "Visual evidence"
 say "On a pull request that changes your UI, the Implement job screenshots the routes it"
 say "touched at mobile and desktop widths, the PR links a gallery of them, and the Reviewer sees them."
@@ -498,15 +575,16 @@ if node -e '
   say "${GREEN}✓${RESET} .fabrik/config.json has a ui block, so UI pull requests get Visual evidence."
   pause
 elif confirm "Turn on Visual evidence for $REPO?"; then
-  step "Run /fabrik-setup again and answer its Visual evidence step. It asks for the files that"
-  step "make a PR UI (ui.paths), how the Sandbox serves the branch (ui.serve and ui.url), and,"
-  step "if you have them, your production site (ui.before_url), the routes to capture by default"
-  step "(ui.default_routes) and your preview deployments' URL (preview.url), and writes them"
-  step "into .fabrik/config.json in its setup PR."
-  SKIPPED+=("turn on Visual evidence: run /fabrik-setup again and answer its Visual evidence step")
+  step "Once the setup PR is merged, run /fabrik-visual-evidence in a Claude session in this repo."
+  step "It suggests the files that make a PR UI (ui.paths), how the Sandbox serves the branch"
+  step "(ui.serve and ui.url), and, if you have them, your production site (ui.before_url), the"
+  step "routes to capture by default (ui.default_routes) and your preview deployments' URL"
+  step "(preview.url). Once you've confirmed each, it opens a PR that writes them into"
+  step ".fabrik/config.json."
+  SKIPPED+=("turn on Visual evidence: run /fabrik-visual-evidence in a Claude session in this repo, once the setup PR is merged")
   pause
 else
-  say "Skipping Visual evidence. Re-run /fabrik-setup to turn it on later."
+  say "Skipping Visual evidence. Run /fabrik-visual-evidence in a Claude session in this repo to turn it on later."
   pause
 fi
 
@@ -535,8 +613,14 @@ else
   pause
 fi
 
-finish
-say "Next: open an issue on $REPO. Intake labels it needs-triage and the Loop takes it from there."
+# Run by Setup, the wizard is one of its steps, and Setup isn't done yet.
+if [[ -n "${FABRIK_WIZARD_REPORT:-}" ]]; then
+  wizard_done
+  say "Next: back to Setup, which says what it did and what's left."
+else
+  finish
+  say "Next: open an issue on $REPO. Intake labels it needs-triage and the Loop takes it from there."
+fi
 printf '\n'
 }
 

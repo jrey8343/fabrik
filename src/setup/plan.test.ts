@@ -1,4 +1,4 @@
-// The setup skill's planner: given what a Product repo holds now and the
+// Setup's planner: given what a Product repo holds now and the
 // Fabrik release being set up, it returns every step that would leave the repo
 // ready to run the Loop. A working install plans nothing, so re-running the
 // skill only repairs what's missing.
@@ -310,7 +310,10 @@ describe("The caller workflow on a repo that has one", () => {
     const plan = planSetup(state, kit);
 
     expect(written(plan.actions, ".github/workflows/fabrik.yml")).toBeUndefined();
-    expect(plan.notes.join("\n")).toContain("v2.0.0");
+    expect(plan.notes).toContain(
+      ".github/workflows/fabrik.yml pins Fabrik v2.0.0, a later major release than v1.4.2: run Setup at v2.0.0 instead, " +
+        "with curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v2.0.0. The caller workflow was left as it is.",
+    );
   });
 
   it("treats each 0.x minor as its own major, as semver does", () => {
@@ -721,15 +724,28 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     return aCleanProduct({ files: { ".fabrik/config.json": config }, vaults: ["Fabrik"], fabrikItems });
   }
 
-  it("walks the Operator through the second account, its token and usage credits when the Kit config lists one Subscription", () => {
-    const { notes } = planSetup(withConfig(oneListed, ["Claude token"]), kit, operator);
+  it("walks the Operator through the second account, its token and usage credits, then setup's command again, which walks the stage, when the vault has no item yet", () => {
+    const { actions, notes } = planSetup(withConfig(oneListed, ["Claude token"]), kit, operator);
 
+    expect(written(actions, ".fabrik/config.json")).toBeUndefined();
     const step = notes.find((note) => note.includes("A second Subscription")) ?? "";
     expect(step).toContain("create a second Claude account");
     expect(step).toContain("`claude setup-token`");
     expect(step).toContain('the "Claude token 2" API Credential, with its expiry date, in the "Fabrik" vault');
     expect(step).toContain("usage credits off on every account");
-    expect(step).toContain('"subscriptions": ["Claude token", "Claude token 2"] in .fabrik/config.json');
+    expect(step).toMatch(
+      /Running setup again walks it, then lists it in subscriptions in \.fabrik\/config\.json: curl -fsSL https:\/\/raw\.githubusercontent\.com\/jrey8343\/fabrik\/main\/setup\.sh \| bash -s -- v1\.4\.2$/,
+    );
+  });
+
+  it("says setup lists it in the setup PR when the plan's own run walks the wizard next", () => {
+    const { actions, notes } = planSetup(withConfig(oneListed, ["Claude token"]), kit, operator, { wizardNext: true });
+
+    expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+    const step = notes.find((note) => note.includes("A second Subscription")) ?? "";
+    expect(step).toContain("create a second Claude account");
+    expect(step).toMatch(/Setup then lists it in subscriptions in \.fabrik\/config\.json, in the setup PR\.$/);
+    expect(step).not.toContain("run setup again");
   });
 
   it("is planned for a repo that leaves subscriptions to its one-item default", () => {
@@ -738,13 +754,57 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     expect(notes.join("\n")).toContain("A second Subscription");
   });
 
-  it("asks only for the Kit config list once the second vault item exists", () => {
-    const { notes } = planSetup(withConfig(oneListed, ["Claude token", "Claude token 2"]), kit, operator);
+  it("lists the second Subscription in the Kit config itself, after the first, once its vault item exists", () => {
+    const { actions, notes } = planSetup(withConfig(kit.templates.kitConfig, ["Claude token", "Claude token 2"]), kit, operator);
 
-    expect(notes.join("\n")).not.toContain("A second Subscription");
-    expect(notes).toContainEqual(
-      'List the second Subscription in the Kit config: "subscriptions": ["Claude token", "Claude token 2"] in .fabrik/config.json.',
+    expect(written(actions, ".fabrik/config.json")).toBe(
+      kit.templates.kitConfig.replace('  "subscriptions": ["Claude token"],\n', '  "subscriptions": ["Claude token", "Claude token 2"],\n'),
     );
+    expect(notes.join("\n")).not.toMatch(/Claude token 2|A second Subscription/);
+  });
+
+  it("keeps every other byte of the Kit config it lists it in, its tabs and CRLF line endings included", () => {
+    const stored = ["Claude token", "Claude token 2"];
+    const own = '{\r\n\t"operator": "jrey8343",\r\n\t"subscriptions": [ "Claude token" ],\r\n\t"max_in_flight": 1\r\n}\r\n';
+    const unlisted = '{\n  "max_in_flight": 1\n}\n';
+
+    expect(written(planSetup(withConfig(own, stored), kit, operator).actions, ".fabrik/config.json")).toBe(
+      '{\r\n\t"operator": "jrey8343",\r\n\t"subscriptions": ["Claude token", "Claude token 2"],\r\n\t"max_in_flight": 1\r\n}\r\n',
+    );
+    expect(written(planSetup(withConfig(unlisted, stored), kit, operator).actions, ".fabrik/config.json")).toBe(
+      '{\n  "max_in_flight": 1,\n  "subscriptions": ["Claude token", "Claude token 2"]\n}\n',
+    );
+  });
+
+  it("lists it in the starter on a repo with no Kit config, in the plan's one write of it, paused or not", () => {
+    const fresh = aCleanProduct({ vaults: ["Fabrik"], fabrikItems: ["Claude token", "Claude token 2"] });
+    const listedIn = (starter: string) =>
+      starter.replace('  "subscriptions": ["Claude token"],\n', '  "subscriptions": ["Claude token", "Claude token 2"],\n');
+
+    for (const [answers, starter] of [
+      [operator, kit.templates.kitConfig],
+      [{ ...operator, paused: true }, kit.templates.kitConfig.replace('"max_in_flight": 2', '"max_in_flight": 0')],
+    ] as const) {
+      const writes = planSetup(fresh, kit, answers).actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json");
+      expect(writes).toEqual([expect.objectContaining({ content: listedIn(starter), why: expect.stringContaining("the second Subscription listed") })]);
+    }
+  });
+
+  it("writes nothing to a Kit config it can't read a list from, and says so", () => {
+    for (const config of ["{ not json\n", '[ "Claude token" ]\n', '{ "subscriptions": "Claude token" }\n', '{ "subscriptions": [] }\n']) {
+      const { actions, notes } = planSetup(withConfig(config, ["Claude token", "Claude token 2"]), kit, operator);
+
+      expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+      expect(notes).toContainEqual(
+        '.fabrik/config.json isn\'t a JSON object whose subscriptions is a list of names, so setup didn\'t list "Claude token 2" in it: fix it, then run setup again.',
+      );
+    }
+  });
+
+  it("leaves a list of two or more Subscriptions as the Operator wrote it", () => {
+    const state = withConfig('{ "subscriptions": ["Claude token", "Claude token B"] }\n', ["Claude token", "Claude token B", "Claude token 2"]);
+
+    expect(planSetup(state, kit, operator)).toEqual(planSetup(state, kit));
   });
 
   it("is planned away once the second vault item exists and is listed", () => {
@@ -754,12 +814,59 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     expect(planSetup(state, kit, operator).notes.join("\n")).not.toMatch(/Claude token 2|A second Subscription/);
   });
 
-  it("names a listed Subscription the Fabrik vault lacks, so no run asks 1Password for a missing item", () => {
-    const { notes } = planSetup(withConfig(twoListed, ["Claude token"]), kit);
+  it("names a listed Subscription the Fabrik vault lacks, so no run asks 1Password for a missing item, and how to walk the wizard for it", () => {
+    const lacks = '.fabrik/config.json lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name';
 
-    expect(notes).toContainEqual(
-      '.fabrik/config.json lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name: walk the wizard\'s "A second Subscription" stage, then run setup again.',
+    expect(planSetup(withConfig(twoListed, ["Claude token"]), kit).notes).toContainEqual(
+      `${lacks}: run setup again to walk the wizard's "A second Subscription" stage for it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2`,
     );
+    expect(planSetup(withConfig(twoListed, ["Claude token"]), kit, {}, { wizardNext: true }).notes).toContainEqual(
+      `${lacks}: walk the wizard's "A second Subscription" stage for it.`,
+    );
+  });
+
+  it("names the Claude token stage for a listed Claude token the Fabrik vault lacks", () => {
+    const lacks = '.fabrik/config.json lists "Claude token" in subscriptions, but the "Fabrik" vault has no item of that name';
+
+    expect(planSetup(withConfig(twoListed, ["Claude token 2"]), kit).notes).toContainEqual(
+      `${lacks}: run setup again to walk the wizard's "The Claude token" stage for it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2`,
+    );
+  });
+
+  it("says to store by hand a listed Subscription the Fabrik vault lacks under a name no wizard stage stores, such as a third", () => {
+    const threeListed = '{ "subscriptions": ["Claude token", "Claude token 2", "Claude token 3"] }\n';
+    const byHand =
+      '.fabrik/config.json lists "Claude token 3" in subscriptions, but the "Fabrik" vault has no item of that name: run `claude setup-token` on that Subscription\'s Claude account and save the token as the "Claude token 3" API Credential, with its expiry date, in the "Fabrik" vault yourself, since the wizard stores only "Claude token" and "Claude token 2".';
+
+    for (const context of [{}, { wizardNext: true }]) {
+      const { notes } = planSetup(withConfig(threeListed, ["Claude token", "Claude token 2"]), kit, {}, context);
+      expect(notes.filter((note) => note.includes("subscriptions"))).toEqual([byHand]);
+    }
+  });
+
+  it("names a Subscription the Fabrik vault lacks in a list of one under its own name, which the Kit reads in place of the Claude token", () => {
+    const byHand =
+      '.fabrik/config.json lists "Claude backup" in subscriptions, but the "Fabrik" vault has no item of that name: run `claude setup-token` on that Subscription\'s Claude account and save the token as the "Claude backup" API Credential, with its expiry date, in the "Fabrik" vault yourself, since the wizard stores only "Claude token" and "Claude token 2".';
+
+    for (const fabrikItems of [["Claude token"], []]) {
+      const { notes } = planSetup(withConfig('{ "subscriptions": ["Claude backup"] }\n', fabrikItems), kit);
+      expect(notes.filter((note) => note.includes("subscriptions"))).toEqual([byHand]);
+    }
+  });
+
+  it("on a yes, only names the second Subscription's token for a list that names it alone, which setup lists nothing after", () => {
+    const { actions, notes } = planSetup(withConfig('{ "subscriptions": ["Claude token 2"] }\n', ["Claude token"]), kit, operator);
+
+    expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+    expect(notes.filter((note) => note.includes("Claude token 2"))).toEqual([
+      '.fabrik/config.json lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name: run setup again to walk the wizard\'s "A second Subscription" stage for it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2',
+    ]);
+  });
+
+  it("gives the Claude token no note in the default list, the Claude token alone, whose token the merge rule names", () => {
+    for (const config of [oneListed, '{ "max_in_flight": 1 }\n']) {
+      expect(planSetup(withConfig(config, []), kit).notes.join("\n")).not.toContain("subscriptions");
+    }
   });
 
   it("creates no service account: the agent and implement accounts already read the Fabrik vault", () => {
@@ -775,256 +882,25 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
   });
 });
 
-describe("Visual evidence, the opt-in step for UI evidence on UI pull requests", () => {
-  const operator = {
-    visualEvidence: {
-      paths: ["src/pages/**", "src/components/**/*.{astro,tsx}"],
-      serve: "npm run preview",
-      url: "http://localhost:4321",
-      beforeUrl: "https://clinic.example.com",
-      defaultRoutes: ["/", "/book"],
-      previewUrl: "https://deploy-preview-{pr}--clinic.netlify.app",
-    },
-  };
-  const theirs = '{ "max_in_flight": 1, "operator": "jrey8343" }\n';
+// Visual evidence is /fabrik-visual-evidence's to write, through its own writer (visualEvidence.ts).
+describe("Visual evidence, which setup leaves to /fabrik-visual-evidence", () => {
+  it("writes the starter Kit config with Visual evidence off, as the starter has it", () => {
+    const config = written(planSetup(aCleanProduct(), kit).actions, ".fabrik/config.json") ?? null;
 
-  function withConfig(config: string): ProductState {
-    return aCleanProduct({ files: { ".fabrik/config.json": config } });
-  }
-
-  it("writes the ui and preview blocks into the Kit config, keeping what it already holds", () => {
-    const { actions } = planSetup(withConfig(theirs), kit, operator);
-
-    expect(JSON.parse(written(actions, ".fabrik/config.json") ?? "{}")).toEqual({
-      max_in_flight: 1,
-      operator: "jrey8343",
-      ui: {
-        paths: ["src/pages/**", "src/components/**/*.{astro,tsx}"],
-        serve: "npm run preview",
-        url: "http://localhost:4321",
-        before_url: "https://clinic.example.com",
-        default_routes: ["/", "/book"],
-      },
-      preview: { url: "https://deploy-preview-{pr}--clinic.netlify.app" },
-    });
-  });
-
-  // The Kit config is the Operator's file: setup adds its two blocks and changes nothing else, not even a space.
-  it("adds the blocks before the Kit config's closing brace, leaving every other byte of the Operator's file as it was", () => {
-    const formatted = [
-      "{",
-      '  "roles": { "implement": { "model": "claude-sonnet-5-5", "effort": null, "timeout_minutes": 90 } },',
-      '  "operator": "jrey8343"',
-      "}",
-      "",
-    ].join("\n");
-    const only = { visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } };
-
-    expect(written(planSetup(withConfig(formatted), kit, only).actions, ".fabrik/config.json")).toBe(
-      [
-        "{",
-        '  "roles": { "implement": { "model": "claude-sonnet-5-5", "effort": null, "timeout_minutes": 90 } },',
-        '  "operator": "jrey8343",',
-        '  "ui": {',
-        '    "paths": ["src/**"],',
-        '    "serve": "npm run preview",',
-        '    "url": "http://localhost:4321",',
-        '    "before_url": null,',
-        '    "default_routes": []',
-        "  },",
-        '  "preview": {',
-        '    "url": null',
-        "  }",
-        "}",
-        "",
-      ].join("\n"),
-    );
-  });
-
-  it("adds only the block a Kit config lacks when the one it has already holds the answers", () => {
-    const withPreview = '{\n\t"operator": "jrey8343",\n\t"preview": { "url": "https://deploy-preview-{pr}--clinic.netlify.app" }\n}\n';
-    const answers = {
-      visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", previewUrl: "https://deploy-preview-{pr}--clinic.netlify.app" },
-    };
-
-    expect(written(planSetup(withConfig(withPreview), kit, answers).actions, ".fabrik/config.json")).toBe(
-      [
-        "{",
-        '\t"operator": "jrey8343",',
-        '\t"preview": { "url": "https://deploy-preview-{pr}--clinic.netlify.app" },',
-        '\t"ui": {',
-        '\t\t"paths": ["src/**"],',
-        '\t\t"serve": "npm run preview",',
-        '\t\t"url": "http://localhost:4321",',
-        '\t\t"before_url": null,',
-        '\t\t"default_routes": []',
-        "\t}",
-        "}",
-        "",
-      ].join("\n"),
-    );
-  });
-
-  it("rewrites the whole Kit config only when a block it already has must change, two-space indented when it was all on one line", () => {
-    const off = '{ "operator": "jrey8343", "ui": null }\n';
-    const only = { visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } };
-
-    expect(written(planSetup(withConfig(off), kit, only).actions, ".fabrik/config.json")).toBe(
-      [
-        "{",
-        '  "operator": "jrey8343",',
-        '  "ui": {',
-        '    "paths": ["src/**"],',
-        '    "serve": "npm run preview",',
-        '    "url": "http://localhost:4321",',
-        '    "before_url": null,',
-        '    "default_routes": []',
-        "  },",
-        '  "preview": {',
-        '    "url": null',
-        "  }",
-        "}",
-        "",
-      ].join("\n"),
-    );
-  });
-
-  // A Product repo that runs `prettier --check .` over `.fabrik/` must pass it on setup's PR.
-  describe("printed as Prettier prints JSON, so the Product repo's Prettier check passes", () => {
-    const pilot = {
-      visualEvidence: {
-        paths: ["src/pages/**", "src/components/**"],
-        serve: "npm run preview",
-        url: "http://localhost:4321",
-        beforeUrl: "https://clinic.example.com",
-        defaultRoutes: ["/"],
-        previewUrl: "https://deploy-preview-{pr}--clinic.netlify.app",
-      },
-    };
-
-    it("rewrites the starter Kit config exactly as Prettier 3 prints it", () => {
-      // Generated once with `prettier@3.6.2 --parser json` from the starter with these answers written.
-      const prettier = readFileSync(resolve(import.meta.dirname, "..", "__fixtures__", "starterWithVisualEvidence.prettier.json"), "utf8");
-
-      expect(written(planSetup(aCleanProduct(), kit, pilot).actions, ".fabrik/config.json")).toBe(prettier);
-    });
-
-    it("keeps the Kit config's own indent and line endings when rewriting the whole of it", () => {
-      const tabbed = '{\r\n\t"operator": "jrey8343",\r\n\t"ui": null\r\n}\r\n';
-
-      expect(written(planSetup(withConfig(tabbed), kit, pilot).actions, ".fabrik/config.json")).toBe(
-        [
-          "{",
-          '\t"operator": "jrey8343",',
-          '\t"ui": {',
-          '\t\t"paths": ["src/pages/**", "src/components/**"],',
-          '\t\t"serve": "npm run preview",',
-          '\t\t"url": "http://localhost:4321",',
-          '\t\t"before_url": "https://clinic.example.com",',
-          '\t\t"default_routes": ["/"]',
-          "\t},",
-          '\t"preview": {',
-          '\t\t"url": "https://deploy-preview-{pr}--clinic.netlify.app"',
-          "\t}",
-          "}",
-          "",
-        ].join("\r\n"),
-      );
-    });
-
-    it("puts each array that fits in 80 columns on one line when adding the blocks to a Kit config", () => {
-      const config = written(planSetup(withConfig(theirs), kit, pilot).actions, ".fabrik/config.json") ?? "";
-
-      expect(config).toContain('\n    "paths": ["src/pages/**", "src/components/**"],\n');
-      expect(config).toContain('\n    "default_routes": ["/"]\n');
-    });
-
-    // Prettier-checked: at this indent an 80-column line, comma and all, stays on one line, and an 81-column one breaks.
-    it("puts each item of an array on its own line once the array no longer fits in 80 columns", () => {
-      const at = (width: number) => {
-        const glob = "x".repeat(width - '    "paths": [""],'.length);
-        const answers = { visualEvidence: { paths: [glob], serve: "npm run preview", url: "http://localhost:4321" } };
-        return { glob, config: written(planSetup(withConfig(theirs), kit, answers).actions, ".fabrik/config.json") ?? "" };
-      };
-
-      const fits = at(80);
-      expect(fits.config).toContain(`\n    "paths": ["${fits.glob}"],\n`);
-      const overflows = at(81);
-      expect(overflows.config).toContain(`\n    "paths": [\n      "${overflows.glob}"\n    ],\n`);
-    });
-  });
-
-  it("writes them into the starter Kit config on a repo that has none, which resolves with every v1 default and Visual evidence on", () => {
-    const { actions } = planSetup(aCleanProduct(), kit, operator);
-
-    expect(actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toHaveLength(1);
-    expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({
-      ok: true,
-      config: {
-        ...DEFAULT_KIT_CONFIG,
-        ui: {
-          paths: ["src/pages/**", "src/components/**/*.{astro,tsx}"],
-          serve: "npm run preview",
-          url: "http://localhost:4321",
-          beforeUrl: "https://clinic.example.com",
-          defaultRoutes: ["/", "/book"],
-        },
-        preview: { url: "https://deploy-preview-{pr}--clinic.netlify.app" },
-      },
-    });
-  });
-
-  it("leaves the Kit config alone until the Operator answers the step, so Visual evidence stays opt-in", () => {
-    expect(written(planSetup(withConfig(theirs), kit).actions, ".fabrik/config.json")).toBeUndefined();
-    expect(written(planSetup(aCleanProduct(), kit).actions, ".fabrik/config.json")).toBe(kit.templates.kitConfig);
-  });
-
-  it("plans nothing once the Kit config holds those blocks, however the Operator has formatted it", () => {
-    const setUp = afterApplying(withConfig(theirs), planSetup(withConfig(theirs), kit, operator));
-    const reformatted = JSON.stringify(JSON.parse(setUp.files[".fabrik/config.json"] ?? "{}"));
-
-    expect(planSetup(setUp, kit, operator)).toEqual(planSetup(setUp, kit));
-    expect(written(planSetup(withConfig(reformatted), kit, operator).actions, ".fabrik/config.json")).toBeUndefined();
-  });
-
-  it("spells out no Before, no default routes and no preview when the Operator gives none", () => {
-    const only = { visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } };
-
-    const config = written(planSetup(withConfig(theirs), kit, only).actions, ".fabrik/config.json") ?? null;
-
-    expect(JSON.parse(config ?? "{}")).toMatchObject({
-      ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", before_url: null, default_routes: [] },
-      preview: { url: null },
-    });
+    expect(config).toBe(kit.templates.kitConfig);
     const resolved = resolveKitConfig({ config });
-    expect(resolved.ok && [resolved.config.ui, resolved.config.preview]).toEqual([
-      { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", beforeUrl: null, defaultRoutes: [] },
-      null,
-    ]);
+    expect(resolved.ok && [resolved.config.ui, resolved.config.preview]).toEqual([null, null]);
   });
 
-  it("writes nothing for answers the Kit config would refuse, naming every problem for the Operator", () => {
-    const wrong = {
-      visualEvidence: { paths: [], serve: "npm run preview", url: "localhost:4321", defaultRoutes: ["book"], previewUrl: "https://pr-{number}.clinic.dev" },
-    };
+  it("never writes a Kit config the repo already has, whether or not it has a ui block", () => {
+    const off = '{\n  "operator": "jrey8343"\n}\n';
+    const on = JSON.stringify({ ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } });
 
-    const plan = planSetup(withConfig(theirs), kit, wrong);
-
-    expect(written(plan.actions, ".fabrik/config.json")).toBeUndefined();
-    const note = plan.notes.find((n) => n.includes("Visual evidence")) ?? "";
-    expect(note).toContain("ui.paths is empty");
-    expect(note).toContain('ui.url is "localhost:4321"');
-    expect(note).toContain('ui.default_routes[0] is "book"');
-    expect(note).toContain("{number} is not a placeholder");
-  });
-
-  it.each(["{ oops", "[]\n"])("leaves a Kit config that isn't a JSON object (%j) for the Operator to fix, rather than overwrite it", (broken) => {
-    const plan = planSetup(withConfig(broken), kit, operator);
-
-    expect(written(plan.actions, ".fabrik/config.json")).toBeUndefined();
-    expect(plan.notes).toContainEqual(
-      ".fabrik/config.json isn't a JSON object, so the Visual evidence answers weren't written to it: fix it and run setup again.",
-    );
+    for (const config of [off, on]) {
+      const { actions, notes } = planSetup(aCleanProduct({ files: { ".fabrik/config.json": config } }), kit);
+      expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+      expect(notes.join("\n")).not.toContain("Visual evidence");
+    }
   });
 });
 
@@ -1041,15 +917,6 @@ describe("Installing with Dispatch paused", () => {
     const { actions } = planSetup(aCleanProduct(), kit, paused);
 
     expect(written(actions, ".fabrik/config.json")).toBe(pausedText(kit.templates.kitConfig));
-  });
-
-  it("pauses the starter with Visual evidence on, too", () => {
-    const visualEvidence = { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" };
-    const plain = written(planSetup(aCleanProduct(), kit, { visualEvidence }).actions, ".fabrik/config.json") ?? "";
-
-    const { actions } = planSetup(aCleanProduct(), kit, { ...paused, visualEvidence });
-
-    expect(written(actions, ".fabrik/config.json")).toBe(pausedText(plain));
   });
 
   it("says in the plan that the starter is paused", () => {
@@ -1105,5 +972,78 @@ describe("Installing with Dispatch paused", () => {
     expect(planSetup(aCleanProduct({ readyForAgent: 1 }), kit).notes).toContainEqual(
       "1 open issue is labelled ready-for-agent: Dispatch starts releasing it to an Implementer as soon as the setup PR merges. Run setup with --paused to hold it back.",
     );
+  });
+
+  describe("with a Kit config only on the setup branch, the starter setup wrote there", () => {
+    const wroteStarter = { wroteStarter: true };
+    const withStarter = (starter: string) => aCleanProduct({ readyForAgent: 4, files: { ".fabrik/config.json": starter } });
+    const pausedNote = (plan: { notes: readonly string[] }) => plan.notes.filter((n) => n.startsWith("--paused"));
+    const readyForAgentNotes = (plan: { notes: readonly string[] }) => plan.notes.filter((n) => n.includes("ready-for-agent"));
+
+    it("with --paused and a paused starter, says nothing about --paused", () => {
+      const plan = planSetup(withStarter(pausedText(kit.templates.kitConfig)), kit, paused, wroteStarter);
+
+      expect(pausedNote(plan)).toEqual([]);
+      expect(readyForAgentNotes(plan)).toEqual([]);
+    });
+
+    it("unpaused, warns that the ready-for-agent issues start as soon as the setup PR merges", () => {
+      const plan = planSetup(withStarter(kit.templates.kitConfig), kit, {}, wroteStarter);
+
+      expect(readyForAgentNotes(plan)).toEqual([
+        "4 open issues are labelled ready-for-agent: Dispatch starts releasing them to Implementers as soon as the setup PR merges. Run setup with --paused to hold them back.",
+      ]);
+    });
+
+    it("with --paused and a starter an earlier run wrote unpaused, pauses Dispatch in it, every other byte kept", () => {
+      const plan = planSetup(withStarter(kit.templates.kitConfig), kit, paused, wroteStarter);
+
+      expect(plan.actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toEqual([
+        expect.objectContaining({ content: pausedText(kit.templates.kitConfig), why: "the starter Kit config, with Dispatch paused now (max_in_flight 0)" }),
+      ]);
+      expect(pausedNote(plan)).toEqual([]);
+      expect(readyForAgentNotes(plan)).toEqual([]);
+    });
+
+    it("unpaused, with a starter an earlier run wrote paused, gives it the v1 default max_in_flight and warns about the ready-for-agent issues", () => {
+      const plan = planSetup(withStarter(pausedText(kit.templates.kitConfig)), kit, {}, wroteStarter);
+
+      expect(plan.actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toEqual([
+        expect.objectContaining({ content: kit.templates.kitConfig, why: "the starter Kit config, with Dispatch not paused now (max_in_flight 2)" }),
+      ]);
+      expect(readyForAgentNotes(plan)).toEqual([
+        "4 open issues are labelled ready-for-agent: Dispatch starts releasing them to Implementers as soon as the setup PR merges. Run setup with --paused to hold them back.",
+      ]);
+    });
+
+    it("pauses Dispatch and lists the second Subscription in one write", () => {
+      const state = aCleanProduct({ files: { ".fabrik/config.json": kit.templates.kitConfig }, vaults: ["Fabrik"], fabrikItems: ["Claude token", "Claude token 2"] });
+
+      const writes = planSetup(state, kit, { paused: true, secondSubscription: true }, wroteStarter).actions.filter(
+        (a) => a.kind === "write-file" && a.path === ".fabrik/config.json",
+      );
+
+      expect(writes).toEqual([
+        expect.objectContaining({
+          content: pausedText(kit.templates.kitConfig).replace('"subscriptions": ["Claude token"]', '"subscriptions": ["Claude token", "Claude token 2"]'),
+          why: "the starter Kit config, with Dispatch paused now (max_in_flight 0), and the second Subscription listed",
+        }),
+      ]);
+    });
+
+    it("plans nothing more for it once the starter pauses Dispatch as this run asks", () => {
+      const once = planSetup(withStarter(kit.templates.kitConfig), kit, paused, wroteStarter);
+      const again = planSetup(afterApplying(withStarter(kit.templates.kitConfig), once), kit, paused, wroteStarter);
+
+      expect(written(again.actions, ".fabrik/config.json")).toBeUndefined();
+      expect(pausedNote(again)).toEqual([]);
+    });
+
+    it("leaves a starter that isn't a JSON object alone, as a Kit config of the Product's own", () => {
+      const plan = planSetup(withStarter("{ not json\n"), kit, paused, wroteStarter);
+
+      expect(written(plan.actions, ".fabrik/config.json")).toBeUndefined();
+      expect(pausedNote(plan)).toEqual(["--paused had no effect: .fabrik/config.json already exists. Set max_in_flight to 0 in it by hand to pause Dispatch."]);
+    });
   });
 });

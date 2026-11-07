@@ -90,7 +90,7 @@ describe("The step summary's line on the Run record", () => {
   it("names the setup step when the Fabrik App has no token for the store", () => {
     expect(recordWriteSummary({ kind: "no-store-token" })).toBe(
       "No Run record written: the Fabrik App couldn't get a token for jrey8343/fabrik-runs. " +
-        "Run fabrik-setup to create the store, then install the Fabrik App on jrey8343/fabrik-runs.",
+        "Run Setup again, giving it your time zone, to create the store, then install the Fabrik App on jrey8343/fabrik-runs.",
     );
   });
 

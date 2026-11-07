@@ -1,22 +1,26 @@
-// The setup wizard is the half of /fabrik-setup the Operator runs in their own
-// terminal, so it's run here as they'd run it: with `gh`, `op` and the browser
-// stubbed, and their answers piped in.
+// The setup wizard is the part of Setup the Operator walks in their own
+// terminal, so it's run here as they'd walk it: with `gh`, `op` and the
+// browser stubbed, and their answers piped in.
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
+import { WIZARD_PATH as WIZARD, WIZARD_REPORT_ENV, WIZARD_SECOND_SUBSCRIPTION_ENV } from "./wizard.ts";
 
-const WIZARD = resolve(import.meta.dirname, "..", "..", "skills", "fabrik-setup", "wizard.sh");
-
-/** An `op` that holds the given "vault/title" items, and logs each call with the template it was given. */
+/**
+ * An `op` that holds the given "vault/title" items, and logs each call with the
+ * template it was given, from a file or, after a lone -, on stdin.
+ */
 const FAKE_OP = `#!/usr/bin/env node
 const { appendFileSync, readFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 const flag = (name) => { const i = args.indexOf(name); return i < 0 ? null : args[i + 1]; };
-const template = flag("--template");
+const file = flag("--template");
+const text = file !== null ? readFileSync(file, "utf8") : args.includes("-") ? readFileSync(0, "utf8") : null;
 appendFileSync(process.env.STUB_DIR + "/op.log", JSON.stringify({
-  args, template: template === null ? null : JSON.parse(readFileSync(template, "utf8")),
+  args, templateFile: file, template: text === null ? null : JSON.parse(text),
 }) + "\\n");
 if (args[0] === "item" && args[1] === "get") {
   const items = JSON.parse(process.env.STUB_OP_ITEMS);
@@ -60,6 +64,8 @@ const THE_APP_AND_CLAUDE = ["Fabrik App/Fabrik App", "Fabrik/Claude token"];
 
 interface OpCall {
   args: string[];
+  /** Where the template was, when op was given one by its path. */
+  templateFile: string | null;
   template: unknown;
 }
 
@@ -68,6 +74,8 @@ interface Walk {
   stdout: string;
   op: OpCall[];
   opened: string[];
+  /** What the wizard reported to setup, a line each, when setup ran it. */
+  report: string[];
 }
 
 interface WalkOptions {
@@ -79,6 +87,12 @@ interface WalkOptions {
   store?: boolean;
   /** The checkout's .env, when it has one. */
   dotEnv?: string;
+  /** The OP_ACCOUNT Setup passes in, naming the 1Password account. Unset when not given. */
+  opAccount?: string;
+  /** Setup runs the wizard, and gives it a file to report to. */
+  bySetup?: boolean;
+  /** When Setup runs it, the Operator's answer to Setup's second Subscription question. */
+  secondSubscription?: boolean;
 }
 
 async function stub(bin: string, name: string, script: string): Promise<void> {
@@ -103,7 +117,7 @@ async function walk(
   items: string[],
   answers: string[],
   kitConfig?: string,
-  { createFails = false, ghApi = {}, store = false, dotEnv }: WalkOptions = {},
+  { createFails = false, ghApi = {}, store = false, dotEnv, opAccount, bySetup = false, secondSubscription = false }: WalkOptions = {},
 ): Promise<Walk> {
   const bin = await tempDir("wizard-bin");
   await stub(bin, "op", FAKE_OP);
@@ -115,26 +129,35 @@ async function walk(
     await writeFile(join(checkout, ".fabrik", "config.json"), kitConfig);
   }
   if (dotEnv !== undefined) await writeFile(join(checkout, ".env"), dotEnv);
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+    STUB_DIR: bin,
+    STUB_OP_ITEMS: JSON.stringify(items),
+    STUB_OP_CREATE_FAILS: createFails ? "1" : "0",
+    STUB_GH_API: JSON.stringify(ghApi),
+    STUB_GH_STORE: store ? "1" : "0",
+  };
+  // Never the account of the shell running the tests.
+  delete env["OP_ACCOUNT"];
+  if (opAccount !== undefined) env["OP_ACCOUNT"] = opAccount;
+  delete env[WIZARD_REPORT_ENV];
+  if (bySetup) env[WIZARD_REPORT_ENV] = join(bin, "report");
+  delete env[WIZARD_SECOND_SUBSCRIPTION_ENV];
+  if (bySetup) env[WIZARD_SECOND_SUBSCRIPTION_ENV] = secondSubscription ? "yes" : "no";
   const run = spawnSync("bash", [WIZARD], {
     cwd: checkout,
     input: answers.map((a) => `${a}\n`).join(""),
     encoding: "utf8",
     timeout: 30_000,
-    env: {
-      ...process.env,
-      PATH: `${bin}:${process.env["PATH"] ?? ""}`,
-      STUB_DIR: bin,
-      STUB_OP_ITEMS: JSON.stringify(items),
-      STUB_OP_CREATE_FAILS: createFails ? "1" : "0",
-      STUB_GH_API: JSON.stringify(ghApi),
-      STUB_GH_STORE: store ? "1" : "0",
-    },
+    env,
   });
   return {
     status: run.status,
     stdout: run.stdout,
     op: (await linesOf(join(bin, "op.log"))).map((l) => JSON.parse(l) as OpCall),
     opened: await linesOf(join(bin, "opened")),
+    report: await linesOf(join(bin, "report")),
   };
 }
 
@@ -143,6 +166,11 @@ function created(w: Walk): { vault: string | undefined; item: unknown }[] {
   return w.op
     .filter((c) => c.args[0] === "item" && c.args[1] === "create")
     .map((c) => ({ vault: c.args[c.args.indexOf("--vault") + 1], item: c.template }));
+}
+
+/** The template files `op item create` was given that are still on disk. */
+function templatesLeft(w: Walk): string[] {
+  return w.op.flatMap((c) => (c.templateFile !== null && existsSync(c.templateFile) ? [c.templateFile] : []));
 }
 
 /** Each `op item delete` call's arguments. */
@@ -158,6 +186,20 @@ describe("The setup wizard's Fabrik App stage", () => {
       "It needs Issues, Pull requests and Contents (read and write), Checks (read), and never 'workflows'.",
     );
     expect(w.stdout).toContain("https://github.com/settings/apps/fabrik-factory/permissions");
+  });
+
+  it("tells setup the App is on the repo once the Operator presses Enter at that step, since setup can't read it for itself", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, { bySetup: true });
+
+    expect(w.status).toBe(0);
+    expect(w.report).toEqual(["app-installed acme/clinic"]);
+  });
+
+  it("tells setup nothing about the App when the Operator's input ends before that Enter", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, ["", "fabrik-factory"], undefined, { bySetup: true });
+
+    expect(w.status).toBe(0);
+    expect(w.report).toEqual([]);
   });
 
   /** A comment or issue made through the App `slug`, which the GitHub user `owner` owns. */
@@ -260,6 +302,69 @@ describe("The setup wizard's Fabrik App stage", () => {
   });
 });
 
+describe("The setup wizard's Fabrik App key stage", () => {
+  const PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0fabrik\n-----END RSA PRIVATE KEY-----\n";
+
+  it("stores the Client ID and the key file's private key as the 'Fabrik App' item, the key never in op's arguments", async () => {
+    const downloads = await tempDir("wizard-downloads");
+    const key = join(downloads, "fabrik.pem");
+    await writeFile(key, PEM);
+
+    const w = await walk(["Fabrik/Claude token"], ["", "fabrik-factory", "", "Iv1.0123abcd", key, "n", "n", ""]);
+
+    expect(w.status).toBe(0);
+    expect(created(w)).toEqual([
+      {
+        vault: "Fabrik App",
+        item: {
+          title: "Fabrik App",
+          category: "SECURE_NOTE",
+          fields: [
+            { id: "client-id", type: "STRING", label: "client-id", value: "Iv1.0123abcd" },
+            { id: "private-key", type: "CONCEALED", label: "private-key", value: PEM },
+          ],
+        },
+      },
+    ]);
+    expect(w.op.filter((c) => c.args.some((arg) => arg.includes("PRIVATE KEY")))).toEqual([]);
+    expect(w.stdout).toContain("stored the 'Fabrik App' item in 1Password");
+  });
+});
+
+describe("The setup wizard's Claude token stage", () => {
+  /** To the Claude token's paste, 1Password holding the App's key. */
+  const TO_THE_PASTE = ["", "fabrik-factory", "", ""];
+
+  it("stores nothing when the Operator pastes nothing, and leaves the token to do", async () => {
+    const w = await walk(["Fabrik App/Fabrik App"], [...TO_THE_PASTE, "", ""]);
+
+    expect(w.status).toBe(0);
+    expect(created(w)).toEqual([]);
+    expect(deleted(w)).toEqual([]);
+    expect(w.stdout).toContain("No token pasted.");
+    expect(w.stdout).not.toContain("stored the Claude token");
+    expect(w.stdout).toMatch(/still to do by hand:\n.*the 'Claude token' API Credential in the 'Fabrik' vault/);
+  });
+
+  it("leaves no copy of the token on disk when 1Password doesn't store it", async () => {
+    const w = await walk(["Fabrik App/Fabrik App"], [...TO_THE_PASTE, "sk-ant-oat01-first", ""], undefined, { createFails: true });
+
+    expect(w.status).not.toBe(0);
+    expect(created(w)).toHaveLength(1);
+    expect(templatesLeft(w)).toEqual([]);
+  });
+
+  it("keeps the token 1Password holds when the replacement pasted is nothing", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_PASTE, "y", "", ""]);
+
+    expect(w.status).toBe(0);
+    expect(created(w)).toEqual([]);
+    expect(deleted(w)).toEqual([]);
+    expect(w.stdout).toContain("Keeping the current token.");
+    expect(w.stdout).not.toContain("still to do by hand");
+  });
+});
+
 describe("The setup wizard's Sentry token stage", () => {
   it("opens Sentry's token page and names the scopes the token needs", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_SENTRY_STAGE, "y", "sntryu_0123abcd"]);
@@ -285,6 +390,14 @@ describe("The setup wizard's Sentry token stage", () => {
     ]);
   });
 
+  it("leaves no copy of the token on disk when 1Password doesn't store it", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_SENTRY_STAGE, "y", "sntryu_0123abcd"], undefined, { createFails: true });
+
+    expect(w.status).not.toBe(0);
+    expect(created(w)).toHaveLength(1);
+    expect(templatesLeft(w)).toEqual([]);
+  });
+
   it("refuses an organization auth token, whose scopes don't cover issues, and leaves the token to do by hand", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_SENTRY_STAGE, "y", "sntrys_eyJpYXQiOjE3"]);
 
@@ -302,15 +415,19 @@ describe("The setup wizard's Sentry token stage", () => {
     expect(w.stdout).not.toContain("still to do by hand");
   });
 
-  it("is skipped for a repo that doesn't report to Sentry, which still finishes setup", async () => {
+  it("is skipped for a repo that doesn't report to Sentry, which still finishes setup, and says Setup walks it once monitor.errors names Sentry", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_SENTRY_STAGE, "n"]);
 
     expect(w.status).toBe(0);
     expect(created(w)).toEqual([]);
     expect(w.stdout).toContain("Setup complete");
+    expect(w.stdout).toContain(
+      "Skipping the Sentry token. Once acme/clinic reports to Sentry, name its project in monitor.errors in .fabrik/config.json and run Setup again: it walks this stage while 1Password lacks the token.",
+    );
+    expect(w.stdout).not.toContain("Re-run the wizard");
   });
 
-  it("keeps the Sentry token 1Password already holds, which every Product repo shares", async () => {
+  it("keeps the Sentry token 1Password already holds, which every Product repo in this 1Password account shares", async () => {
     const w = await walk([...THE_APP_AND_CLAUDE, "Fabrik App/Sentry token"], [...TO_THE_SENTRY_STAGE, "n"]);
 
     expect(w.status).toBe(0);
@@ -336,6 +453,39 @@ describe("The setup wizard's Sentry token stage", () => {
   });
 });
 
+describe("The setup wizard in one 1Password account per Product", () => {
+  /** The account as the wizard words it, and the OP_ACCOUNT Setup passes in to name it, if any. */
+  const ACCOUNTS: [string, string | undefined][] = [
+    ["this 1Password account", undefined],
+    ["this 1Password account (clinic.1password.com)", "clinic.1password.com"],
+  ];
+
+  it.each(ACCOUNTS)("says the Claude and Sentry tokens 1Password holds are shared by every Product repo in %s", async (account, opAccount) => {
+    const w = await walk([...THE_APP_AND_CLAUDE, "Fabrik App/Sentry token"], [...TO_THE_SENTRY_STAGE, "n"], undefined, { opAccount });
+
+    expect(w.stdout).toContain(`1Password already holds a Claude token, which every Product repo in ${account} shares. Replace it with a new one?`);
+    expect(w.stdout).toContain(`1Password already holds a Sentry token, which every Product repo in ${account} shares. Replace it with a new one?`);
+    expect(w.stdout).not.toContain("which every Product repo shares");
+  });
+
+  /** The answers that walk a new account's App key and Claude token stages: a key file that isn't there, then a token. */
+  const IN_A_NEW_ACCOUNT = ["", "fabrik-factory", "", "Iv1.0123abcd", "/nowhere/fabrik.pem", "sk-ant-oat01-first", ""];
+
+  it.each(ACCOUNTS)("says an App key and a Claude token not stored yet in %s are expected for a new account", async (account, opAccount) => {
+    const w = await walk([], IN_A_NEW_ACCOUNT, undefined, { opAccount });
+
+    expect(w.status).toBe(0);
+    expect(w.stdout).toContain(`There's no 'Fabrik App' item in ${account} yet. That's expected for a new account.`);
+    expect(w.stdout).toContain(`There's no Claude token in ${account} yet. That's expected for a new account.`);
+  });
+
+  it("doesn't call the account new when it already holds the App key and the Claude token", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE);
+
+    expect(w.stdout).not.toContain("expected for a new account");
+  });
+});
+
 describe("The setup wizard's second Subscription stage", () => {
   /** Past the Sentry stage, skipping it, to the second Subscription's opt-in. */
   const TO_THE_SECOND_SUBSCRIPTION = [...TO_THE_SENTRY_STAGE, "n", ""];
@@ -348,7 +498,7 @@ describe("The setup wizard's second Subscription stage", () => {
   ];
   const BOTH_LISTED = '{ "subscriptions": ["Claude token", "Claude token 2"] }\n';
 
-  it("walks through the second account, `claude setup-token`, usage credits off on every account and the Kit config list", async () => {
+  it("walks through the second account, `claude setup-token` and usage credits off on every account", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT);
 
     expect(w.stdout).toContain("Create a second Claude account");
@@ -356,7 +506,6 @@ describe("The setup wizard's second Subscription stage", () => {
     expect(w.stdout).toContain("signed in as the second account");
     expect(w.opened).toContain("https://claude.ai/settings/usage");
     expect(w.stdout).toContain("turn usage credits off on every account, the first one included");
-    expect(w.stdout).toContain('"subscriptions": ["Claude token", "Claude token 2"]');
   });
 
   it("stores the second token as the 'Claude token 2' API Credential, with its expiry date, in the 'Fabrik' vault", async () => {
@@ -378,25 +527,113 @@ describe("The setup wizard's second Subscription stage", () => {
     ]);
   });
 
-  it("leaves listing it in the Kit config to do by hand until .fabrik/config.json lists it", async () => {
-    const unlisted = await walk(THE_APP_AND_CLAUDE, ADDING_IT);
-    const listed = await walk(THE_APP_AND_CLAUDE, ADDING_IT, BOTH_LISTED);
+  it("says Setup lists the token it stored in the setup PR, when Setup runs the wizard on a yes to a second Subscription", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT, undefined, { bySetup: true, secondSubscription: true });
 
-    expect(unlisted.stdout).toMatch(/still to do by hand:\n.*"Claude token 2" in subscriptions in \.fabrik\/config\.json/);
-    expect(listed.stdout).toContain(".fabrik/config.json lists both Subscriptions.");
-    expect(listed.stdout).not.toContain("still to do by hand");
+    expect(w.status).toBe(0);
+    expect(w.stdout).toContain("Setup lists it in subscriptions in .fabrik/config.json, after the first, in the setup PR.");
+    expect(w.stdout).not.toContain('"subscriptions": [');
+    expect(w.stdout).not.toContain("still to do by hand");
   });
 
-  it("is skipped unless the Operator asks for a second Subscription, which still finishes setup", async () => {
+  it("otherwise says to run Setup again and say yes, which lists it, rather than to list it by hand", async () => {
+    for (const options of [{}, { bySetup: true, secondSubscription: false }]) {
+      const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT, undefined, options);
+
+      expect(w.stdout).toContain("To list it in subscriptions in .fabrik/config.json, run Setup again and say yes to a second Subscription.");
+      expect(w.stdout).toMatch(/still to do by hand:\n.*list "Claude token 2" in subscriptions in \.fabrik\/config\.json: run Setup again and say yes to a second Subscription/);
+      expect(w.stdout).not.toContain('"subscriptions": [');
+    }
+  });
+
+  it("says .fabrik/config.json lists it, and leaves nothing to do, once it does", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT, BOTH_LISTED);
+
+    expect(w.stdout).toContain(".fabrik/config.json lists 'Claude token 2' already.");
+    expect(w.stdout).not.toContain("still to do by hand");
+  });
+
+  it("says nothing about listing a token it didn't store", async () => {
+    const noToken = [...TO_THE_SECOND_SUBSCRIPTION, "y", "", "", ""];
+
+    const w = await walk(THE_APP_AND_CLAUDE, noToken, undefined, { bySetup: true, secondSubscription: true });
+
+    expect(w.stdout).toContain("No token pasted.");
+    expect(w.stdout).not.toMatch(/lists it in subscriptions|To list it|"subscriptions": \[/);
+  });
+
+  it("is skipped unless the Operator asks for a second Subscription, which still finishes setup, and says how Setup adds one later", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SECOND_SUBSCRIPTION);
 
     expect(w.status).toBe(0);
     expect(created(w)).toEqual([]);
     expect(w.stdout).not.toContain("Create a second Claude account");
     expect(w.stdout).toContain("Setup complete");
+    expect(w.stdout).toContain(
+      "Skipping the second Subscription. To add one later, run Setup again and say yes to a second Subscription: it walks this stage while 1Password lacks the token.",
+    );
+    expect(w.stdout).not.toContain("Re-run the wizard");
   });
 
-  const REPLACING_IT = [...TO_THE_SECOND_SUBSCRIPTION, "y", "sk-ant-oat01-new", ""];
+  describe("with .fabrik/config.json listing two or more Subscriptions, which Setup leaves as they are", () => {
+    const ROTATION = '{ "subscriptions": ["Claude token", "Claude backup"] }\n';
+
+    it("says to list the token it stored by hand, not that Setup lists it or to say yes to Setup", async () => {
+      for (const secondSubscription of [true, false]) {
+        const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT, ROTATION, { bySetup: true, secondSubscription });
+
+        expect(w.status).toBe(0);
+        expect(w.stdout).toContain(
+          "Setup leaves the subscriptions list in .fabrik/config.json as it is, since it lists two or more. To run on 'Claude token 2' too, add it to that list yourself.",
+        );
+        expect(w.stdout).toMatch(/still to do by hand:\n.*list "Claude token 2" in subscriptions in \.fabrik\/config\.json yourself: Setup leaves a list of two or more as it is/);
+        expect(w.stdout).not.toMatch(/Setup lists it|say yes to a second Subscription/);
+      }
+    });
+
+    it("skipped, says Setup leaves that list as it is, not how Setup adds one later", async () => {
+      const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SECOND_SUBSCRIPTION, ROTATION, { bySetup: true });
+
+      expect(w.status).toBe(0);
+      expect(w.stdout).toContain("Skipping the second Subscription. .fabrik/config.json already lists two or more Subscriptions, and Setup leaves that list as it is.");
+      expect(w.stdout).not.toContain("say yes to a second Subscription");
+    });
+
+    it("skipped while the list names the second Subscription, says running Setup again walks this stage, with no yes to give", async () => {
+      const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SECOND_SUBSCRIPTION, BOTH_LISTED, { bySetup: true });
+
+      expect(w.stdout).toContain(
+        "Skipping the second Subscription. .fabrik/config.json lists 'Claude token 2' already, so running Setup again walks this stage while 1Password lacks its token.",
+      );
+      expect(w.stdout).not.toContain("say yes to a second Subscription");
+    });
+  });
+
+  describe("with .fabrik/config.json listing the second Subscription alone, which Setup has nothing to list for", () => {
+    const ALONE = '{ "subscriptions": ["Claude token 2"] }\n';
+
+    it("says it's listed, and leaves nothing to do, once it stores the token", async () => {
+      for (const secondSubscription of [true, false]) {
+        const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT, ALONE, { bySetup: true, secondSubscription });
+
+        expect(w.status).toBe(0);
+        expect(w.stdout).toContain("✓ stored the 'Claude token 2' token");
+        expect(w.stdout).toContain(".fabrik/config.json lists 'Claude token 2' already.");
+        expect(w.stdout).not.toMatch(/Setup lists it|To list it|say yes to a second Subscription|still to do by hand/);
+      }
+    });
+
+    it("skipped, says running Setup again walks this stage, with no yes to give", async () => {
+      const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SECOND_SUBSCRIPTION, ALONE, { bySetup: true });
+
+      expect(w.stdout).toContain(
+        "Skipping the second Subscription. .fabrik/config.json lists 'Claude token 2' already, so running Setup again walks this stage while 1Password lacks its token.",
+      );
+      expect(w.stdout).not.toContain("say yes to a second Subscription");
+    });
+  });
+
+  const REPLACING_IT =[...TO_THE_SECOND_SUBSCRIPTION, "y", "sk-ant-oat01-new", ""];
 
   it("replaces the second token by storing the new one first, then archiving the old item by its id", async () => {
     const w = await walk([...THE_APP_AND_CLAUDE, "Fabrik/Claude token 2"], REPLACING_IT, BOTH_LISTED);
@@ -425,7 +662,7 @@ describe("The setup wizard's second Subscription stage", () => {
     expect(deleted(w)).toEqual([]);
     expect(w.stdout).toContain("Keeping the current second token.");
     expect(w.stdout).toContain("turn usage credits off on every account, the first one included");
-    expect(w.stdout).toContain(".fabrik/config.json lists both Subscriptions.");
+    expect(w.stdout).toContain(".fabrik/config.json lists 'Claude token 2' already.");
   });
 });
 
@@ -439,17 +676,18 @@ describe("The setup wizard's Visual evidence stage", () => {
 
     expect(w.status).toBe(0);
     expect(w.stdout).toContain("Turn on Visual evidence for acme/clinic?");
-    expect(w.stdout).toContain("Skipping Visual evidence.");
+    expect(w.stdout).toContain("Skipping Visual evidence. Run /fabrik-visual-evidence in a Claude session in this repo to turn it on later.");
     expect(w.stdout).not.toContain("still to do by hand");
     expect(w.stdout).toContain("Setup complete");
   });
 
-  it("sends an Operator who wants it to /fabrik-setup's Visual evidence step, which writes the Kit config, and lists it to do", async () => {
+  it("sends an Operator who wants it to /fabrik-visual-evidence, which writes the Kit config, and lists it to do", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, [...TO_VISUAL_EVIDENCE, "y"]);
 
     expect(w.status).toBe(0);
     expect(w.stdout).toContain("ui.paths");
-    expect(w.stdout).toMatch(/still to do by hand:\n.*run \/fabrik-setup again and answer its Visual evidence step/);
+    expect(w.stdout).toMatch(/still to do by hand:\n.*turn on Visual evidence: run \/fabrik-visual-evidence in a Claude session in this repo/);
+    expect(w.stdout).not.toContain("/fabrik-setup");
   });
 
   it("says Visual evidence is on, and asks nothing, once .fabrik/config.json has a ui block", async () => {
@@ -459,5 +697,31 @@ describe("The setup wizard's Visual evidence stage", () => {
     expect(w.stdout).toContain(".fabrik/config.json has a ui block, so UI pull requests get Visual evidence.");
     expect(w.stdout).not.toContain("Turn on Visual evidence");
     expect(w.stdout).not.toContain("still to do by hand");
+  });
+});
+
+describe("The setup wizard run by setup", () => {
+  it("ends handing back to Setup, not saying to open an issue, and promises no setup PR, which a run that writes no file doesn't open", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, { bySetup: true });
+
+    expect(w.status).toBe(0);
+    expect(w.stdout).toContain("Next: back to Setup, which says what it did and what's left.");
+    expect(w.stdout).not.toContain("opens the setup PR");
+    expect(w.stdout).not.toContain("Next: open an issue");
+  });
+
+  it("ends saying the wizard is done, not Setup, which carries on", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, { bySetup: true });
+
+    expect(w.stdout).toContain("✓ The wizard is done");
+    expect(w.stdout).not.toContain("Setup complete");
+  });
+
+  it("run on its own, still ends by saying to open an issue, and reports nothing", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE);
+
+    expect(w.stdout).toContain("✓ Setup complete");
+    expect(w.stdout).toContain("Next: open an issue on acme/clinic.");
+    expect(w.report).toEqual([]);
   });
 });

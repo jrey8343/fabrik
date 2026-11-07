@@ -331,7 +331,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null, research: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
-  // Visual evidence is off until a Product repo turns it on with /fabrik-setup.
+  // Visual evidence is off until a Product repo turns it on with /fabrik-visual-evidence.
   ui: null,
   preview: null,
 };
