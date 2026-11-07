@@ -1397,8 +1397,8 @@ jobs:
   # A replay Ticket's Implement run (#156), one matrix leg per arm: the
   # baseline, as the Ticket was built then, and the variant, with the one
   # variable changed. It has the Implement job's shape and credentials
-  # (ADR-0002, ADR-0004): contents and issues read, no GitHub write
-  # credential, and only the implement service account, which its action
+  # (ADR-0002, ADR-0004): contents, issues and pull requests read, no GitHub
+  # write credential, and only the implement service account, which its action
   # loads the Claude token and the test secrets through. Its action checks out
   # the Ticket's baseSha and passes the arm's commits out as a patch, never
   # pushed. Never named `Implement`, so Dispatch's count of Implement runs in
@@ -1416,9 +1416,14 @@ jobs:
       fail-fast: false
       matrix:
         arm: [baseline, variant]
+    # pull-requests: read for the input step, as the implement job's: on a Ticket
+    # sent back from an agent PR, it reads that closed PR into issue.json's
+    # sentBack (readSentBack in src/agent/inputs.ts). Without it the arm fails
+    # before its agent starts (#340).
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     steps:
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1495,9 +1500,12 @@ jobs:
       fail-fast: false
       matrix:
         arm: [baseline, variant]
+    # pull-requests: read for the input step, as replay-implement's: a sent-back
+    # Ticket's closed PR is read into issue.json's sentBack (#340).
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     steps:
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

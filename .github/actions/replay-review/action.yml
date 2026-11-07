@@ -15,7 +15,7 @@
 # account of the run) and fabrik-transcript-review-replay-<arm>, whether it
 # passed, failed or was cancelled, for the replay-record job. Its job runs it
 # beside the arm's gates job once the arm's Implement job has ended, with
-# contents and issues read, within the Review timeout, after checking out the
+# contents, issues and pull requests read, within the Review timeout, after checking out the
 # Kit alone into kit/:
 #   - uses: ./kit/.github/actions/replay-review
 #     with:

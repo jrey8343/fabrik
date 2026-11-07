@@ -666,7 +666,9 @@ describe("loop.yml's Research job", () => {
 // reads that closed PR in its input step (readSentBack in src/agent/inputs.ts),
 // which takes pull-requests: read. Without it the turn fails before its agent
 // starts. Triage reads it too, should the Operator add needs-triage to such a
-// Ticket. None of them holds a write permission (ADR-0002).
+// Ticket, and so do a replay's Implement and Review arms (#340), whose input
+// step reads the replayed Ticket as the live jobs do. None of them holds a
+// write permission (ADR-0002).
 describe("The agent jobs whose input step may read a sent-back Ticket's PR", () => {
   const permissionsOfJob = (name: string): string[] =>
     (/\n    permissions:\n((?: {6}.*\n)+)/.exec(job(name))?.[1] ?? "")
@@ -674,7 +676,7 @@ describe("The agent jobs whose input step may read a sent-back Ticket's PR", () 
       .split("\n")
       .map((line) => line.trim());
 
-  it.each(["design", "prototype", "triage"])("the %s job holds exactly contents, issues and pull-requests read, and no write", (name) => {
+  it.each(["design", "prototype", "triage", "replay-implement", "replay-review"])("the %s job holds exactly contents, issues and pull-requests read, and no write", (name) => {
     expect(permissionsOfJob(name)).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
     expect(job(name)).not.toMatch(/: write\b|id-token|create-github-app-token/);
   });
@@ -2062,7 +2064,7 @@ describe("loop.yml's replay jobs", () => {
     });
 
     it("holds no write credential: read permissions, and only the implement service account", () => {
-      expect(permissionsIn(implement())).toEqual(["contents: read", "issues: read"]);
+      expect(permissionsIn(implement())).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
       expect(secretsIn(implement())).toEqual(["OP_IMPLEMENT_TOKEN"]);
       expect(codeOf(implement())).not.toMatch(WRITE_CREDENTIALS);
     });
@@ -2099,7 +2101,7 @@ describe("loop.yml's replay jobs", () => {
     const review = () => job("replay-review");
 
     it("holds only the agent service account, with read permissions and no write credential", () => {
-      expect(permissionsIn(review())).toEqual(["contents: read", "issues: read"]);
+      expect(permissionsIn(review())).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
       expect(secretsIn(review())).toEqual(["OP_AGENT_TOKEN"]);
       expect(codeOf(review())).not.toMatch(WRITE_CREDENTIALS);
     });
