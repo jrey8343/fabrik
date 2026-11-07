@@ -208,6 +208,31 @@ finish() {
 # and the Sentry token go straight into 1Password, where the Kit's jobs read
 # them (ADR-0004).
 
+# operator_app_slugs prints, one per line, the slug of each App owned by the
+# signed-in gh user that has commented on or filed issues in $REPO (or the
+# fabrik-runs store), from the latest of each. It prints nothing when gh can't
+# tell: no access, a rate limit, or no comments yet.
+operator_app_slugs() {
+  local login path repo
+  login=$(gh api user 2>/dev/null | node -e '
+    let text = ""; process.stdin.on("data", (chunk) => { text += chunk; });
+    process.stdin.on("end", () => process.stdout.write(JSON.parse(text).login));' 2>/dev/null) || return 0
+  [[ -n "$login" ]] || return 0
+  local repos=("$REPO"); (( HAS_STORE )) && repos+=("$STORE")
+  for repo in "${repos[@]}"; do
+    for path in "repos/$repo/issues/comments?sort=updated&direction=desc&per_page=100" "repos/$repo/issues?state=all&per_page=100"; do
+      gh api "$path" 2>/dev/null | node -e '
+        let text = ""; process.stdin.on("data", (chunk) => { text += chunk; });
+        process.stdin.on("end", () => {
+          const login = process.argv[1].toLowerCase();
+          for (const { performed_via_github_app: app } of JSON.parse(text)) {
+            if (app?.slug && app.owner?.login?.toLowerCase() === login) console.log(app.slug);
+          }
+        });' "$login" 2>/dev/null || true
+    done
+  done | awk '!seen[$0]++'
+}
+
 run_wizard() {
 
 TOTAL_STAGES=8
@@ -232,7 +257,21 @@ stage "Install the Fabrik App on $REPO"
 say "Every label, comment and push the Loop makes comes from the Fabrik App."
 say "It needs Issues, Pull requests and Contents (read and write), Checks (read), and never 'workflows'."
 say "Checks (read) is how the Monitor sees main go red."
-ask FABRIK_APP_SLUG "The Fabrik App's slug (the last part of github.com/apps/<slug>):"
+FOUND_APPS=$(operator_app_slugs || true)
+if [[ -n "$FOUND_APPS" && "$FOUND_APPS" != *$'\n'* ]]; then
+  say "Your App ${BOLD}$FOUND_APPS${RESET} already acts on $REPO, so that's likely the Fabrik App."
+  ask FABRIK_APP_SLUG "The Fabrik App's slug [Enter for $FOUND_APPS]:"
+  [[ -n "$FABRIK_APP_SLUG" ]] || FABRIK_APP_SLUG="$FOUND_APPS"
+else
+  if [[ -n "$FOUND_APPS" ]]; then
+    say "More than one of your Apps acts on $REPO:"
+    while IFS= read -r slug; do step "$slug"; done <<< "$FOUND_APPS"
+  fi
+  say "Your own Apps are listed at https://github.com/settings/apps."
+  open_url "https://github.com/settings/apps"
+  say "Click the Fabrik App there: its slug is the last part of the page's URL, github.com/settings/apps/<slug>."
+  ask FABRIK_APP_SLUG "The Fabrik App's slug:"
+fi
 say "If the App lacks Checks (read), add it first:"
 step "At https://github.com/settings/apps/${FABRIK_APP_SLUG}/permissions, set Repository permissions → Checks to Read-only, then Save changes."
 open_url "https://github.com/apps/${FABRIK_APP_SLUG}/installations/new"

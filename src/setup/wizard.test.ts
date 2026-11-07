@@ -27,11 +27,17 @@ if (args[0] === "item" && args[1] === "get") {
 if (args[0] === "item" && args[1] === "create" && process.env.STUB_OP_CREATE_FAILS === "1") process.exit(1);
 `;
 
-const FAKE_GH = `#!/bin/sh
-case "$*" in
-  "repo view --json nameWithOwner --jq .nameWithOwner") echo acme/clinic ;;
-  *) exit 1 ;;
-esac
+/** A `gh` in acme/clinic's checkout that answers `gh api` from the STUB_GH_API routes, by path without its query, and fails anything else. */
+const FAKE_GH = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.join(" ") === "repo view --json nameWithOwner --jq .nameWithOwner") { console.log("acme/clinic"); process.exit(0); }
+if (args[0] === "repo" && args[1] === "view" && args[2] === "jrey8343/fabrik-runs") process.exit(process.env.STUB_GH_STORE === "1" ? 0 : 1);
+if (args[0] === "api") {
+  const routes = JSON.parse(process.env.STUB_GH_API || "{}");
+  const path = args[1].split("?")[0];
+  if (path in routes) { process.stdout.write(JSON.stringify(routes[path])); process.exit(0); }
+}
+process.exit(1);
 `;
 
 /** The browser opener the wizard tries first. */
@@ -82,7 +88,12 @@ async function linesOf(path: string): Promise<string[]> {
  * and then nothing, which every stage after the Sentry token's takes as Enter or No.
  * `kitConfig` is the checkout's .fabrik/config.json, when it has one.
  */
-async function walk(items: string[], answers: string[], kitConfig?: string, { createFails = false } = {}): Promise<Walk> {
+async function walk(
+  items: string[],
+  answers: string[],
+  kitConfig?: string,
+  { createFails = false, ghApi = {}, store = false }: { createFails?: boolean; ghApi?: Record<string, unknown>; store?: boolean } = {},
+): Promise<Walk> {
   const bin = await tempDir("wizard-bin");
   await stub(bin, "op", FAKE_OP);
   await stub(bin, "gh", FAKE_GH);
@@ -103,6 +114,8 @@ async function walk(items: string[], answers: string[], kitConfig?: string, { cr
       STUB_DIR: bin,
       STUB_OP_ITEMS: JSON.stringify(items),
       STUB_OP_CREATE_FAILS: createFails ? "1" : "0",
+      STUB_GH_API: JSON.stringify(ghApi),
+      STUB_GH_STORE: store ? "1" : "0",
     },
   });
   return {
@@ -133,6 +146,83 @@ describe("The setup wizard's Fabrik App stage", () => {
       "It needs Issues, Pull requests and Contents (read and write), Checks (read), and never 'workflows'.",
     );
     expect(w.stdout).toContain("https://github.com/settings/apps/fabrik-factory/permissions");
+  });
+
+  /** A comment the App owned by `owner` made on an issue. */
+  const commentBy = (slug: string, owner: string) => ({ body: "…", performed_via_github_app: { slug, owner: { login: owner } } });
+  const OPERATOR = { user: { login: "jrey8343" } };
+  /** The answers to the App stage that take the default slug, then the rest of TO_THE_SENTRY_STAGE. */
+  const TAKING_THE_DEFAULT = ["", "", "", "", "n", ""];
+
+  it("offers the slug of the Operator's own App that has commented on the repo as the default", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TAKING_THE_DEFAULT, undefined, {
+      ghApi: { ...OPERATOR, "repos/acme/clinic/issues/comments": [commentBy("fabrik-factory", "jrey8343"), { body: "a human" }] },
+    });
+
+    expect(w.status).toBe(0);
+    expect(w.stdout).toContain("Your App fabrik-factory already acts on acme/clinic");
+    expect(w.opened).not.toContain("https://github.com/settings/apps");
+    expect(w.stdout).toContain("https://github.com/settings/apps/fabrik-factory/permissions");
+    expect(w.opened).toContain("https://github.com/apps/fabrik-factory/installations/new");
+  });
+
+  it("offers the Operator's App that has acted only on the fabrik-runs store, such as by filing the Weekly summary", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, ["", "", "", "", "", "n", ""], undefined, {
+      store: true,
+      ghApi: { ...OPERATOR, "repos/jrey8343/fabrik-runs/issues": [commentBy("fabrik-factory", "jrey8343")] },
+    });
+
+    expect(w.stdout).toContain("Your App fabrik-factory already acts on acme/clinic");
+    expect(w.opened).toContain("https://github.com/apps/fabrik-factory/installations/new");
+  });
+
+  it("never offers an App the Operator doesn't own, such as github-actions or Dependabot", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, {
+      ghApi: {
+        ...OPERATOR,
+        "repos/acme/clinic/issues/comments": [commentBy("github-actions", "github"), commentBy("dependabot", "github")],
+      },
+    });
+
+    expect(w.stdout).not.toContain("Your App");
+    expect(w.stdout).not.toContain("github-actions");
+    expect(w.stdout).not.toContain("dependabot");
+    expect(w.opened).toContain("https://github.com/settings/apps");
+  });
+
+  it("with no App found, opens the Operator's own Apps and says where the slug is before asking", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, {
+      ghApi: { ...OPERATOR, "repos/acme/clinic/issues/comments": [] },
+    });
+
+    expect(w.status).toBe(0);
+    expect(w.opened[0]).toBe("https://github.com/settings/apps");
+    expect(w.stdout).toContain("its slug is the last part of the page's URL, github.com/settings/apps/<slug>");
+    expect(w.opened).toContain("https://github.com/apps/fabrik-factory/installations/new");
+  });
+
+  it("lists each of the Operator's Apps when it finds more than one, and asks which", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, {
+      ghApi: {
+        ...OPERATOR,
+        "repos/acme/clinic/issues/comments": [commentBy("fabrik-factory", "jrey8343"), commentBy("fabrik-factory", "jrey8343")],
+        "repos/acme/clinic/issues": [commentBy("other-bot", "jrey8343")],
+      },
+    });
+
+    expect(w.stdout).toMatch(/More than one of your Apps acts on acme\/clinic:\n.*• fabrik-factory\n.*• other-bot\n/);
+    expect(w.opened[0]).toBe("https://github.com/settings/apps");
+    expect(w.opened).toContain("https://github.com/apps/fabrik-factory/installations/new");
+  });
+
+  it("falls back to the guided prompt, not an exit, when gh can't look the Apps up", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, {
+      ghApi: { ...OPERATOR, "repos/acme/clinic/issues/comments": "rate limited" },
+    });
+
+    expect(w.status).toBe(0);
+    expect(w.opened[0]).toBe("https://github.com/settings/apps");
+    expect(w.stdout).toContain("Setup complete");
   });
 });
 
