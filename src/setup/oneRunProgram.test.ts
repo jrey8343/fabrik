@@ -1100,6 +1100,30 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(world.prs).toHaveLength(1);
   });
 
+  it("after its PR was squash-merged behind another PR, and another clone pulled the default branch into origin's setup branch, every repair run from the default branch gets past origin's copy, which this clone never fetched", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    await anotherPrOnGitHub();
+    await squashOnGitHub(world);
+    const other = await aGitHubClone();
+    other.git("switch", "-q", BRANCH);
+    other.git("pull", "-q", "--no-rebase", "origin", "main");
+    other.git("push", "-q", "origin", BRANCH);
+    git("switch", "-q", "main");
+    git("pull", "-q", "origin", "main");
+    expect(() => git("cat-file", "-e", `${originGit("rev-parse", BRANCH).trim()}^{commit}`)).toThrow();
+
+    for (const _ of [1, 2]) {
+      world.labels.delete("needs-triage");
+      const { code, said, complaints } = await setupOnce(world);
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said).toContain("- create the label needs-triage");
+      expect(git("branch", "--show-current").trim()).toBe("main");
+    }
+    expect(world.prs).toHaveLength(1);
+  });
+
   it("on the setup branch, a repair that writes no file and goes back to a default branch with a commit of its own here says to make it origin's", async () => {
     const world = aWorld();
     await setupOnce(world);
