@@ -826,9 +826,7 @@ describe("Visual evidence, the opt-in step for UI evidence on UI pull requests",
         '  "roles": { "implement": { "model": "claude-sonnet-5-5", "effort": null, "timeout_minutes": 90 } },',
         '  "operator": "jrey8343",',
         '  "ui": {',
-        '    "paths": [',
-        '      "src/**"',
-        "    ],",
+        '    "paths": ["src/**"],',
         '    "serve": "npm run preview",',
         '    "url": "http://localhost:4321",',
         '    "before_url": null,',
@@ -855,9 +853,7 @@ describe("Visual evidence, the opt-in step for UI evidence on UI pull requests",
         '\t"operator": "jrey8343",',
         '\t"preview": { "url": "https://deploy-preview-{pr}--clinic.netlify.app" },',
         '\t"ui": {',
-        '\t\t"paths": [',
-        '\t\t\t"src/**"',
-        "\t\t],",
+        '\t\t"paths": ["src/**"],',
         '\t\t"serve": "npm run preview",',
         '\t\t"url": "http://localhost:4321",',
         '\t\t"before_url": null,',
@@ -869,7 +865,7 @@ describe("Visual evidence, the opt-in step for UI evidence on UI pull requests",
     );
   });
 
-  it("rewrites the whole Kit config, with two-space indents, only when a block it already has must change", () => {
+  it("rewrites the whole Kit config only when a block it already has must change, two-space indented when it was all on one line", () => {
     const off = '{ "operator": "jrey8343", "ui": null }\n';
     const only = { visualEvidence: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } };
 
@@ -878,9 +874,7 @@ describe("Visual evidence, the opt-in step for UI evidence on UI pull requests",
         "{",
         '  "operator": "jrey8343",',
         '  "ui": {',
-        '    "paths": [',
-        '      "src/**"',
-        "    ],",
+        '    "paths": ["src/**"],',
         '    "serve": "npm run preview",',
         '    "url": "http://localhost:4321",',
         '    "before_url": null,',
@@ -893,6 +887,71 @@ describe("Visual evidence, the opt-in step for UI evidence on UI pull requests",
         "",
       ].join("\n"),
     );
+  });
+
+  // A Product repo that runs `prettier --check .` over `.fabrik/` must pass it on setup's PR.
+  describe("printed as Prettier prints JSON, so the Product repo's Prettier check passes", () => {
+    const pilot = {
+      visualEvidence: {
+        paths: ["src/pages/**", "src/components/**"],
+        serve: "npm run preview",
+        url: "http://localhost:4321",
+        beforeUrl: "https://clinic.example.com",
+        defaultRoutes: ["/"],
+        previewUrl: "https://deploy-preview-{pr}--clinic.netlify.app",
+      },
+    };
+
+    it("rewrites the starter Kit config exactly as Prettier 3 prints it", () => {
+      // Generated once with `prettier@3.6.2 --parser json` from the starter with these answers written.
+      const prettier = readFileSync(resolve(import.meta.dirname, "..", "__fixtures__", "starterWithVisualEvidence.prettier.json"), "utf8");
+
+      expect(written(planSetup(aCleanProduct(), kit, pilot).actions, ".fabrik/config.json")).toBe(prettier);
+    });
+
+    it("keeps the Kit config's own indent and line endings when rewriting the whole of it", () => {
+      const tabbed = '{\r\n\t"operator": "jrey8343",\r\n\t"ui": null\r\n}\r\n';
+
+      expect(written(planSetup(withConfig(tabbed), kit, pilot).actions, ".fabrik/config.json")).toBe(
+        [
+          "{",
+          '\t"operator": "jrey8343",',
+          '\t"ui": {',
+          '\t\t"paths": ["src/pages/**", "src/components/**"],',
+          '\t\t"serve": "npm run preview",',
+          '\t\t"url": "http://localhost:4321",',
+          '\t\t"before_url": "https://clinic.example.com",',
+          '\t\t"default_routes": ["/"]',
+          "\t},",
+          '\t"preview": {',
+          '\t\t"url": "https://deploy-preview-{pr}--clinic.netlify.app"',
+          "\t}",
+          "}",
+          "",
+        ].join("\r\n"),
+      );
+    });
+
+    it("puts each array that fits in 80 columns on one line when adding the blocks to a Kit config", () => {
+      const config = written(planSetup(withConfig(theirs), kit, pilot).actions, ".fabrik/config.json") ?? "";
+
+      expect(config).toContain('\n    "paths": ["src/pages/**", "src/components/**"],\n');
+      expect(config).toContain('\n    "default_routes": ["/"]\n');
+    });
+
+    // Prettier-checked: at this indent an 80-column line, comma and all, stays on one line, and an 81-column one breaks.
+    it("puts each item of an array on its own line once the array no longer fits in 80 columns", () => {
+      const at = (width: number) => {
+        const glob = "x".repeat(width - '    "paths": [""],'.length);
+        const answers = { visualEvidence: { paths: [glob], serve: "npm run preview", url: "http://localhost:4321" } };
+        return { glob, config: written(planSetup(withConfig(theirs), kit, answers).actions, ".fabrik/config.json") ?? "" };
+      };
+
+      const fits = at(80);
+      expect(fits.config).toContain(`\n    "paths": ["${fits.glob}"],\n`);
+      const overflows = at(81);
+      expect(overflows.config).toContain(`\n    "paths": [\n      "${overflows.glob}"\n    ],\n`);
+    });
   });
 
   it("writes them into the starter Kit config on a repo that has none, which resolves with every v1 default and Visual evidence on", () => {

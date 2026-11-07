@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { dependabotUpdate, scheduleIn, timeZoneIn } from "./shims.ts";
+import { dependabotUpdate, scheduleIn, settingsUpdate, timeZoneIn } from "./shims.ts";
 
 const template = readFileSync(new URL("../../templates/fabrik-runs-caller.yml", import.meta.url), "utf8");
 const dependabotTemplate = readFileSync(new URL("../../templates/dependabot.yml", import.meta.url), "utf8");
+const settingsTemplate = readFileSync(new URL("../../templates/claude-settings.json", import.meta.url), "utf8");
 
 describe("The Operator's time zone in the store's caller workflow", () => {
   it("is the one setup wrote into its schedule, which the Weekly summary weeks by", () => {
@@ -40,5 +41,17 @@ describe("A Dependabot config that already groups the Fabrik pins", () => {
     expect(dependabotUpdate(`${ungrouped}${productEntry}`, dependabotTemplate)).toEqual({
       note: expect.stringContaining("doesn't group the Fabrik pins"),
     });
+  });
+});
+
+describe("The Product's .claude/settings.json with the Fabrik SessionStart hook merged in", () => {
+  it("is printed as Prettier prints JSON, in the file's own indent, with an array that fits on one line", () => {
+    const theirs = '{\n    "permissions": {\n        "allow": [\n            "Bash(npm test)",\n            "Bash(npm run lint)"\n        ]\n    }\n}\n';
+
+    const update = settingsUpdate(theirs, settingsTemplate);
+
+    const content = update !== null && "content" in update ? update.content : "";
+    expect(content).toMatch(/^\{\n {4}"permissions": \{\n {8}"allow": \["Bash\(npm test\)", "Bash\(npm run lint\)"\]\n {4}\},\n {4}"hooks": \{\n/);
+    expect(content.endsWith("\n}\n")).toBe(true);
   });
 });

@@ -29,6 +29,7 @@ import {
   WONTFIX,
 } from "../loop/labels.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
+import { layoutOf, printJson, printMembers } from "./json.ts";
 import type { SetupKit } from "./kit.ts";
 import {
   CALLER_PATH,
@@ -299,7 +300,10 @@ function withVisualEvidence(text: string, answers: VisualEvidenceAnswers, notes:
   }
   const entries = Object.entries(blocks);
   const changes = entries.some(([key, value]) => Object.hasOwn(config, key) && JSON.stringify(config[key]) !== JSON.stringify(value));
-  if (changes) return `${JSON.stringify({ ...config, ...blocks }, null, 2)}\n`;
+  if (changes) {
+    const layout = layoutOf(text);
+    return `${printJson({ ...config, ...blocks }, layout)}${layout.eol}`;
+  }
   const absent = entries.filter(([key]) => !Object.hasOwn(config, key));
   return absent.length === 0 ? null : withMembers(text, absent);
 }
@@ -309,15 +313,12 @@ function withVisualEvidence(text: string, answers: VisualEvidenceAnswers, notes:
  * indented as its own members are, and every byte of it kept as it was.
  */
 function withMembers(text: string, members: readonly (readonly [string, unknown])[]): string {
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const layout = layoutOf(text);
+  const { eol } = layout;
   // Everything up to the end of its last member, then the closing brace with whatever whitespace is around it.
   const head = text.slice(0, text.lastIndexOf("}")).trimEnd();
   const tail = text.slice(head.length);
-  const indent = /\n([ \t]+)"/.exec(head)?.[1] ?? "  ";
-  const added = members.map(
-    ([key, value]) => `${indent}${JSON.stringify(key)}: ${JSON.stringify(value, null, indent).replaceAll("\n", `${eol}${indent}`)}`,
-  );
-  return `${head}${head.endsWith("{") ? "" : ","}${eol}${added.join(`,${eol}`)}${tail.startsWith(eol) ? "" : eol}${tail}`;
+  return `${head}${head.endsWith("{") ? "" : ","}${eol}${printMembers(members, layout, 1)}${tail.startsWith(eol) ? "" : eol}${tail}`;
 }
 
 function jsonObject(text: string): Record<string, unknown> | null {
