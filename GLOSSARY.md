@@ -122,14 +122,6 @@ _Avoid_: inbox, new-issue hook
 The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside.
 _Avoid_: sorting
 
-**Quick call**:
-A typed decision from a fast decision model, made before or in place of an agent run, carrying its confidence.
-_Avoid_: Jev call, routing, classification
-
-**Shadow**:
-A Quick call made beside today's path on the same event and recorded with today's decision, but never acted on. Every Quick call runs in shadow before it may act.
-_Avoid_: dry run, canary, A/B
-
 **Design session**:
 A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets, charts it as a Map when its destination is too foggy for one session, or ends as not planned when the Operator decides it won't be built: the issue gets `wontfix` and closes as not planned.
 _Avoid_: redesign, planning meeting
