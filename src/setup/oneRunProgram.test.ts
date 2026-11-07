@@ -171,6 +171,33 @@ async function rebaseTheHeadOnGitHub(): Promise<void> {
   github.git("push", "-q", "--force", "origin", BRANCH);
 }
 
+/**
+ * The repo's .gitignore, which setup adds its block to, and a line of it that
+ * another PR changes once the setup PR is open.
+ */
+async function aGitignoreOnMain(): Promise<void> {
+  await writeFile(join(checkout, ".gitignore"), "node_modules\ndist\n.env\n");
+  git("add", ".gitignore");
+  git("commit", "-q", "-m", "Ignore the build");
+  git("push", "-q", "origin", "main");
+}
+
+/**
+ * Another PR changes a line next to setup's block in .gitignore, then GitHub's
+ * "Update with rebase" replays the setup PR's commits onto it. The rebase goes
+ * through, but the copy's change has other lines around it, so git cherry
+ * doesn't match it to the clone's commit.
+ */
+async function rebaseOverANearbyEditOnGitHub(): Promise<void> {
+  const github = await aGitHubClone();
+  await writeFile(join(github.dir, ".gitignore"), "node_modules\nbuild\n.env\n");
+  github.git("commit", "-q", "-am", "Another PR: the build goes in build");
+  github.git("push", "-q", "origin", "main");
+  github.git("switch", "-q", BRANCH);
+  github.git("rebase", "-q", "main");
+  github.git("push", "-q", "--force", "origin", BRANCH);
+}
+
 /** GitHub squash-merges the setup PR: origin's head, as one new commit on origin's main. The PR's own ref keeps that head. */
 async function squashOnGitHub(world: World): Promise<void> {
   const github = await aGitHubClone();
@@ -758,6 +785,56 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     const again = await setupOnce(world);
     expect(again.complaints).toEqual([]);
     expect(again.said).toContain("- create the label needs-triage");
+  });
+
+  it("after a squash merge of a setup PR GitHub updated with rebase over another PR's edit next to setup's, a repair run from the default branch gets past the leftover setup branch", async () => {
+    await aGitignoreOnMain();
+    const world = aWorld();
+    await setupOnce(world);
+    await rebaseOverANearbyEditOnGitHub();
+    await squashOnGitHub(world);
+    git("switch", "-q", "main");
+    git("pull", "-q", "origin", "main");
+    world.labels.delete("needs-triage");
+
+    const { code, said, complaints } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(said).toContain("- create the label needs-triage");
+    expect(world.prs).toHaveLength(1);
+    expect(git("branch", "--show-current").trim()).toBe("main");
+  });
+
+  it("on the setup branch after its PR, which GitHub updated with rebase over another PR's edit next to setup's, was squash-merged, says to go back to the default branch", async () => {
+    await aGitignoreOnMain();
+    const world = aWorld();
+    await setupOnce(world);
+    await rebaseOverANearbyEditOnGitHub();
+    await squashOnGitHub(world);
+
+    const { code, complaints } = await setupOnce(world);
+
+    expect(code).toBe(1);
+    expect(complaints[0]).toBe(`${BRANCH}'s setup PR is merged. Switch to main with git switch main && git pull, then run setup again.`);
+  });
+
+  it("on the setup branch after its PR was squash-merged and the Operator pulled the default branch in, a repair that writes no file opens no setup PR", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    squashTheSetupPr(world);
+    git("switch", "-q", BRANCH);
+    git("pull", "-q", "--no-rebase", "origin", "main");
+    world.labels.delete("needs-triage");
+
+    const { code, said, complaints } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(said).toContain("- create the label needs-triage");
+    expect(world.prs).toHaveLength(1);
+    expect(said).toContain("Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main.");
+    expect(git("branch", "--show-current").trim()).toBe("main");
   });
 
   it("on the setup branch after GitHub updated its open PR with rebase, each stop's command works with git's default config", async () => {
