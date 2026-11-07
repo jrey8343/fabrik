@@ -1117,15 +1117,19 @@ export type Action =
        * Rebases an agent PR's branch onto the default branch's head, with no
        * agent (#304): the adapter replays the branch's commits onto `onto`
        * without a working tree (src/github/branch.ts). When that's clean, it
-       * applies `clean`, then pushes the rebased branch with a lease on the
-       * head it rebased. When it conflicts, it applies `conflicted` instead
-       * and pushes nothing. A branch already holding `onto` gets neither.
+       * applies `clean`, pushes the rebased branch with a lease on the head it
+       * rebased, then applies `pushed`; if the push is refused, as when the
+       * branch moved meanwhile, it applies `refused` instead of `pushed`.
+       * When the rebase conflicts, it applies `conflicted` and pushes nothing.
+       * A branch already holding `onto`, or gone, gets none of them.
        */
       readonly kind: "rebase-onto-main";
       readonly pullRequest: number;
       readonly branch: string;
       readonly onto: string;
       readonly clean: readonly Action[];
+      readonly pushed: readonly Action[];
+      readonly refused: readonly Action[];
       readonly conflicted: readonly Action[];
     }
   /**

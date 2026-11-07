@@ -6,6 +6,7 @@
 import { type CaptureResult, parseCaptureResult } from "../evidence/uiEvidence.ts";
 import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
 import type { AgentRole } from "../loop/types.ts";
+import { FULL_SHA } from "../skills/lock.ts";
 
 /** One job's `needs.<job>`: its result and its outputs. */
 export interface NeededJob {
@@ -216,7 +217,7 @@ function requestOf(text: string | undefined): PrototypeRequestMarker | null {
 
 /** A full commit sha, as the Kit job passes one out, or null for anything else. */
 function shaOr(text: string | undefined): string | null {
-  return text !== undefined && /^[0-9a-f]{40}$/.test(text) ? text : null;
+  return text !== undefined && FULL_SHA.test(text) ? text : null;
 }
 
 function numberOr(text: string | undefined): number | null {

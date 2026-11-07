@@ -50,10 +50,12 @@ function whyNotRebased({ pullRequest, mergeable }: ConflictCandidate, main: stri
 
 /**
  * The mechanical rebase of the PR's branch onto main, and what follows it.
- * Either way the attempt is recorded on the PR first, and the PR goes back
- * to draft, so the push that follows starts a full Review of the combined
- * head, whose pass brings the PR back to the Merge gate. A clean rebase is
- * pushed, using no retry. A conflicting one pushes nothing and starts the
+ * Either way the PR goes back to draft first, so the push that follows starts
+ * a full Review of the combined head, whose pass brings the PR back to the
+ * Merge gate. A clean rebase is pushed, using no retry, and the attempt is
+ * recorded once it has landed; if its lease refuses it, the PR goes back out
+ * of draft with no attempt recorded, for the next check. A conflicting one
+ * records the attempt, pushes nothing and starts the
  * conflict-only run through agent:implement on the Ticket, which resumes the
  * run now in flight on its open PR (src/loop/implement.ts).
  */
@@ -61,31 +63,34 @@ function rebaseOntoMain(pullRequest: PullRequestSnapshot, main: string): Action 
   const { number } = pullRequest;
   const ticket = pullRequest.ticket as number;
   const head = main.slice(0, 7);
+  const branch = agentBranchFor(ticket);
   return {
     kind: "rebase-onto-main",
     pullRequest: number,
-    branch: agentBranchFor(ticket),
+    branch,
     onto: main,
-    clean: [
+    clean: [{ kind: "convert-to-draft", pullRequest: number }],
+    pushed: [
       {
         kind: "comment",
         issue: number,
         body: [
           conflictAttemptMarker({ main, outcome: "rebased" }),
-          `\`main\` moved to ${head} and #${number} conflicted with it, so the Kit rebased \`${agentBranchFor(ticket)}\` onto it. The rebase was clean, so no agent ran and no retry was used.`,
+          `\`main\` moved to ${head} and #${number} conflicted with it, so the Kit rebased \`${branch}\` onto it. The rebase was clean, so no agent ran and no retry was used.`,
           "",
           "The PR is back in draft, and Review runs again on the rebased head; a pass brings it back to you.",
         ].join("\n"),
       },
-      { kind: "convert-to-draft", pullRequest: number },
     ],
+    // The branch moved between the rebase and its push: nothing landed, so nothing is recorded.
+    refused: [{ kind: "mark-ready-for-review", pullRequest: number }],
     conflicted: [
       {
         kind: "comment",
         issue: number,
         body: [
           conflictAttemptMarker({ main, outcome: "conflict-run" }),
-          `\`main\` moved to ${head} and #${number} conflicts with it, and rebasing \`${agentBranchFor(ticket)}\` onto it conflicts too.`,
+          `\`main\` moved to ${head} and #${number} conflicts with it, and rebasing \`${branch}\` onto it conflicts too.`,
           "",
           "A conflict-only Implementer run starts now on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. It uses no retry. The PR is back in draft, and Review runs again on the run's push.",
         ].join("\n"),
@@ -126,7 +131,14 @@ export function owedConflictRun(pullRequest: PullRequestSnapshot, config: KitCon
  * never closes the PR, and it doesn't try again until main moves to a new
  * head. The comment's @-mention is its one notification.
  */
-export function conflictRunEnded(pullRequest: number, main: string, operator: string, why: string, runUrl: string | null = null): Action[] {
+export function conflictRunEnded(
+  pullRequest: number,
+  main: string,
+  operator: string,
+  why: string,
+  runUrl: string | null = null,
+  draft = true,
+): Action[] {
   return [
     {
       kind: "comment",
@@ -140,6 +152,7 @@ export function conflictRunEnded(pullRequest: number, main: string, operator: st
       ].join("\n"),
     },
     { kind: "add-labels", issue: pullRequest, labels: [READY_FOR_HUMAN] },
-    { kind: "mark-ready-for-review", pullRequest },
+    // Out of draft, the next conflict check weighs it again once main moves.
+    ...(draft ? [{ kind: "mark-ready-for-review" as const, pullRequest }] : []),
   ];
 }

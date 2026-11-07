@@ -643,7 +643,7 @@ describe("Applying a plan that rebases an agent PR onto main (#304)", () => {
   const MAIN = "9".repeat(40);
 
   /** A rebaser that finds the branch rebases with this outcome, and records what it was asked and what it pushed. */
-  function fakeRebaser(outcome: "rebased" | "conflicted" | "up-to-date") {
+  function fakeRebaser(outcome: "rebased" | "conflicted" | "up-to-date" | "gone", leaseHolds = true) {
     const asked: [string, string][] = [];
     const pushed: string[] = [];
     return {
@@ -651,7 +651,13 @@ describe("Applying a plan that rebases an agent PR onto main (#304)", () => {
       pushed,
       async rebase(branch: string, onto: string) {
         asked.push([branch, onto]);
-        return { outcome, push: async () => void pushed.push(branch) };
+        return {
+          outcome,
+          push: async () => {
+            if (!leaseHolds) throw new Error("stale info");
+            pushed.push(branch);
+          },
+        };
       },
     };
   }
@@ -665,6 +671,8 @@ describe("Applying a plan that rebases an agent PR onto main (#304)", () => {
         branch: "fabrik/ticket-7",
         onto: MAIN,
         clean: [{ kind: "comment", issue: 50, body: "clean" }],
+        pushed: [{ kind: "comment", issue: 50, body: "pushed" }],
+        refused: [{ kind: "comment", issue: 50, body: "refused" }],
         conflicted: [
           { kind: "comment", issue: 50, body: "conflicted" },
           { kind: "add-labels", issue: 7, labels: ["agent:implement"] },
@@ -673,7 +681,7 @@ describe("Applying a plan that rebases an agent PR onto main (#304)", () => {
     ],
   };
 
-  it("when the rebase is clean, applies the clean actions first, then pushes the rebased branch", async () => {
+  it("when the rebase is clean, applies the clean actions, pushes the rebased branch, then applies the pushed actions", async () => {
     const github = fakeGitHub();
     const rebaser = fakeRebaser("rebased");
     const order: string[] = [];
@@ -694,9 +702,17 @@ describe("Applying a plan that rebases an agent PR onto main (#304)", () => {
     await applyPlan(watched, repo, plan, null, null, pushOrder);
 
     expect(rebaser.asked).toEqual([["fabrik/ticket-7", MAIN]]);
-    expect(order).toEqual([`POST ${issues}/50/comments`, "push"]);
-    expect(github.calls.map(({ body }) => body)).toEqual([{ body: "clean" }]);
+    expect(order).toEqual([`POST ${issues}/50/comments`, "push", `POST ${issues}/50/comments`]);
+    expect(github.calls.map(({ body }) => body)).toEqual([{ body: "clean" }, { body: "pushed" }]);
     expect(rebaser.pushed).toEqual(["fabrik/ticket-7"]);
+  });
+
+  it("when its lease refuses the push, applies the refused actions instead of the pushed ones", async () => {
+    const github = fakeGitHub();
+
+    await applyPlan(github, repo, plan, null, null, fakeRebaser("rebased", false));
+
+    expect(github.calls.map(({ body }) => body)).toEqual([{ body: "clean" }, { body: "refused" }]);
   });
 
   it("when it conflicts, applies the conflicted actions instead and pushes nothing", async () => {
@@ -712,9 +728,9 @@ describe("Applying a plan that rebases an agent PR onto main (#304)", () => {
     expect(rebaser.pushed).toEqual([]);
   });
 
-  it("when the branch already holds main, does neither", async () => {
+  it.each(["up-to-date", "gone"] as const)("when the branch is %s, does neither", async (outcome) => {
     const github = fakeGitHub();
-    const rebaser = fakeRebaser("up-to-date");
+    const rebaser = fakeRebaser(outcome);
 
     await applyPlan(github, repo, plan, null, null, rebaser);
 

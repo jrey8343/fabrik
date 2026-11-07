@@ -98,7 +98,8 @@ async function emptyRepository(remote: Remote): Promise<{ readonly git: Git; rea
 
 /** How a mechanical rebase onto main went (#304), and, when clean, its push. */
 export interface MainRebase {
-  readonly outcome: "rebased" | "conflicted" | "up-to-date";
+  /** `gone` when the branch no longer exists, so there's nothing to rebase. */
+  readonly outcome: "rebased" | "conflicted" | "up-to-date" | "gone";
   /** Pushes the rebased branch, with a lease on the head it rebased; refuses unless the rebase was clean. */
   push(): Promise<void>;
 }
@@ -108,8 +109,8 @@ export interface MainRebase {
  * agent (#304): the PR's commits since it last met main are replayed onto it
  * without a working tree, as a retry's are onto a moved branch (rebaseOnto).
  * Nothing from the Product repo runs. A branch already holding `onto` is up
- * to date, and one whose commits conflict with it, or that's gone, is left as
- * it is. The push replaces the branch only while it's still at the head that
+ * to date, one that's gone has nothing to rebase, and one whose commits
+ * conflict with it is left as it is. The push replaces the branch only while it's still at the head that
  * was rebased.
  */
 export async function rebaseBranchOntoMain(branch: string, onto: string, remote: Remote): Promise<MainRebase> {
@@ -118,7 +119,7 @@ export async function rebaseBranchOntoMain(branch: string, onto: string, remote:
   const refuse = (why: string) => () => Promise.reject(new Error(why));
   await git("fetch", "--quiet", url, onto);
   const head = await headNow(git, url, branch);
-  if (head === null) return { outcome: "conflicted", push: refuse(`${branch} is gone, so there's nothing to rebase`) };
+  if (head === null) return { outcome: "gone", push: refuse(`${branch} is gone, so there's nothing to rebase`) };
   if (await isAncestor(git, onto, head)) return { outcome: "up-to-date", push: refuse(`${branch} already holds ${onto}`) };
   const base = (await git("merge-base", head, onto)).trim();
   const rebased = await rebaseOnto(git, base, head, onto);

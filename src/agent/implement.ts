@@ -10,6 +10,7 @@ import { withoutEvidence } from "../evidence/uiEvidence.ts";
 import { readIfPresent } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { sandboxEnv } from "../kit/secrets.ts";
+import { FULL_SHA } from "../skills/lock.ts";
 import { agentBranchFor, IMPLEMENTER_AUTHOR } from "../loop/agentPullRequest.ts";
 import { verdictsIn } from "../github/threads.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
@@ -204,7 +205,7 @@ export async function requestChangesContext(pullRequestFile: string, reviewFile:
  * Request-changes run, so it gets no findings and no new requirements.
  */
 export async function conflictContext(pullRequestFile: string, main: string): Promise<PullRequestRunContext> {
-  if (!/^[0-9a-f]{40}$/.test(main)) throw new Error(`FABRIK_CONFLICT_MAIN isn't a full commit sha: ${JSON.stringify(main)}`);
+  if (!FULL_SHA.test(main)) throw new Error(`FABRIK_CONFLICT_MAIN isn't a full commit sha: ${JSON.stringify(main)}`);
   const { number, title, body, operatorComments, requestedChanges } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
     title?: unknown;

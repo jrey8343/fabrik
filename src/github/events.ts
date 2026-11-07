@@ -3,6 +3,7 @@
 // It holds no Loop rules; those all live in src/loop/rules.ts.
 import type { AgentRunResult } from "../agent/result.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
+import { FULL_SHA } from "../skills/lock.ts";
 import type { CaptureOutputs } from "../kit/pushJob.ts";
 import { type EvidenceBundle, retroEvidenceOf } from "../kit/retroEvidence.ts";
 import type { PrototypeRequestMarker } from "../loop/markers.ts";
@@ -118,7 +119,7 @@ function defaultBranchPushed(payload: Record<string, unknown>): LoopEvent | null
   const defaultBranch = (payload["repository"] as { default_branch: string }).default_branch;
   if (payload["ref"] !== `refs/heads/${defaultBranch}` || payload["deleted"] === true) return null;
   const head = payload["after"];
-  if (typeof head !== "string" || !/^[0-9a-f]{40}$/.test(head)) return null;
+  if (typeof head !== "string" || !FULL_SHA.test(head)) return null;
   const commits = payload["commits"] as { added: string[]; modified: string[]; removed: string[] }[];
   const kitConfigChanged = commits.some((commit) => [...commit.added, ...commit.modified, ...commit.removed].includes(KIT_CONFIG_PATH));
   return { kind: kitConfigChanged ? "kit-config-changed" : "main-pushed", head };

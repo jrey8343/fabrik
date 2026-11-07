@@ -45,12 +45,18 @@ describe("main moving under a conflicting agent PR at the Merge gate", () => {
     expect(rebase).toMatchObject({ pullRequest: 50, branch: "fabrik/ticket-7", onto: MAIN });
   });
 
-  it("when the rebase is clean, records the attempt and puts the PR back in draft before the push, so the push starts a full Review, using no retry", () => {
+  it("when the rebase is clean, puts the PR back in draft before the push, so the push starts a full Review, and records the attempt once it lands, using no retry", () => {
     const [rebase] = rebasesIn(planFor(MAIN_PUSHED, conflictsSnapshot([{ pullRequest: atMergeGate(), mergeable: false }]), kitConfig()));
 
-    expect(commentOn(rebase?.clean ?? [], 50)).toMatch(new RegExp(`^<!-- fabrik:conflict-attempt ${MAIN} rebased -->`));
-    expect(rebase?.clean).toContainEqual({ kind: "convert-to-draft", pullRequest: 50 });
-    expect(rebase?.clean.some((action) => action.kind === "start-agent-run" || action.kind === "add-labels")).toBe(false);
+    expect(rebase?.clean).toEqual([{ kind: "convert-to-draft", pullRequest: 50 }]);
+    expect(commentOn(rebase?.pushed ?? [], 50)).toMatch(new RegExp(`^<!-- fabrik:conflict-attempt ${MAIN} rebased -->`));
+    expect([...(rebase?.clean ?? []), ...(rebase?.pushed ?? [])].some((action) => action.kind === "start-agent-run" || action.kind === "add-labels")).toBe(false);
+  });
+
+  it("when the push's lease refuses it, brings the PR back out of draft and records no attempt, so the next check tries again", () => {
+    const [rebase] = rebasesIn(planFor(MAIN_PUSHED, conflictsSnapshot([{ pullRequest: atMergeGate(), mergeable: false }]), kitConfig()));
+
+    expect(rebase?.refused).toEqual([{ kind: "mark-ready-for-review", pullRequest: 50 }]);
   });
 
   it("when the rebase conflicts, records the attempt, puts the PR back in draft and starts the conflict-only run through agent:implement", () => {

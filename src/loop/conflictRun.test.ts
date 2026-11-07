@@ -236,6 +236,30 @@ describe("A conflict-only run", () => {
       expect(thread.pullRequest().conflictRunInFlight).toBeNull();
     });
 
+    it("when its output breaks the contract, still ends, so it never stays in flight", () => {
+      const thread = new Thread();
+      thread.mainMovesAndConflicts(MAIN);
+
+      const plan = thread.plan({ ...conflictRunFinished(RESOLVED), output: "not JSON" }, thread.ticketSnapshot());
+
+      expect(actionsOf(plan).some((action) => action.kind === "push-branch")).toBe(false);
+      expect(thread.comments.at(-1)).toMatch(/^<!-- fabrik:conflict-run-ended -->\n@operator .*broke the Implementer's contract/);
+      expect(thread.pullRequest().conflictRunInFlight).toBeNull();
+      expect(thread.draft).toBe(false);
+    });
+
+    it("when the Operator took the PR out of draft while it ran, still ends, leaving the PR where they put it", () => {
+      const thread = new Thread();
+      thread.mainMovesAndConflicts(MAIN);
+      thread.draft = false;
+
+      const actions = actionsOf(thread.conflictRunFinishes(RESOLVED, B));
+
+      expect(actions.some((action) => action.kind === "push-branch" || action.kind === "mark-ready-for-review")).toBe(false);
+      expect(thread.comments.at(-1)).toMatch(/^<!-- fabrik:conflict-run-ended -->\n@operator .*has left draft/);
+      expect(thread.pullRequest().conflictRunInFlight).toBeNull();
+    });
+
     it("isn't tried again against the same main head, but is once main moves", () => {
       const thread = new Thread();
       thread.mainMovesAndConflicts(MAIN);

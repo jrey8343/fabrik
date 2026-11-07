@@ -6,6 +6,7 @@ import { withDecisionLine } from "../loop/decisionsSoFar.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { withPrototypeStarted } from "../loop/markers.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
+import type { MainRebase } from "./branch.ts";
 import type { GitHub, Repo } from "./client.ts";
 
 /** The agent run a plan starts, which the workflow carries out by routing to that role's agent job. */
@@ -37,11 +38,11 @@ export interface BranchPusher {
 
 /**
  * Rebases an agent PR's branch onto the default branch's head, with no agent
- * (src/github/branch.ts, #304): whether that was clean, conflicted, or found
- * the branch already holding that head, and, when clean, its push.
+ * (src/github/branch.ts, #304): whether that was clean, conflicted, found the
+ * branch already holding that head or gone, and, when clean, its push.
  */
 export interface MainRebaser {
-  rebase(branch: string, onto: string): Promise<{ readonly outcome: "rebased" | "conflicted" | "up-to-date"; push(): Promise<void> }>;
+  rebase(branch: string, onto: string): Promise<MainRebase>;
 }
 
 /** A UI PR's preview deployment, which the push job's preview step polls and links (src/kit/previewLink.ts). */
@@ -96,10 +97,22 @@ export async function applyPlan(
       }
       if (rebaser === null) throw new Error(`This job can't rebase ${action.branch} onto main`);
       const rebased = await rebaser.rebase(action.branch, action.onto);
-      if (rebased.outcome === "up-to-date") continue;
+      // Neither is the core's to act on: there's nothing to bring up to date.
+      if (rebased.outcome === "up-to-date" || rebased.outcome === "gone") continue;
+      if (rebased.outcome === "conflicted") {
+        await applyEach(action.conflicted);
+        continue;
+      }
       // The clean actions land first: the PR is in draft before the push starts its Review.
-      await applyEach(rebased.outcome === "rebased" ? action.clean : action.conflicted);
-      if (rebased.outcome === "rebased") await rebased.push();
+      await applyEach(action.clean);
+      const pushed = await rebased.push().then(
+        () => true,
+        (error: unknown) => {
+          console.log(`::warning title=Rebase not pushed::${action.branch}: ${error instanceof Error ? error.message : String(error)}`);
+          return false;
+        },
+      );
+      await applyEach(pushed ? action.pushed : action.refused);
     }
   };
   await applyEach(plan.actions);

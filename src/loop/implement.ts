@@ -132,18 +132,27 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   const { issue, pullRequest, operator } = snapshot;
   if (fixes === undefined) throw new Error("A first Implement run lands through applyImplementation");
   const parsed = parseImplementOutput(event.output, true);
+  // A conflict-only run that can't land still ends, or it would stay in flight for good, its PR withheld from every Verdict (#304).
+  const conflictEnds = (why: string): Plan | null =>
+    fixes.conflict !== undefined && pullRequest !== null && pullRequest.open && pullRequest.number === fixes.pullRequest && pullRequest.conflictRunInFlight === fixes.conflict
+      ? { kind: "act", actions: conflictRunEnded(pullRequest.number, fixes.conflict, operator, why, fixes.runUrl, pullRequest.draft) }
+      : null;
   if (!parsed.ok) {
-    return {
-      kind: "fail",
-      failure: "infrastructure",
-      reason: `The Implementer's retry on #${fixes.pullRequest} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
-    };
+    return (
+      conflictEnds(`its output broke the Implementer's contract (${parsed.errors.join("; ")}), so the Kit didn't push it`) ?? {
+        kind: "fail",
+        failure: "infrastructure",
+        reason: `The Implementer's retry on #${fixes.pullRequest} emitted output that breaks its contract: ${parsed.errors.join("; ")}`,
+      }
+    );
   }
   if (issue === null || pullRequest === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the Ticket or the PR its retry fixes" };
   }
   const stale = whyNotRetriedOnto(issueNumber, issue, fixes, pullRequest);
-  if (stale !== null) return { kind: "nothing", reason: `${stale}, so the retry's branch isn't pushed` };
+  if (stale !== null) {
+    return conflictEnds(`${stale}, so the Kit didn't push it`) ?? { kind: "nothing", reason: `${stale}, so the retry's branch isn't pushed` };
+  }
   if (fixes.conflict !== undefined) return applyConflictRun(event, fixes.conflict, pullRequest, operator, parsed.output, config);
   // The push job rebased the run's own commits if the branch moved (ADR-0006). If the branch moves again,
   // the push's lease refuses it, and the run stays in flight as after an Infrastructure failure.
