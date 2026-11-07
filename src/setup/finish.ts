@@ -39,8 +39,19 @@ export function prBody({ release, defaultBranch, summary }: PrBodyInputs): strin
             "```",
           ]),
     ].join("\n"),
+    ...(summary.appInstalledOn === undefined ? [] : [appInstalledMark(summary.appInstalledOn)]),
   ];
   return `${sections.join("\n\n")}\n`;
+}
+
+/** The setup PR's hidden line that the Operator confirmed the Fabrik App is installed on the repo. */
+function appInstalledMark(repo: string): string {
+  return `<!-- fabrik-setup: app-installed ${repo} -->`;
+}
+
+/** Whether an earlier run's setup PR body says the Operator confirmed the Fabrik App is installed on this repo. */
+export function appConfirmedIn(body: string, repo: string): boolean {
+  return body.split(/\r?\n/).some((line) => line.trim() === appInstalledMark(repo));
 }
 
 /**

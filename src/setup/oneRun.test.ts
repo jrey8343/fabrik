@@ -139,6 +139,13 @@ describe("What the merge waits for, read after the wizard", () => {
     expect(readinessOf(after)).toEqual(READY);
   });
 
+  it("counts the App as installed when the open setup PR keeps an earlier run's confirmation for this repo", () => {
+    const earlierPr = "Sets up Fabrik v1.4.2 in this repo.\n\n<!-- fabrik-setup: app-installed acme/clinic -->\n";
+
+    expect(readinessOf({ ...after, report: "", earlierPr }).appInstalled).toBe(true);
+    expect(readinessOf({ ...after, report: "", earlierPr: earlierPr.replace("acme/clinic", "acme/other") }).appInstalled).toBe(false);
+  });
+
   it("counts the App as installed only on the repo the wizard reported", () => {
     expect(readinessOf({ ...after, report: "app-installed acme/other\n" }).appInstalled).toBe(false);
     expect(readinessOf({ ...after, report: "" }).appInstalled).toBe(false);

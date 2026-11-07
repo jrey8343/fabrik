@@ -216,9 +216,10 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
       // Read again and planned again: a second Subscription's token the wizard stored gets its subscriptions line from this plan.
       const now = await gatherState(run, cwd, repo, paths);
       const appItems = now.vaults.includes(FABRIK_APP_VAULT) ? await vaultItems(run, cwd, FABRIK_APP_VAULT) : [];
+      const earlierPr = (await openSetupPr(run, cwd, branch))?.body ?? null;
       return {
         plan: planSetup(now, kit, answers, { wroteStarter: state.files[KIT_CONFIG_PATH] == null }),
-        readiness: readinessOf({ repo: repoName, report: wizardReport, fabrikItems: now.fabrikItems, appItems }),
+        readiness: readinessOf({ repo: repoName, report: wizardReport, earlierPr, fabrikItems: now.fabrikItems, appItems }),
       };
     },
     commit: () => commitSetupFiles(run, cwd, setupWrites(kit), release),

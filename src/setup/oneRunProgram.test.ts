@@ -57,6 +57,9 @@ const addsASecondSubscription: Wizard = async (world, wizardEnv) => {
   store(world, "Fabrik", "Claude token 2");
 };
 
+/** The Operator ends the wizard at its banner, so it reports nothing and stores nothing. */
+const endsAtTheBanner: Wizard = async () => {};
+
 /** The Operator stops at the Claude token stage. */
 const skipsTheClaudeToken: Wizard = async (world, wizardEnv) => {
   await writeFile(wizardEnv["FABRIK_WIZARD_REPORT"]!, "app-installed acme/clinic\n");
@@ -297,6 +300,19 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(world.prs[0]!.body).toContain("- write .github/workflows/fabrik.yml (");
     expect(world.prs[0]!.body).not.toBe(firstBody);
     expect(world.prs[0]!.body).toContain("Merge this PR yourself");
+  });
+
+  it("a later run whose wizard ends at its banner keeps the setup PR asking for the merge, the App's install confirmed in an earlier run", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    expect(world.prs[0]!.body).toContain("Merge this PR yourself");
+
+    const { code, said } = await setupOnce(world, { wizard: endsAtTheBanner });
+
+    expect(code).toBe(0);
+    expect(world.prs[0]!.body).toContain("Merge this PR yourself");
+    expect(world.prs[0]!.body).not.toContain("the Fabrik App, installed on acme/clinic");
+    expect(said.some((line) => line.startsWith("Merge it yourself"))).toBe(true);
   });
 
   it("a second run after applying stopped partway plans only what's still missing, then commits every file on the same branch", async () => {

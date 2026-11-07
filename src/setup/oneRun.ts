@@ -6,12 +6,13 @@
 // default branch. Each step is injected, so this module does no git, gh, op or
 // terminal work itself.
 import { describeAction } from "./apply.ts";
+import { appConfirmedIn } from "./finish.ts";
 import { FABRIK_APP_VAULT, FABRIK_VAULT, type SetupAction, type SetupPlan } from "./plan.ts";
 import { appInstalledIn } from "./wizard.ts";
 
 /** What the Kit's first runs need before the setup PR merges, read after the wizard. */
 export interface Readiness {
-  /** The Operator confirmed, in the wizard, that the Fabrik App is installed on the repo. */
+  /** The Operator confirmed, in this run's wizard or an earlier run's, that the Fabrik App is installed on the repo. */
   readonly appInstalled: boolean;
   /** The "Fabrik App" item is in the "Fabrik App" vault. */
   readonly appKeyStored: boolean;
@@ -29,6 +30,8 @@ export interface AfterWizard {
   readonly repo: string;
   /** What the wizard wrote to its report file. */
   readonly report: string;
+  /** The body of the setup PR open from the setup branch, if any, which keeps an earlier run's confirmation that the App is installed. */
+  readonly earlierPr?: string | null;
   /** The "Fabrik" vault's item titles. */
   readonly fabrikItems: readonly string[];
   /** The "Fabrik App" vault's item titles. */
@@ -36,9 +39,10 @@ export interface AfterWizard {
 }
 
 /** The merge rule's three facts, from what the wizard left behind rather than how it ended. */
-export function readinessOf({ repo, report, fabrikItems, appItems }: AfterWizard): Readiness {
+export function readinessOf({ repo, report, earlierPr = null, fabrikItems, appItems }: AfterWizard): Readiness {
   return {
-    appInstalled: appInstalledIn(report, repo),
+    // A user's gh can't read an App's installations, so a later run's wizard needn't be walked again to keep it.
+    appInstalled: appInstalledIn(report, repo) || (earlierPr !== null && appConfirmedIn(earlierPr, repo)),
     appKeyStored: appItems.includes(FABRIK_APP_ITEM),
     claudeTokenStored: fabrikItems.includes(CLAUDE_TOKEN_ITEM),
   };
@@ -52,6 +56,8 @@ export interface RunSummary {
   readonly notes: readonly string[];
   /** What the merge waits for. Empty when the Operator can merge, or there's no setup PR. */
   readonly blockers: readonly string[];
+  /** The repo the Operator has confirmed the Fabrik App is installed on, which the setup PR keeps for later runs. */
+  readonly appInstalledOn?: string;
 }
 
 export interface Published {
@@ -126,7 +132,12 @@ export async function runOnce({ plan, repo, earlierDone = [] }: OneRun, steps: O
     return { kind: "applied", summary: { done, notes, blockers: [] } };
   }
   await steps.push();
-  const published = await steps.publish({ done, notes, blockers: mergeBlockers(after.readiness, repo) });
+  const published = await steps.publish({
+    done,
+    notes,
+    blockers: mergeBlockers(after.readiness, repo),
+    ...(after.readiness.appInstalled ? { appInstalledOn: repo } : {}),
+  });
   return { kind: "done", ...published };
 }
 
