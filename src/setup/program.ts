@@ -97,7 +97,12 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
     io.say("");
     if (io.prompt === null || args.plan) {
       const toDoIt = args.plan ? "Run setup again without --plan to do it." : "Setup carries the plan out only on your yes, so run it in a terminal to do it.";
-      io.say(withNotes(plan.actions.length === 0 ? [COMPLETE] : [...stepsOf(plan), "", toDoIt], plan));
+      const branch = setupBranch(args.release);
+      const left =
+        plan.actions.length === 0
+          ? [heldBy(branch), `What's left is the wizard, then pushing ${branch} and opening or updating the setup PR.`]
+          : stepsOf(plan);
+      io.say(withNotes(isComplete(plan, checked.branch, branch) ? [COMPLETE] : [...left, "", toDoIt], plan));
       return 0;
     }
     const inTerminal = { ...io, prompt: io.prompt };
@@ -131,9 +136,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
   const { repo } = state;
   const repoName = `${repo.owner}/${repo.name}`;
 
-  // On the default branch, nothing to plan is a working install. On the
-  // setup branch, an earlier run stopped partway: the wizard and the PR are left.
-  if (inputs.plan.actions.length === 0 && current !== branch) {
+  if (isComplete(inputs.plan, current, branch)) {
     io.say(withNotes([COMPLETE], inputs.plan));
     return 0;
   }
@@ -143,7 +146,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
   }
   // The same actions, with notes that say what this run does once its wizard has run.
   const plan = planSetup(state, kit, answers, { wizardNext: true });
-  io.say(withNotes(plan.actions.length === 0 ? [`${branch} already holds what an earlier run of setup applied.`] : stepsOf(plan), plan));
+  io.say(withNotes(plan.actions.length === 0 ? [heldBy(branch)] : stepsOf(plan), plan));
   io.say("");
 
   let wizardReport = "";
@@ -210,6 +213,19 @@ function stop(io: SetupIo, problem: string): number {
 }
 
 const COMPLETE = "Nothing to do: this repo's Fabrik install is complete.";
+
+/**
+ * On the default branch, nothing to plan is a working install. On the setup
+ * branch, an earlier run stopped partway: the wizard and the setup PR are left.
+ */
+function isComplete(plan: SetupPlan, current: string, branch: string): boolean {
+  return plan.actions.length === 0 && current !== branch;
+}
+
+/** What an empty plan on the setup branch means. */
+function heldBy(branch: string): string {
+  return `${branch} already holds what an earlier run of setup applied.`;
+}
 
 /** The plan's steps, as setup would carry them out. */
 function stepsOf(plan: SetupPlan): string[] {

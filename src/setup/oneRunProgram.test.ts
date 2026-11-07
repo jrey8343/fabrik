@@ -79,9 +79,11 @@ interface Options {
   readonly answers?: string[];
   readonly wizard?: Wizard;
   readonly args?: string[];
+  /** Whether stdin is a terminal. Without one, setup asks nothing. */
+  readonly terminal?: boolean;
 }
 
-async function setupOnce(world: World, { answers = ["y"], wizard = walksEveryStage, args = FLAGS }: Options = {}) {
+async function setupOnce(world: World, { answers = ["y"], wizard = walksEveryStage, args = FLAGS, terminal = true }: Options = {}) {
   const log: string[] = [];
   const said: string[] = [];
   const complaints: string[] = [];
@@ -96,7 +98,7 @@ async function setupOnce(world: World, { answers = ["y"], wizard = walksEverySta
     run,
     env,
     cwd: checkout,
-    prompt,
+    prompt: terminal ? prompt : null,
     say: (line) => said.push(...line.split("\n")),
     complain: (line) => complaints.push(line),
     kitDir: KIT_DIR,
@@ -362,6 +364,23 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       `${BRANCH} holds an earlier run of setup that isn't on main yet. Switch to it with git switch ${BRANCH}, then run setup again: it picks up where that run stopped.`,
     );
     expect(questions).toEqual([]);
+  });
+
+  it.each([
+    ["with --plan", { args: [...FLAGS, "--plan"] }, "Run setup again without --plan to do it."],
+    ["without a terminal", { terminal: false }, "Setup carries the plan out only on your yes, so run it in a terminal to do it."],
+  ])("%s on the setup branch with nothing left to apply, says the wizard and the setup PR are left, not that the install is complete", async (_, options, toDoIt) => {
+    const world = aWorld();
+    await setupOnce(world, { wizard: skipsTheClaudeToken });
+
+    const { code, said, log } = await setupOnce(world, options);
+
+    expect(code).toBe(0);
+    expect(said).not.toContain("Nothing to do: this repo's Fabrik install is complete.");
+    expect(said).toContain(`${BRANCH} already holds what an earlier run of setup applied.`);
+    expect(said).toContain(`What's left is the wizard, then pushing ${BRANCH} and opening or updating the setup PR.`);
+    expect(said).toContain(toDoIt);
+    expect(log.filter((line) => /^git (switch|commit|push)|^gh pr (create|edit)|^wizard$/.test(line))).toEqual([]);
   });
 
   it("with --plan in a terminal, prints the plan and asks no yes", async () => {
