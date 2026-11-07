@@ -9,7 +9,7 @@ import { checkCallerWorkflow } from "../kit/caller.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { aCleanProduct, afterApplying } from "../__fixtures__/productState.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
-import { type ProductState, type SetupAction, planSetup } from "./plan.ts";
+import { type ProductState, type SetupAction, planSetup, setupPaths } from "./plan.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 let kit: SetupKit;
@@ -472,6 +472,33 @@ describe("Branch protection", () => {
     });
 
     expect(protects(state)).toEqual([]);
+  });
+
+  describe("a Kit config with Extra skills", () => {
+    const config = JSON.stringify({ sandbox: { checks: ["build"] }, roles: { design: { skills: ["jrey8343/skills/event-storming"] } } });
+    const pin = (repository: string) => JSON.stringify([{ repository, sha: "a".repeat(40) }]);
+
+    it("checks the config with its skills lock, so a config whose picks are pinned still has its gating checks required", () => {
+      const state = aCleanProduct({ files: { ".fabrik/config.json": config, ".fabrik/skills.lock.json": pin("jrey8343/skills") } });
+
+      expect(protects(state)).toEqual([{ kind: "protect-branch", branch: "main", requiredChecks: ["build"] }]);
+      expect(planSetup(state, kit).notes.join("\n")).not.toContain("is invalid");
+    });
+
+    it.each([
+      ["there's no skills lock", {}],
+      ["the skills lock doesn't pin the pick's Skills source", { ".fabrik/skills.lock.json": pin("someone/else") }],
+    ])("still calls the config invalid when %s", (_, lock) => {
+      const plan = planSetup(aCleanProduct({ files: { ".fabrik/config.json": config, ...lock } }), kit);
+
+      expect(plan.notes.join("\n")).toContain(".fabrik/config.json is invalid, so its gating checks weren't required");
+    });
+  });
+});
+
+describe("What setup reads from the Product repo", () => {
+  it("reads the skills lock, so setup checks the Kit config with it", () => {
+    expect(setupPaths(kit)).toContain(".fabrik/skills.lock.json");
   });
 });
 

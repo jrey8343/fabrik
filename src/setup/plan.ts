@@ -1,7 +1,7 @@
 // The setup skill's planner. Pure, no I/O: given what a Product repo holds now
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
-import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig, type UiConfig } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH, type UiConfig } from "../kit/config.ts";
 import {
   ALL_LABELS,
   AUDIT_LABEL,
@@ -419,6 +419,7 @@ export function setupPaths(kit: SetupKit): readonly string[] {
     ...PRETTIER_DETECTION_PATHS,
     DEPENDABOT_PATH,
     KIT_CONFIG_PATH,
+    SKILLS_SOURCES_LOCK_PATH,
     ...Object.keys(kit.templates.docsAgents).map((name) => `docs/agents/${name}`),
     "AGENTS.md",
     "CLAUDE.md",
@@ -438,7 +439,7 @@ function file(state: ProductState, path: string): string | null {
  */
 function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupAction[] {
   const configText = state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig;
-  const config = resolveKitConfig({ config: configText });
+  const config = resolveKitConfig({ config: configText, skillsLock: file(state, SKILLS_SOURCES_LOCK_PATH) });
   if (!config.ok) notes.push(`${KIT_CONFIG_PATH} is invalid, so its gating checks weren't required: ${config.errors.join("; ")}`);
   const gating = config.ok ? config.config.sandbox.checks : [];
   const current = state.protection;
