@@ -1,6 +1,20 @@
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { GitHubError } from "../github/client.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
-import { readIssue, readMapOffer, readOperatorComments, readPullRequest, type Reader, SENT_BACK_DIFF_LIMIT } from "./inputs.ts";
+import { AGENT_FAILURE_FILE } from "./failure.ts";
+import {
+  readIssue,
+  readMapOffer,
+  readOperatorComments,
+  readPullRequest,
+  type Reader,
+  reportFailure,
+  SENT_BACK_DIFF_LIMIT,
+} from "./inputs.ts";
 
 const repo = { owner: "acme", name: "shop" };
 
@@ -605,5 +619,66 @@ describe("What a Design-session turn's inputs say of the Map cap", () => {
 
     expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG, { number: 3 })).toEqual({ kind: "under-a-spec", spec: 3 });
     expect(github.reads).toEqual([]);
+  });
+});
+
+// #328: a turn on a sent-back Ticket whose job couldn't read the closed PR
+// failed with no report, so its notice said only "it crashed".
+describe("The input step's failure report", () => {
+  const backToDesign = {
+    repository: {
+      issue: {
+        ...issuePage([], null).repository.issue,
+        comments: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            {
+              author: { login: "fabrik-app", __typename: "Bot" },
+              body: "<!-- fabrik:back-to-design 84 operator -->\n**Back to design.**",
+              createdAt: "2026-11-01T00:00:00Z",
+            },
+          ],
+        },
+      },
+    },
+  };
+  const refusing = (error: Error): Reader => ({
+    graphql: async <T>() => backToDesign as T,
+    rest: async () => {
+      throw error;
+    },
+  });
+  const forbidden = new GitHubError("GitHub GET /repos/acme/shop/pulls/84 failed: 403 …", 403, {
+    body: JSON.stringify({ message: "Resource not accessible by integration", status: "403" }),
+    request: "GET /repos/acme/shop/pulls/84",
+  });
+
+  it("names the request GitHub refused and its answer, when a token without pull-requests: read reads the sent-back PR", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fabrik-inputs-"));
+    const failureDir = join(dir, "fabrik-out");
+
+    const error = await readIssue(refusing(forbidden), repo, 7, "operator").then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    await reportFailure(error, failureDir);
+
+    expect(JSON.parse(await readFile(join(failureDir, AGENT_FAILURE_FILE), "utf8"))).toEqual({
+      failure: "unread-inputs",
+      detail: "GET /repos/acme/shop/pulls/84: 403 Resource not accessible by integration",
+      refused: true,
+    });
+  });
+
+  it("leaves no report for an error that isn't a GitHub call's, which the push job reads as a crash", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fabrik-inputs-"));
+
+    await reportFailure(new Error("GH_TOKEN is not set"), dir);
+
+    expect(existsSync(join(dir, AGENT_FAILURE_FILE))).toBe(false);
+  });
+
+  it("leaves no report when the job names no place for it", async () => {
+    await expect(reportFailure(forbidden, "")).resolves.toBeUndefined();
   });
 });

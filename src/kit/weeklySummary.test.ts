@@ -1905,6 +1905,15 @@ describe("the Weekly summary", () => {
       expect(failedBody).toMatchObject({
         body: expect.stringContaining("- [#7](https://github.com/owner/product/issues/7) Build the thing: last run ended in an Infrastructure failure (timeout) 2 days ago"),
       });
+      const unreadBody = weeklySummary(
+        input({
+          records: [aRunRecord({ endedAt: hoursAgo(49), jobResult: "failure", infrastructureFailure: "unread-inputs" })],
+          facts: [factsOf({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" })] })],
+        }),
+      );
+      expect(unreadBody).toMatchObject({
+        body: expect.stringContaining("Build the thing: last run ended in an Infrastructure failure (unread-inputs) 2 days ago"),
+      });
       expect(bodyOf(factsOf())).not.toContain("Stuck");
     });
 

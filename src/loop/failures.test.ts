@@ -198,6 +198,63 @@ describe("Failure notices", () => {
     });
   });
 
+  // #328: a turn on a sent-back Ticket whose job couldn't read the closed PR.
+  describe("when the Kit's input step couldn't read the agent's inputs", () => {
+    const refused = { failure: "unread-inputs", detail: "GET /repos/acme/shop/pulls/84: 403 Resource not accessible by integration", refused: true } as const;
+    const failedRead = { failure: "unread-inputs", detail: "GET /repos/acme/shop/pulls/84: 502 Bad Gateway" } as const;
+    const designIssue = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
+
+    it("a Design-session turn GitHub refused names the input step, the request and GitHub's answer, and says the Kit needs fixing before a reply helps", () => {
+      const plan = planFor(failed({ role: "design", report: refused }), snapshotOf(designIssue), kitConfig());
+
+      // Still an Infrastructure failure: one comment, nothing started, needs-design kept.
+      expect(plan).toEqual({ kind: "act", actions: [{ kind: "comment", issue: 7, body: expect.any(String) }] });
+      expect(commentOf(plan)).toBe(
+        [
+          "<!-- fabrik:design-turn-failed -->",
+          "@operator The Design-session turn run on #7 failed: GitHub refused a request in the Kit's input step, so the agent never started.",
+          "",
+          "> GET /repos/acme/shop/pulls/84: 403 Resource not accessible by integration",
+          "",
+          "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. GitHub refuses this request every time, so running it again won't help: the Kit needs fixing first. Once that fix is in, reply on this issue to run the turn again.",
+          "",
+          `[The run](${RUN})`,
+        ].join("\n"),
+      );
+    });
+
+    it("a prototype turn GitHub refused says the same of its own resumption", () => {
+      const plan = planFor(failed({ role: "design", prototype: true, report: refused }), snapshotOf(designIssue), kitConfig());
+
+      expect(commentOf(plan)).toContain("The prototype turn on #7 failed: GitHub refused a request in the Kit's input step");
+      expect(commentOf(plan)).toContain("the Kit needs fixing first. Once that fix is in, reply on this issue to carry the session on:");
+    });
+
+    it("any other role's refused read names its label as the way back once the Kit is fixed", () => {
+      const plan = planFor(failed({ report: refused }), snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] })), kitConfig());
+
+      expect(commentOf(plan)).toContain("The Triage run on #7 failed: GitHub refused a request in the Kit's input step, so the agent never started.");
+      expect(commentOf(plan)).toContain("Once that fix is in, re-add the `needs-triage` label to run it again.");
+    });
+
+    it("a read GitHub failed (a 5xx or no answer) names the error and offers a reply as the retry", () => {
+      const plan = planFor(failed({ role: "design", report: failedRead }), snapshotOf(designIssue), kitConfig());
+      const body = commentOf(plan);
+
+      expect(body).toContain("failed: a GitHub request failed in the Kit's input step, so the agent never started.");
+      expect(body).toContain("> GET /repos/acme/shop/pulls/84: 502 Bad Gateway");
+      expect(body).toContain("doesn't count against the Ticket's retries. Reply on this issue to run the turn again.");
+      expect(body).not.toContain("needs fixing");
+    });
+
+    it("an input step that left no report still reads as a crash", () => {
+      const body = commentOf(planFor(failed({ role: "design", report: null }), snapshotOf(designIssue), kitConfig()));
+
+      expect(body).toContain("failed: it crashed.");
+      expect(body).toContain("Reply on this issue to run the turn again.");
+    });
+  });
+
   it("mentions whoever the Operator is", () => {
     const plan = planFor(failed(), snapshotOf(anIssue({ number: 7 }), { operator: "jrey" }), kitConfig());
 

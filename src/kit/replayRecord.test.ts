@@ -272,6 +272,25 @@ describe("How a replay Ticket's run ended, for the Loop to land on the replay is
     expect(files.ended.end).toEqual({ kind: "infrastructure", reason: "the baseline arm's Implement run ended in an Infrastructure failure (provider-error)" });
   });
 
+  // #340: an arm's input step that fails on a GitHub read leaves #328's report, which the landing names.
+  it("names the request and GitHub's answer when an arm's input step couldn't read the Ticket, which its record keeps too", () => {
+    const unread = ran({
+      job: line({ ran: true, job: { result: "failure", outputs: { "secrets-step": "skipped", model: "", effort: "" } } }),
+      failureReport: line({ failure: "unread-inputs", detail: "GET /repos/acme/shop/pulls/112: 403 Resource not accessible by integration", refused: true }),
+      transcript: null,
+      transcriptGzip: null,
+    });
+    const files = replayRunFiles(CONTEXT, { baseline: armRan("baseline"), variant: armRan("variant", { review: unread }) }, KIT, ENDED_AT);
+    const record = files.writes.flatMap((group) => group.files).find(({ path }) => path === "runs/acme/shop/2026-11/9001-1-review-replay-variant.json");
+
+    expect(files.ended.end).toEqual({
+      kind: "infrastructure",
+      reason:
+        "the variant arm's Review run ended in an Infrastructure failure (unread-inputs): GET /repos/acme/shop/pulls/112: 403 Resource not accessible by integration",
+    });
+    expect(JSON.parse(Buffer.from(record?.content ?? []).toString("utf8"))).toMatchObject({ infrastructureFailure: "unread-inputs" });
+  });
+
   // The record job runs even when the workflow run was cancelled, so a Ticket never stays in progress for good.
   it("is an Infrastructure failure when an arm's run left no account of how it went, as when the workflow run was cancelled", () => {
     const files = replayRunFiles(CONTEXT, { baseline: armRan("baseline"), variant: armRan("variant", { implement: ran({ job: null, transcript: null, transcriptGzip: null }) }) }, KIT, ENDED_AT);

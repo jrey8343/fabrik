@@ -70,7 +70,7 @@ jobs:
       issues: read
       pull-requests: read
     outputs:
-      sha: ${{ steps.kit.outputs.sha }}
+      sha: ${{ steps.commit.outputs.sha }}
       route: ${{ steps.route.outputs.route }}
       triage-timeout-minutes: ${{ steps.route.outputs.triage-timeout-minutes }}
       design-timeout-minutes: ${{ steps.route.outputs.design-timeout-minutes }}
@@ -128,9 +128,9 @@ jobs:
       # `env:`, never in a `run:` script, where it could inject a command.
       prototype_request: ${{ steps.route.outputs.prototype_request }}
     steps:
-      # No expression context names the commit of a called workflow, so read
-      # it from the OIDC token's job_workflow_sha claim.
-      - name: Find the Kit's pinned commit
+      # No expression context names a called workflow's ref or commit, so read
+      # them from the OIDC token's job_workflow_ref and job_workflow_sha claims.
+      - name: Read the Kit's workflow ref from the OIDC token
         id: kit
         run: |
           set -euo pipefail
@@ -142,16 +142,29 @@ jobs:
             jrey8343/fabrik/.github/workflows/loop.yml@*) ;;
             *) echo "::error::Unexpected Kit workflow ref: $ref"; exit 1 ;;
           esac
-          echo "Kit: $ref ($sha)"
-          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          echo "workflow-ref=$ref" >>"$GITHUB_OUTPUT"
+          echo "workflow-sha=$sha" >>"$GITHUB_OUTPUT"
 
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: jrey8343/fabrik
-          ref: ${{ steps.kit.outputs.sha }}
+          ref: ${{ steps.kit.outputs.workflow-sha }}
           path: kit
           persist-credentials: false
+
+      # A pinned annotated tag's claim names the tag object, not its commit. The checkout
+      # peels it, so pass out the commit it landed on: every job checks the Kit out at it,
+      # and every Run record names it as its kitSha (#324).
+      - name: Peel the Kit's pinned commit
+        id: commit
+        env:
+          KIT_REF: ${{ steps.kit.outputs.workflow-ref }}
+        run: |
+          set -euo pipefail
+          sha="$(git -C kit rev-parse HEAD)"
+          echo "Kit: $KIT_REF at commit $sha"
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
 
       # Read as data only; nothing from the Product repo runs in this job. The
       # workflows folder holds the caller workflow, whose Fabrik pins are checked too.
@@ -184,9 +197,12 @@ jobs:
     concurrency:
       group: fabrik-triage-${{ github.event.issue.number }}
       cancel-in-progress: false
+    # pull-requests: read for the input step: the Operator may add needs-triage to
+    # a Ticket sent back from an agent PR, whose closed PR it reads (#328).
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     outputs:
       # Read by the push job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}
@@ -292,9 +308,13 @@ jobs:
       group: fabrik-design-${{ github.event.issue.number }}
       cancel-in-progress: false
       queue: max
+    # pull-requests: read for the input step: on a Ticket sent back from an agent
+    # PR, it reads that closed PR into issue.json's sentBack (readSentBack in
+    # src/agent/inputs.ts). Without it the turn fails before its agent starts (#328).
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     outputs:
       # Read by the push job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}
@@ -412,9 +432,12 @@ jobs:
       group: fabrik-design-${{ github.event.issue.number }}
       cancel-in-progress: false
       queue: max
+    # pull-requests: read for the input step, as the design job's: a prototype
+    # turn on a Ticket sent back from an agent PR reads that closed PR (#328).
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     outputs:
       # Read by the push job: a failed 1Password step means the agent never started.
       secrets-step: ${{ steps.op.outcome }}
@@ -1387,8 +1410,8 @@ jobs:
   # A replay Ticket's Implement run (#156), one matrix leg per arm: the
   # baseline, as the Ticket was built then, and the variant, with the one
   # variable changed. It has the Implement job's shape and credentials
-  # (ADR-0002, ADR-0004): contents and issues read, no GitHub write
-  # credential, and only the implement service account, which its action
+  # (ADR-0002, ADR-0004): contents, issues and pull requests read, no GitHub
+  # write credential, and only the implement service account, which its action
   # loads the Claude token and the test secrets through. Its action checks out
   # the Ticket's baseSha and passes the arm's commits out as a patch, never
   # pushed. Never named `Implement`, so Dispatch's count of Implement runs in
@@ -1406,9 +1429,14 @@ jobs:
       fail-fast: false
       matrix:
         arm: [baseline, variant]
+    # pull-requests: read for the input step, as the design job's: on a Ticket
+    # sent back from an agent PR, it reads that closed PR into issue.json's
+    # sentBack (readSentBack in src/agent/inputs.ts). Without it the arm fails
+    # before its agent starts (#340).
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     steps:
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1485,9 +1513,12 @@ jobs:
       fail-fast: false
       matrix:
         arm: [baseline, variant]
+    # pull-requests: read for the input step, as replay-implement's: a sent-back
+    # Ticket's closed PR is read into issue.json's sentBack (#340).
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     steps:
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

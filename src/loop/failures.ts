@@ -80,7 +80,22 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
       return "the preflight found a route that would bill metered API usage, so it refused to start the agent";
     case "usage-credits":
       return `its stream showed usage credits being spent on the \`${subscriptionOfRun(run, config)}\` Subscription, so the Kit killed it`;
+    case "unread-inputs":
+      return run.report?.refused === true
+        ? "GitHub refused a request in the Kit's input step, so the agent never started"
+        : "a GitHub request failed in the Kit's input step, so the agent never started";
   }
+}
+
+/**
+ * How the notice says to go on. GitHub refuses a refused input read again
+ * each time the run goes again, so for that the Kit needs fixing first; after
+ * any other failure, including an input read GitHub failed or never answered,
+ * `resume` runs it again.
+ */
+function resumeAfter(failure: InfrastructureFailure, run: FailedRun, resume: string): string {
+  if (failure !== "unread-inputs" || run.report?.refused !== true) return resume;
+  return `GitHub refuses this request every time, so running it again won't help: the Kit needs fixing first. Once that fix is in, ${resume.charAt(0).toLowerCase()}${resume.slice(1)}`;
 }
 
 /**
@@ -195,7 +210,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     detail: run.report?.detail ?? "",
     // A research Decision has no retries to count against, and Dispatch leaves it alone once its run failed.
     notRetried: run.role === "research" ? "neither the Loop nor Dispatch runs it again by itself" : NOT_RETRIED,
-    resume,
+    resume: resumeAfter(failure, run, resume),
     pointer: repoWide?.pointer ?? null,
     runUrl: run.runUrl,
   });

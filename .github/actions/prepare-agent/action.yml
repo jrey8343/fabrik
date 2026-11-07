@@ -92,4 +92,8 @@ runs:
         FABRIK_PULL_REQUEST_COMMENTS: ${{ inputs.pull-request-comments }}
         FABRIK_REVIEW: ${{ inputs.review }}
         FABRIK_AUDIT_COMMIT: ${{ inputs.audit-commit }}
+        # A failed GitHub read leaves its failure report where the agent runner
+        # would, for the job's "Pass the failure report" step, so the push job's
+        # notice names the request and GitHub's answer, not a crash (#328).
+        FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
       run: node kit/src/agent/inputs.ts "$RUNNER_TEMP"

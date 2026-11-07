@@ -201,10 +201,22 @@ function endOf(runs: ArmRuns): ReplayTicketEnd {
         return { kind: "infrastructure", reason: `${name} left no account of how it went, as when its workflow run is cancelled` };
       }
       const failure = run.kind === "ran" ? run.files.record.infrastructureFailure : null;
-      if (failure !== null) return { kind: "infrastructure", reason: `${name} ended in an Infrastructure failure (${failure})` };
+      const detail = unreadInputsDetail(run);
+      if (failure !== null) return { kind: "infrastructure", reason: `${name} ended in an Infrastructure failure (${failure})${detail === null ? "" : `: ${detail}`}` };
     }
   }
   return { kind: "done" };
+}
+
+/**
+ * For a run whose input step failed on a GitHub read, the request and
+ * GitHub's answer its failure report names (#328), so the replay issue says
+ * which read to fix (#340); null for any other run.
+ */
+function unreadInputsDetail(run: ArmRun): string | null {
+  if (run.kind !== "ran" || run.failureReport === null) return null;
+  const report = readFailureReport(run.failureReport);
+  return report.failure === "unread-inputs" && report.detail !== "" ? report.detail : null;
 }
 
 /** The arm's gates file, at its path beside the patch, when its gates job left one for this run. */

@@ -1,7 +1,8 @@
 // What a failed agent job leaves for the push job: which kind of
 // Infrastructure failure it saw, read from the error and the `claude -p`
-// stream. A job cancelled by its timeout leaves nothing, and the push job
+// stream, or for its input step, from the GitHub call that failed. A job cancelled by its timeout leaves nothing, and the push job
 // works that out itself (src/loop/failures.ts). Pure, no I/O.
+import { GitHubError, gitHubMessageOf, refusalOf } from "../github/client.ts";
 import type { FailureReport, ReportedFailure } from "../loop/types.ts";
 import { readStream, streamMessageOf, type AgentStream } from "./stream.ts";
 
@@ -112,6 +113,20 @@ export function failureReportFor({ error, lines, initRefused, overage = null }: 
   return { failure: "crash", detail: message };
 }
 
+/**
+ * What the Kit's input step (src/agent/inputs.ts) leaves when a GitHub call
+ * failed: the request, GitHub's status and its message, and whether GitHub
+ * refused it outright, so the notice doesn't offer to run it again into the
+ * same refusal. Null for any other error, which the push job reads as a crash.
+ */
+export function inputsFailureReportFor(error: unknown): FailureReport | null {
+  if (!(error instanceof GitHubError)) return null;
+  const request = error.request === "" ? "a GitHub request" : error.request;
+  const answer = error.status === 0 ? gitHubMessageOf(error) : `${error.status} ${gitHubMessageOf(error)}`;
+  const refused = error.status >= 400 && error.status < 500 && refusalOf(error) !== "rate-limited";
+  return { failure: "unread-inputs", detail: `${request}: ${answer}`, ...(refused ? { refused: true } : {}) };
+}
+
 const REPORTED: readonly ReportedFailure[] = [
   "crash",
   "missing-output",
@@ -120,6 +135,7 @@ const REPORTED: readonly ReportedFailure[] = [
   "weekly-limit",
   "metered-billing",
   "usage-credits",
+  "unread-inputs",
 ];
 
 /** Reads the artifact's text; anything unreadable counts as a crash, so a notice still goes out. */
@@ -135,5 +151,6 @@ export function readFailureReport(text: string): FailureReport {
     failure: failure as ReportedFailure,
     detail: typeof detail === "string" ? detail : "",
     ...(typeof resetsAt === "string" && !Number.isNaN(Date.parse(resetsAt)) ? { resetsAt } : {}),
+    ...(value?.["refused"] === true ? { refused: true as const } : {}),
   };
 }
