@@ -13,10 +13,17 @@ export const WIZARD_PATH = fileURLToPath(new URL("./wizard.sh", import.meta.url)
 /** The environment variable naming the file the wizard reports to. */
 export const WIZARD_REPORT_ENV = "FABRIK_WIZARD_REPORT";
 
+/**
+ * The environment variable holding the Operator's answer to setup's second
+ * Subscription question, yes or no. With yes, setup lists the token the
+ * wizard's stage stores, so the stage says so instead of asking for a hand edit.
+ */
+export const WIZARD_SECOND_SUBSCRIPTION_ENV = "FABRIK_SECOND_SUBSCRIPTION";
+
 export interface WizardRun {
   /** The Product repo's checkout, on the setup branch. */
   readonly cwd: string;
-  /** Setup's own environment, with OP_ACCOUNT and FABRIK_WIZARD_REPORT. */
+  /** Setup's own environment, with OP_ACCOUNT, FABRIK_WIZARD_REPORT and FABRIK_SECOND_SUBSCRIPTION. */
   readonly env: Env;
 }
 

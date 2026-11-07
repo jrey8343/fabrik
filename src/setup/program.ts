@@ -25,7 +25,7 @@ import { isYes, type Prompt } from "./prompt.ts";
 import { askQuestions } from "./questions.ts";
 import { commitSetupFiles, earlierSetupRun, publishSetupPr, pushSetupBranch, switchToSetupBranch } from "./setupBranch.ts";
 import { pinCaller } from "./shims.ts";
-import { WIZARD_REPORT_ENV, type WizardRun } from "./wizard.ts";
+import { WIZARD_REPORT_ENV, WIZARD_SECOND_SUBSCRIPTION_ENV, type WizardRun } from "./wizard.ts";
 
 export interface SetupIo {
   readonly run: Run;
@@ -118,7 +118,7 @@ interface OneRunInputs {
 
 /** The plan, the Operator's yes, and one run from there to the setup PR. */
 async function oneRun(inputs: OneRunInputs): Promise<number> {
-  const { io, run, env, kit, paths, answers, plan, state, release, current, productDir } = inputs;
+  const { io, run, env, kit, paths, answers, state, release, current, productDir } = inputs;
   const cwd = productDir;
   const branch = setupBranch(release);
   const { repo } = state;
@@ -126,14 +126,16 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
 
   // On the default branch, nothing to plan is a working install. On the
   // setup branch, an earlier run stopped partway: the wizard and the PR are left.
-  if (plan.actions.length === 0 && current !== branch) {
-    io.say(withNotes([COMPLETE], plan));
+  if (inputs.plan.actions.length === 0 && current !== branch) {
+    io.say(withNotes([COMPLETE], inputs.plan));
     return 0;
   }
   if (current !== branch) {
     const earlier = await earlierSetupRun(run, cwd, branch, repo.defaultBranch);
     if (earlier !== null) return stop(io, earlier);
   }
+  // The same actions, with notes that say what this run does once its wizard has run.
+  const plan = planSetup(state, kit, answers, { wizardNext: true });
   io.say(withNotes(plan.actions.length === 0 ? [`${branch} already holds what an earlier run of setup applied.`] : stepsOf(plan), plan));
   io.say("");
 
@@ -163,14 +165,15 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
       const dir = await mkdtemp(join(tmpdir(), "fabrik-wizard-"));
       const reportPath = join(dir, "report");
       try {
-        await io.wizard({ cwd, env: { ...env, [WIZARD_REPORT_ENV]: reportPath } });
+        const secondSubscription = answers.secondSubscription === true ? "yes" : "no";
+        await io.wizard({ cwd, env: { ...env, [WIZARD_REPORT_ENV]: reportPath, [WIZARD_SECOND_SUBSCRIPTION_ENV]: secondSubscription } });
         wizardReport = await readFile(reportPath, "utf8").catch(() => "");
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
     },
     afterWizard: async () => {
-      // Read again and planned again: #322 writes the subscriptions line from this plan.
+      // Read again and planned again: a second Subscription's token the wizard stored gets its subscriptions line from this plan.
       const now = await gatherState(run, cwd, repo, paths);
       const appItems = now.vaults.includes(FABRIK_APP_VAULT) ? await vaultItems(run, cwd, FABRIK_APP_VAULT) : [];
       return {

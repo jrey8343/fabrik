@@ -29,6 +29,7 @@ import {
   WONTFIX,
 } from "../loop/labels.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
+import { withMember } from "./json.ts";
 import type { SetupKit } from "./kit.ts";
 import {
   CALLER_PATH,
@@ -93,8 +94,9 @@ export interface SetupAnswers {
   readonly timeZone?: string;
   /**
    * Whether the Operator wants a second Subscription, so runs fail over to it
-   * when the first reaches its weekly limit. Without it setup says nothing
-   * about Subscriptions, so the second stays an opt-in step.
+   * when the first reaches its weekly limit. With it, setup lists the second
+   * Subscription in the Kit config once its token is in the vault. Without it
+   * setup says nothing about Subscriptions, so the second stays an opt-in step.
    */
   readonly secondSubscription?: boolean;
   /**
@@ -171,7 +173,17 @@ export interface SetupPlan {
   readonly notes: readonly string[];
 }
 
-export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnswers = {}): SetupPlan {
+/** Where the plan stands in setup's run. */
+export interface PlanContext {
+  /**
+   * The same run walks the wizard once the plan is applied, then plans again
+   * and writes what that plan writes in the setup PR, as one run in a terminal
+   * does. Without it, a step the wizard leaves to setup waits for its next run.
+   */
+  readonly wizardNext?: boolean;
+}
+
+export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnswers = {}, context: PlanContext = {}): SetupPlan {
   const actions: SetupAction[] = [];
   const notes: string[] = [];
   const shims: [string, FileUpdate, string][] = [
@@ -200,25 +212,29 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
   actions.push(...protection(state, kit, notes));
   actions.push(...mergeGate(state));
   actions.push(...runStore(state.store, kit, answers, notes));
-  notes.push(...subscriptions(state, kit, answers));
+  notes.push(...subscriptions(state, kit, answers, context));
   return { actions, notes };
 }
 
 /**
  * The Kit config is the Product's: setup writes the starter once, when the repo
- * lacks one, and never changes it after that. Visual evidence, the one block
- * that needs judgment, is /fabrik-visual-evidence's to write (Spec #330).
+ * lacks one, and after that changes only its subscriptions list, on the
+ * Operator's yes to a second Subscription. Visual evidence, the one block that
+ * needs judgment, is /fabrik-visual-evidence's to write (Spec #330).
  */
 function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, notes: string[]): SetupAction[] {
   const existing = state.files[KIT_CONFIG_PATH] ?? null;
   const paused = answers.paused === true;
   if (existing !== null) {
     if (paused) notes.push(pausedHadNoEffect(existing));
-    return [];
+    const listed = withSecondSubscription(existing, state, answers);
+    return listed === null ? [] : [write(KIT_CONFIG_PATH, listed, `list the second Subscription, "${SECOND_SUBSCRIPTION}", in subscriptions`)];
   }
   if (!paused) notes.push(...readyForAgentWarning(state.readyForAgent));
-  const why = `a starter Kit config with every v1 default${paused ? " but Dispatch paused (max_in_flight 0)" : ""}`;
-  return [write(KIT_CONFIG_PATH, paused ? pausedStarter(kit.templates.kitConfig) : kit.templates.kitConfig, why)];
+  const starter = paused ? pausedStarter(kit.templates.kitConfig) : kit.templates.kitConfig;
+  const listed = withSecondSubscription(starter, state, answers);
+  const why = `a starter Kit config with every v1 default${paused ? " but Dispatch paused (max_in_flight 0)" : ""}${listed === null ? "" : ", and the second Subscription listed"}`;
+  return [write(KIT_CONFIG_PATH, listed ?? starter, why)];
 }
 
 /** The warning that an unpaused install puts the tracker's ready-for-agent issues straight into Dispatch's queue. */
@@ -263,28 +279,27 @@ export const SECOND_SUBSCRIPTION = "Claude token 2";
 const SECOND_SUBSCRIPTION_STAGE = 'the wizard\'s "A second Subscription" stage';
 
 /**
- * The Subscriptions the Kit config lists, read from its raw JSON: one setup
- * plans to add is a list the reader may not take yet, and still counts as listed.
+ * The Subscriptions the Kit config's text lists, read from its raw JSON: one
+ * setup plans to add is a list the reader may not take yet, and still counts as
+ * listed. Null when it isn't a JSON object or its list isn't a non-empty one
+ * of names: protection() already tells the Operator the Kit config is invalid.
  */
-function listedSubscriptions(state: ProductState, kit: SetupKit): readonly string[] {
-  try {
-    const raw = JSON.parse(state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig) as { subscriptions?: unknown };
-    const listed = raw.subscriptions;
-    if (Array.isArray(listed) && listed.every((name) => typeof name === "string")) return listed;
-  } catch {
-    // protection() already tells the Operator the Kit config is invalid.
-  }
-  return DEFAULT_KIT_CONFIG.subscriptions;
+function listedSubscriptions(text: string): readonly string[] | null {
+  const config = jsonObject(text);
+  if (config === null) return null;
+  const listed = config["subscriptions"] === undefined ? DEFAULT_KIT_CONFIG.subscriptions : config["subscriptions"];
+  return Array.isArray(listed) && listed.length > 0 && listed.every((name) => typeof name === "string") ? listed : null;
 }
 
 /**
- * A second Subscription (Spec #152): every step is the Operator's, so it's
- * planned as notes. The agent and implement accounts already read the whole
- * `Fabrik` vault, so it needs no new service account, and the Kit config is
- * the Product's, so setup never edits its list.
+ * A second Subscription (Spec #152): its account and token are the Operator's
+ * to make, in the wizard, so they're planned as notes. Once the token is in
+ * the vault, kitConfig() lists it. The agent and implement accounts already
+ * read the whole `Fabrik` vault, so it needs no new service account.
  */
-function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers): string[] {
-  const listed = listedSubscriptions(state, kit);
+function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers, { wizardNext = false }: PlanContext): string[] {
+  const read = listedSubscriptions(state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig);
+  const listed = read ?? DEFAULT_KIT_CONFIG.subscriptions;
   const stored = new Set(state.fabrikItems);
   if (listed.length > 1) {
     return listed
@@ -295,11 +310,31 @@ function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers
       );
   }
   if (answers.secondSubscription !== true) return [];
-  const list = `"subscriptions": ${JSON.stringify([...listed, SECOND_SUBSCRIPTION]).replaceAll(",", ", ")} in ${KIT_CONFIG_PATH}`;
-  if (stored.has(SECOND_SUBSCRIPTION)) return [`List the second Subscription in the Kit config: ${list}.`];
+  if (stored.has(SECOND_SUBSCRIPTION)) {
+    if (read !== null) return [];
+    return [
+      `${KIT_CONFIG_PATH} isn't a JSON object whose subscriptions is a list of names, so setup didn't list "${SECOND_SUBSCRIPTION}" in it: fix it, then run setup again.`,
+    ];
+  }
+  const listing = wizardNext
+    ? `Setup then lists it in subscriptions in ${KIT_CONFIG_PATH}, in the setup PR.`
+    : `Then run setup again, and it lists it in subscriptions in ${KIT_CONFIG_PATH}.`;
   return [
-    `Walk ${SECOND_SUBSCRIPTION_STAGE}: create a second Claude account, run \`claude setup-token\` on it, save the token as the "${SECOND_SUBSCRIPTION}" API Credential, with its expiry date, in the "${FABRIK_VAULT}" vault, and turn usage credits off on every account. Then list it: ${list}.`,
+    `Walk ${SECOND_SUBSCRIPTION_STAGE}: create a second Claude account, run \`claude setup-token\` on it, save the token as the "${SECOND_SUBSCRIPTION}" API Credential, with its expiry date, in the "${FABRIK_VAULT}" vault, and turn usage credits off on every account. ${listing}`,
   ];
+}
+
+/**
+ * The Kit config's text with the second Subscription listed after the one it
+ * lists, every other byte kept, or null when there's nothing to write: the
+ * Operator didn't say yes, its token isn't in the vault yet, or it's listed.
+ */
+function withSecondSubscription(text: string, state: ProductState, answers: SetupAnswers): string | null {
+  if (answers.secondSubscription !== true || !state.fabrikItems.includes(SECOND_SUBSCRIPTION)) return null;
+  const listed = listedSubscriptions(text);
+  // A list of two or more is a rotation the Operator wrote: setup never adds a third.
+  if (listed === null || listed.length > 1 || listed.includes(SECOND_SUBSCRIPTION)) return null;
+  return withMember(text, ["subscriptions"], [...listed, SECOND_SUBSCRIPTION]);
 }
 
 /**

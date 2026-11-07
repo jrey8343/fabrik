@@ -6,7 +6,7 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
-import { WIZARD_PATH as WIZARD, WIZARD_REPORT_ENV } from "./wizard.ts";
+import { WIZARD_PATH as WIZARD, WIZARD_REPORT_ENV, WIZARD_SECOND_SUBSCRIPTION_ENV } from "./wizard.ts";
 
 /** An `op` that holds the given "vault/title" items, and logs each call with the template it was given. */
 const FAKE_OP = `#!/usr/bin/env node
@@ -84,6 +84,8 @@ interface WalkOptions {
   opAccount?: string;
   /** Setup runs the wizard, and gives it a file to report to. */
   bySetup?: boolean;
+  /** When Setup runs it, the Operator's answer to Setup's second Subscription question. */
+  secondSubscription?: boolean;
 }
 
 async function stub(bin: string, name: string, script: string): Promise<void> {
@@ -108,7 +110,7 @@ async function walk(
   items: string[],
   answers: string[],
   kitConfig?: string,
-  { createFails = false, ghApi = {}, store = false, dotEnv, opAccount, bySetup = false }: WalkOptions = {},
+  { createFails = false, ghApi = {}, store = false, dotEnv, opAccount, bySetup = false, secondSubscription = false }: WalkOptions = {},
 ): Promise<Walk> {
   const bin = await tempDir("wizard-bin");
   await stub(bin, "op", FAKE_OP);
@@ -134,6 +136,8 @@ async function walk(
   if (opAccount !== undefined) env["OP_ACCOUNT"] = opAccount;
   delete env[WIZARD_REPORT_ENV];
   if (bySetup) env[WIZARD_REPORT_ENV] = join(bin, "report");
+  delete env[WIZARD_SECOND_SUBSCRIPTION_ENV];
+  if (bySetup) env[WIZARD_SECOND_SUBSCRIPTION_ENV] = secondSubscription ? "yes" : "no";
   const run = spawnSync("bash", [WIZARD], {
     cwd: checkout,
     input: answers.map((a) => `${a}\n`).join(""),
@@ -407,7 +411,7 @@ describe("The setup wizard's second Subscription stage", () => {
   ];
   const BOTH_LISTED = '{ "subscriptions": ["Claude token", "Claude token 2"] }\n';
 
-  it("walks through the second account, `claude setup-token`, usage credits off on every account and the Kit config list", async () => {
+  it("walks through the second account, `claude setup-token` and usage credits off on every account", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT);
 
     expect(w.stdout).toContain("Create a second Claude account");
@@ -415,7 +419,6 @@ describe("The setup wizard's second Subscription stage", () => {
     expect(w.stdout).toContain("signed in as the second account");
     expect(w.opened).toContain("https://claude.ai/settings/usage");
     expect(w.stdout).toContain("turn usage credits off on every account, the first one included");
-    expect(w.stdout).toContain('"subscriptions": ["Claude token", "Claude token 2"]');
   });
 
   it("stores the second token as the 'Claude token 2' API Credential, with its expiry date, in the 'Fabrik' vault", async () => {
@@ -437,13 +440,39 @@ describe("The setup wizard's second Subscription stage", () => {
     ]);
   });
 
-  it("leaves listing it in the Kit config to do by hand until .fabrik/config.json lists it", async () => {
-    const unlisted = await walk(THE_APP_AND_CLAUDE, ADDING_IT);
-    const listed = await walk(THE_APP_AND_CLAUDE, ADDING_IT, BOTH_LISTED);
+  it("says Setup lists the token it stored in the setup PR, when Setup runs the wizard on a yes to a second Subscription", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT, undefined, { bySetup: true, secondSubscription: true });
 
-    expect(unlisted.stdout).toMatch(/still to do by hand:\n.*"Claude token 2" in subscriptions in \.fabrik\/config\.json/);
-    expect(listed.stdout).toContain(".fabrik/config.json lists both Subscriptions.");
-    expect(listed.stdout).not.toContain("still to do by hand");
+    expect(w.status).toBe(0);
+    expect(w.stdout).toContain("Setup lists it in subscriptions in .fabrik/config.json, after the first, in the setup PR.");
+    expect(w.stdout).not.toContain('"subscriptions": [');
+    expect(w.stdout).not.toContain("still to do by hand");
+  });
+
+  it("otherwise says to run Setup again and say yes, which lists it, rather than to list it by hand", async () => {
+    for (const options of [{}, { bySetup: true, secondSubscription: false }]) {
+      const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT, undefined, options);
+
+      expect(w.stdout).toContain("To list it in subscriptions in .fabrik/config.json, run Setup again and say yes to a second Subscription.");
+      expect(w.stdout).toMatch(/still to do by hand:\n.*list "Claude token 2" in subscriptions in \.fabrik\/config\.json: run Setup again and say yes to a second Subscription/);
+      expect(w.stdout).not.toContain('"subscriptions": [');
+    }
+  });
+
+  it("says .fabrik/config.json lists both, and leaves nothing to do, once it does", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT, BOTH_LISTED);
+
+    expect(w.stdout).toContain(".fabrik/config.json lists both Subscriptions.");
+    expect(w.stdout).not.toContain("still to do by hand");
+  });
+
+  it("says nothing about listing a token it didn't store", async () => {
+    const noToken = [...TO_THE_SECOND_SUBSCRIPTION, "y", "", "", ""];
+
+    const w = await walk(THE_APP_AND_CLAUDE, noToken, undefined, { bySetup: true, secondSubscription: true });
+
+    expect(w.stdout).toContain("No token pasted.");
+    expect(w.stdout).not.toMatch(/lists it in subscriptions|To list it|"subscriptions": \[/);
   });
 
   it("is skipped unless the Operator asks for a second Subscription, which still finishes setup", async () => {
