@@ -1,4 +1,4 @@
-// The setup skill's planner. Pure, no I/O: given what a Product repo holds now
+// Setup's planner. Pure, no I/O: given what a Product repo holds now
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
 import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
@@ -48,7 +48,7 @@ import {
   STORE_CALLER_PATH,
 } from "./shims.ts";
 
-/** What the setup skill reads from a Product repo and its 1Password account before planning. */
+/** What Setup reads from a Product repo and its 1Password account before planning. */
 export interface ProductState {
   readonly repo: {
     readonly owner: string;
@@ -57,7 +57,7 @@ export interface ProductState {
     /** Whether an organization owns it. Only an organization repo's branch protection can have bypass allowances. */
     readonly inOrganization: boolean;
   };
-  /** The text of each file the setup skill writes or merges, or null when the repo lacks it. */
+  /** The text of each file Setup writes or merges, or null when the repo lacks it. */
   readonly files: Readonly<Record<string, string | null>>;
   readonly labels: readonly string[];
   readonly secrets: readonly string[];
@@ -472,7 +472,7 @@ function secrets(state: ProductState): SetupAction[] {
   return actions;
 }
 
-/** How the setup skill creates each label the Loop reads or writes, so no run fails on a missing one. */
+/** How Setup creates each label the Loop reads or writes, so no run fails on a missing one. */
 const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly description: string }>> = {
   [NEEDS_TRIAGE]: { color: "fbca04", description: "Fabrik: waiting for Triage" },
   [NEEDS_INFO]: { color: "d876e3", description: "Fabrik: waiting on the reporter for more information" },

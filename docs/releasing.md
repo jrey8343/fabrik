@@ -29,7 +29,7 @@ Fabrik uses semver, counted from what a Product repo has to do:
 
 - **Patch** (`v1.2.3` to `v1.2.4`): fixes and upstream bumps that keep the Loop's behaviour. Merging the Dependabot bump PR is all a Product repo does.
 - **Minor** (`v1.2.4` to `v1.3.0`): new behaviour or new Kit config fields. Every new field has a default, so a Product repo still only merges the bump PR, with no Kit config edit. A new Operator setup step keeps the release a minor when it's opt-in: the feature stays dormant until the step is done, the runs note the missing step quietly in the step summary and never fail on it, and the notes' **To turn it on** section names the step ([#139](https://github.com/jrey8343/fabrik/issues/139)).
-- **Major** (`v1.3.0` to `v2.0.0`): anything that needs a change in the Product repo beyond the bump: a changed shim (the caller workflow's shape, the session hook entry, the `.gitignore` lines or the Dependabot config), a renamed or removed Kit config field, or a new Operator setup step, such as a new secret or App permission, that the Loop can't run without. Each Product repo re-runs the setup skill to migrate.
+- **Major** (`v1.3.0` to `v2.0.0`): anything that needs a change in the Product repo beyond the bump: a changed shim (the caller workflow's shape, the session hook entry, the `.gitignore` lines or the Dependabot config), a renamed or removed Kit config field, or a new Operator setup step, such as a new secret or App permission, that the Loop can't run without. Each Product repo migrates by running Setup again, naming the new release (see [Adopting the Kit](../README.md#adopting-the-kit)).
 
 ## Cutting a release
 

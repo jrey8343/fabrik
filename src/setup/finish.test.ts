@@ -66,7 +66,7 @@ describe("The closing lines", () => {
     expect(text).toContain(`Run setup again to walk the wizard for them: ${COMMAND}`);
   });
 
-  it("give the setup skill's finishing guidance, with the setup command in place of /fabrik-setup", () => {
+  it("give the finishing guidance, naming the setup command wherever it says to run setup again", () => {
     const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: SUMMARY, paused: false }).join("\n");
 
     expect(text).toContain("sandbox.checks");

@@ -106,7 +106,7 @@ export function aReadyOperator(productDir: string, release = "v1.4.2"): Record<s
   };
 }
 
-/** Every command that changes something: none may run without --apply. */
+/** Every command that changes something: none may run before the Operator's yes. */
 export const APPLYING = {
   "gh label create": {},
   "gh secret set": {},

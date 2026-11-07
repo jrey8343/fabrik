@@ -96,11 +96,4 @@ describe("Setup leaves Visual evidence to /fabrik-visual-evidence", () => {
     expect(run.stderr).toMatch(/^Usage: /);
     expect(run.stderr.match(VISUAL_EVIDENCE_FLAG)).toBeNull();
   });
-
-  // Until the bootstrap command replaces it, the fabrik-setup skill drives setup with a flag for each answer.
-  it("isn't passed one by the fabrik-setup skill either", async () => {
-    const skill = await readFile(join(KIT, "skills/fabrik-setup/SKILL.md"), "utf8");
-
-    expect(skill.match(VISUAL_EVIDENCE_FLAG)).toBeNull();
-  });
 });

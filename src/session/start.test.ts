@@ -386,3 +386,106 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
     );
   });
 });
+
+describe("The SessionStart hook, now Setup is no longer a skill", () => {
+  /** The Operator's personal skills folder, holding an old copy of the fabrik-setup skill. */
+  async function personalSkillsWithAnOldCopy(): Promise<{ personalSkills: string; copy: string }> {
+    const personalSkills = await tempDir("personal-skills");
+    const copy = join(personalSkills, "fabrik-setup");
+    await mkdir(copy);
+    await writeFile(join(copy, "SKILL.md"), "---\nname: fabrik-setup\n---\n# Fabrik setup\n");
+    return { personalSkills, copy };
+  }
+
+  const warning = (copy: string) =>
+    `${copy} is an out-of-date copy of the fabrik-setup skill, which Setup no longer uses. It's stale: delete it with rm -rf '${copy}'.`;
+
+  it("warns the Operator in one line while an old personal copy of the setup skill is there, and still installs every skill", async () => {
+    const { personalSkills, copy } = await personalSkillsWithAnOldCopy();
+    const product = await aProduct(callerAt("v1.2.3"));
+
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      download: serving(await aSkillsArchive({ "skills/engineering/grilling": "# grilling" })).download,
+      personalSkills,
+    });
+
+    expect(output.systemMessage).toBe(warning(copy));
+    expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
+    expect(output.hookSpecificOutput.reloadSkills).toBe(true);
+    expect(await readdir(personalSkills)).toEqual(["fabrik-setup"]);
+  });
+
+  it("puts the warning after a wrong Extra skill pick's, in the same message", async () => {
+    const { personalSkills, copy } = await personalSkillsWithAnOldCopy();
+    const product = await aProductWithPicks([{ repository: OPERATOR_SKILLS, sha: OPERATOR_SHA }], { design: ["jrey8343/skills/no-such-skill"] });
+
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      download: servingEach(await upstream()).download,
+      personalSkills,
+    });
+
+    expect(output.systemMessage).toMatch(/^Fabrik installed its Base and Kit skills, but not this repo's Extra skills: .*no-such-skill.*\. \//);
+    expect(output.systemMessage?.endsWith(warning(copy))).toBe(true);
+    expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
+  });
+
+  it("warns about it too when it can't install the skills", async () => {
+    const { personalSkills, copy } = await personalSkillsWithAnOldCopy();
+
+    const output = await sessionStart({ kitDir: await kitWithLiveSkill(), productDir: await aProduct(null), release: "v1.2.3", personalSkills });
+
+    expect(output.systemMessage).toBe(`Fabrik didn't install its skills: .github/workflows/fabrik.yml was not found. ${warning(copy)}`);
+  });
+
+  it("says nothing more when the personal skills hold no copy of it", async () => {
+    const personalSkills = await tempDir("personal-skills");
+    await mkdir(join(personalSkills, "grilling"));
+
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: await aProduct(callerAt("v1.2.3")),
+      release: "v1.2.3",
+      download: serving(await aSkillsArchive()).download,
+      personalSkills,
+    });
+
+    expect(output.systemMessage).toBeUndefined();
+  });
+
+  it("removes the fabrik-setup skill an earlier release installed in the repo", async () => {
+    const product = await aProduct(callerAt("v1.2.3"));
+    await mkdir(join(product, ".claude/skills/fabrik-setup"), { recursive: true });
+    await writeFile(join(product, ".claude/skills/fabrik-setup/SKILL.md"), "---\nname: fabrik-setup\n---\n# Fabrik setup\n");
+
+    await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      download: serving(await aSkillsArchive({ "skills/engineering/grilling": "# grilling" })).download,
+    });
+
+    expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
+  });
+
+  it("keeps an Extra skill the repo picks under that name", async () => {
+    const product = await aProductWithPicks([{ repository: OPERATOR_SKILLS, sha: OPERATOR_SHA }], { design: ["jrey8343/skills/fabrik-setup"] });
+
+    await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      download: servingEach({
+        [BASE_URL]: await aSkillsArchive({ "skills/engineering/grilling": "# grilling" }),
+        [OPERATOR_URL]: await aSkillsArchive({ "skills/setup/fabrik-setup": "# the repo's own" }),
+      }).download,
+    });
+
+    expect(await readFile(join(product, ".claude/skills/fabrik-setup/SKILL.md"), "utf8")).toBe("# the repo's own");
+  });
+});

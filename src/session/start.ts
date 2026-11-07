@@ -5,17 +5,23 @@
 // This installs the skills that release locks, the same commit a Kit step
 // installs in Actions, plus Fabrik's own skills and every Extra skill the
 // Product repo picks (ADR-0008), since the Operator is at the wheel, and prints
-// the hook's JSON.
+// the hook's JSON. While the Operator's personal skills hold an old copy of the
+// fabrik-setup skill, it warns them in one line, and installs everything all
+// the same.
 import { cp, readdir, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
 import { type Download, fetchSkills } from "../skills/fetch.ts";
+import { foundOldSetupSkill, oldSetupSkillIn, personalSkillsDir, staleOldSetupSkill } from "../skills/oldSetupSkill.ts";
 
 /** The caller workflow, the only place the Kit's version appears. */
 export const CALLER_WORKFLOW_PATH = ".github/workflows/fabrik.yml";
 
 /** Fabrik's own skills, installed beside the upstream ones under these names. */
 const FABRIK_SKILLS_DIR = "skills";
+
+/** Fabrik's own skills an earlier release installed and this one doesn't: Setup was a skill until it became a program (ADR-0013). */
+const DROPPED_FABRIK_SKILLS = ["fabrik-setup"];
 
 /** What a SessionStart hook prints on stdout for Claude Code (https://code.claude.com/docs/en/hooks). */
 export interface SessionStartOutput {
@@ -25,7 +31,11 @@ export interface SessionStartOutput {
     /** Skill discovery runs before SessionStart hooks finish, so new skills need it to load in this session. */
     readonly reloadSkills: boolean;
   };
-  /** A warning shown to the Operator when the hook couldn't install the skills, or only the Base and Kit skills. */
+  /**
+   * A warning shown to the Operator when the hook couldn't install the skills,
+   * or only the Base and Kit skills, or found an old copy of the fabrik-setup
+   * skill.
+   */
   readonly systemMessage?: string;
 }
 
@@ -36,14 +46,20 @@ export interface SessionStartInput {
   /** The release the hook entry read from the caller workflow and fetched Fabrik at. */
   readonly release: string;
   readonly download?: Download;
+  /** The Operator's personal skills folder, where an old copy of the fabrik-setup skill may be. Unset, the hook doesn't look. */
+  readonly personalSkills?: string;
 }
 
-export async function sessionStart({
-  kitDir,
-  productDir,
-  release,
-  download,
-}: SessionStartInput): Promise<SessionStartOutput> {
+export async function sessionStart({ personalSkills, ...input }: SessionStartInput): Promise<SessionStartOutput> {
+  const output = await installSkills(input);
+  // Never in the way of the install: a folder it can't read counts as none.
+  const copy = await oldSetupSkillIn(personalSkills ?? null).catch(() => null);
+  if (copy === null) return output;
+  const warning = `${foundOldSetupSkill(copy)} ${staleOldSetupSkill(copy)}`;
+  return { ...output, systemMessage: output.systemMessage === undefined ? warning : `${output.systemMessage}. ${warning}` };
+}
+
+async function installSkills({ kitDir, productDir, release, download }: Omit<SessionStartInput, "personalSkills">): Promise<SessionStartOutput> {
   try {
     const caller = await readFile(join(productDir, CALLER_WORKFLOW_PATH), "utf8").catch(() => null);
     if (caller === null) return notInstalled(`${CALLER_WORKFLOW_PATH} was not found`);
@@ -56,6 +72,10 @@ export async function sessionStart({
     // The Operator is at the wheel, so the session gets every role's picks.
     const { sha, extraSkills, errors } = await fetchSkills(kitDir, productDir, download, { install: "every" });
     const own = await installFabrikSkills(kitDir, productDir);
+    // A gitignored copy an earlier release installed would still offer the dropped skill.
+    for (const name of DROPPED_FABRIK_SKILLS.filter((dropped) => !own.includes(dropped) && !extraSkills.includes(dropped))) {
+      await rm(resolve(productDir, ".claude", "skills", name), { recursive: true, force: true });
+    }
     return {
       hookSpecificOutput: {
         hookEventName: "SessionStart",
@@ -120,5 +140,8 @@ if (import.meta.main) {
     process.exit(2);
   }
   const kitDir = resolve(import.meta.dirname, "..", "..");
-  sessionStart({ kitDir, productDir, release }).then((output) => console.log(JSON.stringify(output)));
+  const personalSkills = personalSkillsDir(process.env);
+  sessionStart({ kitDir, productDir, release, ...(personalSkills === null ? {} : { personalSkills }) }).then((output) =>
+    console.log(JSON.stringify(output)),
+  );
 }

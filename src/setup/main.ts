@@ -1,18 +1,19 @@
-// The setup program, run from a Fabrik checkout at the release being set up,
-// with the Operator's own gh and op sign-ins:
+// The setup program, which the bootstrap command (setup.sh) downloads at the
+// release being set up and runs from the Product repo's clone, on the
+// Operator's terminal, with their own gh and op sign-ins:
 //   node src/setup/main.ts <product checkout> <release>          in a terminal: one run, to the setup PR
 //   node src/setup/main.ts <product checkout> <release> --plan   prints the plan, and never does more
-//   node src/setup/main.ts <product checkout> <release> --apply  only carries the plan out, as the setup skill does
-// It runs its checks first, then chooses the 1Password account (--account=, or
-// OP_ACCOUNT, or the only one, or asks), then asks the questions the flags
+// It runs its checks first, and offers to delete an old copy of the
+// fabrik-setup skill. Then it chooses the 1Password account (--account=, or
+// OP_ACCOUNT, or the only one, or asks), and asks the questions the flags
 // left out: --time-zone=<IANA zone>, --second-subscription and --paused, each
 // with a --no- form. It asks only when stdin is a terminal: without one it
-// prints the plan and stops, as the setup skill needs. In a terminal it asks
-// for a yes, applies the plan on fabrik/setup-<release>, runs the wizard in
-// the same terminal, then commits, pushes and opens the setup PR. Visual
-// evidence isn't setup's: /fabrik-visual-evidence turns it on. Thin by design:
-// the program is in program.ts, one run's order in oneRun.ts, and every
-// decision about the repo in the planner (plan.ts).
+// prints the plan and stops. In a terminal it asks for a yes, applies the
+// plan on fabrik/setup-<release>, runs the wizard in the same terminal, then
+// commits, pushes and opens the setup PR. Visual evidence isn't setup's:
+// /fabrik-visual-evidence turns it on. Thin by design: the program is in
+// program.ts, one run's order in oneRun.ts, and every decision about the
+// repo in the planner (plan.ts).
 import { resolve } from "node:path";
 import { spawnRun } from "./exec.ts";
 import { runSetup } from "./program.ts";

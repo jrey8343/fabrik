@@ -166,7 +166,7 @@ export function recordWriteSummary(outcome: RecordOutcome): string {
     case "no-record":
       return "No Run record: no agent run ended in this run.";
     case "no-store-token":
-      return `${storeWriteSummary("Run record", outcome)} Run fabrik-setup to create the store, then install the Fabrik App on ${RUN_STORE_REPO}.`;
+      return `${storeWriteSummary("Run record", outcome)} Run Setup again, giving it your time zone, to create the store, then install the Fabrik App on ${RUN_STORE_REPO}.`;
     default:
       return storeWriteSummary("Run record", outcome);
   }

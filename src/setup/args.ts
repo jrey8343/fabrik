@@ -5,7 +5,7 @@
 export const SETUP_USAGE =
   "Usage: node src/setup/main.ts <product checkout> <release> [--account=<1Password account>]" +
   " [--time-zone=<IANA zone> | --no-time-zone] [--second-subscription | --no-second-subscription] [--paused | --no-paused]" +
-  " [--plan | --apply]";
+  " [--plan]";
 
 /** The questions' answers the flags gave. A missing one is unanswered; null or false answers no. */
 export interface FlagAnswers {
@@ -19,8 +19,6 @@ export interface SetupArgs {
   readonly release: string;
   /** --plan: print the plan and exit, changing nothing. */
   readonly plan: boolean;
-  /** --apply: carry the plan out, as the setup skill's step 5 does. */
-  readonly apply: boolean;
   /** --account=: the 1Password account, as op's --account takes it. */
   readonly account?: string;
   readonly answers: FlagAnswers;
@@ -39,7 +37,6 @@ export function parseSetupArgs(args: readonly string[]): ParsedArgs {
   const answers: { timeZone?: string | null; secondSubscription?: boolean; paused?: boolean } = {};
   let account: string | undefined;
   let plan = false;
-  let apply = false;
   const refuse = (error: string): ParsedArgs => ({ ok: false, error });
 
   for (const arg of args) {
@@ -51,7 +48,6 @@ export function parseSetupArgs(args: readonly string[]): ParsedArgs {
     const yes = YES_OR_NO.get(flag);
     const no = flag.startsWith("--no-") ? YES_OR_NO.get(`--${flag.slice("--no-".length)}`) : undefined;
     if (flag === "--plan" && value === undefined) plan = true;
-    else if (flag === "--apply" && value === undefined) apply = true;
     else if (flag === "--account") {
       if (value === undefined || value === "") return refuse("--account= needs a 1Password account, such as my.1password.com.");
       account = value;
@@ -66,11 +62,10 @@ export function parseSetupArgs(args: readonly string[]): ParsedArgs {
     else return refuse(`Unknown flag ${arg}.`);
   }
 
-  if (plan && apply) return refuse("--plan prints the plan and changes nothing, so it can't go with --apply.");
   const [productDir, release, ...extra] = positionals;
   if (productDir === undefined || release === undefined) return refuse("Setup needs the Product checkout and the release.");
   if (extra.length > 0) return refuse(`Unexpected argument ${extra[0]}: a flag's value goes after its =, such as --time-zone=Europe/London.`);
-  return { ok: true, args: { productDir, release, plan, apply, ...(account === undefined ? {} : { account }), answers } };
+  return { ok: true, args: { productDir, release, plan, ...(account === undefined ? {} : { account }), answers } };
 }
 
 /** A flag and its value, split at the first =; the value is undefined when there's no =. */

@@ -1,7 +1,7 @@
 // What one setup run says at its end: the setup PR's body, and the closing
 // lines in the Operator's terminal. Both ask for the merge only when nothing
-// holds it back, and the closing lines give the setup skill's finishing
-// guidance, with the setup command in place of /fabrik-setup.
+// holds it back, and the closing lines give the finishing guidance the
+// Operator needs once setup has run.
 import type { RunSummary } from "./oneRun.ts";
 
 /** The command that runs setup, at this release. */
@@ -94,7 +94,7 @@ function mergeAsk(who: string, defaultBranch: string): string {
   );
 }
 
-/** The setup skill's finishing guidance (its step 7). */
+/** What the Operator does once setup has run. */
 function guidance(release: string, paused: boolean): string[] {
   const command = setupCommand(release);
   return [

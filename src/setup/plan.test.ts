@@ -1,4 +1,4 @@
-// The setup skill's planner: given what a Product repo holds now and the
+// Setup's planner: given what a Product repo holds now and the
 // Fabrik release being set up, it returns every step that would leave the repo
 // ready to run the Loop. A working install plans nothing, so re-running the
 // skill only repairs what's missing.
@@ -310,7 +310,10 @@ describe("The caller workflow on a repo that has one", () => {
     const plan = planSetup(state, kit);
 
     expect(written(plan.actions, ".github/workflows/fabrik.yml")).toBeUndefined();
-    expect(plan.notes.join("\n")).toContain("v2.0.0");
+    expect(plan.notes).toContain(
+      ".github/workflows/fabrik.yml pins Fabrik v2.0.0, a later major release than v1.4.2: run Setup at v2.0.0 instead, " +
+        "with curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v2.0.0. The caller workflow was left as it is.",
+    );
   });
 
   it("treats each 0.x minor as its own major, as semver does", () => {

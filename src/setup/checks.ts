@@ -1,10 +1,14 @@
 // The setup program's checks, before any planning: Node 24, op as the Operator
 // rather than a service account, the root of the Product repo's clone, gh as
 // the repo's admin with the workflow scope, and a clean, up-to-date branch.
-// The first that fails stops setup, with a message naming what to fix.
-import { realpath } from "node:fs/promises";
+// The first that fails stops setup, with a message naming what to fix. Once
+// they pass, setup offers to delete an old personal copy of the fabrik-setup
+// skill.
+import { realpath, rm } from "node:fs/promises";
+import { foundOldSetupSkill, oldSetupSkillIn, personalSkillsDir, staleOldSetupSkill } from "../skills/oldSetupSkill.ts";
 import type { Env, Run } from "./exec.ts";
 import type { ProductState } from "./plan.ts";
+import { isYes, type Prompt } from "./prompt.ts";
 
 export interface CheckInputs {
   readonly run: Run;
@@ -38,6 +42,26 @@ export async function checkSetup(inputs: CheckInputs): Promise<Checked> {
   const offBranch = await checkBranch(inputs, signedIn.repo.defaultBranch, branch);
   if (offBranch !== null) return { ok: false, problem: offBranch };
   return { ok: true, repo: signedIn.repo, branch };
+}
+
+export interface OldCopyInputs {
+  readonly env: Env;
+  /** Null when setup mustn't ask, as without a terminal or with --plan: then it only warns. */
+  readonly prompt: Prompt | null;
+  readonly say: (line: string) => void;
+}
+
+/** Offers to delete the Operator's old personal copy of the fabrik-setup skill, warning that it's stale when it's kept. */
+export async function offerToDeleteOldSetupSkill({ env, prompt, say }: OldCopyInputs): Promise<void> {
+  const copy = await oldSetupSkillIn(personalSkillsDir(env));
+  if (copy === null) return;
+  say(foundOldSetupSkill(copy));
+  if (prompt === null) say(staleOldSetupSkill(copy));
+  else if (isYes(await prompt.ask("Delete it? [y/N] "))) {
+    await rm(copy, { recursive: true, force: true });
+    say(`Deleted ${copy}.`);
+  } else say(`Kept it. ${staleOldSetupSkill(copy)}`);
+  say("");
 }
 
 /** The branch setup applies its plan on, and a later run of the same release picks up. */

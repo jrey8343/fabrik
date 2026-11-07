@@ -22,7 +22,6 @@ describe("The setup program's flags", () => {
     expect(args.productDir).toBe(".");
     expect(args.release).toBe("v1.4.2");
     expect(args.plan).toBe(false);
-    expect(args.apply).toBe(false);
   });
 
   it("leaves every question unanswered when no flag answers it", () => {
@@ -65,9 +64,12 @@ describe("The setup program's flags", () => {
     expect(parsed("--account=acme.1password.com").account).toBe("acme.1password.com");
   });
 
-  it("takes --plan and --apply", () => {
+  it("takes --plan", () => {
     expect(parsed("--plan").plan).toBe(true);
-    expect(parsed("--apply").apply).toBe(true);
+  });
+
+  it("refuses --apply, which carried the plan out without the Operator's yes", () => {
+    expect(refused(".", "v1.4.2", "--apply")).toBe("Unknown flag --apply.");
   });
 
   it("refuses the Visual evidence flags, which /fabrik-visual-evidence took over", () => {
@@ -95,10 +97,6 @@ describe("The setup program's flags", () => {
     expect(refused(".", "v1.4.2", "--account=")).toContain("--account=");
   });
 
-  it("refuses --plan with --apply", () => {
-    expect(refused(".", "v1.4.2", "--plan", "--apply")).toContain("--plan");
-  });
-
   it("lists every flag in its usage line, and no other", () => {
     const flags = [
       "--account=",
@@ -109,7 +107,6 @@ describe("The setup program's flags", () => {
       "--paused",
       "--no-paused",
       "--plan",
-      "--apply",
     ];
 
     expect(SETUP_USAGE.split("\n")).toHaveLength(1);

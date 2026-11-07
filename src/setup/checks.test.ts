@@ -153,7 +153,7 @@ describe("The checks before setup plans anything", () => {
     );
   });
 
-  describe("on the setup branch, where the setup skill applies the plan and a later run picks up", () => {
+  describe("on the setup branch, where a run applies its plan and a later run picks up", () => {
     const onSetupBranch = { "git branch --show-current": { stdout: "fabrik/setup-v1.4.2\n" } };
 
     it("pass when it holds origin's default branch", async () => {
