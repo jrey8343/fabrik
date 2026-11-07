@@ -5,12 +5,13 @@
 //   node src/setup/main.ts <product checkout> <release> --plan   prints the plan, and never does more
 // It runs its checks first, and offers to delete an old copy of the
 // fabrik-setup skill. Then it chooses the 1Password account (--account=, or
-// OP_ACCOUNT, or the only one, or asks), and asks the questions the flags
-// left out: --time-zone=<IANA zone>, --second-subscription and --paused, each
-// with a --no- form. It asks only when stdin is a terminal: without one it
-// prints the plan and stops. In a terminal it asks for a yes, applies the
-// plan on fabrik/setup-<release>, runs the wizard in the same terminal, then
-// commits, pushes and opens the setup PR. Visual evidence isn't setup's:
+// the only one, or asks with OP_ACCOUNT as the default, which answers without
+// a terminal), and asks the questions the flags left out: --time-zone=<IANA
+// zone>, --second-subscription and --paused, each with a --no- form. It asks
+// only when stdin is a terminal: without one it prints the plan and stops. In
+// a terminal it asks for a yes, applies the plan on fabrik/setup-<release>,
+// runs the wizard in the same terminal, then commits, pushes and opens the
+// setup PR. Visual evidence isn't setup's:
 // /fabrik-visual-evidence turns it on. Thin by design: the program is in
 // program.ts, one run's order in oneRun.ts, and every decision about the
 // repo in the planner (plan.ts).

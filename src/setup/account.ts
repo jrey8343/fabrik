@@ -1,7 +1,8 @@
 // Which 1Password account setup uses. It reaches every op call, and the
-// wizard, as OP_ACCOUNT, which op reads itself. --account= sets it, and an
-// OP_ACCOUNT already in the environment counts as the answer. Otherwise the
-// only account is taken, and with several the Operator picks one.
+// wizard, as OP_ACCOUNT, which op reads itself. --account= sets it. Otherwise
+// the only account is taken, and with several the Operator picks one in a
+// terminal, an OP_ACCOUNT already in the environment being the default. It's
+// the answer only with one account or none, or without a terminal.
 import type { Env, Run } from "./exec.ts";
 import type { Prompt } from "./prompt.ts";
 
@@ -42,7 +43,9 @@ export async function chooseAccount({ run, cwd, env, given, prompt, say }: Accou
     };
   }
   const accounts = (listed.stdout.trim() === "" ? [] : JSON.parse(listed.stdout)) as OpAccount[];
-  const answer = given ?? (env.OP_ACCOUNT === "" ? undefined : env.OP_ACCOUNT);
+  const exported = env.OP_ACCOUNT === "" ? undefined : env.OP_ACCOUNT;
+  // With several accounts in a terminal, the Operator says which, even when the shell exports one.
+  const answer = given ?? (accounts.length > 1 && prompt !== null ? undefined : exported);
   if (answer !== undefined) {
     const match = accounts.find((account) => matches(account, answer));
     return { ok: true, account: { opAccount: answer, name: match === undefined ? answer : nameOf(match) } };
@@ -55,7 +58,8 @@ export async function chooseAccount({ run, cwd, env, given, prompt, say }: Accou
         "or add one with op account add, then run setup again.",
     };
   }
-  const chosen = accounts.length === 1 ? accounts[0] : await pick(accounts, prompt, say);
+  const offered = exported === undefined ? undefined : accounts.find((account) => matches(account, exported));
+  const chosen = accounts.length === 1 ? accounts[0] : await pick(accounts, offered, prompt, say);
   if (chosen === undefined) {
     const flags = accounts.map((account) => `--account=${opAccountOf(account, accounts)} (${account.email})`).join(", ");
     const why = prompt === null ? "setup can't ask which to use without a terminal" : "no account was chosen";
@@ -64,14 +68,24 @@ export async function chooseAccount({ run, cwd, env, given, prompt, say }: Accou
   return { ok: true, account: { opAccount: opAccountOf(chosen, accounts), name: nameOf(chosen) } };
 }
 
-/** The account the Operator picks by its number, or undefined when they can't be asked or their input ends. */
-async function pick(accounts: readonly OpAccount[], prompt: Prompt | null, say: (line: string) => void): Promise<OpAccount | undefined> {
+/**
+ * The account the Operator picks by its number, or the offered one on an
+ * Enter. Undefined when they can't be asked or their input ends.
+ */
+async function pick(
+  accounts: readonly OpAccount[],
+  offered: OpAccount | undefined,
+  prompt: Prompt | null,
+  say: (line: string) => void,
+): Promise<OpAccount | undefined> {
   if (prompt === null) return undefined;
   say("Your 1Password accounts:");
   accounts.forEach((account, i) => say(`  ${i + 1}. ${nameOf(account)}`));
+  const enter = offered === undefined ? "" : `, Enter for ${accounts.indexOf(offered) + 1}`;
   for (;;) {
-    const answer = await prompt.ask(`Which one holds this Product's secrets? [1-${accounts.length}] `);
+    const answer = await prompt.ask(`Which one holds this Product's secrets? [1-${accounts.length}${enter}] `);
     if (answer === null) return undefined;
+    if (offered !== undefined && answer.trim() === "") return offered;
     const chosen = /^\d+$/.test(answer.trim()) ? accounts[Number(answer.trim()) - 1] : undefined;
     if (chosen !== undefined) return chosen;
     say(`Give a number from 1 to ${accounts.length}.`);

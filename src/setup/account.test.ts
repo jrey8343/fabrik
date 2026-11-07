@@ -92,6 +92,21 @@ describe("Choosing the 1Password account", () => {
     expect(outcome).toEqual({ ok: true, account: { opAccount: "acme.1password.com", name: "acme.1password.com (operator@acme.example)" } });
   });
 
+  it("with several accounts and a terminal, still asks when OP_ACCOUNT is set, offering its account for an Enter", async () => {
+    const prompt = scripted("");
+    const { outcome, said } = await choose(several, { env: { OP_ACCOUNT: "acme.1password.com" }, prompt });
+
+    expect(said).toContain("  2. acme.1password.com (operator@acme.example)");
+    expect(prompt.questions).toEqual(["Which one holds this Product's secrets? [1-2, Enter for 2] "]);
+    expect(outcome).toEqual({ ok: true, account: { opAccount: "acme.1password.com", name: "acme.1password.com (operator@acme.example)" } });
+  });
+
+  it("takes another account the Operator picks over the one OP_ACCOUNT names", async () => {
+    const { outcome } = await choose(several, { env: { OP_ACCOUNT: "acme.1password.com" }, prompt: scripted("1") });
+
+    expect(outcome.ok && outcome.account.opAccount).toBe("my.1password.com");
+  });
+
   it("asks again until the answer is one of the numbers", async () => {
     const prompt = scripted("", "3", "acme", "1");
     const { outcome, said } = await choose(several, { prompt });
