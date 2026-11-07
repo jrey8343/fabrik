@@ -20,8 +20,8 @@
 # failed or was cancelled. The arm's gates, Review and judge jobs and the
 # replay-record job read them. Its job, never named `Implement`, so Dispatch's
 # count of Implement runs in flight passes it by, runs it with contents,
-# issues and pull requests read, within the Implement timeout, after checking out the Kit alone
-# into kit/:
+# issues and pull requests read, within the Implement timeout, after checking
+# out the Kit alone into kit/:
 #   - uses: ./kit/.github/actions/replay-implement
 #     with:
 #       arm: ${{ matrix.arm }}

@@ -1416,7 +1416,7 @@ jobs:
       fail-fast: false
       matrix:
         arm: [baseline, variant]
-    # pull-requests: read for the input step, as the implement job's: on a Ticket
+    # pull-requests: read for the input step, as the design job's: on a Ticket
     # sent back from an agent PR, it reads that closed PR into issue.json's
     # sentBack (readSentBack in src/agent/inputs.ts). Without it the arm fails
     # before its agent starts (#340).
