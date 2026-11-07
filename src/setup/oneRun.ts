@@ -9,6 +9,7 @@ import { KIT_CONFIG_PATH, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH } from "../
 import { describeAction, writtenPaths } from "./apply.ts";
 import { appConfirmedIn, lastOfEach } from "./finish.ts";
 import {
+  CLAUDE_TOKEN_ITEM,
   FABRIK_APP_VAULT,
   FABRIK_VAULT,
   listedSubscriptions,
@@ -32,8 +33,6 @@ export interface Readiness {
 
 /** The item that holds the Fabrik App's client ID and private key, in the "Fabrik App" vault. */
 export const FABRIK_APP_ITEM = "Fabrik App";
-/** The first Subscription's token, in the "Fabrik" vault. */
-export const CLAUDE_TOKEN_ITEM = "Claude token";
 /** The token the Monitor reads Sentry with, in the "Fabrik App" vault. */
 export const SENTRY_TOKEN_ITEM = "Sentry token";
 
@@ -42,30 +41,30 @@ const CLAUDE_TOKEN = `the Claude token, in the "${FABRIK_VAULT}" vault`;
 
 /**
  * What a wizard stage stores that 1Password lacks, as setup names it for the
- * Operator: the Fabrik App's key, the Claude token, each Subscription the Kit
- * config lists or the Operator said yes to, and the Sentry token once
- * monitor.errors names Sentry. The App's install and the GitHub settings
- * stages leave nothing setup can read, so they're never among them.
+ * Operator: the Fabrik App's key, the Claude token, the second Subscription's
+ * token once the Kit config lists it or setup would list it on the Operator's
+ * yes, and the Sentry token once monitor.errors names Sentry. The wizard
+ * stores no other Subscription's token, so one the Kit config lists under
+ * another name is the plan's note, not a gap. The App's install and the GitHub
+ * settings stages leave nothing setup can read, so they're never among them.
  */
 export function wizardGaps(state: ProductState, answers: SetupAnswers, appItems: readonly string[]): string[] {
   const config = state.files[KIT_CONFIG_PATH] ?? null;
   const listed = config === null ? [] : (listedSubscriptions(config) ?? []);
-  const tokens = new Set([CLAUDE_TOKEN_ITEM, ...listed, ...(answers.secondSubscription === true ? [SECOND_SUBSCRIPTION] : [])]);
+  // As the plan has it: a yes adds the second Subscription only to a list of one.
+  const second = listed.includes(SECOND_SUBSCRIPTION) || (answers.secondSubscription === true && listed.length <= 1);
   const read = resolveKitConfig({ config, skillsLock: state.files[SKILLS_SOURCES_LOCK_PATH] ?? null });
   const readsSentry = read.ok && read.config.monitor.errors !== null;
   return [
     ...(appItems.includes(FABRIK_APP_ITEM) ? [] : [APP_KEY]),
-    ...[...tokens].filter((token) => !state.fabrikItems.includes(token)).map(tokenGap),
+    ...(state.fabrikItems.includes(CLAUDE_TOKEN_ITEM) ? [] : [CLAUDE_TOKEN]),
+    ...(second && !state.fabrikItems.includes(SECOND_SUBSCRIPTION)
+      ? [`the second Subscription's token, "${SECOND_SUBSCRIPTION}", in the "${FABRIK_VAULT}" vault`]
+      : []),
     ...(readsSentry && !appItems.includes(SENTRY_TOKEN_ITEM)
       ? [`the Sentry token, in the "${FABRIK_APP_VAULT}" vault, which monitor.errors in ${KIT_CONFIG_PATH} reads`]
       : []),
   ];
-}
-
-function tokenGap(token: string): string {
-  if (token === CLAUDE_TOKEN_ITEM) return CLAUDE_TOKEN;
-  if (token === SECOND_SUBSCRIPTION) return `the second Subscription's token, "${SECOND_SUBSCRIPTION}", in the "${FABRIK_VAULT}" vault`;
-  return `"${token}", which ${KIT_CONFIG_PATH} lists in subscriptions, in the "${FABRIK_VAULT}" vault`;
 }
 
 export interface AfterWizard {

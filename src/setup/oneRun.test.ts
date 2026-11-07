@@ -180,26 +180,40 @@ describe("What the merge waits for, read after the wizard", () => {
 });
 
 describe("What a wizard stage stores that 1Password lacks", () => {
-  const twoListed = '{ "subscriptions": ["Claude token", "Claude token B"] }\n';
+  const listing = (...names: string[]) => `${JSON.stringify({ subscriptions: names })}\n`;
+  const SECOND = 'the second Subscription\'s token, "Claude token 2", in the "Fabrik" vault';
   const installed = (overrides: Partial<ProductState> = {}) =>
-    aCleanProduct({ files: { ".fabrik/config.json": twoListed }, fabrikItems: ["Claude token", "Claude token B"], ...overrides });
+    aCleanProduct({ files: { ".fabrik/config.json": listing("Claude token") }, fabrikItems: ["Claude token"], ...overrides });
 
   it("is nothing once 1Password holds the App's key and every Subscription the Kit config lists", () => {
-    expect(wizardGaps(installed(), {}, ["Fabrik App"])).toEqual([]);
+    const state = installed({ files: { ".fabrik/config.json": listing("Claude token", "Claude token 2") }, fabrikItems: ["Claude token", "Claude token 2"] });
+
+    expect(wizardGaps(state, {}, ["Fabrik App"])).toEqual([]);
   });
 
-  it("names a Subscription the Kit config lists by its own name, and the Claude token once", () => {
-    expect(wizardGaps(installed({ fabrikItems: [] }), {}, ["Fabrik App"])).toEqual([
-      'the Claude token, in the "Fabrik" vault',
-      '"Claude token B", which .fabrik/config.json lists in subscriptions, in the "Fabrik" vault',
-    ]);
+  it("names the Claude token, and the second Subscription's token once the Kit config lists it", () => {
+    const state = installed({ files: { ".fabrik/config.json": listing("Claude token", "Claude token 2") }, fabrikItems: [] });
+
+    expect(wizardGaps(state, {}, ["Fabrik App"])).toEqual(['the Claude token, in the "Fabrik" vault', SECOND]);
+  });
+
+  it("leaves out a Subscription the Kit config lists under a name no wizard stage stores, such as a third, which the plan's note names", () => {
+    for (const listed of [listing("Claude token", "Claude token 2", "Claude token 3"), listing("Claude token", "Claude backup")]) {
+      const state = installed({ files: { ".fabrik/config.json": listed }, fabrikItems: ["Claude token", "Claude token 2"] });
+
+      expect(wizardGaps(state, {}, ["Fabrik App"])).toEqual([]);
+    }
   });
 
   it("names the second Subscription's token only on the Operator's yes", () => {
-    const gap = 'the second Subscription\'s token, "Claude token 2", in the "Fabrik" vault';
-
-    expect(wizardGaps(installed(), { secondSubscription: true }, ["Fabrik App"])).toEqual([gap]);
+    expect(wizardGaps(installed(), { secondSubscription: true }, ["Fabrik App"])).toEqual([SECOND]);
     expect(wizardGaps(installed(), {}, ["Fabrik App"])).toEqual([]);
+  });
+
+  it("leaves it out on a yes to a Kit config listing two or more, which setup never adds to", () => {
+    const state = installed({ files: { ".fabrik/config.json": listing("Claude token", "Claude backup") }, fabrikItems: ["Claude token", "Claude backup"] });
+
+    expect(wizardGaps(state, { secondSubscription: true }, ["Fabrik App"])).toEqual([]);
   });
 
   it("names the Sentry token only once monitor.errors names a Sentry project", () => {

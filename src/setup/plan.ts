@@ -297,6 +297,8 @@ function jsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
+/** The `Fabrik` vault item the wizard saves the first Subscription's token in. */
+export const CLAUDE_TOKEN_ITEM = "Claude token";
 /** The `Fabrik` vault item the wizard saves the second Subscription's token in. */
 export const SECOND_SUBSCRIPTION = "Claude token 2";
 
@@ -305,6 +307,12 @@ const LIST_SECOND_SUBSCRIPTION = `list the second Subscription, "${SECOND_SUBSCR
 
 /** The wizard's stage for the steps of a second Subscription only the Operator can take. */
 const SECOND_SUBSCRIPTION_STAGE = 'the wizard\'s "A second Subscription" stage';
+
+/** The wizard's stage for each Subscription's item it stores in the `Fabrik` vault. It stores no other Subscription's token. */
+const SUBSCRIPTION_STAGES: ReadonlyMap<string, string> = new Map([
+  [CLAUDE_TOKEN_ITEM, 'the wizard\'s "The Claude token" stage'],
+  [SECOND_SUBSCRIPTION, SECOND_SUBSCRIPTION_STAGE],
+]);
 
 /**
  * The Subscriptions the Kit config's text lists, read from its raw JSON: one
@@ -332,10 +340,12 @@ function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers
   // Once the setup PR is merged, setup's command is the way to the wizard, which it walks while 1Password lacks the token.
   const command = setupCommand(kit.release);
   if (listed.length > 1) {
-    const toWalk = wizardNext ? `walk ${SECOND_SUBSCRIPTION_STAGE} for it.` : `run setup again to walk ${SECOND_SUBSCRIPTION_STAGE} for it: ${command}`;
     return listed
       .filter((name) => !stored.has(name))
-      .map((name) => `${KIT_CONFIG_PATH} lists ${JSON.stringify(name)} in subscriptions, but the "${FABRIK_VAULT}" vault has no item of that name: ${toWalk}`);
+      .map(
+        (name) =>
+          `${KIT_CONFIG_PATH} lists ${JSON.stringify(name)} in subscriptions, but the "${FABRIK_VAULT}" vault has no item of that name: ${toStore(name, wizardNext, command)}`,
+      );
   }
   if (answers.secondSubscription !== true) return [];
   if (stored.has(SECOND_SUBSCRIPTION)) {
@@ -350,6 +360,16 @@ function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers
   return [
     `Walk ${SECOND_SUBSCRIPTION_STAGE}: create a second Claude account, run \`claude setup-token\` on it, save the token as the "${SECOND_SUBSCRIPTION}" API Credential, with its expiry date, in the "${FABRIK_VAULT}" vault, and turn usage credits off on every account. ${listing}`,
   ];
+}
+
+/** How the Operator stores a listed Subscription's token: in the wizard's stage for it, or by hand under a name no stage stores. */
+function toStore(name: string, wizardNext: boolean, command: string): string {
+  const stage = SUBSCRIPTION_STAGES.get(name);
+  if (stage === undefined) {
+    const items = [...SUBSCRIPTION_STAGES.keys()].map((item) => JSON.stringify(item)).join(" and ");
+    return `run \`claude setup-token\` on that Subscription's Claude account and save the token as the ${JSON.stringify(name)} API Credential, with its expiry date, in the "${FABRIK_VAULT}" vault yourself, since the wizard stores only ${items}.`;
+  }
+  return wizardNext ? `walk ${stage} for it.` : `run setup again to walk ${stage} for it: ${command}`;
 }
 
 /**

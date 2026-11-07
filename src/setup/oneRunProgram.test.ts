@@ -799,6 +799,31 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(said).toContain("The setup PR: https://github.com/acme/clinic/pull/2");
     });
 
+    it("listing a third Subscription 1Password lacks, which no wizard stage stores, says the install is complete and to store it by hand, asking nothing", async () => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, async (lacking) => {
+        store(lacking, "Fabrik", "Claude token 2");
+        const config = JSON.parse(await readFile(join(checkout, ".fabrik/config.json"), "utf8")) as Record<string, unknown>;
+        const subscriptions = ["Claude token", "Claude token 2", "Claude token 3"];
+        await writeFile(join(checkout, ".fabrik/config.json"), `${JSON.stringify({ ...config, subscriptions }, null, 2)}\n`);
+        git("commit", "-q", "-am", "A third Subscription");
+        git("push", "-q", "origin", "main");
+      });
+
+      for (const _ of [1, 2]) {
+        const { code, said, log, questions } = await setupOnce(world, { answers: [] });
+
+        expect(code).toBe(0);
+        expect(said).toContain(COMPLETE);
+        expect(said).toContainEqual(
+          expect.stringMatching(/^- \.fabrik\/config\.json lists "Claude token 3" in subscriptions, .* yourself, since the wizard stores only "Claude token" and "Claude token 2"\.$/),
+        );
+        expect(said.join("\n")).not.toMatch(/still lacks|Run setup again to walk|"A second Subscription" stage/);
+        expect(questions).toEqual([]);
+        expect(log.filter((line) => /^gh pr (create|edit)|^git (switch|commit|push)|^wizard$/.test(line))).toEqual([]);
+      }
+    });
+
     it.each([
       ["without a terminal", { terminal: false }],
       ["with --plan", { args: [...FLAGS, "--plan"] }],
