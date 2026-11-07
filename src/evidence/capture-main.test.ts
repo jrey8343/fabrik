@@ -132,7 +132,7 @@ describe("The capture step in a Product repo without a ui block", () => {
     const plan = planFor({ kind: "label-added", issue: 7, label: "agent:implement" }, snapshotOf(ticket), config);
     const kitJob = kitJobSummary(plan, config, []) ?? "";
     expect(kitJob.split("\n").filter((line) => line.includes("Visual evidence"))).toEqual([
-      "Visual evidence is off until Kit config has a `ui` block: `/fabrik-setup` turns it on.",
+      "Visual evidence is off until Kit config has a `ui` block: `/fabrik-visual-evidence` turns it on.",
     ]);
   });
 });

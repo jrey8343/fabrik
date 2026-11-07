@@ -77,14 +77,14 @@ describe("The Kit job's step summary", () => {
     const readyTicket = anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"] });
     const ui = { paths: ["src/**/*.astro"], serve: "npm run preview", url: "http://127.0.0.1:4321", beforeUrl: null, defaultRoutes: ["/"] };
 
-    it("notes quietly that Visual evidence is off until Kit config has a ui block, which /fabrik-setup adds", () => {
+    it("notes quietly that Visual evidence is off until Kit config has a ui block, which /fabrik-visual-evidence adds", () => {
       const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
       const plan = planFor(dispatched, snapshotOf(readyTicket), config);
 
       expect(kitJobSummary(plan, config, [])).toBe(
         "### Fabrik Kit job\n\n" +
           "The Implement run on #7 was given the Subscription **Claude token**.\n\n" +
-          "Visual evidence is off until Kit config has a `ui` block: `/fabrik-setup` turns it on.\n",
+          "Visual evidence is off until Kit config has a `ui` block: `/fabrik-visual-evidence` turns it on.\n",
       );
     });
 

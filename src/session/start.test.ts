@@ -1,5 +1,5 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   aKitCheckout,
@@ -81,6 +81,20 @@ describe("The SessionStart hook in a cloud or local session", () => {
 
     expect(await readFile(join(product, ".claude/skills/fabrik-pair/SKILL.md"), "utf8")).toContain("# Pair");
     expect(output.hookSpecificOutput.additionalContext).toContain("/fabrik-pair <issue number>");
+  });
+
+  it("installs the release's Visual evidence skill, and tells Claude how the Operator turns Visual evidence on", async () => {
+    const kit = resolve(import.meta.dirname, "..", "..");
+    const product = await aProduct(callerAt("v1.2.3"));
+
+    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download: serving(await aSkillsArchive()).download });
+
+    expect(await readFile(join(product, ".claude/skills/fabrik-visual-evidence/SKILL.md"), "utf8")).toBe(
+      await readFile(join(kit, "skills/fabrik-visual-evidence/SKILL.md"), "utf8"),
+    );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "To turn Visual evidence on, or change its answers, the Operator runs /fabrik-visual-evidence.",
+    );
   });
 
   it("doesn't mention the Pairing session skill when the release has none", async () => {
