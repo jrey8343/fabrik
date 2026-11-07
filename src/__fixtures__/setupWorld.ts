@@ -58,9 +58,12 @@ const json = (value: unknown) => ({ stdout: JSON.stringify(value) });
 const names = (set: Set<string>) => json([...set].map((name) => ({ name })));
 const valueOf = (args: readonly string[], flag: string) => args[args.indexOf(flag) + 1] ?? "";
 
-/** What GitHub reads from the repo's own git: how many commits a head has that a base lacks. */
+/** What GitHub reads from the repo's own git. */
 export interface Origin {
+  /** How many commits a head has that a base lacks. */
   commitsAhead(base: string, head: string): number;
+  /** How a head stands to a base, as GitHub's compare sums it up ("ahead", "identical", "behind" or "diverged"), or null when either isn't there. */
+  compare?(base: string, head: string): string | null;
 }
 
 export function worldScript(world: World, origin?: Origin): Record<string, Answer> {
@@ -99,6 +102,13 @@ export function worldScript(world: World, origin?: Origin): Record<string, Answe
     "gh api --method POST repos/acme/clinic/rulesets": ({ input }) => {
       world.ruleset = { id: 1, ...(JSON.parse(input ?? "{}") as Record<string, unknown>) };
       return {};
+    },
+    // The compare's two commits follow its endpoint with no space, so no longer key can name it.
+    "gh api": ({ args }) => {
+      const compared = /^repos\/acme\/clinic\/compare\/(\w+)\.\.\.(\w+)$/.exec(args[1] ?? "");
+      if (compared === null || origin?.compare === undefined) throw new Error(`The world has no answer for: gh ${args.join(" ")}`);
+      const status = origin.compare(compared[1]!, compared[2]!);
+      return status === null ? { code: 1, stderr: "gh: Not Found (HTTP 404)" } : { stdout: `${status}\n` };
     },
     "gh pr list": ({ args }) =>
       json(

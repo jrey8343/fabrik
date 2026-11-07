@@ -10,7 +10,7 @@ import { foundOldSetupSkill, oldSetupSkillIn, personalSkillsDir, staleOldSetupSk
 import type { Env, Run } from "./exec.ts";
 import type { ProductState } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
-import { mergedSetupHeads, setupBranch, uncommittedPaths } from "./setupBranch.ts";
+import { mergedSetupTip, setupBranch, uncommittedPaths } from "./setupBranch.ts";
 
 export interface CheckInputs {
   readonly run: Run;
@@ -53,7 +53,7 @@ export async function checkSetup(inputs: CheckInputs): Promise<Checked> {
   const signedIn = await checkGitHub(inputs);
   if (!signedIn.ok) return signedIn;
   const branch = (await inputs.run("git", ["branch", "--show-current"], { cwd: inputs.productDir })).stdout.trim();
-  const onBranch = await checkBranch(inputs, signedIn.repo.defaultBranch, branch);
+  const onBranch = await checkBranch(inputs, signedIn.repo, branch);
   if (typeof onBranch === "string") return { ok: false, problem: onBranch };
   return { ok: true, repo: signedIn.repo, branch, origin: onBranch };
 }
@@ -161,10 +161,11 @@ function repoOf(view: RepoView): ProductState["repo"] {
  */
 async function checkBranch(
   { run, productDir, release, earlierWrites }: CheckInputs,
-  defaultBranch: string,
+  repo: ProductState["repo"],
   current: string,
 ): Promise<string | OriginTips> {
   const cwd = productDir;
+  const { defaultBranch } = repo;
   const ownBranch = setupBranch(release);
   if (current !== defaultBranch && current !== ownBranch) {
     const where = current === "" ? "This clone isn't on a branch" : `This clone is on ${current}, not ${defaultBranch}`;
@@ -207,7 +208,7 @@ async function checkBranch(
   if (!(await holds(originDefault))) {
     // A squash or rebase merge leaves the branch's own commits off the default branch, and pulling it in would only open a PR again.
     const head = (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
-    if ((await mergedSetupHeads(run, cwd, ownBranch)).includes(head)) {
+    if (await mergedSetupTip(run, cwd, `${repo.owner}/${repo.name}`, ownBranch)(head)) {
       return `${ownBranch}'s setup PR is merged. Switch to ${defaultBranch} with git switch ${defaultBranch} && git pull, then run setup again.`;
     }
     return `${ownBranch} doesn't hold origin's latest ${defaultBranch} (${short(originDefault)}). Merge it in with git pull origin ${defaultBranch}, then run setup again.`;

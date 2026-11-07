@@ -91,7 +91,7 @@ async function setupOnce(world: World, { answers = ["y"], wizard = walksEverySta
   const said: string[] = [];
   const complaints: string[] = [];
   const wizardRuns: { cwd: string; env: Env }[] = [];
-  const commands = fakeCommands({ ...aReadyOperator(checkout), ...worldScript(world, { commitsAhead }) });
+  const commands = fakeCommands({ ...aReadyOperator(checkout), ...worldScript(world, { commitsAhead, compare }) });
   const run: Run = async (command, commandArgs, options) => {
     log.push([command, ...commandArgs].join(" "));
     return command === "git" ? spawnRun(command, commandArgs, options) : commands.run(command, commandArgs, options);
@@ -141,6 +141,25 @@ function squashTheSetupPr(world: World): void {
   git("commit", "-q", "-m", "Set up Fabrik v1.4.2 (#1)");
   git("push", "-q", "origin", "main");
   Object.assign(world.prs[0]!, { open: false, merged: true, headRefOid: head });
+}
+
+/** GitHub moves the setup PR's head on after setup's last push, as its "Update branch" button does: a commit on origin's setup branch the clone never fetches. */
+function moveTheHeadOnGitHub(): void {
+  const tip = originGit("rev-parse", BRANCH).trim();
+  const moved = originGit("-c", "user.name=GitHub", "-c", "user.email=noreply@github.com", "commit-tree", `${tip}^{tree}`, "-p", tip, "-m", "Merge main");
+  originGit("update-ref", `refs/heads/${BRANCH}`, moved.trim());
+}
+
+/** As GitHub's compare of two commits sums it up: how the head stands to the base, null when origin lacks either. */
+function compare(base: string, head: string): string | null {
+  try {
+    const behind = Number(originGit("rev-list", "--count", `${head}..${base}`).trim());
+    const ahead = Number(originGit("rev-list", "--count", `${base}..${head}`).trim());
+    if (behind === 0) return ahead === 0 ? "identical" : "ahead";
+    return ahead === 0 ? "behind" : "diverged";
+  } catch {
+    return null;
+  }
 }
 
 /** The files on origin's setup branch. */
@@ -530,6 +549,35 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   it("on the setup branch after its PR was squash-merged, says to switch to the default branch and pull", async () => {
     const world = aWorld();
     await setupOnce(world);
+    squashTheSetupPr(world);
+    git("switch", "-q", BRANCH);
+
+    const { code, complaints } = await setupOnce(world);
+
+    expect(code).toBe(1);
+    expect(complaints[0]).toBe(`${BRANCH}'s setup PR is merged. Switch to main with git switch main && git pull, then run setup again.`);
+  });
+
+  it("after a squash merge of a setup PR whose head GitHub moved on, a repair run from the default branch gets past the leftover setup branch", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    moveTheHeadOnGitHub();
+    squashTheSetupPr(world);
+    world.labels.delete("needs-triage");
+
+    const { code, said, complaints } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(said).toContain("- create the label needs-triage");
+    expect(world.labels.has("needs-triage")).toBe(true);
+    expect(git("branch", "--show-current").trim()).toBe("main");
+  });
+
+  it("on the setup branch after its PR, whose head GitHub moved on, was squash-merged, says to switch to the default branch and pull", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    moveTheHeadOnGitHub();
     squashTheSetupPr(world);
     git("switch", "-q", BRANCH);
 

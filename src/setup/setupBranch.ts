@@ -35,11 +35,28 @@ function changedPaths(status: string): string[] {
 }
 
 /**
- * The head commit of each merged PR from this repo's own setup branch. A
- * squash or rebase merge leaves none of the branch's commits on the default
- * branch, so this is how setup knows that branch is done.
+ * Whether a tip of the setup branch is in a merged PR from this repo's own
+ * setup branch: that PR's head, or a commit before it, as when GitHub's
+ * "Update branch" or a suggested change moved the head on after setup's last
+ * push. A squash or rebase merge leaves none of the branch's commits on the
+ * default branch, so this is how setup knows that branch is done. GitHub
+ * compares the tip with each head, which the clone needn't have.
  */
-export async function mergedSetupHeads(run: Run, cwd: string, branch: string): Promise<string[]> {
+export function mergedSetupTip(run: Run, cwd: string, repo: string, branch: string): (tip: string) => Promise<boolean> {
+  let heads: Promise<string[]> | undefined;
+  return async (tip) => {
+    for (const head of await (heads ??= mergedSetupHeads(run, cwd, branch))) {
+      if (head === tip) return true;
+      // "ahead": the head holds the tip, and more. A tip GitHub lacks fails.
+      const compared = await run("gh", ["api", `repos/${repo}/compare/${tip}...${head}`, "--jq", ".status"], { cwd });
+      if (compared.code === 0 && ["ahead", "identical"].includes(compared.stdout.trim())) return true;
+    }
+    return false;
+  };
+}
+
+/** The head commit of each merged PR from this repo's own setup branch. */
+async function mergedSetupHeads(run: Run, cwd: string, branch: string): Promise<string[]> {
   const listed = JSON.parse(
     await ok(run, "gh", ["pr", "list", "--head", branch, "--state", "merged", "--json", "headRefOid,isCrossRepository"], { cwd }),
   ) as { headRefOid: string; isCrossRepository: boolean }[];
@@ -55,14 +72,14 @@ export async function mergedSetupHeads(run: Run, cwd: string, branch: string): P
 export async function earlierSetupRun(
   run: Run,
   cwd: string,
+  repo: string,
   branch: string,
   defaultBranch: string,
   originTip: string | null,
 ): Promise<string | null> {
-  let heads: Promise<string[]> | undefined;
+  const inMergedPr = mergedSetupTip(run, cwd, repo, branch);
   const merged = async (sha: string) =>
-    (await run("git", ["merge-base", "--is-ancestor", sha, "HEAD"], { cwd })).code === 0 ||
-    (await (heads ??= mergedSetupHeads(run, cwd, branch))).includes(sha);
+    (await run("git", ["merge-base", "--is-ancestor", sha, "HEAD"], { cwd })).code === 0 || (await inMergedPr(sha));
   const local = await run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd });
   if (local.code === 0 && !(await merged(local.stdout.trim()))) {
     return `${branch} holds an earlier run of setup that isn't on ${defaultBranch} yet. Switch to it with git switch ${branch}, then run setup again: it picks up where that run stopped.`;

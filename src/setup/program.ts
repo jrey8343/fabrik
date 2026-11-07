@@ -176,7 +176,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     return 0;
   }
   if (current !== branch) {
-    const earlier = await earlierSetupRun(run, cwd, branch, repo.defaultBranch, origin.setupBranch);
+    const earlier = await earlierSetupRun(run, cwd, repoName, branch, repo.defaultBranch, origin.setupBranch);
     if (earlier !== null) return stop(io, earlier);
   }
   // The same actions, with notes that say what this run does once its wizard has run.
