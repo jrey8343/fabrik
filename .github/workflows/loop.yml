@@ -553,7 +553,7 @@ jobs:
       # fabrik-out (src/evidence/capture-main.ts). It records every failure in
       # the capture result, never the job's: continue-on-error, and its own
       # timeout, the Kit's CAPTURE_TIMEOUT_MINUTES. No secret reaches it, nor
-      # the build and server it runs.
+      # the build, server and sign-ins it runs.
       - name: Capture the variants
         id: capture
         if: success()
@@ -804,7 +804,8 @@ jobs:
       # (src/evidence/capture-main.ts). It records every failure in the capture
       # result, never the job's: continue-on-error, and its own timeout, the
       # Kit's CAPTURE_TIMEOUT_MINUTES (src/evidence/capture.ts; a test holds the
-      # two together). No secret reaches it, nor the build and server it runs.
+      # two together). No secret reaches it, nor the build, server and sign-ins
+      # it runs.
       # Without a ui block it captures nothing and passes out no result, so
       # neither upload below runs; the Kit job's step summary says Visual
       # evidence is off (src/kit/kitJob.ts).

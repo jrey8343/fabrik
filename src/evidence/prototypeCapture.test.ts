@@ -62,6 +62,10 @@ function runner(overrides: Partial<Capturer> = {}) {
       calls.push(`record ${take.url} at ${take.viewport.name} as ${take.image} and ${take.video}`);
       return { status: 200, video: true };
     },
+    signIn: async (identity, command) => {
+      calls.push(`sign-in ${identity}: ${command}`);
+      return "signed-in";
+    },
     stop: async () => {
       calls.push("stop");
     },
@@ -291,5 +295,72 @@ describe("What a prototype turn's capture step leaves", () => {
 
   it("says nothing in the step summary without a ui block", () => {
     expect(prototypeCaptureSummary({ kind: "off" })).toBeNull();
+  });
+});
+
+describe("Capturing a prototype turn's variants behind a sign-in", () => {
+  /** The ui block signing in an owner, with /pricing public. */
+  const signedIn: UiConfig = {
+    ...ui,
+    url: "http://localhost:4321",
+    signIn: { owner: "pnpm sign-in owner", operator: "pnpm sign-in operator" },
+    signInPath: "/sign-in",
+    signedInRoutes: [
+      { route: "/pricing", as: null },
+      { route: "/**", as: "owner" },
+    ],
+  };
+
+  it("signs in as the approved route's Capture identity, once, and records each take as it, by the same rules as a pull request's capture", async () => {
+    const seen: string[] = [];
+    const { capturer, calls } = runner({
+      recordVariant: async (take) => {
+        seen.push(`${take.url} at ${take.viewport.name} as ${take.signedIn?.identity ?? "public"}`);
+        return { status: 200, video: true };
+      },
+    });
+
+    const outcome = await capturePrototype(input({ ui: signedIn, route: "/today", variants: ["A"] }), capturer);
+
+    expect(calls.filter((call) => call.startsWith("sign-in"))).toEqual(["sign-in owner: pnpm sign-in owner"]);
+    expect(seen).toEqual(["http://localhost:4321/today?variant=A at mobile as owner", "http://localhost:4321/today?variant=A at desktop as owner"]);
+    expect(outcome).toEqual({
+      kind: "recorded",
+      result: {
+        outcome: "captured",
+        headSha: HEAD,
+        captures: [
+          { route: "/today", variant: "A", viewport: "mobile", status: 200, image: "variant-a-mobile.png", video: "variant-a-mobile.webm", identity: "owner" },
+          { route: "/today", variant: "A", viewport: "desktop", status: 200, image: "variant-a-desktop.png", video: "variant-a-desktop.webm", identity: "owner" },
+        ],
+      },
+    });
+  });
+
+  it("matches the approved route's path alone, so its query changes nothing, and signs nothing in for a public route", async () => {
+    const { capturer, calls } = runner();
+
+    const outcome = await capturePrototype(input({ ui: signedIn, route: "/pricing?plan=pro", variants: ["A"] }), capturer);
+
+    expect(calls.some((call) => call.startsWith("sign-in"))).toBe(false);
+    expect(outcome.kind === "recorded" && outcome.result.captures.every((capture) => !("identity" in capture))).toBe(true);
+  });
+
+  it("records sign-in-failed with no takes when the sign-in fails", async () => {
+    const { capturer, calls } = runner({ signIn: async () => "no-state" });
+
+    expect(await capturePrototype(input({ ui: signedIn, route: "/today" }), capturer)).toEqual(failed("sign-in-failed"));
+    expect(calls.some((call) => call.startsWith("record"))).toBe(false);
+  });
+
+  it("records sign-in-failed, keeping the takes before it, when a take lands on ui.sign_in_path", async () => {
+    const { capturer } = runner({ recordVariant: async (take) => (take.variant === "B" ? "on-sign-in" : { status: 200, video: true }) });
+
+    expect(await capturePrototype(input({ ui: signedIn, route: "/today", variants: ["A", "B"] }), capturer)).toEqual(
+      failed("sign-in-failed", [
+        { route: "/today", variant: "A", viewport: "mobile", status: 200, image: "variant-a-mobile.png", video: "variant-a-mobile.webm", identity: "owner" },
+        { route: "/today", variant: "A", viewport: "desktop", status: 200, image: "variant-a-desktop.png", video: "variant-a-desktop.webm", identity: "owner" },
+      ]),
+    );
   });
 });

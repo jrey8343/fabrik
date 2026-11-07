@@ -107,3 +107,29 @@ describe("The gallery's captions", () => {
     expect(html).toContain("<figcaption>After</figcaption>");
   });
 });
+
+describe("The gallery of a route viewed signed in", () => {
+  const signedIn: GalleryShot[] = [
+    { route: "/today", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-1-today.png", identity: "owner" },
+    { route: "/pricing", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-2-pricing.png" },
+    { route: "/pricing", reason: "ticket", viewport: "mobile", side: "before", status: 200, image: "before-mobile-2-pricing.png" },
+  ].map((capture, at) => shot(capture as Capture, at + 1));
+
+  it("names the identity on the route and its screenshots, and says why it has no Before", () => {
+    const html = gallery(signedIn, meta);
+
+    expect(html).toContain("<h2><code>/today</code>, named by the Ticket, signed in as <code>owner</code></h2>");
+    expect(html).toContain(
+      "<p>Signed in as <code>owner</code>, so there's no Before: Before is the production site, and the Kit only ever signs in to the Sandbox's own server.</p>",
+    );
+    expect(html).toContain("<figcaption>After, signed in as owner</figcaption>");
+  });
+
+  it("shows a public route as it does today", () => {
+    const html = gallery(signedIn, meta);
+
+    expect(html).toContain("<h2><code>/pricing</code>, named by the Ticket</h2>");
+    expect(html).toContain("<figcaption>Before</figcaption>");
+    expect(html.match(/no Before/g)).toHaveLength(1);
+  });
+});
