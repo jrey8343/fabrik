@@ -112,17 +112,25 @@ function pullRequestCommented(
  * touches, main moved, so an agent PR may now conflict with it (#304). One
  * that added, changed or removed .fabrik/config.json, whose Kit config the
  * Loop reads (removing it restores the defaults), is a Kit config change,
- * which the core treats as main moving too. A push deleting the branch leaves
- * no head to bring a PR up to date with.
+ * which the core treats as main moving too. So is one whose `commits` can't
+ * show it left the Kit config alone (#307): the file lists aren't always there,
+ * and an extra Dispatch and Design queue check costs less than a skipped one.
+ * A push deleting the branch leaves no head to bring a PR up to date with.
  */
 function defaultBranchPushed(payload: Record<string, unknown>): LoopEvent | null {
   const defaultBranch = (payload["repository"] as { default_branch: string }).default_branch;
   if (payload["ref"] !== `refs/heads/${defaultBranch}` || payload["deleted"] === true) return null;
   const head = payload["after"];
   if (typeof head !== "string" || !FULL_SHA.test(head)) return null;
-  const commits = payload["commits"] as { added: string[]; modified: string[]; removed: string[] }[];
-  const kitConfigChanged = commits.some((commit) => [...commit.added, ...commit.modified, ...commit.removed].includes(KIT_CONFIG_PATH));
-  return { kind: kitConfigChanged ? "kit-config-changed" : "main-pushed", head };
+  const commits = payload["commits"];
+  const mayHaveChanged = !Array.isArray(commits) || commits.length === 0 || commits.some(mayChangeKitConfig);
+  return { kind: mayHaveChanged ? "kit-config-changed" : "main-pushed", head };
+}
+
+/** Whether a push's commit changed the Kit config, or lacks the file lists that would show it didn't. */
+function mayChangeKitConfig(commit: { added?: unknown; modified?: unknown; removed?: unknown } | null): boolean {
+  const lists = [commit?.added, commit?.modified, commit?.removed];
+  return !lists.every(Array.isArray) || lists.flat().includes(KIT_CONFIG_PATH);
 }
 
 /**

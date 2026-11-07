@@ -373,9 +373,10 @@ export type LoopEvent =
       readonly head: string;
     }
   /**
-   * A push to the default branch that changed the Kit config, which may have
-   * unpaused or widened Dispatch or the Design-session cap. It is a push to
-   * the default branch too, so the conflict check runs on it as on `main-pushed`.
+   * A push to the default branch that changed the Kit config, or can't show it
+   * didn't, which may have unpaused or widened Dispatch or the Design-session
+   * cap. It is a push to the default branch too, so the conflict check runs on
+   * it as on `main-pushed`.
    */
   | {
       readonly kind: "kit-config-changed";

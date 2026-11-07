@@ -39,11 +39,33 @@ describe("A push", () => {
     expect(loopEventFrom("push", push({ ref: "refs/heads/tweak-config" }))).toBeNull();
   });
 
+  it("to another branch is nothing, whatever its commits hold", () => {
+    expect(loopEventFrom("push", push({ ref: "refs/heads/tweak-config", commits: [{}] }))).toBeNull();
+  });
+
   // #304: whatever it touches, a push to main may leave an agent PR conflicting with it.
   it("to the default branch that leaves the Kit config alone is main moving, carrying its new head", () => {
     const commits = [{ added: [], modified: [".fabrik/implement.md"], removed: [] }];
 
     expect(loopEventFrom("push", push({ commits }))).toEqual({ kind: "main-pushed", head: HEAD });
+  });
+
+  // #307: a real push held an entry with no `added`, and it threw before the check could run.
+  it.each([
+    ["no lists", {}],
+    ["no added", { modified: [], removed: [] }],
+    ["no modified", { added: [], removed: [] }],
+    ["no removed", { added: [], modified: [] }],
+  ])("to the default branch with a commit that has %s may have changed the Kit config, so it's a Kit config change", (_, commit) => {
+    expect(loopEventFrom("push", push({ commits: [commit] }))).toEqual({ kind: "kit-config-changed", head: HEAD });
+  });
+
+  it.each([
+    ["an empty commits list", { commits: [] }],
+    ["no commits list", { commits: undefined }],
+    ["a null commit entry", { commits: [null] }],
+  ])("to the default branch with %s may have changed the Kit config, so it's a Kit config change", (_, overrides) => {
+    expect(loopEventFrom("push", push(overrides))).toEqual({ kind: "kit-config-changed", head: HEAD });
   });
 
   it("that deletes the default branch is nothing: there's no head to bring a PR up to date with", () => {
