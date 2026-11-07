@@ -25,7 +25,7 @@ describe("Reading the store's checkout", () => {
   it("reads every Run record and score file at the current schema, each by its path in the store", async () => {
     const store = await aCheckoutWith({
       [recordPathOf(record)]: JSON.stringify(record),
-      "runs/owner/product/2026-11/1002-1-triage.json": JSON.stringify({ ...record, schema: 5 }),
+      "runs/owner/product/2026-11/1002-1-triage.json": JSON.stringify({ ...record, schema: 6 }),
       [scorePath]: JSON.stringify(aScoreFile()),
       "scores/owner/product/2026-11/1003-1-implement-def456.json": JSON.stringify({ ...aScoreFile(), schema: 3 }),
     });

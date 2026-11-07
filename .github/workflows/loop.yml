@@ -103,10 +103,12 @@ jobs:
       # The model and effort the plan chose for its agent run, a Step-up included.
       model: ${{ steps.route.outputs.model }}
       effort: ${{ steps.route.outputs.effort }}
-      # Which run the plan started, for its Run record: its Retry number (0 for none), and "true"
-      # or "false" for whether it Steps up and whether it's the Operator's Request-changes run.
+      # Which run the plan started, for its Run record: its Retry number (0 for none), "true"
+      # or "false" for whether it Steps up and whether it's the Operator's Request-changes run,
+      # and why it Steps up (retry, marked, request-changes or conflict-only; empty for none).
       retry: ${{ steps.route.outputs.retry }}
       step-up: ${{ steps.route.outputs.step-up }}
+      step-up-reason: ${{ steps.route.outputs.step-up-reason }}
       request-changes: ${{ steps.route.outputs.request-changes }}
       # The Subscription the plan's agent run is given: the Fabrik vault item its
       # job loads the Claude token from. Only ever a vault item name from the

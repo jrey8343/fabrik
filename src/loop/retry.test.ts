@@ -98,6 +98,7 @@ describe("Starting a retry", () => {
           subscription: "Claude token",
           retry: 1,
           stepUp: false,
+          stepUpReason: null,
         },
       ],
     });
@@ -134,6 +135,34 @@ describe("Starting a retry", () => {
 
     expect(actionsOf(first)[1]).toMatchObject({ kind: "start-agent-run", retry: 1, stepUp: false });
     expect(actionsOf(second)[1]).toMatchObject({ kind: "start-agent-run", retry: 2, stepUp: true });
+  });
+
+  it("adding fabrik:step-up between Retries steps up the next one, recorded as marked", () => {
+    const marked = snapshotOf(
+      anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement", "fabrik:step-up"], openPullRequests: [50] }),
+      { pullRequest: flawedPullRequest() },
+    );
+
+    expect(actionsOf(planFor(retryLabeled, marked, kitConfig()))[1]).toMatchObject({
+      model: "claude-opus-5-5",
+      retry: 1,
+      stepUp: true,
+      stepUpReason: "marked",
+    });
+  });
+
+  it("with fabrik:step-up taken off before Retry 1, it runs on the Implementer model", () => {
+    // resumeSnapshot's Ticket carries no fabrik:step-up, whatever its first run ran on.
+    expect(actionsOf(planFor(retryLabeled, resumeSnapshot(), kitConfig()))[1]).toMatchObject({ model: "claude-sonnet-5-5", stepUp: false });
+  });
+
+  it("the second Retry on a marked Ticket records marked, not retry", () => {
+    const marked = snapshotOf(
+      anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement", "fabrik:step-up"], openPullRequests: [50] }),
+      { pullRequest: flawedPullRequest([earlier("execution-flaw")]) },
+    );
+
+    expect(actionsOf(planFor(retryLabeled, marked, kitConfig()))[1]).toMatchObject({ retry: 2, stepUp: true, stepUpReason: "marked" });
   });
 
   it("a Step-up uses whatever model Kit config gives the Step-up", () => {

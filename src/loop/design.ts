@@ -21,6 +21,7 @@ import {
   NEEDS_DESIGN,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
+  STEP_UP_LABEL,
   WONTFIX,
 } from "./labels.ts";
 import {
@@ -556,7 +557,11 @@ function ticketActions(
                 labels: readyLabels(superseded, READY_FOR_HUMAN),
                 assignees: [operator],
               }
-            : { body: withoutMentions(ticket.body), labels: readyLabels(superseded) }),
+            : {
+                body: withoutMentions(ticket.body),
+                // A Ticket the session marks for a Stepped-up start runs on the Step-up model (ADR-0014).
+                labels: ticket.stepUp === true ? [...readyLabels(superseded), STEP_UP_LABEL] : readyLabels(superseded),
+              }),
           parent,
           blockedBy: ticket.blockedBy.length === 0 ? superseded.openBlockers : ticket.blockedBy.map(ticketIssue),
         }),

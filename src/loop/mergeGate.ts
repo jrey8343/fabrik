@@ -51,6 +51,8 @@ function requestChangesRun(
     model: stepUp.model,
     effort: stepUp.effort,
     timeoutMinutes: implement.timeoutMinutes,
+    stepUp: true,
+    stepUpReason: "request-changes",
   };
 }
 

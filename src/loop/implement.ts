@@ -10,7 +10,7 @@ import { withoutMentions } from "./mentions.ts";
 import { conflictRunEnded, owedConflictRun } from "./conflicts.ts";
 import { CONFLICT_RUN_MARKER, EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { owedRequestChangesRun } from "./mergeGate.ts";
-import { MAX_RETRIES, owedRetry, runInFlight, runName, stepsUp } from "./retry.ts";
+import { implementSettings, MAX_RETRIES, owedRetry, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
 import { verdictActions } from "./review.ts";
 import type {
   Action,
@@ -49,16 +49,21 @@ export function startImplementer(
     const resumed =
       pullRequest === null || pullRequest.number !== open || pullRequest.ticket !== issueNumber
         ? null
-        : (owedConflictRun(pullRequest, config) ?? owedRetry(pullRequest, operator, config) ?? owedRequestChangesRun(pullRequest, operator, config));
+        : (owedConflictRun(pullRequest, config) ??
+            owedRetry(pullRequest, issue.labels, operator, config) ??
+            owedRequestChangesRun(pullRequest, operator, config));
     return { kind: "act", actions: resumed === null ? [removeLabel] : [removeLabel, resumed] };
   }
   if (whyNotBuildable(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
-  const { implement, stepUp } = config.roles;
-  // The second retry Steps up; the first run and the first retry use the Implementer's model.
-  const steppedUp = stepsUp(issue.emptyDiffs);
-  const { model, effort } = steppedUp ? stepUp : implement;
+  const { implement } = config.roles;
+  // The second retry Steps up, and every run does while the Ticket is marked for a Stepped-up
+  // start (ADR-0014); otherwise the first run and the first retry use the Implementer's model.
+  const stepUpReason = stepUpReasonFor(issue.emptyDiffs, issue.labels);
+  const { model, effort } = implementSettings(stepUpReason, config);
+  // A first run that doesn't Step up carries neither field.
+  const stepUpFields = issue.emptyDiffs === 0 && stepUpReason === null ? {} : { stepUp: stepUpReason !== null, stepUpReason };
   // Each empty diff so far was an Execution flaw, so this run is the Retry after the last one.
-  const retry = issue.emptyDiffs === 0 ? {} : { retry: issue.emptyDiffs, stepUp: steppedUp };
+  const retry = issue.emptyDiffs === 0 ? {} : { retry: issue.emptyDiffs };
   return {
     kind: "act",
     actions: [
@@ -71,6 +76,7 @@ export function startImplementer(
         effort,
         timeoutMinutes: implement.timeoutMinutes,
         ...retry,
+        ...stepUpFields,
       },
     ],
   };
@@ -424,7 +430,7 @@ function emptyDiff(issueNumber: number, issue: IssueSnapshot): Plan {
         issue: issueNumber,
         body: [
           EMPTY_DIFF_MARKER,
-          `The Implementer's branch for #${issueNumber} changed nothing, so the Kit opened no PR. An empty diff is an Execution flaw: retry ${flaw} of ${MAX_RETRIES} starts now${stepsUp(flaw) ? ", stepped up" : ""}.`,
+          `The Implementer's branch for #${issueNumber} changed nothing, so the Kit opened no PR. An empty diff is an Execution flaw: retry ${flaw} of ${MAX_RETRIES} starts now${stepUpReasonFor(flaw, issue.labels) === null ? "" : ", stepped up"}.`,
         ].join("\n"),
       },
       // A fresh label event, as Dispatch would add, starts the retry in this run's own slot.

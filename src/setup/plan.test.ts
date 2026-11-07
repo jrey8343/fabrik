@@ -345,6 +345,7 @@ describe("Labels", () => {
     "fabrik:retro",
     "fabrik:replay",
     "fabrik:monitor",
+    "fabrik:step-up",
     "wayfinder:map",
     "wayfinder:research",
     "wayfinder:prototype",
@@ -366,6 +367,15 @@ describe("Labels", () => {
     const labels = LOOP_LABELS.filter((l) => l !== "agent:review").map((l) => (l === "bug" ? "Bug" : l));
 
     expect(createdLabels(aCleanProduct({ labels }))).toEqual(["agent:review"]);
+  });
+
+  it("creates fabrik:step-up, saying what it does, on a re-run of an install from before it", () => {
+    const working = afterApplying(aCleanProduct(), planSetup(aCleanProduct(), kit));
+    const before = { ...working, labels: working.labels.filter((l) => l !== "fabrik:step-up") };
+
+    expect(planSetup(before, kit).actions).toEqual([
+      expect.objectContaining({ kind: "create-label", name: "fabrik:step-up", description: expect.stringMatching(/Implement runs .*Step-up/) }),
+    ]);
   });
 
   it("are each named in the README's list of the labels setup creates", () => {

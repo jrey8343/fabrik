@@ -41,6 +41,52 @@ describe("Starting an Implementer", () => {
   });
 });
 
+describe("A Stepped-up start", () => {
+  const runOf = (labels: readonly string[], emptyDiffs = 0) =>
+    actionsOf(planFor(dispatched(), snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement", ...labels], emptyDiffs })), kitConfig())).find(
+      (action) => action.kind === "start-agent-run",
+    );
+
+  it("a Ticket labelled fabrik:step-up gets its first Implement run on the Step-up model, recorded as marked", () => {
+    const config = kitConfig();
+
+    expect(runOf(["fabrik:step-up"])).toMatchObject({
+      model: "claude-opus-5-5",
+      effort: config.roles.stepUp.effort,
+      stepUp: true,
+      stepUpReason: "marked",
+    });
+    expect(runOf(["fabrik:step-up"])).not.toHaveProperty("retry");
+  });
+
+  it("an unmarked Ticket's first run and first Retry are on the Implementer model, and its second Retry Steps up for the retry", () => {
+    expect(runOf([], 0)).toMatchObject({ model: "claude-sonnet-5-5" });
+    expect(runOf([], 0)).not.toHaveProperty("stepUp");
+    expect(runOf([], 1)).toMatchObject({ model: "claude-sonnet-5-5", retry: 1, stepUp: false, stepUpReason: null });
+    expect(runOf([], 2)).toMatchObject({ model: "claude-opus-5-5", retry: 2, stepUp: true, stepUpReason: "retry" });
+  });
+
+  it("a marked Ticket's Retries 1 and 2 both run on the Step-up model, recorded as marked", () => {
+    expect(runOf(["fabrik:step-up"], 1)).toMatchObject({ model: "claude-opus-5-5", retry: 1, stepUp: true, stepUpReason: "marked" });
+    expect(runOf(["fabrik:step-up"], 2)).toMatchObject({ model: "claude-opus-5-5", retry: 2, stepUp: true, stepUpReason: "marked" });
+  });
+
+  it("an empty diff on a marked Ticket says its first Retry starts stepped up", () => {
+    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "fabrik:step-up"] });
+    const empty = finished({ changes: { net: [], commits: [] } });
+
+    expect(commentsOf(actionsOf(planFor(empty, snapshotOf(ticket), kitConfig())))[0]).toContain("retry 1 of 2 starts now, stepped up.");
+  });
+
+  it("a marked Ticket still gets two Retries: its third empty diff is a Design flaw", () => {
+    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "fabrik:step-up"], emptyDiffs: 2 });
+
+    const empty = finished({ changes: { net: [], commits: [] } });
+
+    expect(actionsOf(planFor(empty, snapshotOf(ticket), kitConfig()))).toContainEqual({ kind: "add-labels", issue: 7, labels: ["needs-design"] });
+  });
+});
+
 /** An Implement run's push job: the Implementer's output and the paths its branch changes. */
 function finished(
   overrides: Partial<Extract<LoopEvent, { kind: "implement-run-finished" }>> = {},

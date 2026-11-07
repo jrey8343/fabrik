@@ -287,6 +287,67 @@ describe("the Weekly summary", () => {
     });
   });
 
+  it("breaks the week's Step-ups down by reason", () => {
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ endedAt: "2026-11-03T00:00:00Z", stepUp: true, stepUpReason: "marked" }),
+          aRunRecord({ endedAt: "2026-11-03T00:00:00Z", retry: 1, stepUp: true, stepUpReason: "marked" }),
+          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", retry: 2, stepUp: true, stepUpReason: "retry" }),
+          aRunRecord({ endedAt: "2026-11-05T00:00:00Z", stepUp: true, stepUpReason: "request-changes", requestChanges: true }),
+          aRunRecord({ endedAt: "2026-10-29T00:00:00Z", stepUp: true, stepUpReason: "conflict-only" }), // last week
+        ],
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "summary",
+      summary: {
+        counts: {
+          stepUps: { thisWeek: 4, lastWeek: 1 },
+          stepUpsByReason: {
+            thisWeek: { retry: 1, marked: 2, "request-changes": 1, "conflict-only": 0 },
+            lastWeek: { retry: 0, marked: 0, "request-changes": 0, "conflict-only": 1 },
+          },
+        },
+      },
+    });
+  });
+
+  it("counts the marked Tickets merged in the week, and how many of them needed no Retry", () => {
+    const marked = (issue: number, endedAt: string) => aRunRecord({ issue, endedAt, stepUp: true, stepUpReason: "marked" });
+    const result = weeklySummary(
+      input({
+        records: [
+          marked(7, "2026-11-03T00:00:00Z"), // merged with no Retry
+          marked(8, "2026-11-03T00:00:00Z"),
+          aRunRecord({ issue: 8, endedAt: "2026-11-04T00:00:00Z", retry: 1, stepUp: true, stepUpReason: "marked" }),
+          // Marked only after its first run: no Stepped-up start.
+          aRunRecord({ issue: 9, endedAt: "2026-11-03T00:00:00Z" }),
+          aRunRecord({ issue: 9, endedAt: "2026-11-04T00:00:00Z", retry: 1, stepUp: true, stepUpReason: "marked" }),
+          aRunRecord({ issue: 10, endedAt: "2026-11-03T00:00:00Z" }), // unmarked
+          marked(6, "2026-10-27T00:00:00Z"), // merged last week
+        ],
+        facts: [
+          factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-05T00:00:00Z", { number: 50, ticket: 7 }),
+              aMergedPullRequest("2026-11-05T00:00:00Z", { number: 51, ticket: 8 }),
+              aMergedPullRequest("2026-11-05T00:00:00Z", { number: 52, ticket: 9 }),
+              aMergedPullRequest("2026-11-05T00:00:00Z", { number: 53, ticket: 10 }),
+              aMergedPullRequest("2026-10-29T00:00:00Z", { number: 49, ticket: 6 }),
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "summary",
+      summary: { counts: { steppedUpStarts: { thisWeek: { merged: 2, noRetry: 1 }, lastWeek: { merged: 1, noRetry: 1 } } } },
+    });
+    if (result.kind !== "summary") throw new Error("expected a summary");
+    expect(result.body).toContain("| Stepped-up starts merged | 2 (1 with no Retry) | 1 (1 with no Retry) | +1 |");
+  });
+
   describe("Waiting on you", () => {
     const HOUR = 60 * 60 * 1000;
     const head = "h".repeat(40);
@@ -1597,6 +1658,7 @@ describe("the Weekly summary", () => {
           endedAt: "2026-11-05T00:00:00Z",
           ...UNKNOWN_COST_BASIS,
           stepUp: true,
+          stepUpReason: "retry",
           // Friday 13 November 2026, 10:00 in Sydney.
           rateLimit: { status: "allowed", rateLimitType: "seven_day", utilization: 0.62, resetsAt: 1_794_524_400 },
         }),
@@ -1642,6 +1704,8 @@ describe("the Weekly summary", () => {
       expect(body).toContain("| Revert rate (30 days) | 50% (1 of 2) | 0% (0 of 1) | +50 pts |");
       expect(body).toContain("| Retries | 1 | 0 | +1 |");
       expect(body).toContain("| Step-ups | 1 | 0 | +1 |");
+      expect(body).toContain("| · for a Retry | 1 | 0 | +1 |");
+      expect(body).not.toContain("| · marked |");
     });
 
     it("says how many runs the cost leaves out and how close the Subscription came to its weekly limit", () => {
