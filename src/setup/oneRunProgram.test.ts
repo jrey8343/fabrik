@@ -283,6 +283,38 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(said.slice(said.indexOf("The setup PR: https://github.com/acme/clinic/pull/1")).some((line) => line.startsWith(`- ${warning}`))).toBe(true);
   });
 
+  it("with --paused, a run after one that wrote the starter and stopped partway says nothing about --paused having had no effect", async () => {
+    const world = aWorld();
+    world.failingLabels.add("needs-info");
+    const args = ["--no-time-zone", "--no-second-subscription", "--paused"];
+    await setupOnce(world, { args });
+    world.failingLabels.clear();
+
+    const { code, said } = await setupOnce(world, { args });
+
+    expect(code).toBe(0);
+    expect(world.prs[0]?.body).toContain("but Dispatch paused (max_in_flight 0)");
+    expect(world.prs[0]?.body).not.toContain("--paused had no effect");
+    expect(said.join("\n")).not.toContain("--paused had no effect");
+  });
+
+  it("unpaused, a run after one that wrote the starter and stopped partway still warns that Dispatch releases the ready-for-agent issues on the merge", async () => {
+    const world = aWorld();
+    world.labels.add("ready-for-agent");
+    world.readyForAgent = 2;
+    world.failingLabels.add("needs-info");
+    await setupOnce(world);
+    world.failingLabels.clear();
+    const warning = "2 open issues are labelled ready-for-agent: Dispatch starts releasing them to Implementers as soon as the setup PR merges.";
+
+    const { code, said } = await setupOnce(world);
+
+    expect(code).toBe(0);
+    expect(said.slice(0, said.indexOf(`On ${BRANCH}.`)).some((line) => line.startsWith(`- ${warning}`))).toBe(true);
+    expect(world.prs[0]?.body).toContain(`- ${warning}`);
+    expect(said.slice(said.indexOf("The setup PR: https://github.com/acme/clinic/pull/1")).some((line) => line.startsWith(`- ${warning}`))).toBe(true);
+  });
+
   it("a second run after the wizard stopped partway reuses the branch and PR, applies nothing again, and then asks for the merge", async () => {
     const world = aWorld();
     await setupOnce(world, { wizard: skipsTheClaudeToken });
