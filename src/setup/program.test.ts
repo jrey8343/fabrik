@@ -23,6 +23,10 @@ import { runSetup } from "./program.ts";
 import type { Prompt } from "./prompt.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
+/** The usage line, as the Operator runs setup: through the bootstrap command, which fills in the checkout. */
+const BOOTSTRAP_USAGE =
+  "Usage: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- [release] [--account=<1Password account>]" +
+  " [--time-zone=<IANA zone> | --no-time-zone] [--second-subscription | --no-second-subscription] [--paused | --no-paused] [--plan]";
 
 let productDir: string;
 
@@ -77,10 +81,9 @@ async function setup(args: string[], options: Options = {}) {
 }
 
 const severalAccounts = { "op account list --format json": { stdout: JSON.stringify([PERSONAL, ACME]) } };
-/** No earlier run left a setup branch, so a run in a terminal goes on to ask for the yes. */
+/** No earlier run left a setup branch, here or on origin, so a run in a terminal goes on to ask for the yes. */
 const NO_EARLIER_RUN = {
   "git rev-parse --verify --quiet refs/heads/fabrik/setup-v1.4.2": { code: 1 },
-  "git ls-remote origin refs/heads/fabrik/setup-v1.4.2": { stdout: "" },
 };
 const withFabrikVault = {
   "op vault list --format json": { stdout: JSON.stringify([{ name: "Fabrik" }]) },
@@ -245,7 +248,7 @@ describe("The setup program", () => {
 
     expect(code).toBe(2);
     expect(complaints[0]).toBe("Unknown flag --pause.");
-    expect(complaints[1]).toMatch(/^Usage: node src\/setup\/main\.ts /);
+    expect(complaints[1]).toBe(BOOTSTRAP_USAGE);
     expect(calls).toEqual([]);
   });
 
@@ -254,7 +257,7 @@ describe("The setup program", () => {
 
     expect(code).toBe(2);
     expect(complaints).toHaveLength(1);
-    expect(complaints[0]).toMatch(/^Usage: node src\/setup\/main\.ts /);
+    expect(complaints[0]).toBe(BOOTSTRAP_USAGE);
     expect(calls).toEqual([]);
   });
 

@@ -6,10 +6,16 @@ import type { Answer } from "./setupCommands.ts";
 export interface PullRequest {
   readonly number: number;
   readonly url: string;
+  /** The head branch's name, which a fork's PR can share with one of the repo's own. */
   readonly head: string;
   readonly base: string;
+  /** Whether its head is in a fork, not in acme/clinic. */
+  readonly isCrossRepository: boolean;
   body: string;
   open: boolean;
+  merged?: boolean;
+  /** The head's commit when it merged. */
+  headRefOid?: string;
 }
 
 export interface World {
@@ -23,6 +29,8 @@ export interface World {
   readonly prs: PullRequest[];
   /** Label names whose `gh label create` fails, as a partway failure would. */
   readonly failingLabels: Set<string>;
+  /** How many open issues are labelled ready-for-agent. */
+  readyForAgent: number;
 }
 
 export function aWorld(): World {
@@ -35,6 +43,7 @@ export function aWorld(): World {
     ruleset: null,
     prs: [],
     failingLabels: new Set(),
+    readyForAgent: 0,
   };
 }
 
@@ -49,7 +58,12 @@ const json = (value: unknown) => ({ stdout: JSON.stringify(value) });
 const names = (set: Set<string>) => json([...set].map((name) => ({ name })));
 const valueOf = (args: readonly string[], flag: string) => args[args.indexOf(flag) + 1] ?? "";
 
-export function worldScript(world: World): Record<string, Answer> {
+/** What GitHub reads from the repo's own git: how many commits a head has that a base lacks. */
+export interface Origin {
+  commitsAhead(base: string, head: string): number;
+}
+
+export function worldScript(world: World, origin?: Origin): Record<string, Answer> {
   return {
     "gh label list --limit 1000 --json name": () => names(world.labels),
     "gh label create": ({ args }) => {
@@ -57,7 +71,7 @@ export function worldScript(world: World): Record<string, Answer> {
       world.labels.add(args[2]!);
       return {};
     },
-    "gh issue list": () => json([]),
+    "gh issue list": () => json(Array.from({ length: world.readyForAgent }, (_, i) => ({ number: i + 1 }))),
     "gh secret list --json name": () => names(world.secrets),
     "gh secret set": ({ args }) => {
       world.secrets.add(args[2]!);
@@ -89,13 +103,17 @@ export function worldScript(world: World): Record<string, Answer> {
     "gh pr list": ({ args }) =>
       json(
         world.prs
-          .filter((pr) => pr.open && pr.head === valueOf(args, "--head"))
-          .map(({ number, url, body }) => ({ number, url, body })),
+          .filter((pr) => (valueOf(args, "--state") === "merged" ? pr.merged === true : pr.open) && pr.head === valueOf(args, "--head"))
+          .map(({ number, url, body, isCrossRepository, headRefOid }) => ({ number, url, body, isCrossRepository, headRefOid })),
       ),
     "gh pr create": ({ args, input }) => {
+      const [base, head] = [valueOf(args, "--base"), valueOf(args, "--head")];
+      if (origin !== undefined && origin.commitsAhead(base, head) === 0) {
+        return { code: 1, stderr: `pull request create failed: GraphQL: No commits between ${base} and ${head} (createPullRequest)` };
+      }
       const number = world.prs.length + 1;
       const url = `https://github.com/acme/clinic/pull/${number}`;
-      world.prs.push({ number, url, head: valueOf(args, "--head"), base: valueOf(args, "--base"), body: input ?? "", open: true });
+      world.prs.push({ number, url, head: valueOf(args, "--head"), base: valueOf(args, "--base"), isCrossRepository: false, body: input ?? "", open: true });
       return { stdout: `${url}\n` };
     },
     "gh pr edit": ({ args, input }) => {

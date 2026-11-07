@@ -178,10 +178,10 @@ set_var() {
   warn "skipped GitHub variable $name, gh not ready; set it later"
 }
 
-# finish clears, then shows a closing summary of everything configured.
+# finish ["heading"] clears, then shows a closing summary of everything configured.
 finish() {
   _clear
-  printf '\n%s%s  ✓ Setup complete%s\n' "$BOLD" "$GREEN" "$RESET"
+  printf '\n%s%s  ✓ %s%s\n' "$BOLD" "$GREEN" "${1:-Setup complete}" "$RESET"
   (( ${#WRITTEN_ENV[@]} ))    && note "wrote ${#WRITTEN_ENV[@]} value(s) to $ENV_FILE: ${WRITTEN_ENV[*]}"
   (( ${#WRITTEN_SECRET[@]} )) && note "set ${#WRITTEN_SECRET[@]} GitHub secret(s): ${WRITTEN_SECRET[*]}"
   if (( ${#SKIPPED[@]} )); then
@@ -242,6 +242,11 @@ operator_app_slugs() {
 run_wizard() {
 
 TOTAL_STAGES=8
+
+# A token stage's 0600 item template, removed however the wizard ends: a
+# failed op item create or a Ctrl-C included.
+TEMPLATE=""
+trap 'rm -f "${TEMPLATE:-}"' EXIT
 
 for tool in gh op; do
   command -v "$tool" >/dev/null 2>&1 || { warn "$tool isn't installed; install it and sign in, then re-run."; exit 1; }
@@ -330,8 +335,14 @@ else
     warn "There's no file at $FABRIK_APP_KEY_FILE."
     SKIPPED+=("the 'Fabrik App' item in the 'Fabrik App' vault (fields client-id and private-key)")
   else
-    op item create --vault "Fabrik App" --category "Secure Note" --title "Fabrik App" \
-      "client-id[text]=$FABRIK_APP_CLIENT_ID" "private-key[concealed]=$(cat "$FABRIK_APP_KEY_FILE")" >/dev/null
+    # The item goes to op on stdin, node reading the key itself, so the key is in no command line.
+    FABRIK_APP_CLIENT_ID="$FABRIK_APP_CLIENT_ID" FABRIK_APP_KEY_FILE="$FABRIK_APP_KEY_FILE" node -e '
+      const item = { title: "Fabrik App", category: "SECURE_NOTE", fields: [
+        { id: "client-id", type: "STRING", label: "client-id", value: process.env.FABRIK_APP_CLIENT_ID },
+        { id: "private-key", type: "CONCEALED", label: "private-key",
+          value: require("node:fs").readFileSync(process.env.FABRIK_APP_KEY_FILE, "utf8") },
+      ] };
+      process.stdout.write(JSON.stringify(item));' | op item create --vault "Fabrik App" - >/dev/null
     say "${GREEN}✓ stored${RESET} the 'Fabrik App' item in 1Password"
     if confirm "Delete the downloaded $FABRIK_APP_KEY_FILE now that 1Password holds it?"; then
       rm -f "$FABRIK_APP_KEY_FILE"
@@ -356,22 +367,32 @@ else
   step "In another terminal, run: claude setup-token"
   step "Sign in with the account that has your subscription. It prints a token that lasts one year."
   ask_secret CLAUDE_TOKEN "Paste the token (hidden):"
-  EXPIRES=$(date -v+1y +%Y-%m-%d 2>/dev/null || date -d "+1 year" +%Y-%m-%d)
-  if (( CLAUDE_TOKEN_EXISTS )); then
-    # Archived, not deleted, so the old token stays in the item's history.
-    op item delete "Claude token" --vault "Fabrik" --archive
+  # An empty token would count as stored, so nothing is archived or created for one.
+  if [[ -z "$CLAUDE_TOKEN" ]]; then
+    warn "No token pasted."
+    if (( CLAUDE_TOKEN_EXISTS )); then
+      say "Keeping the current token."
+    else
+      SKIPPED+=("the 'Claude token' API Credential in the 'Fabrik' vault (claude setup-token)")
+    fi
+  else
+    EXPIRES=$(date -v+1y +%Y-%m-%d 2>/dev/null || date -d "+1 year" +%Y-%m-%d)
+    if (( CLAUDE_TOKEN_EXISTS )); then
+      # Archived, not deleted, so the old token stays in the item's history.
+      op item delete "Claude token" --vault "Fabrik" --archive
+    fi
+    TEMPLATE=$(umask 077 && mktemp)
+    CLAUDE_TOKEN="$CLAUDE_TOKEN" EXPIRES="$EXPIRES" node -e '
+      const item = { title: "Claude token", category: "API_CREDENTIAL", fields: [
+        { id: "credential", type: "CONCEALED", label: "credential", value: process.env.CLAUDE_TOKEN },
+        { id: "expires", type: "DATE", label: "expires", value: process.env.EXPIRES },
+      ] };
+      process.stdout.write(JSON.stringify(item));' > "$TEMPLATE"
+    op item create --vault "Fabrik" --template "$TEMPLATE" >/dev/null
+    rm -f "$TEMPLATE"
+    say "${GREEN}✓ stored${RESET} the Claude token, expiring $EXPIRES"
   fi
-  TEMPLATE=$(umask 077 && mktemp)
-  CLAUDE_TOKEN="$CLAUDE_TOKEN" EXPIRES="$EXPIRES" node -e '
-    const item = { title: "Claude token", category: "API_CREDENTIAL", fields: [
-      { id: "credential", type: "CONCEALED", label: "credential", value: process.env.CLAUDE_TOKEN },
-      { id: "expires", type: "DATE", label: "expires", value: process.env.EXPIRES },
-    ] };
-    process.stdout.write(JSON.stringify(item));' > "$TEMPLATE"
-  op item create --vault "Fabrik" --template "$TEMPLATE" >/dev/null
-  rm -f "$TEMPLATE"
   unset CLAUDE_TOKEN
-  say "${GREEN}✓ stored${RESET} the Claude token, expiring $EXPIRES"
   pause
 fi
 
@@ -564,10 +585,12 @@ else
   pause
 fi
 
-finish
+# Run by Setup, the wizard is one of its steps, and Setup isn't done yet.
 if [[ -n "${FABRIK_WIZARD_REPORT:-}" ]]; then
+  finish "The wizard is done"
   say "Next: Setup commits what it wrote, pushes it and opens the setup PR."
 else
+  finish
   say "Next: open an issue on $REPO. Intake labels it needs-triage and the Loop takes it from there."
 fi
 printf '\n'

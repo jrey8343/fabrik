@@ -15,7 +15,7 @@ function plan(actions: SetupAction[], notes: string[] = []): SetupPlan {
   return { actions, notes };
 }
 
-function fakeSteps(options: { yes?: boolean; after?: SetupPlan; readiness?: Readiness } = {}) {
+function fakeSteps(options: { yes?: boolean; after?: SetupPlan; readiness?: Readiness; commits?: boolean; onTheBranch?: boolean } = {}) {
   const log: string[] = [];
   const steps: OneRunSteps = {
     confirm: async () => {
@@ -29,7 +29,15 @@ function fakeSteps(options: { yes?: boolean; after?: SetupPlan; readiness?: Read
       log.push("read again");
       return { plan: options.after ?? plan([]), readiness: options.readiness ?? READY };
     },
-    commit: async () => void log.push("commit"),
+    commit: async () => {
+      log.push("commit");
+      return options.commits ?? true;
+    },
+    somethingToPublish: async () => {
+      log.push("anything to publish?");
+      return options.onTheBranch ?? false;
+    },
+    leaveSetupBranch: async () => void log.push("leave"),
     push: async () => void log.push("push"),
     publish: async (summary) => {
       log.push("publish");
@@ -69,6 +77,15 @@ describe("One setup run", () => {
     ]);
   });
 
+  it("lists what an earlier run on the setup branch applied before it stopped, then this run's steps, each once", async () => {
+    const { steps } = fakeSteps();
+    const earlierDone = ["write .github/workflows/fabrik.yml (the caller workflow)", "create the label needs-info"];
+
+    const result = await runOnce({ plan: plan([LABEL]), repo: "acme/clinic", earlierDone }, steps);
+
+    expect(result.kind === "done" && result.summary.done).toEqual([...earlierDone, "create the label needs-triage"]);
+  });
+
   it("leaves anything else the plan finds after the wizard for the next run, and says so", async () => {
     const { steps, log } = fakeSteps({ after: plan([LABEL], ["a note from after the wizard"]) });
 
@@ -89,6 +106,23 @@ describe("One setup run", () => {
     expect(log).toEqual(["confirm", "switch", "wizard", "read again", "commit", "push", "publish"]);
   });
 
+  it("with nothing committed and nothing on the setup branch for a PR, pushes and publishes nothing, and leaves the branch", async () => {
+    const { steps, log } = fakeSteps({ commits: false });
+
+    const result = await runOnce({ plan: plan([LABEL], ["a note"]), repo: "acme/clinic" }, steps);
+
+    expect(log).toEqual(["confirm", "switch", "apply create-label", "wizard", "read again", "commit", "anything to publish?", "leave"]);
+    expect(result).toEqual({ kind: "applied", summary: { done: ["create the label needs-triage"], notes: [], blockers: [] } });
+  });
+
+  it("with nothing committed, still pushes and publishes what an earlier run left on the setup branch", async () => {
+    const { steps, log } = fakeSteps({ commits: false, onTheBranch: true });
+
+    await runOnce({ plan: plan([]), repo: "acme/clinic" }, steps);
+
+    expect(log.slice(log.indexOf("commit"))).toEqual(["commit", "anything to publish?", "push", "publish"]);
+  });
+
   it("gives the PR what the merge waits for, as read after the wizard", async () => {
     const { steps } = fakeSteps({ readiness: { ...READY, claudeTokenStored: false } });
 
@@ -103,6 +137,13 @@ describe("What the merge waits for, read after the wizard", () => {
 
   it("is ready once the wizard reported the App installed on this repo and 1Password holds both items", () => {
     expect(readinessOf(after)).toEqual(READY);
+  });
+
+  it("counts the App as installed when the open setup PR keeps an earlier run's confirmation for this repo", () => {
+    const earlierPr = "Sets up Fabrik v1.4.2 in this repo.\n\n<!-- fabrik-setup: app-installed acme/clinic -->\n";
+
+    expect(readinessOf({ ...after, report: "", earlierPr }).appInstalled).toBe(true);
+    expect(readinessOf({ ...after, report: "", earlierPr: earlierPr.replace("acme/clinic", "acme/other") }).appInstalled).toBe(false);
   });
 
   it("counts the App as installed only on the repo the wizard reported", () => {

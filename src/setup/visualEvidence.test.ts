@@ -102,6 +102,37 @@ describe("The Visual evidence writer", () => {
     });
   });
 
+  // Prettier 3.6.2 prints each exactly so: once a block inside a one-line object breaks, every object around it breaks too.
+  it("puts a one-line Kit config one member per line when it changes a field of a one-line block in it", () => {
+    const oneLine = '{ "operator": "jrey8343", "preview": { "url": null } }\n';
+
+    expect(write(oneLine, { preview: { url: "https://example.com" } })).toEqual({
+      ok: true,
+      written: ["preview"],
+      config: lines("{", '  "operator": "jrey8343",', '  "preview": {', '    "url": "https://example.com"', "  }", "}", ""),
+    });
+  });
+
+  it("does the same when it changes the fields of a one-line ui block one by one", () => {
+    const oneLine = '{ "operator": "jrey8343", "ui": { "paths": ["src/**"], "serve": "npm start", "url": "http://localhost:3000" } }\n';
+
+    expect(write(oneLine, { ui: { serve: "npm run preview", url: "http://localhost:4321" } })).toEqual({
+      ok: true,
+      written: ["ui"],
+      config: lines(
+        "{",
+        '  "operator": "jrey8343",',
+        '  "ui": {',
+        '    "paths": ["src/**"],',
+        '    "serve": "npm run preview",',
+        '    "url": "http://localhost:4321"',
+        "  }",
+        "}",
+        "",
+      ),
+    });
+  });
+
   it("keeps the Kit config's own indent and line endings", () => {
     const tabbed = '{\r\n\t"operator": "jrey8343",\r\n\t"ui": null\r\n}\r\n';
 

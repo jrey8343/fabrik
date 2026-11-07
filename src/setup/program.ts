@@ -11,19 +11,29 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
+import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { checkOp, chooseAccount } from "./account.ts";
 import { apply, describeAction } from "./apply.ts";
 import { parseSetupArgs, SETUP_USAGE } from "./args.ts";
-import { checkSetup, offerToDeleteOldSetupSkill, setupBranch } from "./checks.ts";
-import type { Env, Run } from "./exec.ts";
-import { closingLines } from "./finish.ts";
+import { checkSetup, offerToDeleteOldSetupSkill, type OriginTips } from "./checks.ts";
+import { type Env, ok, type Run } from "./exec.ts";
+import { appliedLines, closingLines } from "./finish.ts";
 import { gatherState, vaultItems } from "./gather.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type OneRunSteps, readinessOf, runOnce } from "./oneRun.ts";
-import { FABRIK_APP_VAULT, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths } from "./plan.ts";
+import { FABRIK_APP_VAULT, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths, setupWrites } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 import { askQuestions } from "./questions.ts";
-import { commitSetupFiles, earlierSetupRun, publishSetupPr, pushSetupBranch, switchToSetupBranch } from "./setupBranch.ts";
+import {
+  commitSetupFiles,
+  doneRecord,
+  earlierSetupRun,
+  openSetupPr,
+  publishSetupPr,
+  pushSetupBranch,
+  setupBranch,
+  switchToSetupBranch,
+} from "./setupBranch.ts";
 import { pinCaller } from "./shims.ts";
 import { WIZARD_REPORT_ENV, WIZARD_SECOND_SUBSCRIPTION_ENV, type WizardRun } from "./wizard.ts";
 
@@ -63,7 +73,14 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
 
     const before: Run = (command, commandArgs, options) => io.run(command, commandArgs, { ...options, env: io.env });
     const paths = setupPaths(kit);
-    const checked = await checkSetup({ run: before, productDir, release: args.release, env: io.env, nodeVersion: io.nodeVersion, setupPaths: paths });
+    const checked = await checkSetup({
+      run: before,
+      productDir,
+      release: args.release,
+      env: io.env,
+      nodeVersion: io.nodeVersion,
+      setupWrites: setupWrites(kit),
+    });
     if (!checked.ok) return stop(io, checked.problem);
     await offerToDeleteOldSetupSkill({ env: io.env, prompt: args.plan ? null : io.prompt, say: io.say });
     const chosen = await chooseAccount({
@@ -90,11 +107,29 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
     io.say("");
     if (io.prompt === null || args.plan) {
       const toDoIt = args.plan ? "Run setup again without --plan to do it." : "Setup carries the plan out only on your yes, so run it in a terminal to do it.";
-      io.say(withNotes(plan.actions.length === 0 ? [COMPLETE] : [...stepsOf(plan), "", toDoIt], plan));
+      const branch = setupBranch(args.release);
+      const left =
+        plan.actions.length === 0
+          ? [heldBy(branch), `What's left is the wizard, then pushing ${branch} and opening or updating the setup PR.`]
+          : stepsOf(plan);
+      io.say(withNotes(isComplete(plan, checked.branch, branch) ? [COMPLETE] : [...left, "", toDoIt], plan));
       return 0;
     }
     const inTerminal = { ...io, prompt: io.prompt };
-    return await oneRun({ io: inTerminal, run, env, kit, paths, answers, plan, state, release: args.release, current: checked.branch, productDir });
+    return await oneRun({
+      io: inTerminal,
+      run,
+      env,
+      kit,
+      paths,
+      answers,
+      plan,
+      state,
+      release: args.release,
+      current: checked.branch,
+      origin: checked.origin,
+      productDir,
+    });
   } catch (error) {
     return stop(io, error instanceof Error ? error.message : String(error));
   }
@@ -113,32 +148,34 @@ interface OneRunInputs {
   readonly release: string;
   /** The branch the checks found the clone on. */
   readonly current: string;
+  readonly origin: OriginTips;
   readonly productDir: string;
 }
 
 /** The plan, the Operator's yes, and one run from there to the setup PR. */
 async function oneRun(inputs: OneRunInputs): Promise<number> {
-  const { io, run, env, kit, paths, answers, state, release, current, productDir } = inputs;
+  const { io, run, env, kit, paths, answers, state, release, current, origin, productDir } = inputs;
   const cwd = productDir;
   const branch = setupBranch(release);
   const { repo } = state;
   const repoName = `${repo.owner}/${repo.name}`;
 
-  // On the default branch, nothing to plan is a working install. On the
-  // setup branch, an earlier run stopped partway: the wizard and the PR are left.
-  if (inputs.plan.actions.length === 0 && current !== branch) {
+  if (isComplete(inputs.plan, current, branch)) {
     io.say(withNotes([COMPLETE], inputs.plan));
     return 0;
   }
   if (current !== branch) {
-    const earlier = await earlierSetupRun(run, cwd, branch, repo.defaultBranch);
+    const earlier = await earlierSetupRun(run, cwd, branch, repo.defaultBranch, origin.setupBranch);
     if (earlier !== null) return stop(io, earlier);
   }
   // The same actions, with notes that say what this run does once its wizard has run.
   const plan = planSetup(state, kit, answers, { wizardNext: true });
-  io.say(withNotes(plan.actions.length === 0 ? [`${branch} already holds what an earlier run of setup applied.`] : stepsOf(plan), plan));
+  io.say(withNotes(plan.actions.length === 0 ? [heldBy(branch)] : stepsOf(plan), plan));
   io.say("");
 
+  // A run on the setup branch picks up from one that stopped before its PR, which the PR lists too.
+  const record = doneRecord(run, cwd, release);
+  const earlierDone = current === branch ? await record.read() : [];
   let wizardReport = "";
   const steps: OneRunSteps = {
     confirm: async () =>
@@ -150,12 +187,15 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
         ),
       ),
     switchToSetupBranch: async () => {
+      // From the default branch the setup branch starts again, so what earlier runs did on it is history.
+      if (current !== branch) await record.clear();
       await switchToSetupBranch(run, cwd, branch, current);
       io.say(`On ${branch}.`);
     },
     apply: async (actions) => {
       for (const action of actions) {
         await apply(run, action, productDir, repo);
+        await record.add(describeAction(action));
         io.say(`- ${describeAction(action)}`);
       }
     },
@@ -176,22 +216,40 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
       // Read again and planned again: a second Subscription's token the wizard stored gets its subscriptions line from this plan.
       const now = await gatherState(run, cwd, repo, paths);
       const appItems = now.vaults.includes(FABRIK_APP_VAULT) ? await vaultItems(run, cwd, FABRIK_APP_VAULT) : [];
+      const earlierPr = (await openSetupPr(run, cwd, branch))?.body ?? null;
       return {
-        plan: planSetup(now, kit, answers),
-        readiness: readinessOf({ repo: repoName, report: wizardReport, fabrikItems: now.fabrikItems, appItems }),
+        plan: planSetup(now, kit, answers, { wroteStarter: state.files[KIT_CONFIG_PATH] == null }),
+        readiness: readinessOf({ repo: repoName, report: wizardReport, earlierPr, fabrikItems: now.fabrikItems, appItems }),
       };
     },
-    commit: async () => void (await commitSetupFiles(run, cwd, paths, release)),
-    push: () => pushSetupBranch(run, cwd, branch),
-    publish: (summary) => publishSetupPr({ run, cwd, branch, defaultBranch: repo.defaultBranch, release, summary }),
+    commit: () => commitSetupFiles(run, cwd, setupWrites(kit), release),
+    somethingToPublish: async () => {
+      const ahead = Number((await ok(run, "git", ["rev-list", "--count", `${origin.defaultBranch}..HEAD`], { cwd })).trim());
+      return ahead > 0 || (await openSetupPr(run, cwd, branch)) !== null;
+    },
+    leaveSetupBranch: async () => {
+      await ok(run, "git", ["switch", "-q", repo.defaultBranch], { cwd });
+      await ok(run, "git", ["branch", "-q", "-D", branch], { cwd });
+      await record.clear();
+    },
+    push: () => pushSetupBranch(run, cwd, branch, origin.setupBranch),
+    publish: async (summary) => {
+      const published = await publishSetupPr({ run, cwd, branch, defaultBranch: repo.defaultBranch, release, summary });
+      await record.clear();
+      return published;
+    },
   };
 
-  const result = await runOnce({ plan, repo: repoName }, steps);
+  const result = await runOnce({ plan, repo: repoName, earlierDone }, steps);
   if (result.kind === "declined") {
     io.say("Setup changed nothing.");
     return 0;
   }
   io.say("");
+  if (result.kind === "applied") {
+    for (const line of appliedLines(repo.defaultBranch, result.summary)) io.say(line);
+    return 0;
+  }
   const closing = { release, defaultBranch: repo.defaultBranch, url: result.url, summary: result.summary, paused: answers.paused === true };
   for (const line of closingLines(closing)) io.say(line);
   return 0;
@@ -203,6 +261,19 @@ function stop(io: SetupIo, problem: string): number {
 }
 
 const COMPLETE = "Nothing to do: this repo's Fabrik install is complete.";
+
+/**
+ * On the default branch, nothing to plan is a working install. On the setup
+ * branch, an earlier run stopped partway: the wizard and the setup PR are left.
+ */
+function isComplete(plan: SetupPlan, current: string, branch: string): boolean {
+  return plan.actions.length === 0 && current !== branch;
+}
+
+/** What an empty plan on the setup branch means. */
+function heldBy(branch: string): string {
+  return `${branch} already holds what an earlier run of setup applied.`;
+}
 
 /** The plan's steps, as setup would carry them out. */
 function stepsOf(plan: SetupPlan): string[] {

@@ -233,6 +233,13 @@ describe("The bootstrap command", { timeout: 30_000 }, () => {
     expect(curl).toEqual([]);
   });
 
+  it.each(["v24.3.0", "v25.0.0"])("runs the release's program on Node %s", async (nodeVersion) => {
+    const { code, ran } = await bootstrap(["v1.2.3"], { nodeVersion });
+
+    expect(code).toBe(0);
+    expect(ran.map((run) => run.args)).toEqual([[".", "v1.2.3"]]);
+  });
+
   it("run with nothing after --, runs the latest release with no flags", async () => {
     const { code, ran } = await bootstrap([], { latest: "v1.4.2" });
 
@@ -241,11 +248,14 @@ describe("The bootstrap command", { timeout: 30_000 }, () => {
   });
 
   describe("stops before downloading anything", () => {
-    it("on a Node before 24", async () => {
-      const { code, stderr, curl, gh } = await bootstrap(["v1.2.3"], { nodeVersion: "v22.11.0" });
+    // Before 24.3, import.meta.main isn't true for setup's .ts entry point, so the program would exit 0 having done nothing.
+    it.each(["v22.11.0", "v24.2.0"])("on a Node before 24.3, such as %s", async (nodeVersion) => {
+      const { code, stderr, curl, gh } = await bootstrap(["v1.2.3"], { nodeVersion });
 
       expect(code).toBe(1);
-      expect(stderr).toBe("Setup needs Node 24 or later, and this is Node 22.11.0. Install Node 24, then run setup again.\n");
+      expect(stderr).toBe(
+        `Setup needs Node 24.3 or later, and this is Node ${nodeVersion.slice(1)}. Install Node 24.3 or later, then run setup again.\n`,
+      );
       expect(curl).toEqual([]);
       expect(gh).toEqual([]);
     });
@@ -256,7 +266,7 @@ describe("The bootstrap command", { timeout: 30_000 }, () => {
       const { code, stderr, curl } = await bootstrap(["v1.2.3"]);
 
       expect(code).toBe(1);
-      expect(stderr).toBe("Setup needs Node 24 or later, and node isn't installed. Install Node 24, then run setup again.\n");
+      expect(stderr).toBe("Setup needs Node 24.3 or later, and node isn't installed. Install Node 24.3 or later, then run setup again.\n");
       expect(curl).toEqual([]);
     });
 

@@ -39,11 +39,26 @@ export function prBody({ release, defaultBranch, summary }: PrBodyInputs): strin
             "```",
           ]),
     ].join("\n"),
+    ...(summary.appInstalledOn === undefined ? [] : [appInstalledMark(summary.appInstalledOn)]),
   ];
   return `${sections.join("\n\n")}\n`;
 }
 
-/** What an earlier run's PR body says setup did, then what this run did, each once. */
+/** The setup PR's hidden line that the Operator confirmed the Fabrik App is installed on the repo. */
+function appInstalledMark(repo: string): string {
+  return `<!-- fabrik-setup: app-installed ${repo} -->`;
+}
+
+/** Whether an earlier run's setup PR body says the Operator confirmed the Fabrik App is installed on this repo. */
+export function appConfirmedIn(body: string, repo: string): boolean {
+  return body.split(/\r?\n/).some((line) => line.trim() === appInstalledMark(repo));
+}
+
+/**
+ * What an earlier run's PR body says setup did, then what this run did, each
+ * once. Whoever can write the body wrote those lines, so they keep no control
+ * characters, such as a terminal escape, for the closing lines to print.
+ */
 export function withEarlierDone(body: string | null, done: readonly string[]): string[] {
   const earlier: string[] = [];
   if (body !== null) {
@@ -52,7 +67,7 @@ export function withEarlierDone(body: string | null, done: readonly string[]): s
     if (start !== -1) {
       for (const line of lines.slice(start + 1)) {
         if (line.startsWith("## ")) break;
-        if (line.startsWith("- ")) earlier.push(line.slice(2));
+        if (line.startsWith("- ")) earlier.push(line.slice(2).replace(/[\u0000-\u001f\u007f-\u009f]/g, ""));
       }
     }
   }
@@ -84,6 +99,17 @@ export function closingLines({ release, defaultBranch, url, summary, paused }: C
     "",
     "Then:",
     ...bullets(guidance(release, paused)),
+  ];
+}
+
+/** The run's last lines when it wrote no file the default branch lacks, so there's no setup PR. */
+export function appliedLines(defaultBranch: string, summary: RunSummary): string[] {
+  return [
+    "What setup did:",
+    ...(summary.done.length === 0 ? ["- nothing new in this run"] : bullets(summary.done)),
+    ...(summary.notes.length === 0 ? [] : ["", "For the Operator:", ...bullets(summary.notes)]),
+    "",
+    `Every file setup writes is already on ${defaultBranch}, so there's no setup PR to open. Setup switched back to ${defaultBranch}.`,
   ];
 }
 

@@ -1,6 +1,7 @@
-// The setup program's checks, before any planning: Node 24, op as the Operator
-// rather than a service account, the root of the Product repo's clone, gh as
-// the repo's admin with the workflow scope, and a clean, up-to-date branch.
+// The setup program's checks, before any planning: Node 24.3, op as the
+// Operator rather than a service account, the root of the Product repo's
+// clone, gh as the repo's admin with the workflow scope, and a clean,
+// up-to-date branch.
 // The first that fails stops setup, with a message naming what to fix. Once
 // they pass, setup offers to delete an old personal copy of the fabrik-setup
 // skill.
@@ -9,6 +10,7 @@ import { foundOldSetupSkill, oldSetupSkillIn, personalSkillsDir, staleOldSetupSk
 import type { Env, Run } from "./exec.ts";
 import type { ProductState } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
+import { mergedSetupHeads, setupBranch, uncommittedPaths } from "./setupBranch.ts";
 
 export interface CheckInputs {
   readonly run: Run;
@@ -18,8 +20,8 @@ export interface CheckInputs {
   readonly env: Env;
   /** This Node's version, such as 24.11.0. */
   readonly nodeVersion: string;
-  /** Every file setup writes, which its own branch may hold uncommitted after a run that stopped partway. */
-  readonly setupPaths: readonly string[];
+  /** Every file setup may write, which its own branch may hold uncommitted after a run that stopped partway. */
+  readonly setupWrites: readonly string[];
 }
 
 export type Checked =
@@ -28,8 +30,16 @@ export type Checked =
       readonly repo: ProductState["repo"];
       /** The branch the clone is on: the default branch, or setup's own. */
       readonly branch: string;
+      readonly origin: OriginTips;
     }
   | { readonly ok: false; readonly problem: string };
+
+/** The tips of the two branches setup works with, as the checks found them on origin. */
+export interface OriginTips {
+  readonly defaultBranch: string;
+  /** Null when origin has no setup branch for this release. */
+  readonly setupBranch: string | null;
+}
 
 type SignedIn = { readonly ok: true; readonly repo: ProductState["repo"] } | { readonly ok: false; readonly problem: string };
 
@@ -39,9 +49,9 @@ export async function checkSetup(inputs: CheckInputs): Promise<Checked> {
   const signedIn = await checkGitHub(inputs);
   if (!signedIn.ok) return signedIn;
   const branch = (await inputs.run("git", ["branch", "--show-current"], { cwd: inputs.productDir })).stdout.trim();
-  const offBranch = await checkBranch(inputs, signedIn.repo.defaultBranch, branch);
-  if (offBranch !== null) return { ok: false, problem: offBranch };
-  return { ok: true, repo: signedIn.repo, branch };
+  const onBranch = await checkBranch(inputs, signedIn.repo.defaultBranch, branch);
+  if (typeof onBranch === "string") return { ok: false, problem: onBranch };
+  return { ok: true, repo: signedIn.repo, branch, origin: onBranch };
 }
 
 export interface OldCopyInputs {
@@ -64,14 +74,11 @@ export async function offerToDeleteOldSetupSkill({ env, prompt, say }: OldCopyIn
   say("");
 }
 
-/** The branch setup applies its plan on, and a later run of the same release picks up. */
-export function setupBranch(release: string): string {
-  return `fabrik/setup-${release}`;
-}
-
+/** From 24.3, import.meta.main is true for setup's .ts entry point. */
 function checkNode(version: string): string | null {
-  const major = Number(version.split(".")[0]);
-  return major >= 24 ? null : `Setup needs Node 24 or later, and this is Node ${version}. Install Node 24, then run setup again.`;
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  if (major > 24 || (major === 24 && minor >= 3)) return null;
+  return `Setup needs Node 24.3 or later, and this is Node ${version}. Install Node 24.3 or later, then run setup again.`;
 }
 
 /** Setup acts with the Operator's own 1Password access, which a service account's token would limit. It never unsets the token. */
@@ -146,8 +153,13 @@ function repoOf(view: RepoView): ProductState["repo"] {
  * on setup's own branch for this release, built on origin's default branch,
  * with nothing uncommitted but setup's own files. "The same as on origin" is
  * read with git ls-remote, so the checks fetch nothing and write no refs.
+ * Returns what's wrong, or the tips origin has.
  */
-async function checkBranch({ run, productDir, release, setupPaths }: CheckInputs, defaultBranch: string, current: string): Promise<string | null> {
+async function checkBranch(
+  { run, productDir, release, setupWrites }: CheckInputs,
+  defaultBranch: string,
+  current: string,
+): Promise<string | OriginTips> {
   const cwd = productDir;
   const ownBranch = setupBranch(release);
   if (current !== defaultBranch && current !== ownBranch) {
@@ -155,11 +167,11 @@ async function checkBranch({ run, productDir, release, setupPaths }: CheckInputs
     return `${where}. Switch to ${defaultBranch} with git switch ${defaultBranch}, then run setup again.`;
   }
 
-  const changed = changedPaths((await run("git", ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd })).stdout);
+  const changed = await uncommittedPaths(run, cwd);
   if (current === defaultBranch && changed.length > 0) {
     return `This clone has uncommitted changes (${changed.join(", ")}). Commit or stash them, then run setup again.`;
   }
-  const others = changed.filter((path) => !setupPaths.includes(path));
+  const others = changed.filter((path) => !setupWrites.includes(path));
   if (current === ownBranch && others.length > 0) {
     return `${ownBranch} has uncommitted changes setup didn't make (${others.join(", ")}). Commit or stash them, then run setup again.`;
   }
@@ -175,35 +187,28 @@ async function checkBranch({ run, productDir, release, setupPaths }: CheckInputs
   );
   const originDefault = tips.get(refs[0]);
   if (originDefault === undefined) return `origin has no ${defaultBranch} branch. Push ${defaultBranch}, then run setup again.`;
+  const originOwn = tips.get(refs[1]);
+  const origin: OriginTips = { defaultBranch: originDefault, setupBranch: originOwn ?? null };
 
   if (current === defaultBranch) {
     const head = (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
-    if (head === originDefault) return null;
+    if (head === originDefault) return origin;
     return `${defaultBranch} here isn't the same as on origin (${short(head)} here, ${short(originDefault)} on origin). Pull or push so they match, then run setup again.`;
   }
   // A commit this clone lacks isn't its ancestor either: git says so by failing.
   const holds = async (sha: string) => (await run("git", ["merge-base", "--is-ancestor", sha, "HEAD"], { cwd })).code === 0;
   if (!(await holds(originDefault))) {
+    // A squash or rebase merge leaves the branch's own commits off the default branch, and pulling it in would only open a PR again.
+    const head = (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
+    if ((await mergedSetupHeads(run, cwd, ownBranch)).includes(head)) {
+      return `${ownBranch}'s setup PR is merged. Switch to ${defaultBranch} with git switch ${defaultBranch} && git pull, then run setup again.`;
+    }
     return `${ownBranch} doesn't hold origin's latest ${defaultBranch} (${short(originDefault)}). Merge it in with git pull origin ${defaultBranch}, then run setup again.`;
   }
-  const originOwn = tips.get(refs[1]);
   if (originOwn !== undefined && !(await holds(originOwn))) {
     return `origin's ${ownBranch} has commits this clone lacks (${short(originOwn)}). Pull them with git pull origin ${ownBranch}, then run setup again.`;
   }
-  return null;
-}
-
-/** Every path `git status --porcelain=v1 -z` names, a rename's old path included. */
-export function changedPaths(status: string): string[] {
-  const entries = status.split("\0").filter((entry) => entry !== "");
-  const paths: string[] = [];
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i]!;
-    paths.push(entry.slice(3));
-    // A rename or copy is followed by the path it came from.
-    if (/[RC]/.test(entry.slice(0, 2))) paths.push(entries[++i] ?? "");
-  }
-  return paths.filter((path) => path !== "");
+  return origin;
 }
 
 function short(sha: string): string {

@@ -40,16 +40,16 @@ The notes for the minor release that ships Visual evidence on UI pull requests (
 
 ## To turn it on
 
-The setup step is Visual evidence: `/fabrik-visual-evidence` with its answers, whose PR writes them, and the setup wizard's stage "Visual evidence" checks it's on. It started as `/fabrik-setup`'s Visual evidence step, which [#334](https://github.com/jrey8343/fabrik/issues/334) moved into its own skill. Turn it on for the Pilot now, with no preview. The other Product repos can take the step whenever they want it.
+The setup step is Visual evidence: `/fabrik-setup` with its answers, whose wizard stage "Visual evidence" checks it's on. Turn it on for the Pilot now, with no preview. The other Product repos can take the step whenever they want it.
 
-1. **The Pilot now.** Merge this release's bump PR in the Pilot only. Then run `/fabrik-visual-evidence` in a Claude session there, and confirm or correct each answer it suggests:
+1. **The Pilot now.** Merge this release's bump PR in the Pilot only. Then re-run `/fabrik-setup` at this release there, saying yes to Visual evidence, and answer:
    - `ui.paths`: the files that make up its pages, such as its page, layout, component and style files;
    - `ui.serve` and `ui.url`: the command that serves its built site, and the local URL it serves on;
    - `ui.before_url`: its production site, so Before comes from the live site without a second build;
    - `ui.default_routes`: at least `/`;
-   - `preview.url`: none. The skill writes `"preview": { "url": null }`, which the Kit reads as `preview: null`, so no preview is linked. The Pilot has no preview host, and setting one up is a separate Operator decision.
+   - `preview.url`: none. Setup writes `"preview": { "url": null }`, which the Kit reads as `preview: null`, so no preview is linked. The Pilot has no preview host, and setting one up is a separate Operator decision.
 
-   Before merging, check that the Pilot's `sandbox.build` and `ui.serve` work without its `sandbox.secrets`, which they don't get. If either needs a value, give it a non-secret stand-in in `sandbox.env`, or capture will fail with `build-failed` or `server-did-not-start`. Then merge the skill's PR: the push job reads the `ui` block from the default branch. Running `/fabrik-visual-evidence` again with the same answers then writes nothing, and the wizard's "Visual evidence" stage says it's on.
+   Before merging, check that the Pilot's `sandbox.build` and `ui.serve` work without its `sandbox.secrets`, which they don't get. If either needs a value, give it a non-secret stand-in in `sandbox.env`, or capture will fail with `build-failed` or `server-did-not-start`. Then merge the setup PR: the push job reads the `ui` block from the default branch. Re-running setup with the same answers then plans nothing for it, and the wizard's "Visual evidence" stage says it's on.
 2. **Check it on a real UI issue** in the Pilot before the release goes anywhere else. Open an issue that changes a page and names its route in backticks, and let it run to its draft PR's Review:
    - the Implement job's step summary says, under **UI evidence**, how many screenshots it captured of how many routes;
    - the PR's evidence section links a gallery that opens in one click, with Before and After at mobile and desktop widths for each route, and says Kit config declares no preview;
@@ -57,4 +57,4 @@ The setup step is Visual evidence: `/fabrik-visual-evidence` with its answers, w
    - the Review job's "Download the UI evidence" step succeeded, and the Review run's transcript shows the Reviewer opening the screenshots in `fabrik-ui-evidence/`; a visual problem comes back as an Execution flaw that names the route and the screenshot;
    - a Retry or Request-changes run replaces the evidence section with its own;
    - a PR that touches no file in `ui.paths` gets no evidence section.
-3. **Then the other Product repos, when they want it.** In each, merge the bump PR: the repo runs as before, with one quiet line in each Implement run's Kit job step summary saying Visual evidence is off. To turn it on, run `/fabrik-visual-evidence` there, after the same check that `sandbox.build` and `ui.serve` work without `sandbox.secrets`. A repo with a preview host gives `preview.url`, checking first that the host names a branch's preview as `{branch_slug}` does. A repo with no public production site leaves `before_url` out and still gets After evidence. A repo with no UI never takes the step.
+3. **Then the other Product repos, when they want it.** In each, merge the bump PR: the repo runs as before, with one quiet line in each Implement run's Kit job step summary saying Visual evidence is off. To turn it on, re-run `/fabrik-setup` and answer its Visual evidence step, after the same check that `sandbox.build` and `ui.serve` work without `sandbox.secrets`. A repo with a preview host gives `preview.url`, checking first that the host names a branch's preview as `{branch_slug}` does. A repo with no public production site leaves `before_url` out and still gets After evidence. A repo with no UI never takes the step.

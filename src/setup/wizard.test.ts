@@ -2,20 +2,25 @@
 // terminal, so it's run here as they'd walk it: with `gh`, `op` and the
 // browser stubbed, and their answers piped in.
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
 import { WIZARD_PATH as WIZARD, WIZARD_REPORT_ENV, WIZARD_SECOND_SUBSCRIPTION_ENV } from "./wizard.ts";
 
-/** An `op` that holds the given "vault/title" items, and logs each call with the template it was given. */
+/**
+ * An `op` that holds the given "vault/title" items, and logs each call with the
+ * template it was given, from a file or, after a lone -, on stdin.
+ */
 const FAKE_OP = `#!/usr/bin/env node
 const { appendFileSync, readFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 const flag = (name) => { const i = args.indexOf(name); return i < 0 ? null : args[i + 1]; };
-const template = flag("--template");
+const file = flag("--template");
+const text = file !== null ? readFileSync(file, "utf8") : args.includes("-") ? readFileSync(0, "utf8") : null;
 appendFileSync(process.env.STUB_DIR + "/op.log", JSON.stringify({
-  args, template: template === null ? null : JSON.parse(readFileSync(template, "utf8")),
+  args, templateFile: file, template: text === null ? null : JSON.parse(text),
 }) + "\\n");
 if (args[0] === "item" && args[1] === "get") {
   const items = JSON.parse(process.env.STUB_OP_ITEMS);
@@ -59,6 +64,8 @@ const THE_APP_AND_CLAUDE = ["Fabrik App/Fabrik App", "Fabrik/Claude token"];
 
 interface OpCall {
   args: string[];
+  /** Where the template was, when op was given one by its path. */
+  templateFile: string | null;
   template: unknown;
 }
 
@@ -159,6 +166,11 @@ function created(w: Walk): { vault: string | undefined; item: unknown }[] {
   return w.op
     .filter((c) => c.args[0] === "item" && c.args[1] === "create")
     .map((c) => ({ vault: c.args[c.args.indexOf("--vault") + 1], item: c.template }));
+}
+
+/** The template files `op item create` was given that are still on disk. */
+function templatesLeft(w: Walk): string[] {
+  return w.op.flatMap((c) => (c.templateFile !== null && existsSync(c.templateFile) ? [c.templateFile] : []));
 }
 
 /** Each `op item delete` call's arguments. */
@@ -290,6 +302,69 @@ describe("The setup wizard's Fabrik App stage", () => {
   });
 });
 
+describe("The setup wizard's Fabrik App key stage", () => {
+  const PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0fabrik\n-----END RSA PRIVATE KEY-----\n";
+
+  it("stores the Client ID and the key file's private key as the 'Fabrik App' item, the key never in op's arguments", async () => {
+    const downloads = await tempDir("wizard-downloads");
+    const key = join(downloads, "fabrik.pem");
+    await writeFile(key, PEM);
+
+    const w = await walk(["Fabrik/Claude token"], ["", "fabrik-factory", "", "Iv1.0123abcd", key, "n", "n", ""]);
+
+    expect(w.status).toBe(0);
+    expect(created(w)).toEqual([
+      {
+        vault: "Fabrik App",
+        item: {
+          title: "Fabrik App",
+          category: "SECURE_NOTE",
+          fields: [
+            { id: "client-id", type: "STRING", label: "client-id", value: "Iv1.0123abcd" },
+            { id: "private-key", type: "CONCEALED", label: "private-key", value: PEM },
+          ],
+        },
+      },
+    ]);
+    expect(w.op.filter((c) => c.args.some((arg) => arg.includes("PRIVATE KEY")))).toEqual([]);
+    expect(w.stdout).toContain("stored the 'Fabrik App' item in 1Password");
+  });
+});
+
+describe("The setup wizard's Claude token stage", () => {
+  /** To the Claude token's paste, 1Password holding the App's key. */
+  const TO_THE_PASTE = ["", "fabrik-factory", "", ""];
+
+  it("stores nothing when the Operator pastes nothing, and leaves the token to do", async () => {
+    const w = await walk(["Fabrik App/Fabrik App"], [...TO_THE_PASTE, "", ""]);
+
+    expect(w.status).toBe(0);
+    expect(created(w)).toEqual([]);
+    expect(deleted(w)).toEqual([]);
+    expect(w.stdout).toContain("No token pasted.");
+    expect(w.stdout).not.toContain("stored the Claude token");
+    expect(w.stdout).toMatch(/still to do by hand:\n.*the 'Claude token' API Credential in the 'Fabrik' vault/);
+  });
+
+  it("leaves no copy of the token on disk when 1Password doesn't store it", async () => {
+    const w = await walk(["Fabrik App/Fabrik App"], [...TO_THE_PASTE, "sk-ant-oat01-first", ""], undefined, { createFails: true });
+
+    expect(w.status).not.toBe(0);
+    expect(created(w)).toHaveLength(1);
+    expect(templatesLeft(w)).toEqual([]);
+  });
+
+  it("keeps the token 1Password holds when the replacement pasted is nothing", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_PASTE, "y", "", ""]);
+
+    expect(w.status).toBe(0);
+    expect(created(w)).toEqual([]);
+    expect(deleted(w)).toEqual([]);
+    expect(w.stdout).toContain("Keeping the current token.");
+    expect(w.stdout).not.toContain("still to do by hand");
+  });
+});
+
 describe("The setup wizard's Sentry token stage", () => {
   it("opens Sentry's token page and names the scopes the token needs", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_SENTRY_STAGE, "y", "sntryu_0123abcd"]);
@@ -313,6 +388,14 @@ describe("The setup wizard's Sentry token stage", () => {
         },
       },
     ]);
+  });
+
+  it("leaves no copy of the token on disk when 1Password doesn't store it", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_SENTRY_STAGE, "y", "sntryu_0123abcd"], undefined, { createFails: true });
+
+    expect(w.status).not.toBe(0);
+    expect(created(w)).toHaveLength(1);
+    expect(templatesLeft(w)).toEqual([]);
   });
 
   it("refuses an organization auth token, whose scopes don't cover issues, and leaves the token to do by hand", async () => {
@@ -560,9 +643,17 @@ describe("The setup wizard run by setup", () => {
     expect(w.stdout).not.toContain("Next: open an issue");
   });
 
+  it("ends saying the wizard is done, not Setup, which goes on to the setup PR", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, { bySetup: true });
+
+    expect(w.stdout).toContain("✓ The wizard is done");
+    expect(w.stdout).not.toContain("Setup complete");
+  });
+
   it("run on its own, still ends by saying to open an issue, and reports nothing", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE);
 
+    expect(w.stdout).toContain("✓ Setup complete");
     expect(w.stdout).toContain("Next: open an issue on acme/clinic.");
     expect(w.report).toEqual([]);
   });

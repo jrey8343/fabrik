@@ -5,7 +5,7 @@
   "description": "The Fabrik Kit: the Loop rules core and its GitHub glue",
   "type": "module",
   "engines": {
-    "node": ">=24"
+    "node": ">=24.3"
   },
   "scripts": {
     "test": "vitest run",

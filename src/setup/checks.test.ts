@@ -16,7 +16,7 @@ import {
 } from "../__fixtures__/setupCommands.ts";
 import { checkSetup } from "./checks.ts";
 
-const SETUP_PATHS = [".github/workflows/fabrik.yml", ".fabrik/config.json", "docs/agents/domain.md", "AGENTS.md"];
+const SETUP_WRITES = [".github/workflows/fabrik.yml", ".fabrik/config.json", "docs/agents/domain.md", "AGENTS.md"];
 
 let productDir: string;
 
@@ -32,7 +32,7 @@ function check(overrides: Record<string, Answer> = {}, options: { env?: Record<s
     release: "v1.4.2",
     env: options.env ?? {},
     nodeVersion: options.nodeVersion ?? "24.11.0",
-    setupPaths: SETUP_PATHS,
+    setupWrites: SETUP_WRITES,
   });
   return { result, commands };
 }
@@ -51,11 +51,18 @@ describe("The checks before setup plans anything", () => {
       ok: true,
       repo: { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: false },
       branch: "main",
+      origin: { defaultBranch: HEAD_SHA, setupBranch: null },
     });
   });
 
-  it("stop on Node before 24", async () => {
-    expect(await problem({}, { nodeVersion: "22.11.0" })).toMatch(/Node 24 or later.*22\.11\.0/);
+  it.each(["22.11.0", "24.2.0"])("stop on Node before 24.3, such as %s", async (nodeVersion) => {
+    expect(await problem({}, { nodeVersion })).toBe(
+      `Setup needs Node 24.3 or later, and this is Node ${nodeVersion}. Install Node 24.3 or later, then run setup again.`,
+    );
+  });
+
+  it.each(["24.3.0", "25.0.0"])("pass on Node %s", async (nodeVersion) => {
+    expect((await check({}, { nodeVersion }).result).ok).toBe(true);
   });
 
   it("stop when OP_SERVICE_ACCOUNT_TOKEN is set, asking to be run without it, and leave it set", async () => {
@@ -175,7 +182,9 @@ describe("The checks before setup plans anything", () => {
     });
 
     it("stop when it lacks the default branch's latest commit on origin", async () => {
-      expect(await problem({ ...onSetupBranch, [lsRemote("v1.4.2")]: { stdout: `${OTHER_SHA}\trefs/heads/main\n` } })).toBe(
+      const unmerged = { "gh pr list --head fabrik/setup-v1.4.2 --state merged": { stdout: "[]" } };
+
+      expect(await problem({ ...onSetupBranch, ...unmerged, [lsRemote("v1.4.2")]: { stdout: `${OTHER_SHA}\trefs/heads/main\n` } })).toBe(
         "fabrik/setup-v1.4.2 doesn't hold origin's latest main (9f86d08). Merge it in with git pull origin main, then run setup again.",
       );
     });

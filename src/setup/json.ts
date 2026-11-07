@@ -46,38 +46,44 @@ export function printMembers(members: readonly (readonly [string, unknown])[], l
  * printed as Prettier prints it, and every other byte kept as it was. The
  * member is set where it stands when its object has it, and otherwise after
  * that object's last member. A one-line object it changes goes one member per
- * line, as Prettier breaks it. `["ui"]` is a top-level member, and
+ * line, as Prettier breaks it, and so does every one-line object around it,
+ * since Prettier breaks those too. `["ui"]` is a top-level member, and
  * `["ui", "url"]` one in the `ui` object, which must be there.
  */
 export function withMember(text: string, path: readonly string[], value: unknown): string {
   const key = path.at(-1);
   if (key === undefined) throw new Error("withMember needs the path of a member");
+  const layout = layoutOf(text);
   let open = text.indexOf("{");
-  for (const parent of path.slice(0, -1)) {
+  for (const [depth, parent] of path.slice(0, -1).entries()) {
+    text = expanded(text, open, depth + 1, layout);
     const member = membersOf(text, open).members.findLast((m) => m.key === parent);
     if (member === undefined || text[member.valueStart] !== "{") throw new Error(`${path.join(".")} isn't in an object`);
     open = member.valueStart;
   }
-  return setMember(text, open, path.length, key, value);
+  return setMember(expanded(text, open, path.length, layout), open, path.length, key, value, layout);
 }
 
-/** The text with this member of the object whose brace is at `open` set, its members `level` deep. */
-function setMember(text: string, open: number, level: number, key: string, value: unknown): string {
-  const layout = layoutOf(text);
-  const { indent, eol } = layout;
+/**
+ * The text with the object whose brace is at `open`, its members `level` deep,
+ * one member per line when it was on one line, each member's own text kept.
+ */
+function expanded(text: string, open: number, level: number, { indent, eol }: JsonLayout): string {
+  const { members, close } = membersOf(text, open);
+  if (text.slice(open, members[0]?.start ?? close).includes("\n")) return text;
+  const lines = members.map((m) => `${indent.repeat(level)}${text.slice(m.start, m.end)}`);
+  const body = lines.length === 0 ? "" : `${lines.join(`,${eol}`)}${eol}`;
+  return `${text.slice(0, open)}{${eol}${body}${indent.repeat(level - 1)}}${text.slice(close + 1)}`;
+}
+
+/** The text with this member of the object whose brace is at `open` set, its members `level` deep and one per line. */
+function setMember(text: string, open: number, level: number, key: string, value: unknown, layout: JsonLayout): string {
+  const { eol } = layout;
   const { members, close } = membersOf(text, open);
   const head = `${JSON.stringify(key)}: `;
   // JSON.parse keeps a repeated key's last value, so that's the one to set.
   const at = members.findLastIndex((member) => member.key === key);
   const member = members[at];
-  if (!text.slice(open, members[0]?.start ?? close).includes("\n")) {
-    const lines = members.map((m) => text.slice(m.start, m.end));
-    const index = member === undefined ? lines.length : at;
-    const last = member === undefined ? lines.length : lines.length - 1;
-    lines[index] = `${head}${printValue(value, layout, level, widthOf(indent.repeat(level) + head), index < last)}`;
-    const body = lines.map((line) => `${indent.repeat(level)}${line}`).join(`,${eol}`);
-    return `${text.slice(0, open)}{${eol}${body}${eol}${indent.repeat(level - 1)}}${text.slice(close + 1)}`;
-  }
   if (member !== undefined) {
     const column = widthOf(text.slice(text.lastIndexOf("\n", member.start) + 1, member.start) + head);
     return `${text.slice(0, member.start)}${head}${printValue(value, layout, level, column, at < members.length - 1)}${text.slice(member.end)}`;

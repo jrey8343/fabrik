@@ -181,6 +181,12 @@ export interface PlanContext {
    * does. Without it, a step the wizard leaves to setup waits for its next run.
    */
   readonly wizardNext?: boolean;
+  /**
+   * The repo's Kit config is the starter this run of setup wrote, as the plan
+   * made after the wizard finds it: its notes are a fresh install's, not those
+   * for a Kit config the Product already had.
+   */
+  readonly wroteStarter?: boolean;
 }
 
 export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnswers = {}, context: PlanContext = {}): SetupPlan {
@@ -202,7 +208,7 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
     if ("note" in update) notes.push(update.note);
     else actions.push(write(path, update.content, why));
   }
-  actions.push(...kitConfig(state, kit, answers, notes));
+  actions.push(...kitConfig(state, kit, answers, notes, context));
   actions.push(...starters(state, kit));
   const present = new Set(state.labels.map((label) => label.toLowerCase()));
   for (const name of ALL_LABELS) {
@@ -222,11 +228,13 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
  * Operator's yes to a second Subscription. Visual evidence, the one block that
  * needs judgment, is /fabrik-visual-evidence's to write (Spec #330).
  */
-function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, notes: string[]): SetupAction[] {
+function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, notes: string[], { wroteStarter = false }: PlanContext): SetupAction[] {
   const existing = state.files[KIT_CONFIG_PATH] ?? null;
   const paused = answers.paused === true;
   if (existing !== null) {
-    if (paused) notes.push(pausedHadNoEffect(existing));
+    if (wroteStarter) {
+      if (!paused) notes.push(...readyForAgentWarning(state.readyForAgent));
+    } else if (paused) notes.push(pausedHadNoEffect(existing));
     const listed = withSecondSubscription(existing, state, answers);
     return listed === null ? [] : [write(KIT_CONFIG_PATH, listed, `list the second Subscription, "${SECOND_SUBSCRIPTION}", in subscriptions`)];
   }
@@ -405,17 +413,23 @@ function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, no
   return actions;
 }
 
-/** Every file planSetup reads from the Product checkout. */
+/** Every file planSetup reads from the Product checkout: what it writes, and what it only reads. */
 export function setupPaths(kit: SetupKit): readonly string[] {
+  return [...setupWrites(kit), ...PRETTIER_DETECTION_PATHS, SKILLS_SOURCES_LOCK_PATH];
+}
+
+/**
+ * Every file planSetup may write in the Product checkout. The setup commit
+ * takes only these, and only these may be uncommitted on the setup branch.
+ */
+export function setupWrites(kit: SetupKit): readonly string[] {
   return [
     CALLER_PATH,
     SETTINGS_PATH,
     GITIGNORE_PATH,
     PRETTIERIGNORE_PATH,
-    ...PRETTIER_DETECTION_PATHS,
     DEPENDABOT_PATH,
     KIT_CONFIG_PATH,
-    SKILLS_SOURCES_LOCK_PATH,
     ...Object.keys(kit.templates.docsAgents).map((name) => `docs/agents/${name}`),
     "AGENTS.md",
     "CLAUDE.md",

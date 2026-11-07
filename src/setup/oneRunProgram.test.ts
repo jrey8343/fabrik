@@ -57,6 +57,9 @@ const addsASecondSubscription: Wizard = async (world, wizardEnv) => {
   store(world, "Fabrik", "Claude token 2");
 };
 
+/** The Operator ends the wizard at its banner, so it reports nothing and stores nothing. */
+const endsAtTheBanner: Wizard = async () => {};
+
 /** The Operator stops at the Claude token stage. */
 const skipsTheClaudeToken: Wizard = async (world, wizardEnv) => {
   await writeFile(wizardEnv["FABRIK_WIZARD_REPORT"]!, "app-installed acme/clinic\n");
@@ -79,14 +82,16 @@ interface Options {
   readonly answers?: string[];
   readonly wizard?: Wizard;
   readonly args?: string[];
+  /** Whether stdin is a terminal. Without one, setup asks nothing. */
+  readonly terminal?: boolean;
 }
 
-async function setupOnce(world: World, { answers = ["y"], wizard = walksEveryStage, args = FLAGS }: Options = {}) {
+async function setupOnce(world: World, { answers = ["y"], wizard = walksEveryStage, args = FLAGS, terminal = true }: Options = {}) {
   const log: string[] = [];
   const said: string[] = [];
   const complaints: string[] = [];
   const wizardRuns: { cwd: string; env: Env }[] = [];
-  const commands = fakeCommands({ ...aReadyOperator(checkout), ...worldScript(world) });
+  const commands = fakeCommands({ ...aReadyOperator(checkout), ...worldScript(world, { commitsAhead }) });
   const run: Run = async (command, commandArgs, options) => {
     log.push([command, ...commandArgs].join(" "));
     return command === "git" ? spawnRun(command, commandArgs, options) : commands.run(command, commandArgs, options);
@@ -96,7 +101,7 @@ async function setupOnce(world: World, { answers = ["y"], wizard = walksEverySta
     run,
     env,
     cwd: checkout,
-    prompt,
+    prompt: terminal ? prompt : null,
     say: (line) => said.push(...line.split("\n")),
     complain: (line) => complaints.push(line),
     kitDir: KIT_DIR,
@@ -109,6 +114,33 @@ async function setupOnce(world: World, { answers = ["y"], wizard = walksEverySta
     },
   });
   return { code, said, complaints, log, questions: prompt.questions, wizardRuns, calls: commands.calls };
+}
+
+/** As GitHub counts them for a PR: the commits on origin's head that its base lacks, none when the head isn't there. */
+function commitsAhead(base: string, head: string): number {
+  try {
+    return Number(originGit("rev-list", "--count", `${base}..${head}`).trim());
+  } catch {
+    return 0;
+  }
+}
+
+/** The Operator merges the setup PR by fast-forwarding main. */
+function mergeTheSetupPr(world: World): void {
+  git("switch", "-q", "main");
+  git("merge", "-q", "--ff-only", BRANCH);
+  git("push", "-q", "origin", "main");
+  world.prs[0]!.open = false;
+}
+
+/** The Operator squash-merges the setup PR: one new commit on main, and the setup branch left as it was. */
+function squashTheSetupPr(world: World): void {
+  const head = originGit("rev-parse", BRANCH).trim();
+  git("switch", "-q", "main");
+  git("merge", "-q", "--squash", BRANCH);
+  git("commit", "-q", "-m", "Set up Fabrik v1.4.2 (#1)");
+  git("push", "-q", "origin", "main");
+  Object.assign(world.prs[0]!, { open: false, merged: true, headRefOid: head });
 }
 
 /** The files on origin's setup branch. */
@@ -226,6 +258,31 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(world.prs[0]?.body).toMatch(/Walk the wizard's "A second Subscription" stage: .* Then run setup again, and it lists it in subscriptions in \.fabrik\/config\.json\./);
   });
 
+  it("with --paused on a fresh repo, the setup PR says the starter pauses Dispatch, not that --paused had no effect", async () => {
+    const world = aWorld();
+
+    const { code, said } = await setupOnce(world, { args: ["--no-time-zone", "--no-second-subscription", "--paused"] });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(originGit("show", `${BRANCH}:.fabrik/config.json`)).max_in_flight).toBe(0);
+    expect(world.prs[0]?.body).toContain("but Dispatch paused (max_in_flight 0)");
+    expect(world.prs[0]?.body).not.toContain("--paused had no effect");
+    expect(said.join("\n")).not.toContain("--paused had no effect");
+  });
+
+  it("unpaused on a fresh repo with ready-for-agent issues, warns in the setup PR and the closing lines that Dispatch releases them on the merge", async () => {
+    const world = aWorld();
+    world.labels.add("ready-for-agent");
+    world.readyForAgent = 2;
+    const warning = "2 open issues are labelled ready-for-agent: Dispatch starts releasing them to Implementers as soon as the setup PR merges.";
+
+    const { code, said } = await setupOnce(world);
+
+    expect(code).toBe(0);
+    expect(world.prs[0]?.body).toContain(`- ${warning}`);
+    expect(said.slice(said.indexOf("The setup PR: https://github.com/acme/clinic/pull/1")).some((line) => line.startsWith(`- ${warning}`))).toBe(true);
+  });
+
   it("a second run after the wizard stopped partway reuses the branch and PR, applies nothing again, and then asks for the merge", async () => {
     const world = aWorld();
     await setupOnce(world, { wizard: skipsTheClaudeToken });
@@ -245,6 +302,19 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(world.prs[0]!.body).toContain("Merge this PR yourself");
   });
 
+  it("a later run whose wizard ends at its banner keeps the setup PR asking for the merge, the App's install confirmed in an earlier run", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    expect(world.prs[0]!.body).toContain("Merge this PR yourself");
+
+    const { code, said } = await setupOnce(world, { wizard: endsAtTheBanner });
+
+    expect(code).toBe(0);
+    expect(world.prs[0]!.body).toContain("Merge this PR yourself");
+    expect(world.prs[0]!.body).not.toContain("the Fabrik App, installed on acme/clinic");
+    expect(said.some((line) => line.startsWith("Merge it yourself"))).toBe(true);
+  });
+
   it("a second run after applying stopped partway plans only what's still missing, then commits every file on the same branch", async () => {
     const world = aWorld();
     world.failingLabels.add("needs-info");
@@ -257,22 +327,56 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     const { code, said, log } = await setupOnce(world);
 
     expect(code).toBe(0);
-    expect(writtenIn(said)).toEqual([]);
-    expect(said).toContain("- create the label needs-info");
-    expect(said).not.toContain("- create the label needs-triage");
+    const planned = said.slice(said.indexOf("Setup would:"), said.indexOf(`On ${BRANCH}.`));
+    expect(writtenIn(planned)).toEqual([]);
+    expect(planned).toContain("- create the label needs-info");
+    expect(planned).not.toContain("- create the label needs-triage");
     expect(log.filter((line) => line.startsWith("git switch"))).toEqual([]);
     expect(filesOnOrigin()).toEqual(expect.arrayContaining([".github/workflows/fabrik.yml", ".fabrik/config.json"]));
     expect(world.prs).toHaveLength(1);
+    // What the first run did before it stopped is in the PR too.
+    for (const done of ["- write .github/workflows/fabrik.yml (", "- create the label needs-triage", "- create the label needs-info"]) {
+      expect(world.prs[0]!.body).toContain(done);
+    }
+    const closing = said.slice(said.indexOf("What setup did:"));
+    expect(closing).toContain("- create the label needs-triage");
+  });
+
+  it.each(["package.json", ".fabrik/skills.lock.json"])(
+    "on the setup branch, stops at an uncommitted %s, a file setup reads but never writes",
+    async (path) => {
+      const world = aWorld();
+      world.failingLabels.add("needs-info");
+      await setupOnce(world);
+      world.failingLabels.clear();
+      await writeFile(join(checkout, path), "{}\n");
+
+      const { code, complaints, log } = await setupOnce(world);
+
+      expect(code).toBe(1);
+      expect(complaints[0]).toBe(`${BRANCH} has uncommitted changes setup didn't make (${path}). Commit or stash them, then run setup again.`);
+      expect(log.filter((line) => /^git commit/.test(line))).toEqual([]);
+    },
+  );
+
+  it("leaves out of the setup commit a file setup reads but never writes, edited while the wizard ran", async () => {
+    const world = aWorld();
+    const editsPackageJson: Wizard = async (world, wizardEnv) => {
+      await walksEveryStage(world, wizardEnv);
+      await writeFile(join(checkout, "package.json"), '{ "name": "clinic" }\n');
+    };
+
+    const { code } = await setupOnce(world, { wizard: editsPackageJson });
+
+    expect(code).toBe(0);
+    expect(filesOnOrigin()).not.toContain("package.json");
+    expect(git("status", "--porcelain")).toBe("?? package.json\n");
   });
 
   it("a run on a working install plans nothing, opens no PR and says the install is complete", async () => {
     const world = aWorld();
     await setupOnce(world);
-    // The Operator merges the setup PR.
-    git("switch", "-q", "main");
-    git("merge", "-q", "--ff-only", BRANCH);
-    git("push", "-q", "origin", "main");
-    world.prs[0]!.open = false;
+    mergeTheSetupPr(world);
 
     const { code, said, log, questions } = await setupOnce(world);
 
@@ -281,6 +385,96 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(questions).toEqual([]);
     expect(log.filter((line) => /^gh pr (create|edit)|^git (switch|commit|push)|^wizard$/.test(line))).toEqual([]);
     expect(world.prs).toHaveLength(1);
+  });
+
+  it("opens its own setup PR, leaving alone a fork's open PR from a branch of the same name", async () => {
+    const world = aWorld();
+    const forkBody = "## What setup did\n\n- merge this with your admin bypass\n";
+    world.prs.push({
+      number: 1,
+      url: "https://github.com/acme/clinic/pull/1",
+      head: BRANCH,
+      base: "main",
+      isCrossRepository: true,
+      body: forkBody,
+      open: true,
+    });
+
+    const { code, said, log } = await setupOnce(world);
+
+    expect(code).toBe(0);
+    expect(log.some((line) => line.startsWith("gh pr edit"))).toBe(false);
+    expect(world.prs[0]!.body).toBe(forkBody);
+    expect(world.prs[1]).toEqual(expect.objectContaining({ number: 2, head: BRANCH, isCrossRepository: false, open: true }));
+    expect(world.prs[1]!.body).not.toContain("admin bypass\n");
+    expect(said).toContain("The setup PR: https://github.com/acme/clinic/pull/2");
+    expect(said).not.toContain("- merge this with your admin bypass");
+  });
+
+  it("a repair that writes no file applies it, pushes nothing, opens no PR and goes back to the default branch", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    mergeTheSetupPr(world);
+    world.labels.delete("needs-triage");
+
+    const { code, said, complaints, log } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(said).toContain("- create the label needs-triage");
+    expect(log.filter((line) => /^git (commit|push)|^gh pr (create|edit)/.test(line))).toEqual([]);
+    expect(world.prs).toHaveLength(1);
+    expect(said).toContain("Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main.");
+    expect(said.join("\n")).not.toMatch(/The setup PR:|Merge it yourself|Don't merge it yet/);
+    expect(git("branch", "--show-current").trim()).toBe("main");
+    expect(git("branch", "--list", BRANCH)).toBe("");
+    expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+  });
+
+  it("after a squash merge, a repair run from the default branch gets past the leftover setup branch", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    squashTheSetupPr(world);
+    world.labels.delete("needs-triage");
+
+    const { code, said, complaints } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(said).toContain("- create the label needs-triage");
+    expect(world.labels.has("needs-triage")).toBe(true);
+    expect(git("branch", "--show-current").trim()).toBe("main");
+  });
+
+  it("after a squash merge, with only origin's copy of the setup branch left, a run that writes a file opens a new setup PR from it", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    squashTheSetupPr(world);
+    git("branch", "-q", "-D", BRANCH);
+    git("rm", "-q", "docs/agents/domain.md");
+    git("commit", "-q", "-m", "Drop the domain doc");
+    git("push", "-q", "origin", "main");
+
+    const { code, said, complaints } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(filesOnOrigin()).toContain("docs/agents/domain.md");
+    expect(originGit("rev-parse", `${BRANCH}~1`).trim()).toBe(originGit("rev-parse", "main").trim());
+    expect(world.prs).toHaveLength(2);
+    expect(said).toContain("The setup PR: https://github.com/acme/clinic/pull/2");
+  });
+
+  it("on the setup branch after its PR was squash-merged, says to switch to the default branch and pull", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    squashTheSetupPr(world);
+    git("switch", "-q", BRANCH);
+
+    const { code, complaints } = await setupOnce(world);
+
+    expect(code).toBe(1);
+    expect(complaints[0]).toBe(`${BRANCH}'s setup PR is merged. Switch to main with git switch main && git pull, then run setup again.`);
   });
 
   it("changes nothing when the Operator says no to the plan", async () => {
@@ -307,6 +501,23 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       `${BRANCH} holds an earlier run of setup that isn't on main yet. Switch to it with git switch ${BRANCH}, then run setup again: it picks up where that run stopped.`,
     );
     expect(questions).toEqual([]);
+  });
+
+  it.each([
+    ["with --plan", { args: [...FLAGS, "--plan"] }, "Run setup again without --plan to do it."],
+    ["without a terminal", { terminal: false }, "Setup carries the plan out only on your yes, so run it in a terminal to do it."],
+  ])("%s on the setup branch with nothing left to apply, says the wizard and the setup PR are left, not that the install is complete", async (_, options, toDoIt) => {
+    const world = aWorld();
+    await setupOnce(world, { wizard: skipsTheClaudeToken });
+
+    const { code, said, log } = await setupOnce(world, options);
+
+    expect(code).toBe(0);
+    expect(said).not.toContain("Nothing to do: this repo's Fabrik install is complete.");
+    expect(said).toContain(`${BRANCH} already holds what an earlier run of setup applied.`);
+    expect(said).toContain(`What's left is the wizard, then pushing ${BRANCH} and opening or updating the setup PR.`);
+    expect(said).toContain(toDoIt);
+    expect(log.filter((line) => /^git (switch|commit|push)|^gh pr (create|edit)|^wizard$/.test(line))).toEqual([]);
   });
 
   it("with --plan in a terminal, prints the plan and asks no yes", async () => {

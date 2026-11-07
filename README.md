@@ -51,7 +51,7 @@ The Operator adopts the Kit in a Product repo by running Setup in their own term
 curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s --
 ```
 
-There's nothing to copy or install first. `setup.sh` checks for Node 24 and `gh`, downloads Fabrik's latest release into a temporary folder, runs that release's setup program, and deletes the folder whatever the outcome. To set up another release, name it after the `--`, as an exact tag such as `v1.0.0`:
+There's nothing to copy or install first. `setup.sh` checks for Node 24.3 or later and `gh`, downloads Fabrik's latest release into a temporary folder, runs that release's setup program, and deletes the folder whatever the outcome. To set up another release, name it after the `--`, as an exact tag such as `v1.0.0`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.0.0
@@ -59,7 +59,7 @@ curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bas
 
 Setup's flags go after the release, if one is named: `--account=<1Password account>`, `--time-zone=<IANA zone>`, `--second-subscription`, `--paused` and `--plan`. Each question's flag also has a `--no-` form, and Setup asks only what the flags left out.
 
-Setup first checks that it's in the clone's root, on the default branch, clean and the same as on `origin`; that `gh` is signed in as the repo's admin with the `workflow` scope; that `op` is signed in as the Operator, not as a service account (it stops when `OP_SERVICE_ACCOUNT_TOKEN` is set); and that Node is 24 or later. With several 1Password accounts it asks which one holds this Product's secrets. Then it asks three questions: the Operator's time zone for the Weekly summary, whether to add a second Subscription, and whether to pause Dispatch. It shows its plan, naming the 1Password account on the first line. With `--plan`, or without a terminal, it stops there. On the Operator's yes it applies the plan on the branch `fabrik/setup-<release>`, runs the wizard, then commits, pushes and opens the setup PR with the files:
+Setup first checks that it's in the clone's root, on the default branch, clean and the same as on `origin`; that `gh` is signed in as the repo's admin with the `workflow` scope; that `op` is signed in as the Operator, not as a service account (it stops when `OP_SERVICE_ACCOUNT_TOKEN` is set); and that Node is 24.3 or later. With several 1Password accounts it asks which one holds this Product's secrets, offering the one `OP_ACCOUNT` names, if it's set, for an Enter; without a terminal, `OP_ACCOUNT` or `--account=` names it. Then it asks three questions: the Operator's time zone for the Weekly summary, whether to add a second Subscription, and whether to pause Dispatch. It shows its plan, naming the 1Password account on the first line. With `--plan`, or without a terminal, it stops there. On the Operator's yes it applies the plan on the branch `fabrik/setup-<release>`, runs the wizard, then commits, pushes and opens the setup PR with the files:
 
 - **Kit-owned files**, put back whenever they drift: `.github/workflows/fabrik.yml` with every Fabrik `uses:` line pinned to the release, the `SessionStart` hook entry and the `mattpocock-skills` plugin switched off in `.claude/settings.json`, `.claude/skills/` in `.gitignore`, and a `.github/dependabot.yml` entry that bumps only the Fabrik pin, every pinned Fabrik workflow in one grouped PR, with no cooldown. Each is merged into the Product's own file. A caller pinned to an earlier major is migrated; within a major, Dependabot owns the pin.
 - **Starters**, written once and the Product's from then on: `.fabrik/config.json` with every v1 default, `docs/agents/*` with Fabrik's fixed answers (GitHub Issues, the triage labels plus `needs-design`, a single-context glossary and ADRs), and an `## Agent skills` block pointing at them in `CLAUDE.md`, or in `AGENTS.md` when there's no `CLAUDE.md`.
@@ -76,7 +76,7 @@ Every Product repo in this 1Password account, the one Setup uses, shares its `Fa
 
 Setup leaves Visual evidence off. Once the setup PR is merged, the Operator turns it on by running `/fabrik-visual-evidence` in a Claude session in the repo, where the `SessionStart` hook has installed it (see `ui` in the [Kit config](#kit-config)).
 
-Running Setup again on a working install changes nothing. On a broken one it repairs only what's missing: a missing label is created, and a missing secret gets a new service account (1Password shows a token only once, so delete the old account by hand). After a run that stopped partway, Setup picks up on its `fabrik/setup-<release>` branch, and says to switch to it when the clone is on the default branch. To migrate to a new major release, name that release:
+Running Setup again on a working install changes nothing. On a broken one it repairs only what's missing: a missing label is created, and a missing secret gets a new service account (1Password shows a token only once, so delete the old account by hand). A repair that writes no file opens no setup PR, and leaves the clone on the default branch. After a run that stopped partway, Setup picks up on its `fabrik/setup-<release>` branch, and says to switch to it when the clone is on the default branch. To migrate to a new major release, name that release:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v2.0.0
@@ -317,13 +317,41 @@ A Product repo's Kit config lives in `.fabrik/`. Every file is optional and ever
     "secrets": {}
   },
   "roles": {
-    "triage": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 10 },
-    "design": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 30 },
-    "implement": { "model": "claude-sonnet-5-5", "effort": null, "timeout_minutes": 60 },
-    "review": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 30 },
-    "audit": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 45 },
-    "retro": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 45 },
-    "research": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 30 },
+    "triage": {
+      "model": "claude-opus-5-5",
+      "effort": null,
+      "timeout_minutes": 10
+    },
+    "design": {
+      "model": "claude-opus-5-5",
+      "effort": null,
+      "timeout_minutes": 30
+    },
+    "implement": {
+      "model": "claude-sonnet-5-5",
+      "effort": null,
+      "timeout_minutes": 60
+    },
+    "review": {
+      "model": "claude-opus-5-5",
+      "effort": null,
+      "timeout_minutes": 30
+    },
+    "audit": {
+      "model": "claude-opus-5-5",
+      "effort": null,
+      "timeout_minutes": 45
+    },
+    "retro": {
+      "model": "claude-opus-5-5",
+      "effort": null,
+      "timeout_minutes": 45
+    },
+    "research": {
+      "model": "claude-opus-5-5",
+      "effort": null,
+      "timeout_minutes": 30
+    },
     "dispatch": { "timeout_minutes": 10 },
     "step_up": { "model": "claude-opus-5-5", "effort": null }
   },

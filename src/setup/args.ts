@@ -1,9 +1,11 @@
 // The setup program's command line. Each question has a flag, and an empty
 // value or a --no- form answers no, so the program asks only what the flags
 // left out. Anything it doesn't know is refused, with the usage line.
+import { setupCommand } from "./finish.ts";
 
+/** How the Operator runs setup: through the bootstrap command, which gives the program the checkout and the release. */
 export const SETUP_USAGE =
-  "Usage: node src/setup/main.ts <product checkout> <release> [--account=<1Password account>]" +
+  `Usage: ${setupCommand("[release]")} [--account=<1Password account>]` +
   " [--time-zone=<IANA zone> | --no-time-zone] [--second-subscription | --no-second-subscription] [--paused | --no-paused]" +
   " [--plan]";
 

@@ -41,6 +41,12 @@ describe("The setup PR's body", () => {
     ]);
     expect(withEarlierDone(null, ["create the label needs-info"])).toEqual(["create the label needs-info"]);
   });
+
+  it("drops control characters from what the earlier PR's body says, since the closing lines print it to the terminal", () => {
+    const earlier = "## What setup did\n\n- create the label needs-triage\u001b]52;c;ZXZpbA==\u0007\u009b2J\n";
+
+    expect(withEarlierDone(earlier, [])).toEqual(["create the label needs-triage]52;c;ZXZpbA==2J"]);
+  });
 });
 
 describe("The closing lines", () => {
