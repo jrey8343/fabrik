@@ -21,7 +21,7 @@ export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): P
   }
   // Any open weekly-limit issue holds it back, rotation on or off, so that a
   // Retro never competes with Tickets for what's left of the weekly limits.
-  const held = heldBack("Retro", day, retrosIn(slice.issues), now, snapshot.kitIssues, true);
+  const held = heldBack("Retro", day, retrosIn(slice.issues), now, snapshot.kitIssues);
   if (held !== null) return { kind: "nothing", reason: held };
   // The store's opt-in step isn't done: a Retro would have nothing to read, and isn't worth a notice (#139).
   if (!slice.storeReady) return { kind: "nothing", reason: "The fabrik-runs store isn't ready: the Fabrik App isn't on it, or it isn't private" };

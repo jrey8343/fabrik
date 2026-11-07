@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   anIssue,
+  anAuditIssue,
   AUDITED_SHA,
   auditBody,
   kitConfig,
@@ -328,8 +329,10 @@ describe("The weekly-limit issue that buzzes the Operator, with rotation on", ()
   });
 });
 
-describe("A held Auditor run, at the reset, with rotation on", () => {
-  it("is started again on its pending Audit, on the freed Subscription", () => {
+// An Auditor run is no longer held (#268), but a marker from before that can
+// still be on a weekly-limit issue, and the tick can't start the run.
+describe("A held marker an Auditor run left, at the reset, with rotation on", () => {
+  it("fails its pending Audit, closed as not planned with the failed marker, starting nothing", () => {
     const kitIssues = [
       weeklyLimitIssue(41, "Claude token", LATER, [held(98, "audit", null)], true),
       weeklyLimitIssue(40, "Claude token 2", EARLIER),
@@ -338,9 +341,48 @@ describe("A held Auditor run, at the reset, with rotation on", () => {
 
     const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: [audit] }), TWO_SUBSCRIPTIONS);
 
-    expect(actionsOf(plan).filter((action) => action.kind === "start-agent-run")).toEqual([
-      expect.objectContaining({ role: "audit", issue: 98, commit: AUDITED_SHA, subscription: "Claude token 2" }),
+    expect(actionsOf(plan).filter((action) => "issue" in action && action.issue === 98)).toEqual([
+      {
+        kind: "edit-issue-body",
+        issue: 98,
+        body: `The Auditor's run failed: it was held while every listed Subscription was used up.\n\n<!-- fabrik:audit ${AUDITED_SHA} -->\n<!-- fabrik:audit-failed -->`,
+      },
+      { kind: "close", issue: 98, reason: "not_planned" },
     ]);
-    expect(actionsOf(plan).filter((action) => action.kind === "hold-agent-run")).toEqual([]);
+    expect(actionsOf(plan).filter((action) => action.kind === "start-agent-run" || action.kind === "hold-agent-run")).toEqual([]);
+  });
+
+  it("counts as dealt with on a weekly-limit issue that stays open, so a later reset fails nothing again", () => {
+    const kitIssues = [
+      weeklyLimitIssue(41, "Claude token", LATER, [held(98, "audit", null)], true),
+      weeklyLimitIssue(40, "Claude token 2", EARLIER),
+    ];
+    const audit = anIssueHeld(98, ["fabrik:audit"], { byApp: true, body: auditBody(AUDITED_SHA, "pending") });
+
+    const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: [audit] }), TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "comment",
+      issue: 41,
+      body: expect.stringContaining('<!-- fabrik:resumed {"issue":98,"role":"audit","held":1} -->'),
+    });
+  });
+
+  it("leaves the audit gate free to open a fresh Audit on a later tick", () => {
+    const kitIssues = [weeklyLimitIssue(41, "Claude token", EARLIER, [held(98, "audit", null)], true)];
+    const pending = anIssueHeld(98, ["fabrik:audit"], { byApp: true, body: auditBody(AUDITED_SHA, "pending") });
+    const thisWeek = anAuditIssue({ number: 98, open: true, stateReason: null, createdAt: "2026-11-08T04:00:04Z", body: pending.body });
+    const head = "c0ffee5".padEnd(40, "0");
+
+    const reset = planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: [pending], audit: { head, issues: [thisWeek] } }), TWO_SUBSCRIPTIONS);
+    const edit = actionsOf(reset).find((action) => action.kind === "edit-issue-body");
+    if (edit?.kind !== "edit-issue-body") throw new Error(`expected #98's body rewritten: ${JSON.stringify(reset)}`);
+    const failed = { ...thisWeek, open: false, stateReason: "not_planned" as const, body: edit.body };
+    const later = planFor(tick("2026-11-08T12:00:00.000Z"), tickSnapshot({ audit: { head, issues: [failed] } }), TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(reset).filter((action) => action.kind === "open-issue")).toEqual([]);
+    expect(actionsOf(later).filter((action) => action.kind === "open-issue")).toEqual([
+      expect.objectContaining({ labels: ["fabrik:audit"] }),
+    ]);
   });
 });

@@ -4,9 +4,9 @@
 // failed run leaves the issue closed as not planned, with one line on how it
 // failed. The tick tries it again, so unlike a Ticket's failure there's no
 // trigger label to re-add and nobody to tell, unless the failure stalls the
-// whole repo. A Retro run is never held, since the tick can't start one at a
-// reset: one due while every Subscription is used up leaves its Retro the
-// same way. Pure, no I/O.
+// whole repo. Neither run is ever held, since the tick can't start one at a
+// reset: one due while every Subscription is used up leaves its issue the same
+// way. Pure, no I/O.
 import { isPendingAudit, startAuditorRun } from "./audit.ts";
 import { RUN_NAMES } from "./heldRun.ts";
 import { runsDueAreHeld } from "./hold.ts";
@@ -15,7 +15,7 @@ import { AUDIT_FAILED_MARKER, auditMarker, auditMarksIn, RETRO_FAILED_MARKER, re
 import { isPendingRetro } from "./retro.ts";
 import { startAgentRun } from "./runs.ts";
 import type { RanOn } from "./subscriptions.ts";
-import type { AgentRole, InfrastructureFailure, IssueContext, IssueSnapshot, KitConfig, Plan } from "./types.ts";
+import type { Action, AgentRole, HeldTargetSnapshot, InfrastructureFailure, IssueContext, IssueSnapshot, KitConfig, Plan } from "./types.ts";
 
 /** The roles whose run is for a pending issue the scheduled tick opened, and which have no trigger label. */
 export type WeeklyRole = Extract<AgentRole, "audit" | "retro">;
@@ -28,18 +28,17 @@ export interface WeeklyRun {
   readonly runName: string;
   /** Whether this is the App's open issue still waiting on the run: only then does it start, or does a failure change it. */
   readonly isPending: (issue: IssueSnapshot) => boolean;
-  /** The plan once the App opens its pending issue. */
+  /** The plan that starts its run. */
   readonly start: (context: IssueContext, config: KitConfig) => Plan;
   /** The marker lines its failed body ends with: its own marker, kept when the body has one, then its failed marker. */
   readonly failedMarkers: (body: string) => readonly string[];
 }
 
-export const WEEKLY_RUNS: Readonly<Record<WeeklyRole, WeeklyRun>> = {
+const WEEKLY_RUNS: Readonly<Record<WeeklyRole, WeeklyRun>> = {
   audit: {
     issueName: "Audit",
     runName: "The Auditor's run",
     isPending: isPendingAudit,
-    // While every Subscription is used up, planFor holds it, and the tick starts it on its pending Audit at the reset.
     start: ({ issue }, config) => startAuditorRun(issue, config),
     failedMarkers: (body) => {
       const { commit } = auditMarksIn(body);
@@ -50,7 +49,7 @@ export const WEEKLY_RUNS: Readonly<Record<WeeklyRole, WeeklyRun>> = {
     issueName: "Retro",
     runName: "The Retro's run",
     isPending: isPendingRetro,
-    start: startRetroRun,
+    start: ({ issue }, config) => startAgentRun("retro", issue.number, config),
     failedMarkers: (body) => {
       const { windowEnd } = retroMarksIn(body);
       return [...(windowEnd === null ? [] : [retroMarker(windowEnd)]), RETRO_FAILED_MARKER];
@@ -111,33 +110,43 @@ export function failWeekly(
     ranOn === undefined || runUrl === null
       ? null
       : repoWideNotice(failure, context, { run: `The ${RUN_NAMES[role]} run on #${issue.number}`, runUrl, resetsAt, ...ranOn });
+  return { kind: "act", actions: [...failedIssue(role, issue, how, runUrl), ...(repoWide?.actions ?? [])] };
+}
+
+/** A failed weekly run's pending issue rewritten to its one line, keeping its own marker, and closed as not planned. */
+function failedIssue(role: WeeklyRole, { number, body }: Pick<IssueSnapshot, "number" | "body">, how: string, runUrl: string | null): Action[] {
+  const run = WEEKLY_RUNS[role];
   const link = runUrl === null ? "" : ` [The run](${runUrl})`;
-  return {
-    kind: "act",
-    actions: [
-      {
-        kind: "edit-issue-body",
-        issue: issue.number,
-        body: [`${run.runName} failed: ${how}.${link}`, "", ...run.failedMarkers(issue.body)].join("\n"),
-      },
-      { kind: "close", issue: issue.number, reason: "not_planned" },
-      ...(repoWide?.actions ?? []),
-    ],
-  };
+  return [
+    {
+      kind: "edit-issue-body",
+      issue: number,
+      body: [`${run.runName} failed: ${how}.${link}`, "", ...run.failedMarkers(body)].join("\n"),
+    },
+    { kind: "close", issue: number, reason: "not_planned" },
+  ];
 }
 
 /**
- * The plan for the App's pending Retro, once it's opened: a Retro run on
- * roles.retro's model, effort and timeout. With rotation on, while every
- * listed Subscription is used up, a run of any other role would be held
- * (src/loop/hold.ts), but the scheduled tick can't start a Retro run at the
- * reset, so the Retro fails instead, as a failed run leaves it, and a later
- * tick opens the next one. Its weekly-limit issues already say so, so it gives
- * no repo-wide notice.
+ * For a held marker an Auditor run left before Auditor runs stopped being held
+ * (#268), at the reset: its pending Audit failed, since the tick can't start
+ * the run, so that the audit gate can open a fresh one.
  */
-function startRetroRun(context: IssueContext, config: KitConfig): Plan {
-  if (!runsDueAreHeld(context.kitIssues, config)) return startAgentRun("retro", context.issue.number, config);
-  return failWeekly("retro", context, {
+export function failedHeldAudit(audit: HeldTargetSnapshot): Action[] {
+  return failedIssue("audit", audit, "it was held while every listed Subscription was used up", null);
+}
+
+/**
+ * The plan for the App's pending Audit or Retro, once it's opened: its run.
+ * With rotation on, while every listed Subscription is used up, a run of any
+ * other role would be held (src/loop/hold.ts), but the scheduled
+ * tick can't start a weekly run at the reset, so its issue fails instead, as a
+ * failed run leaves it, and a later tick opens the next one. Its weekly-limit
+ * issues already say so, so it gives no repo-wide notice.
+ */
+export function startWeekly(role: WeeklyRole, context: IssueContext, config: KitConfig): Plan {
+  if (!runsDueAreHeld(context.kitIssues, config)) return WEEKLY_RUNS[role].start(context, config);
+  return failWeekly(role, context, {
     failure: "weekly-limit",
     how: "it was due to start while every listed Subscription was used up",
     runUrl: null,

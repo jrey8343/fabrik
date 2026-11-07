@@ -10,7 +10,7 @@
 // instead of started (src/loop/hold.ts), and the scheduled tick resumes it at
 // the reset (src/loop/resume.ts). A run killed for spending usage credits gets
 // a usage-credits issue (src/loop/usageCreditsIssue.ts).
-import type { HeldRun } from "./heldRun.ts";
+import type { HoldableRun } from "./heldRun.ts";
 import { heldLine } from "./hold.ts";
 import { earliestOf, NOTIFIED, notified, resetsAtMarker, resetsAtOf } from "./kitIssueMarks.ts";
 import { READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
@@ -34,7 +34,7 @@ export interface StalledRun extends RanOn {
   /** When the weekly limit resets, if known. */
   readonly resetsAt: string | null;
   /** With rotation on, the run the Kit holds rather than fails, which the weekly-limit notice names. */
-  readonly held?: HeldRun;
+  readonly held?: HoldableRun;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, auditBody, AUDITED_SHA, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { planFor } from "../loop/rules.ts";
 import type { KitIssueSnapshot } from "../loop/types.ts";
 import { kitJobSummary } from "./kitJob.ts";
@@ -50,21 +50,6 @@ describe("The Kit job's step summary", () => {
       "### Fabrik Kit job\n\n" +
         "The Triage run on #7 was held until 2026-11-08 10:00 UTC: every listed Subscription has hit its weekly limit. " +
         "Its `needs-triage` label came off.\n",
-    );
-  });
-
-  it("says a held Auditor run's Audit stays pending", () => {
-    const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
-    const v1Issue: KitIssueSnapshot = { ...firstUsedUp, number: 41, body: "<!-- fabrik:notified -->" };
-    const audit = anIssue({ number: 98, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "pending") });
-    const secondUsedUp: KitIssueSnapshot = { ...firstUsedUp, number: 42, body: "<!-- fabrik:subscription Claude token 2 -->" };
-    const kitIssues = [v1Issue, secondUsedUp];
-    const plan = planFor({ kind: "issue-opened", issue: 98 }, snapshotOf(audit, { kitIssues }), config);
-
-    expect(kitJobSummary(plan, config, kitIssues)).toBe(
-      "### Fabrik Kit job\n\n" +
-        "The Audit run on #98 was held until a Subscription's weekly limit resets, which isn't known: every listed Subscription has hit its weekly limit. " +
-        "Its Audit stays pending.\n",
     );
   });
 

@@ -17,9 +17,9 @@ import type { Action, AgentRole, KitIssueSnapshot } from "./types.ts";
 /** A run the Kit holds. */
 export interface HeldRun {
   readonly role: AgentRole;
-  /** The issue or PR its trigger label lives on, or the pending Audit for an Auditor run. */
+  /** The issue or PR its trigger label lives on, or the pending Audit for a held marker an Auditor run left before #268. */
   readonly issue: number;
-  /** The trigger label that resumes it, or null for an Auditor run, which has none. */
+  /** The trigger label that resumes it, or null for a held marker an Auditor run left before #268. */
   readonly label: Label | null;
   /**
    * Its place in the order held runs resume in, from the first time it was
@@ -29,6 +29,9 @@ export interface HeldRun {
    */
   readonly order?: number | null;
 }
+
+/** A run the Kit holds now: only one with a trigger label, since an Auditor or Retro run is never held. */
+export type HoldableRun = HeldRun & { readonly label: Label };
 
 /** Where a weekly-limit issue's body or comment names a held run, as JSON. */
 export const HELD_MARKER = "<!-- fabrik:held";
@@ -41,8 +44,10 @@ export function heldMarker({ issue, role, label, order = null }: HeldRun): strin
 /**
  * The label whose adding starts each role's run again: its trigger label, and
  * agent:design for a Design-session turn, whichever round it was
- * (src/loop/design.ts). An Auditor run has none: its pending Audit is all it needs.
- * Nor has a Retro run, which is never held: its Retro fails instead (src/loop/failures.ts).
+ * (src/loop/design.ts). An Auditor run and a Retro run have none, and neither
+ * is held: its Audit or Retro fails instead (src/loop/failures.ts). Only a held
+ * marker an Auditor run left before that (#268) is still read, and its Audit
+ * fails at the reset (src/loop/resume.ts).
  */
 export const RESUME_LABELS = {
   triage: NEEDS_TRIAGE,
@@ -68,10 +73,14 @@ export const RUN_NAMES: Readonly<Record<AgentRole, string>> = {
 /**
  * The run a start-agent-run action would have started, held. A Review's run
  * is on its PR, where agent:review lives; an Implement run's, a Retry's
- * included, on its Ticket, where agent:implement resumes it.
+ * included, on its Ticket, where agent:implement resumes it. An Auditor or
+ * Retro run never gets here: its pending issue fails before it's planned
+ * (src/loop/weeklyRuns.ts).
  */
-export function heldRunOf(start: Extract<Action, { kind: "start-agent-run" }>): HeldRun {
-  return { role: start.role, issue: start.issue, label: RESUME_LABELS[start.role] };
+export function heldRunOf(start: Extract<Action, { kind: "start-agent-run" }>): HoldableRun {
+  const label = RESUME_LABELS[start.role];
+  if (label === null) throw new Error(`The ${RUN_NAMES[start.role]} run on #${start.issue} has no trigger label, so it can't be held`);
+  return { role: start.role, issue: start.issue, label };
 }
 
 /** The held runs a weekly-limit issue's body or comment names, in the order its held markers come. */
@@ -202,7 +211,7 @@ function ordersOn(kitIssues: readonly KitIssueSnapshot[]): Map<string, number> {
  * weekly-limit issue's held or resumed marker already gives it, if it was held
  * before, else the next after every place given so far, in the order given.
  */
-export function heldInOrder(runs: readonly HeldRun[], kitIssues: readonly KitIssueSnapshot[]): HeldRun[] {
+export function heldInOrder<Run extends HeldRun>(runs: readonly Run[], kitIssues: readonly KitIssueSnapshot[]): Run[] {
   const orders = ordersOn(kitIssues);
   let next = Math.max(0, ...orders.values()) + 1;
   return runs.map((run) => {
@@ -249,9 +258,9 @@ function markersIn(text: string, marker: string): Record<string, unknown>[] {
  * The Plan's actions that hold a run: its trigger label off, so that adding it
  * back is a fresh label event, and the hold itself, which changes nothing on GitHub.
  */
-export function holding(held: HeldRun, until: string | null): Action[] {
+export function holding(held: HoldableRun, until: string | null): Action[] {
   return [
-    ...(held.label === null ? [] : [{ kind: "remove-label" as const, issue: held.issue, label: held.label }]),
+    { kind: "remove-label", issue: held.issue, label: held.label },
     { kind: "hold-agent-run", role: held.role, issue: held.issue, label: held.label, until },
   ];
 }

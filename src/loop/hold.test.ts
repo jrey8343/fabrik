@@ -20,6 +20,7 @@ import {
 import { agentRunIn } from "../github/apply.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
+import { auditGate } from "./auditGate.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AgentRole, KitIssueSnapshot, LoopEvent, Plan, Snapshot } from "./types.ts";
 
@@ -94,18 +95,6 @@ const STARTS: readonly (readonly [
     (kitIssues) => [{ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(aPullRequest(), { kitIssues })],
     50,
     "agent:review",
-  ],
-  [
-    "audit",
-    "Audit",
-    (kitIssues) => [
-      { kind: "issue-opened", issue: 98 },
-      snapshotOf(anIssue({ number: 98, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "pending") }), {
-        kitIssues,
-      }),
-    ],
-    98,
-    null,
   ],
   [
     "research",
@@ -188,12 +177,20 @@ describe("A run due while every Subscription is used up, with rotation on", () =
     expect(comments).toEqual([{ kind: "comment", issue: 40, body: expect.stringContaining(heldMarker(7, "triage", "needs-triage")) }]);
   });
 
-  it("a held Auditor run leaves its pending Audit as it is", () => {
-    const [event, snapshot] = STARTS[4]![2](BOTH_USED_UP);
+  // The scheduled tick can't start an Auditor run at the reset, so an Audit is never held: it fails, and the tick opens the next.
+  it("an Auditor run due is never held: its pending Audit fails, closed as not planned, for the tick to try again", () => {
+    const audit = anIssue({ number: 98, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "pending") });
 
-    const actions = actionsOf(planFor(event, snapshot, TWO_SUBSCRIPTIONS));
+    const actions = actionsOf(planFor({ kind: "issue-opened", issue: 98 }, snapshotOf(audit, { kitIssues: BOTH_USED_UP }), TWO_SUBSCRIPTIONS));
 
-    expect(actions.filter((action) => "issue" in action && action.issue === 98 && action.kind !== "hold-agent-run")).toEqual([]);
+    expect(actions).toEqual([
+      {
+        kind: "edit-issue-body",
+        issue: 98,
+        body: `The Auditor's run failed: it was due to start while every listed Subscription was used up.\n\n<!-- fabrik:audit ${AUDITED_SHA} -->\n<!-- fabrik:audit-failed -->`,
+      },
+      { kind: "close", issue: 98, reason: "not_planned" },
+    ]);
   });
 
   // The scheduled tick can't start a Retro run at the reset, so a Retro is never held: it fails, and the tick opens the next.
@@ -425,29 +422,49 @@ describe("A Design session's prototype turn, while every Subscription is used up
   });
 });
 
+// An Auditor run has no trigger label to re-run it through, and the scheduled
+// tick can't start one at the reset, so it's never re-run or held: its Audit
+// fails, and the tick opens the next one.
 describe("An Auditor run refused on its weekly limit, with rotation on", () => {
   const audit = anIssue({ number: 98, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "pending") });
+  const failed = [
+    {
+      kind: "edit-issue-body",
+      issue: 98,
+      body: `The Auditor's run failed: it hit the weekly usage limit. [The run](${RUN})\n\n<!-- fabrik:audit ${AUDITED_SHA} -->\n<!-- fabrik:audit-failed -->`,
+    },
+    { kind: "close", issue: 98, reason: "not_planned" },
+  ];
 
-  it("is held while none is free, leaving its Audit pending, not failed", () => {
-    const other = weeklyLimitIssue(40, "Claude token 2", EARLIER, false);
+  it.each([
+    ["while no other Subscription is free", [weeklyLimitIssue(40, "Claude token 2", EARLIER, false)]],
+    ["while another Subscription is free", []],
+  ])("fails its Audit %s, holding nothing, and its Subscription's weekly-limit issue names the run", (_, kitIssues) => {
+    const actions = actionsOf(planFor(refused("audit", 98), snapshotOf(audit, { kitIssues }), TWO_SUBSCRIPTIONS));
 
-    const actions = actionsOf(planFor(refused("audit", 98), snapshotOf(audit, { kitIssues: [other] }), TWO_SUBSCRIPTIONS));
-
-    expect(actions.filter((action) => "issue" in action && action.issue === 98 && action.kind !== "hold-agent-run")).toEqual([]);
-    expect(actions).toContainEqual({ kind: "hold-agent-run", role: "audit", issue: 98, label: null, until: EARLIER });
+    expect(actions.filter((action) => "issue" in action && action.issue === 98)).toEqual(failed);
+    expect(actions.filter((action) => action.kind === "hold-agent-run")).toEqual([]);
+    expect(JSON.stringify(actions)).not.toContain("fabrik:held");
     expect(actions).toContainEqual(
-      expect.objectContaining({ kind: "open-issue", body: expect.stringContaining(heldMarker(98, "audit", null)) }),
+      expect.objectContaining({
+        kind: "open-issue",
+        labels: ["fabrik:weekly-limit"],
+        body: expect.stringContaining("<!-- fabrik:subscription Claude token -->"),
+      }),
+    );
+    expect(actions).toContainEqual(
+      expect.objectContaining({ kind: "open-issue", body: expect.stringContaining("The Audit run on #98") }),
     );
   });
 
-  it("is held, not failed, even while another Subscription is free, on its Subscription's quiet issue", () => {
-    const actions = actionsOf(planFor(refused("audit", 98), snapshotOf(audit), TWO_SUBSCRIPTIONS));
+  it("an Audit that's no longer pending holds nothing, even while none is free, and its failed run changes nothing", () => {
+    const filled = anIssue({ number: 98, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "filled") });
+    const other = weeklyLimitIssue(40, "Claude token 2", EARLIER, false);
 
-    expect(actions.filter((action) => "issue" in action && action.issue === 98 && action.kind !== "hold-agent-run")).toEqual([]);
-    expect(actions).toContainEqual({ kind: "hold-agent-run", role: "audit", issue: 98, label: null, until: LATER });
-    expect(actions).toContainEqual(
-      expect.objectContaining({ kind: "open-issue", body: expect.stringContaining(heldMarker(98, "audit", null)) }),
-    );
+    const plan = planFor(refused("audit", 98), snapshotOf(filled, { kitIssues: [other] }), TWO_SUBSCRIPTIONS);
+
+    expect(plan.kind === "act" ? plan.actions.filter((action) => action.kind === "hold-agent-run") : []).toEqual([]);
+    expect(plan.kind === "act" ? plan.actions.filter((action) => "issue" in action && action.issue === 98) : []).toEqual([]);
   });
 
   it("with one Subscription listed, fails its Audit as V1 does", () => {
@@ -509,20 +526,33 @@ describe("A Retro run refused on its weekly limit, with rotation on", () => {
   });
 });
 
+// Like the Retro's (src/loop/retroGate.test.ts): the scheduled tick can't start
+// an Auditor run at a reset, so any open weekly-limit issue holds the Audit back.
 describe("The Audit due while a Subscription's weekly-limit issue is open, with rotation on", () => {
   const SUNDAY = "2026-11-08T04:00:00.000Z";
   const HEAD = "c0ffee5".padEnd(40, "0");
+  const snapshotWith = (kitIssues: KitIssueSnapshot[]) => tickSnapshot({ kitIssues, audit: { head: HEAD, issues: [] } });
   const opened = (kitIssues: KitIssueSnapshot[], config = TWO_SUBSCRIPTIONS) =>
-    actionsOf(
-      planFor({ kind: "scheduled-tick", now: SUNDAY }, tickSnapshot({ kitIssues, audit: { head: HEAD, issues: [] } }), config),
-    ).filter((action) => action.kind === "open-issue");
+    actionsOf(planFor({ kind: "scheduled-tick", now: SUNDAY }, snapshotWith(kitIssues), config)).filter((action) => action.kind === "open-issue");
 
-  it("opens while another Subscription is free, so its Auditor run starts there", () => {
-    expect(opened([weeklyLimitIssue(41, "Claude token", LATER, false)])).toHaveLength(1);
+  it("opens nothing while another Subscription is free, waiting for the reset", () => {
+    expect(opened([weeklyLimitIssue(41, "Claude token", LATER, false)])).toEqual([]);
   });
 
-  it("opens while every Subscription is used up, so its Auditor run is held on the pending Audit", () => {
-    expect(opened(BOTH_USED_UP)).toHaveLength(1);
+  it("opens nothing while every Subscription is used up", () => {
+    expect(opened(BOTH_USED_UP)).toEqual([]);
+  });
+
+  it("gives the weekly limit as its reason", () => {
+    const plan = auditGate(SUNDAY, snapshotWith([weeklyLimitIssue(41, "Claude token", LATER, false)]), TWO_SUBSCRIPTIONS);
+
+    expect(plan).toEqual({ kind: "nothing", reason: "The weekly usage limit is reached, as #41 says" });
+  });
+
+  it("opens on the tick that closes the last weekly-limit issue at its reset", () => {
+    expect(opened([weeklyLimitIssue(41, "Claude token", "2026-11-08T03:00:00.000Z", false)])).toEqual([
+      expect.objectContaining({ labels: ["fabrik:audit"] }),
+    ]);
   });
 
   it("with one Subscription listed, waits for the reset, as V1 does", () => {

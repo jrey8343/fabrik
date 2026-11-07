@@ -309,7 +309,7 @@ describe("The tick's other rules", () => {
   });
 });
 
-// Unlike the Audit's (src/loop/hold.test.ts): with rotation on too, any open
+// Like the Audit's (src/loop/hold.test.ts): with rotation on too, any open
 // weekly-limit issue holds the Retro back, so that it never competes with
 // Tickets for what's left of the weekly usage limits (US 7).
 describe("The Retro due while a Subscription's weekly-limit issue is open, with rotation on", () => {

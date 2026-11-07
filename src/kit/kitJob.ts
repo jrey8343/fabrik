@@ -48,8 +48,7 @@ function heldIn(plan: Plan): Hold[] {
 function heldSummaryLine(hold: Hold, why: string): string {
   const until =
     hold.until === null ? "a Subscription's weekly limit resets, which isn't known" : readable(hold.until);
-  const where = hold.label === null ? "Its Audit stays pending." : `Its \`${hold.label}\` label came off.`;
-  return `The ${RUN_NAMES[hold.role]} run on #${hold.issue} was held until ${until}: ${why} ${where}`;
+  return `The ${RUN_NAMES[hold.role]} run on #${hold.issue} was held until ${until}: ${why} Its \`${hold.label}\` label came off.`;
 }
 
 const UNUSABLE: Readonly<Record<Unusable, string>> = {
