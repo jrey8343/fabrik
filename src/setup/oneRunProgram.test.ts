@@ -353,6 +353,34 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(world.prs[0]?.body).not.toContain("Don't merge this yet.");
   });
 
+  it("with the Kit config listing only a Subscription under another name, which 1Password lacks, doesn't ask for the merge, and names its token to store by hand", async () => {
+    await mkdir(join(checkout, ".fabrik"));
+    await writeFile(join(checkout, ".fabrik", "config.json"), '{\n  "subscriptions": ["Claude backup"]\n}\n');
+    git("add", ".fabrik/config.json");
+    git("commit", "-q", "-m", "Our Kit config");
+    git("push", "-q", "origin", "main");
+    const world = aWorld();
+
+    const { code, said } = await setupOnce(world, { wizard: skipsTheClaudeToken });
+
+    expect(code).toBe(0);
+    expect(said.some((line) => line.startsWith("Merge it yourself"))).toBe(false);
+    const merging = said.slice(said.indexOf("Don't merge it yet. The Kit's first runs need these, which no wizard stage stores, so you store them yourself, as For the Operator says:"));
+    expect(merging.slice(0, 2)).toEqual([
+      "Don't merge it yet. The Kit's first runs need these, which no wizard stage stores, so you store them yourself, as For the Operator says:",
+      '- the "Claude backup" Subscription\'s token, in the "Fabrik" vault',
+    ]);
+    expect(merging[2]).toMatch(/^Then merge it yourself once its gating checks pass\. /);
+    expect(said.join("\n")).not.toMatch(/the Claude token|walk the wizard for them/);
+    const body = world.prs[0]?.body ?? "";
+    expect(body).toContain(
+      "Don't merge this yet. The Kit's first runs need these, which no wizard stage stores, so you store them yourself, as For the Operator says:\n\n" +
+        '- the "Claude backup" Subscription\'s token, in the "Fabrik" vault\n\n' +
+        "Then merge this PR yourself once its gating checks pass.",
+    );
+    expect(body).not.toContain("Merge this PR yourself");
+  });
+
   it("with a second Subscription, the setup PR lists it in the Kit config once the wizard's stage has stored its token", async () => {
     const world = aWorld();
     const starter = await readFile(join(KIT_DIR, "templates", "fabrik-config.json"), "utf8");

@@ -3,10 +3,10 @@
 // then commit, push and the setup PR.
 import { describe, expect, it } from "vitest";
 import { aCleanProduct } from "../__fixtures__/productState.ts";
-import { mergeBlockers, type OneRunSteps, type Readiness, readinessOf, runOnce, wizardGaps } from "./oneRun.ts";
+import { mergeBlockers, type OneRunSteps, type Readiness, readinessOf, runOnce, tokensByHand, wizardGaps } from "./oneRun.ts";
 import type { ProductState, SetupAction, SetupPlan } from "./plan.ts";
 
-const READY: Readiness = { appInstalled: true, appKeyStored: true, claudeTokenStored: true };
+const READY: Readiness = { appInstalled: true, appKeyStored: true, tokensLacking: [] };
 
 const WORKFLOW: SetupAction = { kind: "write-file", path: ".github/workflows/fabrik.yml", content: "on: push\n", why: "the caller workflow" };
 const LABEL: SetupAction = { kind: "create-label", name: "needs-triage", color: "ededed", description: "Waiting for Triage" };
@@ -147,11 +147,20 @@ describe("One setup run", () => {
   });
 
   it("gives the PR what the merge waits for, as read after the wizard", async () => {
-    const { steps } = fakeSteps({ readiness: { ...READY, claudeTokenStored: false } });
+    const { steps } = fakeSteps({ readiness: { ...READY, tokensLacking: ["Claude token"] } });
 
     const result = await runOnce({ plan: plan([WORKFLOW]), repo: "acme/clinic" }, steps);
 
     expect(result.kind === "done" && result.summary.blockers).toEqual(['the Claude token, in the "Fabrik" vault']);
+  });
+
+  it("gives the PR a listed Subscription's token no wizard stage stores, apart from what the wizard finishes", async () => {
+    const { steps } = fakeSteps({ readiness: { ...READY, tokensLacking: ["Claude backup"] } });
+
+    const result = await runOnce({ plan: plan([WORKFLOW]), repo: "acme/clinic" }, steps);
+
+    expect(result.kind === "done" && result.summary.blockers).toEqual([]);
+    expect(result.kind === "done" && result.summary.storeByHand).toEqual(['the "Claude backup" Subscription\'s token, in the "Fabrik" vault']);
   });
 });
 
@@ -175,15 +184,24 @@ describe("What the merge waits for, read after the wizard", () => {
   });
 
   it("reads the App's key and the Claude token from the vaults' items, not from how the wizard ended", () => {
-    expect(readinessOf({ ...after, appItems: [], fabrikItems: ["Claude token 2"] })).toEqual({ ...READY, appKeyStored: false, claudeTokenStored: false });
+    expect(readinessOf({ ...after, appItems: [], fabrikItems: ["Claude token 2"] })).toEqual({ ...READY, appKeyStored: false, tokensLacking: ["Claude token"] });
   });
 
   it("needs the Claude token only while the Kit config the setup PR merges lists it, as the Kit reads no other", () => {
     const listing = (...names: string[]) => `${JSON.stringify({ subscriptions: names })}\n`;
 
     expect(readinessOf({ ...after, fabrikItems: ["Claude backup"], kitConfig: listing("Claude backup") })).toEqual(READY);
-    expect(readinessOf({ ...after, fabrikItems: ["Claude backup"], kitConfig: listing("Claude backup", "Claude token") }).claudeTokenStored).toBe(false);
-    expect(readinessOf({ ...after, fabrikItems: [], kitConfig: '{ "max_in_flight": 1 }\n' }).claudeTokenStored).toBe(false);
+    expect(readinessOf({ ...after, fabrikItems: ["Claude backup"], kitConfig: listing("Claude backup", "Claude token") }).tokensLacking).toEqual(["Claude token"]);
+    expect(readinessOf({ ...after, fabrikItems: [], kitConfig: '{ "max_in_flight": 1 }\n' }).tokensLacking).toEqual(["Claude token"]);
+  });
+
+  it("names each Subscription the Kit config lists whose token the vault lacks, in its order, under whatever name", () => {
+    const listing = (...names: string[]) => `${JSON.stringify({ subscriptions: names })}\n`;
+
+    expect(readinessOf({ ...after, fabrikItems: [], kitConfig: listing("Claude backup") }).tokensLacking).toEqual(["Claude backup"]);
+    expect(
+      readinessOf({ ...after, fabrikItems: ["Claude token"], kitConfig: listing("Claude backup", "Claude token", "Claude token 2") }).tokensLacking,
+    ).toEqual(["Claude backup", "Claude token 2"]);
   });
 });
 
@@ -254,7 +272,7 @@ describe("The merge rule", () => {
   });
 
   it("names each of the three that isn't done", () => {
-    expect(mergeBlockers({ appInstalled: false, appKeyStored: false, claudeTokenStored: false }, "acme/clinic")).toEqual([
+    expect(mergeBlockers({ appInstalled: false, appKeyStored: false, tokensLacking: ["Claude token"] }, "acme/clinic")).toEqual([
       "the Fabrik App, installed on acme/clinic",
       'the Fabrik App\'s key, in the "Fabrik App" vault',
       'the Claude token, in the "Fabrik" vault',
@@ -264,8 +282,16 @@ describe("The merge rule", () => {
   it.each([
     ["the App not installed", { appInstalled: false }, "the Fabrik App, installed on acme/clinic"],
     ["its key not stored", { appKeyStored: false }, 'the Fabrik App\'s key, in the "Fabrik App" vault'],
-    ["the Claude token skipped", { claudeTokenStored: false }, 'the Claude token, in the "Fabrik" vault'],
+    ["the Claude token skipped", { tokensLacking: ["Claude token"] }, 'the Claude token, in the "Fabrik" vault'],
   ])("holds the merge back with %s", (_, missing, named) => {
     expect(mergeBlockers({ ...READY, ...missing }, "acme/clinic")).toEqual([named]);
+  });
+
+  it("holds the merge back with each listed Subscription's token the vault lacks, the wizard's stages' among what the wizard finishes, any other's to store by hand", () => {
+    const readiness = { ...READY, tokensLacking: ["Claude backup", "Claude token 2"] };
+
+    expect(mergeBlockers(readiness, "acme/clinic")).toEqual(['the second Subscription\'s token, "Claude token 2", in the "Fabrik" vault']);
+    expect(tokensByHand(readiness)).toEqual(['the "Claude backup" Subscription\'s token, in the "Fabrik" vault']);
+    expect(tokensByHand(READY)).toEqual([]);
   });
 });

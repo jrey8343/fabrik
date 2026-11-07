@@ -17,10 +17,15 @@ export interface PrBodyInputs {
 
 const DONE_HEADING = "## What setup did";
 
+/** Why the Operator stores the tokens the merge also waits for: a Subscription the Kit config lists under a name no wizard stage stores. The plan's note says how. */
+const BY_HAND_WHY = "which no wizard stage stores, so you store them yourself, as For the Operator says:";
+const BY_HAND = `The Kit's first runs need these, ${BY_HAND_WHY}`;
+
 /** What the setup PR and the closing lines say when the Kit config the PR merges pauses Dispatch. */
 const PAUSED = "Dispatch is paused, so no Implementer starts until you set max_in_flight in .fabrik/config.json above 0.";
 
 export function prBody({ release, defaultBranch, summary }: PrBodyInputs): string {
+  const byHand = summary.storeByHand ?? [];
   const sections = [
     `Sets up Fabrik ${release} in this repo. Setup wrote this PR's files, and did the rest with your own gh and op.`,
     [DONE_HEADING, "", ...(summary.done.length === 0 ? ["An earlier run of setup wrote this PR's files."] : bullets(summary.done))].join("\n"),
@@ -28,8 +33,9 @@ export function prBody({ release, defaultBranch, summary }: PrBodyInputs): strin
     [
       "## Merging",
       "",
+      ...(summary.blockers.length === 0 && byHand.length === 0 ? [mergeAsk("Merge this PR yourself", defaultBranch)] : []),
       ...(summary.blockers.length === 0
-        ? [mergeAsk("Merge this PR yourself", defaultBranch)]
+        ? []
         : [
             "Don't merge this yet. The Kit's first runs need these, which setup's wizard didn't finish:",
             "",
@@ -40,6 +46,14 @@ export function prBody({ release, defaultBranch, summary }: PrBodyInputs): strin
             "```sh",
             setupCommand(release),
             "```",
+          ]),
+      ...(byHand.length === 0
+        ? []
+        : [
+            ...(summary.blockers.length === 0 ? [`Don't merge this yet. ${BY_HAND}`] : ["", `The Kit's first runs also need these, ${BY_HAND_WHY}`]),
+            "",
+            ...bullets(byHand),
+            ...(summary.blockers.length === 0 ? ["", mergeAsk("Then merge this PR yourself", defaultBranch)] : []),
           ]),
       ...(summary.pausesDispatch === true ? ["", PAUSED] : []),
     ].join("\n"),
@@ -94,6 +108,7 @@ export interface ClosingInputs extends PrBodyInputs {
 
 /** The run's last lines. The wizard clears the screen, so they say again what setup did. */
 export function closingLines({ release, defaultBranch, url, summary }: ClosingInputs): string[] {
+  const byHand = summary.storeByHand ?? [];
   return [
     `The setup PR: ${url}`,
     "",
@@ -101,12 +116,20 @@ export function closingLines({ release, defaultBranch, url, summary }: ClosingIn
     ...(summary.done.length === 0 ? ["- nothing new in this run"] : bullets(summary.done)),
     ...(summary.notes.length === 0 ? [] : ["", "For the Operator:", ...bullets(summary.notes)]),
     "",
+    ...(summary.blockers.length === 0 && byHand.length === 0 ? [mergeAsk("Merge it yourself", defaultBranch)] : []),
     ...(summary.blockers.length === 0
-      ? [mergeAsk("Merge it yourself", defaultBranch)]
+      ? []
       : [
           "Don't merge it yet. The Kit's first runs need these, which the wizard didn't finish:",
           ...bullets(summary.blockers),
           `Run setup again to walk the wizard for them: ${setupCommand(release)}`,
+        ]),
+    ...(byHand.length === 0
+      ? []
+      : [
+          summary.blockers.length === 0 ? `Don't merge it yet. ${BY_HAND}` : `The Kit's first runs also need these, ${BY_HAND_WHY}`,
+          ...bullets(byHand),
+          ...(summary.blockers.length === 0 ? [mergeAsk("Then merge it yourself", defaultBranch)] : []),
         ]),
     "",
     "Then:",
