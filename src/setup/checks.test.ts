@@ -50,6 +50,7 @@ describe("The checks before setup plans anything", () => {
     expect(outcome).toEqual({
       ok: true,
       repo: { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: false },
+      branch: "main",
     });
   });
 

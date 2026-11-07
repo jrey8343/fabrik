@@ -200,13 +200,20 @@ finish() {
 
 
 # Fabrik setup wizard: the steps of adopting the Kit that only the Operator can
-# take. The fabrik-setup skill hands it over after it has written the Kit files,
-# created the labels, vaults and service accounts, and protected the branch.
-# Run it from the Product repo's checkout:
+# take. Setup runs it in the same terminal once it has applied its plan, then
+# opens the setup PR. The fabrik-setup skill hands it over instead, after it
+# has written the Kit files, created the labels, vaults and service accounts,
+# and protected the branch. Run it from the Product repo's checkout:
 #   bash .claude/skills/fabrik-setup/wizard.sh
 # Nothing it captures is written to disk: the Fabrik App's key, the Claude token
 # and the Sentry token go straight into 1Password, where the Kit's jobs read
 # them (ADR-0004).
+
+# report LINE tells Setup, when Setup runs the wizard, something a stage did
+# that Setup can't read for itself. Setup names the file in FABRIK_WIZARD_REPORT.
+report() {
+  [[ -z "${FABRIK_WIZARD_REPORT:-}" ]] || printf '%s\n' "$1" >> "$FABRIK_WIZARD_REPORT"
+}
 
 # operator_app_slugs prints, one per line, the slug of each App owned by the
 # signed-in gh user that made one of the 100 latest comments or issues in $REPO
@@ -289,7 +296,10 @@ open_url "https://github.com/apps/${FABRIK_APP_SLUG}/installations/new"
 step "Pick the account that owns $REPO."
 step "Choose 'Only select repositories', add $REPO (keep the repos it already has), then Install or Save."
 step "If GitHub shows a request for new permissions (Checks: read), review it and accept."
-pause "Press Enter once $REPO is in the App's repository list."
+# pause, except that only a pressed Enter tells Setup the App is installed:
+# your gh can't read an App's installations, so this is Setup's one sign of it.
+printf '  %s%s%s ' "$DIM" "Press Enter once $REPO is in the App's repository list." "$RESET"
+if read -r _; then report "app-installed $REPO"; fi
 
 # ── 1b. The Fabrik App on the fabrik-runs store ───────────────────────────
 if (( HAS_STORE )); then
@@ -548,7 +558,11 @@ else
 fi
 
 finish
-say "Next: open an issue on $REPO. Intake labels it needs-triage and the Loop takes it from there."
+if [[ -n "${FABRIK_WIZARD_REPORT:-}" ]]; then
+  say "Next: Setup commits what it wrote, pushes it and opens the setup PR."
+else
+  say "Next: open an issue on $REPO. Intake labels it needs-triage and the Loop takes it from there."
+fi
 printf '\n'
 }
 

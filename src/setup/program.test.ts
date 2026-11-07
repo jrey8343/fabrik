@@ -69,6 +69,9 @@ async function setup(args: string[], options: Options = {}) {
     kitDir: KIT_DIR,
     nodeVersion: options.nodeVersion ?? "24.11.0",
     machineTimeZone: "Australia/Sydney",
+    wizard: async () => {
+      throw new Error("These runs stop at the plan, or only apply it, so never reach the wizard.");
+    },
   });
   return { code, said, complaints, calls: commands.calls };
 }
@@ -169,7 +172,7 @@ describe("The setup program", () => {
   });
 
   it("with --account=, asks nothing about the account and sets OP_ACCOUNT from it", async () => {
-    const { calls } = await setup([".", "v1.4.2", "--account=acme.1password.com", "--no-time-zone", "--no-second-subscription", "--no-paused"], {
+    const { calls } = await setup([".", "v1.4.2", "--plan", "--account=acme.1password.com", "--no-time-zone", "--no-second-subscription", "--no-paused"], {
       script: severalAccounts,
       prompt: neverAsked,
     });
@@ -180,7 +183,7 @@ describe("The setup program", () => {
 
   it("with every answer given as a flag, asks nothing", async () => {
     const { code, said } = await setup(
-      [".", "v1.4.2", "--account=my.1password.com", "--time-zone=Europe/London", "--second-subscription", "--paused"],
+      [".", "v1.4.2", "--plan", "--account=my.1password.com", "--time-zone=Europe/London", "--second-subscription", "--paused"],
       { script: severalAccounts, prompt: neverAsked },
     );
 

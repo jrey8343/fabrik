@@ -18,16 +18,26 @@ export interface CheckInputs {
   readonly setupPaths: readonly string[];
 }
 
-export type Checked = { readonly ok: true; readonly repo: ProductState["repo"] } | { readonly ok: false; readonly problem: string };
+export type Checked =
+  | {
+      readonly ok: true;
+      readonly repo: ProductState["repo"];
+      /** The branch the clone is on: the default branch, or setup's own. */
+      readonly branch: string;
+    }
+  | { readonly ok: false; readonly problem: string };
+
+type SignedIn = { readonly ok: true; readonly repo: ProductState["repo"] } | { readonly ok: false; readonly problem: string };
 
 export async function checkSetup(inputs: CheckInputs): Promise<Checked> {
   const problem = checkNode(inputs.nodeVersion) ?? checkServiceAccount(inputs.env) ?? (await checkRoot(inputs));
   if (problem !== null) return { ok: false, problem };
   const signedIn = await checkGitHub(inputs);
   if (!signedIn.ok) return signedIn;
-  const branch = await checkBranch(inputs, signedIn.repo.defaultBranch);
-  if (branch !== null) return { ok: false, problem: branch };
-  return { ok: true, repo: signedIn.repo };
+  const branch = (await inputs.run("git", ["branch", "--show-current"], { cwd: inputs.productDir })).stdout.trim();
+  const offBranch = await checkBranch(inputs, signedIn.repo.defaultBranch, branch);
+  if (offBranch !== null) return { ok: false, problem: offBranch };
+  return { ok: true, repo: signedIn.repo, branch };
 }
 
 /** The branch setup applies its plan on, and a later run of the same release picks up. */
@@ -57,9 +67,9 @@ async function checkRoot({ run, productDir }: CheckInputs): Promise<string | nul
 }
 
 /** gh is signed in with the workflow scope, which pushing the caller workflow needs, as the repo's admin. */
-async function checkGitHub({ run, productDir }: CheckInputs): Promise<Checked> {
+async function checkGitHub({ run, productDir }: CheckInputs): Promise<SignedIn> {
   const cwd = productDir;
-  const fail = (problem: string): Checked => ({ ok: false, problem });
+  const fail = (problem: string): SignedIn => ({ ok: false, problem });
   const user = await run("gh", ["api", "-i", "user"], { cwd });
   if (user.code !== 0) {
     return fail(`gh couldn't reach GitHub as you (${firstLine(user.stderr)}). Sign in with gh auth login --scopes workflow, then run setup again.`);
@@ -113,10 +123,9 @@ function repoOf(view: RepoView): ProductState["repo"] {
  * with nothing uncommitted but setup's own files. "The same as on origin" is
  * read with git ls-remote, so the checks fetch nothing and write no refs.
  */
-async function checkBranch({ run, productDir, release, setupPaths }: CheckInputs, defaultBranch: string): Promise<string | null> {
+async function checkBranch({ run, productDir, release, setupPaths }: CheckInputs, defaultBranch: string, current: string): Promise<string | null> {
   const cwd = productDir;
   const ownBranch = setupBranch(release);
-  const current = (await run("git", ["branch", "--show-current"], { cwd })).stdout.trim();
   if (current !== defaultBranch && current !== ownBranch) {
     const where = current === "" ? "This clone isn't on a branch" : `This clone is on ${current}, not ${defaultBranch}`;
     return `${where}. Switch to ${defaultBranch} with git switch ${defaultBranch}, then run setup again.`;
@@ -161,7 +170,7 @@ async function checkBranch({ run, productDir, release, setupPaths }: CheckInputs
 }
 
 /** Every path `git status --porcelain=v1 -z` names, a rename's old path included. */
-function changedPaths(status: string): string[] {
+export function changedPaths(status: string): string[] {
   const entries = status.split("\0").filter((entry) => entry !== "");
   const paths: string[] = [];
   for (let i = 0; i < entries.length; i++) {
