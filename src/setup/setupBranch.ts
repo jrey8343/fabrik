@@ -4,6 +4,7 @@
 // already open from it.
 import { appendFile, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
+import type { OriginTips } from "./checks.ts";
 import { ok, type Run } from "./exec.ts";
 import { prBody, withEarlierDone } from "./finish.ts";
 import type { Published, RunSummary } from "./oneRun.ts";
@@ -35,77 +36,87 @@ function changedPaths(status: string): string[] {
 }
 
 /**
- * Whether a tip of the setup branch is in a merged PR from this repo's own
- * setup branch: that PR's head, or a commit before it, as when GitHub's
- * "Update branch" or a suggested change moved the head on after setup's last
- * push. A squash or rebase merge leaves none of the branch's commits on the
- * default branch, so this is how setup knows that branch is done. GitHub
- * compares the tip with each head, which the clone needn't have.
+ * Whether a tip of the setup branch, here or on origin, is done with: a later
+ * run starts the branch again from the default branch, losing nothing. A
+ * squash or rebase merge leaves none of the branch's commits on the default
+ * branch, so whether they're on it doesn't say. Either of two things does:
  *
- * "Update with rebase" replays the branch's commits onto the default branch,
- * so the head holds copies of the tip's commits, not the tip. With no setup PR
- * open from the branch, the tip counts as merged too when a merged PR's head
- * holds the tip's changes: a copy, with the same changes, of each commit of
- * the tip's it lacks, or else everything the tip changed, so that merging the
- * tip into it changes nothing. The clone fetches that head into FETCH_HEAD
- * alone, so no branch or tag moves.
+ * - Merging the tip into origin's default branch tip changes nothing, so
+ *   everything the tip changed is there already, however it got there. git
+ *   merge-tree writes the merge's tree without a working tree, and fails on a
+ *   conflict or a commit the clone lacks.
+ * - With no setup PR open from the branch, the tip is a head a merged setup
+ *   PR from it had, or a commit before one: its last head, or one a
+ *   force-push replaced, as GitHub's "Update with rebase" does. GitHub
+ *   compares the tip with each head, which the clone needn't have.
  */
-export function mergedSetupTip(run: Run, cwd: string, repo: string, branch: string): (tip: string) => Promise<boolean> {
-  let merged: Promise<MergedPr[]> | undefined;
-  let open: Promise<SetupPr | null> | undefined;
+export function mergedSetupTip(run: Run, cwd: string, repo: string, branch: string, originDefault: string): (tip: string) => Promise<boolean> {
+  let heads: Promise<string[]> | undefined;
   return async (tip) => {
-    const prs = await (merged ??= mergedSetupPrs(run, cwd, branch));
-    for (const { headRefOid: head } of prs) {
-      if (head === tip) return true;
+    if (await changesNothing(run, cwd, originDefault, tip)) return true;
+    const merged = await (heads ??= mergedSetupHeads(run, cwd, repo, branch));
+    if (merged.includes(tip)) return true;
+    for (const head of merged) {
       // "ahead": the head holds the tip, and more. A tip GitHub lacks fails.
       const compared = await run("gh", ["api", `repos/${repo}/compare/${tip}...${head}`, "--jq", ".status"], { cwd });
       if (compared.code === 0 && ["ahead", "identical"].includes(compared.stdout.trim())) return true;
-    }
-    if (prs.length === 0 || (await (open ??= openSetupPr(run, cwd, branch))) !== null) return false;
-    for (const { number } of prs) {
-      if (await holdsChangesOf(run, cwd, number, tip)) return true;
     }
     return false;
   };
 }
 
-interface MergedPr {
-  readonly number: number;
-  /** The head's commit when it merged. */
-  readonly headRefOid: string;
+/** Whether merging the tip into the base changes nothing. */
+async function changesNothing(run: Run, cwd: string, base: string, tip: string): Promise<boolean> {
+  const merged = await run("git", ["merge-tree", "--write-tree", base, tip], { cwd });
+  if (merged.code !== 0) return false;
+  const tree = await run("git", ["rev-parse", `${base}^{tree}`], { cwd });
+  return tree.code === 0 && merged.stdout.split("\n")[0]?.trim() === tree.stdout.trim();
 }
 
-/** Each merged PR from this repo's own setup branch. */
-async function mergedSetupPrs(run: Run, cwd: string, branch: string): Promise<MergedPr[]> {
+/** Every head the merged PRs from this repo's own setup branch had, or none while a setup PR is open from it. */
+async function mergedSetupHeads(run: Run, cwd: string, repo: string, branch: string): Promise<string[]> {
   const listed = JSON.parse(
     await ok(run, "gh", ["pr", "list", "--head", branch, "--state", "merged", "--json", "number,headRefOid,isCrossRepository"], { cwd }),
-  ) as (MergedPr & { isCrossRepository: boolean })[];
-  return listed.filter((pr) => !pr.isCrossRepository).map(({ number, headRefOid }) => ({ number, headRefOid }));
+  ) as { number: number; headRefOid: string; isCrossRepository: boolean }[];
+  const merged = listed.filter((pr) => !pr.isCrossRepository);
+  if (merged.length === 0 || (await openSetupPr(run, cwd, branch)) !== null) return [];
+  const heads: string[] = [];
+  for (const { number, headRefOid } of merged) heads.push(headRefOid, ...(await forcePushedHeads(run, cwd, repo, number)));
+  return [...new Set(heads)];
 }
 
-/**
- * Whether the PR's head holds the tip's changes: a copy of each commit of the
- * tip's it lacks, as git cherry matches them by their changes, or else all the
- * tip changed, so that merging the tip into the head changes nothing.
- */
-async function holdsChangesOf(run: Run, cwd: string, pr: number, tip: string): Promise<boolean> {
-  const fetched = await run("git", ["fetch", "-q", "--no-tags", "--no-recurse-submodules", "origin", `refs/pull/${pr}/head`], { cwd });
-  if (fetched.code !== 0) return false;
-  // "+" marks a commit the head has no copy of.
-  const cherry = await run("git", ["cherry", "FETCH_HEAD", tip], { cwd });
-  if (cherry.code === 0 && !cherry.stdout.split("\n").some((line) => line.startsWith("+"))) return true;
-  // A copy the rebase made next to another PR's edit has other lines around its change, so git cherry doesn't match it.
-  // merge-tree writes the merge's tree without a working tree, and exits non-zero on a conflict.
-  const merged = await run("git", ["merge-tree", "--write-tree", "FETCH_HEAD", tip], { cwd });
-  const head = await run("git", ["rev-parse", "FETCH_HEAD^{tree}"], { cwd });
-  return merged.code === 0 && head.code === 0 && merged.stdout.split("\n")[0]?.trim() === head.stdout.trim();
+/** The PR's timeline's force-pushes: what each one's push replaced. */
+const FORCE_PUSHES = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      timelineItems(itemTypes: HEAD_REF_FORCE_PUSHED_EVENT, first: 100) {
+        nodes { ... on HeadRefForcePushedEvent { beforeCommit { oid } } }
+      }
+    }
+  }
+}`;
+
+interface ForcePushes {
+  readonly data: {
+    readonly repository: {
+      readonly pullRequest: { readonly timelineItems: { readonly nodes: { readonly beforeCommit?: { readonly oid: string } | null }[] } } | null;
+    };
+  };
+}
+
+/** The heads a force-push to the PR replaced, oldest first. */
+async function forcePushedHeads(run: Run, cwd: string, repo: string, pr: number): Promise<string[]> {
+  const [owner = "", name = ""] = repo.split("/");
+  const args = ["api", "graphql", "-f", `query=${FORCE_PUSHES}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${pr}`];
+  const answer = JSON.parse(await ok(run, "gh", args, { cwd })) as ForcePushes;
+  return (answer.data.repository.pullRequest?.timelineItems.nodes ?? []).flatMap((node) => (node.beforeCommit == null ? [] : [node.beforeCommit.oid]));
 }
 
 /**
  * From the default branch, an earlier run's setup branch that isn't merged
- * yet, here or on origin (whose tip the checks found): the run picks up from
- * there, not from the default branch, so it doesn't plan that run's files
- * again over the Operator's edits. Null when there's none.
+ * yet, here or on origin: the run picks up from there, not from the default
+ * branch, so it doesn't plan that run's files again over the Operator's edits.
+ * Null when there's none. The tips are as the checks found them on origin.
  */
 export async function earlierSetupRun(
   run: Run,
@@ -113,16 +124,14 @@ export async function earlierSetupRun(
   repo: string,
   branch: string,
   defaultBranch: string,
-  originTip: string | null,
+  origin: OriginTips,
 ): Promise<string | null> {
-  const inMergedPr = mergedSetupTip(run, cwd, repo, branch);
-  const merged = async (sha: string) =>
-    (await run("git", ["merge-base", "--is-ancestor", sha, "HEAD"], { cwd })).code === 0 || (await inMergedPr(sha));
+  const merged = mergedSetupTip(run, cwd, repo, branch, origin.defaultBranch);
   const local = await run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd });
   if (local.code === 0 && !(await merged(local.stdout.trim()))) {
     return `${branch} holds an earlier run of setup that isn't on ${defaultBranch} yet. Switch to it with git switch ${branch}, then run setup again: it picks up where that run stopped.`;
   }
-  if (originTip === null || (await merged(originTip))) return null;
+  if (origin.setupBranch === null || (await merged(origin.setupBranch))) return null;
   // A copy of the branch in this clone is merged by now, so the + lets the fetch replace it, even when origin's doesn't build on it.
   return (
     `origin's ${branch} holds an earlier run of setup that isn't on ${defaultBranch} yet. ` +

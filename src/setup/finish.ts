@@ -114,14 +114,21 @@ export function closingLines({ release, defaultBranch, url, summary }: ClosingIn
   ];
 }
 
-/** The run's last lines when it wrote no file the default branch lacks, so there's no setup PR. */
-export function appliedLines(defaultBranch: string, summary: RunSummary): string[] {
+/**
+ * The run's last lines when it wrote no file the default branch lacks, so
+ * there's no setup PR. upToDate says whether the default branch it switched
+ * back to is origin's, as setup brings it up to date when it can.
+ */
+export function appliedLines(defaultBranch: string, summary: RunSummary, upToDate = true): string[] {
+  const noPr = `Every file setup writes is already on ${defaultBranch}, so there's no setup PR to open.`;
   return [
     "What setup did:",
     ...(summary.done.length === 0 ? ["- nothing new in this run"] : bullets(summary.done)),
     ...(summary.notes.length === 0 ? [] : ["", "For the Operator:", ...bullets(summary.notes)]),
     "",
-    `Every file setup writes is already on ${defaultBranch}, so there's no setup PR to open. Setup switched back to ${defaultBranch}.`,
+    upToDate
+      ? `${noPr} Setup switched back to ${defaultBranch}.`
+      : `${noPr} Setup switched back to ${defaultBranch}, which here isn't the same as on origin: pull or push so they match, then run setup again.`,
   ];
 }
 

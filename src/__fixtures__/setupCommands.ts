@@ -95,6 +95,8 @@ export function aReadyOperator(productDir: string, release = "v1.4.2"): Record<s
     [lsRemote(release)]: { stdout: `${HEAD_SHA}\trefs/heads/main\n` },
     "git merge-base --is-ancestor": { code: 1 },
     [`git merge-base --is-ancestor ${HEAD_SHA} HEAD`]: { code: 0 },
+    // The clone has no other commit, so git can merge none in.
+    "git merge-tree --write-tree": { code: 128, stderr: "fatal: not something we can merge" },
     // The default branch holds no Kit config.
     "git cat-file -e": { code: 128, stderr: "fatal: path '.fabrik/config.json' does not exist" },
     "op account list --format json": { stdout: JSON.stringify([PERSONAL]) },

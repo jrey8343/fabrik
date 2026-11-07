@@ -159,16 +159,34 @@ async function aGitHubClone(): Promise<{ dir: string; git: (...args: string[]) =
   return { dir, git: github };
 }
 
-/** Another PR lands on main, then GitHub's "Update with rebase" replays the setup PR's commits onto it: origin's setup branch no longer holds the clone's tip. */
-async function rebaseTheHeadOnGitHub(): Promise<void> {
+/** Another PR lands on origin's main, one that changes no file of setup's. */
+async function anotherPrOnGitHub(): Promise<void> {
   const github = await aGitHubClone();
   await writeFile(join(github.dir, "CHANGELOG.md"), "# Changes\n");
   github.git("add", "CHANGELOG.md");
   github.git("commit", "-q", "-m", "Another PR");
   github.git("push", "-q", "origin", "main");
+}
+
+/**
+ * GitHub's "Update with rebase" replays the open setup PR's commits onto
+ * origin's main and force-pushes them. The PR's timeline keeps the head that
+ * force-push replaced.
+ */
+async function updateWithRebaseOnGitHub(world: World): Promise<void> {
+  const github = await aGitHubClone();
+  const replaced = github.git("rev-parse", `origin/${BRANCH}`).trim();
   github.git("switch", "-q", BRANCH);
   github.git("rebase", "-q", "main");
   github.git("push", "-q", "--force", "origin", BRANCH);
+  const pr = world.prs.find((candidate) => candidate.open && candidate.head === BRANCH && !candidate.isCrossRepository);
+  if (pr !== undefined) (pr.forcePushedFrom ??= []).push(replaced);
+}
+
+/** Another PR lands on main, then GitHub's "Update with rebase" replays the setup PR's commits onto it: origin's setup branch no longer holds the clone's tip. */
+async function rebaseTheHeadOnGitHub(world: World): Promise<void> {
+  await anotherPrOnGitHub();
+  await updateWithRebaseOnGitHub(world);
 }
 
 /**
@@ -185,17 +203,23 @@ async function aGitignoreOnMain(): Promise<void> {
 /**
  * Another PR changes a line next to setup's block in .gitignore, then GitHub's
  * "Update with rebase" replays the setup PR's commits onto it. The rebase goes
- * through, but the copy's change has other lines around it, so git cherry
- * doesn't match it to the clone's commit.
+ * through, but the copy's change has other lines around it.
  */
-async function rebaseOverANearbyEditOnGitHub(): Promise<void> {
+async function rebaseOverANearbyEditOnGitHub(world: World): Promise<void> {
   const github = await aGitHubClone();
   await writeFile(join(github.dir, ".gitignore"), "node_modules\nbuild\n.env\n");
   github.git("commit", "-q", "-am", "Another PR: the build goes in build");
   github.git("push", "-q", "origin", "main");
+  await updateWithRebaseOnGitHub(world);
+}
+
+/** A commit on origin's setup branch, made on GitHub as an applied suggestion is: a line added to a file setup wrote. */
+async function editOnGitHub(path: string, line: string): Promise<void> {
+  const github = await aGitHubClone();
   github.git("switch", "-q", BRANCH);
-  github.git("rebase", "-q", "main");
-  github.git("push", "-q", "--force", "origin", BRANCH);
+  await writeFile(join(github.dir, path), `${await readFile(join(github.dir, path), "utf8")}${line}`);
+  github.git("commit", "-q", "-am", "Apply suggestion");
+  github.git("push", "-q", "origin", BRANCH);
 }
 
 /** GitHub squash-merges the setup PR: origin's head, as one new commit on origin's main. The PR's own ref keeps that head. */
@@ -769,7 +793,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   it("after a squash merge of a setup PR GitHub updated with rebase, a repair run from the default branch gets past the leftover setup branch", async () => {
     const world = aWorld();
     await setupOnce(world);
-    await rebaseTheHeadOnGitHub();
+    await rebaseTheHeadOnGitHub(world);
     await squashOnGitHub(world);
     git("switch", "-q", "main");
     git("pull", "-q", "origin", "main");
@@ -787,7 +811,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   it("on the setup branch after its PR, which GitHub updated with rebase, was squash-merged, says to go back to the default branch, which works", async () => {
     const world = aWorld();
     await setupOnce(world);
-    await rebaseTheHeadOnGitHub();
+    await rebaseTheHeadOnGitHub(world);
     await squashOnGitHub(world);
     git("branch", "-q", "--set-upstream-to=origin/main", "main");
 
@@ -806,7 +830,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     await aGitignoreOnMain();
     const world = aWorld();
     await setupOnce(world);
-    await rebaseOverANearbyEditOnGitHub();
+    await rebaseOverANearbyEditOnGitHub(world);
     await squashOnGitHub(world);
     git("switch", "-q", "main");
     git("pull", "-q", "origin", "main");
@@ -825,13 +849,126 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     await aGitignoreOnMain();
     const world = aWorld();
     await setupOnce(world);
-    await rebaseOverANearbyEditOnGitHub();
+    await rebaseOverANearbyEditOnGitHub(world);
     await squashOnGitHub(world);
 
     const { code, complaints } = await setupOnce(world);
 
     expect(code).toBe(1);
     expect(complaints[0]).toBe(`${BRANCH}'s setup PR is merged. Switch to main with git switch main && git pull, then run setup again.`);
+  });
+
+  // GitHub's squash has the edit setup's own copy lacks, so merging that copy into main conflicts.
+  describe.each([
+    ["a suggested change to setup's block in .gitignore", ".gitignore", "# mine\n"],
+    ["a line added to the caller workflow setup wrote", ".github/workflows/fabrik.yml", "# reviewed\n"],
+  ])("after GitHub updated the setup PR with rebase over another PR's edit next to setup's, then %s was committed on GitHub, and the PR was squash-merged", (_, path, line) => {
+    async function mergedAfterAnEditOnGitHub(world: World): Promise<void> {
+      await aGitignoreOnMain();
+      await setupOnce(world);
+      await rebaseOverANearbyEditOnGitHub(world);
+      await editOnGitHub(path, line);
+      await squashOnGitHub(world);
+    }
+
+    // A line added to the Kit-owned caller workflow is drift, which the repair puts back in a setup PR of its own.
+    it("a repair run from the default branch gets past the leftover setup branch", async () => {
+      const world = aWorld();
+      await mergedAfterAnEditOnGitHub(world);
+      git("switch", "-q", "main");
+      git("pull", "-q", "origin", "main");
+      world.labels.delete("needs-triage");
+
+      const { code, said, complaints } = await setupOnce(world);
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said).toContain("- create the label needs-triage");
+      expect(world.labels.has("needs-triage")).toBe(true);
+    });
+
+    it("on the setup branch, says to go back to the default branch, which works", async () => {
+      const world = aWorld();
+      await mergedAfterAnEditOnGitHub(world);
+      git("branch", "-q", "--set-upstream-to=origin/main", "main");
+
+      const { code, complaints } = await setupOnce(world);
+
+      expect(code).toBe(1);
+      expect(complaints[0]).toBe(`${BRANCH}'s setup PR is merged. Switch to main with git switch main && git pull, then run setup again.`);
+      follow(complaints[0]);
+      world.labels.delete("needs-triage");
+      const again = await setupOnce(world);
+      expect(again.complaints).toEqual([]);
+      expect(again.said).toContain("- create the label needs-triage");
+    });
+  });
+
+  it("on the setup branch after its PR was squash-merged behind another PR, and the Operator pulled the default branch in and pushed, a repair leaves the clone on the up-to-date default branch, and later runs get past origin's copy", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    await anotherPrOnGitHub();
+    await squashOnGitHub(world);
+    git("pull", "-q", "--no-rebase", "origin", "main");
+    git("push", "-q", "origin", BRANCH);
+    world.labels.delete("needs-triage");
+
+    const onTheBranch = await setupOnce(world);
+
+    expect(onTheBranch.complaints).toEqual([]);
+    expect(onTheBranch.said).toContain("Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main.");
+    expect(git("branch", "--show-current").trim()).toBe("main");
+    expect(git("rev-parse", "main").trim()).toBe(originGit("rev-parse", "main").trim());
+    for (const _ of [1, 2]) {
+      world.labels.delete("needs-triage");
+      const { code, said, complaints } = await setupOnce(world);
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said).toContain("- create the label needs-triage");
+    }
+    expect(world.prs).toHaveLength(1);
+  });
+
+  it("on the setup branch, a repair that writes no file and goes back to a default branch with a commit of its own here says to make it origin's", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    squashTheSetupPr(world);
+    await writeFile(join(checkout, "NOTES.md"), "# Notes\n");
+    git("add", "NOTES.md");
+    git("commit", "-q", "-m", "Notes, not pushed");
+    git("switch", "-q", BRANCH);
+    git("pull", "-q", "--no-rebase", "origin", "main");
+    world.labels.delete("needs-triage");
+
+    const { code, said, complaints } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(said).toContain(
+      "Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main, which here isn't the same as on origin: pull or push so they match, then run setup again.",
+    );
+    expect(git("branch", "--show-current").trim()).toBe("main");
+    expect(git("log", "-1", "--format=%s").trim()).toBe("Notes, not pushed");
+  });
+
+  it("after its setup PR was closed unmerged and its commit cherry-picked onto the default branch by hand, every repair run from there gets past the setup branch, here and on origin", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    world.prs[0]!.open = false;
+    const tip = git("rev-parse", "HEAD").trim();
+    git("switch", "-q", "main");
+    git("cherry-pick", "-x", tip);
+    git("push", "-q", "origin", "main");
+
+    for (const _ of [1, 2]) {
+      world.labels.delete("needs-triage");
+      const { code, said, complaints } = await setupOnce(world);
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said).toContain("- create the label needs-triage");
+      expect(git("branch", "--show-current").trim()).toBe("main");
+    }
+    expect(world.prs).toHaveLength(1);
   });
 
   it("on the setup branch after its PR was squash-merged and the Operator pulled the default branch in, a repair that writes no file opens no setup PR", async () => {
@@ -855,7 +992,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   it("on the setup branch after GitHub updated its open PR with rebase, each stop's command works with git's default config", async () => {
     const world = aWorld();
     await setupOnce(world);
-    await rebaseTheHeadOnGitHub();
+    await rebaseTheHeadOnGitHub(world);
 
     const behind = await setupOnce(world);
     expect(behind.complaints[0]).toMatch(new RegExp(`^${BRANCH} doesn't hold origin's latest main \\(\\w{7}\\)\\. Merge it in with git pull --no-rebase origin main, then run setup again\\.$`));

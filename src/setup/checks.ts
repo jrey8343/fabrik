@@ -156,9 +156,9 @@ function repoOf(view: RepoView): ProductState["repo"] {
  * The clone is on its default branch, clean and the same as on origin. Or it's
  * on setup's own branch for this release, built on origin's default branch,
  * with nothing uncommitted but the files earlier runs of setup wrote there.
- * "The same as on origin" is read with git ls-remote, so the checks move no
- * branch or tag: all they may fetch is a merged setup PR's head, into
- * FETCH_HEAD. Returns what's wrong, or the tips origin has.
+ * "The same as on origin" is read with git ls-remote, so the checks fetch
+ * nothing and move no branch or tag. Returns what's wrong, or the tips origin
+ * has.
  */
 async function checkBranch(
   { run, productDir, release, earlierWrites }: CheckInputs,
@@ -209,7 +209,7 @@ async function checkBranch(
   if (!(await holds(originDefault))) {
     // A squash or rebase merge leaves the branch's own commits off the default branch, and pulling it in would only open a PR again.
     const head = (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
-    if (await mergedSetupTip(run, cwd, `${repo.owner}/${repo.name}`, ownBranch)(head)) {
+    if (await mergedSetupTip(run, cwd, `${repo.owner}/${repo.name}`, ownBranch, originDefault)(head)) {
       return `${ownBranch}'s setup PR is merged. Switch to ${defaultBranch} with git switch ${defaultBranch} && git pull, then run setup again.`;
     }
     // Without --no-rebase, git's default config refuses to pull into a branch that has commits of its own.

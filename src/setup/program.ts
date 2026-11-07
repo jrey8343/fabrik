@@ -176,7 +176,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     return 0;
   }
   if (current !== branch) {
-    const earlier = await earlierSetupRun(run, cwd, repoName, branch, repo.defaultBranch, origin.setupBranch);
+    const earlier = await earlierSetupRun(run, cwd, repoName, branch, repo.defaultBranch, origin);
     if (earlier !== null) return stop(io, earlier);
   }
   // The same actions, with notes that say what this run does once its wizard has run.
@@ -187,6 +187,8 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
   // A run on the setup branch picks up from one that stopped before its PR, which the PR lists too.
   const earlierDone = current === branch ? await record.read() : [];
   let wizardReport = "";
+  // Whether the default branch the run left the setup branch for is origin's.
+  let upToDate = true;
   const steps: OneRunSteps = {
     confirm: async () =>
       isYes(
@@ -240,6 +242,9 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     },
     leaveSetupBranch: async () => {
       await ok(run, "git", ["switch", "-q", repo.defaultBranch], { cwd });
+      // From the setup branch, the default branch here can be behind origin's, whose tip the setup branch holds.
+      await run("git", ["merge", "-q", "--ff-only", origin.defaultBranch], { cwd });
+      upToDate = (await ok(run, "git", ["rev-parse", "HEAD"], { cwd })).trim() === origin.defaultBranch;
       await ok(run, "git", ["branch", "-q", "-D", branch], { cwd });
       await record.clear();
     },
@@ -261,7 +266,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
   }
   io.say("");
   if (result.kind === "applied") {
-    for (const line of appliedLines(repo.defaultBranch, result.summary)) io.say(line);
+    for (const line of appliedLines(repo.defaultBranch, result.summary, upToDate)) io.say(line);
     return 0;
   }
   for (const line of closingLines({ release, defaultBranch: repo.defaultBranch, url: result.url, summary: result.summary })) io.say(line);
