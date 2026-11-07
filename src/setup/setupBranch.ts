@@ -2,7 +2,7 @@
 // run switches to fabrik/setup-<release>, commits only the files setup
 // writes, pushes the branch, and opens the setup PR or updates the one
 // already open from it.
-import { changedPaths } from "./checks.ts";
+import { uncommittedPaths } from "./checks.ts";
 import { ok, type Run } from "./exec.ts";
 import { prBody, withEarlierDone } from "./finish.ts";
 import type { Published, RunSummary } from "./oneRun.ts";
@@ -36,8 +36,7 @@ export async function switchToSetupBranch(run: Run, cwd: string, branch: string,
 
 /** Commits whichever of setup's files changed, and nothing else the clone has. Returns whether there was anything to commit. */
 export async function commitSetupFiles(run: Run, cwd: string, paths: readonly string[], release: string): Promise<boolean> {
-  const status = await ok(run, "git", ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd });
-  const changed = changedPaths(status).filter((path) => paths.includes(path));
+  const changed = (await uncommittedPaths(run, cwd)).filter((path) => paths.includes(path));
   if (changed.length === 0) return false;
   await ok(run, "git", ["add", "--", ...changed], { cwd });
   await ok(run, "git", ["commit", "-q", "-m", `Set up Fabrik ${release}`, "--", ...changed], { cwd });

@@ -6,7 +6,7 @@
 // skill.
 import { realpath, rm } from "node:fs/promises";
 import { foundOldSetupSkill, oldSetupSkillIn, personalSkillsDir, staleOldSetupSkill } from "../skills/oldSetupSkill.ts";
-import type { Env, Run } from "./exec.ts";
+import { type Env, ok, type Run } from "./exec.ts";
 import type { ProductState } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 
@@ -157,7 +157,7 @@ async function checkBranch({ run, productDir, release, setupPaths }: CheckInputs
     return `${where}. Switch to ${defaultBranch} with git switch ${defaultBranch}, then run setup again.`;
   }
 
-  const changed = changedPaths((await run("git", ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd })).stdout);
+  const changed = await uncommittedPaths(run, cwd);
   if (current === defaultBranch && changed.length > 0) {
     return `This clone has uncommitted changes (${changed.join(", ")}). Commit or stash them, then run setup again.`;
   }
@@ -195,8 +195,16 @@ async function checkBranch({ run, productDir, release, setupPaths }: CheckInputs
   return null;
 }
 
+/**
+ * Every path the clone has uncommitted, untracked ones included. The checks
+ * and the setup commit both read it, so they agree on what's uncommitted.
+ */
+export async function uncommittedPaths(run: Run, cwd: string): Promise<string[]> {
+  return changedPaths(await ok(run, "git", ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd }));
+}
+
 /** Every path `git status --porcelain=v1 -z` names, a rename's old path included. */
-export function changedPaths(status: string): string[] {
+function changedPaths(status: string): string[] {
   const entries = status.split("\0").filter((entry) => entry !== "");
   const paths: string[] = [];
   for (let i = 0; i < entries.length; i++) {
