@@ -185,7 +185,7 @@ describe("The checks before setup plans anything", () => {
       const unmerged = { "gh pr list --head fabrik/setup-v1.4.2 --state merged": { stdout: "[]" } };
 
       expect(await problem({ ...onSetupBranch, ...unmerged, [lsRemote("v1.4.2")]: { stdout: `${OTHER_SHA}\trefs/heads/main\n` } })).toBe(
-        "fabrik/setup-v1.4.2 doesn't hold origin's latest main (9f86d08). Merge it in with git pull origin main, then run setup again.",
+        "fabrik/setup-v1.4.2 doesn't hold origin's latest main (9f86d08). Merge it in with git pull --no-rebase origin main, then run setup again.",
       );
     });
 
@@ -207,7 +207,7 @@ describe("The checks before setup plans anything", () => {
       const remote = { stdout: `${HEAD_SHA}\trefs/heads/main\n${OTHER_SHA}\trefs/heads/fabrik/setup-v1.4.2\n` };
 
       expect(await problem({ ...onSetupBranch, [lsRemote("v1.4.2")]: remote })).toBe(
-        "origin's fabrik/setup-v1.4.2 has commits this clone lacks (9f86d08). Pull them with git pull origin fabrik/setup-v1.4.2, then run setup again.",
+        "origin's fabrik/setup-v1.4.2 has commits this clone lacks (9f86d08). Pull them with git pull --no-rebase origin fabrik/setup-v1.4.2, then run setup again.",
       );
     });
 

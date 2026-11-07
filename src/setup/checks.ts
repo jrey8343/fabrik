@@ -156,8 +156,9 @@ function repoOf(view: RepoView): ProductState["repo"] {
  * The clone is on its default branch, clean and the same as on origin. Or it's
  * on setup's own branch for this release, built on origin's default branch,
  * with nothing uncommitted but the files earlier runs of setup wrote there.
- * "The same as on origin" is read with git ls-remote, so the checks fetch
- * nothing and write no refs. Returns what's wrong, or the tips origin has.
+ * "The same as on origin" is read with git ls-remote, so the checks move no
+ * branch or tag: all they may fetch is a merged setup PR's head, into
+ * FETCH_HEAD. Returns what's wrong, or the tips origin has.
  */
 async function checkBranch(
   { run, productDir, release, earlierWrites }: CheckInputs,
@@ -211,10 +212,11 @@ async function checkBranch(
     if (await mergedSetupTip(run, cwd, `${repo.owner}/${repo.name}`, ownBranch)(head)) {
       return `${ownBranch}'s setup PR is merged. Switch to ${defaultBranch} with git switch ${defaultBranch} && git pull, then run setup again.`;
     }
-    return `${ownBranch} doesn't hold origin's latest ${defaultBranch} (${short(originDefault)}). Merge it in with git pull origin ${defaultBranch}, then run setup again.`;
+    // Without --no-rebase, git's default config refuses to pull into a branch that has commits of its own.
+    return `${ownBranch} doesn't hold origin's latest ${defaultBranch} (${short(originDefault)}). Merge it in with git pull --no-rebase origin ${defaultBranch}, then run setup again.`;
   }
   if (originOwn !== undefined && !(await holds(originOwn))) {
-    return `origin's ${ownBranch} has commits this clone lacks (${short(originOwn)}). Pull them with git pull origin ${ownBranch}, then run setup again.`;
+    return `origin's ${ownBranch} has commits this clone lacks (${short(originOwn)}). Pull them with git pull --no-rebase origin ${ownBranch}, then run setup again.`;
   }
   return origin;
 }

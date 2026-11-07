@@ -41,26 +41,53 @@ function changedPaths(status: string): string[] {
  * push. A squash or rebase merge leaves none of the branch's commits on the
  * default branch, so this is how setup knows that branch is done. GitHub
  * compares the tip with each head, which the clone needn't have.
+ *
+ * "Update with rebase" replays the branch's commits onto the default branch,
+ * so the head holds copies of the tip's commits, not the tip. With no setup PR
+ * open from the branch, the tip counts as merged too when a merged PR's head
+ * holds a copy, with the same changes, of each commit of the tip's it lacks.
+ * The clone fetches that head into FETCH_HEAD alone, so no branch or tag moves.
  */
 export function mergedSetupTip(run: Run, cwd: string, repo: string, branch: string): (tip: string) => Promise<boolean> {
-  let heads: Promise<string[]> | undefined;
+  let merged: Promise<MergedPr[]> | undefined;
+  let open: Promise<SetupPr | null> | undefined;
   return async (tip) => {
-    for (const head of await (heads ??= mergedSetupHeads(run, cwd, branch))) {
+    const prs = await (merged ??= mergedSetupPrs(run, cwd, branch));
+    for (const { headRefOid: head } of prs) {
       if (head === tip) return true;
       // "ahead": the head holds the tip, and more. A tip GitHub lacks fails.
       const compared = await run("gh", ["api", `repos/${repo}/compare/${tip}...${head}`, "--jq", ".status"], { cwd });
       if (compared.code === 0 && ["ahead", "identical"].includes(compared.stdout.trim())) return true;
     }
+    if (prs.length === 0 || (await (open ??= openSetupPr(run, cwd, branch))) !== null) return false;
+    for (const { number } of prs) {
+      if (await holdsCopiesOf(run, cwd, number, tip)) return true;
+    }
     return false;
   };
 }
 
-/** The head commit of each merged PR from this repo's own setup branch. */
-async function mergedSetupHeads(run: Run, cwd: string, branch: string): Promise<string[]> {
+interface MergedPr {
+  readonly number: number;
+  /** The head's commit when it merged. */
+  readonly headRefOid: string;
+}
+
+/** Each merged PR from this repo's own setup branch. */
+async function mergedSetupPrs(run: Run, cwd: string, branch: string): Promise<MergedPr[]> {
   const listed = JSON.parse(
-    await ok(run, "gh", ["pr", "list", "--head", branch, "--state", "merged", "--json", "headRefOid,isCrossRepository"], { cwd }),
-  ) as { headRefOid: string; isCrossRepository: boolean }[];
-  return listed.filter((pr) => !pr.isCrossRepository).map((pr) => pr.headRefOid);
+    await ok(run, "gh", ["pr", "list", "--head", branch, "--state", "merged", "--json", "number,headRefOid,isCrossRepository"], { cwd }),
+  ) as (MergedPr & { isCrossRepository: boolean })[];
+  return listed.filter((pr) => !pr.isCrossRepository).map(({ number, headRefOid }) => ({ number, headRefOid }));
+}
+
+/** Whether the PR's head holds a copy of each commit of the tip's it lacks, as git cherry matches them by their changes. */
+async function holdsCopiesOf(run: Run, cwd: string, pr: number, tip: string): Promise<boolean> {
+  const fetched = await run("git", ["fetch", "-q", "--no-tags", "--no-recurse-submodules", "origin", `refs/pull/${pr}/head`], { cwd });
+  if (fetched.code !== 0) return false;
+  // "+" marks a commit the head has no copy of.
+  const cherry = await run("git", ["cherry", "FETCH_HEAD", tip], { cwd });
+  return cherry.code === 0 && !cherry.stdout.split("\n").some((line) => line.startsWith("+"));
 }
 
 /**
@@ -85,9 +112,10 @@ export async function earlierSetupRun(
     return `${branch} holds an earlier run of setup that isn't on ${defaultBranch} yet. Switch to it with git switch ${branch}, then run setup again: it picks up where that run stopped.`;
   }
   if (originTip === null || (await merged(originTip))) return null;
+  // A copy of the branch in this clone is merged by now, so the + lets the fetch replace it, even when origin's doesn't build on it.
   return (
     `origin's ${branch} holds an earlier run of setup that isn't on ${defaultBranch} yet. ` +
-    `Fetch it and switch to it with git fetch origin ${branch}:${branch} && git switch ${branch}, then run setup again: it picks up where that run stopped.`
+    `Fetch it and switch to it with git fetch origin +${branch}:${branch} && git switch ${branch}, then run setup again: it picks up where that run stopped.`
   );
 }
 

@@ -3,7 +3,7 @@
 // world that keeps what each run did, and the wizard is a stand-in that
 // stores what the Operator would.
 import { execFileSync } from "node:child_process";
-import { readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { aReadyOperator, fakeCommands } from "../__fixtures__/setupCommands.ts";
@@ -148,6 +148,45 @@ function moveTheHeadOnGitHub(): void {
   const tip = originGit("rev-parse", BRANCH).trim();
   const moved = originGit("-c", "user.name=GitHub", "-c", "user.email=noreply@github.com", "commit-tree", `${tip}^{tree}`, "-p", tip, "-m", "Merge main");
   originGit("update-ref", `refs/heads/${BRANCH}`, moved.trim());
+}
+
+/** A clone of origin that does to it what GitHub does, with its own commits and pushes. */
+async function aGitHubClone(): Promise<{ dir: string; git: (...args: string[]) => string }> {
+  const dir = await tempDir("setup-github");
+  const github = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=GitHub", "-c", "user.email=noreply@github.com", ...args], { cwd: dir, encoding: "utf8", env: env as NodeJS.ProcessEnv });
+  github("clone", "-q", origin, ".");
+  return { dir, git: github };
+}
+
+/** Another PR lands on main, then GitHub's "Update with rebase" replays the setup PR's commits onto it: origin's setup branch no longer holds the clone's tip. */
+async function rebaseTheHeadOnGitHub(): Promise<void> {
+  const github = await aGitHubClone();
+  await writeFile(join(github.dir, "CHANGELOG.md"), "# Changes\n");
+  github.git("add", "CHANGELOG.md");
+  github.git("commit", "-q", "-m", "Another PR");
+  github.git("push", "-q", "origin", "main");
+  github.git("switch", "-q", BRANCH);
+  github.git("rebase", "-q", "main");
+  github.git("push", "-q", "--force", "origin", BRANCH);
+}
+
+/** GitHub squash-merges the setup PR: origin's head, as one new commit on origin's main. The PR's own ref keeps that head. */
+async function squashOnGitHub(world: World): Promise<void> {
+  const github = await aGitHubClone();
+  const head = github.git("rev-parse", `origin/${BRANCH}`).trim();
+  github.git("merge", "-q", "--squash", `origin/${BRANCH}`);
+  github.git("commit", "-q", "-m", "Set up Fabrik v1.4.2 (#1)");
+  github.git("push", "-q", "origin", "main");
+  originGit("update-ref", "refs/pull/1/head", head);
+  Object.assign(world.prs[0]!, { open: false, merged: true, headRefOid: head });
+}
+
+/** Runs the command a stop names, as the Operator pastes it into a terminal with git's default config. */
+function follow(complaint: string | undefined): void {
+  const command = /with (git .+?), then run setup again/.exec(complaint ?? "")?.[1];
+  if (command === undefined) throw new Error(`No command to follow in: ${complaint}`);
+  execFileSync("sh", ["-c", command], { cwd: checkout, encoding: "utf8", env: env as NodeJS.ProcessEnv, stdio: "pipe" });
 }
 
 /** As GitHub's compare of two commits sums it up: how the head stands to the base, null when origin lacks either. */
@@ -332,6 +371,104 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(said.slice(0, said.indexOf(`On ${BRANCH}.`)).some((line) => line.startsWith(`- ${warning}`))).toBe(true);
     expect(world.prs[0]?.body).toContain(`- ${warning}`);
     expect(said.slice(said.indexOf("The setup PR: https://github.com/acme/clinic/pull/1")).some((line) => line.startsWith(`- ${warning}`))).toBe(true);
+  });
+
+  describe("pausing the starter on the setup branch, which is still setup's own", () => {
+    const PAUSED = "Dispatch is paused, so no Implementer starts until you set max_in_flight in .fabrik/config.json above 0.";
+    const WARNING = "2 open issues are labelled ready-for-agent: Dispatch starts releasing them to Implementers as soon as the setup PR merges.";
+    const PAUSES = "- write .fabrik/config.json (the starter Kit config, with Dispatch paused now (max_in_flight 0))";
+    const withPaused = (paused: boolean) => ["--no-time-zone", "--no-second-subscription", paused ? "--paused" : "--no-paused"];
+    const closingOf = (said: string[]) => said.slice(said.indexOf("The setup PR: https://github.com/acme/clinic/pull/1"));
+    const maxInFlight = () => JSON.parse(originGit("show", `${BRANCH}:.fabrik/config.json`)).max_in_flight;
+
+    const withReadyIssues = () => {
+      const world = aWorld();
+      world.labels.add("ready-for-agent");
+      world.readyForAgent = 2;
+      return world;
+    };
+
+    it.each([
+      ["opened the setup PR", false],
+      ["stopped partway", true],
+    ])("with --paused after an unpaused run %s, pauses Dispatch in it, and the setup PR and the closing lines say so", async (_, partway) => {
+      const world = withReadyIssues();
+      if (partway) world.failingLabels.add("needs-info");
+      await setupOnce(world);
+      world.failingLabels.clear();
+
+      const { code, said } = await setupOnce(world, { args: withPaused(true) });
+
+      expect(code).toBe(0);
+      expect(maxInFlight()).toBe(0);
+      const body = world.prs[0]!.body;
+      expect(body).toContain(PAUSES);
+      expect(body).toContain(PAUSED);
+      expect(body).not.toContain(WARNING);
+      expect(said.join("\n")).not.toContain("--paused had no effect");
+      expect(closingOf(said).some((line) => line.startsWith(`- ${PAUSED}`))).toBe(true);
+      expect(closingOf(said).some((line) => line.includes(WARNING))).toBe(false);
+    });
+
+    it("with --plan, after an unpaused run stopped partway, plans the same pause as the run that carries it out, which plans nothing more after the wizard", async () => {
+      const world = withReadyIssues();
+      world.failingLabels.add("needs-info");
+      await setupOnce(world);
+      world.failingLabels.clear();
+
+      const planned = await setupOnce(world, { args: [...withPaused(true), "--plan"] });
+      const { said } = await setupOnce(world, { args: withPaused(true) });
+
+      expect(planned.said).toContain(PAUSES);
+      expect(planned.said.join("\n")).not.toMatch(/--paused had no effect|Dispatch starts releasing/);
+      expect(said.slice(said.indexOf("Setup would:"), said.indexOf(`On ${BRANCH}.`))).toContain(PAUSES);
+      expect(said.join("\n")).not.toContain("Setup found more to do after the wizard");
+    });
+
+    it("in a run after a paused one stopped partway, asks again, offering the pause, and the closing lines say Dispatch is paused", async () => {
+      const world = withReadyIssues();
+      world.failingLabels.add("needs-info");
+      await setupOnce(world, { args: withPaused(true) });
+      world.failingLabels.clear();
+
+      const { code, said, questions } = await setupOnce(world, { args: ["--no-time-zone", "--no-second-subscription"], answers: ["", "y"] });
+
+      expect(code).toBe(0);
+      expect(questions[0]).toBe("Install with Dispatch paused, so no Implementer starts until you raise max_in_flight? [Y/n] ");
+      expect(maxInFlight()).toBe(0);
+      expect(world.prs[0]!.body).toContain(PAUSED);
+      expect(closingOf(said).some((line) => line.startsWith(`- ${PAUSED}`))).toBe(true);
+    });
+
+    it("with --no-paused after a paused run opened the setup PR, gives it the v1 default max_in_flight, and the setup PR and the closing lines warn about the ready-for-agent issues", async () => {
+      const world = withReadyIssues();
+      await setupOnce(world, { args: withPaused(true) });
+
+      const { code, said } = await setupOnce(world, { args: withPaused(false) });
+
+      expect(code).toBe(0);
+      expect(maxInFlight()).toBe(2);
+      expect(world.prs[0]!.body).toContain(WARNING);
+      expect(world.prs[0]!.body).not.toContain(PAUSED);
+      expect(closingOf(said).some((line) => line.startsWith(`- ${WARNING}`))).toBe(true);
+      expect(closingOf(said).some((line) => line.includes(PAUSED))).toBe(false);
+    });
+
+    it("with --paused and the Product's own Kit config, which doesn't pause Dispatch, doesn't say Dispatch is paused", async () => {
+      await mkdir(join(checkout, ".fabrik"));
+      await writeFile(join(checkout, ".fabrik", "config.json"), '{\n  "max_in_flight": 3\n}\n');
+      git("add", ".fabrik/config.json");
+      git("commit", "-q", "-m", "Our Kit config");
+      git("push", "-q", "origin", "main");
+      const world = aWorld();
+
+      const { code, said } = await setupOnce(world, { args: withPaused(true) });
+
+      expect(code).toBe(0);
+      expect(world.prs[0]!.body).toContain("--paused had no effect: .fabrik/config.json already exists, with max_in_flight 3.");
+      expect(world.prs[0]!.body).not.toContain(PAUSED);
+      expect(closingOf(said).some((line) => line.includes(PAUSED))).toBe(false);
+    });
   });
 
   it("a second run after the wizard stopped partway reuses the branch and PR, applies nothing again, and then asks for the merge", async () => {
@@ -585,6 +722,85 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
 
     expect(code).toBe(1);
     expect(complaints[0]).toBe(`${BRANCH}'s setup PR is merged. Switch to main with git switch main && git pull, then run setup again.`);
+  });
+
+  it("after a squash merge of a setup PR GitHub updated with rebase, a repair run from the default branch gets past the leftover setup branch", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    await rebaseTheHeadOnGitHub();
+    await squashOnGitHub(world);
+    git("switch", "-q", "main");
+    git("pull", "-q", "origin", "main");
+    world.labels.delete("needs-triage");
+
+    const { code, said, complaints } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(said).toContain("- create the label needs-triage");
+    expect(world.labels.has("needs-triage")).toBe(true);
+    expect(git("branch", "--show-current").trim()).toBe("main");
+  });
+
+  it("on the setup branch after its PR, which GitHub updated with rebase, was squash-merged, says to go back to the default branch, which works", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    await rebaseTheHeadOnGitHub();
+    await squashOnGitHub(world);
+    git("branch", "-q", "--set-upstream-to=origin/main", "main");
+
+    const { code, complaints } = await setupOnce(world);
+
+    expect(code).toBe(1);
+    expect(complaints[0]).toBe(`${BRANCH}'s setup PR is merged. Switch to main with git switch main && git pull, then run setup again.`);
+    follow(complaints[0]);
+    world.labels.delete("needs-triage");
+    const again = await setupOnce(world);
+    expect(again.complaints).toEqual([]);
+    expect(again.said).toContain("- create the label needs-triage");
+  });
+
+  it("on the setup branch after GitHub updated its open PR with rebase, each stop's command works with git's default config", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    await rebaseTheHeadOnGitHub();
+
+    const behind = await setupOnce(world);
+    expect(behind.complaints[0]).toMatch(new RegExp(`^${BRANCH} doesn't hold origin's latest main \\(\\w{7}\\)\\. Merge it in with git pull --no-rebase origin main, then run setup again\\.$`));
+    follow(behind.complaints[0]);
+    const lacking = await setupOnce(world);
+    expect(lacking.complaints[0]).toMatch(
+      new RegExp(`^origin's ${BRANCH} has commits this clone lacks \\(\\w{7}\\)\\. Pull them with git pull --no-rebase origin ${BRANCH}, then run setup again\\.$`),
+    );
+    follow(lacking.complaints[0]);
+    const { code, complaints } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(world.prs).toHaveLength(1);
+  });
+
+  it("from the default branch, a merged copy of the setup branch here doesn't stop the fetch of origin's newer one", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    squashTheSetupPr(world);
+    // Setup ran again from another clone: a new setup branch on origin, from main, and its open PR.
+    const github = await aGitHubClone();
+    github.git("switch", "-q", "-C", BRANCH, "origin/main");
+    await writeFile(join(github.dir, "CLAUDE.md"), "# Clinic\n");
+    github.git("add", "CLAUDE.md");
+    github.git("commit", "-q", "-m", "Set up Fabrik v1.4.2");
+    github.git("push", "-q", "--force", "origin", BRANCH);
+    world.prs.push({ number: 2, url: "https://github.com/acme/clinic/pull/2", head: BRANCH, base: "main", isCrossRepository: false, body: "", open: true });
+    world.labels.delete("needs-triage");
+
+    const { code, complaints } = await setupOnce(world);
+
+    expect(code).toBe(1);
+    expect(complaints[0]).toMatch(new RegExp(`^origin's ${BRANCH} holds an earlier run of setup that isn't on main yet\\.`));
+    follow(complaints[0]);
+    expect(git("branch", "--show-current").trim()).toBe(BRANCH);
+    expect(git("rev-parse", "HEAD").trim()).toBe(originGit("rev-parse", BRANCH).trim());
   });
 
   it("changes nothing when the Operator says no to the plan", async () => {

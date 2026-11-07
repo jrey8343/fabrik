@@ -1,16 +1,19 @@
 // Setup's questions: the Operator's time zone, a second Subscription, and
 // whether to install with Dispatch paused. Each has a flag, and setup asks
 // only what the flags left out, and only on a terminal. Without one, a missing
-// answer means no.
+// answer means no, but for pausing the starter setup wrote on its branch, which
+// keeps what it holds.
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import type { FlagAnswers } from "./args.ts";
-import { isTimeZone, type ProductState, type SetupAnswers } from "./plan.ts";
+import { isTimeZone, pausesDispatch, type ProductState, type SetupAnswers } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "./shims.ts";
 
 export interface QuestionInputs {
   readonly flags: FlagAnswers;
   readonly state: ProductState;
+  /** Whether the repo's Kit config is the starter setup wrote on its branch, still setup's own until the setup PR merges. */
+  readonly wroteStarter: boolean;
   /** This machine's time zone, offered when fabrik-runs holds none. */
   readonly machineTimeZone: string;
   /** Null without a terminal. */
@@ -20,11 +23,10 @@ export interface QuestionInputs {
 
 export type QuestionAnswers = Pick<SetupAnswers, "timeZone" | "secondSubscription" | "paused">;
 
-export async function askQuestions({ flags, state, machineTimeZone, prompt, say }: QuestionInputs): Promise<QuestionAnswers> {
+export async function askQuestions({ flags, state, wroteStarter, machineTimeZone, prompt, say }: QuestionInputs): Promise<QuestionAnswers> {
   const timeZone = flags.timeZone !== undefined ? flags.timeZone : await askTimeZone(state, machineTimeZone, prompt, say);
   const secondSubscription = flags.secondSubscription ?? (await askSecondSubscription(prompt, say));
-  // --paused changes only the starter: an existing Kit config is the Product's.
-  const paused = flags.paused ?? (state.files[KIT_CONFIG_PATH] == null ? await askPaused(state.readyForAgent, prompt, say) : false);
+  const paused = flags.paused ?? (await askPaused(state, wroteStarter, prompt, say));
   return {
     ...(timeZone === null ? {} : { timeZone }),
     ...(secondSubscription ? { secondSubscription } : {}),
@@ -53,12 +55,22 @@ async function askSecondSubscription(prompt: Prompt | null, say: (line: string) 
   return isYes(await prompt.ask("Add a second Subscription? [y/N] "));
 }
 
-async function askPaused(readyForAgent: number, prompt: Prompt | null, say: (line: string) => void): Promise<boolean> {
-  if (prompt === null) return false;
+/**
+ * --paused changes only the starter, so a Kit config the default branch has,
+ * the Product's own, isn't asked about. The starter setup wrote on its branch
+ * is asked about again, offering what it holds.
+ */
+async function askPaused(state: ProductState, wroteStarter: boolean, prompt: Prompt | null, say: (line: string) => void): Promise<boolean> {
+  const config = state.files[KIT_CONFIG_PATH] ?? null;
+  if (config !== null && !wroteStarter) return false;
+  const held = config !== null && pausesDispatch(config);
+  if (prompt === null) return held;
+  const { readyForAgent } = state;
   say(
     readyForAgent === 0
       ? "No open issues are labelled ready-for-agent."
       : `${readyForAgent} open ${readyForAgent === 1 ? "issue is" : "issues are"} labelled ready-for-agent. Dispatch starts releasing them to Implementers as soon as the setup PR merges.`,
   );
-  return isYes(await prompt.ask("Install with Dispatch paused, so no Implementer starts until you raise max_in_flight? [y/N] "));
+  const answer = await prompt.ask(`Install with Dispatch paused, so no Implementer starts until you raise max_in_flight? ${held ? "[Y/n]" : "[y/N]"} `);
+  return answer === null || answer.trim() === "" ? held : isYes(answer);
 }

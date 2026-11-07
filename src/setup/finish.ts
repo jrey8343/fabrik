@@ -17,6 +17,9 @@ export interface PrBodyInputs {
 
 const DONE_HEADING = "## What setup did";
 
+/** What the setup PR and the closing lines say when the Kit config the PR merges pauses Dispatch. */
+const PAUSED = "Dispatch is paused, so no Implementer starts until you set max_in_flight in .fabrik/config.json above 0.";
+
 export function prBody({ release, defaultBranch, summary }: PrBodyInputs): string {
   const sections = [
     `Sets up Fabrik ${release} in this repo. Setup wrote this PR's files, and did the rest with your own gh and op.`,
@@ -38,6 +41,7 @@ export function prBody({ release, defaultBranch, summary }: PrBodyInputs): strin
             setupCommand(release),
             "```",
           ]),
+      ...(summary.pausesDispatch === true ? ["", PAUSED] : []),
     ].join("\n"),
     ...(summary.appInstalledOn === undefined ? [] : [appInstalledMark(summary.appInstalledOn)]),
   ];
@@ -76,12 +80,10 @@ export function withEarlierDone(body: string | null, done: readonly string[]): s
 
 export interface ClosingInputs extends PrBodyInputs {
   readonly url: string;
-  /** Whether the starter Kit config was written with Dispatch paused. */
-  readonly paused: boolean;
 }
 
 /** The run's last lines. The wizard clears the screen, so they say again what setup did. */
-export function closingLines({ release, defaultBranch, url, summary, paused }: ClosingInputs): string[] {
+export function closingLines({ release, defaultBranch, url, summary }: ClosingInputs): string[] {
   return [
     `The setup PR: ${url}`,
     "",
@@ -98,7 +100,7 @@ export function closingLines({ release, defaultBranch, url, summary, paused }: C
         ]),
     "",
     "Then:",
-    ...bullets(guidance(release, paused)),
+    ...bullets(guidance(release, summary.pausesDispatch === true)),
   ];
 }
 
@@ -138,7 +140,7 @@ function guidance(release: string, paused: boolean): string[] {
       "Once the setup PR is merged, turn it on, or change its answers, by running /fabrik-visual-evidence in a Claude session in this repo.",
     ...(paused
       ? [
-          "Dispatch is paused, so no Implementer starts until you set max_in_flight in .fabrik/config.json above 0. " +
+          `${PAUSED} ` +
             "Do that once the tracker's ready-for-agent issues are ones you want built: a push to the default branch that changes it resumes Dispatch straight away.",
         ]
       : []),

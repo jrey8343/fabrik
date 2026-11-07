@@ -946,20 +946,55 @@ describe("Installing with Dispatch paused", () => {
       ]);
     });
 
-    it("with --paused and a starter an earlier run wrote unpaused, says --paused had no effect and how to pause it by hand", () => {
+    it("with --paused and a starter an earlier run wrote unpaused, pauses Dispatch in it, every other byte kept", () => {
       const plan = planSetup(withStarter(kit.templates.kitConfig), kit, paused, wroteStarter);
 
-      expect(pausedNote(plan)).toEqual([
-        "--paused had no effect: .fabrik/config.json already exists, with max_in_flight 2. Set it to 0 by hand to pause Dispatch.",
+      expect(plan.actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toEqual([
+        expect.objectContaining({ content: pausedText(kit.templates.kitConfig), why: "the starter Kit config, with Dispatch paused now (max_in_flight 0)" }),
       ]);
+      expect(pausedNote(plan)).toEqual([]);
       expect(readyForAgentNotes(plan)).toEqual([]);
     });
 
-    it("unpaused, with a starter an earlier run wrote paused, gives no warning, since Dispatch is paused", () => {
+    it("unpaused, with a starter an earlier run wrote paused, gives it the v1 default max_in_flight and warns about the ready-for-agent issues", () => {
       const plan = planSetup(withStarter(pausedText(kit.templates.kitConfig)), kit, {}, wroteStarter);
 
-      expect(readyForAgentNotes(plan)).toEqual([]);
-      expect(pausedNote(plan)).toEqual([]);
+      expect(plan.actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toEqual([
+        expect.objectContaining({ content: kit.templates.kitConfig, why: "the starter Kit config, with Dispatch not paused now (max_in_flight 2)" }),
+      ]);
+      expect(readyForAgentNotes(plan)).toEqual([
+        "4 open issues are labelled ready-for-agent: Dispatch starts releasing them to Implementers as soon as the setup PR merges. Run setup with --paused to hold them back.",
+      ]);
+    });
+
+    it("pauses Dispatch and lists the second Subscription in one write", () => {
+      const state = aCleanProduct({ files: { ".fabrik/config.json": kit.templates.kitConfig }, vaults: ["Fabrik"], fabrikItems: ["Claude token", "Claude token 2"] });
+
+      const writes = planSetup(state, kit, { paused: true, secondSubscription: true }, wroteStarter).actions.filter(
+        (a) => a.kind === "write-file" && a.path === ".fabrik/config.json",
+      );
+
+      expect(writes).toEqual([
+        expect.objectContaining({
+          content: pausedText(kit.templates.kitConfig).replace('"subscriptions": ["Claude token"]', '"subscriptions": ["Claude token", "Claude token 2"]'),
+          why: "the starter Kit config, with Dispatch paused now (max_in_flight 0), and the second Subscription listed",
+        }),
+      ]);
+    });
+
+    it("plans nothing more for it once the starter pauses Dispatch as this run asks", () => {
+      const once = planSetup(withStarter(kit.templates.kitConfig), kit, paused, wroteStarter);
+      const again = planSetup(afterApplying(withStarter(kit.templates.kitConfig), once), kit, paused, wroteStarter);
+
+      expect(written(again.actions, ".fabrik/config.json")).toBeUndefined();
+      expect(pausedNote(again)).toEqual([]);
+    });
+
+    it("leaves a starter that isn't a JSON object alone, as a Kit config of the Product's own", () => {
+      const plan = planSetup(withStarter("{ not json\n"), kit, paused, wroteStarter);
+
+      expect(written(plan.actions, ".fabrik/config.json")).toBeUndefined();
+      expect(pausedNote(plan)).toEqual(["--paused had no effect: .fabrik/config.json already exists. Set max_in_flight to 0 in it by hand to pause Dispatch."]);
     });
   });
 });

@@ -21,7 +21,7 @@ import { appliedLines, closingLines } from "./finish.ts";
 import { gatherState, vaultItems } from "./gather.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type OneRunSteps, readinessOf, runOnce } from "./oneRun.ts";
-import { FABRIK_APP_VAULT, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths } from "./plan.ts";
+import { FABRIK_APP_VAULT, pausesDispatch, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 import { askQuestions } from "./questions.ts";
 import {
@@ -103,10 +103,10 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
     if (unreachable !== null) return stop(io, unreachable);
 
     const state = await gatherState(run, productDir, checked.repo, paths);
-    const answers = await askQuestions({ flags: args.answers, state, machineTimeZone: io.machineTimeZone, prompt: io.prompt, say: io.say });
     // The default branch the checks found has no Kit config, so one here is the starter setup wrote on its branch.
     const config = await run("git", ["cat-file", "-e", `${checked.origin.defaultBranch}:${KIT_CONFIG_PATH}`], { cwd: productDir });
     const wroteStarter = config.code !== 0;
+    const answers = await askQuestions({ flags: args.answers, state, wroteStarter, machineTimeZone: io.machineTimeZone, prompt: io.prompt, say: io.say });
     const plan = planSetup(state, kit, answers, { wroteStarter });
 
     io.say(`Setup uses the 1Password account ${chosen.account.name}.`);
@@ -244,7 +244,10 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     },
     push: () => pushSetupBranch(run, cwd, branch, origin.setupBranch),
     publish: async (summary) => {
-      const published = await publishSetupPr({ run, cwd, branch, defaultBranch: repo.defaultBranch, release, summary });
+      // What the PR merges is the setup branch's Kit config, whatever this run's answer was.
+      const config = await run("git", ["show", `HEAD:${KIT_CONFIG_PATH}`], { cwd });
+      const merged = { ...summary, pausesDispatch: config.code === 0 && pausesDispatch(config.stdout) };
+      const published = await publishSetupPr({ run, cwd, branch, defaultBranch: repo.defaultBranch, release, summary: merged });
       await record.clear();
       return published;
     },
@@ -260,8 +263,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     for (const line of appliedLines(repo.defaultBranch, result.summary)) io.say(line);
     return 0;
   }
-  const closing = { release, defaultBranch: repo.defaultBranch, url: result.url, summary: result.summary, paused: answers.paused === true };
-  for (const line of closingLines(closing)) io.say(line);
+  for (const line of closingLines({ release, defaultBranch: repo.defaultBranch, url: result.url, summary: result.summary })) io.say(line);
   return 0;
 }
 
