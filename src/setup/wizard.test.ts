@@ -2,6 +2,7 @@
 // terminal, so it's run here as they'd walk it: with `gh`, `op` and the
 // browser stubbed, and their answers piped in.
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -165,6 +166,11 @@ function created(w: Walk): { vault: string | undefined; item: unknown }[] {
   return w.op
     .filter((c) => c.args[0] === "item" && c.args[1] === "create")
     .map((c) => ({ vault: c.args[c.args.indexOf("--vault") + 1], item: c.template }));
+}
+
+/** The template files `op item create` was given that are still on disk. */
+function templatesLeft(w: Walk): string[] {
+  return w.op.flatMap((c) => (c.templateFile !== null && existsSync(c.templateFile) ? [c.templateFile] : []));
 }
 
 /** Each `op item delete` call's arguments. */
@@ -340,6 +346,14 @@ describe("The setup wizard's Claude token stage", () => {
     expect(w.stdout).toMatch(/still to do by hand:\n.*the 'Claude token' API Credential in the 'Fabrik' vault/);
   });
 
+  it("leaves no copy of the token on disk when 1Password doesn't store it", async () => {
+    const w = await walk(["Fabrik App/Fabrik App"], [...TO_THE_PASTE, "sk-ant-oat01-first", ""], undefined, { createFails: true });
+
+    expect(w.status).not.toBe(0);
+    expect(created(w)).toHaveLength(1);
+    expect(templatesLeft(w)).toEqual([]);
+  });
+
   it("keeps the token 1Password holds when the replacement pasted is nothing", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_PASTE, "y", "", ""]);
 
@@ -374,6 +388,14 @@ describe("The setup wizard's Sentry token stage", () => {
         },
       },
     ]);
+  });
+
+  it("leaves no copy of the token on disk when 1Password doesn't store it", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_SENTRY_STAGE, "y", "sntryu_0123abcd"], undefined, { createFails: true });
+
+    expect(w.status).not.toBe(0);
+    expect(created(w)).toHaveLength(1);
+    expect(templatesLeft(w)).toEqual([]);
   });
 
   it("refuses an organization auth token, whose scopes don't cover issues, and leaves the token to do by hand", async () => {

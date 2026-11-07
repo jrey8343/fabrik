@@ -243,6 +243,11 @@ run_wizard() {
 
 TOTAL_STAGES=8
 
+# A token stage's 0600 item template, removed however the wizard ends: a
+# failed op item create or a Ctrl-C included.
+TEMPLATE=""
+trap 'rm -f "${TEMPLATE:-}"' EXIT
+
 for tool in gh op; do
   command -v "$tool" >/dev/null 2>&1 || { warn "$tool isn't installed; install it and sign in, then re-run."; exit 1; }
 done
