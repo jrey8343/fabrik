@@ -825,6 +825,25 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     );
   });
 
+  it("names the Claude token stage for a listed Claude token the Fabrik vault lacks", () => {
+    const lacks = '.fabrik/config.json lists "Claude token" in subscriptions, but the "Fabrik" vault has no item of that name';
+
+    expect(planSetup(withConfig(twoListed, ["Claude token 2"]), kit).notes).toContainEqual(
+      `${lacks}: run setup again to walk the wizard's "The Claude token" stage for it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2`,
+    );
+  });
+
+  it("says to store by hand a listed Subscription the Fabrik vault lacks under a name no wizard stage stores, such as a third", () => {
+    const threeListed = '{ "subscriptions": ["Claude token", "Claude token 2", "Claude token 3"] }\n';
+    const byHand =
+      '.fabrik/config.json lists "Claude token 3" in subscriptions, but the "Fabrik" vault has no item of that name: run `claude setup-token` on that Subscription\'s Claude account and save the token as the "Claude token 3" API Credential, with its expiry date, in the "Fabrik" vault yourself, since the wizard stores only "Claude token" and "Claude token 2".';
+
+    for (const context of [{}, { wizardNext: true }]) {
+      const { notes } = planSetup(withConfig(threeListed, ["Claude token", "Claude token 2"]), kit, {}, context);
+      expect(notes.filter((note) => note.includes("subscriptions"))).toEqual([byHand]);
+    }
+  });
+
   it("creates no service account: the agent and implement accounts already read the Fabrik vault", () => {
     const state = withConfig(oneListed, ["Claude token"]);
 
