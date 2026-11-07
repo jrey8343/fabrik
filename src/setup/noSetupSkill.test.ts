@@ -20,7 +20,28 @@ const TO_THE_SKILL = [
   /\bcopy (the|a|it|this) (\S+ )?skill\b/i,
 ];
 
-const isRecord = (path: string) => path.startsWith("docs/adr/") || path.startsWith("docs/release-notes/") || path.endsWith(".test.ts");
+/**
+ * The release-notes drafts of released versions, which are records. A draft is
+ * added here once its release ships: until then it's scanned like any other file.
+ * Named, not read from the latest tag, since CI's shallow checkout has no tags.
+ */
+const RELEASED_NOTES = new Set(
+  [
+    "auditor",
+    "ideas-and-maps",
+    "monitor",
+    "product-intent",
+    "replay",
+    "retro",
+    "run-records",
+    "scorers",
+    "subscription-rotation",
+    "ui-prototypes",
+    "visual-evidence",
+  ].map((name) => `docs/release-notes/${name}.md`),
+);
+
+const isRecord = (path: string) => path.startsWith("docs/adr/") || RELEASED_NOTES.has(path) || path.endsWith(".test.ts");
 
 /** Every file in the repo, tracked or new, as git sees it. */
 function repoFiles(): string[] {
