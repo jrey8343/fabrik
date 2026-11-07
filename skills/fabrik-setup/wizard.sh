@@ -250,6 +250,13 @@ HAS_STORE=0
 gh repo view "$STORE" >/dev/null 2>&1 && HAS_STORE=1
 (( HAS_STORE )) && TOTAL_STAGES=$((TOTAL_STAGES + 1))
 
+# op reads OP_ACCOUNT itself, so every op call here uses the 1Password account
+# Setup passed in, or op's own default without one. One account per Product is
+# a normal setup (ADR-0013), so what the account holds is shared only by the
+# Product repos in it.
+THIS_ACCOUNT="this 1Password account"
+[[ -n "${OP_ACCOUNT:-}" ]] && THIS_ACCOUNT+=" ($OP_ACCOUNT)"
+
 banner "Fabrik setup for $REPO"
 
 # ── 1. The Fabrik App on this repo ─────────────────────────────────────────
@@ -303,6 +310,7 @@ if op item get "Fabrik App" --vault "Fabrik App" --fields label=client-id >/dev/
   pause
 else
   say "The push jobs mint their App token from the 'Fabrik App' item in the 'Fabrik App' vault."
+  say "There's no 'Fabrik App' item in $THIS_ACCOUNT yet. That's expected for a new account."
   open_url "https://github.com/settings/apps/${FABRIK_APP_SLUG}"
   step "Under 'About', copy the Client ID."
   ask FABRIK_APP_CLIENT_ID "Paste the Client ID:"
@@ -329,10 +337,13 @@ say "It lives in the 'Claude token' API Credential in the 'Fabrik' vault, with i
 say "so 1Password's Watchtower warns you before it runs out."
 CLAUDE_TOKEN_EXISTS=0
 op item get "Claude token" --vault "Fabrik" >/dev/null 2>&1 && CLAUDE_TOKEN_EXISTS=1
-if (( CLAUDE_TOKEN_EXISTS )) && ! confirm "1Password already holds a Claude token, which every Product repo shares. Replace it with a new one?"; then
+if (( CLAUDE_TOKEN_EXISTS )) && ! confirm "1Password already holds a Claude token, which every Product repo in $THIS_ACCOUNT shares. Replace it with a new one?"; then
   say "Keeping the current token."
   pause
 else
+  if (( ! CLAUDE_TOKEN_EXISTS )); then
+    say "There's no Claude token in $THIS_ACCOUNT yet. That's expected for a new account."
+  fi
   step "In another terminal, run: claude setup-token"
   step "Sign in with the account that has your subscription. It prints a token that lasts one year."
   ask_secret CLAUDE_TOKEN "Paste the token (hidden):"
@@ -362,7 +373,7 @@ say "monitor.errors in .fabrik/config.json names your Sentry org and project."
 say "It reads Sentry with the 'Sentry token' API Credential in the 'Fabrik App' vault."
 SENTRY_TOKEN_EXISTS=0
 op item get "Sentry token" --vault "Fabrik App" >/dev/null 2>&1 && SENTRY_TOKEN_EXISTS=1
-if (( SENTRY_TOKEN_EXISTS )) && ! confirm "1Password already holds a Sentry token, which every Product repo shares. Replace it with a new one?"; then
+if (( SENTRY_TOKEN_EXISTS )) && ! confirm "1Password already holds a Sentry token, which every Product repo in $THIS_ACCOUNT shares. Replace it with a new one?"; then
   say "Keeping the current Sentry token."
   pause
 elif (( ! SENTRY_TOKEN_EXISTS )) && ! confirm "Does $REPO report production errors to Sentry?"; then

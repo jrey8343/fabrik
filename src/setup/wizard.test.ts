@@ -79,6 +79,8 @@ interface WalkOptions {
   store?: boolean;
   /** The checkout's .env, when it has one. */
   dotEnv?: string;
+  /** The OP_ACCOUNT Setup passes in, naming the 1Password account. Unset when not given. */
+  opAccount?: string;
 }
 
 async function stub(bin: string, name: string, script: string): Promise<void> {
@@ -103,7 +105,7 @@ async function walk(
   items: string[],
   answers: string[],
   kitConfig?: string,
-  { createFails = false, ghApi = {}, store = false, dotEnv }: WalkOptions = {},
+  { createFails = false, ghApi = {}, store = false, dotEnv, opAccount }: WalkOptions = {},
 ): Promise<Walk> {
   const bin = await tempDir("wizard-bin");
   await stub(bin, "op", FAKE_OP);
@@ -115,20 +117,24 @@ async function walk(
     await writeFile(join(checkout, ".fabrik", "config.json"), kitConfig);
   }
   if (dotEnv !== undefined) await writeFile(join(checkout, ".env"), dotEnv);
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+    STUB_DIR: bin,
+    STUB_OP_ITEMS: JSON.stringify(items),
+    STUB_OP_CREATE_FAILS: createFails ? "1" : "0",
+    STUB_GH_API: JSON.stringify(ghApi),
+    STUB_GH_STORE: store ? "1" : "0",
+  };
+  // Never the account of the shell running the tests.
+  delete env["OP_ACCOUNT"];
+  if (opAccount !== undefined) env["OP_ACCOUNT"] = opAccount;
   const run = spawnSync("bash", [WIZARD], {
     cwd: checkout,
     input: answers.map((a) => `${a}\n`).join(""),
     encoding: "utf8",
     timeout: 30_000,
-    env: {
-      ...process.env,
-      PATH: `${bin}:${process.env["PATH"] ?? ""}`,
-      STUB_DIR: bin,
-      STUB_OP_ITEMS: JSON.stringify(items),
-      STUB_OP_CREATE_FAILS: createFails ? "1" : "0",
-      STUB_GH_API: JSON.stringify(ghApi),
-      STUB_GH_STORE: store ? "1" : "0",
-    },
+    env,
   });
   return {
     status: run.status,
@@ -310,7 +316,7 @@ describe("The setup wizard's Sentry token stage", () => {
     expect(w.stdout).toContain("Setup complete");
   });
 
-  it("keeps the Sentry token 1Password already holds, which every Product repo shares", async () => {
+  it("keeps the Sentry token 1Password already holds, which every Product repo in this 1Password account shares", async () => {
     const w = await walk([...THE_APP_AND_CLAUDE, "Fabrik App/Sentry token"], [...TO_THE_SENTRY_STAGE, "n"]);
 
     expect(w.status).toBe(0);
@@ -333,6 +339,39 @@ describe("The setup wizard's Sentry token stage", () => {
         },
       },
     ]);
+  });
+});
+
+describe("The setup wizard in one 1Password account per Product", () => {
+  /** The account as the wizard words it, and the OP_ACCOUNT Setup passes in to name it, if any. */
+  const ACCOUNTS: [string, string | undefined][] = [
+    ["this 1Password account", undefined],
+    ["this 1Password account (clinic.1password.com)", "clinic.1password.com"],
+  ];
+
+  it.each(ACCOUNTS)("says the Claude and Sentry tokens 1Password holds are shared by every Product repo in %s", async (account, opAccount) => {
+    const w = await walk([...THE_APP_AND_CLAUDE, "Fabrik App/Sentry token"], [...TO_THE_SENTRY_STAGE, "n"], undefined, { opAccount });
+
+    expect(w.stdout).toContain(`1Password already holds a Claude token, which every Product repo in ${account} shares. Replace it with a new one?`);
+    expect(w.stdout).toContain(`1Password already holds a Sentry token, which every Product repo in ${account} shares. Replace it with a new one?`);
+    expect(w.stdout).not.toContain("which every Product repo shares");
+  });
+
+  /** The answers that walk a new account's App key and Claude token stages: a key file that isn't there, then a token. */
+  const IN_A_NEW_ACCOUNT = ["", "fabrik-factory", "", "Iv1.0123abcd", "/nowhere/fabrik.pem", "sk-ant-oat01-first", ""];
+
+  it.each(ACCOUNTS)("says an App key and a Claude token not stored yet in %s are expected for a new account", async (account, opAccount) => {
+    const w = await walk([], IN_A_NEW_ACCOUNT, undefined, { opAccount });
+
+    expect(w.status).toBe(0);
+    expect(w.stdout).toContain(`There's no 'Fabrik App' item in ${account} yet. That's expected for a new account.`);
+    expect(w.stdout).toContain(`There's no Claude token in ${account} yet. That's expected for a new account.`);
+  });
+
+  it("doesn't call the account new when it already holds the App key and the Claude token", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE);
+
+    expect(w.stdout).not.toContain("expected for a new account");
   });
 });
 

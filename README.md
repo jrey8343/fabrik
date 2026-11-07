@@ -66,6 +66,8 @@ With `--paused` on both the plan and `--apply`, the starter `.fabrik/config.json
 
 Then the Operator runs the wizard (`skills/fabrik-setup/wizard.sh`, made with the `wizard` skill) in their own terminal, for what only they can do: installing the Fabrik App on the repo (Issues, Pull requests and Contents, plus Checks: read for the Monitor's red main; no `workflows`) and storing its `client-id` and `private-key` in the `Fabrik App` item; `claude setup-token` into the `Claude token` API Credential in the `Fabrik` vault, with its expiry; a Sentry token (`event:read` and `project:read`) into the `Sentry token` API Credential in the `Fabrik App` vault, a stage a repo without Sentry skips; GitHub mobile pushing only mentions, assignments and review requests, with Actions off; and watching the repo on All activity.
 
+Every Product repo in this 1Password account, the one Setup uses, shares its `Fabrik` and `Fabrik App` vaults, and with them the App key, the Claude token and the Sentry token. So on the next Product repo in it, the wizard finds them already stored. One 1Password account per Product is a normal setup too. A new account holds none of them yet, which the wizard says is expected, and the wizard stores them there.
+
 Setup leaves Visual evidence off. Once the setup PR is merged, the Operator turns it on by running `/fabrik-visual-evidence` in a Claude session in the repo, where the `SessionStart` hook has installed it (see `ui` in the [Kit config](#kit-config)).
 
 Re-running `/fabrik-setup` on a working install changes nothing. On a broken one it repairs only what's missing: a missing label is created, and a missing secret gets a new service account (1Password shows a token only once, so delete the old account by hand).
