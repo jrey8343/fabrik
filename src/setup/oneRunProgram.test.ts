@@ -311,12 +311,19 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     const { code, said, log } = await setupOnce(world);
 
     expect(code).toBe(0);
-    expect(writtenIn(said)).toEqual([]);
-    expect(said).toContain("- create the label needs-info");
-    expect(said).not.toContain("- create the label needs-triage");
+    const planned = said.slice(said.indexOf("Setup would:"), said.indexOf(`On ${BRANCH}.`));
+    expect(writtenIn(planned)).toEqual([]);
+    expect(planned).toContain("- create the label needs-info");
+    expect(planned).not.toContain("- create the label needs-triage");
     expect(log.filter((line) => line.startsWith("git switch"))).toEqual([]);
     expect(filesOnOrigin()).toEqual(expect.arrayContaining([".github/workflows/fabrik.yml", ".fabrik/config.json"]));
     expect(world.prs).toHaveLength(1);
+    // What the first run did before it stopped is in the PR too.
+    for (const done of ["- write .github/workflows/fabrik.yml (", "- create the label needs-triage", "- create the label needs-info"]) {
+      expect(world.prs[0]!.body).toContain(done);
+    }
+    const closing = said.slice(said.indexOf("What setup did:"));
+    expect(closing).toContain("- create the label needs-triage");
   });
 
   it.each(["package.json", ".fabrik/skills.lock.json"])(

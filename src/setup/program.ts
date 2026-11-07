@@ -24,7 +24,16 @@ import { type OneRunSteps, readinessOf, runOnce } from "./oneRun.ts";
 import { FABRIK_APP_VAULT, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths, setupWrites } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 import { askQuestions } from "./questions.ts";
-import { commitSetupFiles, earlierSetupRun, openSetupPr, publishSetupPr, pushSetupBranch, setupBranch, switchToSetupBranch } from "./setupBranch.ts";
+import {
+  commitSetupFiles,
+  doneRecord,
+  earlierSetupRun,
+  openSetupPr,
+  publishSetupPr,
+  pushSetupBranch,
+  setupBranch,
+  switchToSetupBranch,
+} from "./setupBranch.ts";
 import { pinCaller } from "./shims.ts";
 import { WIZARD_REPORT_ENV, WIZARD_SECOND_SUBSCRIPTION_ENV, type WizardRun } from "./wizard.ts";
 
@@ -164,6 +173,9 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
   io.say(withNotes(plan.actions.length === 0 ? [heldBy(branch)] : stepsOf(plan), plan));
   io.say("");
 
+  // A run on the setup branch picks up from one that stopped before its PR, which the PR lists too.
+  const record = doneRecord(run, cwd, release);
+  const earlierDone = current === branch ? await record.read() : [];
   let wizardReport = "";
   const steps: OneRunSteps = {
     confirm: async () =>
@@ -175,12 +187,15 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
         ),
       ),
     switchToSetupBranch: async () => {
+      // From the default branch the setup branch starts again, so what earlier runs did on it is history.
+      if (current !== branch) await record.clear();
       await switchToSetupBranch(run, cwd, branch, current);
       io.say(`On ${branch}.`);
     },
     apply: async (actions) => {
       for (const action of actions) {
         await apply(run, action, productDir, repo);
+        await record.add(describeAction(action));
         io.say(`- ${describeAction(action)}`);
       }
     },
@@ -214,12 +229,17 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     leaveSetupBranch: async () => {
       await ok(run, "git", ["switch", "-q", repo.defaultBranch], { cwd });
       await ok(run, "git", ["branch", "-q", "-D", branch], { cwd });
+      await record.clear();
     },
     push: () => pushSetupBranch(run, cwd, branch, origin.setupBranch),
-    publish: (summary) => publishSetupPr({ run, cwd, branch, defaultBranch: repo.defaultBranch, release, summary }),
+    publish: async (summary) => {
+      const published = await publishSetupPr({ run, cwd, branch, defaultBranch: repo.defaultBranch, release, summary });
+      await record.clear();
+      return published;
+    },
   };
 
-  const result = await runOnce({ plan, repo: repoName }, steps);
+  const result = await runOnce({ plan, repo: repoName, earlierDone }, steps);
   if (result.kind === "declined") {
     io.say("Setup changed nothing.");
     return 0;

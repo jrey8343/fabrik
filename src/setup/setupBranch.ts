@@ -2,6 +2,8 @@
 // run switches to fabrik/setup-<release>, commits only the files setup
 // writes, pushes the branch, and opens the setup PR or updates the one
 // already open from it.
+import { appendFile, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { ok, type Run } from "./exec.ts";
 import { prBody, withEarlierDone } from "./finish.ts";
 import type { Published, RunSummary } from "./oneRun.ts";
@@ -70,6 +72,30 @@ export async function earlierSetupRun(
     `origin's ${branch} holds an earlier run of setup that isn't on ${defaultBranch} yet. ` +
     `Fetch it and switch to it with git fetch origin ${branch}:${branch} && git switch ${branch}, then run setup again: it picks up where that run stopped.`
   );
+}
+
+/**
+ * What runs of setup applied on the setup branch since its last setup PR was
+ * published, a step a line, as describeAction words it. A run that stops
+ * before the PR, partway through applying or at the push, leaves it for the
+ * next run's PR to list. It's a file in the clone's git directory, so it's in
+ * no commit.
+ */
+export interface DoneRecord {
+  read(): Promise<string[]>;
+  add(step: string): Promise<void>;
+  clear(): Promise<void>;
+}
+
+export function doneRecord(run: Run, cwd: string, release: string): DoneRecord {
+  let path: Promise<string> | undefined;
+  const file = () =>
+    (path ??= ok(run, "git", ["rev-parse", "--absolute-git-dir"], { cwd }).then((dir) => join(dir.trim(), `fabrik-setup-${release}.done`)));
+  return {
+    read: async () => (await readFile(await file(), "utf8").catch(() => "")).split("\n").filter((line) => line !== ""),
+    add: async (step) => appendFile(await file(), `${step}\n`),
+    clear: async () => rm(await file(), { force: true }),
+  };
 }
 
 /** Switches to the setup branch. One left from a merged run is started again from here, which loses nothing. */

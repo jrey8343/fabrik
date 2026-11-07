@@ -97,9 +97,11 @@ export interface OneRun {
   readonly plan: SetupPlan;
   /** The Product repo, as owner/name. */
   readonly repo: string;
+  /** What earlier runs on the setup branch applied since the last setup PR they published, as describeAction words it. */
+  readonly earlierDone?: readonly string[];
 }
 
-export async function runOnce({ plan, repo }: OneRun, steps: OneRunSteps): Promise<OneRunResult> {
+export async function runOnce({ plan, repo, earlierDone = [] }: OneRun, steps: OneRunSteps): Promise<OneRunResult> {
   if (!(await steps.confirm())) return { kind: "declined" };
   await steps.switchToSetupBranch();
   if (plan.actions.length > 0) await steps.apply(plan.actions);
@@ -117,7 +119,7 @@ export async function runOnce({ plan, repo }: OneRun, steps: OneRunSteps): Promi
     );
   }
 
-  const done = [...plan.actions, ...files].map(describeAction);
+  const done = [...new Set([...earlierDone, ...[...plan.actions, ...files].map(describeAction)])];
   // GitHub opens no PR that holds no commits, as after a repair of only labels, secrets or protection.
   if (!(await steps.commit()) && !(await steps.somethingToPublish())) {
     await steps.leaveSetupBranch();

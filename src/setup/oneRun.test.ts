@@ -77,6 +77,15 @@ describe("One setup run", () => {
     ]);
   });
 
+  it("lists what an earlier run on the setup branch applied before it stopped, then this run's steps, each once", async () => {
+    const { steps } = fakeSteps();
+    const earlierDone = ["write .github/workflows/fabrik.yml (the caller workflow)", "create the label needs-info"];
+
+    const result = await runOnce({ plan: plan([LABEL]), repo: "acme/clinic", earlierDone }, steps);
+
+    expect(result.kind === "done" && result.summary.done).toEqual([...earlierDone, "create the label needs-triage"]);
+  });
+
   it("leaves anything else the plan finds after the wizard for the next run, and says so", async () => {
     const { steps, log } = fakeSteps({ after: plan([LABEL], ["a note from after the wizard"]) });
 
