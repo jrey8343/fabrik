@@ -56,7 +56,10 @@ FABRIK=$(mktemp -d)
 curl -fsSL "https://codeload.github.com/jrey8343/fabrik/tar.gz/refs/tags/<release>" | tar -xzf - -C "$FABRIK" --strip-components=1
 ```
 
-Create the branch the change goes out on: `git switch -c fabrik/visual-evidence`. If an earlier run already opened a PR from it, switch to that branch instead, and push to it in step 4. Only a PR whose head is in this repo counts: `gh pr list --head` matches a fork's branch of the same name too, so look with `gh pr list --head fabrik/visual-evidence --state open --json number,url,isCrossRepository --jq '.[] | select(.isCrossRepository | not)'`, and never push to, edit or offer the Operator a PR from a fork.
+The change goes out on the branch `fabrik/visual-evidence`. Run `git fetch origin`, then look for an earlier run's open PR from it. Only a PR whose head is in this repo counts: `gh pr list --head` matches a fork's branch of the same name too, so look with `gh pr list --head fabrik/visual-evidence --state open --json number,url,isCrossRepository --jq '.[] | select(.isCrossRepository | not)'`, and never push to, edit or offer the Operator a PR from a fork.
+
+- **An earlier run's PR is open:** switch to its branch with `git switch -C fabrik/visual-evidence origin/fabrik/visual-evidence`, and push to it in step 4.
+- **Otherwise:** start the branch from the up-to-date default branch with `git switch -C fabrik/visual-evidence`. That also starts again a branch left from an earlier run whose PR was merged or closed, and loses nothing, since every run confirms its answers again.
 
 Run the writer from the repo's root, with the confirmed answers on stdin as the `ui` and `preview` blocks, in JSON spelled as Kit config spells them. Give every answer, with `null` or `[]` for an optional one the Operator left out. The quoted `'EOF'` keeps the shell off the values:
 
@@ -85,7 +88,7 @@ It writes only those two blocks of `.fabrik/config.json`, in place or before its
 
 ## 4. Open the pull request
 
-1. Commit `.fabrik/config.json` alone, push the branch, and open a PR to the default branch with `gh pr create`. Its body lists each answer, and says the check that `sandbox.build` and `ui.serve` work without `sandbox.secrets` was made.
+1. Commit `.fabrik/config.json` alone. When step 3 found an earlier run's PR open, push with `git push origin fabrik/visual-evidence`, which updates that PR. Otherwise push with `git push --force-with-lease -u origin fabrik/visual-evidence`, which replaces a branch GitHub kept from a merged or closed PR, and open a PR to the default branch with `gh pr create`. Its body lists each answer, and says the check that `sandbox.build` and `ui.serve` work without `sandbox.secrets` was made.
 2. Remove the temporary Fabrik folder.
 3. Tell the Operator to merge the PR themselves. The push job reads the `ui` block from the default branch, so capture starts on the first UI PR after the merge. Then tell them:
    - That with Visual evidence on, each PR whose diff touches `ui.paths` gets an evidence section linking a gallery of its screenshots, and the Reviewer sees them.
