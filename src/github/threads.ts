@@ -22,7 +22,7 @@ import {
   RESEARCH_RUN_FAILED_MARKER,
   RETRY_PUSH_MARKER,
   SESSION_FINISHED,
-  undeliveredReviewsIn,
+  startedReviewsIn,
   UNMARKED_RETRY_PUSH,
   VERDICT_MARKER,
 } from "../loop/markers.ts";
@@ -47,20 +47,26 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst = false, headSha } = value as Record<string, unknown>;
+  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
   if (source !== "reviewer" && source !== "ci" && source !== "empty-diff") return null;
   // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one; likewise requestChangesFirst (#341).
-  if (typeof requestChanges !== "boolean" || typeof conflictRun !== "boolean" || typeof requestChangesFirst !== "boolean") return null;
+  if (typeof requestChanges !== "boolean" || typeof conflictRun !== "boolean") return null;
+  if (requestChangesFirst !== undefined && !isReviewIds(requestChangesFirst)) return null;
   if (typeof headSha !== "string") return null;
   return {
     verdict: verdict as Verdict,
     source,
     requestChanges,
     ...(conflictRun ? { conflictRun: true as const } : {}),
-    ...(requestChangesFirst ? { requestChangesFirst: true as const } : {}),
+    ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
     headSha,
   };
+}
+
+/** Whether a marker's field is a non-empty list of review ids. */
+function isReviewIds(value: unknown): value is number[] {
+  return Array.isArray(value) && value.length > 0 && value.every((id) => Number.isSafeInteger(id) && id > 0);
 }
 
 /**
@@ -119,13 +125,12 @@ export function conflictRunInFlightIn(commentBodies: readonly string[]): string 
  * Whether a Retry or Request-changes run has pushed to a PR since its latest
  * Verdict, from the Fabrik App's comments on it, oldest first: the Kit's note
  * of such a push comes after the last Verdict. A Retry's note from before the
- * marker counts by its opening words. A Request-changes run that ended
- * without pushing (#341) has had its outcome too.
+ * marker counts by its opening words.
  */
 export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean {
   let pushed = false;
   for (const body of commentBodies) {
-    if (isPushNote(body) || requestChangesRunEndedIn(body) !== null) pushed = true;
+    if (isPushNote(body)) pushed = true;
     else if (verdictsIn([body]).length > 0) pushed = false;
   }
   return pushed;
@@ -155,48 +160,72 @@ export type PullRequestHistoryItem =
   | { readonly kind: "draft" | "ready"; readonly at: string };
 
 /**
- * The reviews requesting changes on an agent PR that no Request-changes run
- * has built yet, and the Kit's undelivered-review notes since (#341), from its
- * history in any order. A review counts only if the PR was out of draft when
- * it was submitted, as the event path's Request changes only acts on one at
- * the Merge gate; an agent PR opens as a draft. A Request-changes run's
- * outcome (its push, its Verdict, or its ended note) starts both afresh.
+ * Where an agent PR's Request changes stand (#341), from its history in any
+ * order: the reviews requesting changes that nothing has settled, those a
+ * Request-changes run was started for, and the review of the one in flight.
+ *
+ * A review counts only if the PR was out of draft when it was submitted, as
+ * the event path's Request changes only acts on one at the Merge gate; an
+ * agent PR opens as a draft. A Request-changes run's push or Verdict settles
+ * every review before it, as does a pass, whose Review read them all as part
+ * of the Ticket (ADR-0010). A run is started by the Kit's note naming its
+ * reviews, or by an Execution flaw that gave way to them, and is in flight
+ * until it pushes, is given a Verdict or ends, or the PR leaves draft. A run
+ * that ended without pushing settles nothing: its reviews stay unbuilt, and
+ * noted, so the Kit doesn't note them again. Reviews requesting changes come
+ * only in that state, so a dismissed one isn't in the history at all, and a
+ * run whose every review was dismissed isn't in flight.
  */
 export function requestChangesSinceRunIn(
   history: readonly PullRequestHistoryItem[],
-): Pick<PullRequestSnapshot, "unbuiltChangesRequests" | "undeliveredNotices"> {
+): Pick<PullRequestSnapshot, "unbuiltChangesRequests" | "notedChangesRequests" | "requestChangesRunInFlight"> {
   // Stable, so items at the same time keep the order they were read in.
   const ordered = [...history].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  const standing = new Set(history.flatMap((item) => (item.kind === "changes-requested" ? [item.review] : [])));
   let draft = true;
   let reviews: UnbuiltChangesRequest[] = [];
-  let notices: number[][] = [];
+  let noted: number[] = [];
+  let inFlight: readonly number[] | null = null;
   for (const item of ordered) {
     switch (item.kind) {
       case "draft":
+        draft = true;
+        break;
       case "ready":
-        draft = item.kind === "draft";
+        draft = false;
+        inFlight = null;
         break;
       case "changes-requested":
         if (!draft) reviews.push({ review: item.review, reviewer: item.reviewer, reviewerIsBot: item.reviewerIsBot, submittedAt: item.at });
         break;
       case "bot-comment": {
-        const noted = undeliveredReviewsIn(item.body);
-        if (noted !== null) notices.push(noted);
-        else if (isRequestChangesOutcome(item.body)) {
+        const started = startedReviewsIn(item.body) ?? verdictsIn([item.body])[0]?.requestChangesFirst ?? null;
+        if (started !== null) {
+          noted = [...noted, ...started.filter((review) => !noted.includes(review))];
+          inFlight = started;
+        } else if (settlesRequestChanges(item.body)) {
           reviews = [];
-          notices = [];
+          noted = [];
+          inFlight = null;
+        } else if (requestChangesRunEndedIn(item.body) !== null) {
+          inFlight = null;
         }
         break;
       }
     }
   }
-  return { unbuiltChangesRequests: reviews, undeliveredNotices: notices };
+  const live = (inFlight ?? []).filter((review) => standing.has(review));
+  return {
+    unbuiltChangesRequests: reviews,
+    notedChangesRequests: noted,
+    requestChangesRunInFlight: live.length === 0 ? null : Math.max(...live),
+  };
 }
 
-/** Whether a Kit comment is a Request-changes run's outcome: its push note, its Verdict, or its ended note. */
-function isRequestChangesOutcome(body: string): boolean {
-  if (body.startsWith(REQUEST_CHANGES_RUN_MARKER) || requestChangesRunEndedIn(body) !== null) return true;
-  return verdictsIn([body]).some((record) => record.requestChanges);
+/** Whether a Kit comment settles the Request changes before it: a Request-changes run's push note or Verdict, or a pass. */
+function settlesRequestChanges(body: string): boolean {
+  if (body.startsWith(REQUEST_CHANGES_RUN_MARKER)) return true;
+  return verdictsIn([body]).some((record) => record.requestChanges || record.verdict === "pass");
 }
 
 /**

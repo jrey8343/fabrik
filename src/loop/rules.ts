@@ -122,11 +122,11 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       }));
     // A push to an agent draft PR, or agent:review added to resume after a failure, starts a Review.
     case "pull-request-pushed":
-      return withPullRequest(snapshot, (pullRequest) => startReview(pullRequest, snapshot.operator, config));
+      return withPullRequest(snapshot, (pullRequest) => startReview(pullRequest, config));
     case "pull-request-labeled":
       return withPullRequest(snapshot, (pullRequest) =>
         event.label === REVIEW_LABEL
-          ? startReview(pullRequest, snapshot.operator, config)
+          ? startReview(pullRequest, config)
           : event.label === NEEDS_DESIGN
             ? sendBackToDesign(pullRequest)
             : { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` },

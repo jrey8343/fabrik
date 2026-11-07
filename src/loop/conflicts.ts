@@ -47,11 +47,11 @@ function whyNotRebased({ pullRequest, mergeable }: ConflictCandidate, main: stri
   if (!pullRequest.isAgent || pullRequest.ticket === null || !pullRequest.open) return `#${number} isn't an open agent PR for a Ticket`;
   // A draft is still in the Loop, whose next push is reviewed anyway, or the Operator parked it.
   if (pullRequest.draft) return `#${number} is a draft, so it isn't brought up to date with main`;
-  // Its Request-changes run brings main in itself, by merging (#341).
+  // Its Request-changes run, which the Kit starts once the review is past its grace period, brings main in itself, by merging (#341).
   if (unnotedChangesRequests(pullRequest, operator).length > 0) {
-    return `#${number} has a Request changes from the Operator that no run has built yet, so its Request-changes run brings main in instead`;
+    return `#${number} has a Request changes from the Operator that no run has started for yet, so its Request-changes run brings main in instead`;
   }
-  const run = runInFlight(pullRequest, operator);
+  const run = runInFlight(pullRequest);
   if (run !== null) return `${runName(run)} on #${number} is still in flight, so main isn't brought in now: its push is rebased when it lands`;
   if (pullRequest.conflictAttempts.includes(main)) {
     return `#${number} was already tried against main at ${main.slice(0, 7)}, so it waits for main to move or for the Operator`;
@@ -173,13 +173,17 @@ export function conflictRunEnded(
 
 /**
  * A Request-changes run told to merge main in (#341) that ended without
- * pushing: it couldn't bring main in, or the trust-root guard refused it. As
- * for a conflict-only run, the Kit says why on the PR, ends the run's time in
- * flight, adds ready-for-human to the PR, and brings it back out of draft to
- * the Merge gate. It never closes the PR, and the note counts as main's
- * conflict attempt, so the conflict check doesn't try again until main moves.
+ * pushing: what it built still conflicts with main, or the trust-root guard
+ * refused it. As for a conflict-only run, the Kit says why on the PR, ends the
+ * run's time in flight, adds ready-for-human to the PR, and brings it back out
+ * of draft to the Merge gate. It never closes the PR, and the note counts as
+ * main's conflict attempt, so the conflict check doesn't try again until main
+ * moves. The run settles nothing: once main moves and the PR is brought up to
+ * date, an Execution flaw on it still gives way to the Operator's Request
+ * changes, which no run has built yet.
  */
 export function requestChangesRunEnded(pullRequest: number, main: string, operator: string, why: string, runUrl: string): Action[] {
+  const head = main.slice(0, 7);
   return [
     {
       kind: "comment",
@@ -188,7 +192,7 @@ export function requestChangesRunEnded(pullRequest: number, main: string, operat
         requestChangesRunEndedMarker(main),
         `@${operator} The Request-changes run on #${pullRequest} didn't land: ${why}.`,
         "",
-        `The PR conflicts with \`main\` at ${main.slice(0, 7)} and your requested changes aren't built, so it's yours from here: the Kit won't bring it up to date until \`main\` moves past ${main.slice(0, 7)}. No retry was used.`,
+        `The PR conflicts with \`main\` at ${head} and your requested changes aren't built, so it's yours from here. The Kit won't bring it up to date until \`main\` moves past ${head}; when it does, your Request changes still goes first. No retry was used.`,
         "",
         `[The run](${runUrl})`,
       ].join("\n"),

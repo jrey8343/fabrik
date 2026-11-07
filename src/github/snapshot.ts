@@ -154,6 +154,7 @@ function openIssueNumbersIn(repo: Repo, edges: DependencyEdges): number[] {
 /** What the snapshot reads of a PR, by itself or as one of the open agent PRs the conflict check weighs. */
 const PULL_REQUEST_FIELDS = `
         number
+        url
         state
         isDraft
         headRefName
@@ -161,10 +162,10 @@ const PULL_REQUEST_FIELDS = `
         author { login __typename }
         body
         labels(first: 100) { nodes { name } }
-        comments(last: 100) { nodes { body createdAt author { __typename } } }
-        reviews(last: 1, states: [CHANGES_REQUESTED]) { nodes { databaseId author { login __typename } commit { oid } } }
+        comments(last: 100) { pageInfo { hasPreviousPage } nodes { body createdAt author { __typename } } }
         changesRequests: reviews(last: 50, states: [CHANGES_REQUESTED]) { nodes { databaseId submittedAt author { login __typename } } }
         draftEvents: timelineItems(last: 100, itemTypes: [CONVERT_TO_DRAFT_EVENT, READY_FOR_REVIEW_EVENT]) {
+          pageInfo { hasPreviousPage }
           nodes { __typename ... on ConvertToDraftEvent { createdAt } ... on ReadyForReviewEvent { createdAt } }
         }`;
 
@@ -183,6 +184,7 @@ interface PullRequestQueryResult {
     owner: { login: string };
     pullRequest: {
       number: number;
+      url: string;
       state: "OPEN" | "CLOSED" | "MERGED";
       isDraft: boolean;
       headRefName: string;
@@ -190,14 +192,14 @@ interface PullRequestQueryResult {
       author: { login: string; __typename: string } | null;
       body: string;
       labels: { nodes: { name: string }[] };
-      comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
-      reviews: {
-        nodes: { databaseId: number; author: { login: string; __typename: string } | null; commit: { oid: string } | null }[];
+      comments: {
+        pageInfo: { hasPreviousPage: boolean };
+        nodes: { body: string; createdAt: string; author: { __typename: string } | null }[];
       };
       changesRequests: {
         nodes: { databaseId: number; submittedAt: string | null; author: { login: string; __typename: string } | null }[];
       };
-      draftEvents: { nodes: { __typename: string; createdAt?: string }[] };
+      draftEvents: { pageInfo: { hasPreviousPage: boolean }; nodes: { __typename: string; createdAt?: string }[] };
     } | null;
   };
 }
@@ -1178,18 +1180,28 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     conflictAttempts: conflictAttemptsIn(botComments),
     conflictRunInFlight: conflictRunInFlightIn(botComments),
     pushedSinceVerdict: pushedSinceVerdictIn(botComments),
-    changesRequested: changesRequestedOf(pullRequest.reviews.nodes[0]),
     ...requestChangesSinceRunIn(historyOf(pullRequest, fromBots)),
+    url: pullRequest.url,
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
     uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
   };
 }
 
-/** What tells whether an agent PR's Request changes have been built (#341): the Kit's comments, the reviews, and its draft changes. */
+/**
+ * What tells whether an agent PR's Request changes have been built (#341):
+ * the Kit's comments, the reviews, and its draft changes. The comments and
+ * draft changes are the latest 100 of each, so a review from before the
+ * oldest one read of either, when there were more, is left out: whatever
+ * settled it, or found it out of draft, may be among those not read, and a
+ * review taken for unbuilt would start a run for work long since built.
+ */
 function historyOf(pullRequest: PullRequestNode, fromBots: PullRequestNode["comments"]["nodes"]): PullRequestHistoryItem[] {
   const comments = fromBots.map(({ body, createdAt }): PullRequestHistoryItem => ({ kind: "bot-comment", at: createdAt, body }));
+  const oldest = (connection: { pageInfo: { hasPreviousPage: boolean }; nodes: { createdAt?: string }[] }): string[] =>
+    connection.pageInfo.hasPreviousPage ? connection.nodes.flatMap(({ createdAt }) => (createdAt === undefined ? [] : [createdAt])).slice(0, 1) : [];
+  const window = [...oldest(pullRequest.comments), ...oldest(pullRequest.draftEvents)].sort().at(-1);
   const reviews = pullRequest.changesRequests.nodes.flatMap(({ databaseId, submittedAt, author }): PullRequestHistoryItem[] =>
-    submittedAt === null || author === null
+    submittedAt === null || author === null || (window !== undefined && submittedAt < window)
       ? []
       : [{ kind: "changes-requested", at: submittedAt, review: databaseId, reviewer: author.login, reviewerIsBot: author.__typename === "Bot" }],
   );
@@ -1209,11 +1221,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Pages through every open PR: agent PRs are often the newest, behind others' and bots' PRs.
 const CONFLICTS_QUERY = `
-  query ($owner: String!, $name: String!) {
+  query ($owner: String!, $name: String!, $after: String) {
     repository(owner: $owner, name: $name) {
       defaultBranchRef { target { oid } }
-      pullRequests(states: OPEN, first: 50, orderBy: { field: CREATED_AT, direction: ASC }) {
+      pullRequests(states: OPEN, first: 50, after: $after, orderBy: { field: CREATED_AT, direction: ASC }) {
+        pageInfo { hasNextPage endCursor }
         nodes { ${PULL_REQUEST_FIELDS} mergeable }
       }
     }
@@ -1223,7 +1237,10 @@ const CONFLICTS_QUERY = `
 interface ConflictsQueryResult {
   repository: {
     defaultBranchRef: { target: { oid: string } } | null;
-    pullRequests: { nodes: (PullRequestNode & { mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" })[] };
+    pullRequests: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: (PullRequestNode & { mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" })[];
+    };
   };
 }
 
@@ -1246,28 +1263,24 @@ async function gatherConflicts(
   let head: string | null = main;
   for (let read = 1; read <= MERGEABLE_READS; read += 1) {
     if (read > 1) await wait(MERGEABLE_WAIT_MS);
-    const data = await github.graphql<ConflictsQueryResult>(CONFLICTS_QUERY, { owner: repo.owner, name: repo.name });
-    head = main ?? data.repository.defaultBranchRef?.target.oid ?? null;
-    candidates = data.repository.pullRequests.nodes.flatMap((node) => {
-      const pullRequest = pullRequestSnapshotOf(node, appLogin);
-      if (!pullRequest.isAgent) return [];
-      return [{ pullRequest, mergeable: node.mergeable === "UNKNOWN" ? null : node.mergeable === "MERGEABLE" }];
-    });
+    candidates = [];
+    let after: string | null = null;
+    do {
+      const data: ConflictsQueryResult = await github.graphql<ConflictsQueryResult>(CONFLICTS_QUERY, { owner: repo.owner, name: repo.name, after });
+      head = main ?? data.repository.defaultBranchRef?.target.oid ?? null;
+      const { pageInfo, nodes } = data.repository.pullRequests;
+      candidates.push(
+        ...nodes.flatMap((node) => {
+          const pullRequest = pullRequestSnapshotOf(node, appLogin);
+          if (!pullRequest.isAgent) return [];
+          return [{ pullRequest, mergeable: node.mergeable === "UNKNOWN" ? null : node.mergeable === "MERGEABLE" }];
+        }),
+      );
+      after = pageInfo.hasNextPage ? pageInfo.endCursor : null;
+    } while (after !== null);
     if (candidates.every(({ mergeable }) => mergeable !== null)) break;
   }
   return { main: head, now, pullRequests: candidates };
-}
-
-function changesRequestedOf(
-  review: PullRequestNode["reviews"]["nodes"][number] | undefined,
-): PullRequestSnapshot["changesRequested"] {
-  if (review === undefined || review.author === null || review.commit === null) return null;
-  return {
-    review: review.databaseId,
-    reviewer: review.author.login,
-    reviewerIsBot: review.author.__typename === "Bot",
-    commitSha: review.commit.oid,
-  };
 }
 
 async function gatherDispatch(

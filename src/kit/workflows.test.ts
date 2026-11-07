@@ -1250,6 +1250,22 @@ describe("schedule.yml's Design queue job", () => {
   });
 });
 
+describe("The conflict check's turns (#341)", () => {
+  const schedule = workflows.find((workflow) => workflow.path.endsWith("schedule.yml"))!.text;
+  const tick = schedule.split(/\n(?=  [a-z-]+:\n)/).find((section) => section.startsWith("  tick:\n")) ?? "";
+
+  it("runs a push to the default branch's check in the tick's group, queueing, so the two never note the same Request changes; every other push job runs at once", () => {
+    expect(jobIn(loop, "push")).toContain(
+      "\n    concurrency:\n      group: ${{ github.event_name == 'push' && 'fabrik-tick' || format('fabrik-push-{0}', github.run_id) }}\n      cancel-in-progress: false\n      queue: max\n",
+    );
+    expect(tick).toMatch(/\n    concurrency:\n {6}group: fabrik-tick\n {6}cancel-in-progress: false\n {6}queue: max\n/);
+  });
+
+  it("gives the Implementer the Product repo's default branch, which a Request-changes run on a conflicting PR merges in", () => {
+    expect(jobIn(loop, "implement")).toContain("FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}");
+  });
+});
+
 describe("The store-token action, which the record actions share", () => {
   const action = readFileSync(new URL(".github/actions/store-token/action.yml", root), "utf8");
   const steps = action.split(/\n(?=    - )/);

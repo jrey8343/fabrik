@@ -72,7 +72,13 @@ describe("Reading whether a PR's latest push came from a Request-changes run", (
     fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true },
   };
   const pushSnapshot: Snapshot = {
-    ...snapshotOfPullRequest(aPullRequest({ verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }] })),
+    ...snapshotOfPullRequest(
+      aPullRequest({
+        verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }],
+        notedChangesRequests: [900],
+        requestChangesRunInFlight: 900,
+      }),
+    ),
     issue: anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }),
   };
 

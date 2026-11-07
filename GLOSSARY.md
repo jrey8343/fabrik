@@ -227,7 +227,7 @@ The rule that only the Operator merges a pull request into a Product repo's main
 _Avoid_: approval, sign-off
 
 **Request changes**:
-The Operator's review asking for changes on an agent pull request at the Merge gate, which amends the Ticket for that pull request: the Implementer builds it, also bringing `main` in by merging it when the pull request conflicts with it, and the Reviewer judges against the Ticket as amended, a later one winning over an earlier one and over the Ticket. However large the change, it's built: sending a Ticket to a Design session instead is Send it back.
+The Operator's review asking for changes on an agent pull request at the Merge gate, which amends the Ticket for that pull request: the Implementer builds it, also bringing `main` in by merging it when the pull request conflicts with it, and the Reviewer judges against the Ticket as amended, a later one winning over an earlier one and over the Ticket. However large the change, it's built: sending a Ticket to a Design session instead is Send it back. One GitHub never delivered, as on a pull request that conflicts with `main`, the Kit finds and builds all the same.
 _Avoid_: change request, revision, feedback
 
 **Conflict-only run**:

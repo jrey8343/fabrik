@@ -167,11 +167,17 @@ function latestVerdictIn(comments: readonly PullRequestComment[] | undefined): s
  * comments on the PR. The review's own inline comments are shown once, in the
  * review, each under its id, so the run can still name them as weighed. The
  * Kit job's plan named that review only once it checked the Operator wrote it,
- * so this is the Operator speaking. When the PR's head conflicts with main
- * (`mergeMain`, #341), the run merges `origin/main` in first, never rebasing,
- * and its fix lists each conflicted file and how it was resolved.
+ * so this is the Operator speaking. Their earlier Request changes are built
+ * too where the PR doesn't meet them yet: GitHub may have started no run for
+ * one (#341). When the PR's head conflicts with main (`merge`, #341), the run
+ * merges main in first, never rebasing, and its fix lists each conflicted
+ * file and how it was resolved.
  */
-export async function requestChangesContext(pullRequestFile: string, reviewFile: string, mergeMain = false): Promise<PullRequestRunContext> {
+export async function requestChangesContext(
+  pullRequestFile: string,
+  reviewFile: string,
+  merge: MainToMerge | null = null,
+): Promise<PullRequestRunContext> {
   const pullRequest = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
     title?: unknown;
@@ -184,7 +190,7 @@ export async function requestChangesContext(pullRequestFile: string, reviewFile:
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   // An Execution flaw that gave way to this run (#341) called for no Retry, so its findings are this run's to fix too.
   const latest = latestVerdictIn(pullRequest.comments);
-  const gaveWay = latest !== undefined && verdictsIn([latest])[0]?.requestChangesFirst === true ? latest : null;
+  const gaveWay = latest !== undefined && verdictsIn([latest])[0]?.requestChangesFirst !== undefined ? latest : null;
   const { review, comments } = (JSON.parse(await readFile(reviewFile, "utf8")) ?? {}) as {
     review?: { id?: unknown; body?: unknown; state?: unknown };
     comments?: { id?: unknown; path?: unknown; line?: unknown; body?: unknown }[];
@@ -204,8 +210,11 @@ export async function requestChangesContext(pullRequestFile: string, reviewFile:
   });
   // The Operator's earlier Request changes still amend the Ticket, so the run builds against all of them, each shown once.
   const thisReview = typeof review.id === "number" ? operatorCommentId("review", review.id) : null;
-  const requested = Array.isArray(pullRequest.requestedChanges) ? (pullRequest.requestedChanges as { id?: unknown; comments?: unknown }[]) : [];
+  const requested = Array.isArray(pullRequest.requestedChanges)
+    ? (pullRequest.requestedChanges as { id?: unknown; submittedAt?: unknown; comments?: unknown }[])
+    : [];
   const earlier = requested.filter(({ id }) => id !== thisReview);
+  const submittedAt = requested.find(({ id }) => id === thisReview)?.submittedAt;
   for (const { id, comments: theirs } of earlier) {
     if (typeof id === "string") inReview.add(id);
     for (const comment of Array.isArray(theirs) ? (theirs as { id?: unknown }[]) : []) if (typeof comment.id === "string") inReview.add(comment.id);
@@ -219,13 +228,14 @@ export async function requestChangesContext(pullRequestFile: string, reviewFile:
       "## The pull request the Operator requested changes on",
       `#${number}: ${String(title ?? "")}`,
       ...currentDescription(pullRequest.body),
-      ...(mergeMain
-        ? [
+      ...(merge === null
+        ? []
+        : [
             "## Bring main in first",
-            "This PR conflicts with `main`. Before you build the requested changes, merge it in (`git merge origin/main`), never rebasing, resolve the conflicts the way the PR meant, and commit the merge. Your `fix` must list every conflicted file and say how you resolved each conflict.",
-          ]
-        : []),
+            `This PR conflicts with \`main\`, at ${merge.main}. Before you build the requested changes, merge it in (\`git merge ${merge.ref}\`), never rebasing, resolve the conflicts the way the PR meant, and commit the merge. Your \`fix\` must list every conflicted file and say how you resolved each conflict.`,
+          ]),
       "## The Operator's requested changes",
+      ...(typeof submittedAt === "string" ? [`Submitted ${submittedAt}.`] : []),
       body === "" ? "(The review has no summary; see its comments below.)" : body,
       ...(inline.length === 0 ? [] : ["## The Operator's comments on the code", ...inline]),
       ...(gaveWay === null
@@ -236,9 +246,15 @@ export async function requestChangesContext(pullRequestFile: string, reviewFile:
             gaveWay.trimEnd(),
           ]),
       ...requestedChangesSection(earlier),
-      ...operatorCommentsSection(others),
+      ...(earlier.length === 0
+        ? []
+        : [
+            "On this run, also build each of these the pull request doesn't meet yet, as well as the requested changes above: GitHub may have started no run for one. Where they differ, the later one wins.",
+          ]),
+      ...operatorCommentsSection(others, 2, "(The Operator hasn't commented on it beyond the Request changes above.)"),
     ],
-    operatorComments: givenOperatorComments(pullRequest.operatorComments),
+    // The earlier reviews are shown under their ids too, so the run may name them as weighed.
+    operatorComments: [...givenOperatorComments(pullRequest.operatorComments), ...givenOperatorComments(earlier)],
   };
 }
 
@@ -317,6 +333,14 @@ export interface ImplementInput {
   readonly onPullRequest: boolean;
   /** For a run on an existing PR, the Operator comments it was given; null for a first run. */
   readonly operatorComments: GivenOperatorComment[] | null;
+  /** For a Request-changes run told to merge main in (#341), the default branch head it was told to merge; otherwise null. */
+  readonly mergeMain: string | null;
+}
+
+/** The default branch head a Request-changes run merges in (#341), and the ref it names it by. */
+interface MainToMerge {
+  readonly main: string;
+  readonly ref: string;
 }
 
 /**
@@ -332,34 +356,53 @@ export async function implementInput(
   productDir: string,
   ticket: number,
   config: KitConfig,
-  files: { readonly spec: string; readonly pullRequest: string; readonly review: string; readonly conflict?: string },
+  files: {
+    readonly spec: string;
+    readonly pullRequest: string;
+    readonly review: string;
+    readonly conflict?: string;
+    /** The Product repo's default branch, which a Request-changes run on a conflicting PR merges in (#341). */
+    readonly defaultBranch?: string;
+  },
 ): Promise<ImplementInput> {
   const onPullRequest = files.pullRequest !== "";
   const branch = onPullRequest ? await continueAgentBranch(productDir, ticket) : await startAgentBranch(productDir, ticket);
   const parts = await implementContext(productDir, files.spec, config);
-  if (!onPullRequest) return { branch, parts, onPullRequest, operatorComments: null };
+  if (!onPullRequest) return { branch, parts, onPullRequest, operatorComments: null, mergeMain: null };
   const conflict = files.conflict ?? "";
+  const merge = conflict === "" && files.review !== "" ? await mainToMerge(productDir, files.defaultBranch || "main") : null;
   const context =
     conflict !== ""
       ? await conflictContext(files.pullRequest, conflict)
       : files.review === ""
         ? await retryContext(files.pullRequest)
-        : await requestChangesContext(files.pullRequest, files.review, await conflictsWithMain(productDir));
-  return { branch, parts: [...parts, ...context.parts], onPullRequest, operatorComments: context.operatorComments };
+        : await requestChangesContext(files.pullRequest, files.review, merge);
+  return { branch, parts: [...parts, ...context.parts], onPullRequest, operatorComments: context.operatorComments, mergeMain: merge?.main ?? null };
 }
 
 /**
- * Whether the checkout's head conflicts with `origin/main` (#341): merging the
- * two, worked out without touching the work tree, leaves conflicts. The push
- * job works out the same on its own side, and that is what it trusts.
+ * The default branch head a Request-changes run merges in (#341), or null
+ * when the checkout's head doesn't conflict with it: merging the two, worked
+ * out without touching the work tree, leaves conflicts. The run's result
+ * records that head, and the push job judges what the run built against it.
+ * Exit status 1 with a tree is a conflicted merge; a branch the checkout
+ * doesn't have, or any other failure, isn't a conflict to resolve.
  */
-async function conflictsWithMain(productDir: string): Promise<boolean> {
+async function mainToMerge(productDir: string, defaultBranch: string): Promise<MainToMerge | null> {
+  const ref = `origin/${defaultBranch}`;
+  let main: string;
   try {
-    await git(productDir, "merge-tree", "--write-tree", "--no-messages", "HEAD", "origin/main");
-    return false;
+    main = await git(productDir, "rev-parse", "--verify", "--quiet", `refs/remotes/${ref}^{commit}`);
+  } catch {
+    return null;
+  }
+  try {
+    await git(productDir, "merge-tree", "--write-tree", "--no-messages", "HEAD", main);
+    return null;
   } catch (error) {
-    // Exit status 1 is a conflicted merge; anything else (no origin/main, say) isn't a conflict to resolve.
-    return (error as { code?: unknown }).code === 1;
+    const { code, stdout } = error as { code?: unknown; stdout?: unknown };
+    const tree = typeof stdout === "string" ? (stdout.split("\n")[0]?.trim() ?? "") : "";
+    return code === 1 && /^[0-9a-f]{40,64}$/.test(tree) ? { main, ref } : null;
   }
 }
 

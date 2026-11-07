@@ -30,29 +30,29 @@ const CHECK_DISPATCH: Action = { kind: "check-dispatch" };
 /**
  * agent:implement starts the Implementer. The label comes off as the run starts,
  * so the open draft PR, not the label, shows the Ticket is in progress. On a
- * Ticket whose agent PR is open, it resumes that PR's Implement run instead:
- * the retry an Execution flaw is owed, or the Operator's Request-changes run,
- * so re-adding it recovers either after an Infrastructure failure, or the
- * conflict-only run the Kit started when main moved under the PR (#304), or the
- * Request-changes run the Kit started for an undelivered Request changes, which
- * ranks first (#341). It never
- * starts a second branch beside an open PR. The label always comes off, so it
- * never claims work that isn't running.
+ * Ticket whose agent PR is open, it resumes that PR's Implement run instead,
+ * so re-adding it recovers any of them after an Infrastructure failure: the
+ * Operator's Request-changes run, which the Kit's note or an Execution flaw
+ * that gave way to it started (#341) and which ranks first, or the
+ * conflict-only run the Kit started when main moved under the PR (#304), or
+ * the retry an Execution flaw is owed. It never starts a second branch beside
+ * an open PR. The label always comes off, so it never claims work that isn't
+ * running.
  */
 export function startImplementer(
   issueNumber: number,
-  { issue, operator }: IssueContext,
+  { issue }: IssueContext,
   pullRequest: PullRequestSnapshot | null,
   config: KitConfig,
 ): Plan {
   const removeLabel: Action = { kind: "remove-label", issue: issueNumber, label: DISPATCH_LABEL };
   const open = issue.openPullRequests[0];
   if (open !== undefined && issue.open && issue.labels.includes(READY_FOR_AGENT)) {
-    const resumed =
+    const resumed: Action[] | null =
       pullRequest === null || pullRequest.number !== open || pullRequest.ticket !== issueNumber
         ? null
-        : (owedRequestChangesRun(pullRequest, operator, config) ?? owedConflictRun(pullRequest, config) ?? owedRetry(pullRequest, operator, config));
-    return { kind: "act", actions: resumed === null ? [removeLabel] : [removeLabel, resumed] };
+        : (owedRequestChangesRun(pullRequest, config) ?? listed(owedConflictRun(pullRequest, config) ?? owedRetry(pullRequest, config)));
+    return { kind: "act", actions: [removeLabel, ...(resumed ?? [])] };
   }
   if (whyNotBuildable(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
   const { implement, stepUp } = config.roles;
@@ -76,6 +76,10 @@ export function startImplementer(
       },
     ],
   };
+}
+
+function listed(action: Action | null): Action[] | null {
+  return action === null ? null : [action];
 }
 
 /**
@@ -156,43 +160,51 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
     return conflictEnds(`${stale}, so the Kit didn't push it`) ?? { kind: "nothing", reason: `${stale}, so the retry's branch isn't pushed` };
   }
   if (fixes.conflict !== undefined) return applyConflictRun(event, fixes.conflict, pullRequest, operator, parsed.output, config);
+  const requestChanges = fixes.requestChanges === true;
+  // A Request-changes run lands only while it's in flight (#341): one started twice for the same review, or whose
+  // run already had its outcome, pushes nothing over it.
+  if (requestChanges && runInFlight(pullRequest)?.kind !== "request-changes") {
+    return { kind: "nothing", reason: `#${pullRequest.number} has no Request-changes run in flight, so the run's branch isn't pushed` };
+  }
   // The push job rebased the run's own commits if the branch moved (ADR-0006). If the branch moves again,
   // the push's lease refuses it, and the run stays in flight as after an Infrastructure failure.
-  if (changes.rebase?.conflicted === true) return startAgain(event, fixes, pullRequest, operator, changes.rebase.onto);
+  if (changes.rebase?.conflicted === true) return startAgain(event, fixes, pullRequest, changes.rebase.onto);
 
-  const requestChanges = fixes.requestChanges === true;
-  // A Request-changes run on a head that conflicted with main was told to merge main in (#341). One that can't land
-  // hands the PR to the Operator, open, as a conflict-only run does (ADR-0011), rather than closing it.
-  const mergesMain = requestChanges ? changes.conflictsWithMain : undefined;
+  // A Request-changes run its agent job told to merge main in, because the head it started on conflicted with main
+  // (#341). One that can't land hands the PR to the Operator, open, as a conflict-only run does (ADR-0011).
+  const mainMerge = requestChanges ? changes.mainMerge : undefined;
   const guard = checkTrustRoot([...changes.net, ...changes.commits]);
   if (guard.kind === "refuse") {
-    return mergesMain === undefined
+    return mainMerge === undefined
       ? refuse(issueNumber, guard.paths, operator, pullRequest.number)
       : {
           kind: "act",
           actions: requestChangesRunEnded(
             pullRequest.number,
-            mergesMain,
+            mainMerge.main,
             operator,
             `its changes touch files that steer or judge the agents, which only you change (ADR-0005), so the Kit didn't push it: ${guard.paths.map((path) => `\`${path}\``).join(", ")}`,
             fixes.runUrl,
           ),
         };
   }
-  if (mergesMain !== undefined && changes.updatedFromMain !== true) {
+  if (mainMerge !== undefined && !mainMerge.resolved) {
+    const nothing = changes.net.length === 0 && changes.commits.length === 0;
     return {
       kind: "act",
       actions: requestChangesRunEnded(
         pullRequest.number,
-        mergesMain,
+        mainMerge.main,
         operator,
-        `it didn't merge \`main\` in, so \`${branch}\` still conflicts with it`,
+        nothing
+          ? `it committed nothing, so \`${branch}\` still conflicts with \`main\``
+          : `\`${branch}\` as it left it still conflicts with \`main\`: it didn't merge \`main\` in`,
         fixes.runUrl,
       ),
     };
   }
   // Merging main in or rebasing onto it, to fix a conflict, is a change even with none of the run's own.
-  if (changes.net.length === 0 && changes.updatedFromMain !== true) {
+  if (changes.net.length === 0 && changes.updatedFromMain !== true && mainMerge === undefined) {
     return {
       kind: "act",
       actions: verdictActions(
@@ -224,7 +236,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
           requestChanges ? REQUEST_CHANGES_RUN_MARKER : RETRY_PUSH_MARKER,
           requestChanges
-            ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mergesMain === undefined ? "" : `, and merged \`main\` at ${mergesMain.slice(0, 7)} in to resolve the conflict`}; Review runs again on it.`
+            ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mainMerge === undefined ? "" : `, resolving its conflict with \`main\` at ${mainMerge.main.slice(0, 7)}`}; Review runs again on it.`
             : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
           "",
           // Present: the on-a-PR contract above requires it.
@@ -368,10 +380,9 @@ function startAgain(
   { issue: ticket, branch }: ImplementRunFinished,
   fixes: NonNullable<ImplementRunFinished["fixes"]>,
   pullRequest: PullRequestSnapshot,
-  operator: string,
   onto: string,
 ): Plan {
-  const run = runInFlight(pullRequest, operator);
+  const run = runInFlight(pullRequest);
   if (run === null) {
     return { kind: "nothing", reason: `#${pullRequest.number} has no run in flight to start again, so the run's branch isn't pushed` };
   }

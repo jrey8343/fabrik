@@ -63,10 +63,12 @@ jobs:
     needs: kit
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # One tick at a time per repo; a tick that's queued behind another waits.
+    # One tick at a time per repo; a tick that's queued behind another waits. loop.yml's push job on a push
+    # to the default branch shares the group, so its conflict check and the tick's take turns (#341).
     concurrency:
       group: fabrik-tick
       cancel-in-progress: false
+      queue: max
     permissions: {}
     outputs:
       # "true" when the plan asked for a Design queue check.

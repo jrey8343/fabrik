@@ -27,7 +27,7 @@ export function retryNumber(earlier: readonly VerdictRecord[]): number {
   return (
     1 +
     earlier.filter(
-      (record) => record.verdict === "execution-flaw" && !record.requestChanges && record.conflictRun !== true && record.requestChangesFirst !== true,
+      (record) => record.verdict === "execution-flaw" && !record.requestChanges && record.conflictRun !== true && record.requestChangesFirst === undefined,
     ).length
   );
 }
@@ -57,29 +57,27 @@ export type RunInFlight =
  * The run in flight on this PR, read from its comments alone, or null. A
  * Retry is in flight from the Execution flaw that calls for it until a Retry
  * outcome: its push, or its empty-diff Verdict (which may call for the next
- * one). A Request-changes run is in flight from the Operator's review
- * requesting changes on the head that passed until its push. An
- * Infrastructure failure posts no outcome, so the run stays in flight until
- * agent:implement resumes it; a trust-root refusal closes the PR. A
- * conflict-only run (#304) is in flight from the Kit's note that started it
- * until its push, or its note that it ended without one.
+ * one). A Request-changes run is in flight from the Kit's note that started
+ * it, or the Execution flaw that gave way to it, until its push, its Verdict
+ * or its ended note, or until the PR leaves draft (#341). An Infrastructure
+ * failure posts no outcome, so the run stays in flight until agent:implement
+ * resumes it; a trust-root refusal closes the PR, or, for a Request-changes
+ * run told to merge main in, ends it. A conflict-only run (#304) is in flight
+ * from the Kit's note that started it until its push, or its note that it
+ * ended without one.
  */
-export function runInFlight(pullRequest: PullRequestSnapshot, operator: string): RunInFlight | null {
-  // The Kit's note on an undelivered Request changes started its run (#341), for the latest review it names.
-  const noted = pullRequest.undeliveredNotices.at(-1);
-  if (noted !== undefined) return { kind: "request-changes", review: Math.max(...noted) };
+export function runInFlight(pullRequest: PullRequestSnapshot): RunInFlight | null {
+  const review = pullRequest.requestChangesRunInFlight;
+  if (review !== null) return { kind: "request-changes", review };
   if (pullRequest.conflictRunInFlight !== null) return { kind: "conflict", main: pullRequest.conflictRunInFlight };
   const latest = pullRequest.verdicts.at(-1);
-  if (latest === undefined || pullRequest.pushedSinceVerdict) return null;
-  // One that gave way to an undelivered Request changes (#341) called for no Retry: the conflict check starts that run.
-  if (latest.requestChangesFirst === true) return null;
-  if (latest.verdict === "execution-flaw") {
-    const retry = retryNumber(pullRequest.verdicts.slice(0, -1));
-    return retry > MAX_RETRIES ? null : { kind: "retry", retry };
-  }
-  const review = pullRequest.changesRequested;
-  if (latest.verdict !== "pass" || review === null || review.reviewerIsBot || review.reviewer !== operator) return null;
-  return review.commitSha === latest.headSha ? { kind: "request-changes", review: review.review } : null;
+  if (latest === undefined || pullRequest.pushedSinceVerdict || latest.verdict !== "execution-flaw") return null;
+  // One that gave way to the Operator's Request changes (#341) called for no Retry, while any of those reviews
+  // stands; once the Operator has dismissed them all, it's the Execution flaw it would have been.
+  const gaveWayTo = latest.requestChangesFirst ?? [];
+  if (pullRequest.unbuiltChangesRequests.some(({ review: unbuilt }) => gaveWayTo.includes(unbuilt))) return null;
+  const retry = retryNumber(pullRequest.verdicts.slice(0, -1));
+  return retry > MAX_RETRIES ? null : { kind: "retry", retry };
 }
 
 /** How the Kit's comments name a run in flight, at the start of a sentence. */
@@ -95,8 +93,8 @@ export function runName(run: RunInFlight): string {
 }
 
 /** Why a Review on this PR posts no Verdict, while a run is in flight on it; otherwise null. */
-export function whyAwaitingRun(pullRequest: PullRequestSnapshot, operator: string): string | null {
-  const run = runInFlight(pullRequest, operator);
+export function whyAwaitingRun(pullRequest: PullRequestSnapshot): string | null {
+  const run = runInFlight(pullRequest);
   if (run === null) return null;
   return `${runName(run)} on #${pullRequest.number} is still in flight, so ${pullRequest.headSha.slice(0, 7)} gets no Verdict: the run's push starts the next Review`;
 }
@@ -108,13 +106,9 @@ export function whyAwaitingRun(pullRequest: PullRequestSnapshot, operator: strin
  * only. An Infrastructure failure posts no Verdict, so resuming after one runs
  * the same retry again and uses none up.
  */
-export function owedRetry(
-  pullRequest: PullRequestSnapshot,
-  operator: string,
-  config: KitConfig,
-): Extract<Action, { kind: "start-agent-run" }> | null {
+export function owedRetry(pullRequest: PullRequestSnapshot, config: KitConfig): Extract<Action, { kind: "start-agent-run" }> | null {
   if (whyNotReviewable(pullRequest) !== null || pullRequest.ticket === null) return null;
-  const run = runInFlight(pullRequest, operator);
+  const run = runInFlight(pullRequest);
   if (run?.kind !== "retry") return null;
   const { implement, stepUp } = config.roles;
   // Never a cheaper model, and never a skipped Step-up, whatever the weekly pool says.

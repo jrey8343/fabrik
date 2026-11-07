@@ -96,7 +96,7 @@ describe("main moving under a conflicting agent PR at the Merge gate", () => {
   });
 
   it("skips a PR with a Request-changes run in flight: that run's own push gets rebased when it lands", () => {
-    const pullRequest = atMergeGate({ changesRequested: { review: 9, reviewer: "operator", reviewerIsBot: false, commitSha: HEAD } });
+    const pullRequest = atMergeGate({ notedChangesRequests: [9], requestChangesRunInFlight: 9 });
 
     const plan = planFor(MAIN_PUSHED, conflictsSnapshot([{ pullRequest, mergeable: false }]), kitConfig());
 

@@ -23,7 +23,7 @@ export function verdictMarker(record: VerdictRecord): string {
     source,
     requestChanges,
     ...(conflictRun === true ? { conflictRun } : {}),
-    ...(requestChangesFirst === true ? { requestChangesFirst } : {}),
+    ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
     headSha,
   };
   return `<!-- fabrik:verdict ${JSON.stringify(fields)} -->`;
@@ -74,9 +74,8 @@ export const CONFLICT_RUN_ENDED_MARKER = "<!-- fabrik:conflict-run-ended -->";
 
 /**
  * The first line of the Kit's note on an undelivered Request changes (#341):
- * the Operator's reviews GitHub started no run for, by id. The note starts
- * their Request-changes run, which is in flight from then until its outcome,
- * and the Kit never notes the same review twice.
+ * the Operator's reviews no run had started for, by id. The note starts their
+ * Request-changes run, and the Kit never notes the same review twice.
  */
 const UNDELIVERED_MARKER = /^<!-- fabrik:undelivered-request-changes ([1-9][0-9]*(?:,[1-9][0-9]*)*) -->/;
 
@@ -84,9 +83,25 @@ export function undeliveredMarker(reviews: readonly number[]): string {
   return `<!-- fabrik:undelivered-request-changes ${reviews.join(",")} -->`;
 }
 
-/** The review ids an undelivered-review note's first line names, or null when it isn't one. */
-export function undeliveredReviewsIn(body: string): number[] | null {
-  const match = UNDELIVERED_MARKER.exec(body);
+/**
+ * The first line of the Kit's note that it started the Request-changes run for
+ * the Operator's review GitHub delivered (#341), by id. Like the undelivered
+ * note, it marks that run in flight, so every Request-changes run the Kit
+ * starts is read from the PR's comments alone.
+ */
+const STARTED_MARKER = /^<!-- fabrik:request-changes-run-started ([1-9][0-9]*) -->/;
+
+export function requestChangesRunStartedMarker(review: number): string {
+  return `<!-- fabrik:request-changes-run-started ${review} -->`;
+}
+
+/**
+ * The review ids a note that started a Request-changes run names, from its
+ * first line: an undelivered-review note's, or a delivered review's started
+ * note's. Null when it's neither.
+ */
+export function startedReviewsIn(body: string): number[] | null {
+  const match = UNDELIVERED_MARKER.exec(body) ?? STARTED_MARKER.exec(body);
   return match === null ? null : (match[1] as string).split(",").map(Number);
 }
 

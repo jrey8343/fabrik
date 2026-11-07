@@ -44,7 +44,7 @@ function gatherSnapshot(github: GitHub, ...rest: Parameters<typeof gatherFrom> e
       : ({
           ...github,
           async graphql(query: string, variables: Record<string, unknown>) {
-            if (isConflictsQuery(query)) return { repository: { defaultBranchRef: null, pullRequests: { nodes: [] } } };
+            if (isConflictsQuery(query)) return { repository: { defaultBranchRef: null, pullRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } };
             return github.graphql(query, variables);
           },
         } as unknown as GitHub);
@@ -851,11 +851,11 @@ function pullRequestGitHub({
             headRefOid: HEAD_SHA,
             author: author === null || selectsLogin ? author : { __typename: author.__typename },
             ...(/^\s*body$/m.test(pullRequestQuery) ? { body } : {}),
+            url: "https://github.com/acme/shop/pull/50",
             labels: { nodes: [] },
-            comments: { nodes: [] },
-            reviews: { nodes: [] },
+            comments: { pageInfo: { hasPreviousPage: false }, nodes: [] },
             changesRequests: { nodes: [] },
-            draftEvents: { nodes: [] },
+            draftEvents: { pageInfo: { hasPreviousPage: false }, nodes: [] },
           },
         },
       };
@@ -2157,10 +2157,13 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     author: APP_BOT,
     body: "",
     labels: { nodes: [] },
-    comments: { nodes: [{ body: `<!-- fabrik:conflict-attempt ${"8".repeat(40)} rebased -->\nRebased.`, createdAt: "2026-01-01T00:00:00Z", author: { __typename: "Bot" } }] },
-    reviews: { nodes: [] },
+    url: `https://github.com/acme/shop/pull/${number}`,
+    comments: {
+      pageInfo: { hasPreviousPage: false },
+      nodes: [{ body: `<!-- fabrik:conflict-attempt ${"8".repeat(40)} rebased -->\nRebased.`, createdAt: "2026-01-01T00:00:00Z", author: { __typename: "Bot" } }],
+    },
     changesRequests: { nodes: [] },
-    draftEvents: { nodes: [] },
+    draftEvents: { pageInfo: { hasPreviousPage: false }, nodes: [] },
     mergeable,
     ...overrides,
   });
@@ -2175,7 +2178,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
         if (isConflictsQuery(query)) {
           const nodes = reads[Math.min(read, reads.length - 1)];
           read += 1;
-          return { repository: { defaultBranchRef: { target: { oid: "d".repeat(40) } }, pullRequests: { nodes } } };
+          return { repository: { defaultBranchRef: { target: { oid: "d".repeat(40) } }, pullRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } };
         }
         // Every other slice a tick reads finds nothing.
         const none = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
@@ -2233,5 +2236,50 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
 
     expect(snapshot?.conflicts ?? null).toBeNull();
     expect(reads()).toBe(0);
+  });
+
+  it("pages past the first open PRs, so an agent PR behind others' isn't missed (#341)", async () => {
+    const afters: unknown[] = [];
+    const github = {
+      [ANSWERS_CONFLICTS]: true,
+      async graphql(query: string, variables: { after?: unknown }) {
+        if (isConflictsQuery(query)) {
+          afters.push(variables.after);
+          const page =
+            variables.after === null
+              ? { pageInfo: { hasNextPage: true, endCursor: "cursor-1" }, nodes: [node(60, "CONFLICTING", { headRefName: "feature", author: { login: "jrey", __typename: "User" } })] }
+              : { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [node(50, "CONFLICTING")] };
+          return { repository: { defaultBranchRef: { target: { oid: "d".repeat(40) } }, pullRequests: page } };
+        }
+        const none = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+        return { repository: { owner: { login: "acme" }, defaultBranchRef: null, issues: none, pullRequests: none } };
+      },
+    } as unknown as GitHub;
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN);
+
+    expect(afters).toEqual([null, "cursor-1"]);
+    expect(snapshot.conflicts?.pullRequests.map(({ pullRequest }) => pullRequest.number)).toEqual([50]);
+    expect(snapshot.conflicts?.pullRequests[0]?.pullRequest.url).toBe("https://github.com/acme/shop/pull/50");
+  });
+
+  it("reads the Operator's Request changes no run has built, leaving out one from before the comments it read when there were more (#341)", async () => {
+    const operator = { login: "jrey", __typename: "User" };
+    const review = (databaseId: number, submittedAt: string) => ({ databaseId, submittedAt, author: operator });
+    const read = (hasPreviousPage: boolean) =>
+      node(50, "CONFLICTING", {
+        comments: { pageInfo: { hasPreviousPage }, nodes: [{ body: "Looks close.", createdAt: "2026-11-07T05:00:00Z", author: { __typename: "User" } }] },
+        changesRequests: { nodes: [review(101, "2026-11-07T04:00:00Z"), review(102, "2026-11-07T05:30:00Z")] },
+        // It left draft for the Merge gate before either review.
+        draftEvents: { pageInfo: { hasPreviousPage: false }, nodes: [{ __typename: "ReadyForReviewEvent", createdAt: "2026-11-07T03:00:00Z" }] },
+      });
+
+    const all = await gatherSnapshot(githubReading([[read(false)]]).github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN);
+    const cut = await gatherSnapshot(githubReading([[read(true)]]).github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN);
+
+    const unbuilt = (snapshot: typeof all) => snapshot.conflicts?.pullRequests[0]?.pullRequest.unbuiltChangesRequests.map(({ review: id }) => id);
+    expect(unbuilt(all)).toEqual([101, 102]);
+    // What settled 101 may be among the comments before the 100 it read.
+    expect(unbuilt(cut)).toEqual([102]);
   });
 });

@@ -4,7 +4,7 @@
 // are posted, and the next snapshot reads them back as the adapter does.
 import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
-import { pushedSinceVerdictIn, requestChangesRunIn, verdictsIn } from "../github/threads.ts";
+import { type PullRequestHistoryItem, pushedSinceVerdictIn, requestChangesRunIn, requestChangesSinceRunIn, verdictsIn } from "../github/threads.ts";
 import { planFor } from "./rules.ts";
 import type { Action, BranchChanges, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 
@@ -17,12 +17,25 @@ const D = "d".repeat(40);
 /** PR #50 for Ticket #7, whose thread grows as plans post comments on it. */
 class Thread {
   readonly comments: string[] = [];
+  /** The comments, with the Operator's reviews and the PR's draft changes, in the order they happened. */
+  readonly history: PullRequestHistoryItem[] = [];
   headSha: string;
   draft = true;
-  changesRequested: PullRequestSnapshot["changesRequested"] = null;
+  private second = 0;
 
   constructor(headSha: string) {
     this.headSha = headSha;
+  }
+
+  /** The next moment in the thread. */
+  private next(): string {
+    return new Date(Date.UTC(2026, 0, 1, 0, 0, this.second++)).toISOString();
+  }
+
+  /** The Operator requests changes, with the PR out of draft at the Merge gate. */
+  changesRequested(review: number): void {
+    this.history.push({ kind: "ready", at: this.next() });
+    this.history.push({ kind: "changes-requested", at: this.next(), review, reviewer: "operator", reviewerIsBot: false });
   }
 
   pullRequest(): PullRequestSnapshot {
@@ -32,7 +45,7 @@ class Thread {
       verdicts: verdictsIn(this.comments),
       requestChangesRun: requestChangesRunIn(this.comments),
       pushedSinceVerdict: pushedSinceVerdictIn(this.comments),
-      changesRequested: this.changesRequested,
+      ...requestChangesSinceRunIn(this.history),
     });
   }
 
@@ -52,7 +65,10 @@ class Thread {
     const plan = planFor(event, snapshot, kitConfig());
     if (plan.kind === "act") {
       for (const action of plan.actions) {
-        if (action.kind === "comment" && action.issue === 50) this.comments.push(action.body);
+        if (action.kind === "comment" && action.issue === 50) {
+          this.comments.push(action.body);
+          this.history.push({ kind: "bot-comment", at: this.next(), body: action.body });
+        }
       }
     }
     return plan;
@@ -248,7 +264,7 @@ describe("A Review while a Request-changes run is in flight", () => {
     const thread = new Thread(A);
     thread.plan(reviewed(A, "verdict: pass"));
     thread.draft = false;
-    thread.changesRequested = { review: 9, reviewer: "operator", reviewerIsBot: false, commitSha: A };
+    thread.changesRequested(9);
     const plan = thread.plan({ kind: "pull-request-changes-requested", pullRequest: 50, review: 9, reviewer: "operator", reviewerIsBot: false });
     expect(actionsOf(plan)).toContainEqual({ kind: "convert-to-draft", pullRequest: 50 });
     thread.draft = true;

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { PENRITH_59_REPO, PENRITH_59_REQUEST, PENRITH_59_TICKET_PRACTITIONERS, penrith59 } from "../__fixtures__/requestedChanges.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { verdictMarker } from "../loop/markers.ts";
-import { conflictContext, implementContext, requestChangesContext, retryContext } from "./implement.ts";
+import { conflictContext, implementContext, implementInput, requestChangesContext, retryContext } from "./implement.ts";
 import { readPullRequest } from "./inputs.ts";
 
 async function fileOf(value: unknown): Promise<string> {
@@ -188,6 +188,115 @@ describe("A retry on a PR the Operator requested changes on is given the amended
     const text = (await retryContext(await fileOf(pullRequest))).parts.join("\n");
 
     expect(text).not.toContain("which amend the Ticket");
+  });
+});
+
+describe("A Request-changes run with the Operator's earlier Request changes on its PR (#341)", () => {
+  const earlier = {
+    id: "review-101",
+    url: "https://github.com/acme/shop/pull/50#pullrequestreview-101",
+    submittedAt: "2026-11-07T05:14:00Z",
+    body: "Make the slots 30 minutes.",
+    comments: [],
+  };
+  const latest = { ...earlier, id: "review-102", url: "https://github.com/acme/shop/pull/50#pullrequestreview-102", submittedAt: "2026-11-07T05:52:00Z", body: "Rebase for merge conflicts please." };
+  const context = async () =>
+    requestChangesContext(
+      await fileOf({ ...pullRequest, operatorComments: [], requestedChanges: [earlier, latest] }),
+      await fileOf({ review: { id: 102, state: "CHANGES_REQUESTED", body: latest.body }, comments: [] }),
+    );
+
+  it("is told to build any of them the PR doesn't meet yet, and when its own review was submitted", async () => {
+    const text = (await context()).parts.join("\n");
+
+    expect(text).toContain("## The Operator's requested changes\nSubmitted 2026-11-07T05:52:00Z.\nRebase for merge conflicts please.");
+    expect(text).toContain("### `review-101`: Request changes, 2026-11-07T05:14:00Z\nMake the slots 30 minutes.");
+    expect(text).toContain("also build each of these the pull request doesn't meet yet");
+  });
+
+  it("may name them as weighed, as it's shown them under their ids", async () => {
+    expect((await context()).operatorComments.map(({ id }) => id)).toEqual(["review-101"]);
+  });
+
+  it("isn't told the Operator hasn't commented, right after their Request changes", async () => {
+    const text = (await context()).parts.join("\n");
+
+    expect(text).toContain("## The Operator's comments on the pull request\n(The Operator hasn't commented on it beyond the Request changes above.)");
+    expect(text).not.toContain("(The Operator hasn't commented on it.)");
+  });
+});
+
+describe("A Request-changes run on a PR that conflicts with main (#341)", () => {
+  const git = async (cwd: string, ...args: string[]) => {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const env = { ...process.env, GIT_AUTHOR_NAME: "T", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "T", GIT_COMMITTER_EMAIL: "t@example.com", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+    return (await promisify(execFile)("git", args, { cwd, env })).stdout.trim();
+  };
+  const commit = async (cwd: string, path: string, text: string) => {
+    await writeFile(join(cwd, path), text);
+    await git(cwd, "add", "-A");
+    await git(cwd, "commit", "--quiet", "-m", `Change ${path}`);
+    return git(cwd, "rev-parse", "HEAD");
+  };
+
+  /** A Product checkout at the PR's branch, with `origin/main` fetched; main changes the PR's file when `conflicting`. */
+  async function checkout(conflicting: boolean): Promise<{ productDir: string; main: string }> {
+    const root = await mkdtemp(join(tmpdir(), "fabrik-implement-git-"));
+    const origin = join(root, "origin.git");
+    await git(root, "init", "--quiet", "--bare", "--initial-branch=main", origin);
+    const seed = join(root, "seed");
+    await git(root, "clone", "--quiet", origin, seed);
+    await git(seed, "checkout", "--quiet", "-b", "main");
+    await commit(seed, "shared.ts", "v1\n");
+    await git(seed, "push", "--quiet", "origin", "main");
+    await git(seed, "checkout", "--quiet", "-b", "fabrik/ticket-7");
+    await commit(seed, "shared.ts", "from the PR\n");
+    await git(seed, "push", "--quiet", "origin", "fabrik/ticket-7");
+    await git(seed, "checkout", "--quiet", "main");
+    const main = await commit(seed, conflicting ? "shared.ts" : "other.ts", "from main\n");
+    await git(seed, "push", "--quiet", "origin", "main");
+    const productDir = join(root, "product");
+    await git(root, "clone", "--quiet", "--branch", "fabrik/ticket-7", origin, productDir);
+    return { productDir, main };
+  }
+
+  const input = async (productDir: string, defaultBranch = "main") =>
+    implementInput(productDir, 7, kitConfig(), {
+      spec: await fileOf(null),
+      pullRequest: await fileOf({ ...pullRequest, operatorComments: [] }),
+      review: await fileOf({ review: { id: 102, state: "CHANGES_REQUESTED", body: "Rebase for merge conflicts please." }, comments: [] }),
+      defaultBranch,
+    });
+
+  it("is told to merge main in first, never rebasing, and records the main head it was told to merge", async () => {
+    const { productDir, main } = await checkout(true);
+
+    const { parts, mergeMain } = await input(productDir);
+
+    const text = parts.join("\n");
+    expect(text).toContain("## Bring main in first");
+    expect(text).toContain(`at ${main}`);
+    expect(text).toContain("`git merge origin/main`");
+    expect(mergeMain).toBe(main);
+  });
+
+  it("isn't told to merge when the PR only lags behind main", async () => {
+    const { productDir } = await checkout(false);
+
+    const { parts, mergeMain } = await input(productDir);
+
+    expect(parts.join("\n")).not.toContain("## Bring main in first");
+    expect(mergeMain).toBeNull();
+  });
+
+  it("isn't told to merge a default branch the checkout doesn't have", async () => {
+    const { productDir } = await checkout(true);
+
+    const { parts, mergeMain } = await input(productDir, "trunk");
+
+    expect(parts.join("\n")).not.toContain("## Bring main in first");
+    expect(mergeMain).toBeNull();
   });
 });
 

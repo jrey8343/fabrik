@@ -86,9 +86,10 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     conflictAttempts: [],
     conflictRunInFlight: null,
     pushedSinceVerdict: false,
-    changesRequested: null,
     unbuiltChangesRequests: [],
-    undeliveredNotices: [],
+    notedChangesRequests: [],
+    requestChangesRunInFlight: null,
+    url: "https://github.com/acme/shop/pull/50",
     uiEvidenceMarker: null,
     ...overrides,
   };

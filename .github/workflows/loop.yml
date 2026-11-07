@@ -766,6 +766,8 @@ jobs:
           FABRIK_REVIEW_FILE: ${{ needs.kit.outputs.review != '' && format('{0}/review.json', runner.temp) || '' }}
           # A conflict-only run's main head (#304): it rebases onto it and resolves the conflicts, nothing else.
           FABRIK_CONFLICT_MAIN: ${{ needs.kit.outputs.conflict }}
+          # The branch a Request-changes run on a PR that conflicts with it merges in (#341).
+          FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
           FABRIK_MODEL: ${{ needs.kit.outputs.model }}
           FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
@@ -1607,6 +1609,13 @@ jobs:
     if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # A push to the default branch runs the conflict check, as the scheduled tick does: it takes turns with
+    # the tick and with the next push's check, queueing, so two never note the same Request changes (#341).
+    # Every other push job runs at once.
+    concurrency:
+      group: ${{ github.event_name == 'push' && 'fabrik-tick' || format('fabrik-push-{0}', github.run_id) }}
+      cancel-in-progress: false
+      queue: max
     permissions: {}
     outputs:
       # "true" when the plan asked for a Dispatch check.

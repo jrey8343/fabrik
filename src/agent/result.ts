@@ -35,6 +35,12 @@ export interface AgentRunResult {
    * input before the agent ran, so the Audit says what it looked at first.
    */
   readonly window?: AuditWindow;
+  /**
+   * For a Request-changes run whose head conflicted with main (#341): the
+   * default branch head it was told to merge in, recorded before the agent
+   * ran, so the push job judges what it built against that head.
+   */
+  readonly mergeMain?: string;
 }
 
 /** The artifact's file name, the same in both jobs. */
@@ -61,7 +67,7 @@ const REF = /^[A-Za-z0-9._/-]+$/;
 export function readAgentRunResult(text: string): AgentRunResult {
   const value: unknown = JSON.parse(text);
   if (typeof value !== "object" || value === null) throw new Error(`${AGENT_RESULT_FILE} is not a JSON object`);
-  const { role, issue, output, branch, operatorComments, window } = value as Record<string, unknown>;
+  const { role, issue, output, branch, operatorComments, window, mergeMain } = value as Record<string, unknown>;
   if (typeof role !== "string" || !AGENT_ROLES.includes(role as AgentRole)) {
     throw new Error(`${AGENT_RESULT_FILE} names an unknown role: ${JSON.stringify(role)}`);
   }
@@ -69,9 +75,13 @@ export function readAgentRunResult(text: string): AgentRunResult {
     throw new Error(`${AGENT_RESULT_FILE} names no issue`);
   }
   if (typeof output !== "string") throw new Error(`${AGENT_RESULT_FILE} has no output text`);
+  if (mergeMain !== undefined && (typeof mergeMain !== "string" || !SHA.test(mergeMain))) {
+    throw new Error(`${AGENT_RESULT_FILE} names a main head to merge that isn't a full commit sha`);
+  }
   const given = {
     ...(operatorComments === undefined ? {} : { operatorComments: readGiven(operatorComments) }),
     ...(window === undefined ? {} : { window: readWindow(window) }),
+    ...(mergeMain === undefined ? {} : { mergeMain }),
   };
   const builds = BUILDS_BRANCH.includes(role as AgentRole) || (MAY_BUILD_BRANCH.includes(role as AgentRole) && branch !== undefined);
   if (!builds) return { role: role as AgentRole, issue, output, ...given };

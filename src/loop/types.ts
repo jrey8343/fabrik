@@ -68,12 +68,13 @@ export interface BranchChanges {
    */
   readonly rebase?: { readonly onto: string; readonly conflicted: boolean };
   /**
-   * For a run on its agent PR's own branch: the default branch head that the
-   * head the run started on conflicted with (#341), as the push job saw it;
-   * absent when it didn't conflict. A Request-changes run on such a head was
-   * told to merge main in.
+   * For a Request-changes run its agent job told to merge main in (#341),
+   * because the head it started on conflicted with main: the default branch
+   * head it was told to merge, and whether the branch it built resolves that
+   * conflict, holding that head or merging cleanly with it. Absent for every
+   * other run.
    */
-  readonly conflictsWithMain?: string;
+  readonly mainMerge?: { readonly main: string; readonly resolved: boolean };
   /**
    * For a prototype turn's branch (#155) that moved while the turn ran, as a
    * live Design session's push may move it: the head the turn started on
@@ -563,24 +564,32 @@ export interface PullRequestSnapshot {
   readonly conflictRunInFlight: string | null;
   /**
    * Whether a Retry or Request-changes run has pushed to it since its latest
-   * Verdict, read from the Kit's note of the push. Until one has, the run that
-   * Verdict (or the Operator's review) called for is still in flight (src/loop/retry.ts).
+   * Verdict, read from the Kit's note of the push. Until one has, the Retry
+   * that Verdict called for is still in flight (src/loop/retry.ts).
    */
   readonly pushedSinceVerdict: boolean;
-  /** The latest review that requested changes on it, if any: what a stalled Request-changes run resumes from. */
-  readonly changesRequested: ChangesRequestedReview | null;
   /**
    * The reviews requesting changes on it, oldest first, that were submitted
-   * while it was out of draft and that no Request-changes run has had an
-   * outcome since: none has pushed, been given a Verdict, or ended (#341).
+   * while it was out of draft and that nothing has settled since (#341): no
+   * Request-changes run has pushed or been given a Verdict, and no Review has
+   * passed it. A run that ended without pushing settles nothing.
    */
   readonly unbuiltChangesRequests: readonly UnbuiltChangesRequest[];
   /**
-   * Since that same point, the review ids each of the Kit's notes on an
-   * undelivered Request changes names, oldest note first (#341). Any note
-   * at all means the Request-changes run it started is in flight.
+   * Of those, the ids a Request-changes run was started for (#341): named by
+   * the Kit's note that started it, whether the review was delivered or not,
+   * or by an Execution flaw that gave way to it. The Kit never notes one twice.
    */
-  readonly undeliveredNotices: readonly (readonly number[])[];
+  readonly notedChangesRequests: readonly number[];
+  /**
+   * The review the Request-changes run in flight on it is for (#341), or null:
+   * the latest of those its starting note named that the Operator hasn't
+   * dismissed, while that run hasn't pushed, been given a Verdict or ended,
+   * and the PR hasn't left draft since it started.
+   */
+  readonly requestChangesRunInFlight: number | null;
+  /** Its web address, which the Kit's notes link the Operator's reviews from. */
+  readonly url: string;
   /**
    * Where its UI evidence is kept, read from the marker in the body the Fabrik
    * App wrote (src/evidence/uiEvidence.ts), or null when it has none: not a UI PR.
@@ -595,15 +604,6 @@ export interface UnbuiltChangesRequest {
   readonly reviewerIsBot: boolean;
   /** When it was submitted, as an ISO 8601 time. */
   readonly submittedAt: string;
-}
-
-/** A review requesting changes on a PR, as GitHub records it. */
-export interface ChangesRequestedReview {
-  readonly review: number;
-  readonly reviewer: string;
-  readonly reviewerIsBot: boolean;
-  /** The PR's head commit when the review was submitted. */
-  readonly commitSha: string;
 }
 
 /** The Reviewer's judgment on a PR (GLOSSARY.md). */
@@ -637,10 +637,11 @@ export interface VerdictRecord {
    */
   readonly conflictRun?: true;
   /**
-   * True on an Execution flaw that gave way to an undelivered Request changes
-   * (#341): it called for no Retry, and doesn't count as one; absent otherwise.
+   * On an Execution flaw that gave way to the Operator's Request changes no
+   * run had built (#341), those reviews' ids: it called for no Retry, doesn't
+   * count as one, and started their Request-changes run; absent otherwise.
    */
-  readonly requestChangesFirst?: true;
+  readonly requestChangesFirst?: readonly number[];
   /** The head commit it was given on. */
   readonly headSha: string;
 }
