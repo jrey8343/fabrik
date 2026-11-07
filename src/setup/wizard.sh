@@ -463,16 +463,17 @@ fi
 # implement service accounts already read, so it needs no new service account.
 # Setup lists it in the Kit config once the token is stored, on the Operator's
 # yes to its second Subscription question, which it passes in as
-# FABRIK_SECOND_SUBSCRIPTION. A list of two or more Setup leaves as it is.
+# FABRIK_SECOND_SUBSCRIPTION. A list of two or more Setup leaves as it is, and
+# one that names it already has nothing to list.
 stage "A second Subscription"
 SECOND="Claude token 2"
 say "With a second Subscription, a run refused on the first one's weekly limit is"
 say "re-run on the second, and runs wait only once both are used up."
-# What .fabrik/config.json lists: "both" for two or more with this one among them, "rotation" for two or more without it, else "one".
+# What .fabrik/config.json lists: "listed" when it names this one, whatever else it lists, "rotation" for two or more without it, else "one".
 LISTING=$(node -e '
   const { subscriptions } = JSON.parse(require("node:fs").readFileSync(".fabrik/config.json", "utf8"));
-  const two = Array.isArray(subscriptions) && subscriptions.length > 1;
-  process.stdout.write(two ? (subscriptions.includes(process.argv[1]) ? "both" : "rotation") : "one");' "$SECOND" 2>/dev/null || echo one)
+  const listed = Array.isArray(subscriptions) ? subscriptions : [];
+  process.stdout.write(listed.includes(process.argv[1]) ? "listed" : listed.length > 1 ? "rotation" : "one");' "$SECOND" 2>/dev/null || echo one)
 SECOND_EXISTS=0
 op item get "$SECOND" --vault "Fabrik" >/dev/null 2>&1 && SECOND_EXISTS=1
 SECOND_STORED=$SECOND_EXISTS
@@ -536,8 +537,8 @@ if (( SECOND_EXISTS || ADDING_SECOND )); then
   open_url "https://claude.ai/settings/usage"
   step "Signed in as each account in turn, turn usage credits (extra usage) off."
   pause "Press Enter once usage credits are off on every account."
-  if [[ "$LISTING" == both ]]; then
-    say "${GREEN}✓${RESET} .fabrik/config.json lists both Subscriptions."
+  if [[ "$LISTING" == listed ]]; then
+    say "${GREEN}✓${RESET} .fabrik/config.json lists '$SECOND' already."
   elif (( SECOND_STORED )); then
     if [[ "$LISTING" == rotation ]]; then
       step "Setup leaves the subscriptions list in .fabrik/config.json as it is, since it lists two or more. To run on '$SECOND' too, add it to that list yourself."
@@ -553,7 +554,7 @@ if (( SECOND_EXISTS || ADDING_SECOND )); then
 elif [[ "$LISTING" == rotation ]]; then
   say "Skipping the second Subscription. .fabrik/config.json already lists two or more Subscriptions, and Setup leaves that list as it is."
   pause
-elif [[ "$LISTING" == both ]]; then
+elif [[ "$LISTING" == listed ]]; then
   say "Skipping the second Subscription. .fabrik/config.json lists '$SECOND' already, so running Setup again walks this stage while 1Password lacks its token."
   pause
 else

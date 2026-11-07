@@ -969,6 +969,21 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(wizardRuns[0]?.env[WIZARD_SECOND_SUBSCRIPTION_ENV]).toBe("no");
     });
 
+    it("with a Kit config that lists the second Subscription alone, its token stored, doesn't ask about a second, and says the install is complete", async () => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, async (lacking) => {
+        store(lacking, "Fabrik", "Claude token 2");
+        await listOnMain(["Claude token 2"]);
+      });
+
+      const { code, said, questions } = await setupOnce(world, { answers: [], args: ["--no-time-zone", "--no-paused"] });
+
+      expect(code).toBe(0);
+      expect(questions).toEqual([]);
+      expect(said).toContain('.fabrik/config.json already lists the second Subscription, "Claude token 2", so it doesn\'t ask about a second.');
+      expect(said).toContain(COMPLETE);
+    });
+
     it.each([
       ["without a terminal", { terminal: false }],
       ["with --plan", { args: [...FLAGS, "--plan"] }],
