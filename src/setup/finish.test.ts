@@ -11,6 +11,7 @@ const SUMMARY: RunSummary = {
   blockers: [],
 };
 const BLOCKED: RunSummary = { ...SUMMARY, blockers: ['the Claude token, in the "Fabrik" vault'] };
+const PAUSED: RunSummary = { ...SUMMARY, pausesDispatch: true };
 const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
 
 describe("The setup PR's body", () => {
@@ -29,6 +30,13 @@ describe("The setup PR's body", () => {
     expect(body).toContain('- the Claude token, in the "Fabrik" vault');
     expect(body).toContain(COMMAND);
     expect(body).not.toContain("Merge this PR yourself");
+  });
+
+  it("says Dispatch is paused only when the Kit config it merges pauses it", () => {
+    const paused = "Dispatch is paused, so no Implementer starts until you set max_in_flight in .fabrik/config.json above 0.";
+
+    expect(prBody({ release: "v1.4.2", defaultBranch: "main", summary: PAUSED })).toContain(`\n\n${paused}\n`);
+    expect(prBody({ release: "v1.4.2", defaultBranch: "main", summary: SUMMARY })).not.toContain(paused);
   });
 
   it("keeps what an earlier run did, so a run that picks up the same PR adds to its list", () => {
@@ -51,7 +59,7 @@ describe("The setup PR's body", () => {
 
 describe("The closing lines", () => {
   it("give the PR, what setup did and its notes again, since the wizard clears the screen", () => {
-    const lines = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: SUMMARY, paused: false });
+    const lines = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: SUMMARY });
 
     expect(lines).toContain("The setup PR: https://github.com/acme/clinic/pull/7");
     expect(lines).toContain("- create the label needs-triage");
@@ -59,13 +67,13 @@ describe("The closing lines", () => {
   });
 
   it("ask for the merge once nothing holds it back", () => {
-    const lines = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: SUMMARY, paused: false });
+    const lines = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: SUMMARY });
 
     expect(lines.join("\n")).toMatch(/^Merge it yourself once its gating checks pass\./m);
   });
 
   it("with the Claude token skipped, don't ask for the merge, and say which and that the Kit's first runs need it", () => {
-    const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: BLOCKED, paused: false }).join("\n");
+    const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: BLOCKED }).join("\n");
 
     expect(text).not.toMatch(/Merge it yourself/);
     expect(text).toContain("Don't merge it yet. The Kit's first runs need these, which the wizard didn't finish:\n- the Claude token, in the \"Fabrik\" vault");
@@ -73,7 +81,7 @@ describe("The closing lines", () => {
   });
 
   it("give the finishing guidance, naming the setup command wherever it says to run setup again", () => {
-    const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: SUMMARY, paused: false }).join("\n");
+    const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: SUMMARY }).join("\n");
 
     expect(text).toContain("sandbox.checks");
     expect(text).toContain("Fabrik weekly summary");
@@ -86,10 +94,10 @@ describe("The closing lines", () => {
     expect(text).not.toContain("max_in_flight");
   });
 
-  it("say how to resume Dispatch when setup installed it paused", () => {
-    const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: SUMMARY, paused: true }).join("\n");
+  it("say how to resume Dispatch when the Kit config the setup PR merges pauses it", () => {
+    const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: PAUSED }).join("\n");
 
-    expect(text).toContain("max_in_flight");
+    expect(text).toContain("- Dispatch is paused, so no Implementer starts until you set max_in_flight in .fabrik/config.json above 0.");
   });
 });
 

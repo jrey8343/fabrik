@@ -102,7 +102,8 @@ export interface SetupAnswers {
   /**
    * Whether to install with Dispatch paused: the starter Kit config is written
    * with `max_in_flight: 0`, so no Implementer starts until the Operator raises
-   * it. An existing Kit config is the Product's, so it's never changed.
+   * it. A Kit config the default branch has is the Product's, so it's never
+   * changed, but the starter on setup's branch is set to match, either way.
    */
   readonly paused?: boolean;
 }
@@ -183,9 +184,9 @@ export interface PlanContext {
   readonly wizardNext?: boolean;
   /**
    * The repo's Kit config is the starter setup wrote on its own branch, in this
-   * run or an earlier one, as the default branch lacks one. So long as it
-   * pauses Dispatch just as this run asks, its notes are a fresh install's,
-   * not those for a Kit config the Product already had.
+   * run or an earlier one, as the default branch lacks one. Until the setup PR
+   * merges it's setup's own, not yet the Product's: this run's answer on
+   * pausing sets its max_in_flight, and its notes are a fresh install's.
    */
   readonly wroteStarter?: boolean;
 }
@@ -226,18 +227,27 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
 /**
  * The Kit config is the Product's: setup writes the starter once, when the repo
  * lacks one, and after that changes only its subscriptions list, on the
- * Operator's yes to a second Subscription. Visual evidence, the one block that
- * needs judgment, is /fabrik-visual-evidence's to write (Spec #330).
+ * Operator's yes to a second Subscription. Until the setup PR merges, the
+ * starter on setup's branch is still setup's own, so a later run's answer on
+ * pausing sets its max_in_flight. Visual evidence, the one block that needs
+ * judgment, is /fabrik-visual-evidence's to write (Spec #330).
  */
 function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, notes: string[], { wroteStarter = false }: PlanContext): SetupAction[] {
   const existing = state.files[KIT_CONFIG_PATH] ?? null;
   const paused = answers.paused === true;
+  if (existing !== null && wroteStarter && jsonObject(existing) !== null) {
+    if (!paused) notes.push(...readyForAgentWarning(state.readyForAgent));
+    const maxInFlight = paused ? 0 : DEFAULT_KIT_CONFIG.maxInFlight;
+    const repaused = pausesDispatch(existing) === paused ? null : withMember(existing, ["max_in_flight"], maxInFlight);
+    const listed = withSecondSubscription(repaused ?? existing, state, answers);
+    if (repaused === null) return listed === null ? [] : [write(KIT_CONFIG_PATH, listed, LIST_SECOND_SUBSCRIPTION)];
+    const why = `the starter Kit config, with Dispatch ${paused ? "" : "not "}paused now (max_in_flight ${maxInFlight})${listed === null ? "" : ", and the second Subscription listed"}`;
+    return [write(KIT_CONFIG_PATH, listed ?? repaused, why)];
+  }
   if (existing !== null) {
-    if (wroteStarter && pausesDispatch(existing) === paused) {
-      if (!paused) notes.push(...readyForAgentWarning(state.readyForAgent));
-    } else if (paused) notes.push(pausedHadNoEffect(existing));
+    if (paused) notes.push(pausedHadNoEffect(existing));
     const listed = withSecondSubscription(existing, state, answers);
-    return listed === null ? [] : [write(KIT_CONFIG_PATH, listed, `list the second Subscription, "${SECOND_SUBSCRIPTION}", in subscriptions`)];
+    return listed === null ? [] : [write(KIT_CONFIG_PATH, listed, LIST_SECOND_SUBSCRIPTION)];
   }
   if (!paused) notes.push(...readyForAgentWarning(state.readyForAgent));
   const starter = paused ? pausedStarter(kit.templates.kitConfig) : kit.templates.kitConfig;
@@ -266,7 +276,7 @@ function pausedHadNoEffect(existing: string): string {
 }
 
 /** Whether the Kit config's text sets max_in_flight to 0. */
-function pausesDispatch(text: string): boolean {
+export function pausesDispatch(text: string): boolean {
   return (jsonObject(text)?.["max_in_flight"] ?? DEFAULT_KIT_CONFIG.maxInFlight) === 0;
 }
 
@@ -288,6 +298,9 @@ function jsonObject(text: string): Record<string, unknown> | null {
 
 /** The `Fabrik` vault item the wizard saves the second Subscription's token in. */
 export const SECOND_SUBSCRIPTION = "Claude token 2";
+
+/** Why setup writes a Kit config whose only change is the second Subscription listed. */
+const LIST_SECOND_SUBSCRIPTION = `list the second Subscription, "${SECOND_SUBSCRIPTION}", in subscriptions`;
 
 /** The wizard's stage for the steps of a second Subscription only the Operator can take. */
 const SECOND_SUBSCRIPTION_STAGE = 'the wizard\'s "A second Subscription" stage';

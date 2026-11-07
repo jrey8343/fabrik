@@ -58,6 +58,8 @@ export interface RunSummary {
   readonly blockers: readonly string[];
   /** The repo the Operator has confirmed the Fabrik App is installed on, which the setup PR keeps for later runs. */
   readonly appInstalledOn?: string;
+  /** Whether the Kit config the setup PR merges, the setup branch's, pauses Dispatch. */
+  readonly pausesDispatch?: boolean;
 }
 
 export interface Published {

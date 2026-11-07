@@ -26,9 +26,9 @@ const neverAsked: Prompt = {
   },
 };
 
-async function ask(flags: FlagAnswers, prompt: Prompt | null, state: ProductState = aCleanProduct()) {
+async function ask(flags: FlagAnswers, prompt: Prompt | null, state: ProductState = aCleanProduct(), wroteStarter = false) {
   const said: string[] = [];
-  const answers = await askQuestions({ flags, state, machineTimeZone: "Australia/Sydney", prompt, say: (line) => said.push(line) });
+  const answers = await askQuestions({ flags, state, wroteStarter, machineTimeZone: "Australia/Sydney", prompt, say: (line) => said.push(line) });
   return { answers, said };
 }
 
@@ -109,6 +109,38 @@ describe("Setup's questions", () => {
 
     expect(prompt.questions).toEqual(["Add a second Subscription? [y/N] "]);
     expect(answers).toEqual({});
+  });
+
+  describe("with the starter setup wrote on its branch, which is still setup's own", () => {
+    const withStarter = (maxInFlight: number) => aCleanProduct({ readyForAgent: 2, files: { ".fabrik/config.json": `{\n  "max_in_flight": ${maxInFlight}\n}\n` } });
+    const PAUSE_DEFAULT_YES = "Install with Dispatch paused, so no Implementer starts until you raise max_in_flight? [Y/n] ";
+    const PAUSE_DEFAULT_NO = "Install with Dispatch paused, so no Implementer starts until you raise max_in_flight? [y/N] ";
+
+    it("asks whether to pause, offering what the starter holds", async () => {
+      const paused = scripted("", "");
+      expect((await ask({ timeZone: null }, paused, withStarter(0), true)).answers).toEqual({ paused: true });
+      expect(paused.questions[1]).toBe(PAUSE_DEFAULT_YES);
+
+      const unpaused = scripted("", "");
+      expect((await ask({ timeZone: null }, unpaused, withStarter(2), true)).answers).toEqual({});
+      expect(unpaused.questions[1]).toBe(PAUSE_DEFAULT_NO);
+    });
+
+    it("takes the Operator's answer over what the starter holds", async () => {
+      expect((await ask({ timeZone: null }, scripted("", "n"), withStarter(0), true)).answers).toEqual({});
+      expect((await ask({ timeZone: null }, scripted("", "y"), withStarter(2), true)).answers).toEqual({ paused: true });
+    });
+
+    it("without a terminal, or at the end of its input, keeps what the starter holds", async () => {
+      expect((await ask({}, null, withStarter(0), true)).answers).toEqual({ paused: true });
+      expect((await ask({}, null, withStarter(2), true)).answers).toEqual({});
+      expect((await ask({ timeZone: null }, scripted("", null), withStarter(0), true)).answers).toEqual({ paused: true });
+    });
+
+    it("takes --paused or --no-paused without asking", async () => {
+      expect((await ask({ timeZone: null, secondSubscription: false, paused: true }, neverAsked, withStarter(2), true)).answers).toEqual({ paused: true });
+      expect((await ask({ timeZone: null, secondSubscription: false, paused: false }, neverAsked, withStarter(0), true)).answers).toEqual({});
+    });
   });
 
   it("takes the end of the terminal's input as no", async () => {

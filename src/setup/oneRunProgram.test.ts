@@ -3,7 +3,7 @@
 // world that keeps what each run did, and the wizard is a stand-in that
 // stores what the Operator would.
 import { execFileSync } from "node:child_process";
-import { readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { aReadyOperator, fakeCommands } from "../__fixtures__/setupCommands.ts";
@@ -371,6 +371,104 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(said.slice(0, said.indexOf(`On ${BRANCH}.`)).some((line) => line.startsWith(`- ${warning}`))).toBe(true);
     expect(world.prs[0]?.body).toContain(`- ${warning}`);
     expect(said.slice(said.indexOf("The setup PR: https://github.com/acme/clinic/pull/1")).some((line) => line.startsWith(`- ${warning}`))).toBe(true);
+  });
+
+  describe("pausing the starter on the setup branch, which is still setup's own", () => {
+    const PAUSED = "Dispatch is paused, so no Implementer starts until you set max_in_flight in .fabrik/config.json above 0.";
+    const WARNING = "2 open issues are labelled ready-for-agent: Dispatch starts releasing them to Implementers as soon as the setup PR merges.";
+    const PAUSES = "- write .fabrik/config.json (the starter Kit config, with Dispatch paused now (max_in_flight 0))";
+    const withPaused = (paused: boolean) => ["--no-time-zone", "--no-second-subscription", paused ? "--paused" : "--no-paused"];
+    const closingOf = (said: string[]) => said.slice(said.indexOf("The setup PR: https://github.com/acme/clinic/pull/1"));
+    const maxInFlight = () => JSON.parse(originGit("show", `${BRANCH}:.fabrik/config.json`)).max_in_flight;
+
+    const withReadyIssues = () => {
+      const world = aWorld();
+      world.labels.add("ready-for-agent");
+      world.readyForAgent = 2;
+      return world;
+    };
+
+    it.each([
+      ["opened the setup PR", false],
+      ["stopped partway", true],
+    ])("with --paused after an unpaused run %s, pauses Dispatch in it, and the setup PR and the closing lines say so", async (_, partway) => {
+      const world = withReadyIssues();
+      if (partway) world.failingLabels.add("needs-info");
+      await setupOnce(world);
+      world.failingLabels.clear();
+
+      const { code, said } = await setupOnce(world, { args: withPaused(true) });
+
+      expect(code).toBe(0);
+      expect(maxInFlight()).toBe(0);
+      const body = world.prs[0]!.body;
+      expect(body).toContain(PAUSES);
+      expect(body).toContain(PAUSED);
+      expect(body).not.toContain(WARNING);
+      expect(said.join("\n")).not.toContain("--paused had no effect");
+      expect(closingOf(said).some((line) => line.startsWith(`- ${PAUSED}`))).toBe(true);
+      expect(closingOf(said).some((line) => line.includes(WARNING))).toBe(false);
+    });
+
+    it("with --plan, after an unpaused run stopped partway, plans the same pause as the run that carries it out, which plans nothing more after the wizard", async () => {
+      const world = withReadyIssues();
+      world.failingLabels.add("needs-info");
+      await setupOnce(world);
+      world.failingLabels.clear();
+
+      const planned = await setupOnce(world, { args: [...withPaused(true), "--plan"] });
+      const { said } = await setupOnce(world, { args: withPaused(true) });
+
+      expect(planned.said).toContain(PAUSES);
+      expect(planned.said.join("\n")).not.toMatch(/--paused had no effect|Dispatch starts releasing/);
+      expect(said.slice(said.indexOf("Setup would:"), said.indexOf(`On ${BRANCH}.`))).toContain(PAUSES);
+      expect(said.join("\n")).not.toContain("Setup found more to do after the wizard");
+    });
+
+    it("in a run after a paused one stopped partway, asks again, offering the pause, and the closing lines say Dispatch is paused", async () => {
+      const world = withReadyIssues();
+      world.failingLabels.add("needs-info");
+      await setupOnce(world, { args: withPaused(true) });
+      world.failingLabels.clear();
+
+      const { code, said, questions } = await setupOnce(world, { args: ["--no-time-zone", "--no-second-subscription"], answers: ["", "y"] });
+
+      expect(code).toBe(0);
+      expect(questions[0]).toBe("Install with Dispatch paused, so no Implementer starts until you raise max_in_flight? [Y/n] ");
+      expect(maxInFlight()).toBe(0);
+      expect(world.prs[0]!.body).toContain(PAUSED);
+      expect(closingOf(said).some((line) => line.startsWith(`- ${PAUSED}`))).toBe(true);
+    });
+
+    it("with --no-paused after a paused run opened the setup PR, gives it the v1 default max_in_flight, and the setup PR and the closing lines warn about the ready-for-agent issues", async () => {
+      const world = withReadyIssues();
+      await setupOnce(world, { args: withPaused(true) });
+
+      const { code, said } = await setupOnce(world, { args: withPaused(false) });
+
+      expect(code).toBe(0);
+      expect(maxInFlight()).toBe(2);
+      expect(world.prs[0]!.body).toContain(WARNING);
+      expect(world.prs[0]!.body).not.toContain(PAUSED);
+      expect(closingOf(said).some((line) => line.startsWith(`- ${WARNING}`))).toBe(true);
+      expect(closingOf(said).some((line) => line.includes(PAUSED))).toBe(false);
+    });
+
+    it("with --paused and the Product's own Kit config, which doesn't pause Dispatch, doesn't say Dispatch is paused", async () => {
+      await mkdir(join(checkout, ".fabrik"));
+      await writeFile(join(checkout, ".fabrik", "config.json"), '{\n  "max_in_flight": 3\n}\n');
+      git("add", ".fabrik/config.json");
+      git("commit", "-q", "-m", "Our Kit config");
+      git("push", "-q", "origin", "main");
+      const world = aWorld();
+
+      const { code, said } = await setupOnce(world, { args: withPaused(true) });
+
+      expect(code).toBe(0);
+      expect(world.prs[0]!.body).toContain("--paused had no effect: .fabrik/config.json already exists, with max_in_flight 3.");
+      expect(world.prs[0]!.body).not.toContain(PAUSED);
+      expect(closingOf(said).some((line) => line.includes(PAUSED))).toBe(false);
+    });
   });
 
   it("a second run after the wizard stopped partway reuses the branch and PR, applies nothing again, and then asks for the merge", async () => {
