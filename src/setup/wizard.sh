@@ -362,22 +362,32 @@ else
   step "In another terminal, run: claude setup-token"
   step "Sign in with the account that has your subscription. It prints a token that lasts one year."
   ask_secret CLAUDE_TOKEN "Paste the token (hidden):"
-  EXPIRES=$(date -v+1y +%Y-%m-%d 2>/dev/null || date -d "+1 year" +%Y-%m-%d)
-  if (( CLAUDE_TOKEN_EXISTS )); then
-    # Archived, not deleted, so the old token stays in the item's history.
-    op item delete "Claude token" --vault "Fabrik" --archive
+  # An empty token would count as stored, so nothing is archived or created for one.
+  if [[ -z "$CLAUDE_TOKEN" ]]; then
+    warn "No token pasted."
+    if (( CLAUDE_TOKEN_EXISTS )); then
+      say "Keeping the current token."
+    else
+      SKIPPED+=("the 'Claude token' API Credential in the 'Fabrik' vault (claude setup-token)")
+    fi
+  else
+    EXPIRES=$(date -v+1y +%Y-%m-%d 2>/dev/null || date -d "+1 year" +%Y-%m-%d)
+    if (( CLAUDE_TOKEN_EXISTS )); then
+      # Archived, not deleted, so the old token stays in the item's history.
+      op item delete "Claude token" --vault "Fabrik" --archive
+    fi
+    TEMPLATE=$(umask 077 && mktemp)
+    CLAUDE_TOKEN="$CLAUDE_TOKEN" EXPIRES="$EXPIRES" node -e '
+      const item = { title: "Claude token", category: "API_CREDENTIAL", fields: [
+        { id: "credential", type: "CONCEALED", label: "credential", value: process.env.CLAUDE_TOKEN },
+        { id: "expires", type: "DATE", label: "expires", value: process.env.EXPIRES },
+      ] };
+      process.stdout.write(JSON.stringify(item));' > "$TEMPLATE"
+    op item create --vault "Fabrik" --template "$TEMPLATE" >/dev/null
+    rm -f "$TEMPLATE"
+    say "${GREEN}✓ stored${RESET} the Claude token, expiring $EXPIRES"
   fi
-  TEMPLATE=$(umask 077 && mktemp)
-  CLAUDE_TOKEN="$CLAUDE_TOKEN" EXPIRES="$EXPIRES" node -e '
-    const item = { title: "Claude token", category: "API_CREDENTIAL", fields: [
-      { id: "credential", type: "CONCEALED", label: "credential", value: process.env.CLAUDE_TOKEN },
-      { id: "expires", type: "DATE", label: "expires", value: process.env.EXPIRES },
-    ] };
-    process.stdout.write(JSON.stringify(item));' > "$TEMPLATE"
-  op item create --vault "Fabrik" --template "$TEMPLATE" >/dev/null
-  rm -f "$TEMPLATE"
   unset CLAUDE_TOKEN
-  say "${GREEN}✓ stored${RESET} the Claude token, expiring $EXPIRES"
   pause
 fi
 

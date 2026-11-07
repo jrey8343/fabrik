@@ -325,6 +325,32 @@ describe("The setup wizard's Fabrik App key stage", () => {
   });
 });
 
+describe("The setup wizard's Claude token stage", () => {
+  /** To the Claude token's paste, 1Password holding the App's key. */
+  const TO_THE_PASTE = ["", "fabrik-factory", "", ""];
+
+  it("stores nothing when the Operator pastes nothing, and leaves the token to do", async () => {
+    const w = await walk(["Fabrik App/Fabrik App"], [...TO_THE_PASTE, "", ""]);
+
+    expect(w.status).toBe(0);
+    expect(created(w)).toEqual([]);
+    expect(deleted(w)).toEqual([]);
+    expect(w.stdout).toContain("No token pasted.");
+    expect(w.stdout).not.toContain("stored the Claude token");
+    expect(w.stdout).toMatch(/still to do by hand:\n.*the 'Claude token' API Credential in the 'Fabrik' vault/);
+  });
+
+  it("keeps the token 1Password holds when the replacement pasted is nothing", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_PASTE, "y", "", ""]);
+
+    expect(w.status).toBe(0);
+    expect(created(w)).toEqual([]);
+    expect(deleted(w)).toEqual([]);
+    expect(w.stdout).toContain("Keeping the current token.");
+    expect(w.stdout).not.toContain("still to do by hand");
+  });
+});
+
 describe("The setup wizard's Sentry token stage", () => {
   it("opens Sentry's token page and names the scopes the token needs", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_SENTRY_STAGE, "y", "sntryu_0123abcd"]);
