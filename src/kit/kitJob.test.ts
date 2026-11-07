@@ -53,21 +53,6 @@ describe("The Kit job's step summary", () => {
     );
   });
 
-  it("says a held Auditor run's Audit stays pending", () => {
-    const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
-    const v1Issue: KitIssueSnapshot = { ...firstUsedUp, number: 41, body: "<!-- fabrik:notified -->" };
-    const audit = anIssue({ number: 98, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "pending") });
-    const secondUsedUp: KitIssueSnapshot = { ...firstUsedUp, number: 42, body: "<!-- fabrik:subscription Claude token 2 -->" };
-    const kitIssues = [v1Issue, secondUsedUp];
-    const plan = planFor({ kind: "issue-opened", issue: 98 }, snapshotOf(audit, { kitIssues }), config);
-
-    expect(kitJobSummary(plan, config, kitIssues)).toBe(
-      "### Fabrik Kit job\n\n" +
-        "The Audit run on #98 was held until a Subscription's weekly limit resets, which isn't known: every listed Subscription has hit its weekly limit. " +
-        "Its Audit stays pending.\n",
-    );
-  });
-
   it("names both reasons when one Subscription is used up by its weekly limit and another by a usage-credits kill", () => {
     const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
     const usageCredits: KitIssueSnapshot = {

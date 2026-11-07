@@ -239,7 +239,8 @@ describe("The killed run, with rotation on", () => {
     expect(actions).toContainEqual(expect.objectContaining({ kind: "open-issue", labels: ["ready-for-human", "fabrik:usage-credits"] }));
   });
 
-  it("a killed Auditor run is held, its Audit left pending, when no other Subscription is free", () => {
+  // The scheduled tick can't start an Auditor run at the reset, so an Auditor run is never held.
+  it("a killed Auditor run fails its Audit too when no other Subscription is free, holding nothing", () => {
     const actions = actionsOf(
       planFor(
         killed("audit", { issue: 98 }),
@@ -248,8 +249,9 @@ describe("The killed run, with rotation on", () => {
       ),
     );
 
-    expect(actions.filter((action) => "issue" in action && action.issue === 98 && action.kind !== "hold-agent-run")).toEqual([]);
-    expect(actions).toContainEqual({ kind: "hold-agent-run", role: "audit", issue: 98, label: null, until: RESETS_AT });
+    expect(actions).toContainEqual({ kind: "close", issue: 98, reason: "not_planned" });
+    expect(actions.filter((action) => action.kind === "hold-agent-run")).toEqual([]);
+    expect(JSON.stringify(actions)).not.toContain("fabrik:held");
   });
 
   it("a killed Retro run fails its Retro, for the scheduled tick to try again, while another Subscription is free", () => {

@@ -21,11 +21,8 @@ export function heldLine(held: HeldRun, until: string | null): string {
     until === null
       ? "a Subscription's weekly limit resets, which isn't known"
       : `${readable(until)}, when the first Subscription's weekly limit resets`;
-  const resume =
-    held.label === null
-      ? "The Kit starts it again on that pending Audit then."
-      : `The Kit re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
-  return [`The ${RUN_NAMES[held.role]} run on #${held.issue} is held until ${when}. ${resume}`, "", heldMarker(held)].join("\n");
+  const resume = held.label === null ? "" : ` The Kit re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
+  return [`The ${RUN_NAMES[held.role]} run on #${held.issue} is held until ${when}.${resume}`, "", heldMarker(held)].join("\n");
 }
 
 /**
@@ -68,7 +65,7 @@ export function heldWhileUsedUp(
  * rotation on, while every listed Subscription is used up and a weekly-limit
  * issue is open to carry its held marker. With every Subscription unusable
  * through usage-credits issues alone, nowhere holds its marker, so it starts.
- * A Retro run is never held: its pending Retro fails instead
+ * An Auditor or Retro run is never held: its pending issue fails instead
  * (src/loop/weeklyRuns.ts).
  */
 export function runsDueAreHeld(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): boolean {

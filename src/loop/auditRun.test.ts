@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, auditBody, AUDITED_SHA, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anAuditIssue, anIssue, auditBody, AUDITED_SHA, kitConfig, notificationsOf, snapshotOf, tickSnapshot } from "../__fixtures__/snapshots.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { planFor } from "./rules.ts";
-import type { IssueSnapshot, LoopEvent, Plan } from "./types.ts";
+import type { IssueSnapshot, KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
@@ -215,5 +215,70 @@ describe("A failed Auditor run on an Audit that's no longer pending", () => {
         reason: expect.stringContaining("#98"),
       });
     }
+  });
+});
+
+// With rotation on (#152), a run of another role refused on its weekly limit,
+// or killed for spending usage credits, is re-run on a free Subscription or
+// held until a reset. An Auditor run is neither: it has no trigger label to
+// re-run it through, and the scheduled tick can't start one, so its Audit fails
+// and a later tick opens the next one.
+describe("An Audit that couldn't run on its Subscription, with rotation on", () => {
+  const TWO_SUBSCRIPTIONS = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
+  /** The default branch's head on these ticks, which last week's Audit didn't read. */
+  const HEAD = "c0ffee5".padEnd(40, "0");
+  /** An open weekly-limit issue for `subscription`, resetting at 05:00 UTC. */
+  const limitOf = (number: number, subscription: string): KitIssueSnapshot => ({
+    number,
+    labels: ["fabrik:weekly-limit"],
+    body: `The weekly usage limit of the \`${subscription}\` Subscription is reached.\n\n<!-- fabrik:notified -->\n<!-- fabrik:subscription ${subscription} -->\n<!-- fabrik:resets-at 2026-11-08T05:00:00.000Z -->`,
+    comments: [],
+  });
+
+  /** The Audit as `plan` leaves it, as the next tick's audit slice reads it. */
+  function after(plan: Plan): ReturnType<typeof anAuditIssue> {
+    const edit = actionsOf(plan).find((action) => action.kind === "edit-issue-body" && action.issue === 98);
+    if (edit?.kind !== "edit-issue-body") throw new Error(`expected #98's body rewritten: ${JSON.stringify(plan)}`);
+    const closed = actionsOf(plan).some((action) => action.kind === "close" && action.issue === 98);
+    return anAuditIssue({ number: 98, open: !closed, stateReason: closed ? "not_planned" : null, createdAt: "2026-11-08T04:00:04Z", body: edit.body });
+  }
+
+  /** The tick at `now`, with last week's Audit and these, and no weekly-limit issue open. */
+  function tickAt(now: string, audits: readonly ReturnType<typeof anAuditIssue>[]): Plan {
+    return planFor({ kind: "scheduled-tick", now }, tickSnapshot({ audit: { head: HEAD, issues: [anAuditIssue(), ...audits] } }), TWO_SUBSCRIPTIONS);
+  }
+
+  const opened = (plan: Plan) => actionsOf(plan).filter((action) => action.kind === "open-issue");
+
+  it.each([
+    [
+      "opened while every Subscription is used up",
+      { kind: "issue-opened", issue: 98 } as LoopEvent,
+      [limitOf(40, "Claude token"), limitOf(41, "Claude token 2")],
+    ],
+    ["refused on its weekly limit", auditFailed({ ...report("weekly-limit"), subscription: "Claude token" }), []],
+    [
+      "killed for spending usage credits",
+      auditFailed({ report: { failure: "usage-credits", detail: "isUsingOverage was true" }, subscription: "Claude token" }),
+      [limitOf(41, "Claude token 2")],
+    ],
+  ])("%s, fails, closed as not planned, and a later tick that week opens the next one", (_, event, kitIssues) => {
+    const plan = planFor(event, snapshotOf(anAudit(), { kitIssues }), TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(plan).filter((action) => action.kind === "hold-agent-run" || action.kind === "start-agent-run")).toEqual([]);
+    expect(JSON.stringify(plan)).not.toContain("fabrik:held");
+    const failed = after(plan);
+    expect(failed).toEqual(expect.objectContaining({ open: false, body: expect.stringContaining("<!-- fabrik:audit-failed -->") }));
+
+    expect(opened(tickAt("2026-11-08T06:00:00.000Z", [failed]))).toEqual([
+      expect.objectContaining({ labels: ["fabrik:audit"], body: expect.stringContaining("c0ffee5") }),
+    ]);
+  });
+
+  it("after two such failures in a week, the next Audit waits for next week", () => {
+    const first = after(planFor(auditFailed(report("weekly-limit")), snapshotOf(anAudit()), TWO_SUBSCRIPTIONS));
+    const second = { ...first, number: 99, createdAt: "2026-11-08T06:00:04Z" };
+
+    expect(opened(tickAt("2026-11-08T07:00:00.000Z", [first, second]))).toEqual([]);
   });
 });

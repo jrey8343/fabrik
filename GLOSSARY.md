@@ -191,7 +191,7 @@ A run that fails for a reason outside the work itself, such as the model provide
 _Avoid_: crash, error, flake
 
 **Held run**:
-An agent run the Kit neither starts nor fails while every Subscription is used up, and resumes by itself, in the order it was first held, once one is free.
+An agent run the Kit neither starts nor fails while every Subscription is used up, and resumes by itself, in the order it was first held, once one is free. An Auditor or Retro run is never held: its Audit or Retro fails, and a later scheduled tick opens the next one.
 _Avoid_: paused run, queued run, stalled run
 
 **Weekly-limit issue**:

@@ -37,9 +37,8 @@ export interface WeeklyIssue {
  * nothing here holds it back. It waits for the day's 00:00 UTC, and then
  * opens nothing once one of its issues this week didn't fail, while one is
  * open (pending, filled, or not yet closed by the Operator), while a
- * weekly-limit issue is open if `weeklyLimitHoldsBack`, or after two failed
- * this week. `issues` are the gate's own, newest first, and `name` is what it
- * opens, such as "Audit".
+ * weekly-limit issue is open, or after two failed this week. `issues` are the
+ * gate's own, newest first, and `name` is what it opens, such as "Audit".
  */
 export function heldBack(
   name: string,
@@ -47,7 +46,6 @@ export function heldBack(
   issues: readonly WeeklyIssue[],
   now: string,
   kitIssues: readonly KitIssueSnapshot[],
-  weeklyLimitHoldsBack: boolean,
 ): string | null {
   const week = weekStart(now);
   const due = week + WEEK_DAYS.indexOf(day) * DAY;
@@ -58,7 +56,7 @@ export function heldBack(
   if (done !== undefined) return `#${done.number} is this week's ${name}`;
   const open = issues.find((issue) => issue.open);
   if (open !== undefined) return `${name} #${open.number} is still open`;
-  const limit = weeklyLimitHoldsBack ? kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL)) : undefined;
+  const limit = kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
   if (limit !== undefined) return `The weekly usage limit is reached, as #${limit.number} says`;
   const failed = thisWeek.filter((issue) => issue.failed).reverse();
   if (failed.length >= FAILED_RUNS_A_WEEK) {
