@@ -354,7 +354,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(body).not.toContain("A second Subscription");
     // The plan, before the wizard, says this run lists it.
     expect(said.some((line) => line.endsWith("Setup then lists it in subscriptions in .fabrik/config.json, in the setup PR."))).toBe(true);
-    expect(said.join("\n")).not.toContain("run setup again, and it lists it");
+    expect(said.join("\n")).not.toContain("Running setup again walks it");
   });
 
   it("with a second Subscription whose stage the Operator skipped, lists nothing and says to walk it and run setup again", async () => {
@@ -364,7 +364,9 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
 
     expect(code).toBe(0);
     expect(JSON.parse(originGit("show", `${BRANCH}:.fabrik/config.json`)).subscriptions).toEqual(["Claude token"]);
-    expect(world.prs[0]?.body).toMatch(/Walk the wizard's "A second Subscription" stage: .* Then run setup again, and it lists it in subscriptions in \.fabrik\/config\.json\./);
+    expect(world.prs[0]?.body).toMatch(
+      /Walk the wizard's "A second Subscription" stage: .* Running setup again walks it, then lists it in subscriptions in \.fabrik\/config\.json: curl -fsSL \S+ \| bash -s -- v1\.4\.2\n/,
+    );
   });
 
   it("with --paused on a fresh repo, the setup PR says the starter pauses Dispatch, not that --paused had no effect", async () => {
@@ -669,6 +671,127 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(questions).toEqual([]);
     expect(log.filter((line) => /^gh pr (create|edit)|^git (switch|commit|push)|^wizard$/.test(line))).toEqual([]);
     expect(world.prs).toHaveLength(1);
+  });
+
+  describe("on a merged install with nothing to apply, but 1Password lacking what a wizard stage stores", () => {
+    const COMPLETE = "Nothing to do: this repo's Fabrik install is complete.";
+    const WALK = "Walk the wizard now? [y/N] ";
+    const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+
+    const unstore = (world: World, vault: string, title: string) => void world.items.get(vault)?.delete(title);
+
+    /** The Operator points monitor.errors at a Sentry project in the Product's Kit config on main. */
+    async function sentryOnMain(): Promise<void> {
+      const config = JSON.parse(await readFile(join(checkout, ".fabrik/config.json"), "utf8")) as Record<string, unknown>;
+      const monitor = { errors: { provider: "sentry", org: "acme", project: "clinic" }, red_main: true };
+      await writeFile(join(checkout, ".fabrik/config.json"), `${JSON.stringify({ ...config, monitor }, null, 2)}\n`);
+      git("commit", "-q", "-am", "Read production errors from Sentry");
+      git("push", "-q", "origin", "main");
+    }
+
+    /** The Operator stores the Sentry token in the wizard's Sentry stage, and walks the rest. */
+    const storesTheSentryToken: Wizard = async (world, wizardEnv) => {
+      await walksEveryStage(world, wizardEnv);
+      store(world, "Fabrik App", "Sentry token");
+    };
+
+    const GAPS: [string, (world: World) => void | Promise<void>, string, Wizard][] = [
+      ["the Fabrik App's key", (world) => unstore(world, "Fabrik App", "Fabrik App"), 'the Fabrik App\'s key, in the "Fabrik App" vault', walksEveryStage],
+      ["the Claude token", (world) => unstore(world, "Fabrik", "Claude token"), 'the Claude token, in the "Fabrik" vault', walksEveryStage],
+      ["the Sentry token monitor.errors reads", sentryOnMain, 'the Sentry token, in the "Fabrik App" vault, which monitor.errors in .fabrik/config.json reads', storesTheSentryToken],
+    ];
+
+    async function aMergedInstallLacking(world: World, lacking: (world: World) => void | Promise<void>): Promise<void> {
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      await lacking(world);
+    }
+
+    it.each(GAPS)("lacking %s, names it, asks whether to walk the wizard, and on a no runs nothing", async (_, lacking, gap) => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, lacking);
+
+      const { code, said, log, questions } = await setupOnce(world, { answers: ["n"] });
+
+      expect(code).toBe(0);
+      expect(said).toContain(`- ${gap}`);
+      expect(said).not.toContain(COMPLETE);
+      expect(questions).toEqual([WALK]);
+      expect(log.filter((line) => /^gh pr (create|edit)|^git (switch|commit|push)|^wizard$/.test(line))).toEqual([]);
+      expect(said).toContain("Setup changed nothing.");
+    });
+
+    it.each(GAPS)("lacking %s, walks the wizard on a yes, then says the install is complete, with no setup branch or PR", async (_, lacking, gap, wizard) => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, lacking);
+
+      const { code, said, complaints, log, wizardRuns } = await setupOnce(world, { wizard });
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said).toContain(`- ${gap}`);
+      expect(wizardRuns).toHaveLength(1);
+      expect(wizardRuns[0]?.env["OP_ACCOUNT"]).toBe("my.1password.com");
+      expect(wizardRuns[0]?.env["FABRIK_WIZARD_REPORT"]).toEqual(expect.any(String));
+      expect(wizardRuns[0]?.env[WIZARD_SECOND_SUBSCRIPTION_ENV]).toBe("no");
+      expect(said.at(-1)).toBe(COMPLETE);
+      expect(log.filter((line) => /^gh pr (create|edit)|^git (commit|push)/.test(line))).toEqual([]);
+      expect(world.prs).toHaveLength(1);
+      expect(git("branch", "--show-current").trim()).toBe("main");
+      expect(git("branch", "--list", BRANCH)).toBe("");
+      expect((await setupOnce(world)).said).toContain(COMPLETE);
+    });
+
+    it("whose wizard leaves the gap, says what's still missing and how to walk the wizard again, not that the install is complete", async () => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, (lacking) => unstore(lacking, "Fabrik", "Claude token"));
+
+      const { code, said } = await setupOnce(world, { wizard: endsAtTheBanner });
+
+      expect(code).toBe(0);
+      expect(said).not.toContain(COMPLETE);
+      expect(said.slice(said.lastIndexOf("1Password still lacks what the wizard stores:"))).toEqual([
+        "1Password still lacks what the wizard stores:",
+        '- the Claude token, in the "Fabrik" vault',
+        `Run setup again to walk the wizard for them: ${COMMAND}`,
+      ]);
+      expect(world.prs).toHaveLength(1);
+      expect(git("branch", "--list", BRANCH)).toBe("");
+    });
+
+    it("with a yes to a second Subscription whose token isn't stored, walks the wizard, and lists it in the subscriptions line in a setup PR", async () => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, () => {});
+      const args = ["--no-time-zone", "--second-subscription", "--no-paused"];
+
+      const { code, said, complaints, questions, wizardRuns } = await setupOnce(world, { args, wizard: addsASecondSubscription });
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said).toContain('- the second Subscription\'s token, "Claude token 2", in the "Fabrik" vault');
+      expect(questions).toEqual([WALK]);
+      expect(wizardRuns[0]?.env[WIZARD_SECOND_SUBSCRIPTION_ENV]).toBe("yes");
+      expect(JSON.parse(originGit("show", `${BRANCH}:.fabrik/config.json`)).subscriptions).toEqual(["Claude token", "Claude token 2"]);
+      expect(world.prs).toEqual([expect.objectContaining({ open: false }), expect.objectContaining({ number: 2, head: BRANCH, open: true })]);
+      expect(said).toContain("The setup PR: https://github.com/acme/clinic/pull/2");
+    });
+
+    it.each([
+      ["without a terminal", { terminal: false }],
+      ["with --plan", { args: [...FLAGS, "--plan"] }],
+    ])("%s, names the gap and says to run setup in a terminal to walk the wizard, running nothing", async (_, options) => {
+      const world = aWorld();
+      await aMergedInstallLacking(world, (lacking) => unstore(lacking, "Fabrik", "Claude token"));
+
+      const { code, said, log, questions } = await setupOnce(world, options);
+
+      expect(code).toBe(0);
+      expect(said).not.toContain(COMPLETE);
+      expect(said).toContain('- the Claude token, in the "Fabrik" vault');
+      expect(said).toContain(`Run setup in a terminal to walk the wizard for them: ${COMMAND}`);
+      expect(questions).toEqual([]);
+      expect(log.filter((line) => /^git (switch|commit|push)|^gh pr (create|edit)|^wizard$/.test(line))).toEqual([]);
+    });
   });
 
   it("opens its own setup PR, leaving alone a fork's open PR from a branch of the same name", async () => {

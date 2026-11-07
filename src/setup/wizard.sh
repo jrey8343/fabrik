@@ -203,7 +203,8 @@ finish() {
 # take. Setup runs it in the same terminal, from the Product repo's checkout,
 # once it has written the Kit files, created the labels, vaults and service
 # accounts, and protected the branch. Then it opens the setup PR. Running
-# Setup again walks the wizard again.
+# Setup again walks the wizard again, and once the setup PR is merged it offers
+# the wizard while 1Password lacks what a stage stores here.
 # Nothing it captures is written to disk: the Fabrik App's key, the Claude token
 # and the Sentry token go straight into 1Password, where the Kit's jobs read
 # them (ADR-0004).
@@ -420,7 +421,7 @@ if (( SENTRY_TOKEN_EXISTS )) && ! confirm "1Password already holds a Sentry toke
   say "Keeping the current Sentry token."
   pause
 elif (( ! SENTRY_TOKEN_EXISTS )) && ! confirm "Does $REPO report production errors to Sentry?"; then
-  say "Skipping the Sentry token. Re-run the wizard once $REPO reports to Sentry."
+  say "Skipping the Sentry token. Once $REPO reports to Sentry, name its project in monitor.errors in .fabrik/config.json and run Setup again: it walks this stage while 1Password lacks the token."
   pause
 else
   open_url "https://sentry.io/settings/account/api/auth-tokens/new-token/"
@@ -543,7 +544,7 @@ if (( SECOND_EXISTS || ADDING_SECOND )); then
   fi
   pause
 else
-  say "Skipping the second Subscription. Re-run the wizard to add one later."
+  say "Skipping the second Subscription. To add one later, run Setup again and say yes to a second Subscription: it walks this stage while 1Password lacks the token."
   pause
 fi
 

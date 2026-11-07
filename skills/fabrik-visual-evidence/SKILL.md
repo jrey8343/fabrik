@@ -92,7 +92,7 @@ It writes only those two blocks of `.fabrik/config.json`, in place or before its
 2. Remove the temporary Fabrik folder.
 3. Tell the Operator to merge the PR themselves. The push job reads the `ui` block from the default branch, so capture starts on the first UI PR after the merge. Then tell them:
    - That with Visual evidence on, each PR whose diff touches `ui.paths` gets an evidence section linking a gallery of its screenshots, and the Reviewer sees them.
-   - That the setup wizard's "Visual evidence" stage says it's on once the PR is merged.
+   - That the merge is all it needs: Setup and its wizard needn't run again for it.
    - That running `/fabrik-visual-evidence` again changes its answers, and with the same answers it writes nothing.
 
 **Done when:** the PR is open, and the Operator has its link.

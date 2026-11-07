@@ -724,7 +724,7 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     return aCleanProduct({ files: { ".fabrik/config.json": config }, vaults: ["Fabrik"], fabrikItems });
   }
 
-  it("walks the Operator through the second account, its token and usage credits, then setup again, when the vault has no item yet", () => {
+  it("walks the Operator through the second account, its token and usage credits, then setup's command again, which walks the stage, when the vault has no item yet", () => {
     const { actions, notes } = planSetup(withConfig(oneListed, ["Claude token"]), kit, operator);
 
     expect(written(actions, ".fabrik/config.json")).toBeUndefined();
@@ -733,7 +733,9 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     expect(step).toContain("`claude setup-token`");
     expect(step).toContain('the "Claude token 2" API Credential, with its expiry date, in the "Fabrik" vault');
     expect(step).toContain("usage credits off on every account");
-    expect(step).toMatch(/Then run setup again, and it lists it in subscriptions in \.fabrik\/config\.json\.$/);
+    expect(step).toMatch(
+      /Running setup again walks it, then lists it in subscriptions in \.fabrik\/config\.json: curl -fsSL https:\/\/raw\.githubusercontent\.com\/jrey8343\/fabrik\/main\/setup\.sh \| bash -s -- v1\.4\.2$/,
+    );
   });
 
   it("says setup lists it in the setup PR when the plan's own run walks the wizard next", () => {
@@ -812,11 +814,14 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     expect(planSetup(state, kit, operator).notes.join("\n")).not.toMatch(/Claude token 2|A second Subscription/);
   });
 
-  it("names a listed Subscription the Fabrik vault lacks, so no run asks 1Password for a missing item", () => {
-    const { notes } = planSetup(withConfig(twoListed, ["Claude token"]), kit);
+  it("names a listed Subscription the Fabrik vault lacks, so no run asks 1Password for a missing item, and how to walk the wizard for it", () => {
+    const lacks = '.fabrik/config.json lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name';
 
-    expect(notes).toContainEqual(
-      '.fabrik/config.json lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name: walk the wizard\'s "A second Subscription" stage, then run setup again.',
+    expect(planSetup(withConfig(twoListed, ["Claude token"]), kit).notes).toContainEqual(
+      `${lacks}: run setup again to walk the wizard's "A second Subscription" stage for it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2`,
+    );
+    expect(planSetup(withConfig(twoListed, ["Claude token"]), kit, {}, { wizardNext: true }).notes).toContainEqual(
+      `${lacks}: walk the wizard's "A second Subscription" stage for it.`,
     );
   });
 
