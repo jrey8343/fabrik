@@ -186,7 +186,11 @@ export interface OperatorBrief {
  * Either can wait on the other.
  */
 export type SpecTicket =
-  | (TicketFields & { readonly operator?: undefined })
+  | (TicketFields & {
+      readonly operator?: undefined;
+      /** Marks it for a Stepped-up start (ADR-0014): its Implement runs are Step-ups while the mark stays. Absent means false. */
+      readonly stepUp?: boolean;
+    })
   | (TicketFields & {
       readonly operator: true;
       /** Each one action the Operator takes; the Kit writes them as a task list. */
@@ -286,7 +290,9 @@ function readTickets(value: unknown, errors: string[], outcome: "spec" | "split"
       errors.push(`ticket ${i + 1} needs non-empty key, title and body text, and a blockedBy list of keys`);
     } else if (item.operator === undefined) {
       const fields = { key: item.key, title: item.title, body: item.body, blockedBy: item.blockedBy };
-      if (item.steps === undefined) tickets.push(fields);
+      if (item.stepUp !== undefined && typeof item.stepUp !== "boolean") {
+        errors.push(`ticket ${JSON.stringify(item.key)} needs stepUp to be true or false, if it has one`);
+      } else if (item.steps === undefined) tickets.push(item.stepUp === true ? { ...fields, stepUp: true } : fields);
       else errors.push(`ticket ${JSON.stringify(item.key)} has steps, so mark it "operator": true as an Operator step`);
     } else if (item.operator !== true || !isSteps(item.steps)) {
       errors.push(

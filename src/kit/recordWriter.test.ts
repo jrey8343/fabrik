@@ -9,7 +9,7 @@ const TRANSCRIPT = new Uint8Array([0x1f, 0x8b, 8, 0]);
 
 /** The record a passing Triage run on #12 gets; only its path and content matter here. */
 function files(overrides: Partial<RunRecordFiles> = {}): RunRecordFiles {
-  const record = { schema: 4, repo: "acme/widgets", runId: 9001, runAttempt: 1, role: "triage", issue: 12, replay: null } as unknown as RunRecord;
+  const record = { schema: 5, repo: "acme/widgets", runId: 9001, runAttempt: 1, role: "triage", issue: 12, replay: null } as unknown as RunRecord;
   return { record, recordPath: RECORD_PATH, transcriptPath: TRANSCRIPT_PATH, ...overrides };
 }
 

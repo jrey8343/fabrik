@@ -160,6 +160,34 @@ describe("Finishing a Design session with a Spec and its Tickets", () => {
   });
 });
 
+describe("A Ticket the Design session marks for a Stepped-up start (ADR-0014)", () => {
+  const labelsOf = (tickets: readonly object[]) =>
+    created(planFor(turnFinished({ ...finished, tickets }), inSession, kitConfig()))
+      .slice(1)
+      .map((action) => action.labels);
+
+  it("is created with fabrik:step-up beside its ready labels; an unmarked one, or one marked false, without", () => {
+    expect(labelsOf([{ ...ticket("model"), stepUp: true }, ticket("sms", ["model"]), { ...ticket("ui"), stepUp: false }])).toEqual([
+      ["enhancement", "ready-for-agent", "fabrik:step-up"],
+      ["enhancement", "ready-for-agent"],
+      ["enhancement", "ready-for-agent"],
+    ]);
+  });
+
+  it("never marks an Operator step, which the Operator builds", () => {
+    const step = { ...ticket("secret"), operator: true, steps: ["Add the SMS_TOKEN secret"], stepUp: true };
+
+    expect(labelsOf([step])).toEqual([["enhancement", "ready-for-human"]]);
+  });
+
+  it("refuses a stepUp that isn't a boolean", () => {
+    const plan = planFor(turnFinished({ ...finished, tickets: [{ ...ticket("model"), stepUp: "yes" }] }), inSession, kitConfig());
+
+    expect(created(plan)).toEqual([]);
+    expect(JSON.stringify(plan)).toContain("stepUp");
+  });
+});
+
 describe("A Spec that supersedes an issue keeps the issue's place among its blockers", () => {
   const output = { ...finished, tickets: [ticket("model"), ticket("copy"), ticket("sms", ["model"])] };
 

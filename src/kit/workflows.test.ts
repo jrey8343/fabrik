@@ -125,11 +125,12 @@ describe("The Kit's workflows", () => {
 
   // What the Run record (src/kit/runRecord.ts) needs of how each run started.
   // The write the Run record action reads them from the push job's FABRIK_NEEDS.
-  it("loop.yml's Kit job passes out which run it planned: its Retry number, Step-up and Request changes", () => {
+  it("loop.yml's Kit job passes out which run it planned: its Retry number, Step-up and its reason, and Request changes", () => {
     const kit = jobIn(loop, "kit");
 
     expect(kit).toContain("retry: ${{ steps.route.outputs.retry }}");
     expect(kit).toContain("step-up: ${{ steps.route.outputs.step-up }}");
+    expect(kit).toContain("step-up-reason: ${{ steps.route.outputs.step-up-reason }}");
     expect(kit).toContain("request-changes: ${{ steps.route.outputs.request-changes }}");
   });
 

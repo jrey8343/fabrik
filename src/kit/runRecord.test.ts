@@ -108,7 +108,7 @@ function runEnd(overrides: Partial<RunEnd> = {}): RunEnd {
 describe("The Run record a run's end yields", () => {
   it("a passing Triage run gets a record with its identity, what ran, its outcome, effort spent and cost", () => {
     expect(runRecordFor(runEnd())?.record).toEqual({
-      schema: 4,
+      schema: 5,
       kitSha: KIT_SHA,
       repo: "acme/widgets",
       runId: 9001,
@@ -122,6 +122,7 @@ describe("The Run record a run's end yields", () => {
       subscription: "Claude token",
       retry: 0,
       stepUp: false,
+      stepUpReason: null,
       requestChanges: false,
       prototype: false,
       replay: null,
@@ -212,6 +213,7 @@ describe("The Run record a run's end yields", () => {
         pullRequest: null,
         retry: 0,
         stepUp: false,
+        stepUpReason: null,
         requestChanges: false,
         baseSha: MARKED_SHA,
         verdict: null,
@@ -265,6 +267,7 @@ describe("The Run record a run's end yields", () => {
         pullRequest: null,
         retry: 0,
         stepUp: false,
+        stepUpReason: null,
         requestChanges: false,
         baseSha: MARKED_SHA,
         verdict: null,
@@ -302,6 +305,7 @@ describe("The Run record a run's end yields", () => {
         model: "claude-opus-5-5",
         retry: 0,
         stepUp: false,
+        stepUpReason: null,
         requestChanges: false,
         baseSha: DEFAULT_BRANCH_SHA,
         verdict: null,
@@ -333,6 +337,7 @@ describe("The Run record a run's end yields", () => {
         effort: "high",
         retry: 0,
         stepUp: false,
+        stepUpReason: null,
         requestChanges: false,
         baseSha: null,
         verdict: null,
@@ -373,7 +378,7 @@ describe("The Run record a run's end yields", () => {
       expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-retro.json");
     });
 
-    it("a Retro run names the Subscription the Kit job gave it, at schema 4, its evidence job's failure included", () => {
+    it("a Retro run names the Subscription the Kit job gave it, at schema 5, its evidence job's failure included", () => {
       const subscriptions = ["Claude token", "Claude token 2"];
       const passed = retro("success", {
         needs: needs("retro", { retro: job("success", { "base-sha": DEFAULT_BRANCH_SHA }) }, { subscription: "Claude token 2" }),
@@ -389,8 +394,8 @@ describe("The Run record a run's end yields", () => {
         transcript: null,
       });
 
-      expect(passed?.record).toMatchObject({ schema: 4, role: "retro", subscription: "Claude token 2" });
-      expect(evidenceFailed?.record).toMatchObject({ schema: 4, role: "retro", infrastructureFailure: "crash", subscription: "Claude token 2" });
+      expect(passed?.record).toMatchObject({ schema: 5, role: "retro", subscription: "Claude token 2" });
+      expect(evidenceFailed?.record).toMatchObject({ schema: 5, role: "retro", infrastructureFailure: "crash", subscription: "Claude token 2" });
     });
 
     it("a failed Retro run is recorded as the Infrastructure failure its report names", () => {
@@ -408,6 +413,7 @@ describe("The Run record a run's end yields", () => {
         pullRequest: null,
         retry: 0,
         stepUp: false,
+        stepUpReason: null,
         requestChanges: false,
         baseSha: DEFAULT_BRANCH_SHA,
         verdict: null,
@@ -439,13 +445,14 @@ describe("The Run record a run's end yields", () => {
       const files = research("success");
 
       expect(files?.record).toMatchObject({
-        schema: 4,
+        schema: 5,
         role: "research",
         issue: 42,
         pullRequest: null,
         model: "claude-opus-5-5",
         retry: 0,
         stepUp: false,
+        stepUpReason: null,
         requestChanges: false,
         baseSha: DEFAULT_BRANCH_SHA,
         verdict: null,
@@ -500,6 +507,7 @@ describe("The Run record a run's end yields", () => {
         pullRequest: null,
         retry: 0,
         stepUp: false,
+        stepUpReason: null,
         requestChanges: false,
         baseSha: DEFAULT_BRANCH_SHA,
         verdict: null,
@@ -548,6 +556,7 @@ describe("The Run record a run's end yields", () => {
         effort: "high",
         retry: 0,
         stepUp: false,
+        stepUpReason: null,
         requestChanges: false,
         baseSha: DEFAULT_BRANCH_SHA,
         verdict: null,
@@ -619,7 +628,15 @@ describe("The Run record a run's end yields", () => {
       )?.record;
 
     it("a first run is retry 0, not a Step-up or a Request-changes run", () => {
-      expect(implement({ retry: "0" })).toMatchObject({ retry: 0, stepUp: false, requestChanges: false });
+      expect(implement({ retry: "0" })).toMatchObject({ retry: 0, stepUp: false, stepUpReason: null, requestChanges: false });
+    });
+
+    it.each(["retry", "marked", "request-changes", "conflict-only"])("a run that Stepped up for %s says why", (reason) => {
+      expect(implement({ retry: "0", "step-up": "true", "step-up-reason": reason })).toMatchObject({ stepUp: true, stepUpReason: reason });
+    });
+
+    it("a run that didn't Step up has no reason, whatever the reason output says", () => {
+      expect(implement({ retry: "1", "step-up": "false", "step-up-reason": "marked" })).toMatchObject({ stepUp: false, stepUpReason: null });
     });
 
     it("a Retry carries its Retry number and its PR", () => {
@@ -634,6 +651,7 @@ describe("The Run record a run's end yields", () => {
       expect(implement({ retry: "0", "request-changes": "true", review: "900", "pull-request": "50" })).toMatchObject({
         retry: 0,
         stepUp: false,
+        stepUpReason: null,
         requestChanges: true,
       });
     });
@@ -880,8 +898,8 @@ describe("The Run record a run's end yields", () => {
     expect(files?.record).toMatchObject({ runAttempt: 2, transcript: files?.transcriptPath });
   });
 
-  it("carries schema 4 and the Kit sha that wrote it", () => {
-    expect(runRecordFor(runEnd({ kitSha: "c".repeat(40) }))?.record).toMatchObject({ schema: 4, kitSha: "c".repeat(40) });
+  it("carries schema 5 and the Kit sha that wrote it", () => {
+    expect(runRecordFor(runEnd({ kitSha: "c".repeat(40) }))?.record).toMatchObject({ schema: 5, kitSha: "c".repeat(40) });
   });
 
   it.each([
@@ -891,7 +909,7 @@ describe("The Run record a run's end yields", () => {
   ])("a live %s run is no replay's, and its record and transcript paths name no arm", (role, ended, eventIssue) => {
     const files = runRecordFor(runEnd({ needs: ended, eventIssue }));
 
-    expect(files?.record).toMatchObject({ schema: 4, replay: null });
+    expect(files?.record).toMatchObject({ schema: 5, replay: null });
     expect(files?.recordPath).toBe(`runs/acme/widgets/2026-11/9001-1-${role}.json`);
     expect(files?.transcriptPath).toBe(`transcripts/acme/widgets/2026-11/9001-1-${role}.jsonl.gz`);
   });
@@ -905,7 +923,7 @@ describe("The Run record a run's end yields", () => {
         subscriptions: TWO_SUBSCRIPTIONS,
       });
 
-      expect(runRecordFor(end)?.record).toMatchObject({ schema: 4, subscription: "Claude token 2" });
+      expect(runRecordFor(end)?.record).toMatchObject({ schema: 5, subscription: "Claude token 2" });
     });
 
     it("the first listed Subscription when the Kit job gave the run none", () => {
@@ -961,18 +979,33 @@ describe("A Run record read back from the store", () => {
     expect(readRunRecord(JSON.parse(JSON.stringify(written)), ["Claude token", "Claude token 2"])).toEqual(written);
   });
 
+  it("of schema 4, written before Step-ups had reasons, reads with a null reason, or retry for one that Stepped up, at the current schema", () => {
+    const { stepUpReason: _, ...rest } = written ?? { stepUpReason: null };
+    const older = { ...rest, schema: 4 };
+
+    expect(readRunRecord(older, ["Claude token"])).toEqual({ ...written, schema: 5, stepUpReason: null });
+    expect(readRunRecord({ ...older, role: "implement", retry: 2, stepUp: true }, ["Claude token"])).toEqual({
+      ...written,
+      schema: 5,
+      role: "implement",
+      retry: 2,
+      stepUp: true,
+      stepUpReason: "retry",
+    });
+  });
+
   it("of schema 3, written before Replays, reads as no replay's, at the current schema", () => {
     const { replay: _, ...rest } = written ?? { replay: null };
     const older = { ...rest, schema: 3 };
 
-    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 4, replay: null });
+    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 5, replay: null });
   });
 
   it("of schema 2, written before prototype turns, reads as no prototype turn and no replay's, at the current schema", () => {
     const { prototype: _, replay: __, ...rest } = written ?? { prototype: false, replay: null };
     const older = { ...rest, schema: 2 };
 
-    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 4, prototype: false, replay: null });
+    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 5, prototype: false, replay: null });
   });
 
   it("of schema 1, which names no Subscription, reads as being on the first listed one, no prototype turn and no replay's, at the current schema", () => {
@@ -981,7 +1014,7 @@ describe("A Run record read back from the store", () => {
 
     expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({
       ...written,
-      schema: 4,
+      schema: 5,
       subscription: "Work token",
       prototype: false,
       replay: null,
@@ -989,7 +1022,7 @@ describe("A Run record read back from the store", () => {
   });
 
   it("of a schema the Kit doesn't know reads as no record", () => {
-    expect(readRunRecord({ ...written, schema: 5 }, ["Claude token"])).toBeNull();
+    expect(readRunRecord({ ...written, schema: 6 }, ["Claude token"])).toBeNull();
     expect(readRunRecord("not a record", ["Claude token"])).toBeNull();
   });
 });
@@ -1023,7 +1056,7 @@ describe("A Replay arm's record", () => {
 
   it("is a first Implement run on the replayed Ticket and its merged PR, from the Ticket's base, at the pinned Kit, naming its Replay", () => {
     expect(replayRunRecordFor(replayRunEnd()).record).toMatchObject({
-      schema: 4,
+      schema: 5,
       kitSha: KIT_SHA,
       repo: "acme/widgets",
       runId: 9001,
@@ -1035,6 +1068,7 @@ describe("A Replay arm's record", () => {
       subscription: "Claude token 2",
       retry: 0,
       stepUp: false,
+      stepUpReason: null,
       requestChanges: false,
       prototype: false,
       replay: { issue: REPLAY_ISSUE, arm: "baseline", ticket: TICKET },
@@ -1124,6 +1158,7 @@ describe("A Replay arm's record", () => {
         baseSha: BASE_SHA,
         retry: 0,
         stepUp: false,
+        stepUpReason: null,
         requestChanges: false,
         verdict,
       });
@@ -1265,7 +1300,7 @@ describe("A judge run's record", () => {
 
   it("is for the scored run's subject, in role score, with its own model, outcome, effort spent and cost", () => {
     expect(judgeRunRecordFor(judgeRunEnd()).record).toEqual({
-      schema: 4,
+      schema: 5,
       kitSha: KIT_SHA,
       repo: "acme/widgets",
       runId: 9001,
@@ -1279,6 +1314,7 @@ describe("A judge run's record", () => {
       subscription: "Claude token",
       retry: 0,
       stepUp: false,
+      stepUpReason: null,
       requestChanges: false,
       prototype: false,
       replay: null,

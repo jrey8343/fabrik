@@ -10,7 +10,7 @@ import { mapCapFull } from "../loop/mapCap.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
-import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { type DesignQueueSnapshot, type InfrastructureFailure, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import {
@@ -30,7 +30,7 @@ import {
 } from "./retroEvidence.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { isLive, type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
+import { firstRunOf, isLive, type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
 
 // The GitHub facts the metrics read are the Retro evidence module's (src/kit/retroEvidence.ts).
@@ -234,6 +234,10 @@ export interface WeeklySummary {
     readonly retries: WeekOverWeek<number>;
     /** Records of a Step-up. */
     readonly stepUps: WeekOverWeek<number>;
+    /** Those records by why they Stepped up (ADR-0014). */
+    readonly stepUpsByReason: WeekOverWeek<StepUpCounts>;
+    /** The Tickets merged in the week whose first Implement run was a Stepped-up start, and how many of them needed no Retry. */
+    readonly steppedUpStarts: WeekOverWeek<SteppedUpStarts>;
   };
   /** What the score files of the week's runs say. */
   readonly scores: WeekOverWeek<WeekScores>;
@@ -241,6 +245,15 @@ export interface WeeklySummary {
   readonly scoringCost: WeekOverWeek<ScoringCost>;
   /** One section per Product repo, in the order the facts came. */
   readonly repos: readonly RepoSection[];
+}
+
+/** A week's Step-up records, by reason. */
+export type StepUpCounts = Readonly<Record<StepUpReason, number>>;
+
+/** A week's merged Stepped-up starts: how many merged, and how many of those had no Retry. */
+export interface SteppedUpStarts {
+  readonly merged: number;
+  readonly noRetry: number;
 }
 
 /** The summed cost of a week's Replay records, in USD. */
@@ -484,6 +497,8 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
       ticketsDispatched: change("ticketsDispatched"),
       retries: change("retries"),
       stepUps: change("stepUps"),
+      stepUpsByReason: change("stepUpsByReason"),
+      steppedUpStarts: change("steppedUpStarts"),
     },
     scores: change("scores"),
     scoringCost: change("scoringCost"),
@@ -521,6 +536,8 @@ interface WeekMetrics {
   readonly ticketsDispatched: number;
   readonly retries: number;
   readonly stepUps: number;
+  readonly stepUpsByReason: StepUpCounts;
+  readonly steppedUpStarts: SteppedUpStarts;
   readonly scores: WeekScores;
   readonly scoringCost: ScoringCost;
 }
@@ -557,9 +574,38 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     }).length,
     retries: records.filter((record) => record.role === "implement" && record.retry > 0).length,
     stepUps: records.filter((record) => record.stepUp).length,
+    stepUpsByReason: stepUpsByReasonOf(records),
+    steppedUpStarts: steppedUpStartsOf(merged, input.records),
     scores: scoresOf(week, input),
     scoringCost: { usd: scoring.usd, share: cost === 0 ? null : scoring.usd / cost, unknownCost: scoring.unknownCost },
   };
+}
+
+/** What the summary calls each Step-up reason. */
+const STEP_UP_REASON_NAMES: Readonly<Record<StepUpReason, string>> = {
+  retry: "for a Retry",
+  marked: "marked",
+  "request-changes": "Request changes",
+  "conflict-only": "conflict-only",
+};
+
+function stepUpsByReasonOf(records: readonly RunRecord[]): StepUpCounts {
+  const count = (reason: StepUpReason) => records.filter((record) => record.stepUp && record.stepUpReason === reason).length;
+  return Object.fromEntries(STEP_UP_REASONS.map((reason) => [reason, count(reason)])) as Record<StepUpReason, number>;
+}
+
+/**
+ * Of the week's merged agent PRs, those whose Ticket's first Implement run,
+ * whatever week it ran in, was a Stepped-up start, and how many of those
+ * Tickets had no Retry.
+ */
+function steppedUpStartsOf(merged: readonly MergedAgentPullRequest[], records: readonly RunRecord[]): SteppedUpStarts {
+  // Each marked Ticket's Implement runs.
+  const markedChains = merged.flatMap(({ repo, pullRequest }) => {
+    const runs = records.filter((record) => record.repo === repo && record.role === "implement" && record.issue === pullRequest.ticket);
+    return pullRequest.ticket === null || firstRunOf(runs)?.stepUpReason !== "marked" ? [] : [runs];
+  });
+  return { merged: markedChains.length, noRetry: markedChains.filter((runs) => runs.every((record) => record.retry === 0)).length };
 }
 
 /** What the score files of the week's runs say: per rubric version, how the runs scored. */
@@ -1124,6 +1170,8 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     row("Tickets dispatched", counts.ticketsDispatched, count),
     row("Retries", counts.retries, count),
     row("Step-ups", counts.stepUps, count),
+    ...stepUpReasonRows(counts.stepUpsByReason),
+    steppedUpStartsRow(counts.steppedUpStarts),
     row("Human touches per merged PR", humanTouches, (value) => value.toFixed(1)),
     row("Cycle time (median)", cycleTimeMs, hours),
     row("Operator wait (median)", operatorWaitMs, hours),
@@ -1361,6 +1409,20 @@ function limitReading({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading | nu
 function row(name: string, { thisWeek, lastWeek }: WeekOverWeek<number | null>, format: (value: number) => string): string {
   const change = thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, format);
   return `| ${name} | ${orNone(thisWeek, format)} | ${orNone(lastWeek, format)} | ${change} |`;
+}
+
+/** A row under Step-ups for each reason either week has any of. */
+function stepUpReasonRows(byReason: WeekOverWeek<StepUpCounts>): string[] {
+  return STEP_UP_REASONS.flatMap((reason) => {
+    const counts = { thisWeek: byReason.thisWeek[reason], lastWeek: byReason.lastWeek[reason] };
+    return counts.thisWeek === 0 && counts.lastWeek === 0 ? [] : [row(`· ${STEP_UP_REASON_NAMES[reason]}`, counts, count)];
+  });
+}
+
+/** The merged Stepped-up starts each week, with how many needed no Retry, and the change in how many merged. */
+function steppedUpStartsRow({ thisWeek, lastWeek }: WeekOverWeek<SteppedUpStarts>): string {
+  const cell = ({ merged, noRetry }: SteppedUpStarts) => `${merged} (${noRetry} with no Retry)`;
+  return `| Stepped-up starts merged | ${cell(thisWeek)} | ${cell(lastWeek)} | ${signed(thisWeek.merged - lastWeek.merged, count)} |`;
 }
 
 /** A table row for a share, from 0 to 1: as a percentage, with the change in percentage points. */

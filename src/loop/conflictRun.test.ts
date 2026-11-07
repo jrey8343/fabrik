@@ -130,6 +130,8 @@ describe("A conflict-only run", () => {
       model: stepUp.model,
       effort: stepUp.effort,
       timeoutMinutes: implement.timeoutMinutes,
+      stepUp: true,
+      stepUpReason: "conflict-only",
     });
     expect(run).not.toHaveProperty("retry");
     expect(run).not.toHaveProperty("requestChanges");

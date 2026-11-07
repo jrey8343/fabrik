@@ -28,7 +28,7 @@ import { aMonitorIssueBody } from "./monitor.ts";
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
   return {
-    schema: 4,
+    schema: 5,
     kitSha: "f".repeat(40),
     repo: "owner/product",
     runId: 1000,
@@ -42,6 +42,7 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     subscription: "Claude token",
     retry: 0,
     stepUp: false,
+    stepUpReason: null,
     requestChanges: false,
     prototype: false,
     replay: null,

@@ -258,7 +258,7 @@ function aCandidate(ticket: number, overrides: Partial<ReplayCandidate> = {}): R
 describe("Picking a Replay's Tickets", () => {
   it("picks a listed eligible Ticket to replay from its first Implement run's base, with its merged PR", () => {
     expect(pickReplayTickets({ tickets: [12] }, [aCandidate(12)])).toEqual({
-      picked: [{ ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags: [] }],
+      picked: [{ ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags: [], steppedUp: false }],
       leftOut: [],
     });
   });
@@ -273,7 +273,7 @@ describe("Picking a Replay's Tickets", () => {
     // Edited between the two, so the run that built the branch read the edit.
     const candidate = aCandidate(12, { records, lastEdited: { ticket: "2026-10-02T09:00:00Z", spec: null } });
 
-    expect(pickReplayTickets({ tickets: [12] }, [candidate]).picked).toEqual([{ ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags: [] }]);
+    expect(pickReplayTickets({ tickets: [12] }, [candidate]).picked).toEqual([{ ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags: [], steppedUp: false }]);
   });
 
   it("picks the listed Tickets that are eligible in the order listed, and names each one left out", () => {
@@ -402,7 +402,18 @@ describe("Picking a Replay's Tickets", () => {
       ],
     ])("keeps a Ticket with %s", (_, overrides, flags) => {
       expect(pickReplayTickets({ tickets: [12] }, [aCandidate(12, overrides)]).picked).toEqual([
-        { ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags },
+        { ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags, steppedUp: false },
+      ]);
+    });
+
+    it("picks a marked Ticket whose first run Stepped up, from that run's base, never from a later Request-changes or conflict-only run", () => {
+      const first = aRunRecord({ issue: 12, pullRequest: null, baseSha: baseOf(12), endedAt: "2026-10-01T09:00:00Z", stepUp: true, stepUpReason: "marked" });
+      const later = (stepUpReason: "request-changes" | "conflict-only", requestChanges: boolean) =>
+        aRunRecord({ issue: 12, pullRequest: 112, baseSha: "e".repeat(40), endedAt: "2026-10-02T09:00:00Z", stepUp: true, stepUpReason, requestChanges });
+      const marked = aCandidate(12, { records: [first, later("request-changes", true), later("conflict-only", false)] });
+
+      expect(pickReplayTickets({ tickets: [12] }, [marked]).picked).toEqual([
+        { ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags: [], steppedUp: true },
       ]);
     });
 
@@ -452,6 +463,24 @@ describe("A Replay's two arms", () => {
     ["Review's effort", { kind: "effort", role: "review", effort: "low" }, { ...asBuilt, review: { model: "claude-opus-5-5", effort: "low" } }],
     ["a candidate Kit", { kind: "kit", sha: CANDIDATE }, { ...asBuilt, candidateSha: CANDIDATE }],
   ];
+
+  it("run a marked Ticket's baseline as it was built, on the Step-up model and effort", () => {
+    const arms = replayArms(base, { kind: "effort", role: "review", effort: "low" }, true);
+
+    expect(arms.baseline.implement).toEqual({ model: "claude-opus-5-5", effort: "max" });
+    expect(arms.variant.implement).toEqual({ model: "claude-opus-5-5", effort: "max" });
+  });
+
+  it("run a marked Ticket's variant on the model or effort the variable gives Implement, over the Step-up's", () => {
+    expect(replayArms(base, { kind: "model", role: "implement", model: "claude-sonnet-5-5" }, true).variant.implement).toEqual({
+      model: "claude-sonnet-5-5",
+      effort: "max",
+    });
+    expect(replayArms(base, { kind: "effort", role: "implement", effort: "low" }, true).variant.implement).toEqual({
+      model: "claude-opus-5-5",
+      effort: "low",
+    });
+  });
 
   it.each(variables)("run the baseline as the base Kit config held, when the variable is %s", (_, variable) => {
     expect(replayArms(base, variable).baseline).toEqual(asBuilt);
@@ -615,6 +644,20 @@ describe("A Replay's next step on the tick", () => {
         expect(plan?.leftOut).toEqual([
           { ticket: 12, reason: "its Kit config at 000000c doesn't resolve under this Kit release: .fabrik/config.json: roles.implement.turns is not a field" },
           { ticket: 20, reason: "its Kit config at 0000014 already runs Review at effort high, so its two arms would be the same" },
+        ]);
+      });
+
+      it("keeping a marked Ticket a default-model Replay measures, though its base Kit config's Implement runs that model", () => {
+        const marked = aCandidate(12, {
+          records: [aRunRecord({ issue: 12, pullRequest: null, baseSha: baseOf(12), endedAt: "2026-10-01T09:00:00Z", stepUp: true, stepUpReason: "marked" })],
+        });
+        const issue = aReplayIssue(140, { body: bodyWith("implement.model: claude-sonnet-5-5", "tickets: 12, 7") });
+
+        const plan = replayMarksIn(acceptedBody(nextReplayStep(aTick([issue], { acceptance: acceptanceOf([aCandidate(7), marked]) }))))?.plan;
+
+        expect(plan?.tickets.map(({ ticket, arms }) => [ticket, arms.baseline.implement.model, arms.variant.implement.model])).toEqual([[12, "claude-opus-5-5", "claude-sonnet-5-5"]]);
+        expect(plan?.leftOut).toEqual([
+          { ticket: 7, reason: "its Kit config at 0000007 already runs Implement on claude-sonnet-5-5, so its two arms would be the same" },
         ]);
       });
 
