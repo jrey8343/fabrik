@@ -36,9 +36,12 @@ interface Remote {
 }
 
 /** Runs git in the empty repository the branch is rebuilt in; `with` runs it with more environment, such as a commit's identity. */
-type Git = ((...args: string[]) => Promise<string>) & {
-  with(more: Readonly<Record<string, string>>): (...args: string[]) => Promise<string>;
+type Git = Run & {
+  with(more: Readonly<Record<string, string>>): Run;
 };
+
+/** One way of running git, such as with more environment. */
+type Run = (...args: string[]) => Promise<string>;
 
 /** Where the remote's default branch (the PR's base, main) is fetched to. */
 const MAIN_REF = "refs/fabrik/main";
@@ -50,9 +53,11 @@ const HEAD_REF = "refs/fabrik/head";
  * Rebuilds `branch` from `bundlePath` and reads what it changes. A branch with
  * no commits has no bundle and changes nothing. `mergeMain` is the default
  * branch head a Request-changes run was told to merge in (#341), because the
- * head it started on conflicted with it: what it built is judged against that
- * head, never main as it is now, which may have moved while it ran. A run
- * told to merge it that made no commits resolved nothing.
+ * head it started on conflicted with it: whether it resolved the conflict is
+ * judged against that head, never main as it is now, which may have moved
+ * while it ran. It comes from the run's result, so it counts only if it was
+ * one of main's heads, and it never decides which of the run's paths read as
+ * main's. A run told to merge it that made no commits resolved nothing.
  */
 export async function rebuildAgentBranch(
   branch: BuiltBranch,
@@ -166,7 +171,7 @@ function diff(git: Git, from: string, to: string): Promise<ChangedPath[]> {
  * was changed by hand on top of the merge git would make (remerge), so merging
  * main in doesn't count main's own changes.
  */
-function commitsIn(git: Git, ...revisions: string[]): Promise<ChangedPath[]> {
+function commitsIn(git: Run,...revisions: string[]): Promise<ChangedPath[]> {
   return git("log", "--format=", "--name-status", "-z", "-M", "--diff-merges=remerge", "--no-ext-diff", ...revisions, "--").then(
     parseNameStatus,
   );
@@ -185,7 +190,7 @@ function isAncestor(git: Git, ancestor: string, of: string): Promise<boolean> {
  * and whether one does. Exit status 1 with a tree is a conflicted merge; any
  * other failure is the push job's to report, not a conflict.
  */
-async function mergeTree(git: Git, ours: string, theirs: string): Promise<{ readonly tree: string; readonly conflicted: boolean }> {
+async function mergeTree(git: Run,ours: string, theirs: string): Promise<{ readonly tree: string; readonly conflicted: boolean }> {
   const treeOf = (out: string): string | null => {
     const tree = out.split("\n")[0]?.trim() ?? "";
     return /^[0-9a-f]{40,64}$/.test(tree) ? tree : null;
@@ -279,8 +284,11 @@ async function fastForwardOnly(git: Git, url: string, branch: BuiltBranch, bundl
  * judged as the run's. A path the branch holds just as git's own merge of the
  * PR's head and the main the run brought in would have it is main's, not the
  * run's, though it reads unlike both: a file both had changed that merged
- * cleanly. A Request-changes run told to merge `mergeMain` in (#341) resolved
- * its conflict when the branch holds that head, or merges cleanly with it.
+ * cleanly. The main it brought in is the newest of main's heads the branch
+ * holds and the PR's head didn't, never a commit only the run names. A
+ * Request-changes run told to merge `mergeMain` in (#341) resolved its
+ * conflict when the branch holds that head, or merges cleanly with it. Merges
+ * follow the PR's .gitattributes as they were before the run.
  */
 async function onItsOwnBranch(
   git: Git,
@@ -292,7 +300,6 @@ async function onItsOwnBranch(
   const ref = `refs/heads/${branch.name}`;
   await git("fetch", "--quiet", url, branch.base.sha);
   await git("fetch", "--quiet", url, `+HEAD:${MAIN_REF}`);
-  if (mergeMain !== null) await git("fetch", "--quiet", url, mergeMain);
   const built = await fetchBundle(git, branch, bundlePath);
   const main = (await git("rev-parse", "--verify", `${MAIN_REF}^{commit}`)).trim();
   const head = (await headNow(git, url, branch.name)) ?? branch.base.sha;
@@ -312,28 +319,31 @@ async function onItsOwnBranch(
     tip = rebased;
   }
 
+  // Merges are judged by the PR's own .gitattributes as they stood before the run, never the run's.
+  const judging = git.with({ GIT_ATTR_SOURCE: head });
   const unlike = async (from: string): Promise<Set<string>> =>
     new Set((await git("diff", "--name-only", "-z", "--no-ext-diff", from, tip)).split("\0").filter(Boolean));
   const unlikeMain = await unlike(main);
-  // The main the run brought in, if it did: the head it was told to merge, or main as it is now.
-  let broughtIn: string | null = null;
-  for (const candidate of mergeMain === null ? [main] : [mergeMain, main]) {
-    if (broughtIn === null && (await isAncestor(git, candidate, tip)) && !(await isAncestor(git, candidate, head))) broughtIn = candidate;
-  }
-  const unlikeMerge = broughtIn === null ? null : await unlike((await mergeTree(git, head, broughtIn)).tree);
+  // Main's heads, newest first: its first parents. The main the run brought in is the newest of these it
+  // holds that the PR's head didn't, which the push job works out for itself, whatever the run's result says.
+  const mainHeads = (await git("rev-list", "--first-parent", main)).split("\n").filter(Boolean);
+  const runHolds = new Set((await git("rev-list", tip, "--not", head)).split("\n").filter(Boolean));
+  const broughtIn = mainHeads.find((commit) => runHolds.has(commit)) ?? null;
+  const unlikeMerge = broughtIn === null ? null : await unlike((await mergeTree(judging, head, broughtIn)).tree);
   // A path the branch now holds just as main does, or just as git's own merge with it does, came from main, not from this run.
   const own = (path: string): boolean => unlikeMain.has(path) && (unlikeMerge === null || unlikeMerge.has(path));
   const net = (await diff(git, head, tip)).filter((change) => own(change.path) || (change.from !== undefined && own(change.from)));
-  const resolved =
-    mergeMain === null ? null : (await isAncestor(git, mergeMain, tip)) || !(await mergeTree(git, tip, mergeMain)).conflicted;
+  // The main it was told to merge counts only if it was one of main's heads; otherwise it's main as it is now.
+  const told = mergeMain === null ? null : mainHeads.includes(mergeMain) ? mergeMain : main;
+  const resolved = told === null ? null : (await isAncestor(git, told, tip)) || !(await mergeTree(judging, tip, told)).conflicted;
   return {
     changes: {
       net,
       // Only the run's own: neither main's nor the PR's commits it landed on, whoever pushed them.
-      commits: await commitsIn(git, tip, `^${main}`, `^${head}`),
+      commits: await commitsIn(judging, tip, `^${main}`, `^${head}`),
       updatedFromMain: !(await isAncestor(git, main, head)) && (await isAncestor(git, main, tip)),
       ...(moved ? { rebase: { onto: head, conflicted: false } } : {}),
-      ...(mergeMain === null || resolved === null ? {} : { mainMerge: { main: mergeMain, resolved } }),
+      ...(told === null || resolved === null ? {} : { mainMerge: { main: told, resolved } }),
     },
     head: tip,
     async push(name) {

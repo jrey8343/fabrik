@@ -2189,12 +2189,12 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     return { github, waits, wait, reads: () => read };
   }
 
-  it("holds main's head from a push, and every open agent PR with its mergeable state and the Kit's attempts on it", async () => {
+  it("holds main's head as GitHub reads it with the PRs' mergeable state, not the push's own, which may be stale once checks take turns, and every open agent PR with the Kit's attempts on it", async () => {
     const { github } = githubReading([[node(50, "CONFLICTING"), node(51, "MERGEABLE"), node(60, "CONFLICTING", { headRefName: "feature", author: { login: "jrey", __typename: "User" } })]]);
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN);
 
-    expect(snapshot.conflicts?.main).toBe(MAIN);
+    expect(snapshot.conflicts?.main).toBe("d".repeat(40));
     expect(snapshot.conflicts?.pullRequests.map(({ pullRequest, mergeable }) => [pullRequest.number, mergeable])).toEqual([
       [50, false],
       [51, true],

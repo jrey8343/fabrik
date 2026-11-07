@@ -410,9 +410,9 @@ export async function gatherSnapshot(
   // A push to the default branch may leave an agent PR conflicting with it; the tick catches any the push missed (#304).
   const conflicts =
     event.kind === "main-pushed" || event.kind === "kit-config-changed"
-      ? await gatherConflicts(github, repo, event.head, new Date().toISOString(), appLogin, wait)
+      ? await gatherConflicts(github, repo, new Date().toISOString(), appLogin, wait)
       : event.kind === "scheduled-tick"
-        ? await gatherConflicts(github, repo, null, event.now, appLogin, wait)
+        ? await gatherConflicts(github, repo, event.now, appLogin, wait)
         : null;
   // By default the Operator owns the Product repos they run Fabrik in.
   const theOperator = part?.operator ?? operator ?? owner;
@@ -1245,29 +1245,31 @@ interface ConflictsQueryResult {
 }
 
 /**
- * What the conflict check weighs (#304): the default branch's head, `main`
- * when the event names it, and every open agent PR with whether it merges
- * cleanly into it. GitHub works `mergeable` out in the background once asked,
+ * What the conflict check weighs (#304): the default branch's head and every
+ * open agent PR with whether it merges cleanly into it, both as GitHub reads
+ * them now. A push's own head isn't used: a check waits its turn behind the
+ * tick and other pushes' checks (#341), so by the time it runs main may have
+ * moved on, and `mergeable` is GitHub's against main as it is. GitHub works `mergeable` out in the background once asked,
  * so while any agent PR's is unknown, it reads again, MERGEABLE_READS times
  * at most; one still unknown after that is left for the scheduled tick.
  */
 async function gatherConflicts(
   github: Pick<GitHub, "graphql">,
   repo: Repo,
-  main: string | null,
   now: string,
   appLogin: string | null,
   wait: (ms: number) => Promise<void>,
 ): Promise<ConflictSnapshot> {
   let candidates: ConflictCandidate[] = [];
-  let head: string | null = main;
+  let head: string | null = null;
   for (let read = 1; read <= MERGEABLE_READS; read += 1) {
     if (read > 1) await wait(MERGEABLE_WAIT_MS);
     candidates = [];
     let after: string | null = null;
     do {
       const data: ConflictsQueryResult = await github.graphql<ConflictsQueryResult>(CONFLICTS_QUERY, { owner: repo.owner, name: repo.name, after });
-      head = main ?? data.repository.defaultBranchRef?.target.oid ?? null;
+      // Read with the page's mergeable states, so both are of the same main.
+      if (after === null) head = data.repository.defaultBranchRef?.target.oid ?? null;
       const { pageInfo, nodes } = data.repository.pullRequests;
       candidates.push(
         ...nodes.flatMap((node) => {

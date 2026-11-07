@@ -277,6 +277,89 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
 
     expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "refuse", paths: ["AGENTS.md"] });
   });
+
+  /** The Operator brought main's rules in on the PR and changed their first line; the PR's head is then that. */
+  async function operatorChangesRules(): Promise<string> {
+    const seed = join(root, "seed");
+    await commit(seed, { "AGENTS.md": "a\nb\nc\nd\ne\n" }, "Main's rules");
+    await git(seed, "push", "--quiet", "origin", "main");
+    const operator = join(root, "operator");
+    await git(root, "clone", "--quiet", "--branch", BRANCH, remote, operator);
+    await git(operator, "merge", "--quiet", "--no-edit", "origin/main");
+    const head = await commit(operator, { "AGENTS.md": "A\nb\nc\nd\ne\n" }, "The Operator's rule");
+    await git(operator, "push", "--quiet", "origin", BRANCH);
+    return head;
+  }
+
+  it("judges what it built against main's history, never against a commit only the run's result names", async () => {
+    // A side branch weakened the rules, then put them back, and main merged it: its first commit was never main's head.
+    const seed = join(root, "seed");
+    await git(seed, "checkout", "--quiet", "-b", "side");
+    const weaker = await commit(seed, { "AGENTS.md": "weaker\n" }, "Weaker rules");
+    await commit(seed, { "AGENTS.md": "strict\n" }, "Strict again");
+    await git(seed, "checkout", "--quiet", "main");
+    await git(seed, "merge", "--quiet", "--no-ff", "--no-edit", "side");
+    await git(seed, "push", "--quiet", "origin", "main");
+    await git(clone, "fetch", "--quiet", "origin");
+    await git(clone, "merge", "--quiet", "--no-edit", weaker);
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change");
+
+    const branch = await rebuild(prHead, weaker);
+
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "refuse", paths: ["AGENTS.md"] });
+  });
+
+  it("doesn't count as its own a trust-root file git merged cleanly from a main newer than the one it was told to merge", async () => {
+    const head = await operatorChangesRules();
+    const told = await mainConflicts();
+    const seed = join(root, "seed");
+    await commit(seed, { "AGENTS.md": "a\nb\nc\nd\nE\n" }, "Main changes the rules' last line");
+    await git(seed, "push", "--quiet", "origin", "main");
+    await git(clone, "fetch", "--quiet", "origin");
+    await git(clone, "checkout", "--quiet", "-B", BRANCH, `origin/${BRANCH}`);
+    await mergesMain();
+
+    const branch = await rebuild(head, told);
+
+    expect(paths(branch.changes.net)).toEqual(["src/shared.ts"]);
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "allow" });
+    expect(branch.changes.mainMerge).toEqual({ main: told, resolved: true });
+  });
+
+  it("doesn't count as its own a trust-root file git merged cleanly when it merged main unasked, and main moved on before its push", async () => {
+    const head = await operatorChangesRules();
+    const seed = join(root, "seed");
+    await commit(seed, { "AGENTS.md": "a\nb\nc\nd\nE\n" }, "Main changes the rules' last line");
+    await git(seed, "push", "--quiet", "origin", "main");
+    await git(clone, "fetch", "--quiet", "origin");
+    await git(clone, "checkout", "--quiet", "-B", BRANCH, `origin/${BRANCH}`);
+    await git(clone, "merge", "--quiet", "--no-edit", "origin/main");
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change");
+    await commit(seed, { "src/other.ts": "other\n" }, "Main moves on");
+    await git(seed, "push", "--quiet", "origin", "main");
+
+    const branch = await rebuild(head);
+
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "allow" });
+  });
+
+  it("merges as the PR's own .gitattributes say, so a file both changed that git unions doesn't keep the conflict", async () => {
+    const seed = join(root, "seed");
+    await commit(seed, { ".gitattributes": "CHANGELOG.md merge=union\n", "CHANGELOG.md": "start\n" }, "A union changelog");
+    await git(seed, "push", "--quiet", "origin", "main");
+    const operator = join(root, "operator");
+    await git(root, "clone", "--quiet", "--branch", BRANCH, remote, operator);
+    await git(operator, "merge", "--quiet", "--no-edit", "origin/main");
+    const head = await commit(operator, { "CHANGELOG.md": "start\nthe PR\n" }, "The PR's changelog line");
+    await git(operator, "push", "--quiet", "origin", BRANCH);
+    const main = await mainConflicts({ "CHANGELOG.md": "start\nmain\n" });
+    await git(clone, "checkout", "--quiet", "-B", BRANCH, `origin/${BRANCH}`);
+    await commit(clone, { "src/shared.ts": "shared v1\n" }, "Drop the PR's change to shared, as asked");
+
+    const branch = await rebuild(head, main);
+
+    expect(branch.changes.mainMerge).toEqual({ main, resolved: true });
+  });
 });
 
 describe("A retry that only adds commits", () => {
