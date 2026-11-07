@@ -46,6 +46,28 @@ describe("A push", () => {
     expect(loopEventFrom("push", push({ commits }))).toEqual({ kind: "main-pushed", head: HEAD });
   });
 
+  // #307: a real push held an entry with no `added`, and it threw before the check could run.
+  it.each([
+    ["no lists", {}],
+    ["no added", { modified: [], removed: [] }],
+    ["no modified", { added: [], removed: [] }],
+    ["no removed", { added: [], modified: [] }],
+  ])("to the default branch with a commit that has %s may have changed the Kit config, so it's a Kit config change", (_, commit) => {
+    expect(loopEventFrom("push", push({ commits: [commit] }))).toEqual({ kind: "kit-config-changed", head: HEAD });
+  });
+
+  it.each([
+    ["an empty commits list", { commits: [] }],
+    ["no commits list", { commits: undefined }],
+    ["an empty commit entry", { commits: [null] }],
+  ])("to the default branch with %s may have changed the Kit config, so it's a Kit config change", (_, overrides) => {
+    expect(loopEventFrom("push", push(overrides))).toEqual({ kind: "kit-config-changed", head: HEAD });
+  });
+
+  it("to another branch is nothing, whatever its commits hold", () => {
+    expect(loopEventFrom("push", push({ ref: "refs/heads/tweak-config", commits: [{}] }))).toBeNull();
+  });
+
   it("that deletes the default branch is nothing: there's no head to bring a PR up to date with", () => {
     expect(loopEventFrom("push", push({ after: "0".repeat(40), deleted: true, commits: [] }))).toBeNull();
   });
