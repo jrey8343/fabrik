@@ -317,13 +317,41 @@ A Product repo's Kit config lives in `.fabrik/`. Every file is optional and ever
     "secrets": {}
   },
   "roles": {
-    "triage": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 10 },
-    "design": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 30 },
-    "implement": { "model": "claude-sonnet-5-5", "effort": null, "timeout_minutes": 60 },
-    "review": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 30 },
-    "audit": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 45 },
-    "retro": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 45 },
-    "research": { "model": "claude-opus-5-5", "effort": null, "timeout_minutes": 30 },
+    "triage": {
+      "model": "claude-opus-5-5",
+      "effort": null,
+      "timeout_minutes": 10
+    },
+    "design": {
+      "model": "claude-opus-5-5",
+      "effort": null,
+      "timeout_minutes": 30
+    },
+    "implement": {
+      "model": "claude-sonnet-5-5",
+      "effort": null,
+      "timeout_minutes": 60
+    },
+    "review": {
+      "model": "claude-opus-5-5",
+      "effort": null,
+      "timeout_minutes": 30
+    },
+    "audit": {
+      "model": "claude-opus-5-5",
+      "effort": null,
+      "timeout_minutes": 45
+    },
+    "retro": {
+      "model": "claude-opus-5-5",
+      "effort": null,
+      "timeout_minutes": 45
+    },
+    "research": {
+      "model": "claude-opus-5-5",
+      "effort": null,
+      "timeout_minutes": 30
+    },
     "dispatch": { "timeout_minutes": 10 },
     "step_up": { "model": "claude-opus-5-5", "effort": null }
   },

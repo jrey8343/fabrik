@@ -726,6 +726,11 @@ describe("The Researcher's Kit config", () => {
 });
 
 describe("The Kit config template", () => {
+  // Setup writes it as it is, so a Product repo's prettier --check sees it: Prettier breaks any object past 80 columns.
+  it("fits every line in Prettier's 80 columns", () => {
+    expect(template.split("\n").filter((line) => line.length > 80)).toEqual([]);
+  });
+
   it("spells out caps.design_sessions at its Kit default", () => {
     expect(JSON.parse(template)).toMatchObject({ caps: { design_sessions: 2 } });
   });
