@@ -18,7 +18,7 @@ Stop and tell the Operator what's missing if any of these fails:
 
 - The working directory is the root of the Product repo's clone (`git rev-parse --show-toplevel`), on its default branch, up to date with `origin`, with a clean working tree (`git status --porcelain` prints nothing).
 - The Kit is set up here: `.fabrik/config.json` exists, and `.github/workflows/fabrik.yml` pins a Fabrik release, the tag after `@` in its `uses: jrey8343/fabrik/…@<release>` lines. Without them, the Operator runs Setup first.
-- `node --version` is 24 or later.
+- `node --version` is 24.3 or later, which the writer program needs.
 
 **Done when:** each check passes, and you know the release the repo pins.
 
