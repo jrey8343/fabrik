@@ -26,6 +26,8 @@ export interface World {
   readonly prs: PullRequest[];
   /** Label names whose `gh label create` fails, as a partway failure would. */
   readonly failingLabels: Set<string>;
+  /** How many open issues are labelled ready-for-agent. */
+  readyForAgent: number;
 }
 
 export function aWorld(): World {
@@ -38,6 +40,7 @@ export function aWorld(): World {
     ruleset: null,
     prs: [],
     failingLabels: new Set(),
+    readyForAgent: 0,
   };
 }
 
@@ -60,7 +63,7 @@ export function worldScript(world: World): Record<string, Answer> {
       world.labels.add(args[2]!);
       return {};
     },
-    "gh issue list": () => json([]),
+    "gh issue list": () => json(Array.from({ length: world.readyForAgent }, (_, i) => ({ number: i + 1 }))),
     "gh secret list --json name": () => names(world.secrets),
     "gh secret set": ({ args }) => {
       world.secrets.add(args[2]!);

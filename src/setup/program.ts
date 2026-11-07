@@ -11,6 +11,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
+import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { checkOp, chooseAccount } from "./account.ts";
 import { apply, describeAction } from "./apply.ts";
 import { parseSetupArgs, SETUP_USAGE } from "./args.ts";
@@ -187,7 +188,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
       const now = await gatherState(run, cwd, repo, paths);
       const appItems = now.vaults.includes(FABRIK_APP_VAULT) ? await vaultItems(run, cwd, FABRIK_APP_VAULT) : [];
       return {
-        plan: planSetup(now, kit, answers),
+        plan: planSetup(now, kit, answers, { wroteStarter: state.files[KIT_CONFIG_PATH] == null }),
         readiness: readinessOf({ repo: repoName, report: wizardReport, fabrikItems: now.fabrikItems, appItems }),
       };
     },

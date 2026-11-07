@@ -228,6 +228,31 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(world.prs[0]?.body).toMatch(/Walk the wizard's "A second Subscription" stage: .* Then run setup again, and it lists it in subscriptions in \.fabrik\/config\.json\./);
   });
 
+  it("with --paused on a fresh repo, the setup PR says the starter pauses Dispatch, not that --paused had no effect", async () => {
+    const world = aWorld();
+
+    const { code, said } = await setupOnce(world, { args: ["--no-time-zone", "--no-second-subscription", "--paused"] });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(originGit("show", `${BRANCH}:.fabrik/config.json`)).max_in_flight).toBe(0);
+    expect(world.prs[0]?.body).toContain("but Dispatch paused (max_in_flight 0)");
+    expect(world.prs[0]?.body).not.toContain("--paused had no effect");
+    expect(said.join("\n")).not.toContain("--paused had no effect");
+  });
+
+  it("unpaused on a fresh repo with ready-for-agent issues, warns in the setup PR and the closing lines that Dispatch releases them on the merge", async () => {
+    const world = aWorld();
+    world.labels.add("ready-for-agent");
+    world.readyForAgent = 2;
+    const warning = "2 open issues are labelled ready-for-agent: Dispatch starts releasing them to Implementers as soon as the setup PR merges.";
+
+    const { code, said } = await setupOnce(world);
+
+    expect(code).toBe(0);
+    expect(world.prs[0]?.body).toContain(`- ${warning}`);
+    expect(said.slice(said.indexOf("The setup PR: https://github.com/acme/clinic/pull/1")).some((line) => line.startsWith(`- ${warning}`))).toBe(true);
+  });
+
   it("a second run after the wizard stopped partway reuses the branch and PR, applies nothing again, and then asks for the merge", async () => {
     const world = aWorld();
     await setupOnce(world, { wizard: skipsTheClaudeToken });
