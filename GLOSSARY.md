@@ -242,6 +242,10 @@ _Avoid_: PR feedback, reply
 The screenshots, and preview link if the Product repo has one, that the Kit captures for a pull request changing a Product repo's UI, so the Operator and the Reviewer can see what was built.
 _Avoid_: visual proof, screenshots, artifacts
 
+**Capture identity**:
+A named kind of user that UI evidence views a route as, signed in to the Sandbox's own server with fake credentials.
+_Avoid_: role, persona, test user
+
 **Prototype**:
 Throwaway variants of one UI route that a Design session builds on a branch that is never merged, so the Operator can choose a design by looking at it.
 _Avoid_: mockup, spike, preview
