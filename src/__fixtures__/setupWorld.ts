@@ -55,7 +55,12 @@ const json = (value: unknown) => ({ stdout: JSON.stringify(value) });
 const names = (set: Set<string>) => json([...set].map((name) => ({ name })));
 const valueOf = (args: readonly string[], flag: string) => args[args.indexOf(flag) + 1] ?? "";
 
-export function worldScript(world: World): Record<string, Answer> {
+/** What GitHub reads from the repo's own git: how many commits a head has that a base lacks. */
+export interface Origin {
+  commitsAhead(base: string, head: string): number;
+}
+
+export function worldScript(world: World, origin?: Origin): Record<string, Answer> {
   return {
     "gh label list --limit 1000 --json name": () => names(world.labels),
     "gh label create": ({ args }) => {
@@ -99,6 +104,10 @@ export function worldScript(world: World): Record<string, Answer> {
           .map(({ number, url, body, isCrossRepository }) => ({ number, url, body, isCrossRepository })),
       ),
     "gh pr create": ({ args, input }) => {
+      const [base, head] = [valueOf(args, "--base"), valueOf(args, "--head")];
+      if (origin !== undefined && origin.commitsAhead(base, head) === 0) {
+        return { code: 1, stderr: `pull request create failed: GraphQL: No commits between ${base} and ${head} (createPullRequest)` };
+      }
       const number = world.prs.length + 1;
       const url = `https://github.com/acme/clinic/pull/${number}`;
       world.prs.push({ number, url, head: valueOf(args, "--head"), base: valueOf(args, "--base"), isCrossRepository: false, body: input ?? "", open: true });

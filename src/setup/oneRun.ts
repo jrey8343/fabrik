@@ -1,8 +1,10 @@
 // One setup run, from the Operator's yes to the setup PR, and the rule for
 // when it asks for the merge. The order is fixed here: apply the plan on the
 // setup branch, walk the wizard, read the repo and 1Password again, then
-// commit, push and open the setup PR. Each step is injected, so this module
-// does no git, gh, op or terminal work itself.
+// commit, push and open the setup PR. When the setup branch then holds
+// nothing the default branch lacks, there's no PR: the run goes back to the
+// default branch. Each step is injected, so this module does no git, gh, op or
+// terminal work itself.
 import { describeAction } from "./apply.ts";
 import { FABRIK_APP_VAULT, FABRIK_VAULT, type SetupAction, type SetupPlan } from "./plan.ts";
 import { appInstalledIn } from "./wizard.ts";
@@ -48,7 +50,7 @@ export interface RunSummary {
   readonly done: readonly string[];
   /** The notes for the Operator, from the plan made after the wizard. */
   readonly notes: readonly string[];
-  /** What the merge waits for. Empty when the Operator can merge. */
+  /** What the merge waits for. Empty when the Operator can merge, or there's no setup PR. */
   readonly blockers: readonly string[];
 }
 
@@ -73,14 +75,22 @@ export interface OneRunSteps {
    * as the `subscriptions` line once a second Subscription's token is stored.
    */
   afterWizard(): Promise<{ readonly plan: SetupPlan; readonly readiness: Readiness }>;
-  /** Commits whatever setup wrote on the setup branch. */
-  commit(): Promise<void>;
+  /** Commits whatever setup wrote on the setup branch, returning whether there was anything to commit. */
+  commit(): Promise<boolean>;
+  /** Whether the setup branch holds anything for the setup PR: commits origin's default branch lacks, or a setup PR open from it. */
+  somethingToPublish(): Promise<boolean>;
+  /** Switches back to the default branch and deletes the setup branch, which holds nothing the default branch lacks. */
+  leaveSetupBranch(): Promise<void>;
   push(): Promise<void>;
   /** Opens the setup PR, or updates the one already open from the setup branch. */
   publish(summary: RunSummary): Promise<Published>;
 }
 
-export type OneRunResult = { readonly kind: "declined" } | ({ readonly kind: "done" } & Published);
+export type OneRunResult =
+  | { readonly kind: "declined" }
+  /** The run wrote no file the default branch lacks, so there's no setup PR. */
+  | { readonly kind: "applied"; readonly summary: RunSummary }
+  | ({ readonly kind: "done" } & Published);
 
 export interface OneRun {
   /** The plan the Operator saw. */
@@ -107,13 +117,14 @@ export async function runOnce({ plan, repo }: OneRun, steps: OneRunSteps): Promi
     );
   }
 
-  await steps.commit();
+  const done = [...plan.actions, ...files].map(describeAction);
+  // GitHub opens no PR that holds no commits, as after a repair of only labels, secrets or protection.
+  if (!(await steps.commit()) && !(await steps.somethingToPublish())) {
+    await steps.leaveSetupBranch();
+    return { kind: "applied", summary: { done, notes, blockers: [] } };
+  }
   await steps.push();
-  const published = await steps.publish({
-    done: [...plan.actions, ...files].map(describeAction),
-    notes,
-    blockers: mergeBlockers(after.readiness, repo),
-  });
+  const published = await steps.publish({ done, notes, blockers: mergeBlockers(after.readiness, repo) });
   return { kind: "done", ...published };
 }
 

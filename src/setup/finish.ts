@@ -91,6 +91,17 @@ export function closingLines({ release, defaultBranch, url, summary, paused }: C
   ];
 }
 
+/** The run's last lines when it wrote no file the default branch lacks, so there's no setup PR. */
+export function appliedLines(defaultBranch: string, summary: RunSummary): string[] {
+  return [
+    "What setup did:",
+    ...(summary.done.length === 0 ? ["- nothing new in this run"] : bullets(summary.done)),
+    ...(summary.notes.length === 0 ? [] : ["", "For the Operator:", ...bullets(summary.notes)]),
+    "",
+    `Every file setup writes is already on ${defaultBranch}, so there's no setup PR to open. Setup switched back to ${defaultBranch}.`,
+  ];
+}
+
 function mergeAsk(who: string, defaultBranch: string): string {
   return (
     `${who} once its gating checks pass. It needs no approving review, and as the repo's admin you're the Merge gate ruleset's one bypass actor. ` +

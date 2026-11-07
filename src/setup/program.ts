@@ -15,16 +15,16 @@ import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { checkOp, chooseAccount } from "./account.ts";
 import { apply, describeAction } from "./apply.ts";
 import { parseSetupArgs, SETUP_USAGE } from "./args.ts";
-import { checkSetup, offerToDeleteOldSetupSkill, setupBranch } from "./checks.ts";
-import type { Env, Run } from "./exec.ts";
-import { closingLines } from "./finish.ts";
+import { checkSetup, offerToDeleteOldSetupSkill, type OriginTips, setupBranch } from "./checks.ts";
+import { type Env, ok, type Run } from "./exec.ts";
+import { appliedLines, closingLines } from "./finish.ts";
 import { gatherState, vaultItems } from "./gather.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type OneRunSteps, readinessOf, runOnce } from "./oneRun.ts";
 import { FABRIK_APP_VAULT, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths, setupWrites } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 import { askQuestions } from "./questions.ts";
-import { commitSetupFiles, earlierSetupRun, publishSetupPr, pushSetupBranch, switchToSetupBranch } from "./setupBranch.ts";
+import { commitSetupFiles, earlierSetupRun, openSetupPr, publishSetupPr, pushSetupBranch, switchToSetupBranch } from "./setupBranch.ts";
 import { pinCaller } from "./shims.ts";
 import { WIZARD_REPORT_ENV, WIZARD_SECOND_SUBSCRIPTION_ENV, type WizardRun } from "./wizard.ts";
 
@@ -107,7 +107,20 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
       return 0;
     }
     const inTerminal = { ...io, prompt: io.prompt };
-    return await oneRun({ io: inTerminal, run, env, kit, paths, answers, plan, state, release: args.release, current: checked.branch, productDir });
+    return await oneRun({
+      io: inTerminal,
+      run,
+      env,
+      kit,
+      paths,
+      answers,
+      plan,
+      state,
+      release: args.release,
+      current: checked.branch,
+      origin: checked.origin,
+      productDir,
+    });
   } catch (error) {
     return stop(io, error instanceof Error ? error.message : String(error));
   }
@@ -126,12 +139,13 @@ interface OneRunInputs {
   readonly release: string;
   /** The branch the checks found the clone on. */
   readonly current: string;
+  readonly origin: OriginTips;
   readonly productDir: string;
 }
 
 /** The plan, the Operator's yes, and one run from there to the setup PR. */
 async function oneRun(inputs: OneRunInputs): Promise<number> {
-  const { io, run, env, kit, paths, answers, state, release, current, productDir } = inputs;
+  const { io, run, env, kit, paths, answers, state, release, current, origin, productDir } = inputs;
   const cwd = productDir;
   const branch = setupBranch(release);
   const { repo } = state;
@@ -192,7 +206,15 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
         readiness: readinessOf({ repo: repoName, report: wizardReport, fabrikItems: now.fabrikItems, appItems }),
       };
     },
-    commit: async () => void (await commitSetupFiles(run, cwd, setupWrites(kit), release)),
+    commit: () => commitSetupFiles(run, cwd, setupWrites(kit), release),
+    somethingToPublish: async () => {
+      const ahead = Number((await ok(run, "git", ["rev-list", "--count", `${origin.defaultBranch}..HEAD`], { cwd })).trim());
+      return ahead > 0 || (await openSetupPr(run, cwd, branch)) !== null;
+    },
+    leaveSetupBranch: async () => {
+      await ok(run, "git", ["switch", "-q", repo.defaultBranch], { cwd });
+      await ok(run, "git", ["branch", "-q", "-D", branch], { cwd });
+    },
     push: () => pushSetupBranch(run, cwd, branch),
     publish: (summary) => publishSetupPr({ run, cwd, branch, defaultBranch: repo.defaultBranch, release, summary }),
   };
@@ -203,6 +225,10 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     return 0;
   }
   io.say("");
+  if (result.kind === "applied") {
+    for (const line of appliedLines(repo.defaultBranch, result.summary)) io.say(line);
+    return 0;
+  }
   const closing = { release, defaultBranch: repo.defaultBranch, url: result.url, summary: result.summary, paused: answers.paused === true };
   for (const line of closingLines(closing)) io.say(line);
   return 0;

@@ -15,7 +15,7 @@ function plan(actions: SetupAction[], notes: string[] = []): SetupPlan {
   return { actions, notes };
 }
 
-function fakeSteps(options: { yes?: boolean; after?: SetupPlan; readiness?: Readiness } = {}) {
+function fakeSteps(options: { yes?: boolean; after?: SetupPlan; readiness?: Readiness; commits?: boolean; onTheBranch?: boolean } = {}) {
   const log: string[] = [];
   const steps: OneRunSteps = {
     confirm: async () => {
@@ -29,7 +29,15 @@ function fakeSteps(options: { yes?: boolean; after?: SetupPlan; readiness?: Read
       log.push("read again");
       return { plan: options.after ?? plan([]), readiness: options.readiness ?? READY };
     },
-    commit: async () => void log.push("commit"),
+    commit: async () => {
+      log.push("commit");
+      return options.commits ?? true;
+    },
+    somethingToPublish: async () => {
+      log.push("anything to publish?");
+      return options.onTheBranch ?? false;
+    },
+    leaveSetupBranch: async () => void log.push("leave"),
     push: async () => void log.push("push"),
     publish: async (summary) => {
       log.push("publish");
@@ -87,6 +95,23 @@ describe("One setup run", () => {
     await runOnce({ plan: plan([]), repo: "acme/clinic" }, steps);
 
     expect(log).toEqual(["confirm", "switch", "wizard", "read again", "commit", "push", "publish"]);
+  });
+
+  it("with nothing committed and nothing on the setup branch for a PR, pushes and publishes nothing, and leaves the branch", async () => {
+    const { steps, log } = fakeSteps({ commits: false });
+
+    const result = await runOnce({ plan: plan([LABEL], ["a note"]), repo: "acme/clinic" }, steps);
+
+    expect(log).toEqual(["confirm", "switch", "apply create-label", "wizard", "read again", "commit", "anything to publish?", "leave"]);
+    expect(result).toEqual({ kind: "applied", summary: { done: ["create the label needs-triage"], notes: [], blockers: [] } });
+  });
+
+  it("with nothing committed, still pushes and publishes what an earlier run left on the setup branch", async () => {
+    const { steps, log } = fakeSteps({ commits: false, onTheBranch: true });
+
+    await runOnce({ plan: plan([]), repo: "acme/clinic" }, steps);
+
+    expect(log.slice(log.indexOf("commit"))).toEqual(["commit", "anything to publish?", "push", "publish"]);
   });
 
   it("gives the PR what the merge waits for, as read after the wizard", async () => {

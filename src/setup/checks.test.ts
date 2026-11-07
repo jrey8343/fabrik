@@ -51,6 +51,7 @@ describe("The checks before setup plans anything", () => {
       ok: true,
       repo: { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: false },
       branch: "main",
+      origin: { defaultBranch: HEAD_SHA, setupBranch: null },
     });
   });
 

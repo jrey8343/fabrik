@@ -28,8 +28,16 @@ export type Checked =
       readonly repo: ProductState["repo"];
       /** The branch the clone is on: the default branch, or setup's own. */
       readonly branch: string;
+      readonly origin: OriginTips;
     }
   | { readonly ok: false; readonly problem: string };
+
+/** The tips of the two branches setup works with, as the checks found them on origin. */
+export interface OriginTips {
+  readonly defaultBranch: string;
+  /** Null when origin has no setup branch for this release. */
+  readonly setupBranch: string | null;
+}
 
 type SignedIn = { readonly ok: true; readonly repo: ProductState["repo"] } | { readonly ok: false; readonly problem: string };
 
@@ -39,9 +47,9 @@ export async function checkSetup(inputs: CheckInputs): Promise<Checked> {
   const signedIn = await checkGitHub(inputs);
   if (!signedIn.ok) return signedIn;
   const branch = (await inputs.run("git", ["branch", "--show-current"], { cwd: inputs.productDir })).stdout.trim();
-  const offBranch = await checkBranch(inputs, signedIn.repo.defaultBranch, branch);
-  if (offBranch !== null) return { ok: false, problem: offBranch };
-  return { ok: true, repo: signedIn.repo, branch };
+  const onBranch = await checkBranch(inputs, signedIn.repo.defaultBranch, branch);
+  if (typeof onBranch === "string") return { ok: false, problem: onBranch };
+  return { ok: true, repo: signedIn.repo, branch, origin: onBranch };
 }
 
 export interface OldCopyInputs {
@@ -148,8 +156,13 @@ function repoOf(view: RepoView): ProductState["repo"] {
  * on setup's own branch for this release, built on origin's default branch,
  * with nothing uncommitted but setup's own files. "The same as on origin" is
  * read with git ls-remote, so the checks fetch nothing and write no refs.
+ * Returns what's wrong, or the tips origin has.
  */
-async function checkBranch({ run, productDir, release, setupWrites }: CheckInputs, defaultBranch: string, current: string): Promise<string | null> {
+async function checkBranch(
+  { run, productDir, release, setupWrites }: CheckInputs,
+  defaultBranch: string,
+  current: string,
+): Promise<string | OriginTips> {
   const cwd = productDir;
   const ownBranch = setupBranch(release);
   if (current !== defaultBranch && current !== ownBranch) {
@@ -177,10 +190,12 @@ async function checkBranch({ run, productDir, release, setupWrites }: CheckInput
   );
   const originDefault = tips.get(refs[0]);
   if (originDefault === undefined) return `origin has no ${defaultBranch} branch. Push ${defaultBranch}, then run setup again.`;
+  const originOwn = tips.get(refs[1]);
+  const origin: OriginTips = { defaultBranch: originDefault, setupBranch: originOwn ?? null };
 
   if (current === defaultBranch) {
     const head = (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
-    if (head === originDefault) return null;
+    if (head === originDefault) return origin;
     return `${defaultBranch} here isn't the same as on origin (${short(head)} here, ${short(originDefault)} on origin). Pull or push so they match, then run setup again.`;
   }
   // A commit this clone lacks isn't its ancestor either: git says so by failing.
@@ -188,11 +203,10 @@ async function checkBranch({ run, productDir, release, setupWrites }: CheckInput
   if (!(await holds(originDefault))) {
     return `${ownBranch} doesn't hold origin's latest ${defaultBranch} (${short(originDefault)}). Merge it in with git pull origin ${defaultBranch}, then run setup again.`;
   }
-  const originOwn = tips.get(refs[1]);
   if (originOwn !== undefined && !(await holds(originOwn))) {
     return `origin's ${ownBranch} has commits this clone lacks (${short(originOwn)}). Pull them with git pull origin ${ownBranch}, then run setup again.`;
   }
-  return null;
+  return origin;
 }
 
 /**

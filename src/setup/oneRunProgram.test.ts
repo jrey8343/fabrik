@@ -88,7 +88,7 @@ async function setupOnce(world: World, { answers = ["y"], wizard = walksEverySta
   const said: string[] = [];
   const complaints: string[] = [];
   const wizardRuns: { cwd: string; env: Env }[] = [];
-  const commands = fakeCommands({ ...aReadyOperator(checkout), ...worldScript(world) });
+  const commands = fakeCommands({ ...aReadyOperator(checkout), ...worldScript(world, { commitsAhead }) });
   const run: Run = async (command, commandArgs, options) => {
     log.push([command, ...commandArgs].join(" "));
     return command === "git" ? spawnRun(command, commandArgs, options) : commands.run(command, commandArgs, options);
@@ -111,6 +111,23 @@ async function setupOnce(world: World, { answers = ["y"], wizard = walksEverySta
     },
   });
   return { code, said, complaints, log, questions: prompt.questions, wizardRuns, calls: commands.calls };
+}
+
+/** As GitHub counts them for a PR: the commits on origin's head that its base lacks, none when the head isn't there. */
+function commitsAhead(base: string, head: string): number {
+  try {
+    return Number(originGit("rev-list", "--count", `${base}..${head}`).trim());
+  } catch {
+    return 0;
+  }
+}
+
+/** The Operator merges the setup PR by fast-forwarding main. */
+function mergeTheSetupPr(world: World): void {
+  git("switch", "-q", "main");
+  git("merge", "-q", "--ff-only", BRANCH);
+  git("push", "-q", "origin", "main");
+  world.prs[0]!.open = false;
 }
 
 /** The files on origin's setup branch. */
@@ -326,11 +343,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   it("a run on a working install plans nothing, opens no PR and says the install is complete", async () => {
     const world = aWorld();
     await setupOnce(world);
-    // The Operator merges the setup PR.
-    git("switch", "-q", "main");
-    git("merge", "-q", "--ff-only", BRANCH);
-    git("push", "-q", "origin", "main");
-    world.prs[0]!.open = false;
+    mergeTheSetupPr(world);
 
     const { code, said, log, questions } = await setupOnce(world);
 
@@ -363,6 +376,26 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(world.prs[1]!.body).not.toContain("admin bypass\n");
     expect(said).toContain("The setup PR: https://github.com/acme/clinic/pull/2");
     expect(said).not.toContain("- merge this with your admin bypass");
+  });
+
+  it("a repair that writes no file applies it, pushes nothing, opens no PR and goes back to the default branch", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    mergeTheSetupPr(world);
+    world.labels.delete("needs-triage");
+
+    const { code, said, complaints, log } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(said).toContain("- create the label needs-triage");
+    expect(log.filter((line) => /^git (commit|push)|^gh pr (create|edit)/.test(line))).toEqual([]);
+    expect(world.prs).toHaveLength(1);
+    expect(said).toContain("Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main.");
+    expect(said.join("\n")).not.toMatch(/The setup PR:|Merge it yourself|Don't merge it yet/);
+    expect(git("branch", "--show-current").trim()).toBe("main");
+    expect(git("branch", "--list", BRANCH)).toBe("");
+    expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
   });
 
   it("changes nothing when the Operator says no to the plan", async () => {
