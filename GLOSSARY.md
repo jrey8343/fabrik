@@ -52,6 +52,10 @@ _Avoid_: test repo, demo
 A repository becoming a Product repo: its tracker, checks and skills brought into line with the Loop, the Kit installed, and its first Tickets run through the Loop.
 _Avoid_: cutover, migration, onboarding
 
+**Setup**:
+The program the Operator runs in their own terminal to adopt, repair or migrate the Kit in a repository, with no agent taking part.
+_Avoid_: installer, CLI, bootstrap, `/fabrik-setup`
+
 ## The product
 
 **Product intent**:
