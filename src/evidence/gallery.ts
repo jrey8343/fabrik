@@ -13,6 +13,7 @@ import {
   ROUTE_REASON_WORDS,
   serverErrorWords,
   SIDE_WORDS,
+  signedInWords,
   VARIANT_LETTERS,
   type VariantCapture,
 } from "./uiEvidence.ts";
@@ -104,21 +105,27 @@ function routesOf(captures: readonly GalleryShot[]): GalleryShot[] {
 }
 
 /** A route's heading, then a row per viewport it was captured at, mobile first, with Before beside After. */
-function routeSection({ route, reason }: GalleryShot, captures: readonly GalleryShot[]): string[] {
+function routeSection({ route, reason, identity }: GalleryShot, captures: readonly GalleryShot[]): string[] {
   const rows = UI_VIEWPORTS.flatMap((viewport) => {
     const row = CAPTURE_SIDES.flatMap((side) =>
       captures.filter((capture) => capture.route === route && capture.viewport === viewport.name && capture.side === side),
     );
     return row.length === 0 ? [] : [`<h3>${capitalised(viewport.name)}, ${viewport.width} × ${viewport.height}</h3>`, `<div class="pair">${row.map(figure).join("")}</div>`];
   });
-  return ["<section>", `<h2><code>${escaped(route)}</code>, ${ROUTE_REASON_WORDS[reason]}</h2>`, ...rows, "</section>"];
+  const heading = `<h2><code>${escaped(route)}</code>, ${ROUTE_REASON_WORDS[reason]}${signedInWords(identity, htmlCode)}</h2>`;
+  const noBefore =
+    identity === undefined
+      ? []
+      : [`<p>Signed in as ${htmlCode(identity)}, so it never has a Before: the Kit only ever signs in to the Sandbox's own server, never to the production site Before is taken from.</p>`];
+  return ["<section>", heading, ...noBefore, ...rows, "</section>"];
 }
 
 /** One screenshot, inlined, captioned with its side, and flagged when its page answered a server error. */
-function figure({ route, viewport, side, status, png }: GalleryShot): string {
+function figure({ route, viewport, side, status, png, identity }: GalleryShot): string {
+  const named = `${SIDE_WORDS[side]}${signedInWords(identity, escaped)}`;
   const alt = escaped(`${route} at ${viewport}, ${SIDE_WORDS[side]}`);
   const source = `data:image/png;base64,${Buffer.from(png).toString("base64")}`;
-  const caption = isServerError(status) ? `${SIDE_WORDS[side]}: ${serverErrorWords(String(status), "this is")}` : SIDE_WORDS[side];
+  const caption = isServerError(status) ? `${named}: ${serverErrorWords(String(status), "this is")}` : named;
   return `<figure${isServerError(status) ? ' class="error"' : ""}><figcaption>${caption}</figcaption><img alt="${alt}" src="${source}"></figure>`;
 }
 
@@ -188,9 +195,10 @@ function variantSection(letter: string, variants: readonly GalleryVariant[], cap
 }
 
 /** One viewport of a variant: its screenshot, inlined, and its video beneath it, captioned with the viewport and flagged when its page answered a server error. */
-function variantFigure({ variant, viewport, status, png, webm }: VariantShot): string {
+function variantFigure({ variant, viewport, status, png, webm, identity }: VariantShot): string {
   const size = UI_VIEWPORTS.find(({ name }) => name === viewport);
-  const named = size === undefined ? capitalised(viewport) : `${capitalised(viewport)}, ${size.width} × ${size.height}`;
+  const sized = size === undefined ? capitalised(viewport) : `${capitalised(viewport)}, ${size.width} × ${size.height}`;
+  const named = `${sized}${signedInWords(identity, escaped)}`;
   const caption = isServerError(status) ? `${named}: ${serverErrorWords(String(status), "this is")}` : named;
   const image = `<img alt="Variant ${variant} at ${viewport}" src="data:image/png;base64,${Buffer.from(png).toString("base64")}">`;
   const video =
@@ -202,6 +210,11 @@ function variantFigure({ variant, viewport, status, png, webm }: VariantShot): s
 
 function capitalised(text: string): string {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+/** Text as HTML code. */
+function htmlCode(text: string): string {
+  return `<code>${escaped(text)}</code>`;
 }
 
 /** Text as HTML text or an attribute's value. */

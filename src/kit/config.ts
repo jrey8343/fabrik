@@ -91,6 +91,63 @@ export interface UiConfig {
   readonly beforeUrl: string | null;
   /** The routes captured when neither the Ticket nor the Implementer names any, each starting with `/`. */
   readonly defaultRoutes: readonly string[];
+  /**
+   * Each Capture identity (ADR-0012) and the command that signs it in to the
+   * Sandbox's own server, writing a Playwright storage state; never empty.
+   * Absent, capture signs nothing in, and the next two fields are absent too.
+   */
+  readonly signIn?: Readonly<Record<CaptureIdentity, string>>;
+  /** The route the app sends a signed-out visitor to; set whenever `signIn` is. */
+  readonly signInPath?: string;
+  /** Which Capture identity views each route, the first rule to match winning; set, and never empty, whenever `signIn` is. */
+  readonly signedInRoutes?: readonly SignedInRoute[];
+}
+
+/** A named kind of user that UI evidence views a route as: one of `ui.sign_in`'s keys. */
+export type CaptureIdentity = string;
+
+/** One of `ui.signed_in_routes`: the routes its pattern matches are viewed as `as`, or signed out when it's null. */
+export interface SignedInRoute {
+  /** A route pattern: `*` matches within one path segment, `**` across segments. */
+  readonly route: string;
+  readonly as: CaptureIdentity | null;
+}
+
+/** A Capture identity's name: letters, digits, `-` and `_`, starting with a letter or digit, so it reads plainly wherever it's named. */
+const CAPTURE_IDENTITY = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/** Whether a value is a Capture identity's name, as `ui.sign_in` keys it and the capture result records it. */
+export function isCaptureIdentity(value: unknown): value is CaptureIdentity {
+  return typeof value === "string" && CAPTURE_IDENTITY.test(value);
+}
+
+/**
+ * The Capture identity a route is viewed as, or null when it's viewed signed
+ * out: the `as` of the first of `ui.signed_in_routes` whose pattern matches
+ * the route's path, its query and fragment left out, and null when none
+ * matches or Kit config signs nothing in.
+ */
+export function captureIdentityOf(route: string, ui: UiConfig): CaptureIdentity | null {
+  const path = route.replace(/[?#].*$/s, "");
+  return ui.signedInRoutes?.find((rule) => routePattern(rule.route).test(path))?.as ?? null;
+}
+
+/**
+ * A route pattern as a regular expression over a whole path: `*` matches
+ * within one segment, `**` across any number of them, and a `/**` segment
+ * matches none too, so `/**` matches `/` and `/console/**` matches `/console`.
+ */
+function routePattern(pattern: string): RegExp {
+  const source = pattern
+    .split(/(\/\*\*(?=\/|$)|\*\*|\*)/)
+    .map((part) => {
+      if (part === "/**") return "(?:/.*)?";
+      if (part === "**") return ".*";
+      if (part === "*") return "[^/]*";
+      return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    })
+    .join("");
+  return new RegExp(`^${source}$`, "s");
 }
 
 /**
@@ -626,8 +683,88 @@ function readUi(ui: Reader | null | undefined): UiConfig | null {
   const url = ui.requiredString("url", checkHttpOrHttpsUrl);
   const beforeUrl = ui.nullableString("before_url", checkHttpOrHttpsUrl);
   const defaultRoutes = ui.stringList("default_routes", checkRoute);
-  if (paths === undefined || serve === undefined || url === undefined) return null;
-  return { paths, serve, url, beforeUrl: beforeUrl ?? null, defaultRoutes: defaultRoutes ?? [] };
+  const signedIn = readSignIn(ui, url);
+  if (paths === undefined || serve === undefined || url === undefined || signedIn === undefined) return null;
+  return { paths, serve, url, beforeUrl: beforeUrl ?? null, defaultRoutes: defaultRoutes ?? [], ...signedIn };
+}
+
+/** The `ui` block's sign-in fields, which only come together. */
+const SIGNED_IN_FIELDS = ["sign_in_path", "signed_in_routes"] as const;
+
+/**
+ * The `ui` block's sign-in fields (ADR-0012): none when it sets none, else
+ * all three, with `ui.url` a loopback address; undefined once it has named
+ * every problem.
+ */
+function readSignIn(ui: Reader, url: string | undefined): Pick<UiConfig, "signIn" | "signInPath" | "signedInRoutes"> | undefined {
+  const signIn = ui.nullableObject("sign_in");
+  if (signIn === undefined || signIn === null) {
+    const given = SIGNED_IN_FIELDS.filter((key) => ui.has(key));
+    ui.skip(...given);
+    // A sign_in that isn't an object has already been named, which is all the others need.
+    if (signIn === undefined && ui.has("sign_in")) return undefined;
+    for (const key of given) {
+      ui.refuse(`${ui.fieldName(key)} is set, but ${ui.fieldName("sign_in")} isn't: name a sign-in command for each Capture identity`);
+    }
+    return given.length === 0 ? {} : undefined;
+  }
+  const identities = signIn.keys();
+  const commands = signIn.stringMap(
+    "is not a Capture identity name: letters, digits, - and _, starting with a letter or digit",
+    isCaptureIdentity,
+    checkSignInCommand,
+  );
+  if (identities.length === 0) ui.refuse(`${ui.fieldName("sign_in")} is empty: name at least one Capture identity and the command that signs it in`);
+  const path = ui.has("sign_in_path")
+    ? ui.string("sign_in_path", checkRoute)
+    : ui.refuse(`${ui.fieldName("sign_in_path")} is missing: with ${ui.fieldName("sign_in")}, name the route the app sends a signed-out visitor to`);
+  const rules = readSignedInRoutes(ui, identities);
+  const loopback = url === undefined || isLoopback(url);
+  if (!loopback) {
+    ui.refuse(
+      `${ui.fieldName("url")} is ${JSON.stringify(url)}: a ui with sign_in serves on a loopback address, such as http://localhost:4321, so a sign-in only ever reaches the Sandbox's own server`,
+    );
+  }
+  if (commands === undefined || identities.length === 0 || path === undefined || rules === undefined || !loopback) return undefined;
+  return { signIn: commands, signInPath: path, signedInRoutes: rules };
+}
+
+/**
+ * `ui.signed_in_routes`: an ordered, non-empty list of rules, each `as` null
+ * or one of `identities`; undefined once its problems are named. With no
+ * identity to name, only `ui.sign_in` being empty is named.
+ */
+function readSignedInRoutes(ui: Reader, identities: readonly string[]): readonly SignedInRoute[] | undefined {
+  const field = ui.fieldName("signed_in_routes");
+  const which = `with ${ui.fieldName("sign_in")}, list which Capture identity views each route`;
+  if (!ui.has("signed_in_routes")) return ui.refuse(`${field} is missing: ${which}`);
+  const rules = ui.objectList("signed_in_routes", "a list of { route, as } rules");
+  if (rules === undefined) return undefined;
+  if (rules.length === 0) return ui.refuse(`${field} is empty: ${which}`);
+  const read = rules.map((rule): SignedInRoute | undefined => {
+    if (rule === null) return undefined;
+    const route = rule.requiredString("route", checkRoute);
+    if (!rule.has("as")) {
+      rule.skip("as");
+      return rule.refuse(`${rule.fieldName("as")} is missing: name a ${ui.fieldName("sign_in")} identity, or null for a public route`);
+    }
+    const as = rule.nullableString("as", (name) =>
+      identities.length === 0 || identities.includes(name) ? null : `it must be null or one of ${ui.fieldName("sign_in")}'s identities, ${spelled(identities)}`,
+    );
+    return route === undefined || as === undefined ? undefined : { route, as };
+  });
+  return read.every((rule) => rule !== undefined) ? read : undefined;
+}
+
+function checkSignInCommand(command: string): string | null {
+  return command.trim() === "" ? "a sign-in command can't be blank" : null;
+}
+
+/** Whether a URL's host is this machine's loopback: localhost, a name under .localhost, 127.0.0.1 or [::1]. */
+function isLoopback(url: string): boolean {
+  const host = URL.parse(url)?.hostname.toLowerCase();
+  if (host === undefined) return false;
+  return host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "[::1]";
 }
 
 function checkGlob(glob: string): string | null {
@@ -931,7 +1068,7 @@ class Reader {
     const map = this.object(key);
     if (!Object.hasOwn(this.#value, key)) return undefined;
     const result: Record<string, string> = {};
-    for (const name of map.#keys()) {
+    for (const name of map.keys()) {
       if (!ENV_NAME.test(name)) {
         map.#take(name);
         this.#fail(`${map.#field(name)} is not a valid environment variable name`);
@@ -948,9 +1085,71 @@ class Reader {
     return result;
   }
 
+  /**
+   * A list of objects, a Reader over each, or null in place of one that isn't
+   * an object, once it's named; `what` says what the list must be.
+   */
+  objectList(key: string, what: string): readonly (Reader | null)[] | undefined {
+    const value = this.#take(key);
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value)) {
+      this.#fail(`${this.#field(key)} must be ${what}`);
+      return undefined;
+    }
+    return value.map((item: unknown, i) => {
+      const at = `${this.#field(key)}[${i}]`;
+      if (typeof item === "object" && item !== null && !Array.isArray(item)) return new Reader(item, at, this.#context);
+      this.#fail(`${at} must be an object`);
+      return null;
+    });
+  }
+
+  /**
+   * This object as a map of names to strings, each name refused with `badName`
+   * unless `isName` takes it, each value refused when `check` returns a
+   * reason; undefined once any is refused.
+   */
+  stringMap(badName: string, isName: (name: string) => boolean, check: (value: string) => string | null): Readonly<Record<string, string>> | undefined {
+    const result: Record<string, string> = {};
+    let refused = false;
+    for (const name of this.keys()) {
+      if (!isName(name)) {
+        this.#take(name);
+        this.#fail(`${this.#field(name)} ${badName}`);
+        refused = true;
+        continue;
+      }
+      const value = this.string(name, check);
+      if (value === undefined) refused = true;
+      else result[name] = value;
+    }
+    return refused ? undefined : result;
+  }
+
   /** Whether this object gives `key` at all. */
   has(key: string): boolean {
     return Object.hasOwn(this.#value, key);
+  }
+
+  /** Marks these fields read without reading them, as when a problem elsewhere already says why they can't be used. */
+  skip(...keys: readonly string[]): void {
+    for (const key of keys) this.#take(key);
+  }
+
+  /** Names a problem the reads here don't, always giving undefined, for whoever reads on. */
+  refuse(message: string): undefined {
+    this.#fail(message);
+    return undefined;
+  }
+
+  /** A field's name as errors spell it. */
+  fieldName(key: string): string {
+    return this.#field(key);
+  }
+
+  /** The keys this object gives. */
+  keys(): readonly string[] {
+    return Object.keys(this.#value);
   }
 
   /** Reports every field in this object that no read asked for. */
@@ -958,10 +1157,6 @@ class Reader {
     for (const key of Object.keys(this.#value)) {
       if (!this.#read.has(key)) this.#fail(`${this.#field(key)} is not a Kit config field`);
     }
-  }
-
-  #keys(): readonly string[] {
-    return Object.keys(this.#value);
   }
 
   #take(key: string): unknown {

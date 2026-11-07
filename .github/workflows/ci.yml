@@ -34,6 +34,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # The Playwright capturer's test drives a real headless Chromium against a
+      # local fixture (src/evidence/playwrightCapturer.test.ts); in CI it runs,
+      # rather than skips, so it needs the browser.
+      - name: Install Chromium for the capture test
+        run: npx --no-install playwright-core install --with-deps chromium
+
       - name: Test
         run: npm test
 

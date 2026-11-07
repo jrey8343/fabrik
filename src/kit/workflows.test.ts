@@ -1243,7 +1243,7 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
   // Only the capture program imports Playwright, and it runs after prepare-agent's npm ci.
   it("runs capture after the Kit is installed, the only program that imports Playwright", () => {
     expect(stepAt("name: Capture UI evidence")).toBeGreaterThan(stepAt("uses: ./kit/.github/actions/prepare-agent"));
-    expect(packagesReachedBy("src/evidence/capture-main.ts")).toContain("src/evidence/capture-main.ts imports playwright-core");
+    expect(packagesReachedBy("src/evidence/capture-main.ts")).toContain("src/evidence/playwrightCapturer.ts imports playwright-core");
     expect(packagesReachedBy("src/evidence/capture.ts")).toEqual([]);
   });
 });

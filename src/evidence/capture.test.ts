@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { buildAndServeEnv, type CaptureInput, type CaptureOutcome, type Capturer, captureEvidence, captureStepFiles, captureStepOutputs, captureStepSummary, implementerRoutesIn, implementJobTimeoutMinutes, servedAt } from "./capture.ts";
+import { buildAndServeEnv, type CaptureInput, isOnSignInPath, isStorageState, type CaptureOutcome, type Capturer, captureEvidence, captureStepFiles, captureStepOutputs, captureStepSummary, implementerRoutesIn, implementJobTimeoutMinutes, servedAt } from "./capture.ts";
 import { type Capture, type CaptureFailure, type CaptureResult, parseCaptureResult } from "./uiEvidence.ts";
 
 const HEAD = "c".repeat(40);
@@ -62,6 +62,10 @@ function runner(overrides: Partial<Capturer> = {}) {
     recordVariant: async (take) => {
       calls.push(`record ${take.url} at ${take.viewport.name}`);
       return { status: 200, video: true };
+    },
+    signIn: async (identity, command) => {
+      calls.push(`sign-in ${identity}: ${command}`);
+      return "signed-in";
     },
     stop: async () => {
       calls.push("stop");
@@ -372,6 +376,217 @@ describe("Capturing UI evidence", () => {
 const book: Capture = { route: "/book", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-1-book.png" };
 const bookWide: Capture = { ...book, viewport: "desktop", image: "after-desktop-1-book.png" };
 const captured: CaptureResult<Capture> = { outcome: "captured", headSha: HEAD, captures: [book, bookWide] };
+
+describe("Capturing UI evidence behind a sign-in", () => {
+  /** A ui block like the Pilot's, signing in an owner and an operator against its own server. */
+  const signedIn: UiConfig = {
+    ...ui,
+    url: "http://localhost:4321",
+    signIn: { owner: "pnpm sign-in owner", operator: "pnpm sign-in operator" },
+    signInPath: "/sign-in",
+    signedInRoutes: [
+      { route: "/pricing", as: null },
+      { route: "/console/**", as: "operator" },
+      { route: "/**", as: "owner" },
+    ],
+  };
+
+  /** A Ticket naming these routes, each in backticks. */
+  function naming(...routes: string[]): CaptureInput {
+    return input({ ui: signedIn, ticketBody: `Touches ${routes.map((route) => `\`${route}\``).join(" and ")}.` });
+  }
+
+  /** A runner noting each screenshot with the Capture identity it's signed in as, or public. */
+  function noting(overrides: Partial<Capturer> = {}) {
+    const ran = runner(overrides);
+    const screenshot = overrides.screenshot ?? (async () => 200);
+    ran.capturer.screenshot = async (shot, timeoutMs) => {
+      ran.calls.push(`screenshot ${shot.url} at ${shot.viewport.name} as ${shot.signedIn?.identity ?? "public"}${shot.signedIn ? ` (sign-in at ${shot.signedIn.signInPath})` : ""}`);
+      return screenshot(shot, timeoutMs);
+    };
+    return ran;
+  }
+
+  it("captures exactly as before with no sign-in fields: no sign-in runs, and no capture names an identity", async () => {
+    const { capturer, calls } = runner();
+
+    const outcome = await captureEvidence(input(), capturer);
+
+    expect(calls.some((call) => call.startsWith("sign-in"))).toBe(false);
+    expect(outcome.kind === "recorded" && outcome.result.captures.every((capture) => !("identity" in capture))).toBe(true);
+  });
+
+  it("signs in each identity the chosen routes need once, after the server answers and before any shot, then shoots each signed-in route as it", async () => {
+    const { capturer, calls } = noting();
+
+    const outcome = await captureEvidence(naming("/today", "/clinics", "/console/users"), capturer);
+
+    expect(calls).toEqual([
+      `changed-paths ${HEAD}`,
+      "install-browser",
+      "build npm run build",
+      "free-port http://localhost:4321",
+      "serve node ./dist/server/entry.mjs at http://localhost:4321",
+      "sign-in owner: pnpm sign-in owner",
+      "sign-in operator: pnpm sign-in operator",
+      "screenshot http://localhost:4321/today at mobile as owner (sign-in at /sign-in)",
+      "screenshot http://localhost:4321/today at desktop as owner (sign-in at /sign-in)",
+      "screenshot http://localhost:4321/clinics at mobile as owner (sign-in at /sign-in)",
+      "screenshot http://localhost:4321/clinics at desktop as owner (sign-in at /sign-in)",
+      "screenshot http://localhost:4321/console/users at mobile as operator (sign-in at /sign-in)",
+      "screenshot http://localhost:4321/console/users at desktop as operator (sign-in at /sign-in)",
+      "stop",
+    ]);
+    expect(outcome).toEqual({
+      kind: "recorded",
+      result: {
+        outcome: "captured",
+        headSha: HEAD,
+        captures: [
+          { route: "/today", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-1-today.png", identity: "owner" },
+          { route: "/today", reason: "ticket", viewport: "desktop", side: "after", status: 200, image: "after-desktop-1-today.png", identity: "owner" },
+          { route: "/clinics", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-2-clinics.png", identity: "owner" },
+          { route: "/clinics", reason: "ticket", viewport: "desktop", side: "after", status: 200, image: "after-desktop-2-clinics.png", identity: "owner" },
+          { route: "/console/users", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-3-console-users.png", identity: "operator" },
+          { route: "/console/users", reason: "ticket", viewport: "desktop", side: "after", status: 200, image: "after-desktop-3-console-users.png", identity: "operator" },
+        ],
+      },
+    });
+  });
+
+  it("runs no sign-in for a capture of public routes alone, and takes their Before as usual", async () => {
+    const { capturer, calls } = noting();
+
+    const outcome = await captureEvidence(naming("/pricing"), capturer);
+
+    expect(calls.filter((call) => call.startsWith("sign-in"))).toEqual([]);
+    expect(calls.filter((call) => call.startsWith("screenshot"))).toEqual([
+      "screenshot http://localhost:4321/pricing at mobile as public",
+      "screenshot http://localhost:4321/pricing at desktop as public",
+      "screenshot https://www.penrithphysio.com.au/pricing at mobile as public",
+      "screenshot https://www.penrithphysio.com.au/pricing at desktop as public",
+    ]);
+    expect(outcome.kind === "recorded" && outcome.result.outcome).toBe("captured");
+  });
+
+  it("takes Before for public routes only, and Before is never signed in", async () => {
+    const { capturer, calls } = noting();
+
+    await captureEvidence(naming("/today", "/pricing"), capturer);
+
+    expect(calls.filter((call) => call.startsWith("screenshot https://www.penrithphysio.com.au"))).toEqual([
+      "screenshot https://www.penrithphysio.com.au/pricing at mobile as public",
+      "screenshot https://www.penrithphysio.com.au/pricing at desktop as public",
+    ]);
+  });
+
+  it("never runs an operator sign-in, failed or not, for a capture whose routes are all the owner's", async () => {
+    const signedInAs: string[] = [];
+    const { capturer } = noting({
+      signIn: async (identity) => {
+        signedInAs.push(identity);
+        return identity === "operator" ? "failed" : "signed-in";
+      },
+    });
+
+    const outcome = await captureEvidence(naming("/today"), capturer);
+
+    expect(signedInAs).toEqual(["owner"]);
+    expect(outcome.kind === "recorded" && outcome.result.outcome).toBe("captured");
+  });
+
+  it.each(["failed", "timed-out", "no-state", "bad-state"] as const)(
+    "records sign-in-failed with no screenshots when a sign-in ends %s, and says why in the log",
+    async (ended) => {
+      const { capturer, calls, logs } = noting({ signIn: async () => ended });
+
+      expect(await captureEvidence(naming("/today"), capturer)).toEqual(failed("sign-in-failed"));
+      expect(calls.some((call) => call.startsWith("screenshot"))).toBe(false);
+      expect(calls.at(-1)).toBe("stop");
+      expect(logs.join("\n")).toContain("signing in as owner");
+    },
+  );
+
+  it("gives each sign-in three minutes, within capture's budget", async () => {
+    const given: number[] = [];
+    const { capturer } = noting({
+      signIn: async (_identity, _command, timeoutMs) => {
+        given.push(timeoutMs);
+        return "signed-in";
+      },
+    });
+
+    await captureEvidence(naming("/today"), capturer);
+
+    expect(given).toEqual([180_000]);
+  });
+
+  it("records timeout, not sign-in-failed, when capture's own time runs out while it signs in", async () => {
+    let clock = 0;
+    const { capturer } = noting({
+      now: () => clock,
+      serve: async () => {
+        clock = 17 * 60_000;
+        return "answered";
+      },
+      signIn: async (_identity, _command, timeoutMs) => {
+        clock += timeoutMs;
+        return "timed-out";
+      },
+    });
+
+    expect(await captureEvidence(naming("/today"), capturer)).toEqual(failed("timeout"));
+  });
+
+  it("records sign-in-failed when a signed-in shot lands on ui.sign_in_path, keeping the shots before it and none of its own", async () => {
+    const { capturer, calls } = noting({ screenshot: async (shot) => (shot.route === "/clinics" ? "on-sign-in" : 200) });
+
+    expect(await captureEvidence(naming("/today", "/clinics", "/console"), capturer)).toEqual(
+      failed("sign-in-failed", [
+        { route: "/today", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-1-today.png", identity: "owner" },
+        { route: "/today", reason: "ticket", viewport: "desktop", side: "after", status: 200, image: "after-desktop-1-today.png", identity: "owner" },
+      ]),
+    );
+    expect(calls.filter((call) => call.startsWith("screenshot")).at(-1)).toBe("screenshot http://localhost:4321/clinics at mobile as owner (sign-in at /sign-in)");
+  });
+
+  it("never asks a public shot whether it landed on ui.sign_in_path, so a public route showing the sign-in page fails nothing", async () => {
+    // The shell checks the landing only of a shot that names its sign-in path.
+    const { capturer } = noting({ screenshot: async (shot) => (shot.signedIn === undefined ? 200 : "on-sign-in") });
+    const publicSignIn: UiConfig = { ...signedIn, signedInRoutes: [{ route: "/sign-in", as: null }, ...(signedIn.signedInRoutes ?? [])] };
+
+    const outcome = await captureEvidence(input({ ui: publicSignIn, ticketBody: "Restyle `/sign-in` and `/pricing`." }), capturer);
+
+    expect(outcome.kind === "recorded" && outcome.result.outcome).toBe("captured");
+    expect(outcome.kind === "recorded" && outcome.result.captures).toHaveLength(8);
+  });
+});
+
+describe("What a sign-in leaves, as the Playwright shell checks it", () => {
+  it.each([
+    [{ cookies: [], origins: [] }, true],
+    [{ cookies: [{ name: "session", value: "s", domain: "localhost", path: "/" }], origins: [{ origin: "http://localhost:4321", localStorage: [] }] }, true],
+    [{ cookies: [] }, false],
+    [{ origins: [] }, false],
+    [{ cookies: {}, origins: [] }, false],
+    [[], false],
+    [null, false],
+    ["{}", false],
+  ])("reads %j as a storage state: %s", (value, ok) => {
+    expect(isStorageState(value)).toBe(ok);
+  });
+
+  it.each([
+    ["http://localhost:4321/sign-in", "/sign-in", true],
+    ["http://localhost:4321/sign-in?next=%2Ftoday", "/sign-in", true],
+    ["http://localhost:4321/sign-in/", "/sign-in", true],
+    ["http://localhost:4321/today", "/sign-in", false],
+    ["http://localhost:4321/sign-in-help", "/sign-in", false],
+    ["http://localhost:4321/", "/", true],
+  ])("reads landing on %s as landing on ui.sign_in_path %s: %s", (url, path, landed) => {
+    expect(isOnSignInPath(url, path)).toBe(landed);
+  });
+});
 
 describe("What the capture step leaves", () => {
   it("passes the capture result out as one compact JSON line, which reads back as it was", () => {

@@ -9,7 +9,7 @@
 // evidence section ever shows it. The galleries, the PR's and the prototype's,
 // are beside it (src/evidence/gallery.ts). Pure, no I/O.
 import { posix } from "node:path";
-import { isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+import { type CaptureIdentity, isCaptureIdentity, isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { PROTOTYPE_VARIANT_CAP, variantLetter } from "../loop/designOutput.ts";
 import { linesOutsideCode } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
@@ -91,11 +91,11 @@ export type CaptureSide = (typeof CAPTURE_SIDES)[number];
 /**
  * Why capture failed: `sandbox.build` failed, the server never answered at
  * `ui.url`, capture ran out of time, there was no route to capture, a
- * prototype turn's capture had no variant to capture, or anything else it
- * caught. The push job records the last, `no-result`, itself: a UI pull
+ * prototype turn's capture had no variant to capture, a Capture identity's
+ * sign-in failed (ADR-0012), or anything else it caught. The push job records the last, `no-result`, itself: a UI pull
  * request whose Implement job passed it no capture result it could read.
  */
-export const CAPTURE_FAILURES = ["build-failed", "server-did-not-start", "timeout", "no-routes", "no-variants", "error", "no-result"] as const;
+export const CAPTURE_FAILURES = ["build-failed", "server-did-not-start", "timeout", "no-routes", "no-variants", "sign-in-failed", "error", "no-result"] as const;
 
 export type CaptureFailure = (typeof CAPTURE_FAILURES)[number];
 
@@ -109,6 +109,11 @@ export interface Capture {
   readonly status: number;
   /** The image's file name: a plain name, in the same folder as the capture result. */
   readonly image: string;
+  /**
+   * The Capture identity the page was viewed as (ADR-0012), or absent when it
+   * was viewed signed out, as every capture written before sign-ins was.
+   */
+  readonly identity?: CaptureIdentity;
 }
 
 /** The letters a Prototype's variants go by, in order, one for each up to PROTOTYPE_VARIANT_CAP: A is the first (variantLetter). */
@@ -213,7 +218,7 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | Va
     errors.push(`${at} must be an object`);
     return null;
   }
-  const { route, reason, viewport, side, variant, status, image, video } = value;
+  const { route, reason, viewport, side, variant, status, image, video, identity } = value;
   const ofVariant = variant !== undefined;
   const before = errors.length;
   // As the Implementer output reads a route, so a route it named never makes its capture unreadable.
@@ -234,9 +239,13 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | Va
   if (ofVariant && video !== undefined && !isFileName(video)) {
     errors.push(`${at}.video must be a plain file name, such as variant-a-mobile.webm, with no / or ..`);
   }
+  if (identity !== undefined && !isCaptureIdentity(identity)) {
+    errors.push(`${at}.identity must be a Capture identity's name, such as owner: letters, digits, - and _`);
+  }
   // Whether it's a side's or a variant's decides how every reader shows it.
   if (ofVariant && side !== undefined) errors.push(`${at} must have a side or a variant, not both`);
   if (errors.length > before) return null;
+  const signedIn = identity === undefined ? {} : { identity: identity as CaptureIdentity };
   if (ofVariant) {
     return {
       route: route as string,
@@ -245,6 +254,7 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | Va
       status: status as number,
       image: image as string,
       ...(video === undefined ? {} : { video: video as string }),
+      ...signedIn,
     };
   }
   return {
@@ -254,6 +264,7 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | Va
     side: side as CaptureSide,
     status: status as number,
     image: image as string,
+    ...signedIn,
   };
 }
 
@@ -387,6 +398,7 @@ export function reviewerEvidenceBlock({ result, given, head, recorded }: Reviewe
       opening,
       ...stale,
       "After is this branch, served in the Implement run's Sandbox; Before, where there is one, is the production site.",
+      ...(given.some(({ identity }) => identity !== undefined) ? [NO_SIGNED_IN_BEFORE] : []),
       "Each shows one screen of the page from its top, not the whole page, so content below its bottom edge is out of view rather than cut off.",
       `${where} in \`${REVIEWER_IMAGES_DIR}/\` in your working directory: open each with your Read tool to see it.${of}`,
     ].join(" "),
@@ -401,6 +413,9 @@ export function reviewerEvidenceBlock({ result, given, head, recorded }: Reviewe
   ];
 }
 
+/** What the Reviewer's block says of a signed-in screenshot's Before, when it's given one. */
+const NO_SIGNED_IN_BEFORE = "A screenshot signed in as a Capture identity, a fake user of the Sandbox's own server, has no Before, since Before is never signed in.";
+
 /** Why the Reviewer has no screenshots when there's no capture result to read, and nothing says why capture failed. */
 const UNREAD = "capture left no result this Review could read: the Implement run kept none, or they have expired";
 
@@ -410,11 +425,20 @@ function reviewerFailureWords(reason: CaptureFailure): string {
 }
 
 /** One screenshot the Reviewer is given: its file, then its route (agent text, so as code on one line), viewport and side. */
-function reviewerImageLine({ image, route, viewport, side, status }: Capture): string {
+function reviewerImageLine({ image, route, viewport, side, status, identity }: Capture): string {
   const size = UI_VIEWPORTS.find(({ name }) => name === viewport);
   const width = size === undefined ? "" : ` (${size.width}×${size.height})`;
   const error = isServerError(status) ? `. It ${serverErrorWords(String(status), "it shows")}` : "";
-  return `- \`${REVIEWER_IMAGES_DIR}/${image}\`: ${code(route)} at ${viewport} width${width}, ${SIDE_WORDS[side]}${error}`;
+  return `- \`${REVIEWER_IMAGES_DIR}/${image}\`: ${code(route)} at ${viewport} width${width}, ${SIDE_WORDS[side]}${signedInWords(identity, code)}${error}`;
+}
+
+/**
+ * How the evidence section, the galleries and the Reviewer's block name the
+ * Capture identity a page was viewed as, each in its own markup: nothing for
+ * a page viewed signed out.
+ */
+export function signedInWords(identity: CaptureIdentity | undefined, markup: (name: string) => string): string {
+  return identity === undefined ? "" : `, signed in as ${markup(identity)}`;
 }
 
 /** How the evidence section names why each route was captured. */
@@ -499,6 +523,8 @@ export function failureWords(job: string): Readonly<Record<CaptureFailure, strin
     timeout: "it ran out of time",
     "no-routes": "there was no route to capture: neither the Ticket nor the Implementer named one, and Kit config sets no `ui.default_routes`",
     "no-variants": "there was no variant to capture: the prototype turn's output named none",
+    "sign-in-failed":
+      "signing in failed: a `ui.sign_in` command failed, ran out of time or left no session it could read, or a signed-in page landed on `ui.sign_in_path`, which its log names",
     error: `it hit an error the Kit didn't expect, which ${job}'s log shows`,
     "no-result": "it left no result the push job could read",
   };
@@ -520,8 +546,10 @@ export function screenshots(count: number): string {
 
 /** A captured route, why it was chosen, and every screenshot of it that shows a server's error page rather than the design. */
 function routeLine({ route, reason }: ChosenRoute, captures: readonly Capture[]): string {
+  // Kit config's rules view a route as one identity, so its first capture names it for all.
+  const identity = captures.find((capture) => capture.route === route)?.identity;
   // Its route may be the Implementer's: agent text, which never mentions anyone.
-  const line = `- ${code(withoutMentions(route))}, ${ROUTE_REASON_WORDS[reason]}`;
+  const line = `- ${code(withoutMentions(route))}, ${ROUTE_REASON_WORDS[reason]}${signedInWords(identity, code)}`;
   const errors = captures.filter((capture) => capture.route === route && isServerError(capture.status));
   if (errors.length === 0) return line;
   const answered = errors.map(({ status, side, viewport }) => `${status} for ${SIDE_WORDS[side]} at ${viewport}`);
