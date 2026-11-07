@@ -3,7 +3,7 @@
 // world that keeps what each run did, and the wizard is a stand-in that
 // stores what the Operator would.
 import { execFileSync } from "node:child_process";
-import { realpath, writeFile } from "node:fs/promises";
+import { readFile, realpath, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { aReadyOperator, fakeCommands } from "../__fixtures__/setupCommands.ts";
@@ -12,6 +12,7 @@ import { tempDir } from "../__fixtures__/skillsArchive.ts";
 import { type Env, type Run, spawnRun } from "./exec.ts";
 import { runSetup } from "./program.ts";
 import type { Prompt } from "./prompt.ts";
+import { WIZARD_SECOND_SUBSCRIPTION_ENV } from "./wizard.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 const BRANCH = "fabrik/setup-v1.4.2";
@@ -48,6 +49,12 @@ const walksEveryStage: Wizard = async (world, wizardEnv) => {
   await writeFile(wizardEnv["FABRIK_WIZARD_REPORT"]!, "app-installed acme/clinic\n");
   store(world, "Fabrik App", "Fabrik App");
   store(world, "Fabrik", "Claude token");
+};
+
+/** The Operator walks every stage, and stores a second Subscription's token in its stage. */
+const addsASecondSubscription: Wizard = async (world, wizardEnv) => {
+  await walksEveryStage(world, wizardEnv);
+  store(world, "Fabrik", "Claude token 2");
 };
 
 /** The Operator stops at the Claude token stage. */
@@ -154,6 +161,8 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(wizardRuns).toHaveLength(1);
     expect(wizardRuns[0]?.env["OP_ACCOUNT"]).toBe("my.1password.com");
     expect(await realpath(wizardRuns[0]!.cwd)).toBe(await realpath(checkout));
+    // With no second Subscription asked for, so the wizard's stage says setup doesn't list one.
+    expect(wizardRuns[0]?.env[WIZARD_SECOND_SUBSCRIPTION_ENV]).toBe("no");
   });
 
   it("asks for the merge once the App is installed, its key stored and the Claude token stored", async () => {
@@ -175,6 +184,37 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(said).toContain("Don't merge it yet. The Kit's first runs need these, which the wizard didn't finish:");
     expect(said).toContain('- the Claude token, in the "Fabrik" vault');
     expect(world.prs[0]?.body).toContain("Don't merge this yet.");
+  });
+
+  it("with a second Subscription, the setup PR lists it in the Kit config once the wizard's stage has stored its token", async () => {
+    const world = aWorld();
+    const starter = await readFile(join(KIT_DIR, "templates", "fabrik-config.json"), "utf8");
+
+    const { code, said, wizardRuns } = await setupOnce(world, { wizard: addsASecondSubscription, args: ["--no-time-zone", "--second-subscription", "--no-paused"] });
+
+    expect(code).toBe(0);
+    // So the wizard's stage says setup lists it, rather than asking for a hand edit.
+    expect(wizardRuns[0]?.env[WIZARD_SECOND_SUBSCRIPTION_ENV]).toBe("yes");
+    expect(originGit("show", `${BRANCH}:.fabrik/config.json`)).toBe(
+      starter.replace('  "subscriptions": ["Claude token"],\n', '  "subscriptions": ["Claude token", "Claude token 2"],\n'),
+    );
+    expect(git("status", "--porcelain")).toBe("");
+    const body = world.prs[0]?.body ?? "";
+    expect(body).toContain('- write .fabrik/config.json (list the second Subscription, "Claude token 2", in subscriptions)');
+    expect(body).not.toContain("A second Subscription");
+    // The plan, before the wizard, says this run lists it.
+    expect(said.some((line) => line.endsWith("Setup then lists it in subscriptions in .fabrik/config.json, in the setup PR."))).toBe(true);
+    expect(said.join("\n")).not.toContain("run setup again, and it lists it");
+  });
+
+  it("with a second Subscription whose stage the Operator skipped, lists nothing and says to walk it and run setup again", async () => {
+    const world = aWorld();
+
+    const { code } = await setupOnce(world, { args: ["--no-time-zone", "--second-subscription", "--no-paused"] });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(originGit("show", `${BRANCH}:.fabrik/config.json`)).subscriptions).toEqual(["Claude token"]);
+    expect(world.prs[0]?.body).toMatch(/Walk the wizard's "A second Subscription" stage: .* Then run setup again, and it lists it in subscriptions in \.fabrik\/config\.json\./);
   });
 
   it("a second run after the wizard stopped partway reuses the branch and PR, applies nothing again, and then asks for the merge", async () => {
