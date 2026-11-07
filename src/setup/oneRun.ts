@@ -5,7 +5,7 @@
 // nothing the default branch lacks, there's no PR: the run goes back to the
 // default branch. Each step is injected, so this module does no git, gh, op or
 // terminal work itself.
-import { describeAction } from "./apply.ts";
+import { describeAction, writtenPaths } from "./apply.ts";
 import { appConfirmedIn } from "./finish.ts";
 import { FABRIK_APP_VAULT, FABRIK_VAULT, type SetupAction, type SetupPlan } from "./plan.ts";
 import { appInstalledIn } from "./wizard.ts";
@@ -81,8 +81,8 @@ export interface OneRunSteps {
    * as the `subscriptions` line once a second Subscription's token is stored.
    */
   afterWizard(): Promise<{ readonly plan: SetupPlan; readonly readiness: Readiness }>;
-  /** Commits whatever setup wrote on the setup branch, returning whether there was anything to commit. */
-  commit(): Promise<boolean>;
+  /** Commits these files, the ones setup wrote on the setup branch, returning whether there was anything to commit. */
+  commit(paths: readonly string[]): Promise<boolean>;
   /** Whether the setup branch holds anything for the setup PR: commits origin's default branch lacks, or a setup PR open from it. */
   somethingToPublish(): Promise<boolean>;
   /** Switches back to the default branch and deletes the setup branch, which holds nothing the default branch lacks. */
@@ -126,8 +126,10 @@ export async function runOnce({ plan, repo, earlierDone = [] }: OneRun, steps: O
   }
 
   const done = [...new Set([...earlierDone, ...[...plan.actions, ...files].map(describeAction)])];
+  // Only what this run or the earlier ones wrote: a file of setup's the Operator edited by hand isn't the setup PR's.
+  const committed = await steps.commit(writtenPaths(done));
   // GitHub opens no PR that holds no commits, as after a repair of only labels, secrets or protection.
-  if (!(await steps.commit()) && !(await steps.somethingToPublish())) {
+  if (!committed && !(await steps.somethingToPublish())) {
     await steps.leaveSetupBranch();
     return { kind: "applied", summary: { done, notes, blockers: [] } };
   }

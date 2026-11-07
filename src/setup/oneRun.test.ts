@@ -86,6 +86,19 @@ describe("One setup run", () => {
     expect(result.kind === "done" && result.summary.done).toEqual([...earlierDone, "create the label needs-triage"]);
   });
 
+  it("commits the files this run and an earlier one on the setup branch wrote, and no others", async () => {
+    const { steps } = fakeSteps({ after: plan([SUBSCRIPTIONS]) });
+    const committed: (readonly string[])[] = [];
+    const earlierDone = ["write AGENTS.md (point the skills at docs/agents/*)", "create the label needs-info"];
+
+    await runOnce(
+      { plan: plan([WORKFLOW, LABEL]), repo: "acme/clinic", earlierDone },
+      { ...steps, commit: async (paths) => (committed.push(paths), true) },
+    );
+
+    expect(committed).toEqual([["AGENTS.md", ".github/workflows/fabrik.yml", ".fabrik/config.json"]]);
+  });
+
   it("leaves anything else the plan finds after the wizard for the next run, and says so", async () => {
     const { steps, log } = fakeSteps({ after: plan([LABEL], ["a note from after the wizard"]) });
 

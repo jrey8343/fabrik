@@ -10,7 +10,7 @@ import { foundOldSetupSkill, oldSetupSkillIn, personalSkillsDir, staleOldSetupSk
 import type { Env, Run } from "./exec.ts";
 import type { ProductState } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
-import { mergedSetupHeads, setupBranch, uncommittedPaths } from "./setupBranch.ts";
+import { mergedSetupTip, setupBranch, uncommittedPaths } from "./setupBranch.ts";
 
 export interface CheckInputs {
   readonly run: Run;
@@ -20,8 +20,12 @@ export interface CheckInputs {
   readonly env: Env;
   /** This Node's version, such as 24.11.0. */
   readonly nodeVersion: string;
-  /** Every file setup may write, which its own branch may hold uncommitted after a run that stopped partway. */
-  readonly setupWrites: readonly string[];
+  /**
+   * The files earlier runs of setup wrote on its own branch since their last
+   * setup PR, which a run that stopped partway leaves uncommitted there. Read
+   * only on that branch.
+   */
+  readonly earlierWrites: () => Promise<readonly string[]>;
 }
 
 export type Checked =
@@ -49,7 +53,7 @@ export async function checkSetup(inputs: CheckInputs): Promise<Checked> {
   const signedIn = await checkGitHub(inputs);
   if (!signedIn.ok) return signedIn;
   const branch = (await inputs.run("git", ["branch", "--show-current"], { cwd: inputs.productDir })).stdout.trim();
-  const onBranch = await checkBranch(inputs, signedIn.repo.defaultBranch, branch);
+  const onBranch = await checkBranch(inputs, signedIn.repo, branch);
   if (typeof onBranch === "string") return { ok: false, problem: onBranch };
   return { ok: true, repo: signedIn.repo, branch, origin: onBranch };
 }
@@ -151,16 +155,17 @@ function repoOf(view: RepoView): ProductState["repo"] {
 /**
  * The clone is on its default branch, clean and the same as on origin. Or it's
  * on setup's own branch for this release, built on origin's default branch,
- * with nothing uncommitted but setup's own files. "The same as on origin" is
- * read with git ls-remote, so the checks fetch nothing and write no refs.
- * Returns what's wrong, or the tips origin has.
+ * with nothing uncommitted but the files earlier runs of setup wrote there.
+ * "The same as on origin" is read with git ls-remote, so the checks fetch
+ * nothing and write no refs. Returns what's wrong, or the tips origin has.
  */
 async function checkBranch(
-  { run, productDir, release, setupWrites }: CheckInputs,
-  defaultBranch: string,
+  { run, productDir, release, earlierWrites }: CheckInputs,
+  repo: ProductState["repo"],
   current: string,
 ): Promise<string | OriginTips> {
   const cwd = productDir;
+  const { defaultBranch } = repo;
   const ownBranch = setupBranch(release);
   if (current !== defaultBranch && current !== ownBranch) {
     const where = current === "" ? "This clone isn't on a branch" : `This clone is on ${current}, not ${defaultBranch}`;
@@ -171,9 +176,12 @@ async function checkBranch(
   if (current === defaultBranch && changed.length > 0) {
     return `This clone has uncommitted changes (${changed.join(", ")}). Commit or stash them, then run setup again.`;
   }
-  const others = changed.filter((path) => !setupWrites.includes(path));
-  if (current === ownBranch && others.length > 0) {
-    return `${ownBranch} has uncommitted changes setup didn't make (${others.join(", ")}). Commit or stash them, then run setup again.`;
+  if (current === ownBranch && changed.length > 0) {
+    const written = await earlierWrites();
+    const others = changed.filter((path) => !written.includes(path));
+    if (others.length > 0) {
+      return `${ownBranch} has uncommitted changes setup didn't make (${others.join(", ")}). Commit or stash them, then run setup again.`;
+    }
   }
 
   const refs = [`refs/heads/${defaultBranch}`, `refs/heads/${ownBranch}`] as const;
@@ -200,7 +208,7 @@ async function checkBranch(
   if (!(await holds(originDefault))) {
     // A squash or rebase merge leaves the branch's own commits off the default branch, and pulling it in would only open a PR again.
     const head = (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
-    if ((await mergedSetupHeads(run, cwd, ownBranch)).includes(head)) {
+    if (await mergedSetupTip(run, cwd, `${repo.owner}/${repo.name}`, ownBranch)(head)) {
       return `${ownBranch}'s setup PR is merged. Switch to ${defaultBranch} with git switch ${defaultBranch} && git pull, then run setup again.`;
     }
     return `${ownBranch} doesn't hold origin's latest ${defaultBranch} (${short(originDefault)}). Merge it in with git pull origin ${defaultBranch}, then run setup again.`;

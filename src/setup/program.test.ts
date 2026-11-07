@@ -97,6 +97,7 @@ const READ_ONLY = [
   /^git --no-optional-locks status /,
   /^git ls-remote /,
   /^git merge-base --is-ancestor /,
+  /^git cat-file -e /,
   /^gh api (?!--method)/,
   /^gh repo view /,
   /^gh (label|secret|issue) list /,

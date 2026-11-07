@@ -16,7 +16,7 @@ import {
 } from "../__fixtures__/setupCommands.ts";
 import { checkSetup } from "./checks.ts";
 
-const SETUP_WRITES = [".github/workflows/fabrik.yml", ".fabrik/config.json", "docs/agents/domain.md", "AGENTS.md"];
+const EARLIER_WRITES = [".github/workflows/fabrik.yml", ".fabrik/config.json", "docs/agents/domain.md", "AGENTS.md"];
 
 let productDir: string;
 
@@ -32,7 +32,7 @@ function check(overrides: Record<string, Answer> = {}, options: { env?: Record<s
     release: "v1.4.2",
     env: options.env ?? {},
     nodeVersion: options.nodeVersion ?? "24.11.0",
-    setupWrites: SETUP_WRITES,
+    earlierWrites: async () => EARLIER_WRITES,
   });
   return { result, commands };
 }
@@ -167,7 +167,7 @@ describe("The checks before setup plans anything", () => {
       expect((await check(onSetupBranch).result).ok).toBe(true);
     });
 
-    it("pass with setup's own files uncommitted, as a run that stopped partway leaves them", async () => {
+    it("pass with the files an earlier run wrote uncommitted, as a run that stopped partway leaves them", async () => {
       const status = { stdout: "?? .github/workflows/fabrik.yml\0?? docs/agents/domain.md\0 M AGENTS.md\0" };
 
       expect((await check({ ...onSetupBranch, [STATUS]: status }).result).ok).toBe(true);
@@ -187,6 +187,20 @@ describe("The checks before setup plans anything", () => {
       expect(await problem({ ...onSetupBranch, ...unmerged, [lsRemote("v1.4.2")]: { stdout: `${OTHER_SHA}\trefs/heads/main\n` } })).toBe(
         "fabrik/setup-v1.4.2 doesn't hold origin's latest main (9f86d08). Merge it in with git pull origin main, then run setup again.",
       );
+    });
+
+    it("stop, saying to go back to the default branch, when a merged setup PR's head holds it, as after GitHub moved the head on and the PR was squash-merged", async () => {
+      const movedHead = "c0ffee5ddb22b046e26455e4f9c9b3aaaf62212d";
+      const merged = { stdout: JSON.stringify([{ headRefOid: movedHead, isCrossRepository: false }]) };
+
+      expect(
+        await problem({
+          ...onSetupBranch,
+          [lsRemote("v1.4.2")]: { stdout: `${OTHER_SHA}\trefs/heads/main\n` },
+          "gh pr list --head fabrik/setup-v1.4.2 --state merged": merged,
+          [`gh api repos/acme/clinic/compare/${HEAD_SHA}...${movedHead}`]: { stdout: "ahead\n" },
+        }),
+      ).toBe("fabrik/setup-v1.4.2's setup PR is merged. Switch to main with git switch main && git pull, then run setup again.");
     });
 
     it("stop when origin's copy of it has commits this clone lacks", async () => {

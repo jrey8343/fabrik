@@ -178,10 +178,10 @@ set_var() {
   warn "skipped GitHub variable $name, gh not ready; set it later"
 }
 
-# finish ["heading"] clears, then shows a closing summary of everything configured.
+# finish clears, then shows a closing summary of everything configured.
 finish() {
   _clear
-  printf '\n%s%s  ✓ %s%s\n' "$BOLD" "$GREEN" "${1:-Setup complete}" "$RESET"
+  printf '\n%s%s  ✓ Setup complete%s\n' "$BOLD" "$GREEN" "$RESET"
   (( ${#WRITTEN_ENV[@]} ))    && note "wrote ${#WRITTEN_ENV[@]} value(s) to $ENV_FILE: ${WRITTEN_ENV[*]}"
   (( ${#WRITTEN_SECRET[@]} )) && note "set ${#WRITTEN_SECRET[@]} GitHub secret(s): ${WRITTEN_SECRET[*]}"
   if (( ${#SKIPPED[@]} )); then
@@ -212,6 +212,19 @@ finish() {
 # that Setup can't read for itself. Setup names the file in FABRIK_WIZARD_REPORT.
 report() {
   [[ -z "${FABRIK_WIZARD_REPORT:-}" ]] || printf '%s\n' "$1" >> "$FABRIK_WIZARD_REPORT"
+}
+
+# wizard_done ends the wizard as finish does when Setup runs it, but saying the
+# wizard is done, not Setup: Setup goes on to commit, push and open the setup
+# PR. The stages leave only SKIPPED to show.
+wizard_done() {
+  _clear
+  printf '\n%s%s  ✓ The wizard is done%s\n' "$BOLD" "$GREEN" "$RESET"
+  if (( ${#SKIPPED[@]} )); then
+    printf '\n'; warn "still to do by hand:"
+    for s in "${SKIPPED[@]}"; do note "  - $s"; done
+  fi
+  printf '\n'
 }
 
 # operator_app_slugs prints, one per line, the slug of each App owned by the
@@ -587,7 +600,7 @@ fi
 
 # Run by Setup, the wizard is one of its steps, and Setup isn't done yet.
 if [[ -n "${FABRIK_WIZARD_REPORT:-}" ]]; then
-  finish "The wizard is done"
+  wizard_done
   say "Next: Setup commits what it wrote, pushes it and opens the setup PR."
 else
   finish

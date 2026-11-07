@@ -924,4 +924,42 @@ describe("Installing with Dispatch paused", () => {
       "1 open issue is labelled ready-for-agent: Dispatch starts releasing it to an Implementer as soon as the setup PR merges. Run setup with --paused to hold it back.",
     );
   });
+
+  describe("with a Kit config only on the setup branch, the starter setup wrote there", () => {
+    const wroteStarter = { wroteStarter: true };
+    const withStarter = (starter: string) => aCleanProduct({ readyForAgent: 4, files: { ".fabrik/config.json": starter } });
+    const pausedNote = (plan: { notes: readonly string[] }) => plan.notes.filter((n) => n.startsWith("--paused"));
+    const readyForAgentNotes = (plan: { notes: readonly string[] }) => plan.notes.filter((n) => n.includes("ready-for-agent"));
+
+    it("with --paused and a paused starter, says nothing about --paused", () => {
+      const plan = planSetup(withStarter(pausedText(kit.templates.kitConfig)), kit, paused, wroteStarter);
+
+      expect(pausedNote(plan)).toEqual([]);
+      expect(readyForAgentNotes(plan)).toEqual([]);
+    });
+
+    it("unpaused, warns that the ready-for-agent issues start as soon as the setup PR merges", () => {
+      const plan = planSetup(withStarter(kit.templates.kitConfig), kit, {}, wroteStarter);
+
+      expect(readyForAgentNotes(plan)).toEqual([
+        "4 open issues are labelled ready-for-agent: Dispatch starts releasing them to Implementers as soon as the setup PR merges. Run setup with --paused to hold them back.",
+      ]);
+    });
+
+    it("with --paused and a starter an earlier run wrote unpaused, says --paused had no effect and how to pause it by hand", () => {
+      const plan = planSetup(withStarter(kit.templates.kitConfig), kit, paused, wroteStarter);
+
+      expect(pausedNote(plan)).toEqual([
+        "--paused had no effect: .fabrik/config.json already exists, with max_in_flight 2. Set it to 0 by hand to pause Dispatch.",
+      ]);
+      expect(readyForAgentNotes(plan)).toEqual([]);
+    });
+
+    it("unpaused, with a starter an earlier run wrote paused, gives no warning, since Dispatch is paused", () => {
+      const plan = planSetup(withStarter(pausedText(kit.templates.kitConfig)), kit, {}, wroteStarter);
+
+      expect(readyForAgentNotes(plan)).toEqual([]);
+      expect(pausedNote(plan)).toEqual([]);
+    });
+  });
 });

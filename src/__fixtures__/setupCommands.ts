@@ -95,6 +95,8 @@ export function aReadyOperator(productDir: string, release = "v1.4.2"): Record<s
     [lsRemote(release)]: { stdout: `${HEAD_SHA}\trefs/heads/main\n` },
     "git merge-base --is-ancestor": { code: 1 },
     [`git merge-base --is-ancestor ${HEAD_SHA} HEAD`]: { code: 0 },
+    // The default branch holds no Kit config.
+    "git cat-file -e": { code: 128, stderr: "fatal: path '.fabrik/config.json' does not exist" },
     "op account list --format json": { stdout: JSON.stringify([PERSONAL]) },
     "op vault list --format json": { stdout: "[]" },
     // What setup gathers about the repo and the fabrik-runs store.

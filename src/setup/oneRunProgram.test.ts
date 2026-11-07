@@ -91,7 +91,7 @@ async function setupOnce(world: World, { answers = ["y"], wizard = walksEverySta
   const said: string[] = [];
   const complaints: string[] = [];
   const wizardRuns: { cwd: string; env: Env }[] = [];
-  const commands = fakeCommands({ ...aReadyOperator(checkout), ...worldScript(world, { commitsAhead }) });
+  const commands = fakeCommands({ ...aReadyOperator(checkout), ...worldScript(world, { commitsAhead, compare }) });
   const run: Run = async (command, commandArgs, options) => {
     log.push([command, ...commandArgs].join(" "));
     return command === "git" ? spawnRun(command, commandArgs, options) : commands.run(command, commandArgs, options);
@@ -141,6 +141,25 @@ function squashTheSetupPr(world: World): void {
   git("commit", "-q", "-m", "Set up Fabrik v1.4.2 (#1)");
   git("push", "-q", "origin", "main");
   Object.assign(world.prs[0]!, { open: false, merged: true, headRefOid: head });
+}
+
+/** GitHub moves the setup PR's head on after setup's last push, as its "Update branch" button does: a commit on origin's setup branch the clone never fetches. */
+function moveTheHeadOnGitHub(): void {
+  const tip = originGit("rev-parse", BRANCH).trim();
+  const moved = originGit("-c", "user.name=GitHub", "-c", "user.email=noreply@github.com", "commit-tree", `${tip}^{tree}`, "-p", tip, "-m", "Merge main");
+  originGit("update-ref", `refs/heads/${BRANCH}`, moved.trim());
+}
+
+/** As GitHub's compare of two commits sums it up: how the head stands to the base, null when origin lacks either. */
+function compare(base: string, head: string): string | null {
+  try {
+    const behind = Number(originGit("rev-list", "--count", `${head}..${base}`).trim());
+    const ahead = Number(originGit("rev-list", "--count", `${base}..${head}`).trim());
+    if (behind === 0) return ahead === 0 ? "identical" : "ahead";
+    return ahead === 0 ? "behind" : "diverged";
+  } catch {
+    return null;
+  }
 }
 
 /** The files on origin's setup branch. */
@@ -283,6 +302,38 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(said.slice(said.indexOf("The setup PR: https://github.com/acme/clinic/pull/1")).some((line) => line.startsWith(`- ${warning}`))).toBe(true);
   });
 
+  it("with --paused, a run after one that wrote the starter and stopped partway says nothing about --paused having had no effect", async () => {
+    const world = aWorld();
+    world.failingLabels.add("needs-info");
+    const args = ["--no-time-zone", "--no-second-subscription", "--paused"];
+    await setupOnce(world, { args });
+    world.failingLabels.clear();
+
+    const { code, said } = await setupOnce(world, { args });
+
+    expect(code).toBe(0);
+    expect(world.prs[0]?.body).toContain("but Dispatch paused (max_in_flight 0)");
+    expect(world.prs[0]?.body).not.toContain("--paused had no effect");
+    expect(said.join("\n")).not.toContain("--paused had no effect");
+  });
+
+  it("unpaused, a run after one that wrote the starter and stopped partway still warns that Dispatch releases the ready-for-agent issues on the merge", async () => {
+    const world = aWorld();
+    world.labels.add("ready-for-agent");
+    world.readyForAgent = 2;
+    world.failingLabels.add("needs-info");
+    await setupOnce(world);
+    world.failingLabels.clear();
+    const warning = "2 open issues are labelled ready-for-agent: Dispatch starts releasing them to Implementers as soon as the setup PR merges.";
+
+    const { code, said } = await setupOnce(world);
+
+    expect(code).toBe(0);
+    expect(said.slice(0, said.indexOf(`On ${BRANCH}.`)).some((line) => line.startsWith(`- ${warning}`))).toBe(true);
+    expect(world.prs[0]?.body).toContain(`- ${warning}`);
+    expect(said.slice(said.indexOf("The setup PR: https://github.com/acme/clinic/pull/1")).some((line) => line.startsWith(`- ${warning}`))).toBe(true);
+  });
+
   it("a second run after the wizard stopped partway reuses the branch and PR, applies nothing again, and then asks for the merge", async () => {
     const world = aWorld();
     await setupOnce(world, { wizard: skipsTheClaudeToken });
@@ -358,6 +409,36 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(log.filter((line) => /^git commit/.test(line))).toEqual([]);
     },
   );
+
+  it("on the setup branch, stops at an uncommitted CLAUDE.md, a file setup writes only in some repos and the earlier run didn't", async () => {
+    const world = aWorld();
+    world.failingLabels.add("needs-info");
+    const first = await setupOnce(world);
+    expect(writtenIn(first.said)).toContain("AGENTS.md");
+    world.failingLabels.clear();
+    await writeFile(join(checkout, "CLAUDE.md"), "# My own notes, half written\n");
+
+    const { code, complaints, log } = await setupOnce(world);
+
+    expect(code).toBe(1);
+    expect(complaints[0]).toBe(`${BRANCH} has uncommitted changes setup didn't make (CLAUDE.md). Commit or stash them, then run setup again.`);
+    expect(log.filter((line) => /^git commit/.test(line))).toEqual([]);
+  });
+
+  it("leaves out of the setup commit a file setup writes only in some repos, made while the wizard ran in a run that didn't write it", async () => {
+    const world = aWorld();
+    const startsClaudeMd: Wizard = async (world, wizardEnv) => {
+      await walksEveryStage(world, wizardEnv);
+      await writeFile(join(checkout, "CLAUDE.md"), "# My own notes, half written\n");
+    };
+
+    const { code } = await setupOnce(world, { wizard: startsClaudeMd });
+
+    expect(code).toBe(0);
+    expect(filesOnOrigin()).toContain("AGENTS.md");
+    expect(filesOnOrigin()).not.toContain("CLAUDE.md");
+    expect(git("status", "--porcelain")).toBe("?? CLAUDE.md\n");
+  });
 
   it("leaves out of the setup commit a file setup reads but never writes, edited while the wizard ran", async () => {
     const world = aWorld();
@@ -468,6 +549,35 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   it("on the setup branch after its PR was squash-merged, says to switch to the default branch and pull", async () => {
     const world = aWorld();
     await setupOnce(world);
+    squashTheSetupPr(world);
+    git("switch", "-q", BRANCH);
+
+    const { code, complaints } = await setupOnce(world);
+
+    expect(code).toBe(1);
+    expect(complaints[0]).toBe(`${BRANCH}'s setup PR is merged. Switch to main with git switch main && git pull, then run setup again.`);
+  });
+
+  it("after a squash merge of a setup PR whose head GitHub moved on, a repair run from the default branch gets past the leftover setup branch", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    moveTheHeadOnGitHub();
+    squashTheSetupPr(world);
+    world.labels.delete("needs-triage");
+
+    const { code, said, complaints } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(said).toContain("- create the label needs-triage");
+    expect(world.labels.has("needs-triage")).toBe(true);
+    expect(git("branch", "--show-current").trim()).toBe("main");
+  });
+
+  it("on the setup branch after its PR, whose head GitHub moved on, was squash-merged, says to switch to the default branch and pull", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    moveTheHeadOnGitHub();
     squashTheSetupPr(world);
     git("switch", "-q", BRANCH);
 

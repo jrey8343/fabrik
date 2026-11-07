@@ -182,9 +182,10 @@ export interface PlanContext {
    */
   readonly wizardNext?: boolean;
   /**
-   * The repo's Kit config is the starter this run of setup wrote, as the plan
-   * made after the wizard finds it: its notes are a fresh install's, not those
-   * for a Kit config the Product already had.
+   * The repo's Kit config is the starter setup wrote on its own branch, in this
+   * run or an earlier one, as the default branch lacks one. So long as it
+   * pauses Dispatch just as this run asks, its notes are a fresh install's,
+   * not those for a Kit config the Product already had.
    */
   readonly wroteStarter?: boolean;
 }
@@ -232,7 +233,7 @@ function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, no
   const existing = state.files[KIT_CONFIG_PATH] ?? null;
   const paused = answers.paused === true;
   if (existing !== null) {
-    if (wroteStarter) {
+    if (wroteStarter && pausesDispatch(existing) === paused) {
       if (!paused) notes.push(...readyForAgentWarning(state.readyForAgent));
     } else if (paused) notes.push(pausedHadNoEffect(existing));
     const listed = withSecondSubscription(existing, state, answers);
@@ -262,6 +263,11 @@ function pausedHadNoEffect(existing: string): string {
   const value = config["max_in_flight"] ?? DEFAULT_KIT_CONFIG.maxInFlight;
   if (value === 0) return `${prefix}, with max_in_flight 0, so Dispatch is already paused.`;
   return `${prefix}, with max_in_flight ${JSON.stringify(value)}. Set it to 0 by hand to pause Dispatch.`;
+}
+
+/** Whether the Kit config's text sets max_in_flight to 0. */
+function pausesDispatch(text: string): boolean {
+  return (jsonObject(text)?.["max_in_flight"] ?? DEFAULT_KIT_CONFIG.maxInFlight) === 0;
 }
 
 /** The starter Kit config with `max_in_flight` set to 0, every other byte kept. */
@@ -413,23 +419,17 @@ function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, no
   return actions;
 }
 
-/** Every file planSetup reads from the Product checkout: what it writes, and what it only reads. */
+/** Every file planSetup reads from the Product checkout. */
 export function setupPaths(kit: SetupKit): readonly string[] {
-  return [...setupWrites(kit), ...PRETTIER_DETECTION_PATHS, SKILLS_SOURCES_LOCK_PATH];
-}
-
-/**
- * Every file planSetup may write in the Product checkout. The setup commit
- * takes only these, and only these may be uncommitted on the setup branch.
- */
-export function setupWrites(kit: SetupKit): readonly string[] {
   return [
     CALLER_PATH,
     SETTINGS_PATH,
     GITIGNORE_PATH,
     PRETTIERIGNORE_PATH,
+    ...PRETTIER_DETECTION_PATHS,
     DEPENDABOT_PATH,
     KIT_CONFIG_PATH,
+    SKILLS_SOURCES_LOCK_PATH,
     ...Object.keys(kit.templates.docsAgents).map((name) => `docs/agents/${name}`),
     "AGENTS.md",
     "CLAUDE.md",
