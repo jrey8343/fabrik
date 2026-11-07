@@ -19,10 +19,7 @@ export async function gatherState(run: Run, productDir: string, repo: ProductSta
   const labels = names(await ok(run, "gh", ["label", "list", "--limit", "1000", "--json", "name"], { cwd }));
   const secrets = names(await ok(run, "gh", ["secret", "list", "--json", "name"], { cwd }));
   const vaults = names(await ok(run, "op", ["vault", "list", "--format", "json"], { cwd }));
-  const titles = (json: string) => (JSON.parse(json) as { title: string }[]).map((item) => item.title);
-  const fabrikItems = vaults.includes(FABRIK_VAULT)
-    ? titles(await ok(run, "op", ["item", "list", "--vault", FABRIK_VAULT, "--format", "json"], { cwd }))
-    : [];
+  const fabrikItems = vaults.includes(FABRIK_VAULT) ? await vaultItems(run, cwd, FABRIK_VAULT) : [];
   const [protection, mergeGate, store] = await Promise.all([
     gatherProtection(run, cwd, repo),
     gatherMergeGate(run, cwd, repo),
@@ -30,6 +27,12 @@ export async function gatherState(run: Run, productDir: string, repo: ProductSta
   ]);
   const readyForAgent = await gatherReadyForAgent(run, cwd, labels);
   return { repo, files, labels, secrets, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
+}
+
+/** The titles of the items in a vault the account has. */
+export async function vaultItems(run: Run, cwd: string, vault: string): Promise<string[]> {
+  const listed = JSON.parse(await ok(run, "op", ["item", "list", "--vault", vault, "--format", "json"], { cwd })) as { title: string }[];
+  return listed.map((item) => item.title);
 }
 
 /** How many open issues are labelled ready-for-agent. A repo without the label has none, and `gh` may refuse to filter by a label that doesn't exist. */

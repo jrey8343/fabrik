@@ -1,22 +1,33 @@
 // The setup program, run from a Fabrik checkout at the release being set up,
 // with the Operator's own gh and op sign-ins:
-//   node src/setup/main.ts <product checkout> <release>          prints the plan
+//   node src/setup/main.ts <product checkout> <release>          in a terminal: one run, to the setup PR
 //   node src/setup/main.ts <product checkout> <release> --plan   prints the plan, and never does more
-//   node src/setup/main.ts <product checkout> <release> --apply  carries it out
+//   node src/setup/main.ts <product checkout> <release> --apply  only carries the plan out, as the setup skill does
 // It runs its checks first, then chooses the 1Password account (--account=, or
 // OP_ACCOUNT, or the only one, or asks), then asks the questions the flags
 // left out: --time-zone=<IANA zone>, --second-subscription and --paused, each
-// with a --no- form. It asks only when stdin is a terminal. Visual evidence
-// isn't setup's: /fabrik-visual-evidence turns it on. Thin by design: the
-// program is in program.ts, and every decision about the repo is in the
-// planner (plan.ts).
+// with a --no- form. It asks only when stdin is a terminal: without one it
+// prints the plan and stops, as the setup skill needs. In a terminal it asks
+// for a yes, applies the plan on fabrik/setup-<release>, runs the wizard in
+// the same terminal, then commits, pushes and opens the setup PR. Visual
+// evidence isn't setup's: /fabrik-visual-evidence turns it on. Thin by design:
+// the program is in program.ts, one run's order in oneRun.ts, and every
+// decision about the repo in the planner (plan.ts).
 import { resolve } from "node:path";
 import { spawnRun } from "./exec.ts";
 import { runSetup } from "./program.ts";
 import { terminalPrompt } from "./prompt.ts";
+import { runWizardInTerminal } from "./wizard.ts";
 
 if (import.meta.main) {
   const prompt = terminalPrompt(process.stdin, process.stdout);
+  let closed = false;
+  // The wizard reads the terminal itself, so setup lets go of it first.
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    prompt?.close();
+  };
   runSetup(process.argv.slice(2), {
     run: spawnRun,
     env: process.env,
@@ -27,13 +38,17 @@ if (import.meta.main) {
     kitDir: resolve(import.meta.dirname, "..", ".."),
     nodeVersion: process.versions.node,
     machineTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    wizard: (run) => {
+      close();
+      return runWizardInTerminal(run);
+    },
   }).then(
     (code) => {
-      prompt?.close();
+      close();
       process.exitCode = code;
     },
     (error: unknown) => {
-      prompt?.close();
+      close();
       console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     },

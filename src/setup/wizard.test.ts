@@ -3,11 +3,10 @@
 // stubbed, and their answers piped in.
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
-
-const WIZARD = resolve(import.meta.dirname, "..", "..", "skills", "fabrik-setup", "wizard.sh");
+import { WIZARD_PATH as WIZARD, WIZARD_REPORT_ENV } from "./wizard.ts";
 
 /** An `op` that holds the given "vault/title" items, and logs each call with the template it was given. */
 const FAKE_OP = `#!/usr/bin/env node
@@ -68,6 +67,8 @@ interface Walk {
   stdout: string;
   op: OpCall[];
   opened: string[];
+  /** What the wizard reported to setup, a line each, when setup ran it. */
+  report: string[];
 }
 
 interface WalkOptions {
@@ -81,6 +82,8 @@ interface WalkOptions {
   dotEnv?: string;
   /** The OP_ACCOUNT Setup passes in, naming the 1Password account. Unset when not given. */
   opAccount?: string;
+  /** Setup runs the wizard, and gives it a file to report to. */
+  bySetup?: boolean;
 }
 
 async function stub(bin: string, name: string, script: string): Promise<void> {
@@ -105,7 +108,7 @@ async function walk(
   items: string[],
   answers: string[],
   kitConfig?: string,
-  { createFails = false, ghApi = {}, store = false, dotEnv, opAccount }: WalkOptions = {},
+  { createFails = false, ghApi = {}, store = false, dotEnv, opAccount, bySetup = false }: WalkOptions = {},
 ): Promise<Walk> {
   const bin = await tempDir("wizard-bin");
   await stub(bin, "op", FAKE_OP);
@@ -129,6 +132,8 @@ async function walk(
   // Never the account of the shell running the tests.
   delete env["OP_ACCOUNT"];
   if (opAccount !== undefined) env["OP_ACCOUNT"] = opAccount;
+  delete env[WIZARD_REPORT_ENV];
+  if (bySetup) env[WIZARD_REPORT_ENV] = join(bin, "report");
   const run = spawnSync("bash", [WIZARD], {
     cwd: checkout,
     input: answers.map((a) => `${a}\n`).join(""),
@@ -141,6 +146,7 @@ async function walk(
     stdout: run.stdout,
     op: (await linesOf(join(bin, "op.log"))).map((l) => JSON.parse(l) as OpCall),
     opened: await linesOf(join(bin, "opened")),
+    report: await linesOf(join(bin, "report")),
   };
 }
 
@@ -164,6 +170,20 @@ describe("The setup wizard's Fabrik App stage", () => {
       "It needs Issues, Pull requests and Contents (read and write), Checks (read), and never 'workflows'.",
     );
     expect(w.stdout).toContain("https://github.com/settings/apps/fabrik-factory/permissions");
+  });
+
+  it("tells setup the App is on the repo once the Operator presses Enter at that step, since setup can't read it for itself", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, { bySetup: true });
+
+    expect(w.status).toBe(0);
+    expect(w.report).toEqual(["app-installed acme/clinic"]);
+  });
+
+  it("tells setup nothing about the App when the Operator's input ends before that Enter", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, ["", "fabrik-factory"], undefined, { bySetup: true });
+
+    expect(w.status).toBe(0);
+    expect(w.report).toEqual([]);
   });
 
   /** A comment or issue made through the App `slug`, which the GitHub user `owner` owns. */
@@ -499,5 +519,22 @@ describe("The setup wizard's Visual evidence stage", () => {
     expect(w.stdout).toContain(".fabrik/config.json has a ui block, so UI pull requests get Visual evidence.");
     expect(w.stdout).not.toContain("Turn on Visual evidence");
     expect(w.stdout).not.toContain("still to do by hand");
+  });
+});
+
+describe("The setup wizard run by setup", () => {
+  it("ends saying setup carries on to the setup PR, not to open an issue, since the PR isn't merged yet", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, { bySetup: true });
+
+    expect(w.status).toBe(0);
+    expect(w.stdout).toContain("Next: Setup commits what it wrote, pushes it and opens the setup PR.");
+    expect(w.stdout).not.toContain("Next: open an issue");
+  });
+
+  it("run on its own, still ends by saying to open an issue, and reports nothing", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE);
+
+    expect(w.stdout).toContain("Next: open an issue on acme/clinic.");
+    expect(w.report).toEqual([]);
   });
 });
