@@ -4,6 +4,7 @@
 //   node src/setup/main.ts <product checkout> <release> --apply  carries it out
 // With --time-zone=<IANA zone> it also sets up the fabrik-runs store, with
 // --second-subscription it tells the Operator how to add a second Subscription,
+// with --paused it writes the starter Kit config with Dispatch paused (max_in_flight 0),
 // and with the Visual evidence flags (--ui-path=<glob>, repeated, --ui-serve,
 // --ui-url, and optionally --ui-before-url, --ui-default-route=<route>, repeated,
 // and --preview-url) it writes the Kit config's ui and preview blocks.
@@ -14,6 +15,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
+import { READY_FOR_AGENT } from "../loop/labels.ts";
 import { loadSetupKit } from "./kit.ts";
 import {
   ADMIN_BYPASS,
@@ -89,7 +91,15 @@ async function gatherState(productDir: string, paths: readonly string[]): Promis
     gatherMergeGate(cwd, repo),
     gatherStore(cwd),
   ]);
-  return { repo, files, labels, secrets, vaults, fabrikItems, protection, mergeGate, store };
+  const readyForAgent = await gatherReadyForAgent(cwd, labels);
+  return { repo, files, labels, secrets, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
+}
+
+/** How many open issues are labelled ready-for-agent. A repo without the label has none, and `gh` may refuse to filter by a label that doesn't exist. */
+async function gatherReadyForAgent(cwd: string, labels: readonly string[]): Promise<number> {
+  if (!labels.some((label) => label.toLowerCase() === READY_FOR_AGENT.toLowerCase())) return 0;
+  const args = ["issue", "list", "--label", READY_FOR_AGENT, "--state", "open", "--limit", "1000", "--json", "number"];
+  return (JSON.parse(await ok("gh", args, { cwd })) as unknown[]).length;
 }
 
 /** The fabrik-runs store, read through the API: setup has no checkout of it. */
@@ -341,11 +351,12 @@ if (import.meta.main) {
   const applying = args.includes("--apply");
   const timeZone = args.find((arg) => arg.startsWith("--time-zone="))?.slice("--time-zone=".length);
   const secondSubscription = args.includes("--second-subscription");
+  const paused = args.includes("--paused");
   const visualEvidence = visualEvidenceAnswers(args);
   const [productDir, release] = args.filter((arg) => !arg.startsWith("--"));
   if (productDir === undefined || release === undefined) {
     console.error(
-      "Usage: node src/setup/main.ts <product checkout> <release> [--time-zone=<IANA zone>] [--second-subscription]" +
+      "Usage: node src/setup/main.ts <product checkout> <release> [--time-zone=<IANA zone>] [--second-subscription] [--paused]" +
         " [--ui-path=<glob>]... [--ui-serve=<command>] [--ui-url=<url>] [--ui-before-url=<url>] [--ui-default-route=<route>]... [--preview-url=<template>]" +
         " [--apply]",
     );
@@ -355,6 +366,7 @@ if (import.meta.main) {
     ...(timeZone === undefined ? {} : { timeZone }),
     ...(secondSubscription ? { secondSubscription } : {}),
     ...(visualEvidence === undefined ? {} : { visualEvidence }),
+    ...(paused ? { paused } : {}),
   };
   main(resolve(productDir), release, applying, answers).catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));

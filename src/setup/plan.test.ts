@@ -973,3 +973,78 @@ function storeWritten(actions: readonly SetupAction[], path: string): string | u
   const action = actions.find((a) => a.kind === "write-store-file" && a.path === path);
   return action?.kind === "write-store-file" ? action.content : undefined;
 }
+
+describe("Installing with Dispatch paused", () => {
+  const paused = { paused: true };
+  const pausedText = (config: string) => config.replace('"max_in_flight": 2,', '"max_in_flight": 0,');
+
+  it("writes the starter Kit config with max_in_flight 0 and every other byte the same", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, paused);
+
+    expect(written(actions, ".fabrik/config.json")).toBe(pausedText(kit.templates.kitConfig));
+  });
+
+  it("pauses the starter with Visual evidence on, too", () => {
+    const visualEvidence = { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" };
+    const plain = written(planSetup(aCleanProduct(), kit, { visualEvidence }).actions, ".fabrik/config.json") ?? "";
+
+    const { actions } = planSetup(aCleanProduct(), kit, { ...paused, visualEvidence });
+
+    expect(written(actions, ".fabrik/config.json")).toBe(pausedText(plain));
+  });
+
+  it("says in the plan that the starter is paused", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, paused);
+
+    const action = actions.find((a) => a.kind === "write-file" && a.path === ".fabrik/config.json");
+    expect(action?.kind === "write-file" ? action.why : "").toContain("Dispatch paused");
+  });
+
+  it("leaves an existing Kit config alone, telling the Operator its max_in_flight and how to pause it by hand", () => {
+    const state = aCleanProduct({ files: { ".fabrik/config.json": '{ "max_in_flight": 3 }\n' } });
+
+    const plan = planSetup(state, kit, paused);
+
+    expect(written(plan.actions, ".fabrik/config.json")).toBeUndefined();
+    expect(plan.notes).toContainEqual(
+      "--paused had no effect: .fabrik/config.json already exists, with max_in_flight 3. Set it to 0 by hand to pause Dispatch.",
+    );
+  });
+
+  it("counts a Kit config without max_in_flight as having the default", () => {
+    const plan = planSetup(aCleanProduct({ files: { ".fabrik/config.json": "{}\n" } }), kit, paused);
+
+    expect(plan.notes.find((n) => n.startsWith("--paused"))).toContain("max_in_flight 2");
+  });
+
+  it("plans nothing new for the Kit config when setup runs again with --paused", () => {
+    const setUp = afterApplying(aCleanProduct(), planSetup(aCleanProduct(), kit, paused));
+
+    const again = planSetup(setUp, kit, paused);
+
+    expect(again.actions).toEqual([]);
+    expect(again.notes.find((n) => n.startsWith("--paused"))).toContain("already paused");
+  });
+
+  it("warns that open ready-for-agent issues start as soon as the setup PR merges, unless setup is paused", () => {
+    const plan = planSetup(aCleanProduct({ readyForAgent: 4 }), kit);
+
+    expect(plan.notes).toContainEqual(
+      "4 open issues are labelled ready-for-agent: Dispatch starts releasing them to Implementers as soon as the setup PR merges. Run setup with --paused to hold them back.",
+    );
+  });
+
+  it("says nothing about ready-for-agent issues when there are none, when paused, or when the Kit config exists", () => {
+    const readyForAgentNotes = (plan: { notes: readonly string[] }) => plan.notes.filter((n) => n.includes("ready-for-agent"));
+
+    expect(readyForAgentNotes(planSetup(aCleanProduct(), kit))).toEqual([]);
+    expect(readyForAgentNotes(planSetup(aCleanProduct({ readyForAgent: 4 }), kit, paused))).toEqual([]);
+    expect(readyForAgentNotes(planSetup(aCleanProduct({ readyForAgent: 4, files: { ".fabrik/config.json": "{}\n" } }), kit))).toEqual([]);
+  });
+
+  it("names a single issue in the singular", () => {
+    expect(planSetup(aCleanProduct({ readyForAgent: 1 }), kit).notes).toContainEqual(
+      "1 open issue is labelled ready-for-agent: Dispatch starts releasing it to an Implementer as soon as the setup PR merges. Run setup with --paused to hold it back.",
+    );
+  });
+});
