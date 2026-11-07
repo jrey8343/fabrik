@@ -643,15 +643,16 @@ describe("The setup wizard's Visual evidence stage", () => {
 });
 
 describe("The setup wizard run by setup", () => {
-  it("ends saying setup carries on to the setup PR, not to open an issue, since the PR isn't merged yet", async () => {
+  it("ends handing back to Setup, not saying to open an issue, and promises no setup PR, which a run that writes no file doesn't open", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, { bySetup: true });
 
     expect(w.status).toBe(0);
-    expect(w.stdout).toContain("Next: Setup commits what it wrote, pushes it and opens the setup PR.");
+    expect(w.stdout).toContain("Next: back to Setup, which says what it did and what's left.");
+    expect(w.stdout).not.toContain("opens the setup PR");
     expect(w.stdout).not.toContain("Next: open an issue");
   });
 
-  it("ends saying the wizard is done, not Setup, which goes on to the setup PR", async () => {
+  it("ends saying the wizard is done, not Setup, which carries on", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, { bySetup: true });
 
     expect(w.stdout).toContain("✓ The wizard is done");

@@ -202,9 +202,10 @@ finish() {
 # Fabrik setup wizard: the steps of adopting the Kit that only the Operator can
 # take. Setup runs it in the same terminal, from the Product repo's checkout,
 # once it has written the Kit files, created the labels, vaults and service
-# accounts, and protected the branch. Then it opens the setup PR. Running
-# Setup again walks the wizard again, and once the setup PR is merged it offers
-# the wizard while 1Password lacks what a stage stores here.
+# accounts, and protected the branch. Then it opens the setup PR, when the run
+# wrote a file the default branch lacks. Running Setup again walks the wizard
+# again, and once the setup PR is merged it offers the wizard while 1Password
+# lacks what a stage stores here.
 # Nothing it captures is written to disk: the Fabrik App's key, the Claude token
 # and the Sentry token go straight into 1Password, where the Kit's jobs read
 # them (ADR-0004).
@@ -216,8 +217,8 @@ report() {
 }
 
 # wizard_done ends the wizard as finish does when Setup runs it, but saying the
-# wizard is done, not Setup: Setup goes on to commit, push and open the setup
-# PR. The stages leave only SKIPPED to show.
+# wizard is done, not Setup: Setup carries on, and opens the setup PR only when
+# the run wrote a file. The stages leave only SKIPPED to show.
 wizard_done() {
   _clear
   printf '\n%s%s  ✓ The wizard is done%s\n' "$BOLD" "$GREEN" "$RESET"
@@ -602,7 +603,7 @@ fi
 # Run by Setup, the wizard is one of its steps, and Setup isn't done yet.
 if [[ -n "${FABRIK_WIZARD_REPORT:-}" ]]; then
   wizard_done
-  say "Next: Setup commits what it wrote, pushes it and opens the setup PR."
+  say "Next: back to Setup, which says what it did and what's left."
 else
   finish
   say "Next: open an issue on $REPO. Intake labels it needs-triage and the Loop takes it from there."
