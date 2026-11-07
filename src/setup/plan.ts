@@ -29,6 +29,7 @@ import {
   WONTFIX,
 } from "../loop/labels.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
+import { printJson } from "./json.ts";
 import type { SetupKit } from "./kit.ts";
 import {
   CALLER_PATH,
@@ -299,7 +300,7 @@ function withVisualEvidence(text: string, answers: VisualEvidenceAnswers, notes:
   }
   const entries = Object.entries(blocks);
   const changes = entries.some(([key, value]) => Object.hasOwn(config, key) && JSON.stringify(config[key]) !== JSON.stringify(value));
-  if (changes) return `${JSON.stringify({ ...config, ...blocks }, null, 2)}\n`;
+  if (changes) return `${printJson({ ...config, ...blocks })}\n`;
   const absent = entries.filter(([key]) => !Object.hasOwn(config, key));
   return absent.length === 0 ? null : withMembers(text, absent);
 }
@@ -314,9 +315,10 @@ function withMembers(text: string, members: readonly (readonly [string, unknown]
   const head = text.slice(0, text.lastIndexOf("}")).trimEnd();
   const tail = text.slice(head.length);
   const indent = /\n([ \t]+)"/.exec(head)?.[1] ?? "  ";
-  const added = members.map(
-    ([key, value]) => `${indent}${JSON.stringify(key)}: ${JSON.stringify(value, null, indent).replaceAll("\n", `${eol}${indent}`)}`,
-  );
+  const added = members.map(([key, value], i) => {
+    const head = `${indent}${JSON.stringify(key)}: `;
+    return `${head}${printJson(value, { indent, eol, level: 1, before: head, trailing: i < members.length - 1 ? 1 : 0 })}`;
+  });
   return `${head}${head.endsWith("{") ? "" : ","}${eol}${added.join(`,${eol}`)}${tail.startsWith(eol) ? "" : eol}${tail}`;
 }
 
