@@ -70,6 +70,9 @@ export async function sessionStart({
           own.includes("fabrik-pair")
             ? "To work through a ready-for-human or weekly-limit issue with an agent beside them (a Pairing session), the Operator runs /fabrik-pair <issue number>."
             : "",
+          own.includes("fabrik-visual-evidence")
+            ? "To turn Visual evidence on, or change its answers, the Operator runs /fabrik-visual-evidence."
+            : "",
         ]
           .filter((line) => line !== "")
           .join("\n"),

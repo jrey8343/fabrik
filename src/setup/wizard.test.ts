@@ -478,17 +478,18 @@ describe("The setup wizard's Visual evidence stage", () => {
 
     expect(w.status).toBe(0);
     expect(w.stdout).toContain("Turn on Visual evidence for acme/clinic?");
-    expect(w.stdout).toContain("Skipping Visual evidence.");
+    expect(w.stdout).toContain("Skipping Visual evidence. Run /fabrik-visual-evidence in a Claude session in this repo to turn it on later.");
     expect(w.stdout).not.toContain("still to do by hand");
     expect(w.stdout).toContain("Setup complete");
   });
 
-  it("sends an Operator who wants it to /fabrik-setup's Visual evidence step, which writes the Kit config, and lists it to do", async () => {
+  it("sends an Operator who wants it to /fabrik-visual-evidence, which writes the Kit config, and lists it to do", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, [...TO_VISUAL_EVIDENCE, "y"]);
 
     expect(w.status).toBe(0);
     expect(w.stdout).toContain("ui.paths");
-    expect(w.stdout).toMatch(/still to do by hand:\n.*run \/fabrik-setup again and answer its Visual evidence step/);
+    expect(w.stdout).toMatch(/still to do by hand:\n.*turn on Visual evidence: run \/fabrik-visual-evidence in a Claude session in this repo/);
+    expect(w.stdout).not.toContain("/fabrik-setup");
   });
 
   it("says Visual evidence is on, and asks nothing, once .fabrik/config.json has a ui block", async () => {

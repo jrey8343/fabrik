@@ -4,10 +4,9 @@
 //   node src/setup/main.ts <product checkout> <release> --apply  carries it out
 // With --time-zone=<IANA zone> it also sets up the fabrik-runs store, with
 // --second-subscription it tells the Operator how to add a second Subscription,
-// with --paused it writes the starter Kit config with Dispatch paused (max_in_flight 0),
-// and with the Visual evidence flags (--ui-path=<glob>, repeated, --ui-serve,
-// --ui-url, and optionally --ui-before-url, --ui-default-route=<route>, repeated,
-// and --preview-url) it writes the Kit config's ui and preview blocks.
+// and with --paused it writes the starter Kit config with Dispatch paused
+// (max_in_flight 0). Visual evidence isn't setup's: /fabrik-visual-evidence
+// writes it (visual-evidence-main.ts).
 // It gathers the Product repo's state, asks the planner (plan.ts) what's
 // missing, and applies that. Thin by design: every decision is in the planner.
 import { spawn } from "node:child_process";
@@ -30,7 +29,6 @@ import {
   type SetupAnswers,
   type SetupPlan,
   setupPaths,
-  type VisualEvidenceAnswers,
 } from "./plan.ts";
 import { DEPENDABOT_PATH, pinCaller, STORE_CALLER_PATH } from "./shims.ts";
 
@@ -323,49 +321,22 @@ async function main(productDir: string, release: string, applying: boolean, answ
   console.log(report(plan, applying));
 }
 
-/** Every value given as --<name>=<value>, in order. */
-function flagValues(args: readonly string[], name: string): string[] {
-  const prefix = `--${name}=`;
-  return args.filter((arg) => arg.startsWith(prefix)).map((arg) => arg.slice(prefix.length));
-}
-
-/** The Visual evidence step's answers, when any of its flags is given. A missing ui flag is left blank for the planner to name. */
-function visualEvidenceAnswers(args: readonly string[]): VisualEvidenceAnswers | undefined {
-  const flags = ["ui-path", "ui-serve", "ui-url", "ui-before-url", "ui-default-route", "preview-url"];
-  if (flags.every((name) => flagValues(args, name).length === 0)) return undefined;
-  const last = (name: string) => flagValues(args, name).at(-1);
-  const beforeUrl = last("ui-before-url");
-  const previewUrl = last("preview-url");
-  return {
-    paths: flagValues(args, "ui-path"),
-    serve: last("ui-serve") ?? "",
-    url: last("ui-url") ?? "",
-    ...(beforeUrl === undefined ? {} : { beforeUrl }),
-    defaultRoutes: flagValues(args, "ui-default-route"),
-    ...(previewUrl === undefined ? {} : { previewUrl }),
-  };
-}
-
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const applying = args.includes("--apply");
   const timeZone = args.find((arg) => arg.startsWith("--time-zone="))?.slice("--time-zone=".length);
   const secondSubscription = args.includes("--second-subscription");
   const paused = args.includes("--paused");
-  const visualEvidence = visualEvidenceAnswers(args);
   const [productDir, release] = args.filter((arg) => !arg.startsWith("--"));
   if (productDir === undefined || release === undefined) {
     console.error(
-      "Usage: node src/setup/main.ts <product checkout> <release> [--time-zone=<IANA zone>] [--second-subscription] [--paused]" +
-        " [--ui-path=<glob>]... [--ui-serve=<command>] [--ui-url=<url>] [--ui-before-url=<url>] [--ui-default-route=<route>]... [--preview-url=<template>]" +
-        " [--apply]",
+      "Usage: node src/setup/main.ts <product checkout> <release> [--time-zone=<IANA zone>] [--second-subscription] [--paused] [--apply]",
     );
     process.exit(2);
   }
   const answers: SetupAnswers = {
     ...(timeZone === undefined ? {} : { timeZone }),
     ...(secondSubscription ? { secondSubscription } : {}),
-    ...(visualEvidence === undefined ? {} : { visualEvidence }),
     ...(paused ? { paused } : {}),
   };
   main(resolve(productDir), release, applying, answers).catch((error: unknown) => {

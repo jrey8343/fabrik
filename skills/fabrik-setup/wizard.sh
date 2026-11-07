@@ -497,9 +497,9 @@ else
 fi
 
 # ── 4c. Visual evidence ───────────────────────────────────────────────────
-# Opt-in: the ui block in the Kit config turns it on. /fabrik-setup writes it,
-# and the preview block, from the Operator's answers in its setup PR, so this
-# stage writes nothing: it explains the step and checks for the block.
+# Opt-in: the ui block in the Kit config turns it on. /fabrik-visual-evidence
+# writes it, and the preview block, from the Operator's answers in its own PR,
+# so this stage writes nothing: it points to the skill and checks for the block.
 stage "Visual evidence"
 say "On a pull request that changes your UI, the Implement job screenshots the routes it"
 say "touched at mobile and desktop widths, the PR links a gallery of them, and the Reviewer sees them."
@@ -509,15 +509,16 @@ if node -e '
   say "${GREEN}✓${RESET} .fabrik/config.json has a ui block, so UI pull requests get Visual evidence."
   pause
 elif confirm "Turn on Visual evidence for $REPO?"; then
-  step "Run /fabrik-setup again and answer its Visual evidence step. It asks for the files that"
-  step "make a PR UI (ui.paths), how the Sandbox serves the branch (ui.serve and ui.url), and,"
-  step "if you have them, your production site (ui.before_url), the routes to capture by default"
-  step "(ui.default_routes) and your preview deployments' URL (preview.url), and writes them"
-  step "into .fabrik/config.json in its setup PR."
-  SKIPPED+=("turn on Visual evidence: run /fabrik-setup again and answer its Visual evidence step")
+  step "Once the setup PR is merged, run /fabrik-visual-evidence in a Claude session in this repo."
+  step "It suggests the files that make a PR UI (ui.paths), how the Sandbox serves the branch"
+  step "(ui.serve and ui.url), and, if you have them, your production site (ui.before_url), the"
+  step "routes to capture by default (ui.default_routes) and your preview deployments' URL"
+  step "(preview.url). Once you've confirmed each, it opens a PR that writes them into"
+  step ".fabrik/config.json."
+  SKIPPED+=("turn on Visual evidence: run /fabrik-visual-evidence in a Claude session in this repo, once the setup PR is merged")
   pause
 else
-  say "Skipping Visual evidence. Re-run /fabrik-setup to turn it on later."
+  say "Skipping Visual evidence. Run /fabrik-visual-evidence in a Claude session in this repo to turn it on later."
   pause
 fi
 
