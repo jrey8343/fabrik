@@ -234,8 +234,9 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     },
     commit: (written) => commitSetupFiles(run, cwd, written, release),
     somethingToPublish: async () => {
-      const ahead = Number((await ok(run, "git", ["rev-list", "--count", `${origin.defaultBranch}..HEAD`], { cwd })).trim());
-      return ahead > 0 || (await openSetupPr(run, cwd, branch)) !== null;
+      // Commits can change nothing, as when the Operator merged in a default branch that already has a squash-merged setup PR's files.
+      const [base, head] = (await ok(run, "git", ["rev-parse", `${origin.defaultBranch}^{tree}`, "HEAD^{tree}"], { cwd })).trim().split("\n");
+      return base !== head || (await openSetupPr(run, cwd, branch)) !== null;
     },
     leaveSetupBranch: async () => {
       await ok(run, "git", ["switch", "-q", repo.defaultBranch], { cwd });

@@ -60,8 +60,9 @@ export function appConfirmedIn(body: string, repo: string): boolean {
 
 /**
  * What an earlier run's PR body says setup did, then what this run did, each
- * once. Whoever can write the body wrote those lines, so they keep no control
- * characters, such as a terminal escape, for the closing lines to print.
+ * once, as lastOfEach keeps them. Whoever can write the body wrote those
+ * lines, so they keep no control characters, such as a terminal escape, for
+ * the closing lines to print.
  */
 export function withEarlierDone(body: string | null, done: readonly string[]): string[] {
   const earlier: string[] = [];
@@ -75,7 +76,16 @@ export function withEarlierDone(body: string | null, done: readonly string[]): s
       }
     }
   }
-  return [...new Set([...earlier, ...done])];
+  return lastOfEach([...earlier, ...done]);
+}
+
+/**
+ * Each step once, where it was last done. A step a later run did again goes
+ * after what came between, so the list ends on what the setup branch holds,
+ * as when a run pauses Dispatch again after one that took the pause back.
+ */
+export function lastOfEach(steps: readonly string[]): string[] {
+  return steps.filter((step, i) => steps.lastIndexOf(step) === i);
 }
 
 export interface ClosingInputs extends PrBodyInputs {

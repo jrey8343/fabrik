@@ -45,8 +45,10 @@ function changedPaths(status: string): string[] {
  * "Update with rebase" replays the branch's commits onto the default branch,
  * so the head holds copies of the tip's commits, not the tip. With no setup PR
  * open from the branch, the tip counts as merged too when a merged PR's head
- * holds a copy, with the same changes, of each commit of the tip's it lacks.
- * The clone fetches that head into FETCH_HEAD alone, so no branch or tag moves.
+ * holds the tip's changes: a copy, with the same changes, of each commit of
+ * the tip's it lacks, or else everything the tip changed, so that merging the
+ * tip into it changes nothing. The clone fetches that head into FETCH_HEAD
+ * alone, so no branch or tag moves.
  */
 export function mergedSetupTip(run: Run, cwd: string, repo: string, branch: string): (tip: string) => Promise<boolean> {
   let merged: Promise<MergedPr[]> | undefined;
@@ -61,7 +63,7 @@ export function mergedSetupTip(run: Run, cwd: string, repo: string, branch: stri
     }
     if (prs.length === 0 || (await (open ??= openSetupPr(run, cwd, branch))) !== null) return false;
     for (const { number } of prs) {
-      if (await holdsCopiesOf(run, cwd, number, tip)) return true;
+      if (await holdsChangesOf(run, cwd, number, tip)) return true;
     }
     return false;
   };
@@ -81,13 +83,22 @@ async function mergedSetupPrs(run: Run, cwd: string, branch: string): Promise<Me
   return listed.filter((pr) => !pr.isCrossRepository).map(({ number, headRefOid }) => ({ number, headRefOid }));
 }
 
-/** Whether the PR's head holds a copy of each commit of the tip's it lacks, as git cherry matches them by their changes. */
-async function holdsCopiesOf(run: Run, cwd: string, pr: number, tip: string): Promise<boolean> {
+/**
+ * Whether the PR's head holds the tip's changes: a copy of each commit of the
+ * tip's it lacks, as git cherry matches them by their changes, or else all the
+ * tip changed, so that merging the tip into the head changes nothing.
+ */
+async function holdsChangesOf(run: Run, cwd: string, pr: number, tip: string): Promise<boolean> {
   const fetched = await run("git", ["fetch", "-q", "--no-tags", "--no-recurse-submodules", "origin", `refs/pull/${pr}/head`], { cwd });
   if (fetched.code !== 0) return false;
   // "+" marks a commit the head has no copy of.
   const cherry = await run("git", ["cherry", "FETCH_HEAD", tip], { cwd });
-  return cherry.code === 0 && !cherry.stdout.split("\n").some((line) => line.startsWith("+"));
+  if (cherry.code === 0 && !cherry.stdout.split("\n").some((line) => line.startsWith("+"))) return true;
+  // A copy the rebase made next to another PR's edit has other lines around its change, so git cherry doesn't match it.
+  // merge-tree writes the merge's tree without a working tree, and exits non-zero on a conflict.
+  const merged = await run("git", ["merge-tree", "--write-tree", "FETCH_HEAD", tip], { cwd });
+  const head = await run("git", ["rev-parse", "FETCH_HEAD^{tree}"], { cwd });
+  return merged.code === 0 && head.code === 0 && merged.stdout.split("\n")[0]?.trim() === head.stdout.trim();
 }
 
 /**
