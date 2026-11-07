@@ -17,7 +17,8 @@
 // and passes its commits out as a git bundle beside agent-result.json. A retry
 // runs in a checkout of its PR's branch, with FABRIK_PULL_REQUEST_FILE the PR and
 // its comments, whose latest Verdict holds the findings to fix. A Request-changes
-// run is a retry with FABRIK_REVIEW_FILE too: the Operator's review, its input.
+// run is a retry with FABRIK_REVIEW_FILE too: the Operator's review, its input. A
+// conflict-only run (#304) is one with FABRIK_CONFLICT_MAIN: the main head it rebases onto.
 // A Design-session turn takes the issue's parent Spec from FABRIK_SPEC_FILE (null if none),
 // for a Ticket back in design, the agent PR it came back from in the issue's sentBack,
 // and whether it may offer a Map from FABRIK_MAP_FILE; on a repo with a `ui` block,
@@ -338,7 +339,13 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     const input =
       spec.replay === "implement"
         ? await replayImplementInput(productDir, issueNumber, config, specFile, required(BASE_SHA_ENV))
-        : await implementInput(productDir, issueNumber, config, { spec: specFile, pullRequest: pullRequestFile, review: reviewFile });
+        : await implementInput(productDir, issueNumber, config, {
+            spec: specFile,
+            pullRequest: pullRequestFile,
+            review: reviewFile,
+            // A conflict-only run (#304) rebases its PR's branch onto this main head, from the Kit job's plan.
+            conflict: process.env["FABRIK_CONFLICT_MAIN"] ?? "",
+          });
     branch = input.branch;
     extra.push(...input.parts);
     onPullRequest = input.onPullRequest;

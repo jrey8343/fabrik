@@ -95,9 +95,31 @@ describe("What the push job applies", () => {
       issue: 7,
       pullRequest: 50,
       review: 900,
+      conflict: null,
       startedBy: null,
       capture: { result: null, artifact: null, galleryArtifact: null },
     });
+  });
+
+  it("applies a conflict-only run's result with the main head the Kit job's plan started it for (#304)", () => {
+    const main = "9".repeat(40);
+
+    const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", conflict: main }), 50);
+
+    expect(input).toMatchObject({ kind: "agent-result", role: "implement", issue: 7, pullRequest: 50, review: null, conflict: main });
+  });
+
+  it("names no main head for any other Implement run, and none that isn't a commit", () => {
+    expect(pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50" }), 50)).toMatchObject({ conflict: null });
+    expect(pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", conflict: "main" }), 50)).toMatchObject({ conflict: null });
+  });
+
+  it("names a failed conflict-only run's PR and main head, so its failure hands the PR to the Operator (#304)", () => {
+    const main = "9".repeat(40);
+
+    const input = pushJobInput(needs("implement", { implement: { result: "failure", outputs: {} } }, { ticket: "7", "pull-request": "50", conflict: main }), 50);
+
+    expect(input).toMatchObject({ kind: "agent-failure", role: "implement", issue: 7, conflict: { pullRequest: 50, main } });
   });
 
   describe("An Implement run's UI evidence", () => {

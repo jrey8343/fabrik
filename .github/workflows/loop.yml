@@ -96,6 +96,8 @@ jobs:
       branch: ${{ steps.route.outputs.branch }}
       # For a Request-changes run: the Operator's review, its input. It runs as a retry otherwise does.
       review: ${{ steps.route.outputs.review }}
+      # For a conflict-only run (#304): the default branch head it rebases the PR's branch onto, a full sha.
+      conflict: ${{ steps.route.outputs.conflict }}
       # For an Auditor run: the pending Audit's marked commit, which the Audit job checks out.
       audit-commit: ${{ steps.route.outputs.audit-commit }}
       # The model and effort the plan chose for its agent run, a Step-up included.
@@ -752,6 +754,8 @@ jobs:
           FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
           FABRIK_PULL_REQUEST_FILE: ${{ needs.kit.outputs.pull-request != '' && format('{0}/pull-request.json', runner.temp) || '' }}
           FABRIK_REVIEW_FILE: ${{ needs.kit.outputs.review != '' && format('{0}/review.json', runner.temp) || '' }}
+          # A conflict-only run's main head (#304): it rebases onto it and resolves the conflicts, nothing else.
+          FABRIK_CONFLICT_MAIN: ${{ needs.kit.outputs.conflict }}
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
           FABRIK_MODEL: ${{ needs.kit.outputs.model }}
           FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}

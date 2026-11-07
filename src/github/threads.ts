@@ -5,6 +5,9 @@
 import type { SentBack } from "../loop/backToDesign.ts";
 import {
   BACK_TO_DESIGN_MARKER,
+  conflictAttemptIn,
+  CONFLICT_RUN_ENDED_MARKER,
+  CONFLICT_RUN_MARKER,
   DESIGN_ROUND_MARKER,
   DESIGN_TURN_FAILED_MARKER,
   EMPTY_DIFF_MARKER,
@@ -42,11 +45,12 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const { verdict, source, requestChanges, headSha } = value as Record<string, unknown>;
+  const { verdict, source, requestChanges, conflictRun = false, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
   if (source !== "reviewer" && source !== "ci" && source !== "empty-diff") return null;
-  if (typeof requestChanges !== "boolean" || typeof headSha !== "string") return null;
-  return { verdict: verdict as Verdict, source, requestChanges, headSha };
+  // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one.
+  if (typeof requestChanges !== "boolean" || typeof conflictRun !== "boolean" || typeof headSha !== "string") return null;
+  return { verdict: verdict as Verdict, source, requestChanges, ...(conflictRun ? { conflictRun: true as const } : {}), headSha };
 }
 
 /**
@@ -61,6 +65,43 @@ export function requestChangesRunIn(commentBodies: readonly string[]): boolean {
     else if (verdictsIn([body]).length > 0) latest = false;
   }
   return latest;
+}
+
+/**
+ * Whether a PR's latest push came from a conflict-only run (#304), from the
+ * Fabrik App's comments on it, oldest first, as requestChangesRunIn reads a
+ * Request-changes run's: the next Verdict is marked as from that run.
+ */
+export function conflictRunIn(commentBodies: readonly string[]): boolean {
+  let latest = false;
+  for (const body of commentBodies) {
+    if (body.startsWith(CONFLICT_RUN_MARKER)) latest = true;
+    else if (verdictsIn([body]).length > 0) latest = false;
+  }
+  return latest;
+}
+
+/** The default branch heads the Kit's attempt notes on a PR record (#304), oldest first. */
+export function conflictAttemptsIn(commentBodies: readonly string[]): string[] {
+  return commentBodies.flatMap((body) => {
+    const attempt = conflictAttemptIn(body);
+    return attempt === null ? [] : [attempt.main];
+  });
+}
+
+/**
+ * The default branch head of the conflict-only run in flight on a PR (#304),
+ * or null, from the Fabrik App's comments on it, oldest first: an attempt
+ * note that started one, with neither its push note nor its ended note since.
+ */
+export function conflictRunInFlightIn(commentBodies: readonly string[]): string | null {
+  let inFlight: string | null = null;
+  for (const body of commentBodies) {
+    const attempt = conflictAttemptIn(body);
+    if (attempt !== null) inFlight = attempt.outcome === "conflict-run" ? attempt.main : null;
+    else if (body.startsWith(CONFLICT_RUN_MARKER) || body.startsWith(CONFLICT_RUN_ENDED_MARKER)) inFlight = null;
+  }
+  return inFlight;
 }
 
 /**
@@ -80,7 +121,12 @@ export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean 
 
 /** Whether a comment is the Kit's note of a Retry's or Request-changes run's push: that run's outcome. */
 function isPushNote(body: string): boolean {
-  return body.startsWith(RETRY_PUSH_MARKER) || body.startsWith(REQUEST_CHANGES_RUN_MARKER) || body.startsWith(UNMARKED_RETRY_PUSH);
+  return (
+    body.startsWith(RETRY_PUSH_MARKER) ||
+    body.startsWith(REQUEST_CHANGES_RUN_MARKER) ||
+    body.startsWith(CONFLICT_RUN_MARKER) ||
+    body.startsWith(UNMARKED_RETRY_PUSH)
+  );
 }
 
 /**

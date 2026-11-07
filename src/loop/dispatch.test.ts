@@ -6,6 +6,7 @@ import {
   aTicket,
   dispatchSnapshotOf,
   kitConfig,
+  HEAD_SHA,
   repoSnapshot,
   snapshotOf,
   snapshotOfPullRequest,
@@ -178,7 +179,7 @@ describe("What triggers a Dispatch check", () => {
   });
 
   it("a change to the Kit config, so raising max_in_flight from 0 resumes Dispatch straight away", () => {
-    const plan = planFor({ kind: "kit-config-changed" }, repoSnapshot(), kitConfig());
+    const plan = planFor({ kind: "kit-config-changed", head: HEAD_SHA }, repoSnapshot({ conflicts: { main: HEAD_SHA, pullRequests: [] } }), kitConfig());
 
     expect(plan.kind === "act" && plan.actions).toContainEqual({ kind: "check-dispatch" });
   });

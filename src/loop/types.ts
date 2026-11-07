@@ -160,6 +160,11 @@ export type LoopEvent =
         readonly runUrl: string;
         /** Whether the run was the Operator's Request changes rather than a retry. */
         readonly requestChanges?: boolean;
+        /**
+         * For a conflict-only run (#304): the default branch's head it was
+         * started to bring the PR up to date with. It isn't a retry.
+         */
+        readonly conflict?: string;
         /** The Operator comments on the PR the run was given; none when left out. */
         readonly operatorComments?: readonly GivenOperatorComment[];
       };
@@ -189,6 +194,11 @@ export type LoopEvent =
        * output. Absent, it is read as the first listed Subscription.
        */
       readonly subscription?: string;
+      /**
+       * For a conflict-only run (#304), from the Kit job's outputs: the agent
+       * PR it was on, and the default branch's head it was started for.
+       */
+      readonly conflict?: { readonly pullRequest: number; readonly main: string };
     }
   | { readonly kind: "issue-closed"; readonly issue: number }
   /** A PR was opened or pushed to, so its required checks start; a Review waits for them. */
@@ -353,8 +363,25 @@ export type LoopEvent =
   | { readonly kind: "dispatch-check" }
   /** A Design queue check, which an earlier plan asked for with `check-design-queue` (#147). */
   | { readonly kind: "design-queue-check" }
-  /** A push to the default branch that changed the Kit config, which may have unpaused or widened Dispatch or the Design-session cap. */
-  | { readonly kind: "kit-config-changed" }
+  /**
+   * A push to the default branch (#304): an open agent PR may now conflict
+   * with it, which the conflict check weighs (src/loop/conflicts.ts).
+   */
+  | {
+      readonly kind: "main-pushed";
+      /** The default branch's new head commit. */
+      readonly head: string;
+    }
+  /**
+   * A push to the default branch that changed the Kit config, which may have
+   * unpaused or widened Dispatch or the Design-session cap. It is a push to
+   * the default branch too, so the conflict check runs on it as on `main-pushed`.
+   */
+  | {
+      readonly kind: "kit-config-changed";
+      /** The default branch's new head commit. */
+      readonly head: string;
+    }
   | {
       /** The scheduled Kit workflow's tick (schedule.yml), for the Loop's time-based rules. */
       readonly kind: "scheduled-tick";
@@ -505,6 +532,19 @@ export interface PullRequestSnapshot {
   readonly verdicts: readonly VerdictRecord[];
   /** Whether its latest push came from a Request-changes run, so a Verdict on it is marked as one. */
   readonly requestChangesRun: boolean;
+  /** Whether its latest push came from a conflict-only run (#304), so a Verdict on it is marked as one. */
+  readonly conflictRun: boolean;
+  /**
+   * The default branch heads the Kit has tried to bring it up to date with
+   * (#304), read from the Kit's attempt notes on it, oldest first: one attempt
+   * per head, whether its mechanical rebase was clean or started a conflict-only run.
+   */
+  readonly conflictAttempts: readonly string[];
+  /**
+   * The default branch head a conflict-only run on it was started for, while
+   * that run hasn't pushed or ended (#304); otherwise null.
+   */
+  readonly conflictRunInFlight: string | null;
   /**
    * Whether a Retry or Request-changes run has pushed to it since its latest
    * Verdict, read from the Kit's note of the push. Until one has, the run that
@@ -554,6 +594,11 @@ export interface VerdictRecord {
   readonly source: "reviewer" | "ci" | "empty-diff";
   /** Whether it came from a Request-changes run, which doesn't count as a retry. */
   readonly requestChanges: boolean;
+  /**
+   * True when it came from a conflict-only run (#304), which doesn't count as
+   * a retry either; absent otherwise, as on every marker from before them.
+   */
+  readonly conflictRun?: true;
   /** The head commit it was given on. */
   readonly headSha: string;
 }
@@ -687,6 +732,30 @@ export interface Snapshot {
    * Operator by hand. What the Map cap counts (src/loop/mapCap.ts).
    */
   readonly openMaps: readonly number[] | null;
+  /**
+   * Gathered for a push to the default branch and a scheduled tick only: what
+   * the conflict check weighs (src/loop/conflicts.ts, #304).
+   */
+  readonly conflicts: ConflictSnapshot | null;
+}
+
+/** What the conflict check weighs (src/loop/conflicts.ts, #304). */
+export interface ConflictSnapshot {
+  /** The default branch's head commit, or null when it has none. */
+  readonly main: string | null;
+  /** Every open agent PR, with whether GitHub says it merges cleanly into the default branch. */
+  readonly pullRequests: readonly ConflictCandidate[];
+}
+
+/** An open agent PR the conflict check weighs. */
+export interface ConflictCandidate {
+  readonly pullRequest: PullRequestSnapshot;
+  /**
+   * GitHub's `mergeable`: false when it conflicts with the default branch,
+   * true when it doesn't (though it may be behind), null when GitHub still
+   * hadn't worked it out by the end of the adapter's bounded poll.
+   */
+  readonly mergeable: boolean | null;
 }
 
 /** An issue or PR a held run is on, as the adapter read it on a scheduled tick (src/loop/resume.ts). */
@@ -936,6 +1005,11 @@ export type Action =
       readonly pullRequest?: number;
       /** For a Request-changes run: the Operator's review, which is its input. It isn't a retry. */
       readonly requestChanges?: { readonly review: number };
+      /**
+       * For a conflict-only run (#304): the default branch head it rebases the
+       * PR's branch onto. It isn't a retry or a Request-changes run.
+       */
+      readonly conflict?: { readonly main: string };
       /** For an Implement run that is a Retry: its Retry number, and whether it Steps up. */
       readonly retry?: number;
       readonly stepUp?: boolean;
@@ -1038,6 +1112,26 @@ export type Action =
     }
   /** Push the agent branch the Implement run built, which the push job holds from its bundle. */
   | { readonly kind: "push-branch"; readonly branch: string }
+  | {
+      /**
+       * Rebases an agent PR's branch onto the default branch's head, with no
+       * agent (#304): the adapter replays the branch's commits onto `onto`
+       * without a working tree (src/github/branch.ts). When that's clean, it
+       * applies `clean`, pushes the rebased branch with a lease on the head it
+       * rebased, then applies `pushed`; if the push is refused, as when the
+       * branch moved meanwhile, it applies `refused` instead of `pushed`.
+       * When the rebase conflicts, it applies `conflicted` and pushes nothing.
+       * A branch already holding `onto`, or gone, gets none of them.
+       */
+      readonly kind: "rebase-onto-main";
+      readonly pullRequest: number;
+      readonly branch: string;
+      readonly onto: string;
+      readonly clean: readonly Action[];
+      readonly pushed: readonly Action[];
+      readonly refused: readonly Action[];
+      readonly conflicted: readonly Action[];
+    }
   /**
    * Push the issue's prototype branch, `prototype/<issue>`, which the push job
    * holds from a prototype turn's bundle (#155): no other branch, and only as
