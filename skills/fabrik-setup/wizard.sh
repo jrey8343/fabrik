@@ -426,13 +426,16 @@ fi
 # weekly limit is re-run on the next, and runs wait only when every one is used
 # up. Its token is one more item in the 'Fabrik' vault, which the agent and
 # implement service accounts already read, so it needs no new service account.
+# Setup lists it in the Kit config once the token is stored, on the Operator's
+# yes to its second Subscription question, which it passes in as
+# FABRIK_SECOND_SUBSCRIPTION.
 stage "A second Subscription"
 SECOND="Claude token 2"
-LIST='"subscriptions": ["Claude token", "Claude token 2"]'
 say "With a second Subscription, a run refused on the first one's weekly limit is"
 say "re-run on the second, and runs wait only once both are used up."
 SECOND_EXISTS=0
 op item get "$SECOND" --vault "Fabrik" >/dev/null 2>&1 && SECOND_EXISTS=1
+SECOND_STORED=$SECOND_EXISTS
 ADDING_SECOND=0
 if (( SECOND_EXISTS )); then
   if confirm "1Password already holds the '$SECOND' item. Replace it with a new token?"; then
@@ -484,6 +487,7 @@ if (( SECOND_EXISTS || ADDING_SECOND )); then
         op item delete "$OLD_ID" --vault "Fabrik" --archive
       fi
       say "${GREEN}✓ stored${RESET} the '$SECOND' token, expiring $EXPIRES"
+      SECOND_STORED=1
     fi
     unset SECOND_TOKEN
   fi
@@ -496,9 +500,13 @@ if (( SECOND_EXISTS || ADDING_SECOND )); then
     const { subscriptions } = JSON.parse(require("node:fs").readFileSync(".fabrik/config.json", "utf8"));
     process.exit(Array.isArray(subscriptions) && subscriptions.length > 1 && subscriptions.includes(process.argv[1]) ? 0 : 1);' "$SECOND" 2>/dev/null; then
     say "${GREEN}✓${RESET} .fabrik/config.json lists both Subscriptions."
-  else
-    step "List it in the Kit config, after the first: $LIST in .fabrik/config.json."
-    SKIPPED+=("list \"$SECOND\" in subscriptions in .fabrik/config.json: $LIST")
+  elif (( SECOND_STORED )); then
+    if [[ "${FABRIK_SECOND_SUBSCRIPTION:-}" == yes ]]; then
+      say "Setup lists it in subscriptions in .fabrik/config.json, after the first, in the setup PR."
+    else
+      step "To list it in subscriptions in .fabrik/config.json, run Setup again and say yes to a second Subscription."
+      SKIPPED+=("list \"$SECOND\" in subscriptions in .fabrik/config.json: run Setup again and say yes to a second Subscription")
+    fi
   fi
   pause
 else

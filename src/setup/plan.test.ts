@@ -721,15 +721,26 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     return aCleanProduct({ files: { ".fabrik/config.json": config }, vaults: ["Fabrik"], fabrikItems });
   }
 
-  it("walks the Operator through the second account, its token and usage credits when the Kit config lists one Subscription", () => {
-    const { notes } = planSetup(withConfig(oneListed, ["Claude token"]), kit, operator);
+  it("walks the Operator through the second account, its token and usage credits, then setup again, when the vault has no item yet", () => {
+    const { actions, notes } = planSetup(withConfig(oneListed, ["Claude token"]), kit, operator);
 
+    expect(written(actions, ".fabrik/config.json")).toBeUndefined();
     const step = notes.find((note) => note.includes("A second Subscription")) ?? "";
     expect(step).toContain("create a second Claude account");
     expect(step).toContain("`claude setup-token`");
     expect(step).toContain('the "Claude token 2" API Credential, with its expiry date, in the "Fabrik" vault');
     expect(step).toContain("usage credits off on every account");
-    expect(step).toContain('"subscriptions": ["Claude token", "Claude token 2"] in .fabrik/config.json');
+    expect(step).toMatch(/Then run setup again, and it lists it in subscriptions in \.fabrik\/config\.json\.$/);
+  });
+
+  it("says setup lists it in the setup PR when the plan's own run walks the wizard next", () => {
+    const { actions, notes } = planSetup(withConfig(oneListed, ["Claude token"]), kit, operator, { wizardNext: true });
+
+    expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+    const step = notes.find((note) => note.includes("A second Subscription")) ?? "";
+    expect(step).toContain("create a second Claude account");
+    expect(step).toMatch(/Setup then lists it in subscriptions in \.fabrik\/config\.json, in the setup PR\.$/);
+    expect(step).not.toContain("run setup again");
   });
 
   it("is planned for a repo that leaves subscriptions to its one-item default", () => {
@@ -738,13 +749,57 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     expect(notes.join("\n")).toContain("A second Subscription");
   });
 
-  it("asks only for the Kit config list once the second vault item exists", () => {
-    const { notes } = planSetup(withConfig(oneListed, ["Claude token", "Claude token 2"]), kit, operator);
+  it("lists the second Subscription in the Kit config itself, after the first, once its vault item exists", () => {
+    const { actions, notes } = planSetup(withConfig(kit.templates.kitConfig, ["Claude token", "Claude token 2"]), kit, operator);
 
-    expect(notes.join("\n")).not.toContain("A second Subscription");
-    expect(notes).toContainEqual(
-      'List the second Subscription in the Kit config: "subscriptions": ["Claude token", "Claude token 2"] in .fabrik/config.json.',
+    expect(written(actions, ".fabrik/config.json")).toBe(
+      kit.templates.kitConfig.replace('  "subscriptions": ["Claude token"],\n', '  "subscriptions": ["Claude token", "Claude token 2"],\n'),
     );
+    expect(notes.join("\n")).not.toMatch(/Claude token 2|A second Subscription/);
+  });
+
+  it("keeps every other byte of the Kit config it lists it in, its tabs and CRLF line endings included", () => {
+    const stored = ["Claude token", "Claude token 2"];
+    const own = '{\r\n\t"operator": "jrey8343",\r\n\t"subscriptions": [ "Claude token" ],\r\n\t"max_in_flight": 1\r\n}\r\n';
+    const unlisted = '{\n  "max_in_flight": 1\n}\n';
+
+    expect(written(planSetup(withConfig(own, stored), kit, operator).actions, ".fabrik/config.json")).toBe(
+      '{\r\n\t"operator": "jrey8343",\r\n\t"subscriptions": ["Claude token", "Claude token 2"],\r\n\t"max_in_flight": 1\r\n}\r\n',
+    );
+    expect(written(planSetup(withConfig(unlisted, stored), kit, operator).actions, ".fabrik/config.json")).toBe(
+      '{\n  "max_in_flight": 1,\n  "subscriptions": ["Claude token", "Claude token 2"]\n}\n',
+    );
+  });
+
+  it("lists it in the starter on a repo with no Kit config, in the plan's one write of it, paused or not", () => {
+    const fresh = aCleanProduct({ vaults: ["Fabrik"], fabrikItems: ["Claude token", "Claude token 2"] });
+    const listedIn = (starter: string) =>
+      starter.replace('  "subscriptions": ["Claude token"],\n', '  "subscriptions": ["Claude token", "Claude token 2"],\n');
+
+    for (const [answers, starter] of [
+      [operator, kit.templates.kitConfig],
+      [{ ...operator, paused: true }, kit.templates.kitConfig.replace('"max_in_flight": 2', '"max_in_flight": 0')],
+    ] as const) {
+      const writes = planSetup(fresh, kit, answers).actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json");
+      expect(writes).toEqual([expect.objectContaining({ content: listedIn(starter), why: expect.stringContaining("the second Subscription listed") })]);
+    }
+  });
+
+  it("writes nothing to a Kit config it can't read a list from, and says so", () => {
+    for (const config of ["{ not json\n", '[ "Claude token" ]\n', '{ "subscriptions": "Claude token" }\n', '{ "subscriptions": [] }\n']) {
+      const { actions, notes } = planSetup(withConfig(config, ["Claude token", "Claude token 2"]), kit, operator);
+
+      expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+      expect(notes).toContainEqual(
+        '.fabrik/config.json isn\'t a JSON object whose subscriptions is a list of names, so setup didn\'t list "Claude token 2" in it: fix it, then run setup again.',
+      );
+    }
+  });
+
+  it("leaves a list of two or more Subscriptions as the Operator wrote it", () => {
+    const state = withConfig('{ "subscriptions": ["Claude token", "Claude token B"] }\n', ["Claude token", "Claude token B", "Claude token 2"]);
+
+    expect(planSetup(state, kit, operator)).toEqual(planSetup(state, kit));
   });
 
   it("is planned away once the second vault item exists and is listed", () => {
