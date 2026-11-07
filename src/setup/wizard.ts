@@ -7,8 +7,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Env } from "./exec.ts";
 
-/** The wizard, found from this file. #335 moves it beside the setup program: change it here. */
-export const WIZARD_PATH = fileURLToPath(new URL("../../skills/fabrik-setup/wizard.sh", import.meta.url));
+/** The wizard, beside the setup program in the release setup runs from. */
+export const WIZARD_PATH = fileURLToPath(new URL("./wizard.sh", import.meta.url));
 
 /** The environment variable naming the file the wizard reports to. */
 export const WIZARD_REPORT_ENV = "FABRIK_WIZARD_REPORT";

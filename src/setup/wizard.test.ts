@@ -1,6 +1,6 @@
-// The setup wizard is the half of /fabrik-setup the Operator runs in their own
-// terminal, so it's run here as they'd run it: with `gh`, `op` and the browser
-// stubbed, and their answers piped in.
+// The setup wizard is the part of Setup the Operator walks in their own
+// terminal, so it's run here as they'd walk it: with `gh`, `op` and the
+// browser stubbed, and their answers piped in.
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";

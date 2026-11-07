@@ -1,4 +1,4 @@
-// What the setup skill installs, read from a Fabrik checkout at the release
+// What Setup installs, read from a Fabrik checkout at the release
 // being set up: the caller workflow, the stable shims and the starters.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";

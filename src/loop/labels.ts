@@ -1,5 +1,5 @@
 // Every label the Kit reads or writes (docs/agents/triage-labels.md), in one
-// place: the core, the adapter and the setup skill all take them from here.
+// place: the core, the adapter and the setup program all take them from here.
 
 export const NEEDS_TRIAGE = "needs-triage";
 export const NEEDS_INFO = "needs-info";
@@ -130,7 +130,7 @@ export type Label =
   | typeof RESEARCH_LABEL
   | typeof REPLAY_TRIGGER_LABEL;
 
-/** Every label the Kit uses, so the setup skill can create each one. */
+/** Every label the Kit uses, so Setup can create each one. */
 export const ALL_LABELS: readonly Label[] = [
   ...STATE_LABELS,
   DISPATCH_LABEL,

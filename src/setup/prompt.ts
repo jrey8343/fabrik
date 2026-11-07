@@ -1,6 +1,6 @@
 // How the setup program asks the Operator a question. It asks only when stdin
 // is a terminal: without one there's no prompt, and a missing answer means no,
-// so the setup skill, which passes every answer as a flag, runs as before.
+// so a run without a terminal stops at its plan.
 import { createInterface } from "node:readline";
 
 export interface Prompt {

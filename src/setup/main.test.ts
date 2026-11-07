@@ -1,8 +1,9 @@
-// The setup program run as the setup skill runs it: from the Product repo's
-// root, with no terminal, OP_ACCOUNT set and every answer a flag. Its steps 4
-// and 5 are run verbatim against a real git clone, with gh and op stubbed.
+// The setup program run as the bootstrap command runs it where there's no
+// terminal: from the Product repo's root, as `node src/setup/main.ts .
+// <release> [flags]` with nothing on stdin, against a real git clone, with gh
+// and op stubbed. It asks nothing, so it stops at the plan.
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmod, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { ACME, PERSONAL } from "../__fixtures__/setupCommands.ts";
@@ -74,7 +75,7 @@ beforeEach(async () => {
   git("push", "-q", "origin", "main");
 });
 
-/** One run of the setup program, as the skill's Bash call makes it: stdin piped, so no terminal. */
+/** One run of the setup program with nothing on stdin, so no terminal. */
 async function setup(args: string[]) {
   const run = spawnSync(process.execPath, [MAIN, ...args], {
     cwd: checkout,
@@ -101,8 +102,8 @@ async function setup(args: string[]) {
 }
 
 // Each run starts Node and stubs dozens of gh calls, so allow more than the default.
-describe("The setup skill's commands", { timeout: 60_000 }, () => {
-  it("step 4 prints the plan without asking, on the default branch, naming the account OP_ACCOUNT set", async () => {
+describe("The setup program without a terminal", { timeout: 60_000 }, () => {
+  it("prints the plan without asking, on the default branch, naming the account OP_ACCOUNT set", async () => {
     const { status, stdout, stderr, calls } = await setup([".", "v1.4.2", "--time-zone=Europe/London", "--second-subscription", "--paused"]);
 
     expect(stderr).toBe("");
@@ -116,27 +117,16 @@ describe("The setup skill's commands", { timeout: 60_000 }, () => {
     expect(git("status", "--porcelain")).toBe("");
   });
 
-  it("step 5 applies the plan on the setup branch it has just made", async () => {
+  it("run again on the setup branch, with setup's own files uncommitted as a run that stopped partway leaves them, still plans", async () => {
     git("switch", "-q", "-c", "fabrik/setup-v1.4.2");
-    const { status, stdout, stderr, calls } = await setup([".", "v1.4.2", "--time-zone=Europe/London", "--paused", "--apply"]);
+    await mkdir(join(checkout, ".fabrik"));
+    await writeFile(join(checkout, ".fabrik", "config.json"), "{}\n");
+
+    const { status, stdout, stderr } = await setup([".", "v1.4.2"]);
 
     expect(stderr).toBe("");
     expect(status).toBe(0);
-    expect(stdout).toContain("Done.");
-    expect(await readFile(join(checkout, ".fabrik", "config.json"), "utf8")).toContain('"max_in_flight": 0');
-    const ops = calls.filter((call) => call.command === "op");
-    expect(ops.some((call) => call.line.startsWith("service-account create"))).toBe(true);
-    expect(ops.every((call) => call.account === ACME.url)).toBe(true);
-  });
-
-  it("step 4 run again on the setup branch, with setup's own files uncommitted as a partway failure leaves them, still plans", async () => {
-    git("switch", "-q", "-c", "fabrik/setup-v1.4.2");
-    expect((await setup([".", "v1.4.2", "--apply"])).status).toBe(0);
-
-    const { status, stderr } = await setup([".", "v1.4.2"]);
-
-    expect(stderr).toBe("");
-    expect(status).toBe(0);
+    expect(stdout).toContain("Setup carries the plan out only on your yes, so run it in a terminal to do it.");
   });
 
   it("stops before any plan on a dirty default branch, naming the change", async () => {

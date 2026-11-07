@@ -92,7 +92,7 @@ function nameOf(account: OpAccount): string {
   return `${account.url} (${account.email})`;
 }
 
-/** The account's sign-in address, as the setup skill sets OP_ACCOUNT, unless another account shares it: then its user ID. */
+/** The account's sign-in address, as OP_ACCOUNT takes it, unless another account shares it: then its user ID. */
 function opAccountOf(account: OpAccount, accounts: readonly OpAccount[]): string {
   const shared = accounts.filter((other) => address(other.url) === address(account.url)).length > 1;
   return shared ? account.user_uuid : account.url;

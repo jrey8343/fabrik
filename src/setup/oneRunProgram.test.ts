@@ -108,7 +108,7 @@ async function setupOnce(world: World, { answers = ["y"], wizard = walksEverySta
       await wizard(world, options.env);
     },
   });
-  return { code, said, complaints, log, questions: prompt.questions, wizardRuns };
+  return { code, said, complaints, log, questions: prompt.questions, wizardRuns, calls: commands.calls };
 }
 
 /** The files on origin's setup branch. */
@@ -163,6 +163,15 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(await realpath(wizardRuns[0]!.cwd)).toBe(await realpath(checkout));
     // With no second Subscription asked for, so the wizard's stage says setup doesn't list one.
     expect(wizardRuns[0]?.env[WIZARD_SECOND_SUBSCRIPTION_ENV]).toBe("no");
+  });
+
+  it("applies the plan in the 1Password account it named, every op call from choosing it on included", async () => {
+    const { calls } = await setupOnce(aWorld());
+
+    const ops = calls.filter((call) => call.command === "op");
+    const afterChoosing = ops.slice(ops.findIndex((call) => call.line.startsWith("op account list")) + 1);
+    expect(afterChoosing.some((call) => call.line.startsWith("op service-account create"))).toBe(true);
+    expect(new Set(afterChoosing.map((call) => call.env["OP_ACCOUNT"]))).toEqual(new Set(["my.1password.com"]));
   });
 
   it("asks for the merge once the App is installed, its key stored and the Claude token stored", async () => {

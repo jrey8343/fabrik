@@ -200,11 +200,10 @@ finish() {
 
 
 # Fabrik setup wizard: the steps of adopting the Kit that only the Operator can
-# take. Setup runs it in the same terminal once it has applied its plan, then
-# opens the setup PR. The fabrik-setup skill hands it over instead, after it
-# has written the Kit files, created the labels, vaults and service accounts,
-# and protected the branch. Run it from the Product repo's checkout:
-#   bash .claude/skills/fabrik-setup/wizard.sh
+# take. Setup runs it in the same terminal, from the Product repo's checkout,
+# once it has written the Kit files, created the labels, vaults and service
+# accounts, and protected the branch. Then it opens the setup PR. Running
+# Setup again walks the wizard again.
 # Nothing it captures is written to disk: the Fabrik App's key, the Claude token
 # and the Sentry token go straight into 1Password, where the Kit's jobs read
 # them (ADR-0004).

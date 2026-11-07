@@ -1,12 +1,12 @@
 // The setup program, from its command line to the setup PR. It runs the
-// checks, chooses the 1Password account, reads the Product repo, asks the
-// questions the flags left out, and prints the plan with the account on its
-// first line. In a terminal it then asks the Operator's yes and makes one run
-// of it (oneRun.ts): apply on the setup branch, the wizard, then the setup PR.
-// Without a terminal, or with --plan, it stops at the plan. With --apply it
-// only carries the plan out, as the setup skill's step 5 runs it. The command
-// runner, environment, prompt and wizard come in from main.ts, so the tests
-// run it all without real gh, op or a terminal.
+// checks, offers to delete an old copy of the fabrik-setup skill, chooses the
+// 1Password account, reads the Product repo, asks the questions the flags left
+// out, and prints the plan with the account on its first line. In a terminal
+// it then asks the Operator's yes and makes one run of it (oneRun.ts): apply
+// on the setup branch, the wizard, then the setup PR. Without a terminal, or
+// with --plan, it stops at the plan. The command runner, environment, prompt
+// and wizard come in from main.ts, so the tests run it all without real gh,
+// op or a terminal.
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -14,7 +14,7 @@ import { checkCallerWorkflow } from "../kit/caller.ts";
 import { checkOp, chooseAccount } from "./account.ts";
 import { apply, describeAction } from "./apply.ts";
 import { parseSetupArgs, SETUP_USAGE } from "./args.ts";
-import { checkSetup, setupBranch } from "./checks.ts";
+import { checkSetup, offerToDeleteOldSetupSkill, setupBranch } from "./checks.ts";
 import type { Env, Run } from "./exec.ts";
 import { closingLines } from "./finish.ts";
 import { gatherState, vaultItems } from "./gather.ts";
@@ -65,6 +65,7 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
     const paths = setupPaths(kit);
     const checked = await checkSetup({ run: before, productDir, release: args.release, env: io.env, nodeVersion: io.nodeVersion, setupPaths: paths });
     if (!checked.ok) return stop(io, checked.problem);
+    await offerToDeleteOldSetupSkill({ env: io.env, prompt: args.plan ? null : io.prompt, say: io.say });
     const chosen = await chooseAccount({
       run: before,
       cwd: productDir,
@@ -87,16 +88,9 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
 
     io.say(`Setup uses the 1Password account ${chosen.account.name}.`);
     io.say("");
-    if (args.apply) {
-      for (const action of plan.actions) {
-        await apply(run, action, productDir, state.repo);
-        io.say(`- ${describeAction(action)}`);
-      }
-      io.say(withNotes([plan.actions.length === 0 ? COMPLETE : "Done."], plan));
-      return 0;
-    }
     if (io.prompt === null || args.plan) {
-      io.say(withNotes(plan.actions.length === 0 ? [COMPLETE] : [...stepsOf(plan), "", "Run again with --apply to do it."], plan));
+      const toDoIt = args.plan ? "Run setup again without --plan to do it." : "Setup carries the plan out only on your yes, so run it in a terminal to do it.";
+      io.say(withNotes(plan.actions.length === 0 ? [COMPLETE] : [...stepsOf(plan), "", toDoIt], plan));
       return 0;
     }
     const inTerminal = { ...io, prompt: io.prompt };

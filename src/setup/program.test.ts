@@ -1,8 +1,8 @@
 // The setup program from its command line to its plan: the checks, the
 // 1Password account, the questions, then the plan, with every git, gh and op
 // command answered by a fake runner and no terminal unless a test gives one.
-import { readdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   ACME,
@@ -77,6 +77,11 @@ async function setup(args: string[], options: Options = {}) {
 }
 
 const severalAccounts = { "op account list --format json": { stdout: JSON.stringify([PERSONAL, ACME]) } };
+/** No earlier run left a setup branch, so a run in a terminal goes on to ask for the yes. */
+const NO_EARLIER_RUN = {
+  "git rev-parse --verify --quiet refs/heads/fabrik/setup-v1.4.2": { code: 1 },
+  "git ls-remote origin refs/heads/fabrik/setup-v1.4.2": { stdout: "" },
+};
 const withFabrikVault = {
   "op vault list --format json": { stdout: JSON.stringify([{ name: "Fabrik" }]) },
   "op item list --vault Fabrik --format json": { stdout: "[]" },
@@ -156,17 +161,15 @@ describe("The setup program", () => {
     expect(calls.filter((call) => call.command === "op")).toEqual([]);
   });
 
-  it("with several 1Password accounts, asks which, and every later op call uses it, applying included", async () => {
-    const prompt = scripted("2", "no", "", "");
-    const { code, said, calls } = await setup([".", "v1.4.2", "--apply"], { script: { ...severalAccounts, ...withFabrikVault }, prompt });
+  it("with several 1Password accounts, asks which, and every later op call uses it", async () => {
+    // The Operator answers the account, the three questions, then no to the plan.
+    const prompt = scripted("2", "no", "", "", "n");
+    const { code, said, calls } = await setup([".", "v1.4.2"], { script: { ...severalAccounts, ...withFabrikVault, ...NO_EARLIER_RUN }, prompt });
 
     expect(code).toBe(0);
     expect(prompt.questions[0]).toBe("Which one holds this Product's secrets? [1-2] ");
     const later = calls.slice(calls.findIndex((call) => call.line.startsWith("op account list")) + 1).filter((call) => call.command === "op");
-    expect(later.map((call) => call.line)).toEqual(
-      expect.arrayContaining(["op vault list --format json", "op item list --vault Fabrik --format json", "op vault create Fabrik App"]),
-    );
-    expect(later.some((call) => call.line.startsWith("op service-account create"))).toBe(true);
+    expect(later.map((call) => call.line)).toEqual(expect.arrayContaining(["op vault list --format json", "op item list --vault Fabrik --format json"]));
     expect(new Set(later.map((call) => call.env.OP_ACCOUNT))).toEqual(new Set(["acme.1password.com"]));
     expect(said).toContain("Setup uses the 1Password account acme.1password.com (operator@acme.example).");
   });
@@ -192,7 +195,7 @@ describe("The setup program", () => {
     expect(said.some((line) => line.includes("Dispatch paused (max_in_flight 0)"))).toBe(true);
   });
 
-  it("without a terminal, asks nothing and takes OP_ACCOUNT, as the setup skill sets it", async () => {
+  it("without a terminal, asks nothing and takes the account from OP_ACCOUNT", async () => {
     const { code, said, calls } = await setup([".", "v1.4.2", "--time-zone=Europe/London"], {
       script: severalAccounts,
       env: { OP_ACCOUNT: "acme.1password.com" },
@@ -221,19 +224,20 @@ describe("The setup program", () => {
     expect(await readdir(productDir)).toEqual([]);
   });
 
-  it("applies on the setup branch, as the setup skill's step 5 runs it", async () => {
-    const { code, said, complaints } = await setup([".", "v1.4.2", "--time-zone=Europe/London", "--apply"], {
-      script: {
-        "git branch --show-current": { stdout: "fabrik/setup-v1.4.2\n" },
-        "gh api repos/jrey8343/fabrik-runs/contents/.github/workflows/weekly-summary.yml": { code: 1, stderr: "gh: This repository is empty. (HTTP 404)" },
-        "gh api repos/jrey8343/fabrik-runs/contents/.github/dependabot.yml": { code: 1, stderr: "gh: This repository is empty. (HTTP 404)" },
-      },
-    });
+  it("without a terminal, stops at the plan, since it carries a plan out only on the Operator's yes", async () => {
+    const { code, said, calls } = await setup([".", "v1.4.2", "--time-zone=Europe/London"], { prompt: null });
 
-    expect(complaints).toEqual([]);
     expect(code).toBe(0);
-    expect(said).toContain("Done.");
-    expect(await readdir(productDir)).toContain("AGENTS.md");
+    expect(said).toContain("Setup carries the plan out only on your yes, so run it in a terminal to do it.");
+    expect(calls.filter((call) => !isReadOnly(call)).map((call) => call.line)).toEqual([]);
+    expect(await readdir(productDir)).toEqual([]);
+  });
+
+  it("with --plan in a terminal, stops at the plan and says how to carry it out", async () => {
+    const { code, said } = await setup([".", "v1.4.2", "--plan", "--no-time-zone", "--no-second-subscription", "--no-paused"], { prompt: neverAsked });
+
+    expect(code).toBe(0);
+    expect(said).toContain("Run setup again without --plan to do it.");
   });
 
   it("refuses a flag it doesn't know with the usage line, before running anything", async () => {
@@ -260,5 +264,81 @@ describe("The setup program", () => {
     expect(code).toBe(1);
     expect(complaints[0]).toMatch(/^Can't set up Fabrik v1: /);
     expect(calls).toEqual([]);
+  });
+});
+
+describe("An old personal copy of the fabrik-setup skill", () => {
+  let home: string;
+  let copy: string;
+
+  beforeEach(async () => {
+    home = await tempDir("setup-home");
+    copy = join(home, ".claude", "skills", "fabrik-setup");
+    await mkdir(copy, { recursive: true });
+    await writeFile(join(copy, "SKILL.md"), "---\nname: fabrik-setup\n---\n# Fabrik setup\n");
+    await mkdir(join(home, ".claude", "skills", "grilling"));
+  });
+
+  const exists = async (path: string) => (await readdir(join(path, "..")).catch(() => [] as string[])).includes("fabrik-setup");
+  const FOUND = () => `${copy} is an out-of-date copy of the fabrik-setup skill, which Setup no longer uses.`;
+  const STALE = () => `It's stale: delete it with rm -rf '${copy}'.`;
+  /** A run in a terminal with every question answered by a flag, that the Operator says no to at the plan. */
+  const ANSWERED = [".", "v1.4.2", "--no-time-zone", "--no-second-subscription", "--no-paused"];
+
+  it("is offered for deletion once the checks pass, and deleted on a yes, leaving the other personal skills", async () => {
+    const prompt = scripted("y", "n");
+    const { code, said } = await setup(ANSWERED, { env: { HOME: home }, prompt, script: NO_EARLIER_RUN });
+
+    expect(code).toBe(0);
+    expect(said[0]).toBe(FOUND());
+    expect(prompt.questions[0]).toBe("Delete it? [y/N] ");
+    expect(said).toContain(`Deleted ${copy}.`);
+    expect(await exists(copy)).toBe(false);
+    expect(await readdir(join(home, ".claude", "skills"))).toEqual(["grilling"]);
+  });
+
+  it("is kept on anything but a yes, with a warning that it's stale", async () => {
+    const { said } = await setup(ANSWERED, { env: { HOME: home }, prompt: scripted("", "n"), script: NO_EARLIER_RUN });
+
+    expect(said).toContain(`Kept it. ${STALE()}`);
+    expect(await exists(copy)).toBe(true);
+  });
+
+  it("without a terminal, is kept with the warning, and nothing is asked", async () => {
+    const { code, said } = await setup([".", "v1.4.2"], { env: { HOME: home }, prompt: null });
+
+    expect(code).toBe(0);
+    expect(said.slice(0, 2)).toEqual([FOUND(), STALE()]);
+    expect(await exists(copy)).toBe(true);
+  });
+
+  it("with --plan, which changes nothing, is kept with the warning, and nothing is asked about it", async () => {
+    const { said } = await setup([...ANSWERED, "--plan"], { env: { HOME: home }, prompt: neverAsked });
+
+    expect(said.slice(0, 2)).toEqual([FOUND(), STALE()]);
+    expect(await exists(copy)).toBe(true);
+  });
+
+  it("is found in CLAUDE_CONFIG_DIR's skills when that's set, as Claude Code keeps them there", async () => {
+    const config = await tempDir("setup-claude-config");
+    await mkdir(join(config, "skills", "fabrik-setup"), { recursive: true });
+
+    const { said } = await setup([".", "v1.4.2"], { env: { HOME: home, CLAUDE_CONFIG_DIR: config }, prompt: null });
+
+    expect(said[0]).toBe(`${join(config, "skills", "fabrik-setup")} is an out-of-date copy of the fabrik-setup skill, which Setup no longer uses.`);
+  });
+
+  it("isn't mentioned when there's none", async () => {
+    const { said } = await setup([".", "v1.4.2"], { env: { HOME: await tempDir("setup-home") }, prompt: null });
+
+    expect(said[0]).toBe("Setup uses the 1Password account my.1password.com (operator@example.com).");
+  });
+
+  it("isn't offered when a check fails, since setup stops first", async () => {
+    const { code, said } = await setup([".", "v1.4.2"], { env: { HOME: home }, prompt: neverAsked, nodeVersion: "22.11.0" });
+
+    expect(code).toBe(1);
+    expect(said).toEqual([]);
+    expect(await exists(copy)).toBe(true);
   });
 });
