@@ -57,6 +57,8 @@ There's nothing to copy or install first. `setup.sh` checks for Node 24.3 or lat
 curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.0.0
 ```
 
+`--release=v1.0.0`, anywhere after the `--`, names it too. `setup.sh` refuses an empty `--release=`, two different releases, and a tag that isn't exact, before it downloads anything.
+
 Setup's flags go after the release, if one is named: `--account=<1Password account>`, `--time-zone=<IANA zone>`, `--second-subscription`, `--paused` and `--plan`. Each question's flag also has a `--no-` form, and Setup asks only what the flags left out.
 
 Setup first checks that it's in the clone's root, on the default branch, clean and the same as on `origin`; that `gh` is signed in as the repo's admin with the `workflow` scope; that `op` is signed in as the Operator, not as a service account (it stops when `OP_SERVICE_ACCOUNT_TOKEN` is set); and that Node is 24.3 or later. With several 1Password accounts it asks which one holds this Product's secrets, offering the one `OP_ACCOUNT` names, if it's set, for an Enter; without a terminal, `OP_ACCOUNT` or `--account=` names it. Then it asks three questions: the Operator's time zone for the Weekly summary, whether to add a second Subscription, and whether to pause Dispatch. It shows its plan, naming the 1Password account on the first line. With `--plan`, or without a terminal, it stops there. On the Operator's yes it applies the plan on the branch `fabrik/setup-<release>`, runs the wizard, then commits, pushes and opens the setup PR with the files:

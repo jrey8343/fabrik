@@ -1,5 +1,6 @@
 // The bootstrap script, setup.sh, run as the README gives its command: piped
-// into `bash -s -- [release] [setup's flags]` from the Product repo's clone.
+// into `bash -s -- [release] [setup's flags]` from the Product repo's clone,
+// the release named first or as --release=.
 // curl, gh and node are stubbed on a PATH holding nothing else the script
 // could reach for, and the release it downloads is a stand-in whose setup
 // program only records how it was run.
@@ -238,6 +239,76 @@ describe("The bootstrap command", { timeout: 30_000 }, () => {
 
     expect(code).toBe(0);
     expect(ran.map((run) => run.args)).toEqual([[".", "v1.2.3"]]);
+  });
+
+  describe("with the release named as --release=", () => {
+    it("alone, runs that release's setup program, and never passes --release= on", async () => {
+      const { code, stderr, ran, curl, gh } = await bootstrap(["--release=v1.0.0"]);
+
+      expect(stderr).toBe("");
+      expect(code).toBe(0);
+      expect(curl).toEqual(["-fsSL https://codeload.github.com/jrey8343/fabrik/tar.gz/refs/tags/v1.0.0"]);
+      expect(ran.map((run) => run.args)).toEqual([[".", "v1.0.0"]]);
+      expect(gh.filter((line) => line.startsWith("release "))).toEqual([]);
+    });
+
+    it("after other flags, takes it from among them and passes the rest on in order", async () => {
+      const { code, ran, curl } = await bootstrap(["--paused", "--release=v1.0.0", "--time-zone=Europe/London"]);
+
+      expect(code).toBe(0);
+      expect(curl).toEqual(["-fsSL https://codeload.github.com/jrey8343/fabrik/tar.gz/refs/tags/v1.0.0"]);
+      expect(ran.map((run) => run.args)).toEqual([[".", "v1.0.0", "--paused", "--time-zone=Europe/London"]]);
+    });
+
+    it("as well as first, runs it when the two agree", async () => {
+      const { code, ran } = await bootstrap(["v1.0.0", "--paused", "--release=v1.0.0"]);
+
+      expect(code).toBe(0);
+      expect(ran.map((run) => run.args)).toEqual([[".", "v1.0.0", "--paused"]]);
+    });
+
+    it.each([
+      ["first and as --release=", ["v1.0.0", "--release=v1.2.0"]],
+      ["as --release= twice", ["--release=v1.0.0", "--paused", "--release=v1.2.0"]],
+    ])("refuses two different releases, named %s, downloading nothing", async (_, args) => {
+      const { code, stdout, stderr, ran, curl } = await bootstrap(args);
+
+      expect(code).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toBe("The release is named twice, as v1.0.0 and v1.2.0. Name it once, then run setup again.\n");
+      expect(curl).toEqual([]);
+      expect(ran).toEqual([]);
+    });
+
+    it("refuses an empty --release=, downloading nothing", async () => {
+      const { code, stderr, ran, curl, gh } = await bootstrap(["--release=", "--paused"]);
+
+      expect(code).toBe(1);
+      expect(stderr).toBe(
+        "--release= names no release. Name one from https://github.com/jrey8343/fabrik/releases, such as --release=v1.2.3, or leave it out for the latest.\n",
+      );
+      expect(curl).toEqual([]);
+      expect(gh).toEqual([]);
+      expect(ran).toEqual([]);
+    });
+
+    it("refuses one that isn't an exact release tag, downloading nothing", async () => {
+      const { code, stderr, ran, curl } = await bootstrap(["--release=v1.2"]);
+
+      expect(code).toBe(1);
+      expect(stderr).toBe("v1.2 isn't an exact Fabrik release tag such as v1.2.3. Name one from https://github.com/jrey8343/fabrik/releases, or leave it out for the latest.\n");
+      expect(curl).toEqual([]);
+      expect(ran).toEqual([]);
+    });
+
+    it("refuses --release with its tag after a space, downloading nothing", async () => {
+      const { code, stderr, ran, curl } = await bootstrap(["--release", "v1.0.0"]);
+
+      expect(code).toBe(1);
+      expect(stderr).toBe("--release takes its release after an =, such as --release=v1.2.3.\n");
+      expect(curl).toEqual([]);
+      expect(ran).toEqual([]);
+    });
   });
 
   it("run with nothing after --, runs the latest release with no flags", async () => {

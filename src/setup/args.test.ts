@@ -99,6 +99,8 @@ describe("The setup program's flags", () => {
 
   it("lists every flag in its usage line, and no other", () => {
     const flags = [
+      // The bootstrap's own, which names the release, as a first argument does.
+      "--release=",
       "--account=",
       "--time-zone=",
       "--no-time-zone",
@@ -113,13 +115,15 @@ describe("The setup program's flags", () => {
     expect([...SETUP_USAGE.matchAll(/--[a-z-]+=?/g)].map((match) => match[0]).sort()).toEqual([...flags].sort());
   });
 
-  it("takes every flag its usage line lists", () => {
+  it("takes every flag its usage line lists, but the one the bootstrap takes itself", () => {
     const values: Record<string, string> = {
       "--account=": "my.1password.com",
       "--time-zone=": "Europe/London",
     };
 
     for (const [flag] of SETUP_USAGE.matchAll(/--[a-z-]+=?/g)) {
+      // setup.sh turns --release= into the release it downloads, and never passes it on.
+      if (flag === "--release=") continue;
       expect(parseSetupArgs([".", "v1.4.2", `${flag}${values[flag] ?? ""}`]).ok, flag).toBe(true);
     }
   });
