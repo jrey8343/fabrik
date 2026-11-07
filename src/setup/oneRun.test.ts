@@ -86,6 +86,15 @@ describe("One setup run", () => {
     expect(result.kind === "done" && result.summary.done).toEqual([...earlierDone, "create the label needs-triage"]);
   });
 
+  it("lists a step an earlier run on the setup branch did, and this run did again, where this run did it", async () => {
+    const { steps } = fakeSteps();
+    const earlierDone = ["create the label needs-triage", "create the label needs-info"];
+
+    const result = await runOnce({ plan: plan([LABEL]), repo: "acme/clinic", earlierDone }, steps);
+
+    expect(result.kind === "done" && result.summary.done).toEqual(["create the label needs-info", "create the label needs-triage"]);
+  });
+
   it("commits the files this run and an earlier one on the setup branch wrote, and no others", async () => {
     const { steps } = fakeSteps({ after: plan([SUBSCRIPTIONS]) });
     const committed: (readonly string[])[] = [];

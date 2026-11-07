@@ -42,12 +42,26 @@ describe("The setup PR's body", () => {
   it("keeps what an earlier run did, so a run that picks up the same PR adds to its list", () => {
     const earlier = prBody({ release: "v1.4.2", defaultBranch: "main", summary: BLOCKED });
 
-    expect(withEarlierDone(earlier, ["create the label needs-info", "create the label needs-triage"])).toEqual([
+    expect(withEarlierDone(earlier, ["create the label needs-info"])).toEqual([
       "write .github/workflows/fabrik.yml (the caller workflow)",
       "create the label needs-triage",
       "create the label needs-info",
     ]);
     expect(withEarlierDone(null, ["create the label needs-info"])).toEqual(["create the label needs-info"]);
+  });
+
+  it("lists each step once, where it was last done, so the list ends on what the setup branch holds", () => {
+    const paused = "write .fabrik/config.json (the starter Kit config, with Dispatch paused now (max_in_flight 0))";
+    const unpaused = "write .fabrik/config.json (the starter Kit config, with Dispatch not paused now (max_in_flight 2))";
+    const earlier = prBody({ release: "v1.4.2", defaultBranch: "main", summary: { ...SUMMARY, done: [...SUMMARY.done, paused, unpaused] } });
+
+    expect(withEarlierDone(earlier, [paused, "create the label needs-info"])).toEqual([
+      "write .github/workflows/fabrik.yml (the caller workflow)",
+      "create the label needs-triage",
+      unpaused,
+      paused,
+      "create the label needs-info",
+    ]);
   });
 
   it("drops control characters from what the earlier PR's body says, since the closing lines print it to the terminal", () => {

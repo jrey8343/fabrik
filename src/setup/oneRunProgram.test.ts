@@ -481,6 +481,21 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(closingOf(said).some((line) => line.includes(PAUSED))).toBe(false);
     });
 
+    it("pausing again after a run that took back an earlier pause, ends what setup did on the pause, in the setup PR and the closing lines", async () => {
+      const world = withReadyIssues();
+      await setupOnce(world);
+      await setupOnce(world, { args: withPaused(true) });
+      await setupOnce(world, { args: withPaused(false) });
+
+      const { code, said } = await setupOnce(world, { args: withPaused(true) });
+
+      expect(code).toBe(0);
+      expect(maxInFlight()).toBe(0);
+      const configSteps = (lines: readonly string[]) => lines.filter((line) => line.startsWith("- write .fabrik/config.json ("));
+      expect(configSteps(world.prs[0]!.body.split("\n")).at(-1)).toBe(PAUSES);
+      expect(configSteps(closingOf(said)).at(-1)).toBe(PAUSES);
+    });
+
     it("with --paused and the Product's own Kit config, which doesn't pause Dispatch, doesn't say Dispatch is paused", async () => {
       await mkdir(join(checkout, ".fabrik"));
       await writeFile(join(checkout, ".fabrik", "config.json"), '{\n  "max_in_flight": 3\n}\n');

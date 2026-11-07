@@ -6,7 +6,7 @@
 // default branch. Each step is injected, so this module does no git, gh, op or
 // terminal work itself.
 import { describeAction, writtenPaths } from "./apply.ts";
-import { appConfirmedIn } from "./finish.ts";
+import { appConfirmedIn, lastOfEach } from "./finish.ts";
 import { FABRIK_APP_VAULT, FABRIK_VAULT, type SetupAction, type SetupPlan } from "./plan.ts";
 import { appInstalledIn } from "./wizard.ts";
 
@@ -127,7 +127,7 @@ export async function runOnce({ plan, repo, earlierDone = [] }: OneRun, steps: O
     );
   }
 
-  const done = [...new Set([...earlierDone, ...[...plan.actions, ...files].map(describeAction)])];
+  const done = lastOfEach([...earlierDone, ...[...plan.actions, ...files].map(describeAction)]);
   // Only what this run or the earlier ones wrote: a file of setup's the Operator edited by hand isn't the setup PR's.
   const committed = await steps.commit(writtenPaths(done));
   // A setup PR that changes no file would merge nothing, as after a repair of only labels, secrets or protection.
