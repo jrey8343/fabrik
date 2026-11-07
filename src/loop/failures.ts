@@ -88,9 +88,10 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
 }
 
 /**
- * How the notice says to go on. GitHub refuses a refused input read again on
- * every retry, so for that the Kit needs fixing first; any other failure,
- * including an input read GitHub failed or never answered, `resume` retries.
+ * How the notice says to go on. GitHub refuses a refused input read again
+ * each time the run goes again, so for that the Kit needs fixing first; after
+ * any other failure, including an input read GitHub failed or never answered,
+ * `resume` runs it again.
  */
 function resumeAfter(failure: InfrastructureFailure, run: FailedRun, resume: string): string {
   if (failure !== "unread-inputs" || run.report?.refused !== true) return resume;

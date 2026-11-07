@@ -721,12 +721,8 @@ describe("loop.yml's prototype job", () => {
     );
   });
 
-  // pull-requests: read because the input step reads the PR a sent-back Ticket came back from (readSentBack, #328).
-  it("holds only read permissions, on the Product repo's contents, its issues and its PRs: no GitHub write access", () => {
-    const permissions = /\n    permissions:\n((?: {6}.*\n)+)/.exec(prototype())?.[1] ?? "";
-
-    expect(permissions.trim().split("\n").map((line) => line.trim())).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
-    expect(permissions).not.toMatch(/write/);
+  // Its permissions are pinned with the other jobs that may read a sent-back Ticket's PR, above (#328).
+  it("holds no GitHub credential beyond its read-only token", () => {
     expect(prototype()).not.toMatch(/OP_PUSH_TOKEN|id-token|GH_TOKEN|create-github-app-token/);
   });
 

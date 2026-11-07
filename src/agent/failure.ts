@@ -1,6 +1,6 @@
 // What a failed agent job leaves for the push job: which kind of
 // Infrastructure failure it saw, read from the error and the `claude -p`
-// stream. A job cancelled by its timeout leaves nothing, and the push job
+// stream, or for its input step, from the GitHub call that failed. A job cancelled by its timeout leaves nothing, and the push job
 // works that out itself (src/loop/failures.ts). Pure, no I/O.
 import { GitHubError, gitHubMessageOf, refusalOf } from "../github/client.ts";
 import type { FailureReport, ReportedFailure } from "../loop/types.ts";
@@ -116,7 +116,7 @@ export function failureReportFor({ error, lines, initRefused, overage = null }: 
 /**
  * What the Kit's input step (src/agent/inputs.ts) leaves when a GitHub call
  * failed: the request, GitHub's status and its message, and whether GitHub
- * refused it outright, so the notice doesn't offer a retry that meets the
+ * refused it outright, so the notice doesn't offer to run it again into the
  * same refusal. Null for any other error, which the push job reads as a crash.
  */
 export function inputsFailureReportFor(error: unknown): FailureReport | null {

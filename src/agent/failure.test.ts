@@ -173,7 +173,7 @@ describe("How the input step reports a failed GitHub call (#328)", () => {
     new GitHubError(`GitHub ${request} failed: ${status} ${body}`, status, { body, request, rateLimitRemaining });
   const message = (text: string) => JSON.stringify({ message: text, documentation_url: "https://docs.github.com/rest" });
 
-  it("a 4xx GitHub refuses again on every retry: refused, naming the request, the status and GitHub's message", () => {
+  it("a 4xx GitHub refuses again every time the run goes again: refused, naming the request, the status and GitHub's message", () => {
     expect(inputsFailureReportFor(github(403, message("Resource not accessible by integration")))).toEqual({
       failure: "unread-inputs",
       detail: "GET /repos/acme/shop/pulls/84: 403 Resource not accessible by integration",
@@ -186,7 +186,7 @@ describe("How the input step reports a failed GitHub call (#328)", () => {
     ["a rate limit", github(403, message("API rate limit exceeded"), "GET /repos/acme/shop/pulls/84", "0"), "GET /repos/acme/shop/pulls/84: 403 API rate limit exceeded"],
     ["a 429", github(429, message("Too many requests")), "GET /repos/acme/shop/pulls/84: 429 Too many requests"],
     ["a call GitHub never answered", new GitHubError("GitHub POST /graphql failed: fetch failed", 0, { body: "fetch failed", request: "POST /graphql" }), "POST /graphql: fetch failed"],
-  ])("%s isn't refused: a retry may get through", (_case, error, detail) => {
+  ])("%s isn't refused: running it again may get through", (_case, error, detail) => {
     expect(inputsFailureReportFor(error)).toEqual({ failure: "unread-inputs", detail });
   });
 

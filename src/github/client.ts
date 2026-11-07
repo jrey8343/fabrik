@@ -73,6 +73,16 @@ function graphqlStatusOf(errors: unknown): number {
   return (typeof type === "string" ? GRAPHQL_STATUS[type] : undefined) ?? 502;
 }
 
+/** The GitHubError for a response GitHub answered with a failing status. */
+async function failedResponse(request: string, response: Response): Promise<GitHubError> {
+  const text = await response.text();
+  return new GitHubError(`GitHub ${request} failed: ${response.status} ${text}`, response.status, {
+    body: text,
+    rateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
+    request,
+  });
+}
+
 /** A fetch GitHub never answered, such as a network error, as a GitHubError with status 0. */
 async function fetched(request: string, url: string, init: RequestInit): Promise<Response> {
   try {
@@ -135,12 +145,7 @@ export class GitHub {
     });
     if (response.status === 404 && options.allowNotFound === true) return null;
     if (!response.ok) {
-      const text = await response.text();
-      throw new GitHubError(`GitHub ${method} ${path} failed: ${response.status} ${text}`, response.status, {
-        body: text,
-        rateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
-        request,
-      });
+      throw await failedResponse(request, response);
     }
     return response.status === 204 ? null : response.json();
   }
@@ -167,12 +172,7 @@ export class GitHub {
     const response = await fetched(request, url, { headers: { ...this.#headers(), accept: "application/vnd.github.raw+json" } });
     if (response.status === 404) return null;
     if (!response.ok) {
-      const text = await response.text();
-      throw new GitHubError(`GitHub ${request} failed: ${response.status} ${text}`, response.status, {
-        body: text,
-        rateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
-        request,
-      });
+      throw await failedResponse(request, response);
     }
     return response.text();
   }

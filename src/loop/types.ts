@@ -39,7 +39,7 @@ export interface FailureReport {
   readonly resetsAt?: string;
   /**
    * For unread inputs: true when GitHub refused the request (a 4xx that isn't
-   * a rate limit), which it does again on every retry until the Kit is fixed.
+   * a rate limit), which it does again each time the run goes again, until the Kit is fixed.
    * Absent for a 5xx, a rate limit or a call GitHub never answered.
    */
   readonly refused?: true;
