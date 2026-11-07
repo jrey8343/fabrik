@@ -513,7 +513,7 @@ function mergeGate(state: ProductState): SetupAction[] {
   return [{ kind: "restrict-default-branch", rulesetId: current?.id ?? null }];
 }
 
-/** The vault every repo's agent and implement accounts read: the shared Claude token. */
+/** The vault every repo's agent and implement accounts read: the Claude token every Product repo in this 1Password account shares. */
 export const FABRIK_VAULT = "Fabrik";
 /** The vault only push accounts read: the Fabrik App's client ID and private key. */
 export const FABRIK_APP_VAULT = "Fabrik App";
