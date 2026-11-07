@@ -14,7 +14,9 @@
 //   FABRIK_REVIEW                optional, a Request-changes run's review on that PR: writes review.json
 //   FABRIK_AUDIT_COMMIT          for an Auditor run, the pending Audit's marked commit (FABRIK_ISSUE is the
 //                                Audit): writes audit.json, the Auditor's inputs (readAuditInputs)
-import { writeFile } from "node:fs/promises";
+//   FABRIK_OUT_DIR               optional, where a failed GitHub call leaves its failure report
+//                                (AGENT_FAILURE_FILE), for the push job's notice to name (#328)
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
 import { gatherAuditSliceFor, gatherOpenMaps, type OpenMap } from "../github/snapshot.ts";
@@ -27,6 +29,7 @@ import { mapCapFull } from "../loop/mapCap.ts";
 import { fromAuditIn } from "../loop/markers.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
+import { AGENT_FAILURE_FILE, inputsFailureReportFor } from "./failure.ts";
 import { operatorCommentId, type OperatorComment, type RequestedChange } from "./operatorComments.ts";
 
 /** What these reads need of a GitHub client. */
@@ -679,15 +682,28 @@ async function main(outDir: string): Promise<void> {
   }
 }
 
+/**
+ * Leaves the failure report for a failed GitHub call in `failureDir`, so the
+ * push job's notice names the request and GitHub's answer rather than a
+ * crash. Any other error leaves none, and the push job reads that as a crash.
+ */
+export async function reportFailure(error: unknown, failureDir: string): Promise<void> {
+  const report = inputsFailureReportFor(error);
+  if (report === null || failureDir === "") return;
+  await mkdir(failureDir, { recursive: true });
+  await writeFile(join(failureDir, AGENT_FAILURE_FILE), JSON.stringify(report));
+}
+
 if (import.meta.main) {
   const outDir = process.argv[2];
   if (outDir === undefined) {
     console.error("Usage: node src/agent/inputs.ts <out dir>");
     process.exitCode = 2;
   } else {
-    main(outDir).catch((error: unknown) => {
+    main(outDir).catch(async (error: unknown) => {
       console.error(error instanceof Error ? error.message : error);
       process.exitCode = 1;
+      await reportFailure(error, process.env["FABRIK_OUT_DIR"] ?? "");
     });
   }
 }

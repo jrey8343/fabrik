@@ -249,6 +249,13 @@ describe("The Run record a run's end yields", () => {
       expect(files?.record).toMatchObject({ role: "audit", issue: 98, pullRequest: null, jobResult: "failure", infrastructureFailure: "missing-output" });
     });
 
+    it("a failed Audit run whose input step couldn't read its inputs is recorded as unread inputs (#328)", () => {
+      const report = { failure: "unread-inputs", detail: "GET /repos/acme/widgets/pulls/84: 403 Resource not accessible by integration", refused: true };
+      const files = audit("failure", { failureReport: JSON.stringify(report), transcript: null });
+
+      expect(files?.record).toMatchObject({ role: "audit", issue: 98, jobResult: "failure", infrastructureFailure: "unread-inputs" });
+    });
+
     it("an Audit run timed out by its timeout-minutes, with its transcript, gets a record with no result fields", () => {
       const files = audit("cancelled", { transcript: [init] });
 
