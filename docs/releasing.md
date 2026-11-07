@@ -63,7 +63,7 @@ The Pilot is the canary. A release goes to other Product repos only after it has
 1. The Pilot's Dependabot config (the Product repo shim) watches `jrey8343/fabrik*` with no cooldown, so it opens a bump PR for the new tag within a day. To get it sooner, use "Check for updates" on the Pilot's Dependabot page.
 2. Check the bump PR changes only the `uses:` refs in `.github/workflows/fabrik.yml`, all to the same tag. The Kit fails any run where they disagree.
 3. Merge the bump PR. The Loop's events (`issues`, `issue_comment`, `schedule`) run from the default branch, so the new release takes effect only after the merge. Runs on the bump PR itself see only Dependabot secrets and say little about the release.
-4. Exercise the release on a real issue: open one in the Pilot (or relabel one `needs-triage`) and walk it as far through the Loop as this release changed. The Kit job's "Find the Kit's pinned commit" step logs the tag and commit the run used, and each agent job's step summary shows the model and whether the pinned skills loaded. A draft PR nobody merges is harmless.
+4. Exercise the release on a real issue: open one in the Pilot (or relabel one `needs-triage`) and walk it as far through the Loop as this release changed. The Kit job's "Peel the Kit's pinned commit" step logs the tag and commit the run used, and each agent job's step summary shows the model and whether the pinned skills loaded. A draft PR nobody merges is harmless.
 5. If something is wrong, revert the bump PR in the Pilot. That returns it to the previous release with no other repair. Fix the problem on `main` and cut a patch release, which arrives as a new bump PR.
 6. Once the Pilot is healthy on the release, merge the same bump PR in the other Product repos.
 

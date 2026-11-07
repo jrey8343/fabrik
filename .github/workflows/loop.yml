@@ -70,7 +70,7 @@ jobs:
       issues: read
       pull-requests: read
     outputs:
-      sha: ${{ steps.kit.outputs.sha }}
+      sha: ${{ steps.commit.outputs.sha }}
       route: ${{ steps.route.outputs.route }}
       triage-timeout-minutes: ${{ steps.route.outputs.triage-timeout-minutes }}
       design-timeout-minutes: ${{ steps.route.outputs.design-timeout-minutes }}
@@ -129,7 +129,7 @@ jobs:
       prototype_request: ${{ steps.route.outputs.prototype_request }}
     steps:
       # No expression context names the commit of a called workflow, so read
-      # it from the OIDC token's job_workflow_sha claim.
+      # it from the OIDC token's job_workflow_sha claim, and its ref.
       - name: Find the Kit's pinned commit
         id: kit
         run: |
@@ -142,16 +142,29 @@ jobs:
             jrey8343/fabrik/.github/workflows/loop.yml@*) ;;
             *) echo "::error::Unexpected Kit workflow ref: $ref"; exit 1 ;;
           esac
-          echo "Kit: $ref ($sha)"
-          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          echo "workflow-ref=$ref" >>"$GITHUB_OUTPUT"
+          echo "workflow-sha=$sha" >>"$GITHUB_OUTPUT"
 
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: jrey8343/fabrik
-          ref: ${{ steps.kit.outputs.sha }}
+          ref: ${{ steps.kit.outputs.workflow-sha }}
           path: kit
           persist-credentials: false
+
+      # A pinned annotated tag's claim names the tag object, not its commit. The checkout
+      # peels it, so pass out the commit it landed on: every job checks the Kit out at it,
+      # and every Run record names it as its kitSha (#324).
+      - name: Peel the Kit's pinned commit
+        id: commit
+        env:
+          KIT_REF: ${{ steps.kit.outputs.workflow-ref }}
+        run: |
+          set -euo pipefail
+          sha="$(git -C kit rev-parse HEAD)"
+          echo "Kit: $KIT_REF at commit $sha"
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
 
       # Read as data only; nothing from the Product repo runs in this job. The
       # workflows folder holds the caller workflow, whose Fabrik pins are checked too.
