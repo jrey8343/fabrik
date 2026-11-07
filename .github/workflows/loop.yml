@@ -128,9 +128,9 @@ jobs:
       # `env:`, never in a `run:` script, where it could inject a command.
       prototype_request: ${{ steps.route.outputs.prototype_request }}
     steps:
-      # No expression context names the commit of a called workflow, so read
-      # it from the OIDC token's job_workflow_sha claim, and its ref.
-      - name: Find the Kit's pinned commit
+      # No expression context names a called workflow's ref or commit, so read
+      # them from the OIDC token's job_workflow_ref and job_workflow_sha claims.
+      - name: Read the Kit's workflow ref from the OIDC token
         id: kit
         run: |
           set -euo pipefail

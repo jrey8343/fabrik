@@ -67,7 +67,7 @@ describe("The Kit's workflows", () => {
     const kit = jobIn(text, "kit");
     const steps = stepsOf(kit);
     const at = (needle: string) => steps.findIndex((step) => step.includes(needle));
-    const claim = steps[at("name: Find the Kit's pinned commit")] ?? "";
+    const claim = steps[at("name: Read the Kit's workflow ref from the OIDC token")] ?? "";
     const checkout = at("repository: jrey8343/fabrik");
     const peel = at("git -C kit rev-parse HEAD");
 

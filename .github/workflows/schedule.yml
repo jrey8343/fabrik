@@ -39,9 +39,9 @@ jobs:
       sha: ${{ steps.commit.outputs.sha }}
       started-at: ${{ steps.kit.outputs.started-at }}
     steps:
-      # No expression context names the commit of a called workflow, so read
-      # it from the OIDC token's job_workflow_sha claim, and its ref.
-      - name: Find the Kit's pinned commit
+      # No expression context names a called workflow's ref or commit, so read
+      # them from the OIDC token's job_workflow_ref and job_workflow_sha claims.
+      - name: Read the Kit's workflow ref from the OIDC token
         id: kit
         run: |
           set -euo pipefail
@@ -58,7 +58,7 @@ jobs:
           # When the run got going, for the weekly skills bump gate.
           echo "started-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$GITHUB_OUTPUT"
 
-      - name: Check out the Kit (never a Product repo)
+      - name: Check out the Kit (never the Product repo)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: jrey8343/fabrik
