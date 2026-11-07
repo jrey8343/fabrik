@@ -56,7 +56,7 @@ FABRIK=$(mktemp -d)
 curl -fsSL "https://codeload.github.com/jrey8343/fabrik/tar.gz/refs/tags/<release>" | tar -xzf - -C "$FABRIK" --strip-components=1
 ```
 
-Create the branch the change goes out on: `git switch -c fabrik/visual-evidence`. If an earlier run already opened a PR from it (`gh pr list --head fabrik/visual-evidence --state open`), switch to that branch instead, and push to it in step 4.
+Create the branch the change goes out on: `git switch -c fabrik/visual-evidence`. If an earlier run already opened a PR from it, switch to that branch instead, and push to it in step 4. Only a PR whose head is in this repo counts: `gh pr list --head` matches a fork's branch of the same name too, so look with `gh pr list --head fabrik/visual-evidence --state open --json number,url,isCrossRepository --jq '.[] | select(.isCrossRepository | not)'`, and never push to, edit or offer the Operator a PR from a fork.
 
 Run the writer from the repo's root, with the confirmed answers on stdin as the `ui` and `preview` blocks, in JSON spelled as Kit config spells them. Give every answer, with `null` or `[]` for an optional one the Operator left out. The quoted `'EOF'` keeps the shell off the values:
 

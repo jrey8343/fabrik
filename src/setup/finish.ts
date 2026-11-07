@@ -43,7 +43,11 @@ export function prBody({ release, defaultBranch, summary }: PrBodyInputs): strin
   return `${sections.join("\n\n")}\n`;
 }
 
-/** What an earlier run's PR body says setup did, then what this run did, each once. */
+/**
+ * What an earlier run's PR body says setup did, then what this run did, each
+ * once. Whoever can write the body wrote those lines, so they keep no control
+ * characters, such as a terminal escape, for the closing lines to print.
+ */
 export function withEarlierDone(body: string | null, done: readonly string[]): string[] {
   const earlier: string[] = [];
   if (body !== null) {
@@ -52,7 +56,7 @@ export function withEarlierDone(body: string | null, done: readonly string[]): s
     if (start !== -1) {
       for (const line of lines.slice(start + 1)) {
         if (line.startsWith("## ")) break;
-        if (line.startsWith("- ")) earlier.push(line.slice(2));
+        if (line.startsWith("- ")) earlier.push(line.slice(2).replace(/[\u0000-\u001f\u007f-\u009f]/g, ""));
       }
     }
   }

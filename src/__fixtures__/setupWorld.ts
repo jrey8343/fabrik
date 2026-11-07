@@ -6,8 +6,11 @@ import type { Answer } from "./setupCommands.ts";
 export interface PullRequest {
   readonly number: number;
   readonly url: string;
+  /** The head branch's name, which a fork's PR can share with one of the repo's own. */
   readonly head: string;
   readonly base: string;
+  /** Whether its head is in a fork, not in acme/clinic. */
+  readonly isCrossRepository: boolean;
   body: string;
   open: boolean;
 }
@@ -90,12 +93,12 @@ export function worldScript(world: World): Record<string, Answer> {
       json(
         world.prs
           .filter((pr) => pr.open && pr.head === valueOf(args, "--head"))
-          .map(({ number, url, body }) => ({ number, url, body })),
+          .map(({ number, url, body, isCrossRepository }) => ({ number, url, body, isCrossRepository })),
       ),
     "gh pr create": ({ args, input }) => {
       const number = world.prs.length + 1;
       const url = `https://github.com/acme/clinic/pull/${number}`;
-      world.prs.push({ number, url, head: valueOf(args, "--head"), base: valueOf(args, "--base"), body: input ?? "", open: true });
+      world.prs.push({ number, url, head: valueOf(args, "--head"), base: valueOf(args, "--base"), isCrossRepository: false, body: input ?? "", open: true });
       return { stdout: `${url}\n` };
     },
     "gh pr edit": ({ args, input }) => {

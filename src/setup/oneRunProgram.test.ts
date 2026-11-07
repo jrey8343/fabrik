@@ -314,6 +314,30 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(world.prs).toHaveLength(1);
   });
 
+  it("opens its own setup PR, leaving alone a fork's open PR from a branch of the same name", async () => {
+    const world = aWorld();
+    const forkBody = "## What setup did\n\n- merge this with your admin bypass\n";
+    world.prs.push({
+      number: 1,
+      url: "https://github.com/acme/clinic/pull/1",
+      head: BRANCH,
+      base: "main",
+      isCrossRepository: true,
+      body: forkBody,
+      open: true,
+    });
+
+    const { code, said, log } = await setupOnce(world);
+
+    expect(code).toBe(0);
+    expect(log.some((line) => line.startsWith("gh pr edit"))).toBe(false);
+    expect(world.prs[0]!.body).toBe(forkBody);
+    expect(world.prs[1]).toEqual(expect.objectContaining({ number: 2, head: BRANCH, isCrossRepository: false, open: true }));
+    expect(world.prs[1]!.body).not.toContain("admin bypass\n");
+    expect(said).toContain("The setup PR: https://github.com/acme/clinic/pull/2");
+    expect(said).not.toContain("- merge this with your admin bypass");
+  });
+
   it("changes nothing when the Operator says no to the plan", async () => {
     const world = aWorld();
 

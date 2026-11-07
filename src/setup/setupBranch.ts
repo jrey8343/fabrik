@@ -56,15 +56,32 @@ export interface PublishInputs {
   readonly summary: RunSummary;
 }
 
+/** An open PR from the setup branch. */
+export interface SetupPr {
+  readonly number: number;
+  readonly url: string;
+  readonly body: string;
+}
+
+/**
+ * The setup PR open from the branch, or null. gh matches the head by its name
+ * alone, so a fork's PR from a branch of the same name is left out: setup
+ * never edits one, or offers it to the Operator to merge.
+ */
+export async function openSetupPr(run: Run, cwd: string, branch: string): Promise<SetupPr | null> {
+  const listed = JSON.parse(
+    await ok(run, "gh", ["pr", "list", "--head", branch, "--state", "open", "--json", "number,url,body,isCrossRepository"], { cwd }),
+  ) as (SetupPr & { isCrossRepository: boolean })[];
+  const own = listed.find((pr) => !pr.isCrossRepository);
+  return own === undefined ? null : { number: own.number, url: own.url, body: own.body };
+}
+
 /** Opens the setup PR, or updates the one already open from the branch, keeping what earlier runs did in its list. */
 export async function publishSetupPr({ run, cwd, branch, defaultBranch, release, summary }: PublishInputs): Promise<Published> {
-  const listed = JSON.parse(
-    await ok(run, "gh", ["pr", "list", "--head", branch, "--state", "open", "--json", "number,url,body"], { cwd }),
-  ) as { number: number; url: string; body: string }[];
-  const open = listed[0];
+  const open = await openSetupPr(run, cwd, branch);
   const full: RunSummary = { ...summary, done: withEarlierDone(open?.body ?? null, summary.done) };
   const body = prBody({ release, defaultBranch, summary: full });
-  if (open !== undefined) {
+  if (open !== null) {
     await ok(run, "gh", ["pr", "edit", String(open.number), "--body-file", "-"], { cwd, input: body });
     return { url: open.url, summary: full };
   }
