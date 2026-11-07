@@ -178,10 +178,10 @@ set_var() {
   warn "skipped GitHub variable $name, gh not ready; set it later"
 }
 
-# finish clears, then shows a closing summary of everything configured.
+# finish ["heading"] clears, then shows a closing summary of everything configured.
 finish() {
   _clear
-  printf '\n%s%s  ✓ Setup complete%s\n' "$BOLD" "$GREEN" "$RESET"
+  printf '\n%s%s  ✓ %s%s\n' "$BOLD" "$GREEN" "${1:-Setup complete}" "$RESET"
   (( ${#WRITTEN_ENV[@]} ))    && note "wrote ${#WRITTEN_ENV[@]} value(s) to $ENV_FILE: ${WRITTEN_ENV[*]}"
   (( ${#WRITTEN_SECRET[@]} )) && note "set ${#WRITTEN_SECRET[@]} GitHub secret(s): ${WRITTEN_SECRET[*]}"
   if (( ${#SKIPPED[@]} )); then
@@ -585,10 +585,12 @@ else
   pause
 fi
 
-finish
+# Run by Setup, the wizard is one of its steps, and Setup isn't done yet.
 if [[ -n "${FABRIK_WIZARD_REPORT:-}" ]]; then
+  finish "The wizard is done"
   say "Next: Setup commits what it wrote, pushes it and opens the setup PR."
 else
+  finish
   say "Next: open an issue on $REPO. Intake labels it needs-triage and the Loop takes it from there."
 fi
 printf '\n'

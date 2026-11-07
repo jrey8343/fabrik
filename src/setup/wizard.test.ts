@@ -643,9 +643,17 @@ describe("The setup wizard run by setup", () => {
     expect(w.stdout).not.toContain("Next: open an issue");
   });
 
+  it("ends saying the wizard is done, not Setup, which goes on to the setup PR", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, { bySetup: true });
+
+    expect(w.stdout).toContain("✓ The wizard is done");
+    expect(w.stdout).not.toContain("Setup complete");
+  });
+
   it("run on its own, still ends by saying to open an issue, and reports nothing", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE);
 
+    expect(w.stdout).toContain("✓ Setup complete");
     expect(w.stdout).toContain("Next: open an issue on acme/clinic.");
     expect(w.report).toEqual([]);
   });
