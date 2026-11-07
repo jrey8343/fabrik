@@ -146,6 +146,29 @@ describe("Setup's questions", () => {
     });
   });
 
+  describe("with a Kit config that lists the second Subscription alone, which setup has nothing to list for", () => {
+    const listed = aCleanProduct({ files: { ".fabrik/config.json": '{ "subscriptions": ["Claude token 2"] }\n' } });
+    const LISTED = '.fabrik/config.json already lists the second Subscription, "Claude token 2"';
+
+    it("doesn't ask about a second Subscription, and says it's listed", async () => {
+      const prompt = scripted();
+      const { answers, said } = await ask({ timeZone: null }, prompt, listed);
+
+      expect(prompt.questions).toEqual([]);
+      expect(said).toContain(`${LISTED}, so it doesn't ask about a second.`);
+      expect(answers).toEqual({});
+    });
+
+    it("takes --second-subscription as doing nothing, and says so, in a terminal or not", async () => {
+      for (const prompt of [neverAsked, null]) {
+        const { answers, said } = await ask({ timeZone: null, secondSubscription: true, paused: false }, prompt, listed);
+
+        expect(said).toEqual([`--second-subscription has no effect: ${LISTED}.`]);
+        expect(answers).toEqual({});
+      }
+    });
+  });
+
   describe("with the starter setup wrote on its branch, which is still setup's own", () => {
     const withStarter = (maxInFlight: number) => aCleanProduct({ readyForAgent: 2, files: { ".fabrik/config.json": `{\n  "max_in_flight": ${maxInFlight}\n}\n` } });
     const PAUSE_DEFAULT_YES = "Install with Dispatch paused, so no Implementer starts until you raise max_in_flight? [Y/n] ";

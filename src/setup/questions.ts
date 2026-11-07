@@ -5,7 +5,15 @@
 // keeps what it holds.
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import type { FlagAnswers } from "./args.ts";
-import { isTimeZone, pausesDispatch, type ProductState, type SetupAnswers, subscriptionsTheKitReads } from "./plan.ts";
+import {
+  isTimeZone,
+  pausesDispatch,
+  type ProductState,
+  SECOND_SUBSCRIPTION,
+  type SetupAnswers,
+  subscriptionsTheKitReads,
+  takesSecondSubscription,
+} from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "./shims.ts";
 
@@ -50,14 +58,17 @@ async function askTimeZone(state: ProductState, machineTimeZone: string, prompt:
 }
 
 /**
- * A Kit config that lists two or more Subscriptions is a rotation setup never
- * adds to, so it isn't asked about, and --second-subscription does nothing
- * for it but say so.
+ * A Kit config setup wouldn't list the second Subscription in, a rotation of
+ * two or more it never adds to or a list that names it already, isn't asked
+ * about, and --second-subscription does nothing for it but say so.
  */
 async function askSecondSubscription(flag: boolean | undefined, state: ProductState, prompt: Prompt | null, say: (line: string) => void): Promise<boolean> {
   const listed = subscriptionsTheKitReads(state.files[KIT_CONFIG_PATH] ?? null);
-  if (listed.length > 1) {
-    const lists = `${KIT_CONFIG_PATH} already lists ${listed.length} Subscriptions, and Setup leaves a list of two or more as it is`;
+  if (!takesSecondSubscription(listed)) {
+    const lists =
+      listed.length > 1
+        ? `${KIT_CONFIG_PATH} already lists ${listed.length} Subscriptions, and Setup leaves a list of two or more as it is`
+        : `${KIT_CONFIG_PATH} already lists the second Subscription, "${SECOND_SUBSCRIPTION}"`;
     if (flag === true) say(`--second-subscription has no effect: ${lists}.`);
     else if (flag === undefined && prompt !== null) say(`${lists}, so it doesn't ask about a second.`);
     return false;

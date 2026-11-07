@@ -12,6 +12,7 @@ const SUMMARY: RunSummary = {
 };
 const BLOCKED: RunSummary = { ...SUMMARY, blockers: ['the Claude token, in the "Fabrik" vault'] };
 const PAUSED: RunSummary = { ...SUMMARY, pausesDispatch: true };
+const BY_HAND = 'the "Claude backup" Subscription\'s token, in the "Fabrik" vault';
 const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
 
 describe("The setup PR's body", () => {
@@ -30,6 +31,15 @@ describe("The setup PR's body", () => {
     expect(body).toContain('- the Claude token, in the "Fabrik" vault');
     expect(body).toContain(COMMAND);
     expect(body).not.toContain("Merge this PR yourself");
+  });
+
+  it("with a listed Subscription's token no wizard stage stores, says to store it by hand, after what the wizard didn't finish", () => {
+    const body = prBody({ release: "v1.4.2", defaultBranch: "main", summary: { ...BLOCKED, storeByHand: [BY_HAND] } });
+
+    expect(body).toContain(
+      `\`\`\`\n\nThe Kit's first runs also need these, which no wizard stage stores, so you store them yourself, as For the Operator says:\n\n- ${BY_HAND}\n`,
+    );
+    expect(body).not.toMatch(/merge this PR yourself/i);
   });
 
   it("says Dispatch is paused only when the Kit config it merges pauses it", () => {
@@ -92,6 +102,16 @@ describe("The closing lines", () => {
     expect(text).not.toMatch(/Merge it yourself/);
     expect(text).toContain("Don't merge it yet. The Kit's first runs need these, which the wizard didn't finish:\n- the Claude token, in the \"Fabrik\" vault");
     expect(text).toContain(`Run setup again to walk the wizard for them: ${COMMAND}`);
+  });
+
+  it("with a listed Subscription's token no wizard stage stores, say to store it by hand, after what the wizard didn't finish", () => {
+    const summary = { ...BLOCKED, storeByHand: [BY_HAND] };
+    const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary }).join("\n");
+
+    expect(text).toContain(
+      `Run setup again to walk the wizard for them: ${COMMAND}\nThe Kit's first runs also need these, which no wizard stage stores, so you store them yourself, as For the Operator says:\n- ${BY_HAND}\n\nThen:`,
+    );
+    expect(text).not.toMatch(/merge it yourself/i);
   });
 
   it("give the finishing guidance, naming the setup command wherever it says to run setup again", () => {

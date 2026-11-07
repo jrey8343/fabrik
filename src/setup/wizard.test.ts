@@ -546,10 +546,10 @@ describe("The setup wizard's second Subscription stage", () => {
     }
   });
 
-  it("says .fabrik/config.json lists both, and leaves nothing to do, once it does", async () => {
+  it("says .fabrik/config.json lists it, and leaves nothing to do, once it does", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT, BOTH_LISTED);
 
-    expect(w.stdout).toContain(".fabrik/config.json lists both Subscriptions.");
+    expect(w.stdout).toContain(".fabrik/config.json lists 'Claude token 2' already.");
     expect(w.stdout).not.toContain("still to do by hand");
   });
 
@@ -609,7 +609,31 @@ describe("The setup wizard's second Subscription stage", () => {
     });
   });
 
-  const REPLACING_IT = [...TO_THE_SECOND_SUBSCRIPTION, "y", "sk-ant-oat01-new", ""];
+  describe("with .fabrik/config.json listing the second Subscription alone, which Setup has nothing to list for", () => {
+    const ALONE = '{ "subscriptions": ["Claude token 2"] }\n';
+
+    it("says it's listed, and leaves nothing to do, once it stores the token", async () => {
+      for (const secondSubscription of [true, false]) {
+        const w = await walk(THE_APP_AND_CLAUDE, ADDING_IT, ALONE, { bySetup: true, secondSubscription });
+
+        expect(w.status).toBe(0);
+        expect(w.stdout).toContain("✓ stored the 'Claude token 2' token");
+        expect(w.stdout).toContain(".fabrik/config.json lists 'Claude token 2' already.");
+        expect(w.stdout).not.toMatch(/Setup lists it|To list it|say yes to a second Subscription|still to do by hand/);
+      }
+    });
+
+    it("skipped, says running Setup again walks this stage, with no yes to give", async () => {
+      const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SECOND_SUBSCRIPTION, ALONE, { bySetup: true });
+
+      expect(w.stdout).toContain(
+        "Skipping the second Subscription. .fabrik/config.json lists 'Claude token 2' already, so running Setup again walks this stage while 1Password lacks its token.",
+      );
+      expect(w.stdout).not.toContain("say yes to a second Subscription");
+    });
+  });
+
+  const REPLACING_IT =[...TO_THE_SECOND_SUBSCRIPTION, "y", "sk-ant-oat01-new", ""];
 
   it("replaces the second token by storing the new one first, then archiving the old item by its id", async () => {
     const w = await walk([...THE_APP_AND_CLAUDE, "Fabrik/Claude token 2"], REPLACING_IT, BOTH_LISTED);
@@ -638,7 +662,7 @@ describe("The setup wizard's second Subscription stage", () => {
     expect(deleted(w)).toEqual([]);
     expect(w.stdout).toContain("Keeping the current second token.");
     expect(w.stdout).toContain("turn usage credits off on every account, the first one included");
-    expect(w.stdout).toContain(".fabrik/config.json lists both Subscriptions.");
+    expect(w.stdout).toContain(".fabrik/config.json lists 'Claude token 2' already.");
   });
 });
 

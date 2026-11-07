@@ -28,8 +28,8 @@ export interface Readiness {
   readonly appInstalled: boolean;
   /** The "Fabrik App" item is in the "Fabrik App" vault. */
   readonly appKeyStored: boolean;
-  /** The "Claude token" item is in the "Fabrik" vault, or the Kit never reads it, as the Kit config the setup PR merges lists only other Subscriptions. */
-  readonly claudeTokenStored: boolean;
+  /** Each Subscription the Kit config the setup PR merges lists, in its order, whose token the "Fabrik" vault lacks. The Kit reads every one it lists. */
+  readonly tokensLacking: readonly string[];
 }
 
 /** The item that holds the Fabrik App's client ID and private key, in the "Fabrik App" vault. */
@@ -39,6 +39,12 @@ export const SENTRY_TOKEN_ITEM = "Sentry token";
 
 const APP_KEY = `the Fabrik App's key, in the "${FABRIK_APP_VAULT}" vault`;
 const CLAUDE_TOKEN = `the Claude token, in the "${FABRIK_VAULT}" vault`;
+const SECOND_TOKEN = `the second Subscription's token, "${SECOND_SUBSCRIPTION}", in the "${FABRIK_VAULT}" vault`;
+/** How setup names the token of each Subscription a wizard stage stores. It stores no other. */
+const WIZARD_TOKENS: ReadonlyMap<string, string> = new Map([
+  [CLAUDE_TOKEN_ITEM, CLAUDE_TOKEN],
+  [SECOND_SUBSCRIPTION, SECOND_TOKEN],
+]);
 
 /**
  * What a wizard stage stores that 1Password lacks, as setup names it for the
@@ -61,9 +67,7 @@ export function wizardGaps(state: ProductState, answers: SetupAnswers, appItems:
   return [
     ...(appItems.includes(FABRIK_APP_ITEM) ? [] : [APP_KEY]),
     ...(listed.includes(CLAUDE_TOKEN_ITEM) && !state.fabrikItems.includes(CLAUDE_TOKEN_ITEM) ? [CLAUDE_TOKEN] : []),
-    ...(second && !state.fabrikItems.includes(SECOND_SUBSCRIPTION)
-      ? [`the second Subscription's token, "${SECOND_SUBSCRIPTION}", in the "${FABRIK_VAULT}" vault`]
-      : []),
+    ...(second && !state.fabrikItems.includes(SECOND_SUBSCRIPTION) ? [SECOND_TOKEN] : []),
     ...(readsSentry && !appItems.includes(SENTRY_TOKEN_ITEM)
       ? [`the Sentry token, in the "${FABRIK_APP_VAULT}" vault, which monitor.errors in ${KIT_CONFIG_PATH} reads`]
       : []),
@@ -85,13 +89,13 @@ export interface AfterWizard {
   readonly kitConfig?: string | null;
 }
 
-/** The merge rule's three facts, from what the wizard left behind rather than how it ended. */
+/** The merge rule's facts, from what the wizard left behind rather than how it ended. */
 export function readinessOf({ repo, report, earlierPr = null, fabrikItems, appItems, kitConfig = null }: AfterWizard): Readiness {
   return {
     // A user's gh can't read an App's installations, so a later run's wizard needn't be walked again to keep it.
     appInstalled: appInstalledIn(report, repo) || (earlierPr !== null && appConfirmedIn(earlierPr, repo)),
     appKeyStored: appItems.includes(FABRIK_APP_ITEM),
-    claudeTokenStored: fabrikItems.includes(CLAUDE_TOKEN_ITEM) || !subscriptionsTheKitReads(kitConfig).includes(CLAUDE_TOKEN_ITEM),
+    tokensLacking: subscriptionsTheKitReads(kitConfig).filter((name) => !fabrikItems.includes(name)),
   };
 }
 
@@ -101,8 +105,10 @@ export interface RunSummary {
   readonly done: readonly string[];
   /** The notes for the Operator, from the plan made after the wizard. */
   readonly notes: readonly string[];
-  /** What the merge waits for. Empty when the Operator can merge, or there's no setup PR. */
+  /** What the merge waits for that the wizard finishes. Empty when nothing it finishes holds the merge back, or there's no setup PR. */
   readonly blockers: readonly string[];
+  /** What else the merge waits for: the token of each listed Subscription no wizard stage stores, which the Operator stores by hand, as the plan's note says. */
+  readonly storeByHand?: readonly string[];
   /** The repo the Operator has confirmed the Fabrik App is installed on, which the setup PR keeps for later runs. */
   readonly appInstalledOn?: string;
   /** Whether the Kit config the setup PR merges, the setup branch's, pauses Dispatch. */
@@ -187,16 +193,28 @@ export async function runOnce({ plan, repo, earlierDone = [] }: OneRun, steps: O
     done,
     notes,
     blockers: mergeBlockers(after.readiness, repo),
+    storeByHand: tokensByHand(after.readiness),
     ...(after.readiness.appInstalled ? { appInstalledOn: repo } : {}),
   });
   return { kind: "done", ...published };
 }
 
-/** What the merge waits for: the Fabrik App on the repo, its key and the Claude token while the Kit reads it. Sentry, notifications and watching don't hold it back. */
+/**
+ * What the merge waits for that the wizard finishes: the Fabrik App on the
+ * repo, its key, and the token of each Subscription the Kit reads that a
+ * wizard stage stores. Sentry, notifications and watching don't hold it back.
+ */
 export function mergeBlockers(readiness: Readiness, repo: string): string[] {
   return [
     ...(readiness.appInstalled ? [] : [`the Fabrik App, installed on ${repo}`]),
     ...(readiness.appKeyStored ? [] : [APP_KEY]),
-    ...(readiness.claudeTokenStored ? [] : [CLAUDE_TOKEN]),
+    ...readiness.tokensLacking.flatMap((name) => WIZARD_TOKENS.get(name) ?? []),
   ];
+}
+
+/** The token of each Subscription the Kit reads that the merge also waits for, under a name no wizard stage stores, so the Operator stores it by hand. */
+export function tokensByHand(readiness: Readiness): string[] {
+  return readiness.tokensLacking
+    .filter((name) => !WIZARD_TOKENS.has(name))
+    .map((name) => `the ${JSON.stringify(name)} Subscription's token, in the "${FABRIK_VAULT}" vault`);
 }
