@@ -114,8 +114,8 @@ function pullRequestCommented(
  * Loop reads (removing it restores the defaults), is a Kit config change,
  * which the core treats as main moving too. So is one whose `commits` can't
  * show it left the Kit config alone (#307): the file lists aren't always there,
- * and an extra Dispatch check costs less than a skipped one. A push deleting
- * the branch leaves no head to bring a PR up to date with.
+ * and an extra Dispatch and Design queue check costs less than a skipped one.
+ * A push deleting the branch leaves no head to bring a PR up to date with.
  */
 function defaultBranchPushed(payload: Record<string, unknown>): LoopEvent | null {
   const defaultBranch = (payload["repository"] as { default_branch: string }).default_branch;
@@ -123,8 +123,8 @@ function defaultBranchPushed(payload: Record<string, unknown>): LoopEvent | null
   const head = payload["after"];
   if (typeof head !== "string" || !FULL_SHA.test(head)) return null;
   const commits = payload["commits"];
-  const kitConfigChanged = !Array.isArray(commits) || commits.length === 0 || commits.some(mayChangeKitConfig);
-  return { kind: kitConfigChanged ? "kit-config-changed" : "main-pushed", head };
+  const mayHaveChanged = !Array.isArray(commits) || commits.length === 0 || commits.some(mayChangeKitConfig);
+  return { kind: mayHaveChanged ? "kit-config-changed" : "main-pushed", head };
 }
 
 /** Whether a push's commit changed the Kit config, or lacks the file lists that would show it didn't. */
