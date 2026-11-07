@@ -531,10 +531,9 @@ describe("A Retro run refused on its weekly limit, with rotation on", () => {
 describe("The Audit due while a Subscription's weekly-limit issue is open, with rotation on", () => {
   const SUNDAY = "2026-11-08T04:00:00.000Z";
   const HEAD = "c0ffee5".padEnd(40, "0");
-  const tick = (kitIssues: KitIssueSnapshot[], config = TWO_SUBSCRIPTIONS) =>
-    planFor({ kind: "scheduled-tick", now: SUNDAY }, tickSnapshot({ kitIssues, audit: { head: HEAD, issues: [] } }), config);
+  const snapshotWith = (kitIssues: KitIssueSnapshot[]) => tickSnapshot({ kitIssues, audit: { head: HEAD, issues: [] } });
   const opened = (kitIssues: KitIssueSnapshot[], config = TWO_SUBSCRIPTIONS) =>
-    actionsOf(tick(kitIssues, config)).filter((action) => action.kind === "open-issue");
+    actionsOf(planFor({ kind: "scheduled-tick", now: SUNDAY }, snapshotWith(kitIssues), config)).filter((action) => action.kind === "open-issue");
 
   it("opens nothing while another Subscription is free, waiting for the reset", () => {
     expect(opened([weeklyLimitIssue(41, "Claude token", LATER, false)])).toEqual([]);
@@ -545,9 +544,9 @@ describe("The Audit due while a Subscription's weekly-limit issue is open, with 
   });
 
   it("gives the weekly limit as its reason", () => {
-    const reason = auditGate(SUNDAY, tickSnapshot({ kitIssues: [weeklyLimitIssue(41, "Claude token", LATER, false)], audit: { head: HEAD, issues: [] } }), TWO_SUBSCRIPTIONS);
+    const plan = auditGate(SUNDAY, snapshotWith([weeklyLimitIssue(41, "Claude token", LATER, false)]), TWO_SUBSCRIPTIONS);
 
-    expect(reason).toEqual({ kind: "nothing", reason: "The weekly usage limit is reached, as #41 says" });
+    expect(plan).toEqual({ kind: "nothing", reason: "The weekly usage limit is reached, as #41 says" });
   });
 
   it("opens on the tick that closes the last weekly-limit issue at its reset", () => {

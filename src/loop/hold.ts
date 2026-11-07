@@ -8,7 +8,7 @@
 // carry the marker or resume the run, so it isn't held: a run due starts on
 // the first listed Subscription, whose stream watch kills it on overage, and a
 // killed run gets the usual failure comment. Pure, no I/O.
-import { heldInOrder, heldMarker, type HeldRun, heldRunOf, holding, RUN_NAMES } from "./heldRun.ts";
+import { heldInOrder, heldMarker, heldRunOf, type HoldableRun, holding, RUN_NAMES } from "./heldRun.ts";
 import { earliestOf, notified, resetsAtOf } from "./kitIssueMarks.ts";
 import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { readable } from "./readable.ts";
@@ -16,13 +16,13 @@ import { freeSubscriptions, rotationIsOn } from "./subscriptions.ts";
 import type { Action, KitConfig, KitIssueSnapshot, Plan } from "./types.ts";
 
 /** The line naming a held run, with its held marker, for a weekly-limit issue. */
-export function heldLine(held: HeldRun, until: string | null): string {
+export function heldLine(held: HoldableRun, until: string | null): string {
   const when =
     until === null
       ? "a Subscription's weekly limit resets, which isn't known"
       : `${readable(until)}, when the first Subscription's weekly limit resets`;
-  const resume = held.label === null ? "" : ` The Kit re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
-  return [`The ${RUN_NAMES[held.role]} run on #${held.issue} is held until ${when}.${resume}`, "", heldMarker(held)].join("\n");
+  const resume = `The Kit re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
+  return [`The ${RUN_NAMES[held.role]} run on #${held.issue} is held until ${when}. ${resume}`, "", heldMarker(held)].join("\n");
 }
 
 /**
@@ -100,7 +100,7 @@ export function canHold(kitIssues: readonly KitIssueSnapshot[]): boolean {
  * naming it on the weekly-limit issue a run held now is named on. Only while
  * one is open (canHold).
  */
-export function heldAfterKill(held: HeldRun, kitIssues: readonly KitIssueSnapshot[]): Action[] {
+export function heldAfterKill(held: HoldableRun, kitIssues: readonly KitIssueSnapshot[]): Action[] {
   const { until, on } = holdingOn(kitIssues);
   if (on === undefined) throw new Error(`The ${RUN_NAMES[held.role]} run on #${held.issue} has no weekly-limit issue to be held on`);
   return [...holding(held, until), { kind: "comment", issue: on.number, body: heldLine(held, until) }];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, auditBody, AUDITED_SHA, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { planFor } from "../loop/rules.ts";
 import type { KitIssueSnapshot } from "../loop/types.ts";
 import { kitJobSummary } from "./kitJob.ts";

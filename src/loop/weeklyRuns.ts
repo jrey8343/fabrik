@@ -28,18 +28,18 @@ export interface WeeklyRun {
   readonly runName: string;
   /** Whether this is the App's open issue still waiting on the run: only then does it start, or does a failure change it. */
   readonly isPending: (issue: IssueSnapshot) => boolean;
-  /** The plan once the App opens its pending issue. */
+  /** The plan that starts its run. */
   readonly start: (context: IssueContext, config: KitConfig) => Plan;
   /** The marker lines its failed body ends with: its own marker, kept when the body has one, then its failed marker. */
   readonly failedMarkers: (body: string) => readonly string[];
 }
 
-export const WEEKLY_RUNS: Readonly<Record<WeeklyRole, WeeklyRun>> = {
+const WEEKLY_RUNS: Readonly<Record<WeeklyRole, WeeklyRun>> = {
   audit: {
     issueName: "Audit",
     runName: "The Auditor's run",
     isPending: isPendingAudit,
-    start: (context, config) => startOrFail("audit", context, config, () => startAuditorRun(context.issue, config)),
+    start: ({ issue }, config) => startAuditorRun(issue, config),
     failedMarkers: (body) => {
       const { commit } = auditMarksIn(body);
       return [...(commit === null ? [] : [auditMarker(commit)]), AUDIT_FAILED_MARKER];
@@ -49,7 +49,7 @@ export const WEEKLY_RUNS: Readonly<Record<WeeklyRole, WeeklyRun>> = {
     issueName: "Retro",
     runName: "The Retro's run",
     isPending: isPendingRetro,
-    start: (context, config) => startOrFail("retro", context, config, () => startAgentRun("retro", context.issue.number, config)),
+    start: ({ issue }, config) => startAgentRun("retro", issue.number, config),
     failedMarkers: (body) => {
       const { windowEnd } = retroMarksIn(body);
       return [...(windowEnd === null ? [] : [retroMarker(windowEnd)]), RETRO_FAILED_MARKER];
@@ -137,15 +137,15 @@ export function failedHeldAudit(audit: HeldTargetSnapshot): Action[] {
 }
 
 /**
- * The plan for the App's pending Audit or Retro, once it's opened: its run,
- * from `start`. With rotation on, while every listed Subscription is used up,
- * a run of any other role would be held (src/loop/hold.ts), but the scheduled
+ * The plan for the App's pending Audit or Retro, once it's opened: its run.
+ * With rotation on, while every listed Subscription is used up, a run of any
+ * other role would be held (src/loop/hold.ts), but the scheduled
  * tick can't start a weekly run at the reset, so its issue fails instead, as a
  * failed run leaves it, and a later tick opens the next one. Its weekly-limit
  * issues already say so, so it gives no repo-wide notice.
  */
-function startOrFail(role: WeeklyRole, context: IssueContext, config: KitConfig, start: () => Plan): Plan {
-  if (!runsDueAreHeld(context.kitIssues, config)) return start();
+export function startWeekly(role: WeeklyRole, context: IssueContext, config: KitConfig): Plan {
+  if (!runsDueAreHeld(context.kitIssues, config)) return WEEKLY_RUNS[role].start(context, config);
   return failWeekly(role, context, {
     failure: "weekly-limit",
     how: "it was due to start while every listed Subscription was used up",

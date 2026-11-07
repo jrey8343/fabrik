@@ -13,7 +13,7 @@
 // run is never re-run or held: the tick can't start one at a reset, so its
 // Audit or Retro fails, for the tick to try again.
 import { prototypeRole } from "./design.ts";
-import { type HeldRun, heldInOrder, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
+import { heldInOrder, type HoldableRun, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
 import { canHold, heldAfterKill } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
@@ -84,17 +84,17 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
 
 /**
  * With rotation on, the run a weekly-limit refusal holds rather than fails, or
- * null: a run of any role but a weekly one while no other Subscription is free.
- * An Auditor or Retro run is never held.
+ * null: a run of any role but the Auditor's or the Retro's, which are never
+ * held, while no other Subscription is free.
  */
 function heldOnRefusal(
   run: FailedRun,
   failure: InfrastructureFailure,
   { issue, kitIssues }: IssueContext,
   ranOn: RanOn,
-): HeldRun | null {
+): HoldableRun | null {
   if (!ranOn.rotation || !RERUN_FAILURES.includes(failure)) return null;
-  // The tick can't start a weekly run at the reset, so its Audit or Retro fails, and the tick opens the next one.
+  // The tick can't start an Auditor or Retro run at the reset, so its issue fails, and the tick opens the next one.
   if (isWeeklyRole(run.role)) return null;
   // A kill opens no weekly-limit issue, and only one can hold the run: with none open it fails as usual.
   if (failure === "usage-credits" && !canHold(kitIssues)) return null;

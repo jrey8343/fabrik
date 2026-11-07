@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   anIssue,
+  anAuditIssue,
   AUDITED_SHA,
   auditBody,
   kitConfig,
@@ -370,10 +371,10 @@ describe("A held marker an Auditor run left, at the reset, with rotation on", ()
   it("leaves the audit gate free to open a fresh Audit on a later tick", () => {
     const kitIssues = [weeklyLimitIssue(41, "Claude token", EARLIER, [held(98, "audit", null)], true)];
     const pending = anIssueHeld(98, ["fabrik:audit"], { byApp: true, body: auditBody(AUDITED_SHA, "pending") });
-    const thisWeek = { number: 98, title: "Audit: week of 2026-11-02", open: true, stateReason: null, createdAt: "2026-11-08T04:00:04Z", byApp: true };
+    const thisWeek = anAuditIssue({ number: 98, open: true, stateReason: null, createdAt: "2026-11-08T04:00:04Z", body: pending.body });
     const head = "c0ffee5".padEnd(40, "0");
 
-    const reset = planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: [pending], audit: { head, issues: [{ ...thisWeek, body: pending.body }] } }), TWO_SUBSCRIPTIONS);
+    const reset = planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: [pending], audit: { head, issues: [thisWeek] } }), TWO_SUBSCRIPTIONS);
     const edit = actionsOf(reset).find((action) => action.kind === "edit-issue-body");
     if (edit?.kind !== "edit-issue-body") throw new Error(`expected #98's body rewritten: ${JSON.stringify(reset)}`);
     const failed = { ...thisWeek, open: false, stateReason: "not_planned" as const, body: edit.body };

@@ -39,7 +39,7 @@ import { replayGate } from "./replayGate.ts";
 import { landReplayRun, startReplay } from "./replayRun.ts";
 import { retroGate } from "./retroGate.ts";
 import { landRetro } from "./retroLanding.ts";
-import { WEEKLY_RUNS, weeklyRoleOf } from "./weeklyRuns.ts";
+import { startWeekly, weeklyRoleOf } from "./weeklyRuns.ts";
 import { dispatch } from "./dispatch.ts";
 import { applyRedChecks, applyReview, startReview } from "./review.ts";
 import type {
@@ -76,7 +76,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // Retro for the Retro run, on roles.retro; Intake never sorts either.
       return withIssue(snapshot, (context) => {
         const weekly = weeklyRoleOf(context.issue);
-        return weekly === null ? intake(event.issue, context.issue) : WEEKLY_RUNS[weekly].start(context, config);
+        return weekly === null ? intake(event.issue, context.issue) : startWeekly(weekly, context, config);
       });
     case "label-added":
       return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, snapshot, config));
