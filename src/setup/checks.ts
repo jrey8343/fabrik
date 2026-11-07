@@ -6,9 +6,10 @@
 // skill.
 import { realpath, rm } from "node:fs/promises";
 import { foundOldSetupSkill, oldSetupSkillIn, personalSkillsDir, staleOldSetupSkill } from "../skills/oldSetupSkill.ts";
-import { type Env, ok, type Run } from "./exec.ts";
+import type { Env, Run } from "./exec.ts";
 import type { ProductState } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
+import { mergedSetupHeads, setupBranch, uncommittedPaths } from "./setupBranch.ts";
 
 export interface CheckInputs {
   readonly run: Run;
@@ -70,11 +71,6 @@ export async function offerToDeleteOldSetupSkill({ env, prompt, say }: OldCopyIn
     say(`Deleted ${copy}.`);
   } else say(`Kept it. ${staleOldSetupSkill(copy)}`);
   say("");
-}
-
-/** The branch setup applies its plan on, and a later run of the same release picks up. */
-export function setupBranch(release: string): string {
-  return `fabrik/setup-${release}`;
 }
 
 /** From 24.3, import.meta.main is true for setup's .ts entry point. */
@@ -201,33 +197,17 @@ async function checkBranch(
   // A commit this clone lacks isn't its ancestor either: git says so by failing.
   const holds = async (sha: string) => (await run("git", ["merge-base", "--is-ancestor", sha, "HEAD"], { cwd })).code === 0;
   if (!(await holds(originDefault))) {
+    // A squash or rebase merge leaves the branch's own commits off the default branch, and pulling it in would only open a PR again.
+    const head = (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
+    if ((await mergedSetupHeads(run, cwd, ownBranch)).includes(head)) {
+      return `${ownBranch}'s setup PR is merged. Switch to ${defaultBranch} with git switch ${defaultBranch} && git pull, then run setup again.`;
+    }
     return `${ownBranch} doesn't hold origin's latest ${defaultBranch} (${short(originDefault)}). Merge it in with git pull origin ${defaultBranch}, then run setup again.`;
   }
   if (originOwn !== undefined && !(await holds(originOwn))) {
     return `origin's ${ownBranch} has commits this clone lacks (${short(originOwn)}). Pull them with git pull origin ${ownBranch}, then run setup again.`;
   }
   return origin;
-}
-
-/**
- * Every path the clone has uncommitted, untracked ones included. The checks
- * and the setup commit both read it, so they agree on what's uncommitted.
- */
-export async function uncommittedPaths(run: Run, cwd: string): Promise<string[]> {
-  return changedPaths(await ok(run, "git", ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd }));
-}
-
-/** Every path `git status --porcelain=v1 -z` names, a rename's old path included. */
-function changedPaths(status: string): string[] {
-  const entries = status.split("\0").filter((entry) => entry !== "");
-  const paths: string[] = [];
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i]!;
-    paths.push(entry.slice(3));
-    // A rename or copy is followed by the path it came from.
-    if (/[RC]/.test(entry.slice(0, 2))) paths.push(entries[++i] ?? "");
-  }
-  return paths.filter((path) => path !== "");
 }
 
 function short(sha: string): string {

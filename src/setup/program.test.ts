@@ -81,10 +81,9 @@ async function setup(args: string[], options: Options = {}) {
 }
 
 const severalAccounts = { "op account list --format json": { stdout: JSON.stringify([PERSONAL, ACME]) } };
-/** No earlier run left a setup branch, so a run in a terminal goes on to ask for the yes. */
+/** No earlier run left a setup branch, here or on origin, so a run in a terminal goes on to ask for the yes. */
 const NO_EARLIER_RUN = {
   "git rev-parse --verify --quiet refs/heads/fabrik/setup-v1.4.2": { code: 1 },
-  "git ls-remote origin refs/heads/fabrik/setup-v1.4.2": { stdout: "" },
 };
 const withFabrikVault = {
   "op vault list --format json": { stdout: JSON.stringify([{ name: "Fabrik" }]) },

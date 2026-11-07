@@ -130,6 +130,16 @@ function mergeTheSetupPr(world: World): void {
   world.prs[0]!.open = false;
 }
 
+/** The Operator squash-merges the setup PR: one new commit on main, and the setup branch left as it was. */
+function squashTheSetupPr(world: World): void {
+  const head = originGit("rev-parse", BRANCH).trim();
+  git("switch", "-q", "main");
+  git("merge", "-q", "--squash", BRANCH);
+  git("commit", "-q", "-m", "Set up Fabrik v1.4.2 (#1)");
+  git("push", "-q", "origin", "main");
+  Object.assign(world.prs[0]!, { open: false, merged: true, headRefOid: head });
+}
+
 /** The files on origin's setup branch. */
 function filesOnOrigin(branch = BRANCH): string[] {
   return originGit("ls-tree", "-r", "--name-only", branch).split("\n").filter((path) => path !== "");
@@ -396,6 +406,52 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(git("branch", "--show-current").trim()).toBe("main");
     expect(git("branch", "--list", BRANCH)).toBe("");
     expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+  });
+
+  it("after a squash merge, a repair run from the default branch gets past the leftover setup branch", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    squashTheSetupPr(world);
+    world.labels.delete("needs-triage");
+
+    const { code, said, complaints } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(said).toContain("- create the label needs-triage");
+    expect(world.labels.has("needs-triage")).toBe(true);
+    expect(git("branch", "--show-current").trim()).toBe("main");
+  });
+
+  it("after a squash merge, with only origin's copy of the setup branch left, a run that writes a file opens a new setup PR from it", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    squashTheSetupPr(world);
+    git("branch", "-q", "-D", BRANCH);
+    git("rm", "-q", "docs/agents/domain.md");
+    git("commit", "-q", "-m", "Drop the domain doc");
+    git("push", "-q", "origin", "main");
+
+    const { code, said, complaints } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(filesOnOrigin()).toContain("docs/agents/domain.md");
+    expect(originGit("rev-parse", `${BRANCH}~1`).trim()).toBe(originGit("rev-parse", "main").trim());
+    expect(world.prs).toHaveLength(2);
+    expect(said).toContain("The setup PR: https://github.com/acme/clinic/pull/2");
+  });
+
+  it("on the setup branch after its PR was squash-merged, says to switch to the default branch and pull", async () => {
+    const world = aWorld();
+    await setupOnce(world);
+    squashTheSetupPr(world);
+    git("switch", "-q", BRANCH);
+
+    const { code, complaints } = await setupOnce(world);
+
+    expect(code).toBe(1);
+    expect(complaints[0]).toBe(`${BRANCH}'s setup PR is merged. Switch to main with git switch main && git pull, then run setup again.`);
   });
 
   it("changes nothing when the Operator says no to the plan", async () => {

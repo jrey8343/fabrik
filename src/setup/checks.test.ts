@@ -182,7 +182,9 @@ describe("The checks before setup plans anything", () => {
     });
 
     it("stop when it lacks the default branch's latest commit on origin", async () => {
-      expect(await problem({ ...onSetupBranch, [lsRemote("v1.4.2")]: { stdout: `${OTHER_SHA}\trefs/heads/main\n` } })).toBe(
+      const unmerged = { "gh pr list --head fabrik/setup-v1.4.2 --state merged": { stdout: "[]" } };
+
+      expect(await problem({ ...onSetupBranch, ...unmerged, [lsRemote("v1.4.2")]: { stdout: `${OTHER_SHA}\trefs/heads/main\n` } })).toBe(
         "fabrik/setup-v1.4.2 doesn't hold origin's latest main (9f86d08). Merge it in with git pull origin main, then run setup again.",
       );
     });

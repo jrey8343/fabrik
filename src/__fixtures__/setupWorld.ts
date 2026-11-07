@@ -13,6 +13,9 @@ export interface PullRequest {
   readonly isCrossRepository: boolean;
   body: string;
   open: boolean;
+  merged?: boolean;
+  /** The head's commit when it merged. */
+  headRefOid?: string;
 }
 
 export interface World {
@@ -100,8 +103,8 @@ export function worldScript(world: World, origin?: Origin): Record<string, Answe
     "gh pr list": ({ args }) =>
       json(
         world.prs
-          .filter((pr) => pr.open && pr.head === valueOf(args, "--head"))
-          .map(({ number, url, body, isCrossRepository }) => ({ number, url, body, isCrossRepository })),
+          .filter((pr) => (valueOf(args, "--state") === "merged" ? pr.merged === true : pr.open) && pr.head === valueOf(args, "--head"))
+          .map(({ number, url, body, isCrossRepository, headRefOid }) => ({ number, url, body, isCrossRepository, headRefOid })),
       ),
     "gh pr create": ({ args, input }) => {
       const [base, head] = [valueOf(args, "--base"), valueOf(args, "--head")];

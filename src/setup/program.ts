@@ -15,7 +15,7 @@ import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { checkOp, chooseAccount } from "./account.ts";
 import { apply, describeAction } from "./apply.ts";
 import { parseSetupArgs, SETUP_USAGE } from "./args.ts";
-import { checkSetup, offerToDeleteOldSetupSkill, type OriginTips, setupBranch } from "./checks.ts";
+import { checkSetup, offerToDeleteOldSetupSkill, type OriginTips } from "./checks.ts";
 import { type Env, ok, type Run } from "./exec.ts";
 import { appliedLines, closingLines } from "./finish.ts";
 import { gatherState, vaultItems } from "./gather.ts";
@@ -24,7 +24,7 @@ import { type OneRunSteps, readinessOf, runOnce } from "./oneRun.ts";
 import { FABRIK_APP_VAULT, planSetup, type ProductState, type SetupAnswers, type SetupPlan, setupPaths, setupWrites } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
 import { askQuestions } from "./questions.ts";
-import { commitSetupFiles, earlierSetupRun, openSetupPr, publishSetupPr, pushSetupBranch, switchToSetupBranch } from "./setupBranch.ts";
+import { commitSetupFiles, earlierSetupRun, openSetupPr, publishSetupPr, pushSetupBranch, setupBranch, switchToSetupBranch } from "./setupBranch.ts";
 import { pinCaller } from "./shims.ts";
 import { WIZARD_REPORT_ENV, WIZARD_SECOND_SUBSCRIPTION_ENV, type WizardRun } from "./wizard.ts";
 
@@ -156,7 +156,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     return 0;
   }
   if (current !== branch) {
-    const earlier = await earlierSetupRun(run, cwd, branch, repo.defaultBranch);
+    const earlier = await earlierSetupRun(run, cwd, branch, repo.defaultBranch, origin.setupBranch);
     if (earlier !== null) return stop(io, earlier);
   }
   // The same actions, with notes that say what this run does once its wizard has run.
@@ -215,7 +215,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
       await ok(run, "git", ["switch", "-q", repo.defaultBranch], { cwd });
       await ok(run, "git", ["branch", "-q", "-D", branch], { cwd });
     },
-    push: () => pushSetupBranch(run, cwd, branch),
+    push: () => pushSetupBranch(run, cwd, branch, origin.setupBranch),
     publish: (summary) => publishSetupPr({ run, cwd, branch, defaultBranch: repo.defaultBranch, release, summary }),
   };
 

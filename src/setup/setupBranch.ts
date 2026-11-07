@@ -2,26 +2,70 @@
 // run switches to fabrik/setup-<release>, commits only the files setup
 // writes, pushes the branch, and opens the setup PR or updates the one
 // already open from it.
-import { uncommittedPaths } from "./checks.ts";
 import { ok, type Run } from "./exec.ts";
 import { prBody, withEarlierDone } from "./finish.ts";
 import type { Published, RunSummary } from "./oneRun.ts";
 
+/** The branch setup applies its plan on, and a later run of the same release picks up. */
+export function setupBranch(release: string): string {
+  return `fabrik/setup-${release}`;
+}
+
+/**
+ * Every path the clone has uncommitted, untracked ones included. The checks
+ * and the setup commit both read it, so they agree on what's uncommitted.
+ */
+export async function uncommittedPaths(run: Run, cwd: string): Promise<string[]> {
+  return changedPaths(await ok(run, "git", ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd }));
+}
+
+/** Every path `git status --porcelain=v1 -z` names, a rename's old path included. */
+function changedPaths(status: string): string[] {
+  const entries = status.split("\0").filter((entry) => entry !== "");
+  const paths: string[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!;
+    paths.push(entry.slice(3));
+    // A rename or copy is followed by the path it came from.
+    if (/[RC]/.test(entry.slice(0, 2))) paths.push(entries[++i] ?? "");
+  }
+  return paths.filter((path) => path !== "");
+}
+
+/**
+ * The head commit of each merged PR from this repo's own setup branch. A
+ * squash or rebase merge leaves none of the branch's commits on the default
+ * branch, so this is how setup knows that branch is done.
+ */
+export async function mergedSetupHeads(run: Run, cwd: string, branch: string): Promise<string[]> {
+  const listed = JSON.parse(
+    await ok(run, "gh", ["pr", "list", "--head", branch, "--state", "merged", "--json", "headRefOid,isCrossRepository"], { cwd }),
+  ) as { headRefOid: string; isCrossRepository: boolean }[];
+  return listed.filter((pr) => !pr.isCrossRepository).map((pr) => pr.headRefOid);
+}
+
 /**
  * From the default branch, an earlier run's setup branch that isn't merged
- * yet: the run picks up from there, not from the default branch, so it doesn't
- * plan that run's files again over the Operator's edits. Null when there's none.
+ * yet, here or on origin (whose tip the checks found): the run picks up from
+ * there, not from the default branch, so it doesn't plan that run's files
+ * again over the Operator's edits. Null when there's none.
  */
-export async function earlierSetupRun(run: Run, cwd: string, branch: string, defaultBranch: string): Promise<string | null> {
-  const merged = async (sha: string) => (await run("git", ["merge-base", "--is-ancestor", sha, "HEAD"], { cwd })).code === 0;
+export async function earlierSetupRun(
+  run: Run,
+  cwd: string,
+  branch: string,
+  defaultBranch: string,
+  originTip: string | null,
+): Promise<string | null> {
+  let heads: Promise<string[]> | undefined;
+  const merged = async (sha: string) =>
+    (await run("git", ["merge-base", "--is-ancestor", sha, "HEAD"], { cwd })).code === 0 ||
+    (await (heads ??= mergedSetupHeads(run, cwd, branch))).includes(sha);
   const local = await run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd });
   if (local.code === 0 && !(await merged(local.stdout.trim()))) {
     return `${branch} holds an earlier run of setup that isn't on ${defaultBranch} yet. Switch to it with git switch ${branch}, then run setup again: it picks up where that run stopped.`;
   }
-  if (local.code === 0) return null;
-  const remote = await run("git", ["ls-remote", "origin", `refs/heads/${branch}`], { cwd });
-  const tip = remote.stdout.split("\t")[0]?.trim() ?? "";
-  if (remote.code !== 0 || tip === "" || (await merged(tip))) return null;
+  if (originTip === null || (await merged(originTip))) return null;
   return (
     `origin's ${branch} holds an earlier run of setup that isn't on ${defaultBranch} yet. ` +
     `Fetch it and switch to it with git fetch origin ${branch}:${branch} && git switch ${branch}, then run setup again: it picks up where that run stopped.`
@@ -43,8 +87,13 @@ export async function commitSetupFiles(run: Run, cwd: string, paths: readonly st
   return true;
 }
 
-export async function pushSetupBranch(run: Run, cwd: string, branch: string): Promise<void> {
-  await ok(run, "git", ["push", "-q", "-u", "origin", branch], { cwd });
+/**
+ * Pushes the setup branch over the tip the checks found on origin, or none:
+ * one GitHub kept from a squash- or rebase-merged run is replaced, and one
+ * that moved since the checks is not.
+ */
+export async function pushSetupBranch(run: Run, cwd: string, branch: string, originTip: string | null): Promise<void> {
+  await ok(run, "git", ["push", "-q", "-u", `--force-with-lease=${branch}:${originTip ?? ""}`, "origin", branch], { cwd });
 }
 
 export interface PublishInputs {
