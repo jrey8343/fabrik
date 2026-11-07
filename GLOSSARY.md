@@ -207,8 +207,12 @@ A Kit-owned issue telling the Operator to turn usage credits off on a Subscripti
 _Avoid_: overage issue, billing issue
 
 **Step-up**:
-An Implementer run on a stronger model than its role's default, after a failed review or at the Operator's request.
+An Implementer run on a stronger model than its role's default, after a failed review, at the Operator's request, or on a Ticket marked for a Stepped-up start.
 _Avoid_: escalation, upgrade
+
+**Stepped-up start**:
+A Ticket marked, by the Design session that wrote it or by the Operator, so that its Implement runs are Step-ups while the mark stays, from its first run on. Its Retries count as any Ticket's do, with no further Step-up to fall back on.
+_Avoid_: pre-escalation, Opus Ticket, heavy Ticket
 
 **Sandbox**:
 An isolated environment where an Implementer, or a Design session's prototype turn, does its work on a branch, holding no production secrets.
