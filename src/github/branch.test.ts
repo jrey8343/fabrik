@@ -515,7 +515,7 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
   });
 });
 
-describe("A run whose range holds a merge remerge can't judge (#390)", () => {
+describe("A run whose range holds an octopus merge (#390)", () => {
   /** Two side branches off the PR's head, each changing a file of its own, octopus-merged into the agent branch. */
   async function octopusMerge(edit: (clone: string) => Promise<void> = async () => {}): Promise<void> {
     await git(clone, "checkout", "--quiet", "-b", "left", prHead);

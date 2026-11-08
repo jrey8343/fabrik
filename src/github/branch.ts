@@ -219,12 +219,12 @@ function diff(git: Git, from: string, to: string): Promise<ChangedPath[]> {
 /**
  * What each commit in `revisions` changes on its own. A merge shows only what
  * was changed by hand on top of the merge git would make (remerge), so merging
- * main in doesn't count main's own changes. A merge remerge can't judge (#390),
- * an octopus merge or one whose parents share no merge base, is judged by
- * combined diff instead: a path is its own only where its result differs from
- * every parent, so a side taken unchanged, judged elsewhere, doesn't count, and
- * a hand edit does. Git is never asked to remerge those, so it never warns into
- * the listing.
+ * main in doesn't count main's own changes. Remerge can't judge an octopus
+ * merge, nor a merge whose parents share no merge base (#390). Those are judged
+ * by combined diff instead: a path is the merge's own only where its result
+ * differs from every parent. A side taken unchanged is judged elsewhere, so it
+ * doesn't count; a hand edit does. Git is never asked to remerge those merges,
+ * so it never warns into the listing.
  */
 async function commitsIn(git: Run, ...revisions: string[]): Promise<ChangedPath[]> {
   const commits = (await git("rev-list", "--parents", ...revisions, "--"))
@@ -248,17 +248,29 @@ async function commitsIn(git: Run, ...revisions: string[]): Promise<ChangedPath[
   return changes;
 }
 
-/** Whether remerge can judge a commit with these parents: any but a merge of more than two, or of two with no merge base. */
-function remergeCanJudge(git: Run, parents: readonly string[]): Promise<boolean> {
-  if (parents.length <= 1) return Promise.resolve(true);
-  if (parents.length > 2) return Promise.resolve(false);
-  return git("merge-base", parents[0]!, parents[1]!).then(
-    () => true,
-    () => false,
-  );
+/**
+ * Whether remerge can judge a commit with these parents: any but a merge of more than two, or of two with no merge
+ * base. Only git's "no merge base" exit (1) says so; any other failure is the push job's to report, never a reason
+ * to judge the merge another way.
+ */
+async function remergeCanJudge(git: Run, parents: readonly string[]): Promise<boolean> {
+  const [ours, theirs, ...more] = parents;
+  if (ours === undefined || theirs === undefined) return true;
+  if (more.length > 0) return false;
+  try {
+    await git("merge-base", ours, theirs);
+    return true;
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 1) return false;
+    throw error;
+  }
 }
 
-/** The paths where merge `sha` differs from every one of its `parents`, as its first parent's diff names them. */
+/**
+ * The paths where merge `sha` differs from every one of its `parents`, as its first parent's diff names them. Renames
+ * are off, unlike remerge's listing: the parents' diffs are compared path by path, so a rename inside the merge counts
+ * as both its paths.
+ */
 async function unlikeEveryParent(git: Run, sha: string, parents: readonly string[]): Promise<ChangedPath[]> {
   const diffs = await Promise.all(
     parents.map(async (parent) => parseNameStatus(await git("diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", parent, sha))),
