@@ -62,6 +62,12 @@ const TO_THE_SENTRY_STAGE = [
 /** 1Password's items, as "vault/title", once the App's key and the Claude token are stored. */
 const THE_APP_AND_CLAUDE = ["Fabrik App/Fabrik App", "Fabrik/Claude token"];
 
+/** The account as the wizard words it, and the OP_ACCOUNT Setup passes in to name it, if any. */
+const ACCOUNTS: [string, string | undefined][] = [
+  ["this 1Password account", undefined],
+  ["this 1Password account (clinic.1password.com)", "clinic.1password.com"],
+];
+
 interface OpCall {
   args: string[];
   /** Where the template was, when op was given one by its path. */
@@ -415,15 +421,35 @@ describe("The setup wizard's Sentry token stage", () => {
     expect(w.stdout).not.toContain("still to do by hand");
   });
 
-  it("is skipped for a repo that doesn't report to Sentry, which still finishes setup, and says Setup walks it once monitor.errors names Sentry", async () => {
+  it("asks whether to store a Sentry token now, not whether the repo reports to Sentry", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_SENTRY_STAGE, "n"]);
+
+    expect(w.stdout).toContain("Store a Sentry token now?");
+    expect(w.stdout).not.toContain("report production errors to Sentry?");
+  });
+
+  it.each(ACCOUNTS)("says, before asking, that the token is shared by every Product repo in %s, harmless before acme/clinic reports, and fine to skip", async (account, opAccount) => {
+    const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_SENTRY_STAGE, "n"], undefined, { opAccount });
+
+    const explained = w.stdout.indexOf(`One Sentry token serves every Product repo in ${account}.`);
+    expect(explained).toBeGreaterThan(-1);
+    expect(explained).toBeLessThan(w.stdout.indexOf("Store a Sentry token now?"));
+    expect(w.stdout).toContain(
+      "Storing it before acme/clinic reports to Sentry is harmless: the Monitor doesn't read Sentry until monitor.errors names a project.",
+    );
+    expect(w.stdout).toContain("Skipping is fine too: once monitor.errors names a project, running Setup again walks this stage.");
+  });
+
+  it("is skipped on a no, which still finishes setup, and says how to store a token later without assuming the repo doesn't use Sentry", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, [...TO_THE_SENTRY_STAGE, "n"]);
 
     expect(w.status).toBe(0);
     expect(created(w)).toEqual([]);
     expect(w.stdout).toContain("Setup complete");
     expect(w.stdout).toContain(
-      "Skipping the Sentry token. Once acme/clinic reports to Sentry, name its project in monitor.errors in .fabrik/config.json and run Setup again: it walks this stage while 1Password lacks the token.",
+      "Skipping the Sentry token. To store one later, name a project in monitor.errors in .fabrik/config.json and run Setup again: it walks this stage while 1Password lacks the token.",
     );
+    expect(w.stdout).not.toContain("Once acme/clinic reports to Sentry");
     expect(w.stdout).not.toContain("Re-run the wizard");
   });
 
@@ -454,12 +480,6 @@ describe("The setup wizard's Sentry token stage", () => {
 });
 
 describe("The setup wizard in one 1Password account per Product", () => {
-  /** The account as the wizard words it, and the OP_ACCOUNT Setup passes in to name it, if any. */
-  const ACCOUNTS: [string, string | undefined][] = [
-    ["this 1Password account", undefined],
-    ["this 1Password account (clinic.1password.com)", "clinic.1password.com"],
-  ];
-
   it.each(ACCOUNTS)("says the Claude and Sentry tokens 1Password holds are shared by every Product repo in %s", async (account, opAccount) => {
     const w = await walk([...THE_APP_AND_CLAUDE, "Fabrik App/Sentry token"], [...TO_THE_SENTRY_STAGE, "n"], undefined, { opAccount });
 

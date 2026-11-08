@@ -418,11 +418,19 @@ say "monitor.errors in .fabrik/config.json names your Sentry org and project."
 say "It reads Sentry with the 'Sentry token' API Credential in the 'Fabrik App' vault."
 SENTRY_TOKEN_EXISTS=0
 op item get "Sentry token" --vault "Fabrik App" >/dev/null 2>&1 && SENTRY_TOKEN_EXISTS=1
+# The question is whether to store a token now, not whether the repo reports to
+# Sentry: a token stored early is harmless, since the Monitor doesn't read Sentry
+# until monitor.errors names a project.
+if (( ! SENTRY_TOKEN_EXISTS )); then
+  say "One Sentry token serves every Product repo in $THIS_ACCOUNT."
+  say "Storing it before $REPO reports to Sentry is harmless: the Monitor doesn't read Sentry until monitor.errors names a project."
+  say "Skipping is fine too: once monitor.errors names a project, running Setup again walks this stage."
+fi
 if (( SENTRY_TOKEN_EXISTS )) && ! confirm "1Password already holds a Sentry token, which every Product repo in $THIS_ACCOUNT shares. Replace it with a new one?"; then
   say "Keeping the current Sentry token."
   pause
-elif (( ! SENTRY_TOKEN_EXISTS )) && ! confirm "Does $REPO report production errors to Sentry?"; then
-  say "Skipping the Sentry token. Once $REPO reports to Sentry, name its project in monitor.errors in .fabrik/config.json and run Setup again: it walks this stage while 1Password lacks the token."
+elif (( ! SENTRY_TOKEN_EXISTS )) && ! confirm "Store a Sentry token now?"; then
+  say "Skipping the Sentry token. To store one later, name a project in monitor.errors in .fabrik/config.json and run Setup again: it walks this stage while 1Password lacks the token."
   pause
 else
   open_url "https://sentry.io/settings/account/api/auth-tokens/new-token/"
