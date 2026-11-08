@@ -841,7 +841,7 @@ export interface ConflictSnapshot {
    * check had no token that can read workflow runs. A stalled Request-changes run on a draft is restarted only when
    * it reads false (#387).
    */
-  readonly implementRunUnderWay: boolean | null;
+  readonly implementJobUnderWay: boolean | null;
   /** Every open agent PR, with whether GitHub says it merges cleanly into the default branch. */
   readonly pullRequests: readonly ConflictCandidate[];
 }

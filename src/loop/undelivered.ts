@@ -65,9 +65,9 @@ export function actOnUndelivered(
   now: string,
   held: number | null = null,
   runMinutes: number = UNDELIVERED_GRACE_MINUTES,
-  implementRunUnderWay: boolean | null = null,
+  implementJobUnderWay: boolean | null = null,
 ): Action[] | null {
-  const stalled = stalledRequestChangesRun(pullRequest, now, implementRunUnderWay);
+  const stalled = stalledRequestChangesRun(pullRequest, now, implementJobUnderWay);
   if (stalled !== null) return stalled;
   if (!actsOn(pullRequest)) return null;
   const unnoted = unnotedChangesRequests(pullRequest, operator);
@@ -127,10 +127,10 @@ export function actOnUndelivered(
  *   job that lands it, under way, so the check leaves it alone. So does a
  *   check that couldn't read the jobs.
  */
-function stalledRequestChangesRun(pullRequest: PullRequestSnapshot, now: string, implementRunUnderWay: boolean | null): Action[] | null {
+function stalledRequestChangesRun(pullRequest: PullRequestSnapshot, now: string, implementJobUnderWay: boolean | null): Action[] | null {
   const { ticket, requestChangesRunSince: since } = pullRequest;
   if (!pullRequest.isAgent || ticket === null || !pullRequest.open) return null;
-  if (pullRequest.draft && implementRunUnderWay !== false) return null;
+  if (pullRequest.draft && implementJobUnderWay !== false) return null;
   if (pullRequest.requestChangesRunInFlight === null || since === null) return null;
   if (Date.parse(now) - Date.parse(since) < UNDELIVERED_GRACE_MINUTES * 60_000) return null;
   return [{ kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] }];

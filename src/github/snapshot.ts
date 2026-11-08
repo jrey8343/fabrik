@@ -440,10 +440,11 @@ export const PROTOTYPE_JOB_NAME = "Prototype turn";
  * bot's issue is taken for the App's (see byAppOf). A
  * Dispatch check also reads workflow runs, through `actions`, and so does a
  * conflict check when it's given them (#387): the Fabrik App has no Actions
- * permission (ADR-0002), so that is the job's own read-only GITHUB_TOKEN. A scheduled tick also reads whether the fabrik-runs
- * store is private, through `store` (see gatherRetroSlice), and the store's
- * Run records through `replayStore`, only while a replay issue the Operator
- * filed is open (see gatherReplaySlice). Only src/main.ts, which the tick
+ * permission (ADR-0002), so that is the job's own read-only GITHUB_TOKEN. A
+ * scheduled tick also reads whether the fabrik-runs store is private,
+ * through `store` (see gatherRetroSlice), and the store's Run records through
+ * `replayStore`, only while a replay issue the Operator filed is open (see
+ * gatherReplaySlice). Only src/main.ts, which the tick
  * runs, passes `replayStore`; the Kit job, which never routes a tick, doesn't.
  * agent:replay added reads every open replay issue, which a replay Ticket's
  * claim weighs, and nothing of the store.
@@ -1373,8 +1374,8 @@ async function gatherConflicts(
   for (const { node, mergeable } of agents) {
     pullRequests.push({ pullRequest: pullRequestSnapshotOf(await withEarlierComments(github, repo, node), appLogin, operator), mergeable });
   }
-  const implementRunUnderWay = actions === null ? null : await implementJobUnderWay(actions, repo);
-  return { main: head, now, implementRunUnderWay, pullRequests };
+  const implementJobUnderWay = actions === null ? null : await readImplementJobUnderWay(actions, repo);
+  return { main: head, now, implementJobUnderWay, pullRequests };
 }
 
 async function gatherDispatch(
@@ -1504,9 +1505,9 @@ async function gatherDesignQueue(
  * the Weekly summary's Held section counts. With a token that can read
  * workflow runs (the Design queue job's), the turns in progress are read from
  * their jobs. Without one, as on the scheduled tick's Design queue job (it
- * asks for no Actions permission) and the Weekly summary (its Product-repo token can't
- * read Actions), they are read from the issues instead, erring toward holding
- * a slot: see firstTurnClaimed.
+ * asks for no Actions permission) and the Weekly summary (its Product-repo
+ * token can't read Actions), they are read from the issues instead, erring
+ * toward holding a slot: see firstTurnClaimed.
  */
 export async function gatherDesignQueueSlice(
   github: Pick<GitHub, "graphql">,
@@ -1617,9 +1618,13 @@ export async function countDispatchedRuns(
   repo: Repo,
 ): Promise<{ implement: number; research: number }> {
   const unfinished = (await jobsOfUnfinishedRuns(github, repo)).filter((job) => job.status !== "completed");
-  const named = (jobName: string) =>
-    unfinished.filter(({ name }) => name === jobName || name.endsWith(` / ${jobName}`)).length;
+  const named = (jobName: string) => unfinished.filter(({ name }) => isJobNamed(name, jobName)).length;
   return { implement: named(IMPLEMENT_JOB_NAME), research: named(RESEARCH_JOB_NAME) };
+}
+
+/** Whether a job's name is `jobName`, or `<caller job> / <jobName>` when a Product repo's caller workflow ran it. */
+function isJobNamed(name: string, jobName: string): boolean {
+  return name === jobName || name.endsWith(` / ${jobName}`);
 }
 
 /**
@@ -1628,11 +1633,17 @@ export async function countDispatchedRuns(
  * waiting, queued or running, and also one that's done while its push job is
  * still landing the run, which may still push or end it. GitHub doesn't list
  * a job still waiting on its `needs` until those jobs finish, but an Implement
- * job needs only the Kit job, which its run's claim needs too.
+ * job needs only the Kit job, which its run's claim needs too. Null when the
+ * Actions API couldn't be read, so a failed read only leaves a stalled run
+ * alone, never the rest of the conflict check.
  */
-async function implementJobUnderWay(github: Pick<GitHub, "rest">, repo: Repo): Promise<boolean> {
-  const jobs = await jobsOfUnfinishedRuns(github, repo);
-  return jobs.some(({ name, conclusion }) => conclusion !== "skipped" && (name === IMPLEMENT_JOB_NAME || name.endsWith(` / ${IMPLEMENT_JOB_NAME}`)));
+async function readImplementJobUnderWay(github: Pick<GitHub, "rest">, repo: Repo): Promise<boolean | null> {
+  try {
+    const jobs = await jobsOfUnfinishedRuns(github, repo);
+    return jobs.some(({ name, conclusion }) => conclusion !== "skipped" && isJobNamed(name, IMPLEMENT_JOB_NAME));
+  } catch {
+    return null;
+  }
 }
 
 const DESIGN_JOB = new RegExp(`^(?:.+ / )?(?:${DESIGN_JOB_NAME}|${PROTOTYPE_JOB_NAME}) #([1-9][0-9]*)$`);

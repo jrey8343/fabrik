@@ -61,7 +61,7 @@ class Thread {
    * Whether an Implement job is under way anywhere in the repo, as the conflict check reads it from the Actions API:
    * null when it couldn't read it.
    */
-  implementRunUnderWay: boolean | null = null;
+  implementJobUnderWay: boolean | null = null;
   /** What a mechanical rebase onto main pushes the PR to, when the conflict check plans one. */
   rebasedTo = E;
   /** When set, this action fails as the adapter applies it, and every action after it is never applied. */
@@ -94,7 +94,7 @@ class Thread {
     return {
       main: this.main,
       now: this.now,
-      implementRunUnderWay: this.implementRunUnderWay,
+      implementJobUnderWay: this.implementJobUnderWay,
       pullRequests: [{ pullRequest: this.pullRequest(), mergeable: this.mergeable }],
     };
   }
@@ -1160,7 +1160,7 @@ describe("A Request-changes run noted on a draft with no Implement job behind it
 
   it.each(["mainPushed", "tick"] as const)("is restarted by the %s check once past the grace period: one agent:implement on the Ticket, and nothing else", (check) => {
     const thread = noted();
-    thread.implementRunUnderWay = false;
+    thread.implementJobUnderWay = false;
 
     const plan = thread[check](30);
 
@@ -1172,21 +1172,21 @@ describe("A Request-changes run noted on a draft with no Implement job behind it
 
   it("isn't restarted while an Implement job is under way anywhere in the repo: it may be the run's own", () => {
     const thread = noted();
-    thread.implementRunUnderWay = true;
+    thread.implementJobUnderWay = true;
 
     expect(addsImplement(thread.mainPushed(90))).toBe(false);
   });
 
   it("isn't restarted within the grace period of its note", () => {
     const thread = noted();
-    thread.implementRunUnderWay = false;
+    thread.implementJobUnderWay = false;
 
     expect(addsImplement(thread.mainPushed(23))).toBe(false);
   });
 
   it("isn't restarted when the check couldn't read whether an Implement job is under way", () => {
     const thread = noted();
-    thread.implementRunUnderWay = null;
+    thread.implementJobUnderWay = null;
 
     expect(addsImplement(thread.mainPushed(90))).toBe(false);
   });
@@ -1195,7 +1195,7 @@ describe("A Request-changes run noted on a draft with no Implement job behind it
     const thread = noted();
     thread.implement();
     thread.requestChangesRunFinishes(BUILT, B, 40);
-    thread.implementRunUnderWay = false;
+    thread.implementJobUnderWay = false;
 
     expect(addsImplement(thread.mainPushed(90))).toBe(false);
   });
@@ -1208,7 +1208,7 @@ describe("A Request-changes run noted on a draft with no Implement job behind it
       thread.failsAt = "convert-to-draft";
       thread.tick(60);
       thread.failsAt = null;
-      thread.implementRunUnderWay = underWay;
+      thread.implementJobUnderWay = underWay;
 
       expect(onThePullRequest(thread.tick(120))).toEqual([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]);
       expect(addsImplement(thread.mainPushed(65))).toBe(false);

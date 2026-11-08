@@ -24,7 +24,7 @@ export function checkConflicts(conflicts: ConflictSnapshot, operator: string, he
   const reasons: string[] = [];
   const actions: Action[] = [];
   for (const candidate of conflicts.pullRequests) {
-    const undelivered = actOnUndelivered(candidate, operator, now, held, runMinutes, conflicts.implementRunUnderWay);
+    const undelivered = actOnUndelivered(candidate, operator, now, held, runMinutes, conflicts.implementJobUnderWay);
     if (undelivered !== null) {
       actions.push(...undelivered);
       continue;

@@ -2242,7 +2242,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "scheduled-tick", now: "2026-11-07T10:17:00Z" }, null, APP_LOGIN);
 
-    expect(snapshot.conflicts).toEqual({ main: "d".repeat(40), now: "2026-11-07T10:17:00Z", implementRunUnderWay: null, pullRequests: [] });
+    expect(snapshot.conflicts).toEqual({ main: "d".repeat(40), now: "2026-11-07T10:17:00Z", implementJobUnderWay: null, pullRequests: [] });
   });
 
   it("reads again while GitHub is still working out whether a PR conflicts, until it knows", async () => {
@@ -2275,7 +2275,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, actions as unknown as GitHub);
 
-    expect(snapshot.conflicts?.implementRunUnderWay).toBe(true);
+    expect(snapshot.conflicts?.implementJobUnderWay).toBe(true);
   });
 
   it("reads no Implement job under way when the only unfinished runs skipped theirs, and finished runs don't count", async () => {
@@ -2287,7 +2287,17 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "scheduled-tick", now: "2026-11-07T10:17:00Z" }, null, APP_LOGIN, actions as unknown as GitHub);
 
-    expect(snapshot.conflicts?.implementRunUnderWay).toBe(false);
+    expect(snapshot.conflicts?.implementJobUnderWay).toBe(false);
+  });
+
+  it("reads whether an Implement job is under way as unknown when the Actions API fails, and still holds every PR", async () => {
+    const { github } = githubReading([[node(50, "CONFLICTING")]]);
+    const actions = { rest: async () => Promise.reject(new Error("GitHub GET actions/runs failed: 403 API rate limit exceeded")) };
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.conflicts?.implementJobUnderWay).toBeNull();
+    expect(snapshot.conflicts?.pullRequests.map(({ pullRequest }) => pullRequest.number)).toEqual([50]);
   });
 
   it("reads whether an Implement job is under way as unknown without a token that can read workflow runs", async () => {
@@ -2295,7 +2305,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN);
 
-    expect(snapshot.conflicts?.implementRunUnderWay).toBeNull();
+    expect(snapshot.conflicts?.implementJobUnderWay).toBeNull();
   });
 
   it("isn't gathered for any other event", async () => {
