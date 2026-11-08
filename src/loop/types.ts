@@ -596,9 +596,9 @@ export interface PullRequestSnapshot {
   readonly conflictRunInFlight: string | null;
   /**
    * Whether that conflict-only run was started on a draft whose push GitHub
-   * never reviewed (#389), not a PR at the Merge gate: its push note doesn't
-   * say its Verdict uses no retry, as that Verdict counts as the unreviewed
-   * push's own would have. False while none is in flight.
+   * never reviewed (#389), not a PR at the Merge gate: its Verdict counts as
+   * the unreviewed push's own would have, so it isn't marked as from a
+   * conflict-only run. False while none is in flight.
    */
   readonly conflictRunOnUnreviewedDraft: boolean;
   /**

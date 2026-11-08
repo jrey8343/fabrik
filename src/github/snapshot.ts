@@ -1331,7 +1331,8 @@ function ticketEmptyDiffsOf(pullRequest: PullRequestNode, ticket: number | null)
   return countEmptyDiffs(closedTicketOf(pullRequest, ticket)?.comments.nodes.map((comment) => comment.body) ?? []);
 }
 
-function closedTicketOf(pullRequest: PullRequestNode, ticket: number | null) {
+/** The issue among those a PR closes that is the Ticket its agent branch names, or undefined. */
+function closedTicketOf(pullRequest: PullRequestNode, ticket: number | null): PullRequestNode["closingIssuesReferences"]["nodes"][number] | undefined {
   return pullRequest.closingIssuesReferences.nodes.find((issue) => issue.number === ticket);
 }
 
