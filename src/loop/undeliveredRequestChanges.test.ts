@@ -253,8 +253,9 @@ describe("An undelivered Request changes", () => {
     const tick = thread.tick(60);
 
     const kinds = actionsOf(tick).map((action) => action.kind);
-    // The note goes first, so the run is in flight even if what follows it fails.
-    expect(kinds.slice(0, 3)).toEqual(["comment", "convert-to-draft", "add-labels"]);
+    // The note goes first, so the run is in flight even if what follows it fails; the run itself turns the PR to
+    // draft if the Kit couldn't.
+    expect(kinds.slice(0, 3)).toEqual(["comment", "add-labels", "convert-to-draft"]);
     expect(actionsOf(tick)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
     expect(kinds).not.toContain("rebase-onto-main");
     const [note, ...more] = commentsOn(tick, 50);
@@ -290,19 +291,22 @@ describe("An undelivered Request changes, beyond the first tick", () => {
     expect(actionsOf(tick)).toContainEqual({ kind: "convert-to-draft", pullRequest: 50 });
     expect(addsImplement(tick)).toBe(true);
     const [note] = commentsOn(tick, 50);
-    expect(note).toContain("No run started for your Request changes");
+    // A run may have started and come to nothing, as when its claim failed: the note says only that none is under way.
+    expect(note).toContain("No Request-changes run is under way for your Request changes");
     expect(note).toContain("#pullrequestreview-5810278044");
     expect(note).not.toContain("conflict");
     expect(note).not.toContain("merging");
   });
 
-  it("on a PR GitHub hadn't worked out a conflict for: the note says the run merges main in if it conflicts", () => {
+  it("on a PR GitHub hadn't worked out a conflict for: the note gives the conflict as the likely reason, and says the run merges main in if it conflicts", () => {
     const thread = new Thread();
     thread.mergeable = null;
     thread.review(5810278044, 14);
 
     const [note] = commentsOn(thread.tick(60), 50);
 
+    expect(note).toContain("GitHub started no run for your Request changes");
+    expect(note).toContain("GitHub doesn't start workflows for reviews while a pull request conflicts with its base");
     expect(note).toContain("merging `main` in first if #50 conflicts with it");
   });
 
@@ -694,6 +698,41 @@ describe("The Request-changes run an undelivered Request changes started", () =>
     expect(actionsOf(resumed)).toContainEqual({ kind: "convert-to-draft", pullRequest: 50 });
     expect(startsOn(resumed)).toMatchObject({ requestChanges: { review: 5810278044 } });
     expect(commentsOn(thread.tick(120), 50)).toEqual([]);
+  });
+
+  it.each(["add-labels", "convert-to-draft"] as const)(
+    "still starts when the note's %s failed: the next check starts the run, quietly, which turns the PR to draft first",
+    (failed) => {
+      const thread = new Thread();
+      thread.review(5810278044, 14);
+      thread.failsAt = failed;
+      thread.tick(60);
+      thread.failsAt = null;
+      expect(thread.draft).toBe(false);
+
+      const next = thread.tick(120);
+
+      expect(commentsOn(next, 50)).toEqual([]);
+      expect(addsImplement(next)).toBe(true);
+      const resumed = thread.implement();
+      expect(actionsOf(resumed)).toContainEqual({ kind: "convert-to-draft", pullRequest: 50 });
+      expect(startsOn(resumed)).toMatchObject({ requestChanges: { review: 5810278044 } });
+    },
+  );
+
+  it("of a delivered review whose claim failed before turning the PR to draft is started by the next check", () => {
+    const thread = new Thread();
+    thread.mergeable = true;
+    thread.review(777, 14);
+    thread.failsAt = "convert-to-draft";
+    thread.delivered(777, 14);
+    thread.failsAt = null;
+
+    const next = thread.tick(60);
+
+    expect(commentsOn(next, 50)).toEqual([]);
+    expect(addsImplement(next)).toBe(true);
+    expect(startsOn(thread.implement())).toMatchObject({ requestChanges: { review: 777 } });
   });
 });
 

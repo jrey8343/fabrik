@@ -95,12 +95,12 @@ describe("main moving under a conflicting agent PR at the Merge gate", () => {
     expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("#50 is a draft") });
   });
 
-  it("skips a PR with a Request-changes run in flight: that run's own push gets rebased when it lands", () => {
-    const pullRequest = atMergeGate({ notedChangesRequests: [9], requestChangesRunInFlight: 9 });
+  it("doesn't rebase a PR with a Request-changes run in flight that never went back to draft: it starts that run, which brings main in", () => {
+    const pullRequest = atMergeGate({ notedChangesRequests: [9], requestChangesRunInFlight: 9, requestChangesRunReviews: [9] });
 
     const plan = planFor(MAIN_PUSHED, conflictsSnapshot([{ pullRequest, mergeable: false }]), kitConfig());
 
-    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("Request-changes run on #50 is still in flight") });
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }] });
   });
 
   it("skips a PR with a Retry in flight, which is a draft", () => {

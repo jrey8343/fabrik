@@ -55,9 +55,12 @@ function actsOn(pullRequest: PullRequestSnapshot): boolean {
  * draft, and adds agent:implement on the Ticket, which starts that run
  * (src/loop/implement.ts). The run reads all the Operator's Request changes,
  * and, when the PR conflicts with main, merges main in. The note goes first:
- * if the rest fails, re-adding agent:implement still resumes the run.
+ * if the rest fails, the next check, or re-adding agent:implement, still
+ * starts the run.
  */
 export function actOnUndelivered({ pullRequest, mergeable }: ConflictCandidate, operator: string, now: string): Action[] | null {
+  const stalled = stalledRequestChangesRun(pullRequest);
+  if (stalled !== null) return stalled;
   if (!actsOn(pullRequest)) return null;
   const unnoted = unnotedChangesRequests(pullRequest, operator);
   const cutoff = Date.parse(now) - UNDELIVERED_GRACE_MINUTES * 60_000;
@@ -65,10 +68,14 @@ export function actOnUndelivered({ pullRequest, mergeable }: ConflictCandidate, 
   const reviews = unnoted.map(({ review }) => review);
   const { number } = pullRequest;
   const links = reviewLinks(pullRequest, reviews);
+  const why = "GitHub doesn't start workflows for reviews while a pull request conflicts with its base";
+  // A PR that merges cleanly most likely had a run start that came to nothing, as when its claim failed.
   const opening =
     mergeable === false
-      ? `GitHub started no run for your Request changes on #${number} (${links}): #${number} conflicts with \`main\`, and GitHub doesn't start workflows for reviews while a pull request conflicts with its base.`
-      : `No run started for your Request changes on #${number} (${links}).`;
+      ? `GitHub started no run for your Request changes on #${number} (${links}): #${number} conflicts with \`main\`, and ${why}.`
+      : mergeable === null
+        ? `GitHub started no run for your Request changes on #${number} (${links}). #${number} may conflict with \`main\`, which GitHub hasn't worked out yet, and ${why}.`
+        : `No Request-changes run is under way for your Request changes on #${number} (${links}).`;
   // GitHub hadn't worked out whether it conflicts: the run's own check decides, so the note says either may happen.
   const merging =
     mergeable === false
@@ -84,8 +91,21 @@ export function actOnUndelivered({ pullRequest, mergeable }: ConflictCandidate, 
   ].join("\n");
   return [
     { kind: "comment", issue: number, body },
-    { kind: "convert-to-draft", pullRequest: number },
     // A fresh agent:implement on the Ticket starts the run the note put in flight on its open PR. It notifies nobody.
     { kind: "add-labels", issue: pullRequest.ticket as number, labels: [DISPATCH_LABEL] },
+    { kind: "convert-to-draft", pullRequest: number },
   ];
+}
+
+/**
+ * A Request-changes run in flight on a PR still out of draft, or null: the
+ * Kit noted it, but the PR was never turned to draft and the run never
+ * started, as when what followed the note failed (#341). Only that leaves one
+ * so: the PR leaving draft ends the run in flight. The check starts it, with a
+ * fresh agent:implement, which turns the PR to draft first.
+ */
+function stalledRequestChangesRun(pullRequest: PullRequestSnapshot): Action[] | null {
+  const { ticket } = pullRequest;
+  if (!pullRequest.isAgent || ticket === null || !pullRequest.open || pullRequest.draft) return null;
+  return pullRequest.requestChangesRunInFlight === null ? null : [{ kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] }];
 }
