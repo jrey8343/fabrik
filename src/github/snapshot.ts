@@ -74,6 +74,7 @@ import {
   requestChangesRunIn,
   requestChangesSinceRunIn,
   leftDraftSinceVerdictIn,
+  implementRunFailedIn,
   researchRunFailedIn,
   verdictsIn,
 } from "./threads.ts";
@@ -295,6 +296,7 @@ const DISPATCH_QUERY = `
           subIssues { totalCount }
           blockedBy(first: 50) { nodes { number state stateReason } }
           closedByPullRequestsReferences(first: 20, includeClosedPrs: false) { nodes { number state } }
+          comments(last: 100) { nodes { body author { login __typename } } }
         }
       }
       pullRequests(states: OPEN, first: 100) {
@@ -316,6 +318,7 @@ interface DispatchQueryResult {
         subIssues: { totalCount: number };
         blockedBy: { nodes: { number: number; state: "OPEN" | "CLOSED"; stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null }[] };
         closedByPullRequestsReferences: { nodes: { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[] };
+        comments: { nodes: { body: string; author: { login: string; __typename: string } | null }[] };
       }[];
     };
     pullRequests: { nodes: { isDraft: boolean; headRefName: string; author: { __typename: string } | null }[] };
@@ -1431,7 +1434,7 @@ async function gatherDispatch(
   appLogin: string | null,
 ): Promise<EventPart> {
   const [{ tickets, page }, runs, researchDecisions] = await Promise.all([
-    gatherDispatchTickets(github, repo),
+    gatherDispatchTickets(github, repo, appLogin),
     countDispatchedRuns(actions, repo),
     gatherResearchDecisions(github, repo, appLogin),
   ]);
@@ -1463,12 +1466,16 @@ export async function gatherDispatchCandidates(
   repo: Repo,
   appLogin: string | null,
 ): Promise<Pick<DispatchSnapshot, "tickets" | "researchDecisions">> {
-  const [{ tickets }, researchDecisions] = await Promise.all([gatherDispatchTickets(github, repo), gatherResearchDecisions(github, repo, appLogin)]);
+  const [{ tickets }, researchDecisions] = await Promise.all([gatherDispatchTickets(github, repo, appLogin), gatherResearchDecisions(github, repo, appLogin)]);
   return { tickets, researchDecisions };
 }
 
-/** Every open `ready-for-agent` issue, and the query's last page, which also holds the repo's open PRs and its owner. */
-async function gatherDispatchTickets(github: GitHub, repo: Repo): Promise<{ tickets: TicketSnapshot[]; page: DispatchQueryResult }> {
+/**
+ * Every open `ready-for-agent` issue, its last Implement run's word read from
+ * the Fabrik App's comments on it, and the query's last page, which also holds
+ * the repo's open PRs and its owner.
+ */
+async function gatherDispatchTickets(github: GitHub, repo: Repo, appLogin: string | null): Promise<{ tickets: TicketSnapshot[]; page: DispatchQueryResult }> {
   const tickets: TicketSnapshot[] = [];
   let after: string | null = null;
   let page: DispatchQueryResult;
@@ -1492,6 +1499,9 @@ async function gatherDispatchTickets(github: GitHub, repo: Repo): Promise<{ tick
         openLinkedPullRequests: issue.closedByPullRequestsReferences.nodes
           .filter((pr) => pr.state === "OPEN")
           .map((pr) => pr.number),
+        lastRunFailed: implementRunFailedIn(
+          issue.comments.nodes.map((comment) => ({ body: comment.body, byApp: byAppOf(comment.author, appLogin) })),
+        ),
       });
     }
     after = page.repository.issues.pageInfo.hasNextPage ? page.repository.issues.pageInfo.endCursor : null;

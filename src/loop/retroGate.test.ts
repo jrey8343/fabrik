@@ -159,7 +159,7 @@ describe("The retro gate opens a pending Retro", () => {
 });
 
 /** A tick that opens no Retro and closes or posts nothing: it only asks for the Design queue check every tick ends with. */
-const OPENS_NOTHING: Plan = { kind: "act", actions: [{ kind: "check-design-queue" }] };
+const OPENS_NOTHING: Plan = { kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] };
 
 describe("The retro gate opens nothing", () => {
   it("when retro.day is null, which turns the Retro off", () => {
@@ -276,6 +276,7 @@ describe("The tick's other rules", () => {
         { kind: "comment", issue: 41, body: expect.stringMatching(/^The weekly usage limit reset at 2026-11-07 03:00 UTC/) },
         { kind: "close", issue: 41, reason: "completed" },
         expect.objectContaining({ kind: "open-issue", title: "Retro: week of 2026-11-02", labels: ["fabrik:retro"], assignees: [] }),
+        { kind: "check-dispatch" },
         { kind: "check-design-queue" },
       ],
     });
@@ -290,6 +291,7 @@ describe("The tick's other rules", () => {
       actions: [
         expect.objectContaining({ kind: "comment", issue: 41 }),
         { kind: "close", issue: 41, reason: "completed" },
+        { kind: "check-dispatch" },
         { kind: "check-design-queue" },
       ],
     });
@@ -304,7 +306,7 @@ describe("The tick's other rules", () => {
     const plan = planFor({ kind: "scheduled-tick", now: SATURDAY }, snapshot, kitConfig({ audit: { day: "saturday" } }));
 
     expect(opened(plan).map((issue) => issue.labels)).toEqual([["fabrik:audit"], ["fabrik:retro"]]);
-    expect(plan).toMatchObject({ kind: "act", actions: [{ kind: "open-issue" }, { kind: "open-issue" }, { kind: "check-design-queue" }] });
+    expect(plan).toMatchObject({ kind: "act", actions: [{ kind: "open-issue" }, { kind: "open-issue" }, { kind: "check-dispatch" }, { kind: "check-design-queue" }] });
     expect(notificationsOf(plan)).toEqual([]);
   });
 });
@@ -400,6 +402,7 @@ describe("The scheduled-tick rule", () => {
         expect.objectContaining({ kind: "comment", issue: 41 }),
         { kind: "close", issue: 41, reason: "completed" },
         expect.objectContaining({ kind: "open-issue", title: "Retro: week of 2026-11-02", labels: ["fabrik:retro"], assignees: [] }),
+        { kind: "check-dispatch" },
         { kind: "check-design-queue" },
       ],
     });
@@ -411,6 +414,6 @@ describe("The scheduled-tick rule", () => {
 
     const plan = planFor({ kind: "scheduled-tick", now: SATURDAY }, snapshot, kitConfig({ retro: { day: null } }));
 
-    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
   });
 });

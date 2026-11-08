@@ -63,8 +63,9 @@ jobs:
   tick:
     if: github.event_name == 'schedule'
     uses: jrey8343/fabrik/.github/workflows/schedule.yml@v0.1.0-pre.1
-    # To read the Kit's pinned commit, and for the conflict check to read whether an Implement job is under way.
-    # Neither writes: every write goes through the Fabrik App token.
+    # To read the Kit's pinned commit, for the conflict check to read whether an Implement job is under way,
+    # and for the hourly Dispatch check to count Implement and Research runs in flight.
+    # None of these writes: every write goes through the Fabrik App token.
     permissions:
       id-token: write
       actions: read

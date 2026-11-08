@@ -32,7 +32,7 @@ function tick(
 }
 
 /** A tick that opens no Audit and closes or posts nothing: it only asks for the Design queue check every tick ends with. */
-const OPENS_NOTHING: Plan = { kind: "act", actions: [{ kind: "check-design-queue" }] };
+const OPENS_NOTHING: Plan = { kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] };
 
 /** The Kit's open weekly-limit issue, for a limit that resets at `resetsAt`. */
 function weeklyLimitIssue(resetsAt: string): KitIssueSnapshot {
@@ -211,6 +211,7 @@ describe("The tick's other rules", () => {
         { kind: "comment", issue: 41, body: expect.stringMatching(/^The weekly usage limit reset at 2026-11-08 03:00 UTC/) },
         { kind: "close", issue: 41, reason: "completed" },
         expect.objectContaining({ kind: "open-issue", title: "Audit: week of 2026-11-02", labels: ["fabrik:audit"], assignees: [] }),
+        { kind: "check-dispatch" },
         { kind: "check-design-queue" },
       ],
     });
@@ -222,7 +223,7 @@ describe("The tick's other rules", () => {
 
     expect(plan).toEqual({
       kind: "act",
-      actions: [expect.objectContaining({ kind: "comment", issue: 41 }), { kind: "close", issue: 41, reason: "completed" }, { kind: "check-design-queue" }],
+      actions: [expect.objectContaining({ kind: "comment", issue: 41 }), { kind: "close", issue: 41, reason: "completed" }, { kind: "check-dispatch" }, { kind: "check-design-queue" }],
     });
   });
 });

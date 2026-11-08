@@ -3,7 +3,8 @@
 #
 # This file is wiring only. It runs the Loop's time-based rules (closing the
 # weekly-limit issue after its reset, opening the week's pending Audit and
-# pending Retro, taking the Replays' next step, and a Design queue check)
+# pending Retro, taking the Replays' next step, a Dispatch check and a Design
+# queue check)
 # through the Loop rules core, which src/main.ts runs as a `scheduled-tick`
 # event, once a week the Product repo's skills bumps for its own Skills
 # sources, and every hour the Monitor, in a job of its own. The Fabrik App
@@ -95,6 +96,8 @@ jobs:
       # Request-changes run (#387); the Fabrik App has no Actions permission. The caller's tick job grants it.
       actions: read
     outputs:
+      # "true" when the plan asked for a Dispatch check.
+      dispatch: ${{ steps.loop.outputs.dispatch }}
       # "true" when the plan asked for a Design queue check.
       design-queue: ${{ steps.loop.outputs.design-queue }}
     steps:
@@ -126,6 +129,44 @@ jobs:
           find-store: "true"
           # The replay step's checkout of the store, empty when it made none.
           store-dir: ${{ steps.replay-store.outputs.store-dir }}
+          actions-token: ${{ github.token }}
+
+  # The hourly Dispatch check (#418), which picks up a ready Ticket that no
+  # event the Loop watches released: one left waiting while every slot was
+  # full, or one whose trigger was missed. Like loop.yml's Dispatch job it
+  # reads Implement and Research runs in flight with its actions token.
+  dispatch:
+    name: Dispatch
+    needs: [kit, tick]
+    if: ${{ !cancelled() && needs.tick.result == 'success' && needs.tick.outputs.dispatch == 'true' }}
+    runs-on: ubuntu-latest
+    # The default roles.dispatch.timeout_minutes: the tick reads no Kit config before its jobs start.
+    timeout-minutes: 10
+    # loop.yml's Dispatch job's group: one check at a time per repo, so two
+    # can't both fill the same free slot.
+    concurrency:
+      group: fabrik-dispatch
+      cancel-in-progress: false
+    permissions:
+      # Only to count Implement and Research runs in flight; the Fabrik App has no Actions permission.
+      # The caller's tick job grants it.
+      actions: read
+    env:
+      FABRIK_DISPATCH_CHECK: "true"
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # The App token adds agent:implement or agent:research, so the label starts the Implement or Research run.
+      - name: Run a Dispatch check
+        uses: ./kit/.github/actions/run-loop
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
           actions-token: ${{ github.token }}
 
   # The hourly Design queue check (#147), which catches a slot freed by an

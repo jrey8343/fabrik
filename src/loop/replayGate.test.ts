@@ -37,12 +37,12 @@ function usageCreditsIssue(number: number, subscription: string): KitIssueSnapsh
 }
 
 /** A tick that starts no replay, and opens or posts nothing else: it only asks for the Design queue check every tick ends with. */
-const STARTS_NOTHING: Plan = { kind: "act", actions: [{ kind: "check-design-queue" }] };
+const STARTS_NOTHING: Plan = { kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] };
 
 /** The tick starting replay #140's next pending Ticket. */
 const STARTS_140: Plan = {
   kind: "act",
-  actions: [{ kind: "add-labels", issue: 140, labels: ["agent:replay"] }, { kind: "check-design-queue" }],
+  actions: [{ kind: "add-labels", issue: 140, labels: ["agent:replay"] }, { kind: "check-dispatch" }, { kind: "check-design-queue" }],
 };
 
 describe("The scheduled tick's replay step", () => {
@@ -95,6 +95,7 @@ describe("The scheduled tick's replay step", () => {
           expect.objectContaining({ kind: "comment", issue: 41 }),
           { kind: "close", issue: 41, reason: "completed" },
           { kind: "add-labels", issue: 140, labels: ["agent:replay"] },
+          { kind: "check-dispatch" },
           { kind: "check-design-queue" },
         ],
       });
@@ -171,6 +172,7 @@ describe("The scheduled tick's replay step, beside its gates", () => {
             reason: "run 9001 never landed, still in progress 211 minutes after it started, past the 210 a replay Ticket's run can last, as when its replay-record job couldn't run",
             resultsReady: expect.stringContaining("@operator **This Replay's results are in.**"),
           },
+          { kind: "check-dispatch" },
           { kind: "check-design-queue" },
         ],
       });
@@ -200,6 +202,7 @@ describe("The scheduled tick's replay step, beside its gates", () => {
       actions: [
         { kind: "remove-label", issue: 140, label: "agent:replay" },
         { kind: "add-labels", issue: 140, labels: ["agent:replay"] },
+        { kind: "check-dispatch" },
         { kind: "check-design-queue" },
       ],
     });
@@ -215,7 +218,7 @@ describe("The scheduled tick's replay step, beside its gates", () => {
       const [edit] = actionsOf(plan);
       expect(edit).toMatchObject({ kind: "edit-issue-body", issue: 140 });
       expect(edit?.kind === "edit-issue-body" && replayMarksIn(edit.body)?.progress).toEqual([{ ticket: 12, state: "pending" }]);
-      expect(actionsOf(plan).slice(1)).toEqual([{ kind: "check-design-queue" }]);
+      expect(actionsOf(plan).slice(1)).toEqual([{ kind: "check-dispatch" }, { kind: "check-design-queue" }]);
     });
 
     it("rejects an invalid one with one comment", () => {
@@ -223,7 +226,7 @@ describe("The scheduled tick's replay step, beside its gates", () => {
 
       expect(plan).toEqual({
         kind: "act",
-        actions: [{ kind: "comment", issue: 140, body: expect.stringContaining('review.effort is "highest"') }, { kind: "check-design-queue" }],
+        actions: [{ kind: "comment", issue: 140, body: expect.stringContaining('review.effort is "highest"') }, { kind: "check-dispatch" }, { kind: "check-design-queue" }],
       });
     });
   });

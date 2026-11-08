@@ -117,6 +117,7 @@ describe("A replay issue (#156)", () => {
       actions: [
         expect.objectContaining({ kind: "open-issue", labels: ["fabrik:audit"] }),
         { kind: "add-labels", issue: 140, labels: ["agent:replay"] },
+        { kind: "check-dispatch" },
         { kind: "check-design-queue" },
       ],
     });

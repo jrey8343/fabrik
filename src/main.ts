@@ -418,8 +418,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Only the Dispatch job, loop.yml's Design queue job, a push to main's push job and the scheduled tick set it: their
-  // GITHUB_TOKEN, scoped to actions: read. The scheduled tick's Design queue job has none, so its snapshot reads turns
+  // Only the Dispatch jobs, loop.yml's Design queue job, a push to main's push job and the scheduled tick's own job
+  // set it: their GITHUB_TOKEN, scoped to actions: read. The scheduled tick's Design queue job has none, so its snapshot reads turns
   // in progress from the issues. Without one, a conflict check can't tell whether an Implement job is under way (#387).
   const actionsToken = process.env["FABRIK_ACTIONS_TOKEN"];
   const actions =

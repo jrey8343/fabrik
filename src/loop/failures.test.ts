@@ -159,6 +159,21 @@ describe("Failure notices", () => {
     });
   });
 
+  // Dispatch reads it back and leaves the Ticket alone until agent:implement is re-added, so no check re-runs it (#418).
+  it("an Implement failure with no PR yet marks its notice on the Ticket as the run's failure", () => {
+    const plan = planFor(failed({ role: "implement" }), snapshotOf(anIssue({ number: 7 })), kitConfig());
+
+    expect(commentOf(plan)).toMatch(/^<!-- fabrik:implement-run-failed -->\n@operator The Implement run on #7 failed: /);
+  });
+
+  it("an Implement failure on a Ticket with an open PR leaves its notice on the PR unmarked, since the PR holds the Ticket off Dispatch", () => {
+    const issue = anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [12] });
+
+    const plan = planFor(failed({ role: "implement" }), snapshotOf(issue), kitConfig());
+
+    expect(commentOf(plan)).not.toContain("fabrik:implement-run-failed");
+  });
+
   it("a Review failure names agent:review on the PR, where the review trigger lives", () => {
     const issue = anIssue({ number: 7, openPullRequests: [12] });
 

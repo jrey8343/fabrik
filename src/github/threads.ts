@@ -20,6 +20,7 @@ import {
   REQUEST_CHANGES_RUN_EMPTY_MARKER,
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunEndedIn,
+  IMPLEMENT_RUN_FAILED_MARKER,
   RESEARCH_RUN_FAILED_MARKER,
   RETRY_ENDED_MARKER,
   RETRY_PUSH_MARKER,
@@ -522,9 +523,29 @@ function endsDesignSession(body: string): boolean {
  * failure by quoting the notice, and a reply after it, a person's or another
  * bot's, leaves it standing.
  */
-export function researchRunFailedIn(comments: readonly { readonly body: string; readonly byApp: boolean }[]): boolean {
+export function researchRunFailedIn(comments: readonly KitComment[]): boolean {
+  return latestKitWordIs(RESEARCH_RUN_FAILED_MARKER, comments);
+}
+
+/**
+ * Whether the Kit's Implement failure notice is a Ticket's latest run's word,
+ * from its comments oldest first, read as researchRunFailedIn reads a
+ * Decision's (#418).
+ */
+export function implementRunFailedIn(comments: readonly KitComment[]): boolean {
+  return latestKitWordIs(IMPLEMENT_RUN_FAILED_MARKER, comments);
+}
+
+/** A comment on an issue, and whether the Fabrik App wrote it. */
+interface KitComment {
+  readonly body: string;
+  readonly byApp: boolean;
+}
+
+/** Whether the Fabrik App's last comment, of these oldest first, starts with this marker. */
+function latestKitWordIs(marker: string, comments: readonly KitComment[]): boolean {
   const latest = comments.filter(({ byApp }) => byApp).at(-1);
-  return latest !== undefined && latest.body.startsWith(RESEARCH_RUN_FAILED_MARKER);
+  return latest !== undefined && latest.body.startsWith(marker);
 }
 
 /** Whether a comment is part of a Design session: a round, or the session's end, async or live. */

@@ -105,7 +105,7 @@ describe("agent:replay on a replay issue", () => {
   });
 
   it("starts the next Ticket of an agent:replay added by hand whatever Dispatch waits on and the last weekly-limit reading, as agent:implement added by hand starts past Dispatch's cap", () => {
-    const ready = { number: 31, open: true, labels: ["ready-for-agent"], openBlockers: [], notPlannedBlockers: [], subIssues: 0, openLinkedPullRequests: [] };
+    const ready = { number: 31, open: true, labels: ["ready-for-agent"], openBlockers: [], notPlannedBlockers: [], subIssues: 0, openLinkedPullRequests: [], lastRunFailed: false };
     const busyTick = replaySlice([aReplayIssue()], { tickets: [ready], weeklyLimits: { "Claude token": aReading(0.9) } });
 
     expect(actionsOf(planFor(ADDED, snapshotOf(aReplay(), { replay: busyTick }), kitConfig()))).toContainEqual({ kind: "mark-replay-started", issue: 140, ticket: 12 });
