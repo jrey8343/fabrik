@@ -706,7 +706,23 @@ describe("The head a push leaves the agent branch at, which fills in a preview U
     await operatorPushes({ "src/feature.ts": "the Operator's feature\n" });
     await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix");
 
-    expect((await rebuild(prHead)).head).toBeNull();
+    const branch = await rebuild(prHead);
+    expect(branch.head).toBeNull();
+    expect(branch.changes.pushedHead).toBeUndefined();
+  });
+
+  // The run's push note names it, so a push that fails after the note leaves the run in flight (#420).
+  it.each([
+    ["only adds commits", false],
+    ["was rebased onto a branch that moved", true],
+  ])("is the tip a retry's changes name for its push note, when it %s", async (_, moved) => {
+    if (moved) await operatorPushes({ "src/other.ts": "the Operator's\n" });
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix");
+
+    const branch = await rebuild(prHead);
+    await branch.push(BRANCH);
+
+    expect(branch.changes.pushedHead).toBe(await git(remote, "rev-parse", `refs/heads/${BRANCH}`));
   });
 });
 

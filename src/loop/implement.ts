@@ -12,6 +12,7 @@ import { conflictRunEnded, owedConflictRun, requestChangesRunEnded } from "./con
 import {
   CONFLICT_RUN_MARKER,
   EMPTY_DIFF_MARKER,
+  pushedHeadMarker,
   requestChangesAnswersMarker,
   REQUEST_CHANGES_RUN_EMPTY_MARKER,
   REQUEST_CHANGES_RUN_MARKER,
@@ -25,6 +26,7 @@ import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { type AnswerLines, verdictActions } from "./review.ts";
 import type {
   Action,
+  BranchChanges,
   IssueContext,
   IssueSnapshot,
   KitConfig,
@@ -292,6 +294,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
           requestChanges ? REQUEST_CHANGES_RUN_MARKER : RETRY_PUSH_MARKER,
           ...(recorded === null ? [] : [recorded.marker]),
+          ...pushedHead(changes),
           requestChanges
             ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mainMerge === undefined ? "" : `, which no longer conflicts with \`main\` at ${mainMerge.main.slice(0, 7)}`}; Review runs again on it.`
             : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
@@ -410,6 +413,7 @@ function applyConflictRun(
           // whose Execution flaw calls for one and counts (#415), unless the run was on a draft whose push GitHub never
           // reviewed (#389): that Verdict is the push's own, unmarked.
           CONFLICT_RUN_MARKER,
+          ...pushedHead(changes),
           pullRequest.conflictRunOnUnreviewedDraft
             ? `The Implementer rebased \`${branch}\` onto \`main\` at ${main.slice(0, 7)} and resolved its conflicts; Review runs on it, and its Verdict counts as one on the push GitHub never reviewed would have.`
             : `The Implementer rebased \`${branch}\` onto \`main\` at ${main.slice(0, 7)} and resolved its conflicts; Review runs again on it. The run used no retry, but an Execution flaw on it calls for one like any other.`,
@@ -423,6 +427,11 @@ function applyConflictRun(
       ...previewToLink(evidence, config, branch, pullRequest.number),
     ],
   };
+}
+
+/** The marker line naming the head a run's push lands (pushedHeadMarker), or none when the push job named none. */
+function pushedHead({ pushedHead: head }: BranchChanges): string[] {
+  return head === undefined ? [] : [pushedHeadMarker(head)];
 }
 
 /**

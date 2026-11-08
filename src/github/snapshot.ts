@@ -65,6 +65,8 @@ import {
   conflictAttemptsIn,
   conflictRunIn,
   conflictRunInFlightIn,
+  landedPushNotes,
+  type OnBranch,
   conflictRunOnUnreviewedDraftIn,
   isKitPushNote,
   type PullRequestHistoryItem,
@@ -178,7 +180,7 @@ const PULL_REQUEST_FIELDS = `
         }
         createdAt
         forcePushes: timelineItems(last: 1, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) { nodes { ... on HeadRefForcePushedEvent { createdAt } } }
-        headCommit: commits(last: 1) { nodes { commit { oid committedDate } } }
+        commits(last: 100) { pageInfo { hasPreviousPage } nodes { commit { oid committedDate } } }
         closingIssuesReferences(first: 10) { nodes { number labels(first: 100) { nodes { name } } comments(last: 100) { nodes { body } } } }`;
 
 const PULL_REQUEST_QUERY = `
@@ -275,7 +277,8 @@ interface PullRequestQueryResult {
       draftEvents: { pageInfo: { hasPreviousPage: boolean }; nodes: { __typename: string; createdAt?: string }[] };
       createdAt: string;
       forcePushes: { nodes: { createdAt: string }[] };
-      headCommit: { nodes: { commit: { oid: string; committedDate: string } }[] };
+      /** Its branch's latest commits, oldest first: the head last. */
+      commits: { pageInfo: { hasPreviousPage: boolean }; nodes: { commit: { oid: string; committedDate: string } }[] };
       closingIssuesReferences: { nodes: { number: number; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string }[] } }[] };
     } | null;
   };
@@ -1240,7 +1243,11 @@ type PullRequestNode = NonNullable<PullRequestQueryResult["repository"]["pullReq
 
 /** A PR as the core sees it, from what PULL_REQUEST_FIELDS read of it. */
 function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | null, operator: string | null = null): PullRequestSnapshot {
-  const fromBots = pullRequest.comments.nodes.filter((comment) => comment.author?.__typename === "Bot");
+  // A run's push note whose push never landed reads as no push at all, so the run stays in flight (#420).
+  const fromBots = landedPushNotes(
+    pullRequest.comments.nodes.filter((comment) => comment.author?.__typename === "Bot"),
+    onBranchOf(pullRequest),
+  );
   const botComments = fromBots.map((comment) => comment.body);
   // Every review still requesting changes, however old: GitHub lists a dismissed one no longer.
   const standing = new Set(pullRequest.changesRequests.nodes.map(({ databaseId }) => databaseId));
@@ -1301,6 +1308,12 @@ function historyOf(pullRequest: PullRequestNode, fromBots: PullRequestNode["comm
   return [...comments, ...reviews, ...drafts];
 }
 
+/** Whether a commit is on a PR's branch (OnBranch), from the latest commits the snapshot read of it. */
+function onBranchOf(pullRequest: PullRequestNode): OnBranch {
+  const read = new Set(pullRequest.commits.nodes.map(({ commit }) => commit.oid));
+  return (sha) => (read.has(sha) || sha === pullRequest.headRefOid ? true : pullRequest.commits.pageInfo.hasPreviousPage ? null : false);
+}
+
 /**
  * When a PR's current head was pushed, as best its history tells (#389): the
  * latest of its last force push, the Kit's last note of a push of its own, its
@@ -1310,7 +1323,7 @@ function historyOf(pullRequest: PullRequestNode, fromBots: PullRequestNode["comm
  * Null when none of them is known.
  */
 function headPushedAtOf(pullRequest: PullRequestNode, fromBots: PullRequestNode["comments"]["nodes"], isAgent: boolean): string | null {
-  const head = pullRequest.headCommit.nodes.at(-1)?.commit;
+  const head = pullRequest.commits.nodes.at(-1)?.commit;
   const times = [
     ...pullRequest.forcePushes.nodes.map(({ createdAt }) => createdAt),
     ...fromBots.filter(({ body }) => isKitPushNote(body)).map(({ createdAt }) => createdAt),

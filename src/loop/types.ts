@@ -76,6 +76,11 @@ export interface BranchChanges {
    */
   readonly mainMerge?: { readonly main: string; readonly resolved: boolean };
   /**
+   * For a run on its agent PR's own branch with something to push: the commit
+   * its push lands as the branch's head, which its push note names (pushedHeadMarker).
+   */
+  readonly pushedHead?: string;
+  /**
    * For a prototype turn's branch (#155) that moved while the turn ran, as a
    * live Design session's push may move it: the head the turn started on
    * (null when it cut the branch afresh, there being none) and where the
@@ -602,8 +607,9 @@ export interface PullRequestSnapshot {
    */
   readonly conflictRunOnUnreviewedDraft: boolean;
   /**
-   * Whether a Retry or Request-changes run has pushed to it since its latest
-   * Verdict, read from the Kit's note of the push. Until one has, the Retry
+   * Whether a Retry, Request-changes or conflict-only run has pushed to it
+   * since its latest Verdict, read from the Kit's note of the push, unless that
+   * note names a head that never reached the branch (#420). Until one has, the Retry
    * that Verdict called for is still in flight (src/loop/retry.ts).
    */
   readonly pushedSinceVerdict: boolean;

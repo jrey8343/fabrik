@@ -186,6 +186,33 @@ export function requestChangesRunEndedIn(body: string): string | null {
  */
 export const REQUEST_CHANGES_RUN_EMPTY_MARKER = "<!-- fabrik:request-changes-run-empty -->";
 
+/**
+ * The marker line naming the head a Retry's, Request-changes run's or
+ * conflict-only run's push note announces (#420): the note is posted before
+ * the push, so the push starts a Review that sees it, and a push that then
+ * fails leaves a note whose head never reached the branch. It goes right after
+ * the note's other marker lines, before anything the agent wrote.
+ */
+export function pushedHeadMarker(sha: string): string {
+  return `<!-- fabrik:pushed-head ${sha} -->`;
+}
+
+const PUSHED_HEAD_MARKER = /^<!-- fabrik:pushed-head ([0-9a-f]{40}|[0-9a-f]{64}) -->$/;
+
+/**
+ * The head a push note announces, read from the marker lines it opens with,
+ * or null when it names none, as every note from before #420 does. Only a
+ * bot's comment should be passed in.
+ */
+export function pushedHeadIn(body: string): string | null {
+  for (const line of body.split("\n")) {
+    if (!line.startsWith("<!-- fabrik:")) return null;
+    const sha = PUSHED_HEAD_MARKER.exec(line)?.[1];
+    if (sha !== undefined) return sha;
+  }
+  return null;
+}
+
 /** The first line of the Kit's note on a PR that a Retry pushed to it: the Retry's outcome, which ends its time in flight. */
 export const RETRY_PUSH_MARKER = "<!-- fabrik:retry-push -->";
 
