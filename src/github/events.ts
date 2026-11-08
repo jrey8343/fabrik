@@ -156,7 +156,6 @@ export function agentRunEventFrom(
   retry: {
     readonly pullRequest: number;
     readonly runUrl: string;
-    readonly requestChanges?: boolean;
     readonly review?: number;
     readonly retry?: number;
     readonly retryFlaw?: string;

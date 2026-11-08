@@ -246,7 +246,7 @@ async function agentResultEvent(
       : {
           pullRequest: input.pullRequest,
           runUrl: thisRunUrl(),
-          requestChanges: input.review !== null,
+          // A Request-changes run's review, which its answers are about (#369).
           ...(input.review === null ? {} : { review: input.review }),
           ...(input.retry === undefined || input.retry === null ? {} : { retry: input.retry }),
           ...(input.retryFlaw === undefined || input.retryFlaw === null ? {} : { retryFlaw: input.retryFlaw }),
@@ -262,9 +262,9 @@ async function agentResultEvent(
   // The main head a Request-changes run was told to merge in (#341), from its result, which the agent job writes: the
   // push job checks it against main as the Kit job read it before the run, which the agent can't rewrite, and main as
   // it is now. Only a Request-changes run is ever told to, whatever the result says.
-  const mergeMain = retry?.requestChanges === true ? (result.mergeMain ?? null) : null;
+  const mergeMain = retry?.review !== undefined ? (result.mergeMain ?? null) : null;
   const branch = await rebuildAgentBranch(built, bundlePath, remote(), {
-    requestChanges: retry?.requestChanges === true,
+    requestChanges: retry?.review !== undefined,
     mergeMain,
     started: input.mainAtStart ?? null,
   });

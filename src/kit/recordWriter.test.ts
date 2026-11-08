@@ -9,7 +9,7 @@ const TRANSCRIPT = new Uint8Array([0x1f, 0x8b, 8, 0]);
 
 /** The record a passing Triage run on #12 gets; only its path and content matter here. */
 function files(overrides: Partial<RunRecordFiles> = {}): RunRecordFiles {
-  const record = { schema: 4, repo: "acme/widgets", runId: 9001, runAttempt: 1, role: "triage", issue: 12, replay: null } as unknown as RunRecord;
+  const record = { schema: 5, repo: "acme/widgets", runId: 9001, runAttempt: 1, role: "triage", issue: 12, replay: null } as unknown as RunRecord;
   return { record, recordPath: RECORD_PATH, transcriptPath: TRANSCRIPT_PATH, ...overrides };
 }
 
@@ -90,7 +90,7 @@ describe("The step summary's line on the Run record", () => {
   it("names the setup step when the Fabrik App has no token for the store", () => {
     expect(recordWriteSummary({ kind: "no-store-token" })).toBe(
       "No Run record written: the Fabrik App couldn't get a token for jrey8343/fabrik-runs. " +
-        "Run fabrik-setup to create the store, then install the Fabrik App on jrey8343/fabrik-runs.",
+        "Run Setup again, giving it your time zone, to create the store, then install the Fabrik App on jrey8343/fabrik-runs.",
     );
   });
 

@@ -192,3 +192,12 @@ describe("The prototype gallery's text", () => {
     expect(loaded(html).every((value) => value.startsWith("data:"))).toBe(true);
   });
 });
+
+describe("The prototype gallery of a route viewed signed in", () => {
+  it("names the identity on each screenshot, and a public route's read as they do today", () => {
+    const signedIn = shots.map((each) => ({ ...each, identity: "owner" }));
+
+    expect(prototypeGallery(signedIn, variants, meta)).toContain("<figcaption>Mobile, 390 × 844, signed in as owner</figcaption>");
+    expect(prototypeGallery(shots, variants, meta)).not.toContain("signed in");
+  });
+});

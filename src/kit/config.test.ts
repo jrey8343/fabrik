@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { previewUrl, REVIEWER_IMAGE_CAP, resolveKitConfig, UI_VIEWPORTS } from "./config.ts";
+import { captureIdentityOf, previewUrl, REVIEWER_IMAGE_CAP, resolveKitConfig, type UiConfig, UI_VIEWPORTS } from "./config.ts";
 
 const root = new URL("../../", import.meta.url);
 const template = readFileSync(new URL("templates/fabrik-config.json", root), "utf8");
@@ -726,6 +726,11 @@ describe("The Researcher's Kit config", () => {
 });
 
 describe("The Kit config template", () => {
+  // Setup writes it as it is, so a Product repo's prettier --check sees it: Prettier breaks any object past 80 columns.
+  it("fits every line in Prettier's 80 columns", () => {
+    expect(template.split("\n").filter((line) => line.length > 80)).toEqual([]);
+  });
+
   it("spells out caps.design_sessions at its Kit default", () => {
     expect(JSON.parse(template)).toMatchObject({ caps: { design_sessions: 2 } });
   });
@@ -1166,6 +1171,112 @@ describe("The ui and preview blocks, which Visual evidence reads", () => {
     expect(resolveKitConfig({ config: withUi(changes) })).toEqual({ ok: false, errors: [error] });
   });
 
+  /** A ui block that signs in an owner and an operator, as ADR-0012 describes. */
+  const SIGN_IN = {
+    sign_in: { owner: "pnpm sign-in owner", operator: "pnpm sign-in operator" },
+    sign_in_path: "/sign-in",
+    signed_in_routes: [
+      { route: "/pricing", as: null },
+      { route: "/console/**", as: "operator" },
+      { route: "/**", as: "owner" },
+    ],
+  };
+
+  it("resolves sign_in, sign_in_path and signed_in_routes, keeping the rules in order", () => {
+    const result = resolveKitConfig({ config: withUi(SIGN_IN) });
+
+    expect(result.ok && result.config.ui).toEqual({
+      paths: ["src/**"],
+      serve: "npm run preview",
+      url: "http://localhost:4321",
+      beforeUrl: null,
+      defaultRoutes: [],
+      signIn: { owner: "pnpm sign-in owner", operator: "pnpm sign-in operator" },
+      signInPath: "/sign-in",
+      signedInRoutes: [
+        { route: "/pricing", as: null },
+        { route: "/console/**", as: "operator" },
+        { route: "/**", as: "owner" },
+      ],
+    });
+  });
+
+  it.each(["http://localhost:4321", "http://app.localhost:3000", "http://127.0.0.1:4321", "http://[::1]:8080", "https://LOCALHOST"])(
+    "signs in against the loopback ui.url %s",
+    (url) => {
+      expect(resolveKitConfig({ config: withUi({ ...SIGN_IN, url }) }).ok).toBe(true);
+    },
+  );
+
+  it.each(["https://staging.example.com", "http://10.0.0.5:4321", "http://localhost.example.com", "http://127.0.0.2:4321"])(
+    "refuses sign_in when ui.url %s isn't loopback, since a sign-in only ever runs against the Sandbox's own server",
+    (url) => {
+      expect(resolveKitConfig({ config: withUi({ ...SIGN_IN, url }) })).toEqual({
+        ok: false,
+        errors: [
+          `ui.url is ${JSON.stringify(url)}: a ui with sign_in serves on a loopback address, such as http://localhost:4321, so a sign-in only ever reaches the Sandbox's own server`,
+        ],
+      });
+    },
+  );
+
+  it.each([
+    [{ sign_in_path: "/sign-in" }, "ui.sign_in_path is set, but ui.sign_in isn't: name a sign-in command for each Capture identity"],
+    [
+      { signed_in_routes: [{ route: "/**", as: null }] },
+      "ui.signed_in_routes is set, but ui.sign_in isn't: name a sign-in command for each Capture identity",
+    ],
+  ])("refuses sign_in_path or signed_in_routes without sign_in: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withUi(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [{ ...SIGN_IN, sign_in_path: undefined }, "ui.sign_in_path is missing: with ui.sign_in, name the route the app sends a signed-out visitor to"],
+    [{ ...SIGN_IN, sign_in_path: "sign-in" }, `ui.sign_in_path is "sign-in": a route must be a path starting with one /, such as /book`],
+    [{ ...SIGN_IN, signed_in_routes: undefined }, "ui.signed_in_routes is missing: with ui.sign_in, list which Capture identity views each route"],
+    [{ ...SIGN_IN, signed_in_routes: [] }, "ui.signed_in_routes is empty: with ui.sign_in, list which Capture identity views each route"],
+    [{ ...SIGN_IN, signed_in_routes: "/**" }, "ui.signed_in_routes must be a list of { route, as } rules"],
+    [{ ...SIGN_IN, signed_in_routes: ["/**"] }, "ui.signed_in_routes[0] must be an object"],
+    [{ ...SIGN_IN, signed_in_routes: [{ as: "owner" }] }, "ui.signed_in_routes[0].route is missing"],
+    [
+      { ...SIGN_IN, signed_in_routes: [{ route: "console/**", as: "owner" }] },
+      `ui.signed_in_routes[0].route is "console/**": a route must be a path starting with one /, such as /book`,
+    ],
+    [{ ...SIGN_IN, signed_in_routes: [{ route: "/**" }] }, "ui.signed_in_routes[0].as is missing: name a ui.sign_in identity, or null for a public route"],
+    [
+      { ...SIGN_IN, signed_in_routes: [{ route: "/**", as: "admin" }] },
+      `ui.signed_in_routes[0].as is "admin": it must be null or one of ui.sign_in's identities, owner or operator`,
+    ],
+    [{ ...SIGN_IN, signed_in_routes: [{ route: "/**", as: "owner", via: "cookie" }] }, "ui.signed_in_routes[0].via is not a Kit config field"],
+    [{ ...SIGN_IN, sign_in: {} }, "ui.sign_in is empty: name at least one Capture identity and the command that signs it in"],
+    [{ ...SIGN_IN, sign_in: "pnpm sign-in" }, "ui.sign_in must be an object or null"],
+    [{ ...SIGN_IN, sign_in: { owner: " ", operator: "pnpm sign-in operator" } }, `ui.sign_in.owner is " ": a sign-in command can't be blank`],
+    [{ ...SIGN_IN, sign_in: { owner: 1, operator: "pnpm sign-in operator" } }, "ui.sign_in.owner must be a string"],
+    [
+      { ...SIGN_IN, sign_in: { "the owner": "pnpm sign-in owner", owner: "x", operator: "y" } },
+      "ui.sign_in.the owner is not a Capture identity name: letters, digits, - and _, starting with a letter or digit",
+    ],
+  ])("refuses a sign-in block that doesn't read, naming the field: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withUi(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("names every problem in a sign-in block at once", () => {
+    const result = resolveKitConfig({
+      config: withUi({
+        url: "https://staging.example.com",
+        sign_in: { owner: "" },
+        signed_in_routes: [{ route: "/**", as: "admin" }],
+      }),
+    });
+
+    expect(!result.ok && result.errors).toEqual([
+      `ui.sign_in.owner is "": a sign-in command can't be blank`,
+      "ui.sign_in_path is missing: with ui.sign_in, name the route the app sends a signed-out visitor to",
+      `ui.signed_in_routes[0].as is "admin": it must be null or one of ui.sign_in's identities, owner`,
+      `ui.url is "https://staging.example.com": a ui with sign_in serves on a loopback address, such as http://localhost:4321, so a sign-in only ever reaches the Sandbox's own server`,
+    ]);
+  });
+
   it("names every bad default route, not just the first", () => {
     const result = resolveKitConfig({ config: withUi({ default_routes: ["book", "/", "services"] }) });
 
@@ -1299,5 +1410,69 @@ describe("Filling in a preview.url template for a pull request", () => {
     ["/fabrik//ticket-7/", "fabrik-ticket-7"],
   ])("slugs the branch %s as %s: lower case, each run of anything but a letter or digit one -, none at either end", (branch, slug) => {
     expect(previewUrl("https://{branch_slug}.example.dev", { ...pullRequest, branch })).toBe(`https://${slug}.example.dev/`);
+  });
+});
+
+describe("Which Capture identity views a route", () => {
+  const ui: UiConfig = {
+    paths: ["src/**"],
+    serve: "pnpm start",
+    url: "http://localhost:3000",
+    beforeUrl: "https://app.example.com",
+    defaultRoutes: [],
+    signIn: { owner: "pnpm sign-in owner", operator: "pnpm sign-in operator" },
+    signInPath: "/sign-in",
+    signedInRoutes: [
+      { route: "/pricing", as: null },
+      { route: "/console/**", as: "operator" },
+      { route: "/clinics/*/today", as: "owner" },
+      { route: "/**", as: "owner" },
+    ],
+  };
+
+  it.each([
+    ["/pricing", null],
+    ["/console", "operator"],
+    ["/console/users/7", "operator"],
+    ["/clinics/penrith/today", "owner"],
+    ["/today", "owner"],
+    ["/", "owner"],
+  ])("takes the first rule that matches %s: %s", (route, identity) => {
+    expect(captureIdentityOf(route, ui)).toBe(identity);
+  });
+
+  it("matches the route's path only, so a query or a fragment changes nothing", () => {
+    expect(captureIdentityOf("/pricing?variant=a", ui)).toBeNull();
+    expect(captureIdentityOf("/console?variant=b#top", ui)).toBe("operator");
+  });
+
+  it("reads a route no rule matches as public", () => {
+    const rules: UiConfig = { ...ui, signedInRoutes: [{ route: "/console/**", as: "operator" }] };
+
+    expect(captureIdentityOf("/today", rules)).toBeNull();
+  });
+
+  it("reads `*` as one segment, so it never reaches across a /", () => {
+    const rules: UiConfig = { ...ui, signedInRoutes: [{ route: "/clinics/*", as: "owner" }] };
+
+    expect(captureIdentityOf("/clinics/penrith", rules)).toBe("owner");
+    expect(captureIdentityOf("/clinics/penrith/today", rules)).toBeNull();
+  });
+
+  it("reads `/**` as matching `/`", () => {
+    expect(captureIdentityOf("/", { ...ui, signedInRoutes: [{ route: "/**", as: "operator" }] })).toBe("operator");
+  });
+
+  it("matches a pattern's other characters as they are", () => {
+    const rules: UiConfig = { ...ui, signedInRoutes: [{ route: "/a.b+(c)", as: "owner" }] };
+
+    expect(captureIdentityOf("/a.b+(c)", rules)).toBe("owner");
+    expect(captureIdentityOf("/aXb+(c)", rules)).toBeNull();
+  });
+
+  it("views every route signed out when Kit config signs nothing in", () => {
+    const { signIn: _signIn, signInPath: _signInPath, signedInRoutes: _rules, ...plain } = ui;
+
+    expect(captureIdentityOf("/today", plain)).toBeNull();
   });
 });

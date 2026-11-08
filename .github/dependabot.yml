@@ -3,7 +3,7 @@
 # Dependabot moves those pins as reviewable PRs. Matt Pocock's skills are not a
 # package: .github/workflows/skills-bump.yml bumps their SHA instead.
 #
-# This is not the Product repo shim; the setup skill writes that one.
+# This is not the Product repo shim; Setup writes that one.
 version: 2
 updates:
   - package-ecosystem: npm

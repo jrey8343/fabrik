@@ -134,6 +134,8 @@ export function owedConflictRun(pullRequest: PullRequestSnapshot, config: KitCon
     model: stepUp.model,
     effort: stepUp.effort,
     timeoutMinutes: implement.timeoutMinutes,
+    stepUp: true,
+    stepUpReason: "conflict-only",
   };
 }
 

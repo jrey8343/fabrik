@@ -170,7 +170,8 @@ const PULL_REQUEST_FIELDS = `
         draftEvents: timelineItems(last: 100, itemTypes: [CONVERT_TO_DRAFT_EVENT, READY_FOR_REVIEW_EVENT]) {
           pageInfo { hasPreviousPage }
           nodes { __typename ... on ConvertToDraftEvent { createdAt } ... on ReadyForReviewEvent { createdAt } }
-        }`;
+        }
+        closingIssuesReferences(first: 10) { nodes { number labels(first: 100) { nodes { name } } } }`;
 
 const PULL_REQUEST_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -264,6 +265,7 @@ interface PullRequestQueryResult {
         nodes: { databaseId: number; submittedAt: string | null; author: { login: string; __typename: string } | null }[];
       };
       draftEvents: { pageInfo: { hasPreviousPage: boolean }; nodes: { __typename: string; createdAt?: string }[] };
+      closingIssuesReferences: { nodes: { number: number; labels: { nodes: { name: string }[] } }[] };
     } | null;
   };
 }
@@ -1229,13 +1231,15 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
   // Every review still requesting changes, however old: GitHub lists a dismissed one no longer.
   const standing = new Set(pullRequest.changesRequests.nodes.map(({ databaseId }) => databaseId));
   const history = historyOf(pullRequest, fromBots);
+  const ticket = ticketOfAgentBranch(pullRequest.headRefName);
   return {
     number: pullRequest.number,
     isAgent: isAgentPullRequest({
       headRef: pullRequest.headRefName,
       authorIsBot: pullRequest.author?.__typename === "Bot",
     }),
-    ticket: ticketOfAgentBranch(pullRequest.headRefName),
+    ticket,
+    ticketLabels: ticketLabelsOf(pullRequest, ticket),
     open: pullRequest.state === "OPEN",
     draft: pullRequest.isDraft,
     headSha: pullRequest.headRefOid,
@@ -1278,6 +1282,16 @@ function historyOf(pullRequest: PullRequestNode, fromBots: PullRequestNode["comm
     createdAt === undefined ? [] : [{ kind: __typename === "ConvertToDraftEvent" ? "draft" : "ready", at: createdAt }],
   );
   return [...comments, ...reviews, ...drafts];
+}
+
+/**
+ * The labels of the Ticket a PR's agent branch names, read from the issues
+ * its `Closes #n` links, or none when it links no such issue. The Ticket's
+ * number stays the branch's: a closing link to another issue doesn't count.
+ */
+function ticketLabelsOf(pullRequest: PullRequestNode, ticket: number | null): string[] {
+  const closed = pullRequest.closingIssuesReferences.nodes.find((issue) => issue.number === ticket);
+  return closed?.labels.nodes.map((label) => label.name) ?? [];
 }
 
 /** How many times the conflict check reads open agent PRs while GitHub still works out whether one merges cleanly (#304). */

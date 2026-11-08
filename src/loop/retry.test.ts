@@ -11,7 +11,7 @@ import {
 } from "../__fixtures__/snapshots.ts";
 import { anEvidence, CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "./rules.ts";
-import type { Action, LoopEvent, Plan, Snapshot, VerdictRecord } from "./types.ts";
+import type { Action, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
@@ -63,6 +63,34 @@ describe("An Execution flaw starts a retry", () => {
   });
 });
 
+describe("An Execution flaw's Verdict names the Retry it starts", () => {
+  const flaw = reviewed("verdict: execution-flaw\n\nThe empty-cart case throws.");
+  const verdictOn = (pullRequest: PullRequestSnapshot): string => {
+    const comment = actionsOf(planFor(flaw, snapshotOfPullRequest(pullRequest), kitConfig())).find((action) => action.kind === "comment");
+    if (comment?.kind !== "comment") throw new Error("expected a Verdict comment");
+    return comment.body;
+  };
+  const MARKED = ["enhancement", "ready-for-agent", "fabrik:step-up"];
+
+  it("on a Ticket marked fabrik:step-up, says Retry 1 starts stepped up, as it runs on the Step-up model", () => {
+    expect(verdictOn(aPullRequest({ ticketLabels: MARKED }))).toContain("Retry 1 of 2 starts now, stepped up:");
+  });
+
+  it("on a Ticket marked fabrik:step-up, says Retry 2 starts stepped up", () => {
+    expect(verdictOn(aPullRequest({ ticketLabels: MARKED, verdicts: [earlier("execution-flaw")], pushedSinceVerdict: true }))).toContain(
+      "Retry 2 of 2 starts now, stepped up:",
+    );
+  });
+
+  it("on an unmarked Ticket, says Retry 1 starts plain and Retry 2 stepped up", () => {
+    const unmarked = ["enhancement", "ready-for-agent"];
+    expect(verdictOn(aPullRequest({ ticketLabels: unmarked }))).toContain("Retry 1 of 2 starts now:");
+    expect(verdictOn(aPullRequest({ ticketLabels: unmarked, verdicts: [earlier("execution-flaw")], pushedSinceVerdict: true }))).toContain(
+      "Retry 2 of 2 starts now, stepped up:",
+    );
+  });
+});
+
 /** agent:implement added to Ticket #7, whose agent PR is #50. */
 const retryLabeled: LoopEvent = { kind: "label-added", issue: 7, label: "agent:implement" };
 
@@ -100,6 +128,7 @@ describe("Starting a retry", () => {
           // The flaw it fixes, by the head it was given on, which its push lands only for (#341).
           retryFlaw: HEAD_SHA,
           stepUp: false,
+          stepUpReason: null,
         },
       ],
     });
@@ -136,6 +165,34 @@ describe("Starting a retry", () => {
 
     expect(actionsOf(first)[1]).toMatchObject({ kind: "start-agent-run", retry: 1, stepUp: false });
     expect(actionsOf(second)[1]).toMatchObject({ kind: "start-agent-run", retry: 2, stepUp: true });
+  });
+
+  it("adding fabrik:step-up between Retries steps up the next one, recorded as marked", () => {
+    const marked = snapshotOf(
+      anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement", "fabrik:step-up"], openPullRequests: [50] }),
+      { pullRequest: flawedPullRequest() },
+    );
+
+    expect(actionsOf(planFor(retryLabeled, marked, kitConfig()))[1]).toMatchObject({
+      model: "claude-opus-5-5",
+      retry: 1,
+      stepUp: true,
+      stepUpReason: "marked",
+    });
+  });
+
+  it("with fabrik:step-up taken off before Retry 1, it runs on the Implementer model", () => {
+    // resumeSnapshot's Ticket carries no fabrik:step-up, whatever its first run ran on.
+    expect(actionsOf(planFor(retryLabeled, resumeSnapshot(), kitConfig()))[1]).toMatchObject({ model: "claude-sonnet-5-5", stepUp: false });
+  });
+
+  it("the second Retry on a marked Ticket records marked, not retry", () => {
+    const marked = snapshotOf(
+      anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement", "fabrik:step-up"], openPullRequests: [50] }),
+      { pullRequest: flawedPullRequest([earlier("execution-flaw")]) },
+    );
+
+    expect(actionsOf(planFor(retryLabeled, marked, kitConfig()))[1]).toMatchObject({ retry: 2, stepUp: true, stepUpReason: "marked" });
   });
 
   it("a Step-up uses whatever model Kit config gives the Step-up", () => {
@@ -244,6 +301,9 @@ function retried(
       title: "Handle the empty cart",
       summary: "Shows the empty state for an empty cart, @someone, and tests both cases.",
       fix: "Guards the empty-cart case the Reviewer flagged, @someone.",
+      // A retry ignores these; a Request-changes run owes them (#369).
+      reviewMiss: false,
+      amendsTicket: true,
     }),
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
@@ -442,9 +502,9 @@ describe("The preview deployment of a retry's PR", () => {
     ["a retry", uiRetry(), markedUi()],
     [
       "a Request-changes run",
-      uiRetry({ fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true } }),
+      uiRetry({ fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 900 } }),
       // The run the Kit's note started for review 900 is in flight.
-      { ...markedUi(), notedChangesRequests: [900], requestChangesRunInFlight: 900 },
+      { ...markedUi(), notedChangesRequests: [900], requestChangesRunInFlight: 900, requestChangesRunReviews: [900] },
     ],
   ])("is linked on %s's UI PR once the push job has pushed, from Kit config's template and the PR's branch", (_, event, pullRequest) => {
     const actions = actionsOf(planFor(event, retrySnapshot(pullRequest), kitConfig({ ui: UI, preview: PREVIEW })));
@@ -505,8 +565,9 @@ describe("A retry whose branch moved while it ran (ADR-0006)", () => {
       verdicts: [earlier("pass", { headSha: HEAD_SHA })],
       notedChangesRequests: [9],
       requestChangesRunInFlight: 9,
+      requestChangesRunReviews: [9],
     });
-    const event = { ...rebased(true), fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true } };
+    const event = { ...rebased(true), fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 9 } };
 
     const actions = actionsOf(planFor(event, movedSnapshot(pullRequest), kitConfig()));
 

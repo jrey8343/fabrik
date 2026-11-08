@@ -21,14 +21,14 @@ import type {
   SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
-import { designRoundMarker, fromPullRequestLine, verdictMarker } from "../loop/markers.ts";
+import { designRoundMarker, fromPullRequestLine, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker, verdictMarker } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
 import { aMonitorIssueBody } from "./monitor.ts";
 
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
   return {
-    schema: 4,
+    schema: 5,
     kitSha: "f".repeat(40),
     repo: "owner/product",
     runId: 1000,
@@ -42,6 +42,7 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     subscription: "Claude token",
     retry: 0,
     stepUp: false,
+    stepUpReason: null,
     requestChanges: false,
     prototype: false,
     replay: null,
@@ -148,7 +149,8 @@ export function aMergedPullRequest(mergedAt: string, overrides: Partial<AgentPul
 
 /** The Operator requesting changes at `at`, saying nothing more. */
 export function aReview(at: string, overrides: Partial<ReviewFacts> = {}): ReviewFacts {
-  return { author: "operator", state: "changes-requested", body: "", comments: [], at, ...overrides };
+  const id = overrides.id ?? 900;
+  return { id, url: `https://github.com/owner/product/pull/50#pullrequestreview-${id}`, author: "operator", state: "changes-requested", body: "", comments: [], at, ...overrides };
 }
 
 /** A commit the Operator made at `at`, its patch unread; the Fabrik App's with `{ byApp: true }`. */
@@ -242,7 +244,21 @@ export function anOpenReplay(overrides: Partial<OpenReplayFacts> = {}): OpenRepl
 
 /** The Fabrik App's comment `body` at `at`; a person's with `{ author, byBot: false }`. */
 export function aComment(body: string, at: string, overrides: Partial<CommentFacts> = {}): CommentFacts {
-  return { author: "fabrik-app[bot]", byBot: true, body, at, ...overrides };
+  return { url: "https://github.com/owner/product/pull/50#issuecomment-1", author: "fabrik-app[bot]", byBot: true, body, at, ...overrides };
+}
+
+/** The Fabrik App's note of a Request-changes run's push at `at`, holding its answers about review `review` (#369). */
+export function anAnswersComment(
+  review: number,
+  { reviewMiss, amendsTicket }: { readonly reviewMiss: boolean; readonly amendsTicket: boolean },
+  at: string,
+  overrides: Partial<CommentFacts> = {},
+): CommentFacts {
+  return aComment(
+    [REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker({ review, reviewMiss, amendsTicket }), "The Implementer pushed the Operator's requested changes."].join("\n"),
+    at,
+    { url: `https://github.com/owner/product/pull/50#issuecomment-${review}1`, ...overrides },
+  );
 }
 
 /** The Fabrik App's Design round `round` at `at`. */

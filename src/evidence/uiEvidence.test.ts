@@ -7,6 +7,7 @@ import {
   evidenceSection,
   isUi,
   parseCaptureResult,
+  reviewerEvidenceBlock,
   reviewerImages,
   routesFor,
   type UiEvidence,
@@ -226,11 +227,11 @@ describe("The capture result", () => {
     ["a short head SHA", withResult({ headSha: "4f2b9c0" }), "headSha must be a full commit SHA"],
     ["captures that aren't a list", withResult({ captures: { "/book": [] } }), "captures must be a list"],
     ["a capture outcome with no captures", withResult({ captures: [] }), `captures can't be empty when the outcome is "captured"`],
-    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, error or no-result"],
+    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, sign-in-failed, error or no-result"],
     [
       "a failed outcome with an unknown reason",
       withResult({ outcome: "failed", reason: "flaky" }),
-      "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, error or no-result",
+      "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, sign-in-failed, error or no-result",
     ],
     ["a capture that isn't an object", withResult({ captures: ["after-mobile-book.png"] }), "captures[0] must be an object"],
     ["a route that isn't a path", withCapture({ route: "book" }), "captures[0].route must be a path starting with one /"],
@@ -285,7 +286,7 @@ describe("The capture result", () => {
     expect(parseCaptureResult(text)).toEqual({
       ok: false,
       errors: [
-        "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, error or no-result",
+        "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, sign-in-failed, error or no-result",
         "headSha must be a full commit SHA",
         "captures[1].side must be before or after",
         "captures[1].status must be an HTTP status from 100 to 599",
@@ -683,5 +684,85 @@ describe("Linking the preview in a PR body's evidence section, once the push job
     ["holds the waiting line outside any section", "The preview deployment is linked here once it answers.\n\nCloses #12"],
   ])("changes nothing in a body that %s", (_, text) => {
     expect(withPreviewLink(text, 9100, { kind: "linked", url: PREVIEW })).toBeNull();
+  });
+});
+
+describe("UI evidence of a route viewed signed in", () => {
+  /** The owner's /today, After only, and a public /pricing, After and Before, as a capture behind a sign-in writes it. */
+  const signedIn: CaptureResult<Capture> = {
+    outcome: "captured",
+    headSha: HEAD,
+    captures: [
+      { route: "/today", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-1-today.png", identity: "owner" },
+      { route: "/today", reason: "ticket", viewport: "desktop", side: "after", status: 503, image: "after-desktop-1-today.png", identity: "owner" },
+      { route: "/pricing", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-2-pricing.png" },
+      { route: "/pricing", reason: "ticket", viewport: "mobile", side: "before", status: 200, image: "before-mobile-2-pricing.png" },
+    ],
+  };
+
+  it("reads back with each capture's Capture identity, and a capture with none still reads", () => {
+    expect(parseCaptureResult(JSON.stringify(signedIn))).toEqual({ ok: true, result: signedIn });
+  });
+
+  it("reads back a prototype turn's capture of a signed-in route", () => {
+    const prototype: CaptureResult = {
+      outcome: "captured",
+      headSha: HEAD,
+      captures: [{ route: "/today", variant: "A", viewport: "mobile", status: 200, image: "variant-a-mobile.png", identity: "owner" }],
+    };
+
+    expect(parseCaptureResult(JSON.stringify(prototype))).toEqual({ ok: true, result: prototype });
+  });
+
+  it.each([7, "", "the owner", "../owner", null])("refuses an identity that isn't a Capture identity's name: %j", (identity) => {
+    const bad = { ...signedIn, captures: [{ ...signedIn.captures[0], identity }] };
+
+    expect(parseCaptureResult(JSON.stringify(bad))).toEqual({
+      ok: false,
+      errors: ["captures[0].identity must be a Capture identity's name, such as owner: letters, digits, - and _"],
+    });
+  });
+
+  it("reads back a capture that failed signing in", () => {
+    const failed: CaptureResult = { outcome: "failed", reason: "sign-in-failed", headSha: HEAD, captures: signedIn.captures.slice(0, 1) };
+
+    expect(parseCaptureResult(JSON.stringify(failed))).toEqual({ ok: true, result: failed });
+  });
+
+  it("names the identity on each signed-in route in the evidence section, and a public route reads as it does today", () => {
+    const section = evidenceSection(evidence(signedIn)).split("\n");
+
+    expect(section).toContain(
+      "- `/today`, named by the Ticket, signed in as `owner`. **Server error:** it answered 503 for After at desktop, so that screenshot shows an error page, not the design.",
+    );
+    expect(section).toContain("- `/pricing`, named by the Ticket");
+  });
+
+  it("says why capture failed when signing in failed, never blocking the PR", () => {
+    const section = evidenceSection(evidence({ outcome: "failed", reason: "sign-in-failed", headSha: HEAD, captures: [] }));
+
+    expect(section).toContain(
+      "**Capture failed:** signing in failed: a `ui.sign_in` command failed, ran out of time or left no session it could read, or a signed-in page landed on `ui.sign_in_path`, which its log names. There are no screenshots.",
+    );
+  });
+
+  it("names the identity on each signed-in screenshot the Reviewer is given, and says a signed-in route has no Before", () => {
+    const block = reviewerEvidenceBlock({ result: signedIn, given: reviewerImages(signedIn.captures), head: HEAD, recorded: null });
+
+    expect(block[1]).toContain(
+      "A screenshot signed in as a Capture identity, a fake user of the Sandbox's own server, has no Before, since Before is never signed in.",
+    );
+    expect(block[2]?.split("\n")).toEqual([
+      "- `fabrik-ui-evidence/after-mobile-1-today.png`: `/today` at mobile width (390×844), After, signed in as `owner`",
+      "- `fabrik-ui-evidence/after-mobile-2-pricing.png`: `/pricing` at mobile width (390×844), After",
+      "- `fabrik-ui-evidence/after-desktop-1-today.png`: `/today` at desktop width (1440×900), After, signed in as `owner`. It answered 503, so it shows an error page, not the design",
+      "- `fabrik-ui-evidence/before-mobile-2-pricing.png`: `/pricing` at mobile width (390×844), Before",
+    ]);
+  });
+
+  it("leaves the Reviewer's block as it is today when no screenshot is signed in", () => {
+    const block = reviewerEvidenceBlock({ result: allCaptured, given: reviewerImages(allCaptured.captures), head: HEAD, recorded: null });
+
+    expect(block.join("\n")).not.toMatch(/signed in|Capture identity/);
   });
 });

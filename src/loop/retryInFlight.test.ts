@@ -103,11 +103,11 @@ function retried(headSha: string, requestChanges = false): Extract<LoopEvent, { 
   return {
     kind: "implement-run-finished",
     issue: 7,
-    output: JSON.stringify({ title: "Handle the empty cart", summary: "Handles the empty cart.", fix: "Fixed the build." }),
+    output: JSON.stringify({ title: "Handle the empty cart", summary: "Handles the empty cart.", fix: "Fixed the build.", reviewMiss: false, amendsTicket: false }),
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes: { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }] },
-    fixes: { pullRequest: 50, headSha, runUrl: RUN, ...(requestChanges ? { requestChanges: true } : {}) },
+    fixes: { pullRequest: 50, headSha, runUrl: RUN, ...(requestChanges ? { review: 9 } : {}) },
   };
 }
 

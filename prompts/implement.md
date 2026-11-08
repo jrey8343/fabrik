@@ -33,6 +33,10 @@ If the end of this prompt has "The pull request the Operator requested changes o
 - Otherwise, if the requested changes above ask you to rebase, or say the PR conflicts with `main`, bring `origin/main` in: rebase onto it (`git rebase origin/main`) if they asked for a rebase, otherwise merge it (`git merge origin/main`). Resolve the conflicts and commit. This is the one case where you rebase or merge another branch. The Kit judges only your own changes, never what `main` already has, so a conflict you resolve in a file you must not change still counts as your change.
 - Run the build and the tests again before you finish.
 - Your output's `summary` describes the PR as a whole as it now stands: the Kit replaces the PR body with it, so start from "The pull request's current description". Your output's `fix` describes what the Operator asked for, any findings you were given, and what you changed, and must name each acceptance criterion it amended: quote the criterion and say how the requested changes changed it. The Kit keeps the PR's title.
+- Your output also answers two questions about the Operator's review, each yes or no, independent of the other. The Kit records both on the PR, and the Weekly summary and the Retro count them. Answer only for the review this run was started for, under "The Operator's requested changes" and "The Operator's comments on the code", never for an earlier Request changes you read as part of the Ticket.
+  - `reviewMiss`: does at least one point in the review ask for what the PR should already have done when Review passed it, a Review miss? That's something the Ticket as it then stood, counting earlier Request changes, its Spec, or this Product repo's standards (its `AGENTS.md`, glossary and ADRs) already required. Judge it against what Review judges against, not against what the Operator now wants. Name each such point in `reviewMissPoints`.
+  - `amendsTicket`: is at least one point an amendment, one that adds to, changes or removes what the Ticket asked for? It's yes exactly when your `fix` names an acceptance criterion the review amended, or a requirement it added.
+  - One review can be both, and a point can be neither. A review that asks only for a rebase, a squash or a retitle answers no to both.
 
 ## When main moved under the PR
 
@@ -75,6 +79,9 @@ When you have committed your work, end your reply with exactly one `<implement>`
   "title": "The PR title: one line saying what the change does.",
   "summary": "Markdown for the PR body: what the PR changes and why, how you tested it, and anything the reviewer should look at closely.",
   "fix": "Only on a retry or a Request-changes run: Markdown saying what you were asked to fix and what this run changed.",
+  "reviewMiss": true,
+  "reviewMissPoints": ["The Ticket asked for a confirmation email on booking, and the PR sent none."],
+  "amendsTicket": false,
   "operatorCommentsConsidered": ["conversation-3"],
   "routes": ["/book"]
 }
@@ -84,5 +91,8 @@ When you have committed your work, end your reply with exactly one `<implement>`
 - `summary` is non-empty Markdown. The Kit adds `Closes #<ticket>` itself. Don't @-mention anyone.
 - If you need the Operator's input, put every question for them in `summary` under one heading, "Questions for the Operator", and nowhere else in it. Leave the heading out when you have none.
 - `fix` is non-empty Markdown on a retry or a Request-changes run, which the Kit posts as a comment on the PR. Leave it out on a first run. Don't @-mention anyone.
+- `reviewMiss` is `true` or `false`, only on a Request-changes run: whether the review it was started for holds a Review miss, as "When the Operator requested changes" says. Leave it out on every other run.
+- `reviewMissPoints` names each point that is a Review miss, one short line each, saying what was already required and where: required when `reviewMiss` is `true`, left out otherwise. Don't @-mention anyone.
+- `amendsTicket` is `true` or `false`, only on a Request-changes run: whether the review amends the Ticket. Leave it out on every other run.
 - `operatorCommentsConsidered` lists, on a retry or a Request-changes run, the id of each comment under "The Operator's comments on the pull request" or "The Operator's comments on the code", and of each review or inline comment under "The Operator's Request changes, which amend the Ticket", that you weighed, exactly as its heading gives it (such as `conversation-3`, `review-5` or `inline-9`). Leave it out, or leave it empty, if you weighed none, and always on a first run. The Kit ends your `fix` comment with a link to each one; it ignores an id it didn't give you.
 - `routes` lists, when your change touched the UI, the routes it shows on, so any UI evidence is captured where the change can be seen: each a path starting with `/`, such as `/book`, never a full URL. Leave it out when you touched no UI. On a retry or a Request-changes run, name the routes the PR as a whole shows on.

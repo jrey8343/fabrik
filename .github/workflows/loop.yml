@@ -70,7 +70,7 @@ jobs:
       issues: read
       pull-requests: read
     outputs:
-      sha: ${{ steps.kit.outputs.sha }}
+      sha: ${{ steps.commit.outputs.sha }}
       route: ${{ steps.route.outputs.route }}
       triage-timeout-minutes: ${{ steps.route.outputs.triage-timeout-minutes }}
       design-timeout-minutes: ${{ steps.route.outputs.design-timeout-minutes }}
@@ -106,12 +106,14 @@ jobs:
       # The model and effort the plan chose for its agent run, a Step-up included.
       model: ${{ steps.route.outputs.model }}
       effort: ${{ steps.route.outputs.effort }}
-      # Which run the plan started, for its Run record: its Retry number (0 for none), and "true"
-      # or "false" for whether it Steps up and whether it's the Operator's Request-changes run.
+      # Which run the plan started, for its Run record: its Retry number (0 for none), "true"
+      # or "false" for whether it Steps up and whether it's the Operator's Request-changes run,
+      # and why it Steps up (retry, marked, request-changes or conflict-only; empty for none).
       retry: ${{ steps.route.outputs.retry }}
       # For a Retry on an agent PR (#341): the head its Execution flaw was given on, which the push job lands it for.
       retry-flaw: ${{ steps.route.outputs.retry-flaw }}
       step-up: ${{ steps.route.outputs.step-up }}
+      step-up-reason: ${{ steps.route.outputs.step-up-reason }}
       request-changes: ${{ steps.route.outputs.request-changes }}
       # The Subscription the plan's agent run is given: the Fabrik vault item its
       # job loads the Claude token from. Only ever a vault item name from the
@@ -133,9 +135,9 @@ jobs:
       # `env:`, never in a `run:` script, where it could inject a command.
       prototype_request: ${{ steps.route.outputs.prototype_request }}
     steps:
-      # No expression context names the commit of a called workflow, so read
-      # it from the OIDC token's job_workflow_sha claim.
-      - name: Find the Kit's pinned commit
+      # No expression context names a called workflow's ref or commit, so read
+      # them from the OIDC token's job_workflow_ref and job_workflow_sha claims.
+      - name: Read the Kit's workflow ref from the OIDC token
         id: kit
         run: |
           set -euo pipefail
@@ -147,16 +149,29 @@ jobs:
             jrey8343/fabrik/.github/workflows/loop.yml@*) ;;
             *) echo "::error::Unexpected Kit workflow ref: $ref"; exit 1 ;;
           esac
-          echo "Kit: $ref ($sha)"
-          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          echo "workflow-ref=$ref" >>"$GITHUB_OUTPUT"
+          echo "workflow-sha=$sha" >>"$GITHUB_OUTPUT"
 
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: jrey8343/fabrik
-          ref: ${{ steps.kit.outputs.sha }}
+          ref: ${{ steps.kit.outputs.workflow-sha }}
           path: kit
           persist-credentials: false
+
+      # A pinned annotated tag's claim names the tag object, not its commit. The checkout
+      # peels it, so pass out the commit it landed on: every job checks the Kit out at it,
+      # and every Run record names it as its kitSha (#324).
+      - name: Peel the Kit's pinned commit
+        id: commit
+        env:
+          KIT_REF: ${{ steps.kit.outputs.workflow-ref }}
+        run: |
+          set -euo pipefail
+          sha="$(git -C kit rev-parse HEAD)"
+          echo "Kit: $KIT_REF at commit $sha"
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
 
       # Read as data only; nothing from the Product repo runs in this job. The
       # workflows folder holds the caller workflow, whose Fabrik pins are checked too.
@@ -244,6 +259,8 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
           FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          # The open issues and those closed in the last 30 days, which Triage compares the issue against for a duplicate (#363).
+          FABRIK_RECENT_ISSUES_FILE: ${{ runner.temp }}/recent-issues.json
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
         run: node ../kit/src/agent/run.ts triage
 
@@ -545,7 +562,7 @@ jobs:
       # fabrik-out (src/evidence/capture-main.ts). It records every failure in
       # the capture result, never the job's: continue-on-error, and its own
       # timeout, the Kit's CAPTURE_TIMEOUT_MINUTES. No secret reaches it, nor
-      # the build and server it runs.
+      # the build, server and sign-ins it runs.
       - name: Capture the variants
         id: capture
         if: success()
@@ -798,7 +815,8 @@ jobs:
       # (src/evidence/capture-main.ts). It records every failure in the capture
       # result, never the job's: continue-on-error, and its own timeout, the
       # Kit's CAPTURE_TIMEOUT_MINUTES (src/evidence/capture.ts; a test holds the
-      # two together). No secret reaches it, nor the build and server it runs.
+      # two together). No secret reaches it, nor the build, server and sign-ins
+      # it runs.
       # Without a ui block it captures nothing and passes out no result, so
       # neither upload below runs; the Kit job's step summary says Visual
       # evidence is off (src/kit/kitJob.ts).
@@ -1404,8 +1422,8 @@ jobs:
   # A replay Ticket's Implement run (#156), one matrix leg per arm: the
   # baseline, as the Ticket was built then, and the variant, with the one
   # variable changed. It has the Implement job's shape and credentials
-  # (ADR-0002, ADR-0004): contents and issues read, no GitHub write
-  # credential, and only the implement service account, which its action
+  # (ADR-0002, ADR-0004): contents, issues and pull requests read, no GitHub
+  # write credential, and only the implement service account, which its action
   # loads the Claude token and the test secrets through. Its action checks out
   # the Ticket's baseSha and passes the arm's commits out as a patch, never
   # pushed. Never named `Implement`, so Dispatch's count of Implement runs in
@@ -1423,9 +1441,14 @@ jobs:
       fail-fast: false
       matrix:
         arm: [baseline, variant]
+    # pull-requests: read for the input step, as the design job's: on a Ticket
+    # sent back from an agent PR, it reads that closed PR into issue.json's
+    # sentBack (readSentBack in src/agent/inputs.ts). Without it the arm fails
+    # before its agent starts (#340).
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     steps:
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1502,9 +1525,12 @@ jobs:
       fail-fast: false
       matrix:
         arm: [baseline, variant]
+    # pull-requests: read for the input step, as replay-implement's: a sent-back
+    # Ticket's closed PR is read into issue.json's sentBack (#340).
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     steps:
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

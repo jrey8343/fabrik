@@ -3,7 +3,7 @@
 import { evidenceSection, isUi, withoutEvidence } from "../evidence/uiEvidence.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { consideredSection } from "./considered.ts";
-import { parseImplementOutput } from "./implementOutput.ts";
+import { type ImplementerAnswers, parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
@@ -11,15 +11,16 @@ import { conflictRunEnded, owedConflictRun, requestChangesRunEnded } from "./con
 import {
   CONFLICT_RUN_MARKER,
   EMPTY_DIFF_MARKER,
+  requestChangesAnswersMarker,
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunStartedMarker,
   RETRY_PUSH_MARKER,
   UNMARKED_RETRY_PUSH,
 } from "./markers.ts";
 import { handBack, owedRequestChangesRun } from "./mergeGate.ts";
-import { MAX_RETRIES, owedRetry, type RunInFlight, runInFlight, runName, stepsUp } from "./retry.ts";
+import { implementSettings, MAX_RETRIES, owedRetry, type RunInFlight, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
-import { verdictActions } from "./review.ts";
+import { type AnswerLines, verdictActions } from "./review.ts";
 import type {
   Action,
   IssueContext,
@@ -59,16 +60,19 @@ export function startImplementer(
     const resumed: Action[] | null =
       pullRequest === null || pullRequest.number !== open || pullRequest.ticket !== issueNumber
         ? null
-        : (owedRequestChangesRun(pullRequest, config) ?? listed(owedConflictRun(pullRequest, config) ?? owedRetry(pullRequest, config)));
+        : (owedRequestChangesRun(pullRequest, config) ?? listed(owedConflictRun(pullRequest, config) ?? owedRetry(pullRequest, issue.labels, config)));
     return { kind: "act", actions: [removeLabel, ...(resumed ?? [])] };
   }
   if (whyNotBuildable(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
-  const { implement, stepUp } = config.roles;
-  // The second retry Steps up; the first run and the first retry use the Implementer's model.
-  const steppedUp = stepsUp(issue.emptyDiffs);
-  const { model, effort } = steppedUp ? stepUp : implement;
+  const { implement } = config.roles;
+  // The second retry Steps up, and every run does while the Ticket is marked for a Stepped-up
+  // start (ADR-0014); otherwise the first run and the first retry use the Implementer's model.
+  const stepUpReason = stepUpReasonFor(issue.emptyDiffs, issue.labels);
+  const { model, effort } = implementSettings(stepUpReason, config);
+  // A first run that doesn't Step up carries neither field.
+  const stepUpFields = issue.emptyDiffs === 0 && stepUpReason === null ? {} : { stepUp: stepUpReason !== null, stepUpReason };
   // Each empty diff so far was an Execution flaw, so this run is the Retry after the last one.
-  const retry = issue.emptyDiffs === 0 ? {} : { retry: issue.emptyDiffs, stepUp: steppedUp };
+  const retry = issue.emptyDiffs === 0 ? {} : { retry: issue.emptyDiffs };
   return {
     kind: "act",
     actions: [
@@ -81,6 +85,7 @@ export function startImplementer(
         effort,
         timeoutMinutes: implement.timeoutMinutes,
         ...retry,
+        ...stepUpFields,
       },
     ],
   };
@@ -145,7 +150,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   const { issue: issueNumber, changes, branch, fixes } = event;
   const { issue, pullRequest, operator } = snapshot;
   if (fixes === undefined) throw new Error("A first Implement run lands through applyImplementation");
-  const parsed = parseImplementOutput(event.output, true);
+  const parsed = parseImplementOutput(event.output, fixes.review === undefined ? "pull-request" : "request-changes");
   // A conflict-only run that can't land still ends, or it would stay in flight for good, its PR withheld from every Verdict (#304).
   const conflictEnds = (why: string): Plan | null =>
     fixes.conflict !== undefined && pullRequest !== null && pullRequest.open && pullRequest.number === fixes.pullRequest && pullRequest.conflictRunInFlight === fixes.conflict
@@ -168,7 +173,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
     return conflictEnds(`${stale}, so the Kit didn't push it`) ?? { kind: "nothing", reason: `${stale}, so the retry's branch isn't pushed` };
   }
   if (fixes.conflict !== undefined) return applyConflictRun(event, fixes.conflict, pullRequest, operator, parsed.output, config);
-  const requestChanges = fixes.requestChanges === true;
+  const requestChanges = fixes.review !== undefined;
   // A Request-changes run lands only while it's the one in flight (#341): one started twice for the same review,
   // whose run already had its outcome, or left over for a review a later run took over from, pushes nothing over it.
   const inFlight = runInFlight(pullRequest);
@@ -232,6 +237,9 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       ),
     };
   }
+  // The run's answers about the review it was started for, recorded with its outcome either way (#369).
+  const { answers } = parsed.output;
+  const recorded = fixes.review !== undefined && answers !== undefined ? answerLines(fixes.review, answers) : null;
   // Merging main in or rebasing onto it, to fix a conflict, is a change even with none of the run's own.
   if (changes.net.length === 0 && changes.updatedFromMain !== true && mainMerge === undefined) {
     return {
@@ -244,6 +252,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           verdict: "execution-flaw",
           source: "empty-diff",
           findings: `The Implementer's ${requestChanges ? "Request-changes run" : "retry"} on \`${branch}\` committed no change, so there was nothing to review.`,
+          answers: recorded,
         },
         operator,
       ),
@@ -264,10 +273,12 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         body: [
           // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
           requestChanges ? REQUEST_CHANGES_RUN_MARKER : RETRY_PUSH_MARKER,
+          ...(recorded === null ? [] : [recorded.marker]),
           requestChanges
             ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mainMerge === undefined ? "" : `, which no longer conflicts with \`main\` at ${mainMerge.main.slice(0, 7)}`}; Review runs again on it.`
             : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
           "",
+          ...(recorded === null ? [] : [...recorded.lines, ""]),
           // Present: the on-a-PR contract above requires it.
           withoutMentions(parsed.output.fix ?? ""),
           ...consideredSection(parsed.output.operatorCommentsConsidered ?? [], fixes.operatorComments),
@@ -276,6 +287,20 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       { kind: "push-branch", branch },
       ...previewToLink(evidence, config, branch, pullRequest.number),
     ],
+  };
+}
+
+/**
+ * The marker and readable lines for a Request-changes run's answers about
+ * `review`: `Review miss: yes, <point>; <point>` or `Review miss: no`, then
+ * `Amends the Ticket: yes` or `no`. Each point is agent text, so it's put on
+ * one line and mentions nobody.
+ */
+function answerLines(review: number, { reviewMiss, points, amendsTicket }: ImplementerAnswers): AnswerLines {
+  const named = points.map((point) => withoutMentions(point.replace(/\s+/g, " ").trim())).join("; ");
+  return {
+    marker: requestChangesAnswersMarker({ review, reviewMiss, amendsTicket }),
+    lines: [reviewMiss ? `Review miss: yes, ${named}` : "Review miss: no", `Amends the Ticket: ${amendsTicket ? "yes" : "no"}`],
   };
 }
 
@@ -541,7 +566,7 @@ function emptyDiff(issueNumber: number, issue: IssueSnapshot): Plan {
         issue: issueNumber,
         body: [
           EMPTY_DIFF_MARKER,
-          `The Implementer's branch for #${issueNumber} changed nothing, so the Kit opened no PR. An empty diff is an Execution flaw: retry ${flaw} of ${MAX_RETRIES} starts now${stepsUp(flaw) ? ", stepped up" : ""}.`,
+          `The Implementer's branch for #${issueNumber} changed nothing, so the Kit opened no PR. An empty diff is an Execution flaw: retry ${flaw} of ${MAX_RETRIES} starts now${stepUpReasonFor(flaw, issue.labels) === null ? "" : ", stepped up"}.`,
         ].join("\n"),
       },
       // A fresh label event, as Dispatch would add, starts the retry in this run's own slot.

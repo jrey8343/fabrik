@@ -194,10 +194,22 @@ describe("The Kit job's routing of a conflict-only run (#304)", () => {
       review: "",
       model: kitConfig().roles.stepUp.model,
       retry: "0",
-      "step-up": "false",
+      "step-up": "true",
+      "step-up-reason": "conflict-only",
       "request-changes": "false",
       conflict: MAIN,
     });
+  });
+
+  it("passes out a marked Ticket's first run as a Step-up, with marked as its reason", () => {
+    const marked = anIssue({ number: 8, labels: ["enhancement", "ready-for-agent", "agent:implement", "fabrik:step-up"] });
+    const first = planFor({ kind: "label-added", issue: 8, label: "agent:implement" }, snapshotOf(marked), kitConfig());
+
+    expect(kitJobOutputs(first, 8, kitConfig())).toMatchObject({ route: "implement", retry: "0", "step-up": "true", "step-up-reason": "marked" });
+  });
+
+  it("passes out no Step-up reason for a run that doesn't Step up", () => {
+    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "step-up": "false", "step-up-reason": "" });
   });
 
   it("passes out no main head for any other run", () => {

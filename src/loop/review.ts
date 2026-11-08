@@ -140,6 +140,12 @@ const HEADINGS: Readonly<Record<Verdict, string>> = {
 /** Names the Verdict comment, so the note on a Ticket sent back to design can link it. */
 const VERDICT_COMMENT: PostedComment = { posted: "verdict" };
 
+/** A Request-changes run's answers as its outcome comment carries them: the marker line, and the lines people read (#369). */
+export interface AnswerLines {
+  readonly marker: string;
+  readonly lines: readonly string[];
+}
+
 /**
  * The Verdict comment (it mentions nobody), and agent:review off so re-adding
  * it is a fresh event. An Execution flaw then starts its retry, if one is
@@ -157,12 +163,15 @@ export function verdictActions(
     findings,
     followUps = [],
     considered = [],
+    answers = null,
   }: {
     readonly verdict: Verdict;
     readonly source: VerdictRecord["source"];
     readonly findings: string;
     readonly followUps?: readonly string[];
     readonly considered?: readonly string[];
+    /** A Request-changes run's answers (#369), when its empty diff is the Verdict: their marker goes right under the Verdict's, their lines after the findings. */
+    readonly answers?: AnswerLines | null;
   },
   operator: string,
 ): Action[] {
@@ -182,10 +191,12 @@ export function verdictActions(
   const next = first ?? nextAfter(verdict, pullRequest);
   const body = [
     verdictMarker(record),
+    ...(answers === null ? [] : [answers.marker]),
     `## Verdict: ${HEADINGS[verdict]}`,
     "",
     `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}${record.conflictRun === true ? ", after a conflict-only run, so it uses no retry" : ""}.`,
     ...(findings === "" ? [] : ["", findings]),
+    ...(answers === null ? [] : ["", ...answers.lines]),
     ...followUps,
     ...(next === null ? [] : ["", next.line]),
     "",

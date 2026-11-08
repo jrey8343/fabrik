@@ -39,6 +39,16 @@ function fakeGitHub() {
   };
 }
 
+describe("Applying a close", () => {
+  it.each(["duplicate", "not_planned", "completed"] as const)("sends GitHub the state reason %s", async (reason) => {
+    const github = fakeGitHub();
+
+    await applyPlan(github, repo, { kind: "act", actions: [{ kind: "close", issue: 7, reason }] });
+
+    expect(github.calls).toEqual([{ method: "PATCH", path: `${issues}/7`, body: { state: "closed", state_reason: reason } }]);
+  });
+});
+
 describe("Applying a plan that moves blocked-by edges onto new Tickets", () => {
   it("links a new Ticket to an existing blocker, and an existing issue to a new Ticket, by database id", async () => {
     const github = fakeGitHub();

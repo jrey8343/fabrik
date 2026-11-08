@@ -318,6 +318,91 @@ describe("Finishing a Design session with an agent brief", () => {
   });
 });
 
+describe("Setting a Stepped-up start from a Design session's agent brief", () => {
+  const brief = {
+    summary: "Offer a waitlist when the patient's physio is fully booked that day.",
+    acceptanceCriteria: ["A fully booked day shows Join waitlist"],
+  };
+  const finish = (output: unknown, labels: string[]) =>
+    planFor(
+      { kind: "agent-run-finished", role: "design", issue: 7, output: JSON.stringify(output) },
+      snapshotOf(anIssue({ number: 7, labels }), { operator: "jrey" }),
+      kitConfig(),
+    );
+  const labelMoves = (plan: ReturnType<typeof planFor>) =>
+    plan.kind === "act" ? plan.actions.filter((a) => a.kind === "add-labels" || a.kind === "remove-label") : [];
+
+  it("adds fabrik:step-up along with ready-for-agent when the brief has stepUp: true", () => {
+    const plan = finish({ kind: "brief", comment: "Done.", brief: { ...brief, stepUp: true } }, ["needs-design"]);
+
+    expect(labelMoves(plan)).toEqual([
+      { kind: "remove-label", issue: 7, label: "needs-design" },
+      { kind: "add-labels", issue: 7, labels: ["ready-for-agent", "fabrik:step-up"] },
+    ]);
+  });
+
+  it("keeps fabrik:step-up, removing nothing, when the brief has stepUp: true on an issue already marked", () => {
+    const plan = finish({ kind: "brief", comment: "Done.", brief: { ...brief, stepUp: true } }, ["needs-design", "fabrik:step-up"]);
+
+    expect(labelMoves(plan)).toEqual([
+      { kind: "remove-label", issue: 7, label: "needs-design" },
+      { kind: "add-labels", issue: 7, labels: ["ready-for-agent", "fabrik:step-up"] },
+    ]);
+  });
+
+  it("takes fabrik:step-up off an issue that has it when the brief has stepUp: false", () => {
+    const plan = finish({ kind: "brief", comment: "Done.", brief: { ...brief, stepUp: false } }, ["needs-design", "fabrik:step-up"]);
+
+    expect(labelMoves(plan)).toEqual([
+      { kind: "remove-label", issue: 7, label: "needs-design" },
+      { kind: "remove-label", issue: 7, label: "fabrik:step-up" },
+      { kind: "add-labels", issue: 7, labels: ["ready-for-agent"] },
+    ]);
+  });
+
+  it("removes nothing more when the brief has stepUp: false on an issue without the mark", () => {
+    const plan = finish({ kind: "brief", comment: "Done.", brief: { ...brief, stepUp: false } }, ["needs-design"]);
+
+    expect(labelMoves(plan)).toEqual([
+      { kind: "remove-label", issue: 7, label: "needs-design" },
+      { kind: "add-labels", issue: 7, labels: ["ready-for-agent"] },
+    ]);
+  });
+
+  it.each([
+    ["keeps the mark on an issue that has it", ["needs-design", "fabrik:step-up"]],
+    ["doesn't add the mark to an issue that doesn't have it", ["needs-design"]],
+  ])("leaves fabrik:step-up as it stands when the brief has no stepUp: %s", (_, labels) => {
+    const plan = finish({ kind: "brief", comment: "Done.", brief }, labels);
+
+    expect(labelMoves(plan)).toEqual([
+      { kind: "remove-label", issue: 7, label: "needs-design" },
+      { kind: "add-labels", issue: 7, labels: ["ready-for-agent"] },
+    ]);
+  });
+
+  it("refuses a stepUp that isn't a boolean, naming the field", () => {
+    const plan = finish({ kind: "brief", comment: "Done.", brief: { ...brief, stepUp: "yes" } }, ["needs-design"]);
+
+    expect(plan).toEqual({
+      kind: "fail",
+      failure: "infrastructure",
+      reason: "The Design-session turn on #7 emitted output that breaks its contract: a brief needs stepUp to be true or false, if it has one",
+    });
+  });
+
+  it.each([true, false])("neither adds nor removes fabrik:step-up for an Operator brief with stepUp: %s", (stepUp) => {
+    const operatorBrief = { operator: true, summary: "Rotate the SMS token.", steps: ["Rotate it"], stepUp };
+
+    const plan = finish({ kind: "brief", comment: "Done.", brief: operatorBrief }, ["needs-design", "fabrik:step-up"]);
+
+    expect(labelMoves(plan)).toEqual([
+      { kind: "remove-label", issue: 7, label: "needs-design" },
+      { kind: "add-labels", issue: 7, labels: ["ready-for-human"] },
+    ]);
+  });
+});
+
 /** The logins GitHub would notify for this Markdown: `@name` not preceded by a word character. */
 function mentionsIn(markdown: string): string[] {
   return [...markdown.matchAll(/(?<![\w`])@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\/[\w-]+)?)/g)].map(

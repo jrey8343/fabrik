@@ -226,11 +226,13 @@ function implementRunFinished(
       title: "Handle the empty cart",
       summary: "Handles the empty cart, with the free-shipping banner.",
       fix: "Built the requested banner.\n\nConflicted files:\n- `src/cart.ts`: kept main's new total and the empty-cart guard.",
+      // A Request-changes run answers both questions about its review (#369).
+      ...(requestChanges ? { reviewMiss: false, amendsTicket: true } : {}),
     }),
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes,
-    fixes: { pullRequest: 50, headSha, runUrl: RUN, requestChanges, ...(review === undefined ? {} : { review }), ...(retry === undefined ? {} : { retry }), ...(retryFlaw === undefined ? {} : { retryFlaw }) },
+    fixes: { pullRequest: 50, headSha, runUrl: RUN, ...(review === undefined ? {} : { review }),...(retry === undefined ? {} : { retry }), ...(retryFlaw === undefined ? {} : { retryFlaw }) },
   };
 }
 

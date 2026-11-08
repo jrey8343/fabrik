@@ -13,7 +13,7 @@ import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { IMPLEMENT_JOB_NAME } from "../github/snapshot.ts";
 import { REPLAY_ROUTE_JOB_MINUTES } from "../loop/replayGate.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE, PROTOTYPE_GALLERY_FILE } from "../evidence/capture.ts";
-import { MAP_INPUTS_FILE } from "../agent/inputs.ts";
+import { MAP_INPUTS_FILE, RECENT_ISSUES_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 
@@ -61,6 +61,39 @@ describe("The Kit's workflows", () => {
     expect(new Set(kitCheckouts)).toEqual(new Set(["kit"]));
   });
 
+  // A Product pins an annotated tag (docs/releasing.md), whose job_workflow_sha claim names the
+  // tag object, not the commit. The Kit job peels it, so every job and Run record names the commit (#324).
+  describe.each(workflows)("$path's Kit job", ({ text }) => {
+    const kit = jobIn(text, "kit");
+    const steps = stepsOf(kit);
+    const at = (needle: string) => steps.findIndex((step) => step.includes(needle));
+    const claim = steps[at("name: Read the Kit's workflow ref from the OIDC token")] ?? "";
+    const checkout = at("repository: jrey8343/fabrik");
+    const peel = at("git -C kit rev-parse HEAD");
+
+    it("checks the Kit out at the OIDC token's workflow sha, then passes out the commit that checkout landed on", () => {
+      expect(claim).toContain("jq -r .job_workflow_sha");
+      expect(claim).toContain("workflow-sha=$sha");
+      expect(claim).not.toMatch(/echo "sha=/);
+      expect(steps[checkout]).toContain("ref: ${{ steps.kit.outputs.workflow-sha }}");
+      expect(peel, "the Kit job never peels the checked-out commit").toBeGreaterThan(checkout);
+      expect(steps[peel]).toContain("id: commit");
+      expect(steps[peel]).toContain('echo "sha=$sha" >>"$GITHUB_OUTPUT"');
+      expect(kit).toContain("      sha: ${{ steps.commit.outputs.sha }}\n");
+    });
+
+    it("logs both the workflow ref it was called at and the commit it runs", () => {
+      expect(claim).toContain("workflow-ref=$ref");
+      expect(steps[peel]).toContain("KIT_REF: ${{ steps.kit.outputs.workflow-ref }}");
+      expect(steps[peel]).toContain('echo "Kit: $KIT_REF at commit $sha"');
+    });
+
+    it("needs no token beyond the OIDC one: its Kit checkout keeps no credentials", () => {
+      expect(steps[checkout]).toContain("persist-credentials: false");
+      expect(steps[checkout]).not.toContain("token:");
+    });
+  });
+
   it.each(workflows)("$path uses only composite actions the Kit ships", ({ text }) => {
     const local = [...text.matchAll(/uses: \.\/kit\/(\S+)/g)].map((match) => match[1]!);
 
@@ -92,11 +125,12 @@ describe("The Kit's workflows", () => {
 
   // What the Run record (src/kit/runRecord.ts) needs of how each run started.
   // The write the Run record action reads them from the push job's FABRIK_NEEDS.
-  it("loop.yml's Kit job passes out which run it planned: its Retry number, Step-up and Request changes", () => {
+  it("loop.yml's Kit job passes out which run it planned: its Retry number, Step-up and its reason, and Request changes", () => {
     const kit = jobIn(loop, "kit");
 
     expect(kit).toContain("retry: ${{ steps.route.outputs.retry }}");
     expect(kit).toContain("step-up: ${{ steps.route.outputs.step-up }}");
+    expect(kit).toContain("step-up-reason: ${{ steps.route.outputs.step-up-reason }}");
     expect(kit).toContain("request-changes: ${{ steps.route.outputs.request-changes }}");
   });
 
@@ -251,6 +285,13 @@ describe("The Kit's workflows", () => {
 
     expect(inputs).toContain("FABRIK_ROLE: ${{ inputs.role }}");
     expect(agent).toContain(`FABRIK_MAP_FILE: \${{ runner.temp }}/${MAP_INPUTS_FILE}`);
+  });
+
+  it("the Triage job gives its agent the recent issues the agent-inputs step read for its role, and no other agent job does", () => {
+    const agent = stepsOf(jobIn(loop, "triage")).find((step) => step.includes("src/agent/run.ts triage"));
+
+    expect(agent).toContain(`FABRIK_RECENT_ISSUES_FILE: \${{ runner.temp }}/${RECENT_ISSUES_FILE}`);
+    expect(loop.split("FABRIK_RECENT_ISSUES_FILE:").length - 1).toBe(1);
   });
 
   it("prepare-agent installs the Base skills plus its role's Extra skills, and holds no secret", () => {
@@ -666,7 +707,9 @@ describe("loop.yml's Research job", () => {
 // reads that closed PR in its input step (readSentBack in src/agent/inputs.ts),
 // which takes pull-requests: read. Without it the turn fails before its agent
 // starts. Triage reads it too, should the Operator add needs-triage to such a
-// Ticket. None of them holds a write permission (ADR-0002).
+// Ticket, and so do a replay's Implement and Review arms (#340), whose input
+// step reads the replayed Ticket as the live jobs do. None of them holds a
+// write permission (ADR-0002).
 describe("The agent jobs whose input step may read a sent-back Ticket's PR", () => {
   const permissionsOfJob = (name: string): string[] =>
     (/\n    permissions:\n((?: {6}.*\n)+)/.exec(job(name))?.[1] ?? "")
@@ -674,7 +717,7 @@ describe("The agent jobs whose input step may read a sent-back Ticket's PR", () 
       .split("\n")
       .map((line) => line.trim());
 
-  it.each(["design", "prototype", "triage"])("the %s job holds exactly contents, issues and pull-requests read, and no write", (name) => {
+  it.each(["design", "prototype", "triage", "replay-implement", "replay-review"])("the %s job holds exactly contents, issues and pull-requests read, and no write", (name) => {
     expect(permissionsOfJob(name)).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
     expect(job(name)).not.toMatch(/: write\b|id-token|create-github-app-token/);
   });
@@ -1208,7 +1251,7 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
   // Only the capture program imports Playwright, and it runs after prepare-agent's npm ci.
   it("runs capture after the Kit is installed, the only program that imports Playwright", () => {
     expect(stepAt("name: Capture UI evidence")).toBeGreaterThan(stepAt("uses: ./kit/.github/actions/prepare-agent"));
-    expect(packagesReachedBy("src/evidence/capture-main.ts")).toContain("src/evidence/capture-main.ts imports playwright-core");
+    expect(packagesReachedBy("src/evidence/capture-main.ts")).toContain("src/evidence/playwrightCapturer.ts imports playwright-core");
     expect(packagesReachedBy("src/evidence/capture.ts")).toEqual([]);
   });
 });
@@ -2084,7 +2127,7 @@ describe("loop.yml's replay jobs", () => {
     });
 
     it("holds no write credential: read permissions, and only the implement service account", () => {
-      expect(permissionsIn(implement())).toEqual(["contents: read", "issues: read"]);
+      expect(permissionsIn(implement())).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
       expect(secretsIn(implement())).toEqual(["OP_IMPLEMENT_TOKEN"]);
       expect(codeOf(implement())).not.toMatch(WRITE_CREDENTIALS);
     });
@@ -2121,7 +2164,7 @@ describe("loop.yml's replay jobs", () => {
     const review = () => job("replay-review");
 
     it("holds only the agent service account, with read permissions and no write credential", () => {
-      expect(permissionsIn(review())).toEqual(["contents: read", "issues: read"]);
+      expect(permissionsIn(review())).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
       expect(secretsIn(review())).toEqual(["OP_AGENT_TOKEN"]);
       expect(codeOf(review())).not.toMatch(WRITE_CREDENTIALS);
     });

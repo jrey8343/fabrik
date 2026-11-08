@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { MAX_AUDIT_CANDIDATES, readAuditOutput } from "../loop/auditOutput.ts";
 import { readDesignTurnOutput, readPrototypeTurnOutput } from "../loop/designOutput.ts";
-import { readPullRequestRunOutput } from "../loop/implementOutput.ts";
+import { readPullRequestRunOutput, readRequestChangesRunOutput } from "../loop/implementOutput.ts";
 import { readResearchOutput } from "../loop/researchOutput.ts";
 import {
   LOOSENING_STREAK_MINIMUM,
@@ -680,5 +680,29 @@ describe("The Retro's prompt", () => {
     const directions = full?.ok === true ? full.output.proposals.map((proposal) => proposal.direction) : [];
     expect(directions).toContain("loosen");
     expect(examples[1]).toEqual({ ok: true, output: { proposals: [] } });
+  });
+});
+
+describe("A Request-changes run's answers in the Implement prompt (#369)", () => {
+  it("asks for both answers about the review the run was started for, which its example carries", async () => {
+    const text = await prompt("implement");
+    const example: unknown = JSON.parse(/<implement>\n([\s\S]*?)\n<\/implement>/.exec(text)?.[1] ?? "null");
+    expect(readRequestChangesRunOutput(example)).toMatchObject({
+      ok: true,
+      output: { answers: { reviewMiss: true, points: [expect.any(String)], amendsTicket: false } },
+    });
+    const output = section(text, "Your output");
+    expect(lineStarting(output, "- `reviewMiss`")).toContain("only on a Request-changes run");
+    expect(lineStarting(output, "- `reviewMissPoints`")).toContain("each point");
+    expect(lineStarting(output, "- `amendsTicket`")).toContain("only on a Request-changes run");
+  });
+
+  it("says how to judge them: against what Review judges against, for the one review the run was started for, a rebase-only review being no to both", async () => {
+    const judging = section(await prompt("implement"), "When the Operator requested changes");
+    expect(judging).toContain("Review miss");
+    expect(judging).toContain("the Ticket as it then stood, counting earlier Request changes, its Spec, or this Product repo's standards");
+    expect(judging).toContain("adds to, changes or removes what the Ticket asked for");
+    expect(judging).toContain("only for the review this run was started for");
+    expect(judging).toContain("only for a rebase, a squash or a retitle answers no to both");
   });
 });

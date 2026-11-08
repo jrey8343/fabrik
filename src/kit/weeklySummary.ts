@@ -10,7 +10,7 @@ import { mapCapFull } from "../loop/mapCap.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
-import { type DesignQueueSnapshot, type InfrastructureFailure, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { type DesignQueueSnapshot, type InfrastructureFailure, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import {
@@ -24,13 +24,15 @@ import {
   mergedAgentPullRequestsIn,
   type MetricFacts,
   type OpenPullRequestFacts,
+  requestChangesIn,
+  type RequestChangesReview,
   verdictsOn,
   type Window,
   within,
 } from "./retroEvidence.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { isLive, type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
+import { firstRunOf, isLive, type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
 
 // The GitHub facts the metrics read are the Retro evidence module's (src/kit/retroEvidence.ts).
@@ -225,6 +227,10 @@ export interface WeeklySummary {
   readonly escapesByStrength: WeekOverWeek<EscapesByStrength>;
   /** The Architectural escapes opened in the week, with the evidence against each PR: what the Retro reads. */
   readonly escapesThisWeek: readonly EscapeThisWeek[];
+  /** The Operator's Request changes submitted in the week, by what their runs answered about them (#369). */
+  readonly requestChanges: WeekOverWeek<RequestChangesCounts>;
+  /** Each Request changes submitted in the week whose run answered that it holds a Review miss. */
+  readonly reviewMissesThisWeek: readonly ReviewMissThisWeek[];
   readonly counts: {
     /** Agent PRs merged in the week, across every Product repo. */
     readonly mergedPullRequests: WeekOverWeek<number>;
@@ -234,6 +240,10 @@ export interface WeeklySummary {
     readonly retries: WeekOverWeek<number>;
     /** Records of a Step-up. */
     readonly stepUps: WeekOverWeek<number>;
+    /** Those records by why they Stepped up (ADR-0014). */
+    readonly stepUpsByReason: WeekOverWeek<StepUpCounts>;
+    /** The Tickets merged in the week whose first Implement run was a Stepped-up start, and how many of them needed no Retry. */
+    readonly steppedUpStarts: WeekOverWeek<SteppedUpStarts>;
   };
   /** What the score files of the week's runs say. */
   readonly scores: WeekOverWeek<WeekScores>;
@@ -241,6 +251,40 @@ export interface WeeklySummary {
   readonly scoringCost: WeekOverWeek<ScoringCost>;
   /** One section per Product repo, in the order the facts came. */
   readonly repos: readonly RepoSection[];
+}
+
+/**
+ * A week's Request changes: how many hold a Review miss and how many amend
+ * the Ticket, two independent answers, and how many have no answer at all.
+ */
+export interface RequestChangesCounts {
+  readonly reviewMiss: number;
+  readonly amendsTicket: number;
+  readonly unanswered: number;
+}
+
+/** A Request changes whose run answered it holds a Review miss, with where to read each part of it. */
+export interface ReviewMissThisWeek {
+  /** `owner/name`. */
+  readonly repo: string;
+  readonly number: number;
+  /** The PR's. */
+  readonly url: string;
+  /** The Request changes review's. */
+  readonly reviewUrl: string;
+  /** The Kit's comment holding the answer. */
+  readonly answerUrl: string;
+  /** The Actions run of the Review whose pass it followed, or null when the store holds none. */
+  readonly passingReviewUrl: string | null;
+}
+
+/** A week's Step-up records, by reason. */
+export type StepUpCounts = Readonly<Record<StepUpReason, number>>;
+
+/** A week's merged Stepped-up starts: how many merged, and how many of those had no Retry. */
+export interface SteppedUpStarts {
+  readonly merged: number;
+  readonly noRetry: number;
 }
 
 /** The summed cost of a week's Replay records, in USD. */
@@ -479,11 +523,15 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
     escapeRate: change("escapeRate"),
     escapesByStrength: change("escapesByStrength"),
     escapesThisWeek: escapesThisWeekOf(weeks.thisWeek, input),
+    requestChanges: change("requestChanges"),
+    reviewMissesThisWeek: thisWeek.reviewMisses,
     counts: {
       mergedPullRequests: change("mergedPullRequests"),
       ticketsDispatched: change("ticketsDispatched"),
       retries: change("retries"),
       stepUps: change("stepUps"),
+      stepUpsByReason: change("stepUpsByReason"),
+      steppedUpStarts: change("steppedUpStarts"),
     },
     scores: change("scores"),
     scoringCost: change("scoringCost"),
@@ -517,10 +565,15 @@ interface WeekMetrics {
   readonly revertRate: RevertRate;
   readonly escapeRate: EscapeRate;
   readonly escapesByStrength: EscapesByStrength;
+  readonly requestChanges: RequestChangesCounts;
+  /** The week's Request changes with a Review miss: the list only this week's summary shows. */
+  readonly reviewMisses: readonly ReviewMissThisWeek[];
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
   readonly retries: number;
   readonly stepUps: number;
+  readonly stepUpsByReason: StepUpCounts;
+  readonly steppedUpStarts: SteppedUpStarts;
   readonly scores: WeekScores;
   readonly scoringCost: ScoringCost;
 }
@@ -535,6 +588,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
   const scoring = costOf(records.filter((record) => record.role === "score"));
   const escapeWindow = escapeWindowOf(week);
   const escapes = escapesIn(escapeWindow, input);
+  const requestChanges = requestChangesIn(week, input);
   return {
     records: records.length,
     cost,
@@ -550,6 +604,8 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     revertRate: revertRateOf(week, input),
     escapeRate: escapeRateOf(escapeWindow, escapes, input),
     escapesByStrength: escapesByStrengthOf(escapes),
+    requestChanges: requestChangesCountsOf(requestChanges),
+    reviewMisses: reviewMissesOf(requestChanges),
     mergedPullRequests: merged.length,
     ticketsDispatched: tickets.filter((ticket) => {
       const dispatch = dispatchOf(ticket);
@@ -557,9 +613,38 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     }).length,
     retries: records.filter((record) => record.role === "implement" && record.retry > 0).length,
     stepUps: records.filter((record) => record.stepUp).length,
+    stepUpsByReason: stepUpsByReasonOf(records),
+    steppedUpStarts: steppedUpStartsOf(merged, input.records),
     scores: scoresOf(week, input),
     scoringCost: { usd: scoring.usd, share: cost === 0 ? null : scoring.usd / cost, unknownCost: scoring.unknownCost },
   };
+}
+
+/** What the summary calls each Step-up reason. */
+const STEP_UP_REASON_NAMES: Readonly<Record<StepUpReason, string>> = {
+  retry: "for a Retry",
+  marked: "marked",
+  "request-changes": "Request changes",
+  "conflict-only": "conflict-only",
+};
+
+function stepUpsByReasonOf(records: readonly RunRecord[]): StepUpCounts {
+  const count = (reason: StepUpReason) => records.filter((record) => record.stepUp && record.stepUpReason === reason).length;
+  return Object.fromEntries(STEP_UP_REASONS.map((reason) => [reason, count(reason)])) as Record<StepUpReason, number>;
+}
+
+/**
+ * Of the week's merged agent PRs, those whose Ticket's first Implement run,
+ * whatever week it ran in, was a Stepped-up start, and how many of those
+ * Tickets had no Retry.
+ */
+function steppedUpStartsOf(merged: readonly MergedAgentPullRequest[], records: readonly RunRecord[]): SteppedUpStarts {
+  // Each marked Ticket's Implement runs.
+  const markedChains = merged.flatMap(({ repo, pullRequest }) => {
+    const runs = records.filter((record) => record.repo === repo && record.role === "implement" && record.issue === pullRequest.ticket);
+    return pullRequest.ticket === null || firstRunOf(runs)?.stepUpReason !== "marked" ? [] : [runs];
+  });
+  return { merged: markedChains.length, noRetry: markedChains.filter((runs) => runs.every((record) => record.retry === 0)).length };
 }
 
 /** What the score files of the week's runs say: per rubric version, how the runs scored. */
@@ -651,6 +736,34 @@ function escapesThisWeekOf(week: Week, input: WeeklySummaryInput): EscapeThisWee
         operatorPushes,
       })),
     }));
+}
+
+/** A week's Request changes, by their answers, counted by when each review was submitted. */
+function requestChangesCountsOf(reviews: readonly RequestChangesReview[]): RequestChangesCounts {
+  const answers = reviews.map(({ answer }) => answer);
+  return {
+    reviewMiss: answers.filter((answer) => answer?.reviewMiss === true).length,
+    amendsTicket: answers.filter((answer) => answer?.amendsTicket === true).length,
+    unanswered: answers.filter((answer) => answer === null).length,
+  };
+}
+
+/** Those of a week's Request changes whose run answered that it holds a Review miss. */
+function reviewMissesOf(reviews: readonly RequestChangesReview[]): ReviewMissThisWeek[] {
+  return reviews.flatMap(({ repo, pullRequest, review, answer, passingReview }) =>
+    answer?.reviewMiss !== true
+      ? []
+      : [
+          {
+            repo,
+            number: pullRequest,
+            url: `https://github.com/${repo}/pull/${pullRequest}`,
+            reviewUrl: review.url,
+            answerUrl: answer.comment.url,
+            passingReviewUrl: passingReview === null ? null : runUrlOf(passingReview),
+          },
+        ],
+  );
 }
 
 /** The Actions run attempt a record came from, in its Product repo. */
@@ -1124,7 +1237,10 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     row("Tickets dispatched", counts.ticketsDispatched, count),
     row("Retries", counts.retries, count),
     row("Step-ups", counts.stepUps, count),
+    ...stepUpReasonRows(counts.stepUpsByReason),
+    steppedUpStartsRow(counts.steppedUpStarts),
     row("Human touches per merged PR", humanTouches, (value) => value.toFixed(1)),
+    ...requestChangesRows(summary.requestChanges),
     row("Cycle time (median)", cycleTimeMs, hours),
     row("Operator wait (median)", operatorWaitMs, hours),
     `| Revert rate (30 days) | ${revertCell(revertRate.thisWeek)} | ${revertCell(revertRate.lastWeek)} | ${revertChange} |`,
@@ -1149,7 +1265,13 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
   lines.push(...scoresLines(summary.scores, summary.scoringCost));
   lines.push(...heldLines(summary.repos));
   for (const repo of summary.repos) {
-    lines.push(...repoLines(repo, summary.escapesThisWeek.filter((escape) => escape.repo === repo.repo)));
+    lines.push(
+      ...repoLines(
+        repo,
+        summary.escapesThisWeek.filter((escape) => escape.repo === repo.repo),
+        summary.reviewMissesThisWeek.filter((miss) => miss.repo === repo.repo),
+      ),
+    );
   }
   // The Operator's one mention, last: the week's only scheduled push.
   lines.push(`@${operator}`);
@@ -1233,7 +1355,7 @@ function heldLines(repos: readonly RepoSection[]): string[] {
 /** How many of a repo's Waiting on you items show before the rest collapse into `<details>`. */
 const SHOWN_ITEMS = 10;
 
-function repoLines({ repo, waitingOnYou, stuck }: RepoSection, escapes: readonly EscapeThisWeek[]): string[] {
+function repoLines({ repo, waitingOnYou, stuck }: RepoSection, escapes: readonly EscapeThisWeek[], reviewMisses: readonly ReviewMissThisWeek[]): string[] {
   const lines = [`## ${repo}`, "", "### Waiting on you", ""];
   if (waitingOnYou.length === 0) lines.push("Nothing waiting on you.", "");
   else {
@@ -1243,6 +1365,7 @@ function repoLines({ repo, waitingOnYou, stuck }: RepoSection, escapes: readonly
   }
   if (stuck.length > 0) lines.push("### Stuck", "", ...stuck.map(stuckLine), "");
   if (escapes.length > 0) lines.push("### Architectural escapes this week", "", ...escapes.flatMap(escapeLines), "");
+  if (reviewMisses.length > 0) lines.push("### Review misses this week", "", ...reviewMisses.map(reviewMissLine), "");
   lines.push(liveLinks(repo), "");
   return lines;
 }
@@ -1256,6 +1379,12 @@ function escapeLines({ number, url, pullRequests }: EscapeThisWeek): string[] {
       return `  - [#${number}](${url}): ${review}${operatorPushes ? ", with Operator pushes" : ""}`;
     }),
   ];
+}
+
+/** A Review miss: its PR, the Request changes, the comment holding the answer, and the Review run whose pass it followed. */
+function reviewMissLine({ number, url, reviewUrl, answerUrl, passingReviewUrl }: ReviewMissThisWeek): string {
+  const after = passingReviewUrl === null ? "after no passing Review run on record" : `after the pass of [Review run](${passingReviewUrl})`;
+  return `- [#${number}](${url}): [Request changes](${reviewUrl}), [answered here](${answerUrl}), ${after}`;
 }
 
 function waitingLine(item: WaitingItem): string {
@@ -1361,6 +1490,30 @@ function limitReading({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading | nu
 function row(name: string, { thisWeek, lastWeek }: WeekOverWeek<number | null>, format: (value: number) => string): string {
   const change = thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, format);
   return `| ${name} | ${orNone(thisWeek, format)} | ${orNone(lastWeek, format)} | ${change} |`;
+}
+
+/** The week's Request changes with a Review miss, amending the Ticket, and unanswered, each week over week. */
+function requestChangesRows({ thisWeek, lastWeek }: WeekOverWeek<RequestChangesCounts>): string[] {
+  const rows: [string, keyof RequestChangesCounts][] = [
+    ["Request changes with a Review miss", "reviewMiss"],
+    ["Request changes amending the Ticket", "amendsTicket"],
+    ["Request changes unanswered", "unanswered"],
+  ];
+  return rows.map(([name, key]) => row(name, { thisWeek: thisWeek[key], lastWeek: lastWeek[key] }, count));
+}
+
+/** A row under Step-ups for each reason either week has any of. */
+function stepUpReasonRows(byReason: WeekOverWeek<StepUpCounts>): string[] {
+  return STEP_UP_REASONS.flatMap((reason) => {
+    const counts = { thisWeek: byReason.thisWeek[reason], lastWeek: byReason.lastWeek[reason] };
+    return counts.thisWeek === 0 && counts.lastWeek === 0 ? [] : [row(`· ${STEP_UP_REASON_NAMES[reason]}`, counts, count)];
+  });
+}
+
+/** The merged Stepped-up starts each week, with how many needed no Retry, and the change in how many merged. */
+function steppedUpStartsRow({ thisWeek, lastWeek }: WeekOverWeek<SteppedUpStarts>): string {
+  const cell = ({ merged, noRetry }: SteppedUpStarts) => `${merged} (${noRetry} with no Retry)`;
+  return `| Stepped-up starts merged | ${cell(thisWeek)} | ${cell(lastWeek)} | ${signed(thisWeek.merged - lastWeek.merged, count)} |`;
 }
 
 /** A table row for a share, from 0 to 1: as a percentage, with the change in percentage points. */

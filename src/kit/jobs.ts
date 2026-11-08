@@ -40,6 +40,7 @@
 //   retry                    for an Implement run, its Retry number (0 for a first or Request-changes run); else empty
 //   retry-flaw               for a Retry on an agent PR, the head its Execution flaw was given on (#341); else empty
 //   step-up, request-changes "true" when the run Steps up, or is the Operator's Request-changes run; else "false"
+//   step-up-reason           why the run Steps up: retry, marked, request-changes or conflict-only; else empty
 //   dispatch-timeout-minutes the Dispatch job's Kit config timeout
 //   subscription             the Subscription the plan's agent run is given: the `Fabrik` vault item
 //                            its job loads the Claude token from; empty when it starts none
@@ -197,6 +198,8 @@ export function kitJobOutputs(
     // A Retry on an agent PR: the head of the Execution flaw it fixes, so its push lands only for that flaw (#341).
     "retry-flaw": run?.role === "implement" ? (run.retryFlaw ?? "") : "",
     "step-up": String(run?.stepUp === true),
+    // Only ever one of the Kit's own Step-up reasons, never agent text.
+    "step-up-reason": run?.stepUp === true ? (run.stepUpReason ?? "") : "",
     "request-changes": String(run?.requestChanges !== undefined),
     "dispatch-timeout-minutes": String(config.roles.dispatch.timeoutMinutes),
     // Only ever a vault item name from the Kit config checked above, never a secret.

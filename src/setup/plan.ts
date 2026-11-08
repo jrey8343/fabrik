@@ -1,7 +1,7 @@
-// The setup skill's planner. Pure, no I/O: given what a Product repo holds now
+// Setup's planner. Pure, no I/O: given what a Product repo holds now
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
-import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH, type UiConfig } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
 import {
   ALL_LABELS,
   AUDIT_LABEL,
@@ -23,13 +23,15 @@ import {
   RESEARCH_LABEL,
   RETRO_LABEL,
   REVIEW_LABEL,
+  STEP_UP_LABEL,
   TOKEN_ROTATION_LABEL,
   USAGE_CREDITS_LABEL,
   WEEKLY_LIMIT_LABEL,
   WONTFIX,
 } from "../loop/labels.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
-import { layoutOf, printJson, printMembers } from "./json.ts";
+import { setupCommand } from "./finish.ts";
+import { withMember } from "./json.ts";
 import type { SetupKit } from "./kit.ts";
 import {
   CALLER_PATH,
@@ -49,7 +51,7 @@ import {
   STORE_CALLER_PATH,
 } from "./shims.ts";
 
-/** What the setup skill reads from a Product repo and its 1Password account before planning. */
+/** What Setup reads from a Product repo and its 1Password account before planning. */
 export interface ProductState {
   readonly repo: {
     readonly owner: string;
@@ -58,7 +60,7 @@ export interface ProductState {
     /** Whether an organization owns it. Only an organization repo's branch protection can have bypass allowances. */
     readonly inOrganization: boolean;
   };
-  /** The text of each file the setup skill writes or merges, or null when the repo lacks it. */
+  /** The text of each file Setup writes or merges, or null when the repo lacks it. */
   readonly files: Readonly<Record<string, string | null>>;
   readonly labels: readonly string[];
   readonly secrets: readonly string[];
@@ -94,34 +96,20 @@ export interface SetupAnswers {
   readonly timeZone?: string;
   /**
    * Whether the Operator wants a second Subscription, so runs fail over to it
-   * when the first reaches its weekly limit. Without it setup says nothing
-   * about Subscriptions, so the second stays an opt-in step.
+   * when the first reaches its weekly limit. With it, setup lists the second
+   * Subscription in a Kit config that lists one, once its token is in the
+   * vault. Without it setup says nothing about a second Subscription, so it
+   * stays an opt-in step.
    */
   readonly secondSubscription?: boolean;
   /**
-   * The Visual evidence step (Spec #153): which files make a pull request UI,
-   * how the Sandbox serves the branch, and where the production site and
-   * preview deployments are. Without it setup leaves the Kit config's `ui` and
-   * `preview` blocks alone, so Visual evidence stays an opt-in step.
-   */
-  readonly visualEvidence?: VisualEvidenceAnswers;
-  /**
    * Whether to install with Dispatch paused: the starter Kit config is written
    * with `max_in_flight: 0`, so no Implementer starts until the Operator raises
-   * it. An existing Kit config is the Product's, so it's never changed.
+   * it. A Kit config the default branch has is the Product's, so it's never
+   * changed, but the starter on setup's branch is set to match, either way.
    */
   readonly paused?: boolean;
 }
-
-/**
- * The Operator's answers to the Visual evidence step, which setup writes as
- * the Kit config's `ui` and `preview` blocks: the `ui` block's, with
- * `before_url` and `default_routes` left out when the Operator gives none,
- * and `preview.url`, a template that may use `{pr}`, `{branch_slug}` and
- * `{sha}` (src/kit/config.ts), left out when no preview is linked.
- */
-export type VisualEvidenceAnswers = Pick<UiConfig, "paths" | "serve" | "url"> &
-  Partial<Pick<UiConfig, "beforeUrl" | "defaultRoutes">> & { readonly previewUrl?: string };
 
 export interface BranchProtection {
   readonly requiredChecks: readonly string[];
@@ -189,7 +177,24 @@ export interface SetupPlan {
   readonly notes: readonly string[];
 }
 
-export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnswers = {}): SetupPlan {
+/** Where the plan stands in setup's run. */
+export interface PlanContext {
+  /**
+   * The same run walks the wizard once the plan is applied, then plans again
+   * and writes what that plan writes in the setup PR, as one run in a terminal
+   * does. Without it, a step the wizard leaves to setup waits for its next run.
+   */
+  readonly wizardNext?: boolean;
+  /**
+   * The repo's Kit config is the starter setup wrote on its own branch, in this
+   * run or an earlier one, as the default branch lacks one. Until the setup PR
+   * merges it's setup's own, not yet the Product's: this run's answer on
+   * pausing sets its max_in_flight, and its notes are a fresh install's.
+   */
+  readonly wroteStarter?: boolean;
+}
+
+export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnswers = {}, context: PlanContext = {}): SetupPlan {
   const actions: SetupAction[] = [];
   const notes: string[] = [];
   const shims: [string, FileUpdate, string][] = [
@@ -208,7 +213,7 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
     if ("note" in update) notes.push(update.note);
     else actions.push(write(path, update.content, why));
   }
-  actions.push(...kitConfig(state, kit, answers, notes));
+  actions.push(...kitConfig(state, kit, answers, notes, context));
   actions.push(...starters(state, kit));
   const present = new Set(state.labels.map((label) => label.toLowerCase()));
   for (const name of ALL_LABELS) {
@@ -218,28 +223,40 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
   actions.push(...protection(state, kit, notes));
   actions.push(...mergeGate(state));
   actions.push(...runStore(state.store, kit, answers, notes));
-  notes.push(...subscriptions(state, kit, answers));
+  notes.push(...subscriptions(state, kit, answers, context));
   return { actions, notes };
 }
 
 /**
  * The Kit config is the Product's: setup writes the starter once, when the repo
- * lacks one, and otherwise changes only what the Operator's answers to an
- * opt-in step ask for. Visual evidence is that step: its `ui` and `preview`
- * blocks go into the starter, or into the Kit config the repo already has.
+ * lacks one, and after that changes only its subscriptions list, on the
+ * Operator's yes to a second Subscription. Until the setup PR merges, the
+ * starter on setup's branch is still setup's own, so a later run's answer on
+ * pausing sets its max_in_flight. Visual evidence, the one block that needs
+ * judgment, is /fabrik-visual-evidence's to write (Spec #330).
  */
-function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, notes: string[]): SetupAction[] {
+function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, notes: string[], { wroteStarter = false }: PlanContext): SetupAction[] {
   const existing = state.files[KIT_CONFIG_PATH] ?? null;
   const paused = answers.paused === true;
-  const text = existing ?? (paused ? pausedStarter(kit.templates.kitConfig) : kit.templates.kitConfig);
-  const updated = answers.visualEvidence === undefined ? null : withVisualEvidence(text, answers.visualEvidence, notes);
-  if (existing === null && !paused) notes.push(...readyForAgentWarning(state.readyForAgent));
-  if (existing !== null && paused) notes.push(pausedHadNoEffect(existing));
-  if (existing === null) {
-    const why = `a starter Kit config with every v1 default${paused ? " but Dispatch paused (max_in_flight 0)" : ""}`;
-    return [updated === null ? write(KIT_CONFIG_PATH, text, why) : write(KIT_CONFIG_PATH, updated, `${why}, and Visual evidence on`)];
+  if (existing !== null && wroteStarter && jsonObject(existing) !== null) {
+    if (!paused) notes.push(...readyForAgentWarning(state.readyForAgent));
+    const maxInFlight = paused ? 0 : DEFAULT_KIT_CONFIG.maxInFlight;
+    const repaused = pausesDispatch(existing) === paused ? null : withMember(existing, ["max_in_flight"], maxInFlight);
+    const listed = withSecondSubscription(repaused ?? existing, state, answers);
+    if (repaused === null) return listed === null ? [] : [write(KIT_CONFIG_PATH, listed, LIST_SECOND_SUBSCRIPTION)];
+    const why = `the starter Kit config, with Dispatch ${paused ? "" : "not "}paused now (max_in_flight ${maxInFlight})${listed === null ? "" : ", and the second Subscription listed"}`;
+    return [write(KIT_CONFIG_PATH, listed ?? repaused, why)];
   }
-  return updated === null ? [] : [write(KIT_CONFIG_PATH, updated, "the Visual evidence step's ui and preview blocks")];
+  if (existing !== null) {
+    if (paused) notes.push(pausedHadNoEffect(existing));
+    const listed = withSecondSubscription(existing, state, answers);
+    return listed === null ? [] : [write(KIT_CONFIG_PATH, listed, LIST_SECOND_SUBSCRIPTION)];
+  }
+  if (!paused) notes.push(...readyForAgentWarning(state.readyForAgent));
+  const starter = paused ? pausedStarter(kit.templates.kitConfig) : kit.templates.kitConfig;
+  const listed = withSecondSubscription(starter, state, answers);
+  const why = `a starter Kit config with every v1 default${paused ? " but Dispatch paused (max_in_flight 0)" : ""}${listed === null ? "" : ", and the second Subscription listed"}`;
+  return [write(KIT_CONFIG_PATH, listed ?? starter, why)];
 }
 
 /** The warning that an unpaused install puts the tracker's ready-for-agent issues straight into Dispatch's queue. */
@@ -261,64 +278,16 @@ function pausedHadNoEffect(existing: string): string {
   return `${prefix}, with max_in_flight ${JSON.stringify(value)}. Set it to 0 by hand to pause Dispatch.`;
 }
 
+/** Whether the Kit config's text sets max_in_flight to 0. */
+export function pausesDispatch(text: string): boolean {
+  return (jsonObject(text)?.["max_in_flight"] ?? DEFAULT_KIT_CONFIG.maxInFlight) === 0;
+}
+
 /** The starter Kit config with `max_in_flight` set to 0, every other byte kept. */
 function pausedStarter(starter: string): string {
   const member = /("max_in_flight"\s*:\s*)\d+/;
   if (!member.test(starter)) throw new Error("The starter Kit config has no max_in_flight to pause.");
   return starter.replace(member, (_, key: string) => `${key}0`);
-}
-
-/**
- * The Kit config with its `ui` and `preview` blocks as the Visual evidence
- * step's answers spell them, or null when it already holds them or the
- * answers are ones the Kit config would refuse. The file is the Operator's:
- * a block it lacks is added before its closing brace, every other byte kept,
- * and only when a block it has must change is the whole file rewritten.
- */
-function withVisualEvidence(text: string, answers: VisualEvidenceAnswers, notes: string[]): string | null {
-  const blocks = {
-    ui: {
-      paths: answers.paths,
-      serve: answers.serve,
-      url: answers.url,
-      before_url: answers.beforeUrl ?? null,
-      default_routes: answers.defaultRoutes ?? [],
-    },
-    preview: { url: answers.previewUrl ?? null },
-  };
-  const checked = resolveKitConfig({ config: JSON.stringify(blocks) });
-  if (!checked.ok) {
-    notes.push(
-      `The Visual evidence answers weren't written to ${KIT_CONFIG_PATH}, because the Kit config would refuse them: ${checked.errors.join("; ")}. Run setup again with them fixed.`,
-    );
-    return null;
-  }
-  const config = jsonObject(text);
-  if (config === null) {
-    notes.push(`${KIT_CONFIG_PATH} isn't a JSON object, so the Visual evidence answers weren't written to it: fix it and run setup again.`);
-    return null;
-  }
-  const entries = Object.entries(blocks);
-  const changes = entries.some(([key, value]) => Object.hasOwn(config, key) && JSON.stringify(config[key]) !== JSON.stringify(value));
-  if (changes) {
-    const layout = layoutOf(text);
-    return `${printJson({ ...config, ...blocks }, layout)}${layout.eol}`;
-  }
-  const absent = entries.filter(([key]) => !Object.hasOwn(config, key));
-  return absent.length === 0 ? null : withMembers(text, absent);
-}
-
-/**
- * A JSON object's text with these members added before its closing brace,
- * indented as its own members are, and every byte of it kept as it was.
- */
-function withMembers(text: string, members: readonly (readonly [string, unknown])[]): string {
-  const layout = layoutOf(text);
-  const { eol } = layout;
-  // Everything up to the end of its last member, then the closing brace with whatever whitespace is around it.
-  const head = text.slice(0, text.lastIndexOf("}")).trimEnd();
-  const tail = text.slice(head.length);
-  return `${head}${head.endsWith("{") ? "" : ","}${eol}${printMembers(members, layout, 1)}${tail.startsWith(eol) ? "" : eol}${tail}`;
 }
 
 function jsonObject(text: string): Record<string, unknown> | null {
@@ -330,50 +299,112 @@ function jsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
+/** The `Fabrik` vault item the wizard saves the first Subscription's token in. */
+export const CLAUDE_TOKEN_ITEM = "Claude token";
 /** The `Fabrik` vault item the wizard saves the second Subscription's token in. */
 export const SECOND_SUBSCRIPTION = "Claude token 2";
+
+/** Why setup writes a Kit config whose only change is the second Subscription listed. */
+const LIST_SECOND_SUBSCRIPTION = `list the second Subscription, "${SECOND_SUBSCRIPTION}", in subscriptions`;
 
 /** The wizard's stage for the steps of a second Subscription only the Operator can take. */
 const SECOND_SUBSCRIPTION_STAGE = 'the wizard\'s "A second Subscription" stage';
 
+/** The wizard's stage for each Subscription's item it stores in the `Fabrik` vault. It stores no other Subscription's token. */
+const SUBSCRIPTION_STAGES: ReadonlyMap<string, string> = new Map([
+  [CLAUDE_TOKEN_ITEM, 'the wizard\'s "The Claude token" stage'],
+  [SECOND_SUBSCRIPTION, SECOND_SUBSCRIPTION_STAGE],
+]);
+
 /**
- * The Subscriptions the Kit config lists, read from its raw JSON: one setup
- * plans to add is a list the reader may not take yet, and still counts as listed.
+ * The Subscriptions the Kit config's text lists, read from its raw JSON: one
+ * setup plans to add is a list the reader may not take yet, and still counts as
+ * listed. Null when it isn't a JSON object or its list isn't a non-empty one
+ * of names: protection() already tells the Operator the Kit config is invalid.
  */
-function listedSubscriptions(state: ProductState, kit: SetupKit): readonly string[] {
-  try {
-    const raw = JSON.parse(state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig) as { subscriptions?: unknown };
-    const listed = raw.subscriptions;
-    if (Array.isArray(listed) && listed.every((name) => typeof name === "string")) return listed;
-  } catch {
-    // protection() already tells the Operator the Kit config is invalid.
-  }
-  return DEFAULT_KIT_CONFIG.subscriptions;
+export function listedSubscriptions(text: string): readonly string[] | null {
+  const config = jsonObject(text);
+  if (config === null) return null;
+  const listed = config["subscriptions"] === undefined ? DEFAULT_KIT_CONFIG.subscriptions : config["subscriptions"];
+  return Array.isArray(listed) && listed.length > 0 && listed.every((name) => typeof name === "string") ? listed : null;
 }
 
 /**
- * A second Subscription (Spec #152): every step is the Operator's, so it's
- * planned as notes. The agent and implement accounts already read the whole
- * `Fabrik` vault, so it needs no new service account, and the Kit config is
- * the Product's, so setup never edits its list.
+ * The Subscriptions whose tokens the Kit reads, from the Kit config's text:
+ * the ones it lists. A repo with none gets the starter, which lists the
+ * default, the Claude token alone, and a list setup can't read counts as the
+ * default too.
  */
-function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers): string[] {
-  const listed = listedSubscriptions(state, kit);
+export function subscriptionsTheKitReads(text: string | null): readonly string[] {
+  return (text === null ? null : listedSubscriptions(text)) ?? DEFAULT_KIT_CONFIG.subscriptions;
+}
+
+/**
+ * Each listed Subscription the vault lacks, and a second Subscription (Spec
+ * #152): its account and token are the Operator's to make, in the wizard, so
+ * they're planned as notes. Once the token is in the vault, kitConfig() lists
+ * it. The agent and implement accounts already read the whole `Fabrik` vault,
+ * so it needs no new service account.
+ */
+function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers, { wizardNext = false }: PlanContext): string[] {
+  const read = listedSubscriptions(state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig);
+  const listed = read ?? DEFAULT_KIT_CONFIG.subscriptions;
   const stored = new Set(state.fabrikItems);
-  if (listed.length > 1) {
-    return listed
-      .filter((name) => !stored.has(name))
-      .map(
-        (name) =>
-          `${KIT_CONFIG_PATH} lists ${JSON.stringify(name)} in subscriptions, but the "${FABRIK_VAULT}" vault has no item of that name: walk ${SECOND_SUBSCRIPTION_STAGE}, then run setup again.`,
-      );
+  // Once the setup PR is merged, setup's command is the way to the wizard, which it walks while 1Password lacks the token.
+  const command = setupCommand(kit.release);
+  // The Kit reads each listed one. The default, the Claude token alone, is the install's own, whose token the merge rule names.
+  const isDefault = listed.length === 1 && listed[0] === CLAUDE_TOKEN_ITEM;
+  const lacking = (isDefault ? [] : listed.filter((name) => !stored.has(name))).map(
+    (name) =>
+      `${KIT_CONFIG_PATH} lists ${JSON.stringify(name)} in subscriptions, but the "${FABRIK_VAULT}" vault has no item of that name: ${toStore(name, wizardNext, command)}`,
+  );
+  if (answers.secondSubscription !== true || !takesSecondSubscription(listed)) return lacking;
+  if (stored.has(SECOND_SUBSCRIPTION)) {
+    if (read !== null) return lacking;
+    return [
+      `${KIT_CONFIG_PATH} isn't a JSON object whose subscriptions is a list of names, so setup didn't list "${SECOND_SUBSCRIPTION}" in it: fix it, then run setup again.`,
+    ];
   }
-  if (answers.secondSubscription !== true) return [];
-  const list = `"subscriptions": ${JSON.stringify([...listed, SECOND_SUBSCRIPTION]).replaceAll(",", ", ")} in ${KIT_CONFIG_PATH}`;
-  if (stored.has(SECOND_SUBSCRIPTION)) return [`List the second Subscription in the Kit config: ${list}.`];
+  const listing = wizardNext
+    ? `Setup then lists it in subscriptions in ${KIT_CONFIG_PATH}, in the setup PR.`
+    : `Running setup again walks it, then lists it in subscriptions in ${KIT_CONFIG_PATH}: ${command}`;
   return [
-    `Walk ${SECOND_SUBSCRIPTION_STAGE}: create a second Claude account, run \`claude setup-token\` on it, save the token as the "${SECOND_SUBSCRIPTION}" API Credential, with its expiry date, in the "${FABRIK_VAULT}" vault, and turn usage credits off on every account. Then list it: ${list}.`,
+    ...lacking,
+    `Walk ${SECOND_SUBSCRIPTION_STAGE}: create a second Claude account, run \`claude setup-token\` on it, save the token as the "${SECOND_SUBSCRIPTION}" API Credential, with its expiry date, in the "${FABRIK_VAULT}" vault, and turn usage credits off on every account. ${listing}`,
   ];
+}
+
+/** How the Operator stores a listed Subscription's token: in the wizard's stage for it, or by hand under a name no stage stores. */
+function toStore(name: string, wizardNext: boolean, command: string): string {
+  const stage = SUBSCRIPTION_STAGES.get(name);
+  if (stage === undefined) {
+    const items = [...SUBSCRIPTION_STAGES.keys()].map((item) => JSON.stringify(item)).join(" and ");
+    return `run \`claude setup-token\` on that Subscription's Claude account and save the token as the ${JSON.stringify(name)} API Credential, with its expiry date, in the "${FABRIK_VAULT}" vault yourself, since the wizard stores only ${items}.`;
+  }
+  return wizardNext ? `walk ${stage} for it.` : `run setup again to walk ${stage} for it: ${command}`;
+}
+
+/**
+ * The Kit config's text with the second Subscription listed after the one it
+ * lists, every other byte kept, or null when there's nothing to write: the
+ * Operator didn't say yes, its token isn't in the vault yet, or the list
+ * doesn't take it.
+ */
+function withSecondSubscription(text: string, state: ProductState, answers: SetupAnswers): string | null {
+  if (answers.secondSubscription !== true || !state.fabrikItems.includes(SECOND_SUBSCRIPTION)) return null;
+  const listed = listedSubscriptions(text);
+  if (listed === null || !takesSecondSubscription(listed)) return null;
+  return withMember(text, ["subscriptions"], [...listed, SECOND_SUBSCRIPTION]);
+}
+
+/**
+ * Whether setup lists the second Subscription after these, on the Operator's
+ * yes once its token is stored: a list of one that doesn't name it already. A
+ * list of two or more is a rotation the Operator wrote, or setup on an earlier
+ * yes, which setup leaves as it is.
+ */
+export function takesSecondSubscription(listed: readonly string[]): boolean {
+  return listed.length === 1 && !listed.includes(SECOND_SUBSCRIPTION);
 }
 
 /**
@@ -381,7 +412,7 @@ function subscriptions(state: ProductState, kit: SetupKit, answers: SetupAnswers
  * exists with the Fabrik App installed on it (the wizard's stage).
  */
 /** Whether GitHub's schedule `timezone:` takes it: an IANA name the runtime's time zone data knows. */
-function isTimeZone(name: string): boolean {
+export function isTimeZone(name: string): boolean {
   if (!/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(name)) return false;
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: name });
@@ -513,7 +544,7 @@ function mergeGate(state: ProductState): SetupAction[] {
   return [{ kind: "restrict-default-branch", rulesetId: current?.id ?? null }];
 }
 
-/** The vault every repo's agent and implement accounts read: the shared Claude token. */
+/** The vault every repo's agent and implement accounts read: the Claude token every Product repo in this 1Password account shares. */
 export const FABRIK_VAULT = "Fabrik";
 /** The vault only push accounts read: the Fabrik App's client ID and private key. */
 export const FABRIK_APP_VAULT = "Fabrik App";
@@ -546,7 +577,7 @@ function secrets(state: ProductState): SetupAction[] {
   return actions;
 }
 
-/** How the setup skill creates each label the Loop reads or writes, so no run fails on a missing one. */
+/** How Setup creates each label the Loop reads or writes, so no run fails on a missing one. */
 const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly description: string }>> = {
   [NEEDS_TRIAGE]: { color: "fbca04", description: "Fabrik: waiting for Triage" },
   [NEEDS_INFO]: { color: "d876e3", description: "Fabrik: waiting on the reporter for more information" },
@@ -568,6 +599,7 @@ const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly
   [RETRO_LABEL]: { color: "c5def5", description: "Fabrik: the week's Retro, proposing changes to how the factory works" },
   [REPLAY_LABEL]: { color: "c5def5", description: "Fabrik: the Operator's Replay, re-running merged Tickets with one thing changed" },
   [MONITOR_LABEL]: { color: "e99695", description: "Fabrik: filed by the Monitor for a production error or a red main" },
+  [STEP_UP_LABEL]: { color: "f9d0c4", description: "Fabrik: while it's on, the Ticket's Implement runs are Step-ups" },
   [MAP_LABEL]: { color: "bfd4f2", description: "Fabrik: a Map charting a foggy destination through its Decisions" },
   [decisionLabel("research")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by research" },
   [decisionLabel("prototype")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a prototype" },

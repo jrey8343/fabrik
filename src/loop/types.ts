@@ -174,9 +174,10 @@ export type LoopEvent =
         readonly pullRequest: number;
         readonly headSha: string;
         readonly runUrl: string;
-        /** Whether the run was the Operator's Request changes rather than a retry. */
-        readonly requestChanges?: boolean;
-        /** For a Request-changes run: the review it was started for, from the Kit job's plan (#341). */
+        /**
+         * For a Request-changes run, rather than a retry: the Operator's review
+         * it was started for, which its answers are about (#369).
+         */
         readonly review?: number;
         /** For a Retry: its number, from the Kit job's plan, so a Retry left over from an earlier flaw never lands (#341). */
         readonly retry?: number;
@@ -539,6 +540,18 @@ export interface ParentIssueSnapshot {
   readonly labels: readonly string[];
 }
 
+/**
+ * Why an Implement run is on the Step-up model: the second Retry, a Ticket
+ * marked for a Stepped-up start (ADR-0014), the Operator's Request changes,
+ * or a conflict-only run (#304). In the order the Weekly summary lists them.
+ */
+export const STEP_UP_REASONS = ["retry", "marked", "request-changes", "conflict-only"] as const;
+export type StepUpReason = (typeof STEP_UP_REASONS)[number];
+
+export function isStepUpReason(value: unknown): value is StepUpReason {
+  return (STEP_UP_REASONS as readonly unknown[]).includes(value);
+}
+
 /** A pull request as the core sees it. */
 export interface PullRequestSnapshot {
   readonly number: number;
@@ -546,6 +559,12 @@ export interface PullRequestSnapshot {
   readonly isAgent: boolean;
   /** The Ticket its agent branch was cut for, or null if it isn't on one. */
   readonly ticket: number | null;
+  /**
+   * That Ticket's labels as this snapshot read them, through the PR's closing
+   * link to it, or none when there's no Ticket or the PR doesn't link it. Its
+   * Verdict reads them to say whether the Retry it starts Steps up (ADR-0014).
+   */
+  readonly ticketLabels: readonly string[];
   readonly open: boolean;
   readonly draft: boolean;
   /** Its head commit now. */
@@ -1061,7 +1080,7 @@ export type Action =
       readonly line: readonly (string | PostedComment)[];
     }
   | { readonly kind: "assign"; readonly issue: number; readonly assignee: string }
-  | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" | "completed" }
+  | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" | "completed" | "duplicate" }
   | {
       readonly kind: "open-issue";
       readonly title: string;
@@ -1083,11 +1102,16 @@ export type Action =
        * PR's branch onto. It isn't a retry or a Request-changes run.
        */
       readonly conflict?: { readonly main: string };
-      /** For an Implement run that is a Retry: its Retry number, and whether it Steps up. */
+      /** For an Implement run that is a Retry: its Retry number. */
       readonly retry?: number;
       /** For a Retry on an agent PR: the head the Execution flaw it fixes was given on (#341). */
       readonly retryFlaw?: string;
+      /**
+       * For an Implement run: whether it runs on the Step-up model, and why. A
+       * first run that doesn't Step up carries neither.
+       */
       readonly stepUp?: boolean;
+      readonly stepUpReason?: StepUpReason | null;
       /** For an Auditor run: the pending Audit's marked commit, which its job checks out and reads up to. */
       readonly commit?: string;
       /**

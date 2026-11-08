@@ -9,6 +9,7 @@
 // Replay's markers, which only the Replay module reads and writes, live
 // beside its rules (src/kit/replay.ts).
 import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
+import type { RequestChangesAnswers } from "./implementOutput.ts";
 import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
@@ -31,6 +32,46 @@ export function verdictMarker(record: VerdictRecord): string {
 
 /** The first line of the Kit's note on a PR that a Request-changes run pushed to it. */
 export const REQUEST_CHANGES_RUN_MARKER = "<!-- fabrik:request-changes-run -->";
+
+/** What a Request-changes run answered about the review it was started for (#369), as its marker records it. */
+export interface RecordedAnswers extends RequestChangesAnswers {
+  /** The Request changes review the run was started for, and answers for alone. */
+  readonly review: number;
+}
+
+/**
+ * The second line of a Request-changes run's outcome comment (#369), its push
+ * note or its empty-diff Verdict, right under that comment's own marker:
+ * the run's two answers about the review it was started for. Only the Kit
+ * writes that line, so agent text further down can't fake it.
+ */
+const REQUEST_CHANGES_ANSWERS_MARKER = /^<!-- fabrik:request-changes-answers (\{.*?\}) -->$/;
+
+/** The answers marker line for a Request-changes run's answers about its review, which requestChangesAnswersIn reads back. */
+export function requestChangesAnswersMarker({ review, reviewMiss, amendsTicket }: RecordedAnswers): string {
+  return `<!-- fabrik:request-changes-answers ${markerJson({ review, reviewMiss, amendsTicket })} -->`;
+}
+
+/**
+ * A Request-changes run's two answers about the review it was started for,
+ * read from the second line of the Kit's comment holding them, or null when
+ * that line holds none: every comment from before the answers, and every
+ * other comment. Only a bot's comment should be passed in.
+ */
+export function requestChangesAnswersIn(body: string): RecordedAnswers | null {
+  const json = REQUEST_CHANGES_ANSWERS_MARKER.exec(body.split("\n", 2)[1] ?? "")?.[1];
+  if (json === undefined) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const { review, reviewMiss, amendsTicket } = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(review) || (review as number) <= 0 || typeof reviewMiss !== "boolean" || typeof amendsTicket !== "boolean") return null;
+  return { review: review as number, reviewMiss, amendsTicket };
+}
 
 /**
  * The first line of the Kit's note on a PR that a conflict-only run pushed to

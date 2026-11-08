@@ -341,7 +341,7 @@ function replyOnNeedsInfo(
 
 /** Triage's sorting lands as its comment, then needs-triage swapped for a category and a state. */
 function applyTriage(issueNumber: number, text: string, issue: IssueSnapshot, operator: string): Plan {
-  const parsed = parseTriageOutput(text);
+  const parsed = parseTriageOutput(text, issueNumber);
   if (!parsed.ok) {
     return {
       kind: "fail",
@@ -371,7 +371,7 @@ function applyTriage(issueNumber: number, text: string, issue: IssueSnapshot, op
  * What each Triage state does beyond its labels and comment, so the issue has a
  * clear next step. needs-design and needs-info need nothing more.
  */
-function outcome(issueNumber: number, { state }: TriageOutput, operator: string): Action[] {
+function outcome(issueNumber: number, { state, duplicateOf }: TriageOutput, operator: string): Action[] {
   switch (state) {
     // The Fast path made a Ticket ready, so see whether it can start.
     case READY_FOR_AGENT:
@@ -379,8 +379,9 @@ function outcome(issueNumber: number, { state }: TriageOutput, operator: string)
     // The assignment is ready-for-human's one notification.
     case READY_FOR_HUMAN:
       return [{ kind: "assign", issue: issueNumber, assignee: operator }];
+    // A duplicate closes as GitHub's own duplicate, the original named in the comment (#363).
     case WONTFIX:
-      return [{ kind: "close", issue: issueNumber, reason: "not_planned" }];
+      return [{ kind: "close", issue: issueNumber, reason: duplicateOf === null ? "not_planned" : "duplicate" }];
     default:
       return [];
   }
@@ -390,9 +391,10 @@ function outcome(issueNumber: number, { state }: TriageOutput, operator: string)
  * Triage's comment: addressed to the author on needs-info, and followed on the
  * Fast path by the agent brief the Implementer works to.
  */
-function triageComment({ state, comment, brief }: TriageOutput, author: string): string {
+function triageComment({ state, comment, brief, duplicateOf }: TriageOutput, author: string): string {
   // needs-info's one notification: the question reaches its author by @-mention.
   if (state === NEEDS_INFO) return `@${author}\n\n${comment}`;
+  if (duplicateOf !== null) return `${comment}\n\nClosing as a duplicate of #${duplicateOf}.`;
   if (brief === null) return comment;
   return [
     comment,

@@ -5,15 +5,32 @@
 // flight, no other head gets a Verdict, so each flaw starts exactly one
 // Implementer attempt (ADR-0006).
 import { whyNotReviewable } from "./agentPullRequest.ts";
-import { DISPATCH_LABEL } from "./labels.ts";
-import type { Action, KitConfig, PullRequestSnapshot, VerdictRecord } from "./types.ts";
+import { DISPATCH_LABEL, STEP_UP_LABEL } from "./labels.ts";
+import type { Action, KitConfig, PullRequestSnapshot, StepUpReason, VerdictRecord } from "./types.ts";
 
 /** Execution-flaw retries a Ticket gets before the next flaw counts as a Design flaw. */
 export const MAX_RETRIES = 2;
 
 /** Whether this retry Steps up: the last one does, while the first run and earlier retries use the Implementer's model. */
-export function stepsUp(retry: number): boolean {
+function stepsUp(retry: number): boolean {
   return retry >= MAX_RETRIES;
+}
+
+/**
+ * Why a first run or a Retry on a Ticket with these labels Steps up, or null
+ * when it runs on the Implementer's model. The label is read as the run
+ * starts, so adding it mid-chain steps up the next run and removing it drops
+ * back (ADR-0014). On a marked Ticket the second Retry says `marked`.
+ */
+export function stepUpReasonFor(retry: number, ticketLabels: readonly string[]): Extract<StepUpReason, "retry" | "marked"> | null {
+  if (ticketLabels.includes(STEP_UP_LABEL)) return "marked";
+  return stepsUp(retry) ? "retry" : null;
+}
+
+/** The model and effort an Implement run with this Step-up reason runs on. */
+export function implementSettings(reason: StepUpReason | null, config: KitConfig): KitConfig["roles"]["stepUp"] {
+  const { implement, stepUp } = config.roles;
+  return reason === null ? { model: implement.model, effort: implement.effort } : stepUp;
 }
 
 /**
@@ -40,7 +57,7 @@ export function retryAfterFlaw(pullRequest: PullRequestSnapshot): { readonly lin
   const retry = retryNumber(pullRequest.verdicts);
   if (retry > MAX_RETRIES || pullRequest.ticket === null) return null;
   return {
-    line: `Retry ${retry} of ${MAX_RETRIES} starts now${stepsUp(retry) ? ", stepped up" : ""}: the Implementer fixes these findings on the same branch.`,
+    line: `Retry ${retry} of ${MAX_RETRIES} starts now${stepUpReasonFor(retry, pullRequest.ticketLabels) === null ? "" : ", stepped up"}: the Implementer fixes these findings on the same branch.`,
     // A fresh agent:implement on the Ticket resumes the PR's Implement run (src/loop/implement.ts). It notifies nobody.
     actions: [{ kind: "add-labels", issue: pullRequest.ticket, labels: [DISPATCH_LABEL] }],
   };
@@ -106,16 +123,23 @@ export function whyAwaitingRun(pullRequest: PullRequestSnapshot): string | null 
  * The retry an agent draft PR is owed: the one in flight, on whatever head the
  * PR is at now, the Operator's pushes included; otherwise null. The first
  * retry runs on the Implementer's model and the second Steps up, for this PR
- * only. An Infrastructure failure posts no Verdict, so resuming after one runs
- * the same retry again and uses none up.
+ * only, and every one Steps up while its Ticket carries fabrik:step-up. An
+ * Infrastructure failure posts no Verdict, so resuming after one runs the
+ * same retry again and uses none up.
  */
-export function owedRetry(pullRequest: PullRequestSnapshot, config: KitConfig): Extract<Action, { kind: "start-agent-run" }> | null {
+export function owedRetry(
+  pullRequest: PullRequestSnapshot,
+  ticketLabels: readonly string[],
+  config: KitConfig,
+): Extract<Action, { kind: "start-agent-run" }> | null {
   if (whyNotReviewable(pullRequest) !== null || pullRequest.ticket === null) return null;
   const run = runInFlight(pullRequest);
   if (run?.kind !== "retry") return null;
-  const { implement, stepUp } = config.roles;
-  // Never a cheaper model, and never a skipped Step-up, whatever the weekly pool says.
-  const { model, effort } = stepsUp(run.retry) ? stepUp : implement;
+  const { implement } = config.roles;
+  // Never a cheaper model, and never a skipped Step-up, whatever the weekly pool says. The one
+  // deliberate exception is the Operator taking fabrik:step-up off the Ticket (ADR-0014).
+  const stepUpReason = stepUpReasonFor(run.retry, ticketLabels);
+  const { model, effort } = implementSettings(stepUpReason, config);
   return {
     kind: "start-agent-run",
     role: "implement",
@@ -126,6 +150,7 @@ export function owedRetry(pullRequest: PullRequestSnapshot, config: KitConfig): 
     timeoutMinutes: implement.timeoutMinutes,
     retry: run.retry,
     retryFlaw: run.flaw,
-    stepUp: stepsUp(run.retry),
+    stepUp: stepUpReason !== null,
+    stepUpReason,
   };
 }

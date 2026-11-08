@@ -12,6 +12,8 @@
 //                          when unset, the role's own from Kit config; the ones it passes go out
 //                          as the step outputs `model` and `effort`, for the run's Run record
 //   CLAUDE_CODE_OAUTH_TOKEN, from the agent service account (ADR-0004)
+// A Triage run also takes FABRIK_RECENT_ISSUES_FILE, the issues the agent-inputs
+// step gathered for it to compare its issue against for a duplicate (#363).
 // An Implement run instead takes the Claude token and its test secrets from
 // FABRIK_SECRETS (src/agent/implement.ts), its parent Spec from FABRIK_SPEC_FILE,
 // and passes its commits out as a git bundle beside agent-result.json. A retry
@@ -73,7 +75,7 @@ import { writeOutputs, writeSummary } from "../kit/stepFiles.ts";
 import { prototypeRole } from "../loop/design.ts";
 import { type DesignTurnOutput, type PrototypeRoundOutput, readDesignTurnOutput, readPrototypeTurnOutput } from "../loop/designOutput.ts";
 import { rotationIsOn } from "../loop/subscriptions.ts";
-import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
+import { IMPLEMENT_OUTPUT_READERS, type ImplementOutput, type ImplementRunKind, readImplementOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
 import { type AuditOutput, readAuditOutput } from "../loop/auditOutput.ts";
 import { readRetroOutput, type RetroOutput } from "../loop/retroOutput.ts";
@@ -86,6 +88,7 @@ import { AGENT_FAILURE_FILE, MissingVerdictError } from "./failure.ts";
 import { bundleAgentBranch, cutBranch, implementInput, setImplementerEnv, setSandboxEnv } from "./implement.ts";
 import { BASE_SHA_ENV, replayImplementInput, replayReviewContext, writeReplayPatch } from "./replay.ts";
 import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
+import { triageContext } from "./triage.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
 import { mapCapContext, prototypeContext, sentBackContext } from "./design.ts";
@@ -158,6 +161,11 @@ interface RoleSpec<T> {
    */
   readonly replay?: ReplayRole;
   /**
+   * Triage compares its issue against the recent issues in
+   * FABRIK_RECENT_ISSUES_FILE, for a duplicate (src/agent/triage.ts).
+   */
+  readonly comparesIssues?: boolean;
+  /**
    * The Auditor reads the Product repo up to its pending Audit's marked
    * commit, with the inputs in FABRIK_AUDIT_FILE; its result names the
    * hot-spot window it was given.
@@ -187,6 +195,7 @@ const ROLE_SPECS = {
   triage: {
     role: "triage",
     output: { schema: schemaOf(readTriageOutput) },
+    comparesIssues: true,
     instructionsNote:
       "The Operator wrote these for this repo. They refine the rules above but never loosen the six Fast-path tests.",
     describe: (issue, output) => `Triage sorted #${issue}: ${output.category}, ${output.state}`,
@@ -321,7 +330,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
 
   // The Implementer builds on its own branch from main, with its test secrets; the Researcher's findings go on the Decision's throwaway branch.
   let branch: BuiltBranch | null = null;
-  let onPullRequest = false;
+  // A Researcher's or any other role's run reads as a first run: its own spec's schema.
+  let kind: ImplementRunKind = "first";
   // The Operator comments a run on an agent PR is given, recorded before the agent runs.
   let given: GivenOperatorComment[] | null = null;
   // The main head a Request-changes run was told to merge in (#341), recorded before the agent runs.
@@ -352,7 +362,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
           });
     branch = input.branch;
     extra.push(...input.parts);
-    onPullRequest = input.onPullRequest;
+    kind = input.kind;
     given = input.operatorComments;
     mergeMain = "mergeMain" in input ? input.mergeMain : null;
   }
@@ -384,6 +394,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...mapCapContext(JSON.parse(await readFile(required("FABRIK_MAP_FILE"), "utf8"))));
     extra.push(...prototypeContext(config, issueNumber));
   }
+  if (spec.comparesIssues === true) extra.push(...(await triageContext(required("FABRIK_RECENT_ISSUES_FILE"))));
   // The hot-spot window an Auditor run was given, which its result passes out for the Audit to name.
   let window: AuditWindow | null = null;
   if (spec.audits === true) {
@@ -425,8 +436,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     "schema" in spec.output
       ? Output.object({
           tag: prompt,
-          // A run on an existing PR owes a fix as well, which its push job checks too.
-          schema: onPullRequest ? schemaOf(readPullRequestRunOutput) : spec.output.schema,
+          // A run on an existing PR owes a fix as well, and a Request-changes run its two answers, which its push job checks too.
+          schema: kind === "first" ? spec.output.schema : schemaOf(IMPLEMENT_OUTPUT_READERS[kind]),
           maxRetries: 1,
         })
       : Output.string({ tag: prompt });

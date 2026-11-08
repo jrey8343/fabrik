@@ -3,6 +3,7 @@
 // Product's own content, so re-running setup puts back only what Fabrik owns.
 // Pure, no I/O.
 import { checkCallerWorkflow } from "../kit/caller.ts";
+import { setupCommand } from "./finish.ts";
 import { layoutOf, printJson } from "./json.ts";
 
 /** What to do with one file: nothing, write this content, or tell the Operator why not. */
@@ -31,7 +32,9 @@ export function callerUpdate(existing: string | null, template: string, release:
   if (order < 0) return { content: fresh };
   if (order > 0) {
     return {
-      note: `${path} pins Fabrik ${pins.release}, a later major release than ${release}: run the setup skill from ${pins.release} instead. The caller workflow was left as it is.`,
+      note:
+        `${path} pins Fabrik ${pins.release}, a later major release than ${release}: run Setup at ${pins.release} instead, ` +
+        `with ${setupCommand(pins.release)}. The caller workflow was left as it is.`,
     };
   }
   const repaired = pinCaller(template, pins.release);

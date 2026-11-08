@@ -1,5 +1,5 @@
 // Every label the Kit reads or writes (docs/agents/triage-labels.md), in one
-// place: the core, the adapter and the setup skill all take them from here.
+// place: the core, the adapter and the setup program all take them from here.
 
 export const NEEDS_TRIAGE = "needs-triage";
 export const NEEDS_INFO = "needs-info";
@@ -61,6 +61,14 @@ export const RETRO_LABEL = "fabrik:retro";
  * Operator files it, not the App.
  */
 export const REPLAY_LABEL = "fabrik:replay";
+
+/**
+ * The mark for a Stepped-up start (ADR-0014): a Design session or the
+ * Operator puts it on a Ticket, and every Implement run that starts while it's
+ * on is a Step-up. It isn't one of KIT_ISSUE_LABELS: a marked Ticket is a
+ * Ticket like any other.
+ */
+export const STEP_UP_LABEL = "fabrik:step-up";
 
 /** Every label that marks an issue as the Kit's own, so Intake leaves it alone and the adapter reads it into the snapshot. */
 export const KIT_ISSUE_LABELS = [
@@ -128,9 +136,10 @@ export type Label =
   | typeof MAP_LABEL
   | DecisionLabel
   | typeof RESEARCH_LABEL
-  | typeof REPLAY_TRIGGER_LABEL;
+  | typeof REPLAY_TRIGGER_LABEL
+  | typeof STEP_UP_LABEL;
 
-/** Every label the Kit uses, so the setup skill can create each one. */
+/** Every label the Kit uses, so Setup can create each one. */
 export const ALL_LABELS: readonly Label[] = [
   ...STATE_LABELS,
   DISPATCH_LABEL,
@@ -141,6 +150,7 @@ export const ALL_LABELS: readonly Label[] = [
   ...CATEGORY_LABELS,
   ...KIT_ISSUE_LABELS,
   MONITOR_LABEL,
+  STEP_UP_LABEL,
   MAP_LABEL,
   ...DECISION_TYPES.map(decisionLabel),
 ];

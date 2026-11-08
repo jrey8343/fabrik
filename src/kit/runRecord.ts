@@ -1,5 +1,5 @@
 // The Run record (ADR-0009): from what the push job knows when an AFK agent
-// run ends, the one schema 4 record of that run, and the paths it and its
+// run ends, the one schema 5 record of that run, and the paths it and its
 // transcript take in the store, or no record when no agent run ended. A judge
 // run, scoring a finished run, gets a record too, in role `score`, from what
 // the score-record job knows when it ends, and so does a Replay arm's
@@ -10,14 +10,15 @@
 // the store is read at the current schema: a schema 1 record, written before
 // runs were given a Subscription, as being on the first listed one, a schema
 // 1 or 2 record, written before prototype turns, as no prototype turn, and a
-// schema 1, 2 or 3 record, written before Replays, as no replay's. Pure, no
-// I/O.
+// schema 1, 2 or 3 record, written before Replays, as no replay's, and a
+// schema 1 to 4 record, written before Step-ups had reasons, with a null
+// reason, or `retry` if it Stepped up. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
 import { infrastructureFailureOf } from "../loop/failures.ts";
 import { firstSubscription } from "../loop/subscriptions.ts";
-import type { AgentRole, InfrastructureFailure, KitConfig, Verdict } from "../loop/types.ts";
+import { type AgentRole, type InfrastructureFailure, isStepUpReason, type KitConfig, type StepUpReason, type Verdict } from "../loop/types.ts";
 import { parseVerdict } from "../loop/verdict.ts";
 import { isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RETRO_EVIDENCE_JOB, routedJob } from "./pushJob.ts";
 
@@ -73,8 +74,8 @@ export interface RateLimitReading {
 /** A record's role: the agent role that ran, or `score` for a judge run scoring a finished run. */
 export type RunRecordRole = AgentRole | "score";
 
-/** The schema a Run record is written at: 2 added `subscription`, 3 added `prototype`, 4 added `replay`. */
-export const RUN_RECORD_SCHEMA = 4;
+/** The schema a Run record is written at: 2 added `subscription`, 3 added `prototype`, 4 added `replay`, 5 added `stepUpReason`. */
+export const RUN_RECORD_SCHEMA = 5;
 
 /** A Replay's two arms (#156): the baseline, run as the Ticket was built, and the variant, with the one variable changed. */
 export type ReplayArm = "baseline" | "variant";
@@ -119,7 +120,22 @@ export function isLive({ replay }: { readonly replay: ReplayRun | null }): boole
   return replay === null;
 }
 
-/** One AFK agent run, schema 4. */
+/**
+ * A Ticket's first Implement run, the one that cut the branch it merged: the
+ * last of its runs that wasn't a Retry, Request-changes or conflict-only run,
+ * since a first run that failed for its Subscription is run again as a first
+ * run. It is taken by its place in the chain, so a marked Ticket's first run,
+ * a Stepped-up start, counts (ADR-0014). Any other Step-up isn't one: a record
+ * from before Step-ups had reasons reads as a Retry's.
+ */
+export function firstRunOf(implementRuns: readonly RunRecord[]): RunRecord | undefined {
+  const first = implementRuns.filter(
+    (record) => record.retry === 0 && !record.requestChanges && (record.stepUpReason === null || record.stepUpReason === "marked"),
+  );
+  return first.toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt)).at(-1);
+}
+
+/** One AFK agent run, schema 5. */
 export interface RunRecord {
   readonly schema: typeof RUN_RECORD_SCHEMA;
   readonly kitSha: string;
@@ -144,7 +160,14 @@ export interface RunRecord {
   readonly subscription: string;
   /** 0 for a first Implement run (and every other role), else its Retry number. */
   readonly retry: number;
+  /** Whether the run used the Step-up model. */
   readonly stepUp: boolean;
+  /**
+   * Why it Stepped up, exactly when it did (ADR-0014). A schema 1 to 4
+   * record, written before Step-ups had reasons, reads as `retry` if it
+   * Stepped up, else null.
+   */
+  readonly stepUpReason: StepUpReason | null;
   readonly requestChanges: boolean;
   /** Whether the run was a Design session's prototype turn (#155), whose role stays `design`. */
   readonly prototype: boolean;
@@ -243,7 +266,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     ...whatRan(agent, kit, end.roles[role]),
     subscription: nonEmpty(kit["subscription"]) ?? firstSubscription({ subscriptions: end.subscriptions }),
     retry: implement ? (countOf(kit["retry"]) ?? 0) : 0,
-    stepUp: implement && kit["step-up"] === "true",
+    ...stepUpOf(implement ? kit : {}),
     requestChanges: implement && kit["request-changes"] === "true",
     prototype: isPrototypeTurn(end.needs, role),
     replay: null,
@@ -296,6 +319,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     subscription: scored.subscription,
     retry: 0,
     stepUp: false,
+    stepUpReason: null,
     requestChanges: false,
     prototype: false,
     // A Replay arm's judge run is the arm's too, so its cost counts as the Replay's.
@@ -361,6 +385,7 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     subscription: end.subscription,
     retry: 0,
     stepUp: false,
+    stepUpReason: null,
     requestChanges: false,
     prototype: false,
     replay,
@@ -370,6 +395,13 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     verdict: role === "review" ? verdictOf(end.agentResult) : null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
+}
+
+/** Whether an Implement run Stepped up, and why, from the Kit job's outputs; never a reason without a Step-up. */
+function stepUpOf(kit: Readonly<Record<string, string>>): Pick<RunRecord, "stepUp" | "stepUpReason"> {
+  if (kit["step-up"] !== "true") return { stepUp: false, stepUpReason: null };
+  const reason = kit["step-up-reason"];
+  return { stepUp: true, stepUpReason: isStepUpReason(reason) ? reason : null };
 }
 
 /** The fields a run's own stream gives its record, whatever its role. */
@@ -420,20 +452,24 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
  * A Run record as read back from the store, at the current schema: a schema 1
  * record, which names no Subscription, is read as being on the first listed
  * one, a schema 1 or 2 record, written before there were prototype turns, as
- * no prototype turn, and a schema 1, 2 or 3 record, written before there were
- * Replays, as no replay's. Null for anything that isn't a record of a schema
- * the Kit knows.
+ * no prototype turn, a schema 1, 2 or 3 record, written before there were
+ * Replays, as no replay's, and a schema 1 to 4 record, written before Step-ups
+ * had reasons, with a null reason, or `retry` if it Stepped up: until then
+ * only the second Retry recorded a Step-up. Null for anything that isn't a
+ * record of a schema the Kit knows.
  */
 export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
   if (typeof stored !== "object" || stored === null) return null;
   const { schema } = stored as { schema?: unknown };
   if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
-  const current: Pick<RunRecord, "schema" | "replay"> = { schema: RUN_RECORD_SCHEMA, replay: null };
-  if (schema === 3) return { ...(stored as Omit<RunRecord, "schema" | "replay">), ...current };
-  if (schema === 2) return { ...(stored as Omit<RunRecord, "schema" | "prototype" | "replay">), ...current, prototype: false };
+  type Schema4 = Omit<RunRecord, "schema" | "stepUpReason">;
+  const record = (fields: Schema4): RunRecord => ({ ...fields, schema: RUN_RECORD_SCHEMA, stepUpReason: fields.stepUp ? "retry" : null });
+  if (schema === 4) return record(stored as Schema4);
+  if (schema === 3) return record({ ...(stored as Omit<Schema4, "replay">), replay: null });
+  if (schema === 2) return record({ ...(stored as Omit<Schema4, "prototype" | "replay">), prototype: false, replay: null });
   if (schema === 1) {
-    const record = stored as Omit<RunRecord, "schema" | "subscription" | "prototype" | "replay">;
-    return { ...record, ...current, subscription: firstSubscription({ subscriptions }), prototype: false };
+    const older = stored as Omit<Schema4, "subscription" | "prototype" | "replay">;
+    return record({ ...older, subscription: firstSubscription({ subscriptions }), prototype: false, replay: null });
   }
   return null;
 }

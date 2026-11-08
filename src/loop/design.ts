@@ -5,6 +5,7 @@ import type { SentBack } from "./backToDesign.ts";
 import { withCarriedLines } from "./carriedLines.ts";
 import { consideredSection } from "./considered.ts";
 import {
+  type DesignAgentBrief,
   dependencyOrder,
   parseDesignTurnOutput,
   type DesignTurnOutput,
@@ -21,6 +22,7 @@ import {
   NEEDS_DESIGN,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
+  STEP_UP_LABEL,
   WONTFIX,
 } from "./labels.ts";
 import {
@@ -556,7 +558,11 @@ function ticketActions(
                 labels: readyLabels(superseded, READY_FOR_HUMAN),
                 assignees: [operator],
               }
-            : { body: withoutMentions(ticket.body), labels: readyLabels(superseded) }),
+            : {
+                body: withoutMentions(ticket.body),
+                // A Ticket the session marks for a Stepped-up start runs on the Step-up model (ADR-0014).
+                labels: ticket.stepUp === true ? [...readyLabels(superseded), STEP_UP_LABEL] : readyLabels(superseded),
+              }),
           parent,
           blockedBy: ticket.blockedBy.length === 0 ? superseded.openBlockers : ticket.blockedBy.map(ticketIssue),
         }),
@@ -597,7 +603,7 @@ function commaList(issues: readonly CreatedIssue[]): (string | CreatedIssue)[] {
 }
 
 /** The small outcome: the issue becomes its own agent brief, ready for an Implementer. */
-function rewriteAsBrief(issueNumber: number, comment: string, brief: AgentBrief, issue: IssueSnapshot): Action[] {
+function rewriteAsBrief(issueNumber: number, comment: string, brief: DesignAgentBrief, issue: IssueSnapshot): Action[] {
   return [
     { kind: "edit-issue-body", issue: issueNumber, body: rewrittenBody(briefBody(brief), issue) },
     {
@@ -610,7 +616,11 @@ function rewriteAsBrief(issueNumber: number, comment: string, brief: AgentBrief,
       ].join("\n"),
     },
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
-    { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] },
+    // The session sets or clears the Stepped-up start as it rewrites the Ticket (ADR-0014); left out, the mark stays as it is.
+    ...(brief.stepUp === false && issue.labels.includes(STEP_UP_LABEL)
+      ? [{ kind: "remove-label", issue: issueNumber, label: STEP_UP_LABEL } as const]
+      : []),
+    { kind: "add-labels", issue: issueNumber, labels: brief.stepUp === true ? [READY_FOR_AGENT, STEP_UP_LABEL] : [READY_FOR_AGENT] },
   ];
 }
 

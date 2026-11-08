@@ -119,8 +119,12 @@ The rule that gives a new issue `needs-triage`, unless a skill made it or it alr
 _Avoid_: inbox, new-issue hook
 
 **Triage**:
-The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside.
+The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside. An issue it sets aside as a duplicate of one of the Recent issues closes as GitHub's *duplicate*, naming that issue, the original; any other it sets aside closes as *not planned*.
 _Avoid_: sorting
+
+**Recent issues**:
+What Triage compares a new issue against for a duplicate: the 50 most recently created of the open issues and those closed in the last 30 days, the Monitor's included. The issue a duplicate names among them is its **original**.
+_Avoid_: comparison set, candidate list
 
 **Design session**:
 A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets, charts it as a Map when its destination is too foggy for one session, or ends as not planned when the Operator decides it won't be built: the issue gets `wontfix` and closes as not planned.
@@ -207,8 +211,12 @@ A Kit-owned issue telling the Operator to turn usage credits off on a Subscripti
 _Avoid_: overage issue, billing issue
 
 **Step-up**:
-An Implementer run on a stronger model than its role's default, after a failed review or at the Operator's request.
+An Implementer run on a stronger model than its role's default, after a failed review, at the Operator's request, or on a Ticket marked for a Stepped-up start.
 _Avoid_: escalation, upgrade
+
+**Stepped-up start**:
+A Ticket marked, by the Design session that wrote it or by the Operator, so that its Implement runs are Step-ups while the mark stays, from its first run on. Its Retries count as any Ticket's do, with no further Step-up to fall back on.
+_Avoid_: pre-escalation, Opus Ticket, heavy Ticket
 
 **Sandbox**:
 An isolated environment where an Implementer, or a Design session's prototype turn, does its work on a branch, holding no production secrets.
@@ -271,6 +279,10 @@ _Avoid_: intervention, manual fix
 **Architectural escape**:
 An Audit candidate the Operator files as an issue that traces back to merged agent pull requests: structural decay that passed Review. Counted against those pull requests, never against a candidate the Operator set aside.
 _Avoid_: architecture regression, design debt
+
+**Review miss**:
+A point in a Request changes asking for what a pass should already have caught: something the Ticket as it then stood, its Spec or the Product repo's standards required. A point that amends the Ticket, or only asks for a rebase, is none, and unlike an Architectural escape it's caught at the Merge gate, before merge.
+_Avoid_: missed flaw, false pass, escape
 
 **Replay**:
 An experiment the Operator starts that re-runs merged Tickets from their original base commit, once as before and once with one thing changed, to compare the two.

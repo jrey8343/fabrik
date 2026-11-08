@@ -2,9 +2,9 @@
 // agent has ended, and a prototype turn's variants (#155) in the prototype
 // job, after its agent has ended: every decision the capture step makes,
 // behind the Capturer, which does what capture does to the runner. The
-// Playwright shell (src/evidence/capture-main.ts) is the real Capturer, and
-// tests fake it. Pure, no I/O.
-import { slug, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+// Playwright shell (src/evidence/playwrightCapturer.ts, which
+// src/evidence/capture-main.ts runs) is the real Capturer, and tests fake it. Pure, no I/O.
+import { type CaptureIdentity, captureIdentityOf, slug, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import type { PrototypeVariant } from "../loop/designOutput.ts";
 import { parseImplementOutput } from "../loop/implementOutput.ts";
 import { gallery, type GalleryShot, prototypeGallery, type VariantShot } from "./gallery.ts";
@@ -62,6 +62,19 @@ export interface Shot extends ChosenRoute {
   readonly url: string;
   /** A plain file name, unique to this shot. */
   readonly image: string;
+  /** Who the page is viewed as, when it's viewed signed in; absent, it's viewed signed out. */
+  readonly signedIn?: SignedInAs;
+}
+
+/**
+ * A shot or take viewed signed in (ADR-0012): as which Capture identity,
+ * whose storage state its browser loads, and the route that, landed on,
+ * says the session didn't take.
+ */
+export interface SignedInAs {
+  readonly identity: CaptureIdentity;
+  /** `ui.sign_in_path`. */
+  readonly signInPath: string;
 }
 
 /**
@@ -78,7 +91,19 @@ export interface VariantTake {
   /** Plain file names, unique to this take. */
   readonly image: string;
   readonly video: string;
+  /** Who the page is viewed as, when it's viewed signed in; absent, it's viewed signed out. */
+  readonly signedIn?: SignedInAs;
 }
+
+/**
+ * How a Capture identity's sign-in ended: it left a storage state capture
+ * can load, its command failed or ran past its time, or it left no file, or
+ * one that doesn't read as a storage state (isStorageState).
+ */
+export type SignInEnd = "signed-in" | "failed" | "timed-out" | "no-state" | "bad-state";
+
+/** What a signed-in shot or take reports when its page landed on `ui.sign_in_path`, its image thrown away. */
+export const ON_SIGN_IN = "on-sign-in";
 
 /** How a command capture runs to its end ended: it finished, it failed, or it ran past the time it was given. */
 export type Finished = "ok" | "failed" | "timed-out";
@@ -95,14 +120,26 @@ export interface Capturer {
   freePort(url: string): Promise<boolean>;
   /** Starts `ui.serve` in the background and waits for the URL to answer, or the server to exit. */
   serve(command: string, url: string, timeoutMs: number): Promise<"answered" | "exited" | "timed-out">;
-  /** Loads the shot's URL at its viewport and saves its screenshot: the HTTP status the page answered. */
-  screenshot(shot: Shot, timeoutMs: number): Promise<number | "timed-out">;
   /**
-   * Loads the take's URL at its viewport, saves its screenshot, then scrolls
-   * the page down while it records it: the HTTP status the page answered,
-   * and whether its video was saved, which a take can go without.
+   * Runs a Capture identity's `ui.sign_in` command in the Product directory,
+   * with the env `ui.serve` gets and `FABRIK_STORAGE_STATE`, a path outside
+   * the evidence folder to write a storage state to, which every later shot
+   * and take signed in as it loads.
    */
-  recordVariant(take: VariantTake, timeoutMs: number): Promise<{ readonly status: number; readonly video: boolean } | "timed-out">;
+  signIn(identity: CaptureIdentity, command: string, timeoutMs: number): Promise<SignInEnd>;
+  /**
+   * Loads the shot's URL at its viewport, signed in when it says so, and
+   * saves its screenshot: the HTTP status the page answered; or, for a
+   * signed-in shot whose page landed on its sign-in path, ON_SIGN_IN, saving none.
+   */
+  screenshot(shot: Shot, timeoutMs: number): Promise<number | "timed-out" | typeof ON_SIGN_IN>;
+  /**
+   * Loads the take's URL at its viewport, signed in when it says so, saves
+   * its screenshot, then scrolls the page down while it records it: the HTTP
+   * status the page answered, and whether its video was saved, which a take
+   * can go without; or, landing on its sign-in path, ON_SIGN_IN, as a shot does.
+   */
+  recordVariant(take: VariantTake, timeoutMs: number): Promise<{ readonly status: number; readonly video: boolean } | "timed-out" | typeof ON_SIGN_IN>;
   /** Stops everything capture started. */
   stop(): Promise<void>;
   /** Milliseconds, from any fixed point. */
@@ -145,6 +182,9 @@ const CAPTURE_BUDGET_MS = (CAPTURE_TIMEOUT_MINUTES - 2) * 60_000;
 
 /** How long `ui.url` gets to answer once `ui.serve` has started. */
 const SERVER_START_MS = 3 * 60_000;
+
+/** How long each Capture identity's sign-in command gets to run. */
+const SIGN_IN_MS = 3 * 60_000;
 
 /** How long each page gets to load. */
 const PAGE_LOAD_MS = 60_000;
@@ -236,14 +276,16 @@ async function takeShots(
   captures: Capture[],
 ): Promise<CaptureFailure | null> {
   const left = budget(capturer);
-  const serving = await serveBranch(build, ui, capturer, left);
+  const shots = shotsFor(routes, ui);
+  const serving = await serveBranch(build, ui, capturer, left, shots);
   if (serving !== null) return serving;
-  for (const shot of shotsFor(routes, ui)) {
+  for (const shot of shots) {
     if (left() <= 0) return stopped(capturer, "timeout", `before ${shot.url} at ${shot.viewport.name}`);
     const status = await capturer.screenshot(shot, Math.min(PAGE_LOAD_MS, left()));
     if (status === "timed-out") return stopped(capturer, "timeout", `loading ${shot.url} at ${shot.viewport.name}`);
+    if (status === ON_SIGN_IN) return signedOut(capturer, shot);
     const { route, reason, viewport, side, image } = shot;
-    captures.push({ route, reason, viewport: viewport.name, side, status, image });
+    captures.push({ route, reason, viewport: viewport.name, side, status, image, ...identityOf(shot) });
   }
   return null;
 }
@@ -262,24 +304,43 @@ async function takeVariants(
   captures: VariantCapture[],
 ): Promise<CaptureFailure | null> {
   const left = budget(capturer);
-  const serving = await serveBranch(build, ui, capturer, left);
+  const takes = takesFor(route, variants, ui);
+  const serving = await serveBranch(build, ui, capturer, left, takes);
   if (serving !== null) return serving;
-  for (const take of takesFor(route, variants, ui)) {
+  for (const take of takes) {
     if (left() <= 0) return stopped(capturer, "timeout", `before ${take.url} at ${take.viewport.name}`);
     const taken = await capturer.recordVariant(take, Math.min(VARIANT_TAKE_MS, left()));
     if (taken === "timed-out") return stopped(capturer, "timeout", `loading ${take.url} at ${take.viewport.name}`);
+    if (taken === ON_SIGN_IN) return signedOut(capturer, take);
     const { variant, viewport, image, video } = take;
-    captures.push({ route, variant, viewport: viewport.name, status: taken.status, image, ...(taken.video ? { video } : {}) });
+    captures.push({ route, variant, viewport: viewport.name, status: taken.status, image, ...(taken.video ? { video } : {}), ...identityOf(take) });
   }
   return null;
 }
 
+/** A capture's identity, as the capture result records it: none for a page viewed signed out. */
+function identityOf({ signedIn }: Shot | VariantTake): { readonly identity?: CaptureIdentity } {
+  return signedIn === undefined ? {} : { identity: signedIn.identity };
+}
+
+/** Logs that a signed-in page landed on the sign-in path, so its session didn't take, then gives sign-in-failed. */
+function signedOut(capturer: Capturer, { url, viewport, signedIn }: Shot | VariantTake): CaptureFailure {
+  return stopped(capturer, "sign-in-failed", `at ${url} at ${viewport.name}: signed in as ${signedIn?.identity}, it landed on ${signedIn?.signInPath}, so its image was thrown away`);
+}
+
 /**
  * Installs the browser, builds the branch and starts its server at `ui.url`,
- * within what's `left` of capture's budget: null once it answers, else why
- * capture stopped.
+ * then signs in each Capture identity these shots or takes are viewed as,
+ * once each, in the order they're first needed, all within what's `left` of
+ * capture's budget: null once all have signed in, else why capture stopped.
  */
-async function serveBranch(build: string | null, ui: UiConfig, capturer: Capturer, left: () => number): Promise<CaptureFailure | null> {
+async function serveBranch(
+  build: string | null,
+  ui: UiConfig,
+  capturer: Capturer,
+  left: () => number,
+  shots: readonly (Shot | VariantTake)[],
+): Promise<CaptureFailure | null> {
   const installed = await capturer.installBrowser(left());
   if (installed !== "ok") return stopped(capturer, installed === "timed-out" ? "timeout" : "error", "installing the headless browser");
   const built = build === null ? "ok" : await capturer.build(build, left());
@@ -292,7 +353,42 @@ async function serveBranch(build: string | null, ui: UiConfig, capturer: Capture
   // A server cut short by capture's own budget may yet have started: that's capture running out of time.
   if (served === "timed-out" && serverMs < SERVER_START_MS) return stopped(capturer, "timeout", `waiting for ${ui.url} to answer`);
   if (served !== "answered") return stopped(capturer, "server-did-not-start", `waiting for ${ui.url} to answer once \`ui.serve\` ran (it ${served})`);
+  const identities = [...new Set(shots.flatMap(({ signedIn }) => (signedIn === undefined ? [] : [signedIn.identity])))];
+  for (const identity of identities) {
+    const command = ui.signIn?.[identity];
+    if (command === undefined) return stopped(capturer, "error", `signing in as ${identity}, which \`ui.sign_in\` names no command for`);
+    const signInMs = Math.min(SIGN_IN_MS, left());
+    const signed = await capturer.signIn(identity, command, signInMs);
+    // As with the server: a sign-in cut short by capture's own budget is capture running out of time.
+    if (signed === "timed-out" && signInMs < SIGN_IN_MS) return stopped(capturer, "timeout", `signing in as ${identity}`);
+    if (signed !== "signed-in") return stopped(capturer, "sign-in-failed", `signing in as ${identity}: ${SIGN_IN_ENDS[signed]}`);
+  }
   return null;
+}
+
+/** How a sign-in that failed ended, for the log. */
+const SIGN_IN_ENDS: Readonly<Record<Exclude<SignInEnd, "signed-in">, string>> = {
+  failed: "its `ui.sign_in` command failed",
+  "timed-out": `its \`ui.sign_in\` command ran past its ${SIGN_IN_MS / 60_000} minutes`,
+  "no-state": "its `ui.sign_in` command wrote nothing to FABRIK_STORAGE_STATE",
+  "bad-state": "what its `ui.sign_in` command wrote to FABRIK_STORAGE_STATE isn't a storage state: a JSON object with cookies and origins lists",
+};
+
+/**
+ * Whether a sign-in left a storage state capture can load: an object with
+ * `cookies` and `origins` lists, as Playwright writes it, or a Product
+ * writes it by hand.
+ */
+export function isStorageState(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const { cookies, origins } = value as Record<string, unknown>;
+  return Array.isArray(cookies) && Array.isArray(origins);
+}
+
+/** Whether a page that ended at `url` landed on the sign-in path, a trailing / or its query making no difference. */
+export function isOnSignInPath(url: string, signInPath: string): boolean {
+  const path = (at: string) => at.replace(/(?<=.)\/+$/, "");
+  return path(new URL(url).pathname) === path(signInPath);
 }
 
 /** Logs where capture stopped and why, then gives the reason. */
@@ -315,33 +411,45 @@ function recorded(result: CaptureResult<Capture>): CaptureOutcome {
  */
 function takesFor(route: string, variants: readonly string[], ui: UiConfig): VariantTake[] {
   const page = pageAt(ui.url, route);
+  const signedIn = signedInAs(route, ui);
   return variants.flatMap((variant) =>
     UI_VIEWPORTS.map((viewport) => {
       const name = `variant-${variant.toLowerCase()}-${viewport.name}`;
-      return { route, variant, viewport, url: variantPage(page, variant), image: `${name}.png`, video: `${name}.webm` };
+      return { route, variant, viewport, url: variantPage(page, variant), image: `${name}.png`, video: `${name}.webm`, ...signedIn };
     }),
   );
 }
 
+/** Who a route of the branch is viewed as, by Kit config's rules: nothing for a route viewed signed out. */
+function signedInAs(route: string, ui: UiConfig): { readonly signedIn?: SignedInAs } {
+  const identity = captureIdentityOf(route, ui);
+  return identity === null || ui.signInPath === undefined ? {} : { signedIn: { identity, signInPath: ui.signInPath } };
+}
+
 /**
  * Every shot of these routes: After, from the branch served at `ui.url`,
- * then Before, from `ui.before_url` when there is one; each route in the
- * order chosen, at mobile then desktop.
+ * each signed in as its Capture identity when it has one, then Before, from
+ * `ui.before_url` when there is one, of the routes viewed signed out alone,
+ * since no sign-in ever reaches a deployed site (ADR-0012); each route in
+ * the order chosen, at mobile then desktop.
  */
 function shotsFor(routes: readonly ChosenRoute[], ui: UiConfig): Shot[] {
   const sides: [CaptureSide, string][] = [["after", ui.url]];
   if (ui.beforeUrl !== null) sides.push(["before", ui.beforeUrl]);
   return sides.flatMap(([side, base]) =>
-    routes.flatMap(({ route, reason }, at) =>
-      UI_VIEWPORTS.map((viewport) => ({
+    routes.flatMap(({ route, reason }, at) => {
+      const signedIn = signedInAs(route, ui);
+      if (side === "before" && signedIn.signedIn !== undefined) return [];
+      return UI_VIEWPORTS.map((viewport) => ({
         route,
         reason,
         viewport,
         side,
         url: pageAt(base, route),
         image: `${side}-${viewport.name}-${at + 1}-${routeSlug(route)}.png`,
-      })),
-    ),
+        ...(side === "after" ? signedIn : {}),
+      }));
+    }),
   );
 }
 
@@ -444,7 +552,7 @@ function summary(line: string): string {
 const WITHHELD = /^(?:FABRIK_SECRETS|CLAUDE_CODE_OAUTH_TOKEN|GH_TOKEN|GITHUB_TOKEN|ACTIONS_\w*TOKEN\w*)$/;
 
 /**
- * The env `sandbox.build` and `ui.serve` run with: the runner's, with Kit
+ * The env `sandbox.build`, `ui.serve` and `ui.sign_in` run with: the runner's, with Kit
  * config's `sandbox.env` over it, less anything WITHHELD, which no Product
  * code capture runs may hold.
  */

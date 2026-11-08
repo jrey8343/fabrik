@@ -20,7 +20,6 @@ import { FULL_SHA, shortSha } from "../skills/lock.ts";
 import type { KitConfig } from "./config.ts";
 import {
   eligibleOf,
-  firstRunOf,
   type LeftOutTicket,
   type PickedTicket,
   pickWith,
@@ -35,7 +34,7 @@ import {
 } from "./replayPick.ts";
 import { readReplayRequest, readReplayVariable, type ReplayRequest, type ReplayVariable, settingOf, variableLine } from "./replayRequest.ts";
 import { SCORERS } from "./rubrics.ts";
-import { isLive, isReplayArm, REPLAY_ARMS, type ReplayArm, type ReplayRole, replayPatchPath, type RunRecord } from "./runRecord.ts";
+import { firstRunOf, isLive, isReplayArm, REPLAY_ARMS, type ReplayArm, type ReplayRole, replayPatchPath, type RunRecord } from "./runRecord.ts";
 import { storeFileUrl } from "./runStore.ts";
 import type { ScoreFile } from "./scorer.ts";
 
@@ -322,27 +321,30 @@ const EDIT_TO_FIX = "Edit the request in the issue body, and the Kit reads it ag
  */
 function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): { readonly plan: ReplayPlan; readonly ruledOut: readonly LeftOutTicket[] } {
   const { variable } = request;
-  const { picked, leftOut, ruledOut } = pickWith(request, acceptance.candidates, ({ baseSha }) => {
+  const { picked, leftOut, ruledOut } = pickWith(request, acceptance.candidates, (ticket) => {
+    const { baseSha } = ticket;
     const base = acceptance.baseConfigs[baseSha];
     // Never unread: requestStep weighs no request until every base it picks from is read.
     if (base === undefined) return null;
     if (!base.ok) return `its Kit config at ${shortSha(baseSha)} doesn't resolve under this Kit release: ${base.errors.join("; ")}`;
-    const runs = alreadyRuns(base.config, variable);
+    const runs = alreadyRuns(replayArms(base.config, variable, ticket.steppedUp).baseline, variable);
     return runs === null ? null : `its Kit config at ${shortSha(baseSha)} already runs ${runs}, so its two arms would be the same`;
   });
   const tickets = picked.flatMap((ticket) => {
     const base = acceptance.baseConfigs[ticket.baseSha];
-    return base?.ok === true ? [{ ...ticket, arms: replayArms(base.config, variable) }] : [];
+    // The arms carry how its first run ran, so the plan holds no Stepped-up start of its own.
+    const { steppedUp, ...planned } = ticket;
+    return base?.ok === true ? [{ ...planned, arms: replayArms(base.config, variable, steppedUp) }] : [];
   });
   return { plan: { variable, tickets, leftOut }, ruledOut };
 }
 
-/** What the base Kit config already runs as the variable's variant would, in words; null when the variant changes it. */
-function alreadyRuns(base: Pick<KitConfig, "roles">, variable: ReplayVariable): string | null {
+/** What the baseline already runs as the variable's variant would, in words; null when the variant changes it. */
+function alreadyRuns(baseline: ReplayArmSettings, variable: ReplayVariable): string | null {
   // The baseline loads the pinned release's prompts, never a candidate's.
   if (variable.kind === "kit") return null;
   const { setting, value } = settingOf(variable);
-  if (base.roles[variable.role][setting] !== value) return null;
+  if (baseline[variable.role][setting] !== value) return null;
   return `${RUN_NAMES[variable.role]} ${setting === "model" ? "on" : "at effort"} ${value}`;
 }
 
@@ -363,7 +365,7 @@ export interface ReplayPlan {
 }
 
 /** A picked Ticket, with what each of its arms runs it with. */
-export interface PlannedTicket extends PickedTicket {
+export interface PlannedTicket extends Omit<PickedTicket, "steppedUp"> {
   readonly arms: ReplayArms;
 }
 

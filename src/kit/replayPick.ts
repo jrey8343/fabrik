@@ -9,7 +9,7 @@ import { type ChangedPath, checkTrustRoot } from "../guard/trust-root.ts";
 import { spelled } from "../loop/readable.ts";
 import { checkEffort, type KitConfig, refuseFable } from "./config.ts";
 import { checkCandidateKit, type ReplayRequest, type ReplayVariable, settingOf } from "./replayRequest.ts";
-import { isLive, type ReplayArm, type ReplayRole, type RunRecord } from "./runRecord.ts";
+import { firstRunOf, isLive, type ReplayArm, type ReplayRole, type RunRecord } from "./runRecord.ts";
 
 /** A Ticket a Replay might run, with what the pick weighs of it. */
 export interface ReplayCandidate {
@@ -43,6 +43,8 @@ export interface PickedTicket {
   /** Its first Implement run's base, which both arms start from. */
   readonly baseSha: string;
   readonly flags: readonly ReplayFlag[];
+  /** Whether its first Implement run was a Stepped-up start (ADR-0014), so its baseline runs on the Step-up model. */
+  readonly steppedUp: boolean;
 }
 
 /**
@@ -171,20 +173,10 @@ function eligibilityOf(candidate: ReplayCandidate | undefined): Eligible | strin
   if (editedSince(candidate.lastEdited, startOf(first))) flags.push("edited-input");
   if (hiddenTests(merged.files).length === 0) flags.push("no-hidden-tests");
   return {
-    picked: { ticket: candidate.ticket, pullRequest: merged.number, baseSha: first.baseSha, flags },
+    picked: { ticket: candidate.ticket, pullRequest: merged.number, baseSha: first.baseSha, flags, steppedUp: first.stepUp },
     cost: originalRuns.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
     mergedAt: Date.parse(merged.mergedAt),
   };
-}
-
-/**
- * A Ticket's first Implement run, the one that cut the branch it merged: the
- * last of its runs that wasn't a Retry, Step-up or Request-changes run, since
- * a first run that failed for its Subscription is run again as a first run.
- */
-export function firstRunOf(implementRuns: readonly RunRecord[]): RunRecord | undefined {
-  const first = implementRuns.filter((record) => record.retry === 0 && !record.stepUp && !record.requestChanges);
-  return first.toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt)).at(-1);
 }
 
 /** About when a run started, in ms: its end less its agent's duration, or its end when it has none. */
@@ -216,14 +208,16 @@ export type ReplayArms = Readonly<Record<ReplayArm, ReplayArmSettings>>;
 
 /**
  * A picked Ticket's two arms: the baseline, run with the models and efforts
- * its Kit config held at its `baseSha`, and the variant, differing from the
- * baseline only in `variable`. Both arms load the pinned release's prompts
+ * its Kit config held at its `baseSha` (Implement on the Step-up's for a
+ * Stepped-up start), and the variant, differing from the baseline only in
+ * `variable`. Both arms load the pinned release's prompts
  * and Base skills unless the variable is a candidate Kit.
  */
-export function replayArms(base: Pick<KitConfig, "roles">, variable: ReplayVariable): ReplayArms {
-  const { implement, review } = base.roles;
+export function replayArms(base: Pick<KitConfig, "roles">, variable: ReplayVariable, steppedUp = false): ReplayArms {
+  const { implement, review, stepUp } = base.roles;
   const baseline: ReplayArmSettings = {
-    implement: { model: implement.model, effort: implement.effort },
+    // A marked Ticket was built on the Step-up model, so its baseline runs on it. No arm reads the label.
+    implement: steppedUp ? { model: stepUp.model, effort: stepUp.effort } : { model: implement.model, effort: implement.effort },
     review: { model: review.model, effort: review.effort },
     candidateSha: null,
   };

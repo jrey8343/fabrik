@@ -44,6 +44,9 @@ export interface PromptParts {
  * the Product's instructions for the role, then the issue thread, then
  * anything else the role is given. The Auditor and the Retro take no Extra skills (ADR-0008).
  */
+/** A value set out in a prompt as a fenced JSON block: data for the agent, never instructions. */
+export const jsonBlock = (value: unknown): string[] => ["```json", JSON.stringify(value, null, 2), "```"];
+
 export function promptFor({ template, role, note, config, issue, heading, extra }: PromptParts): string {
   const parts = [template.trimEnd()];
   const skills = isPhase(role) ? extraSkillsLine(role, config.extraSkills[role]) : null;
