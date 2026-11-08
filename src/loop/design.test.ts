@@ -341,6 +341,15 @@ describe("Setting a Stepped-up start from a Design session's agent brief", () =>
     ]);
   });
 
+  it("keeps fabrik:step-up, removing nothing, when the brief has stepUp: true on an issue already marked", () => {
+    const plan = finish({ kind: "brief", comment: "Done.", brief: { ...brief, stepUp: true } }, ["needs-design", "fabrik:step-up"]);
+
+    expect(labelMoves(plan)).toEqual([
+      { kind: "remove-label", issue: 7, label: "needs-design" },
+      { kind: "add-labels", issue: 7, labels: ["ready-for-agent", "fabrik:step-up"] },
+    ]);
+  });
+
   it("takes fabrik:step-up off an issue that has it when the brief has stepUp: false", () => {
     const plan = finish({ kind: "brief", comment: "Done.", brief: { ...brief, stepUp: false } }, ["needs-design", "fabrik:step-up"]);
 
@@ -375,8 +384,11 @@ describe("Setting a Stepped-up start from a Design session's agent brief", () =>
   it("refuses a stepUp that isn't a boolean, naming the field", () => {
     const plan = finish({ kind: "brief", comment: "Done.", brief: { ...brief, stepUp: "yes" } }, ["needs-design"]);
 
-    expect(plan).toMatchObject({ kind: "fail", failure: "infrastructure" });
-    expect(JSON.stringify(plan)).toContain("needs stepUp to be true or false, if it has one");
+    expect(plan).toEqual({
+      kind: "fail",
+      failure: "infrastructure",
+      reason: "The Design-session turn on #7 emitted output that breaks its contract: a brief needs stepUp to be true or false, if it has one",
+    });
   });
 
   it.each([true, false])("neither adds nor removes fabrik:step-up for an Operator brief with stepUp: %s", (stepUp) => {
@@ -384,8 +396,10 @@ describe("Setting a Stepped-up start from a Design session's agent brief", () =>
 
     const plan = finish({ kind: "brief", comment: "Done.", brief: operatorBrief }, ["needs-design", "fabrik:step-up"]);
 
-    expect(plan.kind).toBe("act");
-    expect(JSON.stringify(plan)).not.toContain("fabrik:step-up");
+    expect(labelMoves(plan)).toEqual([
+      { kind: "remove-label", issue: 7, label: "needs-design" },
+      { kind: "add-labels", issue: 7, labels: ["ready-for-human"] },
+    ]);
   });
 });
 
