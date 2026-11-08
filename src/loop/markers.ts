@@ -16,7 +16,7 @@ import type { Strength, VerdictRecord } from "./types.ts";
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
 
 export function verdictMarker(record: VerdictRecord): string {
-  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, leftLoop, headSha } = record;
+  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, headSha } = record;
   // Only a conflict-only run's Verdict says so (#304), and only one that gave way to an undelivered Request
   // changes (#341), so every other marker reads as it always has.
   const fields = {
@@ -25,7 +25,7 @@ export function verdictMarker(record: VerdictRecord): string {
     requestChanges,
     ...(conflictRun === true ? { conflictRun } : {}),
     ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
-    ...(leftLoop === true ? { leftLoop } : {}),
+    ...(ticketNotReady === true ? { ticketNotReady } : {}),
     headSha,
   };
   return `<!-- fabrik:verdict ${JSON.stringify(fields)} -->`;
@@ -190,7 +190,15 @@ export const RETRY_PUSH_MARKER = "<!-- fabrik:retry-push -->";
 
 /**
  * The first line of the Kit's note that the Retry a PR's latest Verdict called
- * for never started, and won't, as its Ticket has left `ready-for-agent`
+ * for never started, and that it has re-added agent:implement for it (#416).
+ * The Kit restarts each Retry once: the Retry stays in flight, so re-adding
+ * the label by hand still resumes it.
+ */
+export const RETRY_RESTARTED_MARKER = "<!-- fabrik:retry-restarted -->";
+
+/**
+ * The first line of the Kit's note that the Retry a PR's latest Verdict called
+ * for never started, and won't, as its Ticket is no longer `ready-for-agent`
  * (#416): no Retry is in flight from it.
  */
 export const RETRY_ENDED_MARKER = "<!-- fabrik:retry-ended -->";

@@ -11,13 +11,13 @@
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
 import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, requestChangesRunEndedMarker } from "./markers.ts";
-import { runInFlight, runName, stalledRetry } from "./retry.ts";
-import { actOnUndelivered, UNDELIVERED_GRACE_MINUTES, unnotedChangesRequests } from "./undelivered.ts";
+import { runInFlight, runName, unstartedRetry } from "./retry.ts";
+import { actOnUndelivered, unnotedChangesRequests } from "./undelivered.ts";
 import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, Plan, PullRequestSnapshot } from "./types.ts";
 
 /**
  * The conflict check, on a push to the default branch or the scheduled tick:
- * for each open agent PR, a restart of a Retry that never started
+ * for each open agent PR, what follows a Retry that never started
  * (src/loop/retry.ts, #416), or the Request-changes run for an undelivered
  * Request changes on it (src/loop/undelivered.ts, #341), or else a rebase onto main if
  * it conflicts with it, at the Merge gate or as a draft whose push GitHub never
@@ -35,9 +35,10 @@ export function checkConflicts(
   const reasons: string[] = [];
   const actions: Action[] = [];
   for (const candidate of conflicts.pullRequests) {
-    const stalled = stalledRetry(candidate.pullRequest, operator, now, runMinutes ?? UNDELIVERED_GRACE_MINUTES, conflicts.implementJobUnderWay);
-    if (stalled !== null) {
-      actions.push(...stalled);
+    // Only with the Implement job's timeout to wait out: a Retry may be working until then.
+    const unstarted = runMinutes === undefined ? null : unstartedRetry(candidate.pullRequest, operator, now, runMinutes, conflicts.implementJobUnderWay);
+    if (unstarted !== null) {
+      actions.push(...unstarted);
       continue;
     }
     const undelivered = actOnUndelivered(candidate, operator, now, held, runMinutes, conflicts.implementJobUnderWay);

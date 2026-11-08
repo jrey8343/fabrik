@@ -23,6 +23,7 @@ import {
   RESEARCH_RUN_FAILED_MARKER,
   RETRY_ENDED_MARKER,
   RETRY_PUSH_MARKER,
+  RETRY_RESTARTED_MARKER,
   SESSION_FINISHED,
   startedReviewsIn,
   UNMARKED_RETRY_PUSH,
@@ -49,14 +50,14 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, leftLoop = false, headSha } = value as Record<string, unknown>;
+  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, ticketNotReady = false, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
   if (source !== "reviewer" && source !== "ci" && source !== "empty-diff") return null;
   // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one; likewise requestChangesFirst (#341).
   if (typeof requestChanges !== "boolean" || typeof conflictRun !== "boolean") return null;
   if (requestChangesFirst !== undefined && !isReviewIds(requestChangesFirst)) return null;
-  // Likewise leftLoop (#416).
-  if (typeof leftLoop !== "boolean") return null;
+  // Likewise ticketNotReady (#416).
+  if (typeof ticketNotReady !== "boolean") return null;
   if (typeof headSha !== "string") return null;
   return {
     verdict: verdict as Verdict,
@@ -64,7 +65,7 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     requestChanges,
     ...(conflictRun ? { conflictRun: true as const } : {}),
     ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
-    ...(leftLoop ? { leftLoop: true as const } : {}),
+    ...(ticketNotReady ? { ticketNotReady: true as const } : {}),
     headSha,
   };
 }
@@ -160,7 +161,7 @@ function endsConflictRun(body: string): boolean {
     body.startsWith(CONFLICT_RUN_MARKER) ||
     body.startsWith(CONFLICT_RUN_ENDED_MARKER) ||
     body.startsWith(REQUEST_CHANGES_RUN_MARKER) ||
-    verdictsIn([body]).length > 0
+    isVerdict(body)
   );
 }
 
@@ -179,25 +180,31 @@ export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean 
   return pushed;
 }
 
+/** Whether a comment is a Verdict: it carries a valid Verdict marker. */
+function isVerdict(body: string): boolean {
+  return verdictsIn([body]).length > 0;
+}
+
 /**
- * Whether the Kit has noted, since a PR's latest Verdict, that the Retry it
- * called for won't start, its Ticket having left the Loop (#416), from the
- * Fabrik App's comments on it, oldest first.
+ * The Kit's latest note since a PR's latest Verdict on the Retry it called
+ * for, which never started (#416), or null, from the Fabrik App's comments on
+ * it, oldest first: that it restarted the Retry, or that it ended it.
  */
-export function retryEndedSinceVerdictIn(commentBodies: readonly string[]): boolean {
-  let ended = false;
+export function retryNoteSinceVerdictIn(commentBodies: readonly string[]): "restarted" | "ended" | null {
+  let note: "restarted" | "ended" | null = null;
   for (const body of commentBodies) {
-    if (body.startsWith(RETRY_ENDED_MARKER)) ended = true;
-    else if (verdictsIn([body]).length > 0) ended = false;
+    if (body.startsWith(RETRY_RESTARTED_MARKER)) note = "restarted";
+    else if (body.startsWith(RETRY_ENDED_MARKER)) note = "ended";
+    else if (isVerdict(body)) note = null;
   }
-  return ended;
+  return note;
 }
 
 /** When the latest Verdict in a PR's history was posted, or null when it has none (#416). */
 export function verdictPostedAtIn(history: readonly PullRequestHistoryItem[]): string | null {
   let latest: string | null = null;
   for (const item of history) {
-    if (item.kind === "bot-comment" && verdictsIn([item.body]).length > 0 && (latest === null || item.at >= latest)) latest = item.at;
+    if (item.kind === "bot-comment" && isVerdict(item.body) && (latest === null || item.at >= latest)) latest = item.at;
   }
   return latest;
 }

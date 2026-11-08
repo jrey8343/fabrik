@@ -15,7 +15,7 @@ import {
   pushedSinceVerdictIn,
   requestChangesRunIn,
   requestChangesSinceRunIn,
-  retryEndedSinceVerdictIn,
+  retryNoteSinceVerdictIn,
   standingIn,
   verdictPostedAtIn,
   verdictsIn,
@@ -35,7 +35,7 @@ function at(minutes: number): string {
   return new Date(Date.UTC(2026, 10, 7, 5, minutes)).toISOString();
 }
 
-/** How long an Implement job may run, which a Retry is given before the check counts it as stalled. */
+/** How long an Implement job may run, which a Retry is given before the check counts it as never started. */
 const RUN_MINUTES = implementJobTimeoutMinutes(kitConfig().roles.implement.timeoutMinutes);
 
 /** Agent draft PR #50 for Ticket #7, at A, with its Review under way. */
@@ -64,7 +64,7 @@ class Thread {
       requestChangesRun: requestChangesRunIn(comments),
       conflictRunInFlight: conflictRunInFlightIn(comments),
       pushedSinceVerdict: pushedSinceVerdictIn(comments),
-      retryEndedSinceVerdict: retryEndedSinceVerdictIn(comments),
+      retryNoteSinceVerdict: retryNoteSinceVerdictIn(comments),
       ...requestChangesSinceRunIn(this.history, standingIn(this.history), "operator"),
       leftDraftSinceVerdict: leftDraftSinceVerdictIn(this.history),
     });
@@ -137,7 +137,7 @@ const addsImplement = (plan: Plan): boolean => actionsOf(plan).some((action) => 
 const startsReview = (plan: Plan): boolean => actionsOf(plan).some((action) => action.kind === "start-agent-run" && action.role === "review");
 
 describe("An Execution flaw on a Ticket that left ready-for-agent during its Review", () => {
-  it("says the Ticket has left the Loop and starts no Retry", () => {
+  it("says the Ticket is no longer ready-for-agent and starts no Retry", () => {
     const thread = new Thread();
     thread.ticketLabels = ["enhancement", "ready-for-human"];
 
@@ -146,7 +146,7 @@ describe("An Execution flaw on a Ticket that left ready-for-agent during its Rev
     expect(addsImplement(plan)).toBe(false);
     const [verdict] = commentsOn(plan, 50);
     expect(verdict).not.toContain("starts now");
-    expect(verdict).toContain("#7 is no longer `ready-for-agent`, so it has left the Loop and no Retry starts");
+    expect(verdict).toContain("#7 is no longer `ready-for-agent`, so no Retry starts");
     expect(runInFlight(thread.pullRequest())).toBeNull();
   });
 
@@ -159,11 +159,21 @@ describe("An Execution flaw on a Ticket that left ready-for-agent during its Rev
     expect(startsReview(thread.pushed(B, 30))).toBe(true);
     expect(commentsOn(thread.flaw(40), 50)[0]).toContain("Retry 1 of 2 starts now");
   });
+
+  it("on a PR that no longer links its Ticket, whose labels read as none, starts the Retry as before: implement.ts reads the Ticket itself", () => {
+    const thread = new Thread();
+    thread.ticketLabels = [];
+
+    const plan = thread.flaw(10);
+
+    expect(addsImplement(plan)).toBe(true);
+    expect(commentsOn(plan, 50)[0]).toContain("Retry 1 of 2 starts now");
+  });
 });
 
 describe("A Retry announced by its Verdict that never started", () => {
   /** A Verdict at 05:10 whose agent:implement never reached the Ticket: the Verdict comment landed, the label add failed. */
-  function stalled(): Thread {
+  function unstarted(): Thread {
     const thread = new Thread();
     thread.failsAt = "add-labels";
     expect(commentsOn(thread.flaw(10), 50)[0]).toContain("Retry 1 of 2 starts now");
@@ -172,41 +182,55 @@ describe("A Retry announced by its Verdict that never started", () => {
   }
 
   it("leaves a later push without a Review while it reads as in flight, as the bug did", () => {
-    const thread = stalled();
+    const thread = unstarted();
 
     expect(startsReview(thread.pushed(B, 20))).toBe(false);
   });
 
-  it("is restarted by the tick once the Implement job's timeout has passed with no Implement job under way: one agent:implement on the Ticket, which resumes the Retry", () => {
-    const thread = stalled();
+  it("is restarted by the tick once the Implement job's timeout has passed with no Implement job under way: a note, and one agent:implement on the Ticket, which resumes the Retry", () => {
+    const thread = unstarted();
 
     const plan = thread.tick(10 + RUN_MINUTES + 1);
 
     expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
-    expect(commentsOn(plan, 50)).toEqual([]);
+    const [note, ...more] = commentsOn(plan, 50);
+    expect(more).toEqual([]);
+    expect(note).toContain("Retry 1 of 2 on #50 never started, so the Kit has added `agent:implement` to #7 again");
+    expect(note).not.toContain("@");
     expect(actionsOf(thread.implement())).toContainEqual(expect.objectContaining({ kind: "start-agent-run", role: "implement", retry: 1, retryFlaw: A }));
   });
 
+  it("is restarted once: if that comes to nothing too, as after an Infrastructure failure, it waits for the Operator, whose agent:implement still resumes it", () => {
+    const thread = unstarted();
+    thread.tick(10 + RUN_MINUTES + 1);
+
+    const later = thread.tick(10 + 3 * RUN_MINUTES);
+
+    expect(addsImplement(later)).toBe(false);
+    expect(commentsOn(later, 50)).toEqual([]);
+    expect(actionsOf(thread.implement())).toContainEqual(expect.objectContaining({ kind: "start-agent-run", role: "implement", retry: 1 }));
+  });
+
   it("isn't restarted within the Implement job's timeout of its Verdict", () => {
-    expect(addsImplement(stalled().tick(10 + RUN_MINUTES - 1))).toBe(false);
+    expect(addsImplement(unstarted().tick(10 + RUN_MINUTES - 1))).toBe(false);
   });
 
   it.each([true, null])("isn't restarted while an Implement job may be under way (read as %s)", (underWay) => {
-    const thread = stalled();
+    const thread = unstarted();
     thread.implementJobUnderWay = underWay;
 
     expect(addsImplement(thread.tick(10 + RUN_MINUTES + 1))).toBe(false);
   });
 
   it("isn't restarted once its push has landed", () => {
-    const thread = stalled();
+    const thread = unstarted();
     thread.posted("<!-- fabrik:retry-push -->\nThe Implementer pushed a fix.", 30);
 
     expect(addsImplement(thread.tick(10 + RUN_MINUTES + 1))).toBe(false);
   });
 
   it("on a Ticket that has since left ready-for-agent: the tick says so once, starts nothing, and a later push gets its Review", () => {
-    const thread = stalled();
+    const thread = unstarted();
     thread.ticketLabels = ["enhancement", "ready-for-human"];
 
     const plan = thread.tick(10 + RUN_MINUTES + 1);
@@ -215,7 +239,7 @@ describe("A Retry announced by its Verdict that never started", () => {
     const [note, ...more] = commentsOn(plan, 50);
     expect(more).toEqual([]);
     expect(note).toContain("@operator Retry 1 of 2 on #50 never started");
-    expect(note).toContain("#7 is no longer `ready-for-agent`, so it has left the Loop and no Retry starts");
+    expect(note).toContain("#7 is no longer `ready-for-agent`, so no Retry starts");
     expect(commentsOn(thread.tick(10 + RUN_MINUTES + 61), 50)).toEqual([]);
     expect(startsReview(thread.pushed(B, 10 + RUN_MINUTES + 70))).toBe(true);
   });

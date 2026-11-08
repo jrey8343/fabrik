@@ -6,7 +6,7 @@
 // Implementer attempt (ADR-0006).
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { DISPATCH_LABEL, READY_FOR_AGENT, STEP_UP_LABEL } from "./labels.ts";
-import { RETRY_ENDED_MARKER } from "./markers.ts";
+import { RETRY_ENDED_MARKER, RETRY_RESTARTED_MARKER } from "./markers.ts";
 import type { Action, KitConfig, PullRequestSnapshot, StepUpReason, VerdictRecord } from "./types.ts";
 
 /** Execution-flaw retries a Ticket gets before the next flaw counts as a Design flaw. */
@@ -40,7 +40,7 @@ export function implementSettings(reason: StepUpReason | null, config: KitConfig
  * Request-changes run uses no retry, but a flaw on its push calls for one like
  * any other, so it counts (#393). A conflict-only run's Verdict (#304), a
  * flaw that gave way to an undelivered Request changes (#341) and one on a
- * Ticket that had left the Loop (#416) call for none, so they don't, and an
+ * Ticket no longer `ready-for-agent` (#416) call for none, so they don't, and an
  * Infrastructure failure posts no Verdict at all.
  */
 export function retryNumber(earlier: readonly VerdictRecord[]): number {
@@ -48,34 +48,41 @@ export function retryNumber(earlier: readonly VerdictRecord[]): number {
     1 +
     earlier.filter(
       (record) =>
-        record.verdict === "execution-flaw" && record.conflictRun !== true && record.requestChangesFirst === undefined && record.leftLoop !== true,
+        record.verdict === "execution-flaw" && record.conflictRun !== true && record.requestChangesFirst === undefined && record.ticketNotReady !== true,
     ).length
   );
 }
 
 /**
- * Whether this PR's Ticket has left the Loop, as the snapshot read its labels:
- * it's no longer `ready-for-agent`, so agent:implement on it starts nothing
- * (src/loop/implement.ts) and no Retry can start (#416).
+ * Whether this PR's Ticket is no longer `ready-for-agent`, as the snapshot
+ * read its labels through the PR's closing link (#416): agent:implement on it
+ * starts nothing (src/loop/implement.ts), so no Retry can start. A PR that no
+ * longer links its Ticket reads no labels, which tells nothing, so it isn't.
  */
-export function ticketLeftLoop(pullRequest: PullRequestSnapshot): boolean {
-  return !pullRequest.ticketLabels.includes(READY_FOR_AGENT);
+export function ticketNotReady(pullRequest: PullRequestSnapshot): boolean {
+  const { ticketLabels } = pullRequest;
+  return ticketLabels.length > 0 && !ticketLabels.includes(READY_FOR_AGENT);
+}
+
+/** What a Verdict leads to beyond its comment: the line it ends with, its actions, and whether its Ticket was no longer `ready-for-agent` (#416). */
+export interface VerdictNext {
+  readonly line: string;
+  readonly actions: Action[];
+  readonly ticketNotReady?: true;
 }
 
 /**
  * What an Execution flaw on this PR does next: its retry and a line saying so,
  * or null when its retries are used up, so the flaw counts as a Design flaw.
- * On a Ticket that has left `ready-for-agent`, as when the Operator relabelled
- * it during the Review, it says so and starts nothing, marked `leftLoop` (#416).
+ * On a Ticket no longer `ready-for-agent`, as when the Operator relabelled it
+ * during the Review, it says so and starts nothing, marked `ticketNotReady` (#416).
  */
-export function retryAfterFlaw(
-  pullRequest: PullRequestSnapshot,
-): { readonly line: string; readonly actions: Action[]; readonly leftLoop?: true } | null {
+export function retryAfterFlaw(pullRequest: PullRequestSnapshot): VerdictNext | null {
   const { ticket } = pullRequest;
   const retry = retryNumber(pullRequest.verdicts);
   if (retry > MAX_RETRIES || ticket === null) return null;
-  if (ticketLeftLoop(pullRequest)) {
-    return { line: leftLoopLine(pullRequest.number, ticket), actions: [], leftLoop: true };
+  if (ticketNotReady(pullRequest)) {
+    return { line: ticketNotReadyLine(pullRequest.number, ticket), actions: [], ticketNotReady: true };
   }
   return {
     line: `Retry ${retry} of ${MAX_RETRIES} starts now${stepUpReasonFor(retry, pullRequest.ticketLabels) === null ? "" : ", stepped up"}: the Implementer fixes these findings on the same branch.`,
@@ -84,9 +91,9 @@ export function retryAfterFlaw(
   };
 }
 
-/** What the Kit says when a Retry can't start because the Ticket has left the Loop (#416). */
-export function leftLoopLine(pullRequest: number, ticket: number): string {
-  return `#${ticket} is no longer \`ready-for-agent\`, so it has left the Loop and no Retry starts. #${pullRequest} stays in draft: push to it to have it reviewed again, or take it out of draft to take it over.`;
+/** What the Kit says when a Retry can't start because the Ticket is no longer `ready-for-agent` (#416), and how the Operator goes on. */
+function ticketNotReadyLine(pullRequest: number, ticket: number): string {
+  return `#${ticket} is no longer \`ready-for-agent\`, so no Retry starts. #${pullRequest} stays in draft: push to it to have it reviewed again, or take it out of draft to take it over.`;
 }
 
 /** The Implement run an agent PR's latest Verdict, or the Operator's review, called for, that hasn't pushed yet. */
@@ -117,8 +124,8 @@ export function runInFlight(pullRequest: PullRequestSnapshot): RunInFlight | nul
   if (pullRequest.conflictRunInFlight !== null) return { kind: "conflict", main: pullRequest.conflictRunInFlight };
   const latest = pullRequest.verdicts.at(-1);
   if (latest === undefined || pullRequest.pushedSinceVerdict || latest.verdict !== "execution-flaw") return null;
-  // One on a Ticket that had left the Loop called for no Retry, and one the Kit has since ended for that reason has none in flight (#416).
-  if (latest.leftLoop === true || pullRequest.retryEndedSinceVerdict) return null;
+  // One on a Ticket no longer ready-for-agent called for no Retry, and one the Kit has since ended for that reason has none in flight (#416).
+  if (latest.ticketNotReady === true || pullRequest.retryNoteSinceVerdict === "ended") return null;
   // A Retry works on a draft: once the PR has left draft since the flaw, as when the Operator took it back or the Kit
   // handed it to them, none is in flight, even after something turns the PR to draft again.
   if (!pullRequest.draft || pullRequest.leftDraftSinceVerdict) return null;
@@ -185,35 +192,46 @@ export function owedRetry(
 }
 
 /**
- * A Retry in flight that nothing is working (#416), and what the conflict
- * check does about it, or null. Its Verdict announced it, but what followed
- * the comment failed, so agent:implement never reached the Ticket, and a re-run
- * of the Review job lands nothing on a head that already has a Verdict. It is
- * stalled once its Verdict is older than the Implement job's timeout
- * (`runMinutes`) with no Implement job under way anywhere in the repo, as for a
- * stalled Request-changes run (src/loop/undelivered.ts); a check that couldn't
- * read the jobs leaves it alone. The check re-adds agent:implement on the
- * Ticket, which resumes it, or, if the Ticket has left `ready-for-agent`, says
- * so once with the Operator mentioned, which ends it.
+ * What the conflict check does about a Retry in flight that never started
+ * (#416), or null. Its Verdict announced it, but what followed the comment
+ * failed, so agent:implement never reached the Ticket, and a re-run of the
+ * Review job lands nothing on a head that already has a Verdict. The check
+ * counts it as never started once its Verdict is older than the Implement
+ * job's timeout (`runMinutes`) with no Implement job under way anywhere in the
+ * repo, as for a Request-changes run (src/loop/undelivered.ts); a check that
+ * couldn't read the jobs leaves it alone. It says so on the PR and re-adds
+ * agent:implement on the Ticket, which resumes it, once: if that comes to
+ * nothing too, as after an Infrastructure failure, whose notice says the Loop
+ * won't run it again, the Retry waits for the Operator (ADR-0006). On a Ticket
+ * no longer `ready-for-agent` it instead says once, mentioning the Operator,
+ * that no Retry starts, which ends it.
  */
-export function stalledRetry(
+export function unstartedRetry(
   pullRequest: PullRequestSnapshot,
   operator: string,
   now: string,
   runMinutes: number,
   implementJobUnderWay: boolean | null,
 ): Action[] | null {
-  const { ticket, verdictPostedAt } = pullRequest;
+  const { number, ticket, verdictPostedAt } = pullRequest;
   if (!pullRequest.isAgent || ticket === null || !pullRequest.open || implementJobUnderWay !== false || verdictPostedAt === null) return null;
+  if (pullRequest.retryNoteSinceVerdict !== null) return null;
   const run = runInFlight(pullRequest);
   if (run?.kind !== "retry") return null;
   if (Date.parse(now) - Date.parse(verdictPostedAt) < runMinutes * 60_000) return null;
-  if (!ticketLeftLoop(pullRequest)) return [{ kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] }];
+  if (ticketNotReady(pullRequest)) {
+    return [{ kind: "comment", issue: number, body: [RETRY_ENDED_MARKER, `@${operator} ${runName(run)} on #${number} never started. ${ticketNotReadyLine(number, ticket)}`].join("\n") }];
+  }
   return [
     {
       kind: "comment",
-      issue: pullRequest.number,
-      body: [RETRY_ENDED_MARKER, `@${operator} ${runName(run)} on #${pullRequest.number} never started. ${leftLoopLine(pullRequest.number, ticket)}`].join("\n"),
+      issue: number,
+      body: [
+        RETRY_RESTARTED_MARKER,
+        `${runName(run)} on #${number} never started, so the Kit has added \`agent:implement\` to #${ticket} again to start it. It does this once: if the Retry doesn't push this time, re-add \`agent:implement\` on #${ticket} to resume it, or take #${number} out of draft to take it over.`,
+      ].join("\n"),
     },
+    // A fresh agent:implement on the Ticket resumes the Retry (src/loop/implement.ts). The note notifies nobody.
+    { kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] },
   ];
 }

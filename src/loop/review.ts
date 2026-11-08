@@ -8,7 +8,7 @@ import { consideredSection } from "./considered.ts";
 import { followUpsSection } from "./followUps.ts";
 import { DISPATCH_LABEL, REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
-import { retryAfterFlaw, whyAwaitingRun } from "./retry.ts";
+import { retryAfterFlaw, type VerdictNext, whyAwaitingRun } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { verdictMarker } from "./markers.ts";
 import { parseVerdict } from "./verdict.ts";
@@ -173,14 +173,14 @@ export function verdictActions(
   operator: string,
 ): Action[] {
   const first = verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator) : null;
-  const next = first ?? nextAfter(verdict, pullRequest);
+  const next: VerdictNext | null = first ?? nextAfter(verdict, pullRequest);
   const record: VerdictRecord = {
     verdict,
     source,
     requestChanges: pullRequest.requestChangesRun,
     ...(pullRequest.conflictRun ? { conflictRun: true as const } : {}),
     ...(first === null ? {} : { requestChangesFirst: first.reviews }),
-    ...(next !== null && "leftLoop" in next ? { leftLoop: true as const } : {}),
+    ...(next?.ticketNotReady === true ? { ticketNotReady: true as const } : {}),
     headSha: event.headSha,
   };
   const by = BY[source];
@@ -233,7 +233,7 @@ function requestChangesFirst(
 }
 
 /** What a Verdict leads to beyond its comment: a retry, back to design, or (for a pass) nothing here. */
-function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot): { line: string; actions: Action[]; leftLoop?: true } | null {
+function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot): VerdictNext | null {
   if (verdict === "pass") return null;
   const retry = verdict === "execution-flaw" ? retryAfterFlaw(pullRequest) : null;
   if (retry !== null) return retry;
