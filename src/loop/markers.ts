@@ -10,6 +10,7 @@
 // beside its rules (src/kit/replay.ts).
 import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
 import type { RequestChangesAnswers } from "./implementOutput.ts";
+import type { TriggerLabel } from "./labels.ts";
 import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
@@ -264,6 +265,24 @@ export const RESEARCH_RUN_FAILED_MARKER = "<!-- fabrik:research-run-failed -->";
  * alone until the Operator re-adds agent:implement (#418).
  */
 export const IMPLEMENT_RUN_FAILED_MARKER = "<!-- fabrik:implement-run-failed -->";
+
+/**
+ * The first line of the Kit's comment that it added a trigger label again,
+ * since it sat with no run behind it (#419): the stuck-trigger sweep's first
+ * strike, which the sweep reads back to give up on its second.
+ */
+export function stuckTriggerReaddedMarker(label: TriggerLabel): string {
+  return `<!-- fabrik:stuck-trigger-readded ${label} -->`;
+}
+
+/**
+ * The marker in the Kit's comment that it took a trigger label off for good,
+ * since nothing started twice (#419), after the role's own failure marker
+ * where it has one, so it reads as distinct from an ordinary failed run.
+ */
+export function stuckTriggerGaveUpMarker(label: TriggerLabel): string {
+  return `<!-- fabrik:stuck-trigger-gave-up ${label} -->`;
+}
 
 /** How the comment that ends a Design session starts, either way it ends. */
 export const SESSION_FINISHED = "**Design session finished.**";

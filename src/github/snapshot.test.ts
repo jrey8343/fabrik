@@ -24,6 +24,9 @@ import {
   PROTOTYPE_JOB_NAME,
   readKitConfigSources,
   RESEARCH_JOB_NAME,
+  REVIEW_CHECKS_JOB_NAME,
+  REVIEW_JOB_NAME,
+  CLAIM_JOB_NAME,
 } from "./snapshot.ts";
 
 /** The conflict check's query (#304), which reads each open PR's mergeable state. */
@@ -2085,6 +2088,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
       author: OPERATOR,
       labels: { nodes: labels.map((name) => ({ name })) },
       comments: { pageInfo: { hasPreviousPage: false, startCursor: null }, nodes: [] },
+      timelineItems: { nodes: [] },
       ...overrides,
     };
   }
@@ -2170,8 +2174,27 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
       const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding([]));
 
       expect(snapshot.replay?.issues).toEqual([
-        { number: 140, open: true, author: "jrey8343", body: acceptedBody(), comments: ["This replay can't run."], labels: ["fabrik:replay", "agent:replay"] },
-        { number: 150, open: true, author: "mallory", body: "```replay\nreview.effort: low\n```", comments: [], labels: ["fabrik:replay"] },
+        { number: 140, open: true, author: "jrey8343", body: acceptedBody(), comments: ["This replay can't run."], labels: ["fabrik:replay", "agent:replay"], gaveUp: false },
+        { number: 150, open: true, author: "mallory", body: "```replay\nreview.effort: low\n```", comments: [], labels: ["fabrik:replay"], gaveUp: false },
+      ]);
+    });
+
+    it("holds whether the Kit gave up on agent:replay there with nobody adding it since (#419), from the App's give-up comment alone", async () => {
+      const gaveUp = "<!-- fabrik:stuck-trigger-gave-up agent:replay -->\n@jrey8343 `agent:replay` came off";
+      const at = (createdAt: string) => ({ createdAt, label: { name: "agent:replay" } });
+      const timeline = (...nodes: unknown[]) => ({ timelineItems: { nodes } });
+      const { github } = githubWith([
+        anIssueNode(140, ["fabrik:replay"], { body: acceptedBody(), ...timeline({ __typename: "LabeledEvent", ...at("2026-11-08T03:00:00Z") }, { __typename: "UnlabeledEvent", ...at("2026-11-08T05:00:00Z") }, { __typename: "IssueComment", body: gaveUp, author: APP_BOT }) }),
+        anIssueNode(141, ["fabrik:replay"], { body: acceptedBody(), ...timeline({ __typename: "IssueComment", body: gaveUp, author: APP_BOT }, { __typename: "LabeledEvent", ...at("2026-11-08T06:00:00Z") }) }),
+        anIssueNode(142, ["fabrik:replay"], { body: acceptedBody(), ...timeline({ __typename: "IssueComment", body: gaveUp, author: OPERATOR }) }),
+      ]);
+
+      const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding([]));
+
+      expect(snapshot.replay?.issues.map(({ number, gaveUp }) => [number, gaveUp])).toEqual([
+        [140, true],
+        [141, false],
+        [142, false],
       ]);
     });
 
@@ -2237,12 +2260,13 @@ describe("Gathering a replay Ticket's claim (#156)", () => {
       author: { login: "jrey8343", __typename: "User" },
       labels: { nodes: [{ name: "fabrik:replay" }] },
       comments: { pageInfo: { hasPreviousPage: false, startCursor: null }, nodes: [] },
+      timelineItems: { nodes: [] },
     };
 
     const snapshot = await gatherSnapshot(githubHolding([other]), repo, claim, "jrey8343", APP_LOGIN);
 
     expect(snapshot.replay).toEqual({
-      issues: [{ number: 130, open: true, author: "jrey8343", body: other.body, comments: [], labels: ["fabrik:replay"] }],
+      issues: [{ number: 130, open: true, author: "jrey8343", body: other.body, comments: [], labels: ["fabrik:replay"], gaveUp: false }],
       capacity: null,
       acceptance: null,
     });
@@ -2553,3 +2577,125 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     });
   });
 });
+
+describe("The names of the jobs a trigger label's run shows up as (#419)", () => {
+  it.each([
+    ["implement-claim", () => CLAIM_JOB_NAME],
+    ["review-checks", () => REVIEW_CHECKS_JOB_NAME],
+    ["review", () => REVIEW_JOB_NAME],
+  ])("is the name loop.yml gives the %s job, which the stuck-trigger sweep reads a run behind a label by", async (job, name) => {
+    const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
+
+    expect(new RegExp(`^ {2}${job}:\\n {4}name: (.+)$`, "m").exec(workflow)?.[1]).toBe(name());
+  });
+});
+
+describe("Gathering a scheduled tick's trigger-sweep slice (#419)", () => {
+  const tick = { kind: "scheduled-tick", now: "2026-11-09T04:00:00Z" } as const;
+  const BOT = { login: "fabrik-app", __typename: "Bot" };
+  const labeled = (name: string, createdAt: string) => ({ __typename: "LabeledEvent", createdAt, label: { name } });
+  const unlabeled = (name: string, createdAt: string) => ({ __typename: "UnlabeledEvent", createdAt, label: { name } });
+  const comment = (body: string, createdAt: string, author: unknown = BOT) => ({ __typename: "IssueComment", createdAt, body, author });
+  const node = (number: number, labels: string[], timeline: unknown[]) => ({ number, labels: { nodes: labels.map((name) => ({ name })) }, timelineItems: { nodes: timeline } });
+
+  /** The API, holding these open issues and PRs with a trigger label; every other slice a tick reads finds nothing. The sweep's queries are in `asked`. */
+  function githubWith(issues: unknown[], pullRequests: unknown[] = []) {
+    const asked: { query: string; variables: Record<string, unknown> }[] = [];
+    const none = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>) {
+        if (query.includes("$triggers")) {
+          asked.push({ query, variables });
+          const nodes = query.includes("pullRequests(") ? pullRequests : issues;
+          return { repository: { [query.includes("pullRequests(") ? "pullRequests" : "issues"]: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } };
+        }
+        return { repository: { owner: { login: "acme" }, defaultBranchRef: null, issues: none, pullRequests: none } };
+      },
+    } as unknown as GitHub;
+    return { github, asked };
+  }
+
+  it("reads each trigger label on an open issue or PR, when it was last added, and whether the Kit's re-add came after it last came off", async () => {
+    const { github, asked } = githubWith(
+      [
+        node(7, ["ready-for-agent", "agent:implement"], [
+          labeled("agent:implement", "2026-11-09T01:00:00Z"),
+          unlabeled("agent:implement", "2026-11-09T02:00:00Z"),
+          labeled("agent:implement", "2026-11-09T02:00:00Z"),
+          // Same second as the cycle: timeline order, not time, says it came after.
+          comment("<!-- fabrik:stuck-trigger-readded agent:implement -->\nsat", "2026-11-09T02:00:00Z"),
+        ]),
+        node(8, ["agent:research"], [
+          comment("<!-- fabrik:stuck-trigger-readded agent:research -->\nsat", "2026-11-08T01:00:00Z"),
+          unlabeled("agent:research", "2026-11-08T01:05:00Z"),
+          labeled("agent:research", "2026-11-09T03:00:00Z"),
+        ]),
+        // Quoting the marker isn't the Kit's word.
+        node(9, ["agent:design"], [labeled("agent:design", "2026-11-09T03:00:00Z"), comment("<!-- fabrik:stuck-trigger-readded agent:design -->", "2026-11-09T03:10:00Z", { login: "mallory", __typename: "User" })]),
+      ],
+      [node(50, ["agent:review"], [])],
+    );
+    const actions = actionsWith([]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.triggers?.labelled).toEqual([
+      { number: 7, label: "agent:implement", lastAddedAt: "2026-11-09T02:00:00Z", readded: true },
+      { number: 8, label: "agent:research", lastAddedAt: "2026-11-09T03:00:00Z", readded: false },
+      { number: 9, label: "agent:design", lastAddedAt: "2026-11-09T03:00:00Z", readded: false },
+      { number: 50, label: "agent:review", lastAddedAt: null, readded: false },
+    ]);
+    // Closed ones are never swept.
+    expect(asked.map(({ query }) => /(issues|pullRequests)\(states: OPEN, labels: \$triggers/.exec(query)?.[1])).toEqual(["issues", "pullRequests"]);
+    expect(asked[0]?.variables["triggers"]).toEqual(["agent:implement", "agent:design", "agent:review", "agent:research", "agent:replay"]);
+  });
+
+  it("reads which roles have a job under way in an unfinished run, called from a caller workflow or not, leaving out jobs their run skipped", async () => {
+    const { github } = githubWith([]);
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Claim the work", status: "completed", conclusion: "success" }, { name: "fabrik / Implement", status: "completed", conclusion: "skipped" }, { name: "fabrik / Review", status: "queued" }] },
+      { id: 2, status: "queued", jobs: [{ name: "Design-session turn #12", status: "queued" }, { name: "fabrik / Prototype turn #3", status: "queued" }] },
+      { id: 3, status: "completed", jobs: [{ name: "fabrik / Research", status: "in_progress" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.triggers?.underWay).toEqual({ implement: false, research: false, review: true, claim: true, designTurns: [3, 12] });
+  });
+
+  it("reads a Review checks job as Review under way", async () => {
+    const { github } = githubWith([]);
+    const actions = actionsWith([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Review checks", status: "in_progress" }] }]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.triggers?.underWay).toMatchObject({ review: true });
+  });
+
+  it("reads nothing under way as unknown, and no label, when the Actions API fails", async () => {
+    const { github, asked } = githubWith([node(7, ["agent:implement"], [])]);
+    const actions = { rest: async () => Promise.reject(new Error("GitHub GET actions/runs failed: 403")) };
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.triggers).toEqual({ underWay: null, labelled: [] });
+    expect(asked).toEqual([]);
+  });
+
+  it("reads it as unknown too without a token that can read workflow runs", async () => {
+    const { github } = githubWith([node(7, ["agent:implement"], [])]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN);
+
+    expect(snapshot.triggers).toEqual({ underWay: null, labelled: [] });
+  });
+
+  it("isn't gathered for any other event", async () => {
+    const { github } = githubWith([]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: "d".repeat(40) }, null, APP_LOGIN, actionsWith([]) as unknown as GitHub);
+
+    expect(snapshot.triggers).toBeNull();
+  });
+});
+

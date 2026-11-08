@@ -196,16 +196,12 @@ describe("The scheduled tick's replay step, beside its gates", () => {
     expect(tick(replaySlice([aReplayIssue(overrides)]))).toEqual(STARTS_NOTHING);
   });
 
-  it("takes agent:replay off and adds it again on an issue that still has it, so the label event a failed claim never answered fires anew", () => {
-    expect(tick(replaySlice([aReplayIssue({ labels: ["fabrik:replay", "agent:replay"] })]))).toEqual({
-      kind: "act",
-      actions: [
-        { kind: "remove-label", issue: 140, label: "agent:replay" },
-        { kind: "add-labels", issue: 140, labels: ["agent:replay"] },
-        { kind: "check-dispatch" },
-        { kind: "check-design-queue" },
-      ],
-    });
+  it("leaves an issue that still has agent:replay, as after a claim that never ran, to the stuck-trigger sweep, which re-adds it once (#419)", () => {
+    expect(tick(replaySlice([aReplayIssue({ labels: ["fabrik:replay", "agent:replay"] })]))).toEqual(STARTS_NOTHING);
+  });
+
+  it("doesn't add agent:replay back to an issue the Kit gave up on, until someone adds it again (#419)", () => {
+    expect(tick(replaySlice([aReplayIssue({ gaveUp: true })]))).toEqual(STARTS_NOTHING);
   });
 
   describe("on a waiting request, which needs no spare capacity", () => {

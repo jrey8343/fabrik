@@ -29,9 +29,12 @@ import {
   RETRY_RESTARTED_MARKER,
   SESSION_FINISHED,
   startedReviewsIn,
+  stuckTriggerGaveUpMarker,
+  stuckTriggerReaddedMarker,
   UNMARKED_RETRY_PUSH,
   VERDICT_MARKER,
 } from "../loop/markers.ts";
+import type { TriggerLabel } from "../loop/labels.ts";
 import type { IssueSnapshot, PendingPrototype, PullRequestSnapshot, UnbuiltChangesRequest, Verdict, VerdictRecord } from "../loop/types.ts";
 import { VERDICTS } from "../loop/verdict.ts";
 
@@ -594,4 +597,52 @@ function sentBackIn(body: string): SentBack | null {
   const match = BACK_TO_DESIGN_MARKER.exec(body);
   if (match?.[1] === undefined || match[2] === undefined) return null;
   return { pullRequest: Number(match[1]), verdictUrl: match[2] === "operator" ? null : match[2] };
+}
+
+/**
+ * One entry of an issue's or PR's timeline as the stuck-trigger sweep reads
+ * it (#419), oldest first: a label added or taken off, or a comment the
+ * Fabrik App wrote. Anyone else's comment is left out, so quoting a marker
+ * can't fake one.
+ */
+export type TriggerHistoryEntry =
+  | { readonly kind: "labeled" | "unlabeled"; readonly label: string; readonly at: string }
+  | { readonly kind: "kit-comment"; readonly body: string };
+
+/** When `label` was last added, from the timeline oldest first, or null when it doesn't show it. */
+export function lastAddedAtIn(history: readonly TriggerHistoryEntry[], label: TriggerLabel): string | null {
+  let at: string | null = null;
+  for (const entry of history) if (entry.kind === "labeled" && entry.label === label) at = entry.at;
+  return at;
+}
+
+/**
+ * Whether the Kit's stuck-trigger re-add comment for `label` came after the
+ * label last came off: its strike one stands, so another stuck tick is strike
+ * two. Read in timeline order rather than by time, since the re-add's own
+ * cycle takes the label off in the same second the comment lands. Any later
+ * `unlabeled` event, a claim's or a role declining it, resets the count.
+ */
+export function stuckTriggerReaddedIn(history: readonly TriggerHistoryEntry[], label: TriggerLabel): boolean {
+  let readded = false;
+  for (const entry of history) {
+    if (entry.kind === "kit-comment" && entry.body.startsWith(stuckTriggerReaddedMarker(label))) readded = true;
+    else if (entry.kind === "unlabeled" && entry.label === label) readded = false;
+  }
+  return readded;
+}
+
+/**
+ * Whether the Kit gave up on `label` (#419) and nobody has added it since: its
+ * give-up comment comes after the label's latest `labeled` event. The give-up
+ * marker follows the role's own failure marker where it has one, so it's
+ * looked for on any line, where the re-add marker always opens its comment.
+ */
+export function stuckTriggerGaveUpIn(history: readonly TriggerHistoryEntry[], label: TriggerLabel): boolean {
+  let gaveUp = false;
+  for (const entry of history) {
+    if (entry.kind === "kit-comment" && entry.body.split("\n").includes(stuckTriggerGaveUpMarker(label))) gaveUp = true;
+    else if (entry.kind === "labeled" && entry.label === label) gaveUp = false;
+  }
+  return gaveUp;
 }

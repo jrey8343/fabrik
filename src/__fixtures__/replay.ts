@@ -38,9 +38,9 @@ export function acceptedBody(tickets: readonly number[] = [12, 7], progress: rea
   return replayBody(requestBody("review.effort: high", tickets.join(", ")), { plan, progress: each });
 }
 
-/** Replay issue #140, open, filed by the Operator (`operator`) and accepted, with both its Tickets pending. */
+/** Replay issue #140, open, filed by the Operator (`operator`) and accepted, with both its Tickets pending, and never given up on. */
 export function aReplayIssue(overrides: Partial<ReplayIssueSnapshot> = {}): ReplayIssueSnapshot {
-  return { number: 140, open: true, author: "operator", body: acceptedBody(), comments: [], labels: ["fabrik:replay"], ...overrides };
+  return { number: 140, open: true, author: "operator", body: acceptedBody(), comments: [], labels: ["fabrik:replay"], gaveUp: false, ...overrides };
 }
 
 /** A weekly-limit reading of this utilization and status, resetting on Monday 2026-11-16 04:00 UTC. */
