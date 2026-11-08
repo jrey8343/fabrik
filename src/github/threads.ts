@@ -17,6 +17,7 @@ import {
   type PrototypeRequestMarker,
   prototypeRequestIn,
   prototypeStartedIn,
+  REQUEST_CHANGES_RUN_EMPTY_MARKER,
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunEndedIn,
   RESEARCH_RUN_FAILED_MARKER,
@@ -71,13 +72,14 @@ function isReviewIds(value: unknown): value is number[] {
 
 /**
  * Whether a PR's latest push came from a Request-changes run, from the Fabrik
- * App's comments on it, oldest first: its last note of such a push has no
- * Verdict after it yet, so the next Verdict is marked as from that run.
+ * App's comments on it, oldest first: its last note of such a push, or that
+ * such a run committed nothing (#388), has no Verdict after it yet, so the
+ * next Verdict is marked as from that run.
  */
 export function requestChangesRunIn(commentBodies: readonly string[]): boolean {
   let latest = false;
   for (const body of commentBodies) {
-    if (body.startsWith(REQUEST_CHANGES_RUN_MARKER)) latest = true;
+    if (isRequestChangesRunOutcome(body)) latest = true;
     else if (verdictsIn([body]).length > 0) latest = false;
   }
   return latest;
@@ -134,6 +136,11 @@ export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean 
     else if (verdictsIn([body]).length > 0) pushed = false;
   }
   return pushed;
+}
+
+/** Whether a comment is a Request-changes run's outcome note: its push, or that it committed nothing (#388). */
+function isRequestChangesRunOutcome(body: string): boolean {
+  return body.startsWith(REQUEST_CHANGES_RUN_MARKER) || body.startsWith(REQUEST_CHANGES_RUN_EMPTY_MARKER);
 }
 
 /** Whether a comment is the Kit's note of a Retry's or Request-changes run's push: that run's outcome. */
@@ -278,9 +285,13 @@ export function leftDraftSinceVerdictIn(history: readonly PullRequestHistoryItem
   return left;
 }
 
-/** Whether a Kit comment settles the Request changes before it: a Request-changes run's push note or Verdict, or a pass. */
+/**
+ * Whether a Kit comment settles the Request changes before it: a
+ * Request-changes run's push note, its note that it committed nothing (#388),
+ * or its Verdict, or a pass.
+ */
 function settlesRequestChanges(body: string): boolean {
-  if (body.startsWith(REQUEST_CHANGES_RUN_MARKER)) return true;
+  if (isRequestChangesRunOutcome(body)) return true;
   return verdictsIn([body]).some((record) => record.requestChanges || record.verdict === "pass");
 }
 

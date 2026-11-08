@@ -76,8 +76,9 @@ export type RunInFlight =
  * Retry is in flight from the Execution flaw that calls for it until a Retry
  * outcome: its push, or its empty-diff Verdict (which may call for the next
  * one). A Request-changes run is in flight from the Kit's note that started
- * it, or the Execution flaw that gave way to it, until its push, its Verdict
- * or its ended note, or until the PR leaves draft (#341). An Infrastructure
+ * it, or the Execution flaw that gave way to it, until its push, its Verdict,
+ * its ended note or its note that it committed nothing (#388), or until the
+ * PR leaves draft (#341). An Infrastructure
  * failure posts no outcome, so the run stays in flight until agent:implement
  * resumes it; a trust-root refusal closes the PR, or, for a Request-changes
  * run told to merge main in, ends it. A conflict-only run (#304) is in flight

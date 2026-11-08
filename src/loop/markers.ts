@@ -41,7 +41,8 @@ export interface RecordedAnswers extends RequestChangesAnswers {
 
 /**
  * The second line of a Request-changes run's outcome comment (#369), its push
- * note or its empty-diff Verdict, right under that comment's own marker:
+ * note or its note that it committed nothing (#388), right under that
+ * comment's own marker (an older one's empty-diff Verdict carries it too):
  * the run's two answers about the review it was started for. Only the Kit
  * writes that line, so agent text further down can't fake it.
  */
@@ -164,6 +165,15 @@ export function requestChangesRunEndedMarker(main: string): string {
 export function requestChangesRunEndedIn(body: string): string | null {
   return REQUEST_CHANGES_RUN_ENDED_MARKER.exec(body)?.[1] ?? null;
 }
+
+/**
+ * The first line of the Kit's note that a Request-changes run, not told to
+ * merge main in, committed nothing (#388): its outcome, with no Verdict. It
+ * ends the run's time in flight and settles the Request changes the run read,
+ * as its push would, and marks the next Verdict as from a Request-changes run,
+ * which uses no retry. Unlike the ended note, it records no conflict attempt.
+ */
+export const REQUEST_CHANGES_RUN_EMPTY_MARKER = "<!-- fabrik:request-changes-run-empty -->";
 
 /** The first line of the Kit's note on a PR that a Retry pushed to it: the Retry's outcome, which ends its time in flight. */
 export const RETRY_PUSH_MARKER = "<!-- fabrik:retry-push -->";
