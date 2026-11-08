@@ -119,8 +119,12 @@ The rule that gives a new issue `needs-triage`, unless a skill made it or it alr
 _Avoid_: inbox, new-issue hook
 
 **Triage**:
-The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside.
+The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside. An issue it sets aside as a duplicate of one of the Recent issues closes as GitHub's *duplicate*, naming that issue, the original; any other it sets aside closes as *not planned*.
 _Avoid_: sorting
+
+**Recent issues**:
+What Triage compares a new issue against for a duplicate: the 50 most recently created of the open issues and those closed in the last 30 days, the Monitor's included. The issue a duplicate names among them is its **original**.
+_Avoid_: comparison set, candidate list
 
 **Design session**:
 A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets, charts it as a Map when its destination is too foggy for one session, or ends as not planned when the Operator decides it won't be built: the issue gets `wontfix` and closes as not planned.

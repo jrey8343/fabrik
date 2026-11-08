@@ -5,6 +5,7 @@
 import { readFile } from "node:fs/promises";
 import type { AuditWindow } from "../loop/types.ts";
 import { AUDIT_INPUTS_FILE, type AuditInputs } from "./inputs.ts";
+import { jsonBlock } from "./prompt.ts";
 
 /** The heading over the pending Audit's own issue in the Auditor's prompt. */
 export const AUDIT_ISSUE_HEADING = "The pending Audit";
@@ -17,8 +18,6 @@ export const AUDIT_SECTIONS = {
   closedAudits: "The last closed Audits",
   filedCandidates: "Open issues filed from Audits",
 } as const;
-
-const json = (value: unknown): string[] => ["```json", JSON.stringify(value, null, 2), "```"];
 
 /**
  * What the Auditor's prompt carries after the pending Audit's issue, still
@@ -42,8 +41,8 @@ export async function auditContext(auditFile: string): Promise<{ window: AuditWi
     parts: [
       `This is Audit #${audit.number}. Its marked commit, which you're checked out at, is \`${audit.commit}\`.`,
       `## ${AUDIT_SECTIONS.window}`,
-      ...json(window),
-      ...lists.flatMap((list) => [`## ${AUDIT_SECTIONS[list]}`, ...json(inputs?.[list])]),
+      ...jsonBlock(window),
+      ...lists.flatMap((list) => [`## ${AUDIT_SECTIONS[list]}`, ...jsonBlock(inputs?.[list])]),
     ],
   };
 }

@@ -10,6 +10,7 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { findingsPathFor, researchBranchFor } from "../loop/researchPaths.ts";
+import { jsonBlock } from "./prompt.ts";
 
 /** The heading over the research Decision's own issue in the Researcher's prompt. */
 export const RESEARCH_ISSUE_HEADING = "The research Decision";
@@ -26,8 +27,6 @@ export const RESEARCH_SECTIONS = {
  * Implementer's from 1Password.
  */
 export const RESEARCHER_AUTHOR = { name: "Fabrik Researcher", email: "fabrik-researcher@users.noreply.github.com" } as const;
-
-const json = (value: unknown): string[] => ["```json", JSON.stringify(value, null, 2), "```"];
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -57,7 +56,7 @@ export async function researchContext(
     findingsPath,
     parts: [
       `## ${RESEARCH_SECTIONS.map}`,
-      ...json(map),
+      ...jsonBlock(map),
       `## ${RESEARCH_SECTIONS.findingsFile}`,
       `Write your findings to \`${findingsPath}\`, from the repo root, and change no other file.`,
     ],

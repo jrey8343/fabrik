@@ -100,6 +100,8 @@ A Product repo may keep two files that hold its Product intent, both free prose 
 
 An idea too foggy for one Design session fails the Fast path's size test, so Triage sends it to `needs-design` as usual, and its comment adds one line: `This looks too foggy for one Design session.` A clear but large idea goes to `needs-design` without the line. Triage never charts a Map itself: that's the Operator's call in the Design session (see [Maps](#maps)).
 
+Triage compares each issue against the recent issues: every open issue and every issue closed in the last 30 days, the 50 most recently created, each with the first 500 characters of its body, the Monitor's issues included. The job's read-only token reads them before the agent starts. When the issue reports the same request or defect as one of them, Triage chooses `wontfix` and names that original (`"duplicateOf": <n>` in its output). The issue then closes with state reason *duplicate*, and Triage's comment ends `Closing as a duplicate of #<n>.` A merely related issue isn't a duplicate, and in doubt Triage sorts as usual. Any other `wontfix` still closes as *not planned*. The original gets no comment, label or link.
+
 A person's reply on a `needs-info` issue swaps `needs-info` for `needs-triage`, which starts Triage again; a bot's reply does nothing. Deleting the reply doesn't undo the swap: Triage still runs, reads the thread without the reply, and most likely asks its questions again, one more round and one more notification.
 
 ## Design session (async)
