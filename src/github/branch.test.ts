@@ -299,21 +299,44 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     expect(branch.changes.mainMerge).toEqual({ main: rewritten, resolved: false });
   });
 
-  it("that merged a main whose history was rewritten is judged, never failing the push job, and counts every path unlike main as its own", async () => {
-    // Main is force-pushed to a new root, which shares no history with the PR.
+  /**
+   * Main is force-pushed to a new root, which shares no history with the PR, carrying its own workflow; the run
+   * merges it in, taking main's side wherever the two differ, then `edit`s the merge before committing it.
+   */
+  async function mergesRewrittenMain(edit: (clone: string) => Promise<void> = async () => {}): Promise<string> {
     const seed = join(root, "seed");
     await git(seed, "checkout", "--quiet", "--orphan", "rewritten");
     await writeFile(join(seed, "AGENTS.md"), "rules\n");
+    await writeFile(join(seed, ".github/workflows/ci.yml"), "ci, rewritten\n");
     const rewritten = await commit(seed, { "src/shared.ts": "rewritten\n" }, "Main, rewritten");
     await git(seed, "push", "--quiet", "--force", "origin", "rewritten:main");
     await git(clone, "fetch", "--quiet", "origin");
-    await git(clone, "merge", "--quiet", "--no-edit", "--allow-unrelated-histories", "-X", "ours", "origin/main");
+    await git(clone, "merge", "--quiet", "--no-commit", "--allow-unrelated-histories", "-X", "theirs", "origin/main");
+    await edit(clone);
+    await git(clone, "add", "-A");
+    await git(clone, "commit", "--quiet", "--no-edit");
     await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change");
+    return rewritten;
+  }
+
+  it("that merged a main whose history was rewritten is judged, never failing the push job, and counts every path unlike main as its own", async () => {
+    const rewritten = await mergesRewrittenMain();
 
     const branch = await rebuild(prHead, rewritten, rewritten);
 
     expect(branch.changes.mainMerge).toEqual({ main: rewritten, resolved: true });
     expect(paths(branch.changes.net)).toContain("src/feature.ts");
+    // The workflow it took from main, unchanged, isn't the run's own change (#390).
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "allow" });
+  });
+
+  it("that merged a main whose history was rewritten still counts as its own a trust-root file it edited to match neither side", async () => {
+    const rewritten = await mergesRewrittenMain((cwd) => writeFile(join(cwd, ".github/workflows/ci.yml"), "ci, weakened\n"));
+
+    const branch = await rebuild(prHead, rewritten, rewritten);
+
+    expect(paths(branch.changes.commits)).toContain(".github/workflows/ci.yml");
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "refuse", paths: [".github/workflows/ci.yml"] });
   });
 
   it("whose result names a main that's neither main as it started nor as it is now is judged against main as it is now", async () => {
@@ -489,6 +512,40 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     const branch = await rebuild(head, main, main);
 
     expect(branch.changes.mainMerge).toEqual({ main, resolved: true });
+  });
+});
+
+describe("A run whose range holds a merge remerge can't judge (#390)", () => {
+  /** Two side branches off the PR's head, each changing a file of its own, octopus-merged into the agent branch. */
+  async function octopusMerge(edit: (clone: string) => Promise<void> = async () => {}): Promise<void> {
+    await git(clone, "checkout", "--quiet", "-b", "left", prHead);
+    await commit(clone, { "src/left.ts": "left\n" }, "Left");
+    await git(clone, "checkout", "--quiet", "-b", "right", prHead);
+    await commit(clone, { "src/right.ts": "right\n" }, "Right");
+    await git(clone, "checkout", "--quiet", BRANCH);
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change");
+    await git(clone, "merge", "--quiet", "--no-commit", "left", "right");
+    await edit(clone);
+    await git(clone, "add", "-A");
+    await git(clone, "commit", "--quiet", "--no-edit");
+  }
+
+  it("rebuilds an octopus merge that takes each side unchanged, listing each side's own paths", async () => {
+    await octopusMerge();
+
+    const branch = await rebuild(prHead);
+
+    expect(paths(branch.changes.commits)).toEqual(["src/feature.ts", "src/left.ts", "src/right.ts"]);
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "allow" });
+  });
+
+  it("counts as its own a trust-root file an octopus merge edits beyond every side", async () => {
+    await octopusMerge((cwd) => writeFile(join(cwd, ".github/workflows/ci.yml"), "ci, weakened\n"));
+
+    const branch = await rebuild(prHead);
+
+    expect(paths(branch.changes.commits)).toContain(".github/workflows/ci.yml");
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "refuse", paths: [".github/workflows/ci.yml"] });
   });
 });
 
