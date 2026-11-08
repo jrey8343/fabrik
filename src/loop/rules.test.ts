@@ -196,6 +196,48 @@ describe("Applying Triage output", () => {
     });
   });
 
+  it("takes off a state label the Operator added while Triage ran, so Design and Dispatch don't both start", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage", "needs-design", "bug"] });
+
+    const plan = planFor(
+      triaged({ category: "bug", state: "ready-for-agent", comment: "Fast path.", brief: { summary: "Fix it.", acceptanceCriteria: ["It works"] } }),
+      snapshotOf(issue),
+      kitConfig(),
+    );
+
+    expect(plan).toMatchObject({
+      kind: "act",
+      actions: expect.arrayContaining([{ kind: "remove-label", issue: 7, label: "needs-design" }]),
+    });
+  });
+
+  // labels.ts: "An issue holds at most one" state label.
+  const stateLabels = ["needs-triage", "needs-info", "needs-design", "ready-for-agent", "ready-for-human", "wontfix"];
+  const landings = [
+    { state: "needs-info" },
+    { state: "needs-design" },
+    { state: "ready-for-agent", brief: { summary: "Fix it.", acceptanceCriteria: ["It works"] } },
+    { state: "ready-for-human" },
+    { state: "wontfix" },
+  ];
+  it.each(
+    landings.flatMap((landing) =>
+      stateLabels.filter((stale) => stale !== "needs-triage").map((stale) => [landing.state, stale, landing] as const),
+    ),
+  )("leaves exactly one state label when Triage lands %s on an issue that also has %s", (state, stale, landing) => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage", stale, "bug"] });
+
+    const plan = planFor(triaged({ category: "bug", comment: "Sorted.", ...landing }), snapshotOf(issue), kitConfig());
+
+    if (plan.kind !== "act") throw new Error(`expected act, got ${plan.kind}`);
+    const after = new Set(issue.labels);
+    for (const action of plan.actions) {
+      if (action.kind === "remove-label") after.delete(action.label);
+      if (action.kind === "add-labels") action.labels.forEach((label) => after.add(label));
+    }
+    expect([...after].filter((label) => stateLabels.includes(label))).toEqual([state]);
+  });
+
   it.each([
     ["is not JSON", "category: bug"],
     ["is not an object", JSON.stringify(["bug", "needs-design"])],

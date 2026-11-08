@@ -368,6 +368,9 @@ function applyTriage(issueNumber: number, text: string, issue: IssueSnapshot, op
   if (!issue.labels.includes(NEEDS_TRIAGE)) {
     return { kind: "nothing", reason: `#${issueNumber} no longer has needs-triage, so Triage's output is stale` };
   }
+  // An issue holds at most one state label, so any the Operator added while
+  // Triage ran comes off too, or Design and Dispatch could both start (#423).
+  const staleStates = issue.labels.filter(isStateLabel).filter((label) => label !== NEEDS_TRIAGE && label !== output.state);
   const staleCategories = issue.labels.filter(isCategoryLabel).filter((label) => label !== output.category);
   const added = [output.category, output.state].filter((label) => !issue.labels.includes(label));
   return {
@@ -375,7 +378,7 @@ function applyTriage(issueNumber: number, text: string, issue: IssueSnapshot, op
     actions: [
       { kind: "comment", issue: issueNumber, body: triageComment(output, issue.author) },
       { kind: "remove-label", issue: issueNumber, label: NEEDS_TRIAGE },
-      ...staleCategories.map((label) => ({ kind: "remove-label" as const, issue: issueNumber, label })),
+      ...[...staleStates, ...staleCategories].map((label) => ({ kind: "remove-label" as const, issue: issueNumber, label })),
       { kind: "add-labels", issue: issueNumber, labels: added },
       ...outcome(issueNumber, output, operator),
     ],
