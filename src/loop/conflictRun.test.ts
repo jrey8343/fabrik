@@ -282,12 +282,12 @@ describe("A conflict-only run on a draft whose push GitHub never reviewed (#389)
    * PR #50 for Ticket #7, a draft whose head B was pushed an hour before the check, by
    * the run these comments record, and which GitHub never reviewed because it conflicts with main.
    */
-  function stuckAfter(comments: readonly string[]): Thread {
+  function unreviewedAfter(comments: readonly string[]): Thread {
     const thread = new Thread();
     thread.comments.splice(0, thread.comments.length, ...comments);
     thread.draft = true;
     thread.headSha = B;
-    thread.headPushedAt = "2025-12-31T23:00:00Z";
+    thread.headPushedAt = "2025-12-31T22:50:00Z";
     return thread;
   }
 
@@ -303,7 +303,7 @@ describe("A conflict-only run on a draft whose push GitHub never reviewed (#389)
   }
 
   it("starts as for a PR at the Merge gate, and the PR stays in draft", () => {
-    const thread = stuckAfter([]);
+    const thread = unreviewedAfter([]);
     thread.mainMovesAndConflicts(MAIN);
 
     expect(thread.pullRequest().conflictRunInFlight).toBe(MAIN);
@@ -311,7 +311,7 @@ describe("A conflict-only run on a draft whose push GitHub never reviewed (#389)
   });
 
   it("pushes with a note that doesn't say its Verdict uses no retry", () => {
-    const thread = stuckAfter([]);
+    const thread = unreviewedAfter([]);
     thread.mainMovesAndConflicts(MAIN);
     thread.conflictRunFinishes(RESOLVED, "c".repeat(40));
 
@@ -321,7 +321,7 @@ describe("A conflict-only run on a draft whose push GitHub never reviewed (#389)
   });
 
   it("after a first Implement run, gets a Verdict that counts toward the two Retries, never exempt", () => {
-    const verdict = conflictRunThenRed(stuckAfter([]));
+    const verdict = conflictRunThenRed(unreviewedAfter([]));
 
     expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "ci", requestChanges: false, headSha: "c".repeat(40) }]);
     expect(verdict).not.toContain("conflict-only run");
@@ -329,21 +329,21 @@ describe("A conflict-only run on a draft whose push GitHub never reviewed (#389)
   });
 
   it("after a Retry, gets a Verdict that counts toward the two Retries, never exempt", () => {
-    const verdict = conflictRunThenRed(stuckAfter([FLAW_ON_A, "<!-- fabrik:retry-push -->\nThe Implementer pushed a fix."]));
+    const verdict = conflictRunThenRed(unreviewedAfter([FLAW_ON_A, "<!-- fabrik:retry-push -->\nThe Implementer pushed a fix."]));
 
     expect(verdictsIn([verdict])[0]).not.toHaveProperty("conflictRun");
     expect(verdict).toMatch(/Retry 2 of 2 starts now, stepped up:/);
   });
 
   it("after a Request-changes run, gets a Verdict marked as a Request-changes one, which costs no retry", () => {
-    const verdict = conflictRunThenRed(stuckAfter([PASS_ON_A, "<!-- fabrik:request-changes-run -->\nThe Implementer pushed the Operator's requested changes."]));
+    const verdict = conflictRunThenRed(unreviewedAfter([PASS_ON_A, "<!-- fabrik:request-changes-run -->\nThe Implementer pushed the Operator's requested changes."]));
 
     expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "ci", requestChanges: true, headSha: "c".repeat(40) }]);
     expect(verdict).toMatch(/Retry 1 of 2 starts now:/);
   });
 
   it("after a clean rebase of a Request-changes run's push, the Verdict is marked as a Request-changes one too", () => {
-    const thread = stuckAfter([PASS_ON_A, "<!-- fabrik:request-changes-run -->\nThe Implementer pushed the Operator's requested changes."]);
+    const thread = unreviewedAfter([PASS_ON_A, "<!-- fabrik:request-changes-run -->\nThe Implementer pushed the Operator's requested changes."]);
     const plan = planFor({ kind: "main-pushed", head: MAIN }, thread.conflictsSnapshot(MAIN), kitConfig());
     const rebase = actionsOf(plan).find((action) => action.kind === "rebase-onto-main");
     if (rebase?.kind === "rebase-onto-main") thread.land([...rebase.clean, ...rebase.pushed]);
@@ -356,7 +356,7 @@ describe("A conflict-only run on a draft whose push GitHub never reviewed (#389)
   });
 
   it("that can't push hands the PR to the Operator the same way: says why, adds ready-for-human, out of draft, never closed", () => {
-    const thread = stuckAfter([]);
+    const thread = unreviewedAfter([]);
     thread.mainMovesAndConflicts(MAIN);
 
     const actions = actionsOf(thread.conflictRunFinishes({ net: [], commits: [], updatedFromMain: false }, "c".repeat(40)));

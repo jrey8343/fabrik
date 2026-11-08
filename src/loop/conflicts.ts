@@ -20,15 +20,15 @@ import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, Plan, Pull
  * for each open agent PR, the Request-changes run for an undelivered Request
  * changes on it (src/loop/undelivered.ts, #341), or else a rebase onto main if
  * it conflicts with it, at the Merge gate or as a draft whose push GitHub never
- * reviewed (#389), or why there's neither. A draft's grace period is the
- * Review job's timeout, `reviewMinutes`.
+ * reviewed (#389), or why there's neither. Such a draft waits `reviewMinutes`
+ * from its push (reviewGraceMinutes).
  */
 export function checkConflicts(
   conflicts: ConflictSnapshot,
   operator: string,
   held: number | null = null,
-  runMinutes?: number,
-  reviewMinutes = 0,
+  runMinutes: number | undefined,
+  reviewMinutes: number,
 ): Plan {
   const { main, now } = conflicts;
   const reasons: string[] = [];
@@ -81,6 +81,16 @@ function whyNotRebased(
 }
 
 /**
+ * How long a draft's push is left for a Review that did start, before the Kit
+ * counts it as never reviewed (#389, ADR-0016): a Review is two jobs, the wait
+ * for the PR's required checks and the Reviewer's, each given the Review
+ * role's timeout, so a started one has ended by then.
+ */
+export function reviewGraceMinutes(reviewTimeoutMinutes: number): number {
+  return 2 * reviewTimeoutMinutes;
+}
+
+/**
  * Why this draft isn't one whose push GitHub never reviewed (#389, ADR-0016),
  * or null when it is. GitHub starts no pull_request-family workflow while a PR
  * conflicts with its base, so a push onto a conflicting draft (a Retry's, a
@@ -101,18 +111,18 @@ function whyNotUnreviewedDraft(pullRequest: PullRequestSnapshot, mergeable: bool
   if (headPushedAt === null) return `#${number} is a draft and when ${head} was pushed isn't known, so it isn't brought up to date with main`;
   // A Review that did start, before main moved, is given its job's whole timeout to land.
   if (Date.parse(now) - Date.parse(headPushedAt) < reviewMinutes * 60_000) {
-    return `#${number} is a draft pushed less than a Review job's timeout ago, so a Review of ${head} may still land`;
+    return `#${number} is a draft pushed less than a Review's timeout ago, so a Review of ${head} may still land`;
   }
   return null;
 }
 
 /**
  * The mechanical rebase of the PR's branch onto main, and what follows it.
- * Either way the PR goes back to draft first, so the push that follows starts
- * a full Review of the combined head, whose pass brings the PR back to the
- * Merge gate. A clean rebase is pushed, using no retry, and the attempt is
- * recorded once it has landed; if its lease refuses it, the PR goes back out
- * of draft with no attempt recorded, for the next check. A conflicting one
+ * Either way a PR at the Merge gate goes back to draft first, so the push that
+ * follows starts a full Review of the combined head, whose pass brings the PR
+ * back to the Merge gate. A clean rebase is pushed, using no retry, and the
+ * attempt is recorded once it has landed; if its lease refuses it, the PR goes
+ * back out of draft with no attempt recorded, for the next check. A conflicting one
  * records the attempt, pushes nothing and starts the
  * conflict-only run through agent:implement on the Ticket, which resumes the
  * run now in flight on its open PR (src/loop/implement.ts).
@@ -162,9 +172,7 @@ function rebaseOntoMain(pullRequest: PullRequestSnapshot, main: string): Action 
         issue: number,
         body: [
           conflictAttemptMarker({ main, outcome: "conflict-run", ...unreviewedDraft }),
-          draft
-            ? `${why}, and rebasing \`${branch}\` onto it conflicts too.`
-            : `\`main\` moved to ${head} and #${number} conflicts with it, and rebasing \`${branch}\` onto it conflicts too.`,
+          `${why}, and rebasing \`${branch}\` onto it conflicts too.`,
           "",
           draft
             ? "A conflict-only Implementer run starts now on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. The run uses no retry, but the Verdict on its push counts as one on the unreviewed push would have. The PR stays in draft, and Review runs on the run's push."

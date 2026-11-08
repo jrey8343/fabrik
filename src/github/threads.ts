@@ -95,12 +95,19 @@ export function requestChangesRunIn(commentBodies: readonly string[]): boolean {
  */
 export function conflictRunIn(commentBodies: readonly string[]): boolean {
   let latest = false;
-  let onUnreviewedDraft = false;
+  commentBodies.forEach((body, at) => {
+    if (body.startsWith(CONFLICT_RUN_MARKER)) latest = !startedOnUnreviewedDraft(commentBodies.slice(0, at));
+    else if (verdictsIn([body]).length > 0) latest = false;
+  });
+  return latest;
+}
+
+/** Whether the latest attempt note in these comments that started a conflict-only run was on a draft whose push GitHub never reviewed (#389). */
+function startedOnUnreviewedDraft(commentBodies: readonly string[]): boolean {
+  let latest = false;
   for (const body of commentBodies) {
     const attempt = conflictAttemptIn(body);
-    if (attempt?.outcome === "conflict-run") onUnreviewedDraft = attempt.unreviewedDraft === true;
-    else if (body.startsWith(CONFLICT_RUN_MARKER)) latest = !onUnreviewedDraft;
-    else if (verdictsIn([body]).length > 0) latest = false;
+    if (attempt?.outcome === "conflict-run") latest = attempt.unreviewedDraft === true;
   }
   return latest;
 }
@@ -112,12 +119,7 @@ export function conflictRunIn(commentBodies: readonly string[]): boolean {
  * uses no retry.
  */
 export function conflictRunOnUnreviewedDraftIn(commentBodies: readonly string[]): boolean {
-  let latest = false;
-  for (const body of commentBodies) {
-    const attempt = conflictAttemptIn(body);
-    if (attempt?.outcome === "conflict-run") latest = attempt.unreviewedDraft === true;
-  }
-  return latest && conflictRunInFlightIn(commentBodies) !== null;
+  return conflictRunInFlightIn(commentBodies) !== null && startedOnUnreviewedDraft(commentBodies);
 }
 
 /** The default branch heads the Kit's attempt notes on a PR record (#304), oldest first. */
