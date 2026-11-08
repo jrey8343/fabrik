@@ -57,7 +57,7 @@ type DesignTurnOutcome =
       readonly kind: "brief";
       /** What the session decided, for the closing comment. */
       readonly comment: string;
-      readonly brief: AgentBrief | OperatorBrief;
+      readonly brief: DesignAgentBrief | OperatorBrief;
     }
   | {
       /** The large outcome: a Spec and its Tickets, which supersede the issue. */
@@ -170,6 +170,16 @@ export interface MapDecision {
 }
 
 /**
+ * The small outcome's agent brief: Triage's, plus the Stepped-up start a
+ * Design session may set or clear as it rewrites the Ticket (ADR-0014). Only
+ * a Design session's brief has it: the Fast path never marks a Ticket.
+ */
+export interface DesignAgentBrief extends AgentBrief {
+  /** True adds the mark, false takes it off; absent leaves it as it stands, so a mark the Operator added by hand stays. */
+  readonly stepUp?: boolean;
+}
+
+/**
  * The small outcome when the whole issue is Operator work that fits one
  * sitting: ready for a Pairing session rather than an Implementer.
  */
@@ -243,7 +253,7 @@ function isSteps(value: unknown): value is string[] {
   return Array.isArray(value) && value.length > 0 && value.every(isText);
 }
 
-function readBrief(value: unknown, errors: string[]): AgentBrief | OperatorBrief | null {
+function readBrief(value: unknown, errors: string[]): DesignAgentBrief | OperatorBrief | null {
   if (isObject(value) && value.operator !== undefined) {
     if (value.operator !== true || !isText(value.summary) || !isSteps(value.steps)) {
       errors.push("an Operator brief needs operator: true, a summary and at least one step, with no empty step");
@@ -261,7 +271,13 @@ function readBrief(value: unknown, errors: string[]): AgentBrief | OperatorBrief
     errors.push("a brief needs a summary and at least one acceptance criterion");
     return null;
   }
-  return { summary: value.summary, acceptanceCriteria: value.acceptanceCriteria };
+  const brief = { summary: value.summary, acceptanceCriteria: value.acceptanceCriteria };
+  if (value.stepUp === undefined) return brief;
+  if (typeof value.stepUp !== "boolean") {
+    errors.push("the brief needs stepUp to be true or false, if it has one");
+    return null;
+  }
+  return { ...brief, stepUp: value.stepUp };
 }
 
 function readSpec(value: unknown, errors: string[]): { title: string; body: string } | null {
