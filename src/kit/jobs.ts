@@ -1,9 +1,12 @@
 // The Kit job's step: checks the Product's Kit config and its caller
 // workflow's Fabrik pins (read as data from a sparse checkout, never run), and
 // its Extra skill picks against each pinned Skills source's manifest, so no
-// agent starts on an invalid Kit; asks the Loop rules core what this event
-// calls for; and tells the workflow which job it routes to and the settings its jobs
-// need before they start, such as their timeout-minutes. Writes step outputs:
+// agent starts on an invalid Kit; on a pull request that changes the caller,
+// a bump of its pin say, checks the caller it proposes against the workflows
+// at the release it pins and fails naming any job that grants too little
+// (#422); asks the Loop rules core what this event calls for; and tells the
+// workflow which job it routes to and the settings its jobs need before they
+// start, such as their timeout-minutes. Writes step outputs:
 //   route                    "triage", "design", "implement", "review", "audit", "retro" or "research" when the
 //                            plan starts that agent run (a Retro run's evidence job, then its Retro job),
 //                            "replay" when it starts a replay Ticket's two arms (#156), its claim and then
@@ -72,6 +75,7 @@ import { planFor } from "../loop/rules.ts";
 import type { Action, Plan } from "../loop/types.ts";
 import { kitConfigErrors } from "../skills/pinnedManifests.ts";
 import { callerWorkflowPath, checkKit } from "./caller.ts";
+import { callerChangeErrors } from "./callerPermissions.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
 import type { KitConfig } from "./config.ts";
 import { kitJobSummary, subscriptionOf } from "./kitJob.ts";
@@ -82,6 +86,15 @@ function required(name: string): string {
   const value = process.env[name];
   if (value === undefined || value === "") throw new Error(`${name} is not set`);
   return value;
+}
+
+/** The head a pull_request_target run was opened, pushed or reopened at, whose caller workflow it proposes; null for any other event. */
+function pullRequestHeadOf(eventName: string, payload: Record<string, unknown>): string | null {
+  if (eventName !== "pull_request_target") return null;
+  const action = payload["action"];
+  if (action !== "opened" && action !== "synchronize" && action !== "reopened") return null;
+  const pullRequest = payload["pull_request"] as { head?: { sha?: unknown } } | undefined;
+  return typeof pullRequest?.head?.sha === "string" ? pullRequest.head.sha : null;
 }
 
 function routeOf(plan: Plan): string {
@@ -116,6 +129,23 @@ async function main(productDir: string): Promise<void> {
 
   const eventName = required("GITHUB_EVENT_NAME");
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
+  // A pull request that changes the caller workflow, a Dependabot bump of its pin say (#422): the caller it proposes
+  // must grant what the workflows at the release it pins ask for, or GitHub fails every run at startup once it
+  // merges, saying nothing. Checked here, with the base branch's Kit, so the PR's check names the gap before the merge.
+  const github = new GitHub(required("GH_TOKEN"), process.env["GITHUB_API_URL"]);
+  const headSha = pullRequestHeadOf(eventName, payload);
+  if (headSha !== null) {
+    const callerErrors = await callerChangeErrors(github, repo, { path: callerPath, baseText: callerText, headSha });
+    if (callerErrors.length > 0) {
+      for (const error of callerErrors) console.log(`::error title=Caller workflow::${error}`);
+      const summaryPath = process.env["GITHUB_STEP_SUMMARY"];
+      if (summaryPath !== undefined && summaryPath !== "") {
+        await appendFile(summaryPath, `### Fabrik Kit job\n\nThis pull request's ${callerPath} can't merge as it is:\n\n${callerErrors.map((error) => `- ${error}`).join("\n")}\n`);
+      }
+      process.exitCode = 1;
+      return;
+    }
+  }
   const event = loopEventFrom(eventName, payload);
   let plan: Plan | null = null;
   let ticket: number | null = null;
@@ -124,7 +154,6 @@ async function main(productDir: string): Promise<void> {
   if (event === null) {
     console.log(`The Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
   } else {
-    const github = new GitHub(required("GH_TOKEN"), process.env["GITHUB_API_URL"]);
     // This job only routes, with no Fabrik App token, so it doesn't know the App's login and takes any bot's
     // issue for the App's, so the App's pending Audit or Retro routes to its run: the push job's plan is the one applied.
     // Another bot's look-alike pending Audit or Retro so costs one run, whose result the push job drops (byAppOf).

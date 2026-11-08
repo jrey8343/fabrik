@@ -44,6 +44,39 @@ describe("A Dependabot config that already groups the Fabrik pins", () => {
   });
 });
 
+// #422: a major may change the caller's shape, so a Dependabot bump of it kills every run; only Setup delivers one.
+describe("A Dependabot config and a major Fabrik release", () => {
+  const ignoreBlock = /^ {4}# Never a major[\s\S]*?update-types: \["version-update:semver-major"\]\n/m;
+  const productEntry = '  - package-ecosystem: npm\n    directory: "/"\n    schedule:\n      interval: weekly\n';
+
+  it("the shim the Kit ships ignores a major for the Kit, so Dependabot proposes only a patch or a minor", () => {
+    expect(dependabotTemplate).toMatch(
+      /^ {4}ignore:\n {6}- dependency-name: "jrey8343\/fabrik\*"\n {8}update-types: \["version-update:semver-major"\]\n/m,
+    );
+  });
+
+  it("the shim an earlier Setup wrote, unchanged, with no ignore of a major, is replaced by the template", () => {
+    const earlier = dependabotTemplate.replace(ignoreBlock, "");
+    expect(earlier).not.toBe(dependabotTemplate);
+
+    expect(dependabotUpdate(earlier, dependabotTemplate)).toEqual({ content: dependabotTemplate });
+  });
+
+  it("an edited Fabrik entry that groups the pins but doesn't ignore a major gets a note saying what to add", () => {
+    const edited = `${dependabotTemplate.replace(ignoreBlock, "")}${productEntry}`;
+
+    expect(dependabotUpdate(edited, dependabotTemplate)).toEqual({
+      note: expect.stringMatching(/doesn't ignore a major Fabrik release.*version-update:semver-major/),
+    });
+  });
+
+  it("an edited Fabrik entry that ignores a major in its own quoting is left alone", () => {
+    const edited = `${dependabotTemplate.replace('update-types: ["version-update:semver-major"]', "update-types:\n          - version-update:semver-major")}${productEntry}`;
+
+    expect(dependabotUpdate(edited, dependabotTemplate)).toBeNull();
+  });
+});
+
 describe("The Product's .claude/settings.json with the Fabrik SessionStart hook merged in", () => {
   it("is printed as Prettier prints JSON, in the file's own indent, with an array that fits on one line", () => {
     const theirs = '{\n    "permissions": {\n        "allow": [\n            "Bash(npm test)",\n            "Bash(npm run lint)"\n        ]\n    }\n}\n';

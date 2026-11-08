@@ -192,11 +192,11 @@ export const DEPENDABOT_PATH = ".github/dependabot.yml";
  */
 export function dependabotUpdate(existing: string | null, template: string): FileUpdate {
   if (existing === null) return { content: template };
-  if (existing.includes("jrey8343/fabrik")) return groupedFabrikPins(existing, template);
+  if (existing.includes("jrey8343/fabrik")) return fabrikEntryUpdate(existing, template);
   const lines = existing.split("\n");
   const updatesAt = lines.findIndex((line) => /^updates:\s*$/.test(line));
   if (updatesAt === -1) return { content: template };
-  const handMerge = `${DEPENDABOT_PATH} already has an entry for GitHub Actions, so the Fabrik one wasn't added: add \`- dependency-name: "jrey8343/fabrik*"\` to that entry's allow list (if it has one), group the Fabrik pins into one PR with \`groups: { fabrik: { patterns: ["jrey8343/fabrik*"] } }\`, and set its cooldown to 0 days.`;
+  const handMerge = `${DEPENDABOT_PATH} already has an entry for GitHub Actions, so the Fabrik one wasn't added: add \`- dependency-name: "jrey8343/fabrik*"\` to that entry's allow list (if it has one), group the Fabrik pins into one PR with \`groups: { fabrik: { patterns: ["jrey8343/fabrik*"] } }\`, ignore a major with \`ignore: [{ dependency-name: "jrey8343/fabrik*", update-types: ["version-update:semver-major"] }]\`, and set its cooldown to 0 days.`;
   if (/package-ecosystem:\s*["']?github-actions/.test(existing)) return { note: handMerge };
   const laterTopLevelKey = lines.slice(updatesAt + 1).some((line) => /^[A-Za-z]/.test(line));
   if (laterTopLevelKey) {
@@ -208,18 +208,44 @@ export function dependabotUpdate(existing: string | null, template: string): Fil
   return { content: `${existing}${separator}${entry}` };
 }
 
+/** A YAML text without its comment lines. */
+function withoutComments(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("#"))
+    .join("\n");
+}
+
+/** The template's group block, which an earlier Setup's shim lacked. */
+const GROUP_BLOCK = /^ {4}# Each pinned Fabrik workflow[\s\S]*?- "jrey8343\/fabrik\*"\n/m;
+/** The template's ignore of a major release, which a Setup before #422 wrote no shim with. */
+const IGNORE_BLOCK = /^ {4}# Never a major[\s\S]*?update-types: \["version-update:semver-major"\]\n/m;
+
 /**
  * Fabrik pins several workflows, and Dependabot opens a PR per dependency
  * unless a group joins them, so an ungrouped shim lands a release half-bumped.
- * The ungrouped shim setup wrote unchanged is replaced; an edited one is the
- * Operator's to fix.
+ * And a major may change the caller's shape (a job's permissions, say), which
+ * a bump can't carry, so a shim that proposes one kills every run at startup
+ * once it merges (#422): a major arrives only through Setup. The shim an
+ * earlier Setup wrote unchanged is replaced; an edited one is the Operator's
+ * to fix, and the notes say what to add.
  */
-function groupedFabrikPins(existing: string, template: string): FileUpdate {
+function fabrikEntryUpdate(existing: string, template: string): FileUpdate {
   // Whatever quotes the Product's formatter puts on the pattern, or none, and any comment after it.
-  if (/^\s+fabrik:\n\s+patterns:\n\s+- (["']?)jrey8343\/fabrik\*\1(?:\s|$)/m.test(existing)) return null;
-  const groupBlock = /^ {4}# Each pinned Fabrik workflow[\s\S]*?- "jrey8343\/fabrik\*"\n/m;
-  if (existing === template.replace(groupBlock, "")) return { content: template };
-  return {
-    note: `${DEPENDABOT_PATH} doesn't group the Fabrik pins, so Dependabot bumps each pinned workflow in its own PR and the caller pins two releases until both merge: add \`groups: { fabrik: { patterns: ["jrey8343/fabrik*"] } }\` to its Fabrik entry.`,
-  };
+  const grouped = /^\s+fabrik:\n\s+patterns:\n\s+- (["']?)jrey8343\/fabrik\*\1(?:\s|$)/m.test(existing);
+  // The ignore of a major for the Kit, in a flow or block list, whatever the quoting.
+  const ignoresMajor = /^\s+ignore:\n\s+- dependency-name: (["']?)jrey8343\/fabrik\*\1\n\s+update-types:\s*(?:\[\s*)?(?:\n\s+- )?(["']?)version-update:semver-major\2(?:\s|\]|$)/m.test(existing);
+  if (grouped && ignoresMajor) return null;
+  // The same shim but for a block or two and its comments, whose wording each Kit release may change.
+  const earlierShims = [template.replace(GROUP_BLOCK, ""), template.replace(IGNORE_BLOCK, ""), template.replace(GROUP_BLOCK, "").replace(IGNORE_BLOCK, "")];
+  if (earlierShims.some((shim) => withoutComments(shim) === withoutComments(existing))) return { content: template };
+  const notes = [
+    grouped
+      ? []
+      : `${DEPENDABOT_PATH} doesn't group the Fabrik pins, so Dependabot bumps each pinned workflow in its own PR and the caller pins two releases until both merge: add \`groups: { fabrik: { patterns: ["jrey8343/fabrik*"] } }\` to its Fabrik entry.`,
+    ignoresMajor
+      ? []
+      : `${DEPENDABOT_PATH} doesn't ignore a major Fabrik release, so Dependabot proposes one as a plain bump, which can't carry the caller workflow changes a major may need, and a caller granting less than the release's workflows ask fails every run at startup: add \`ignore: [{ dependency-name: "jrey8343/fabrik*", update-types: ["version-update:semver-major"] }]\` to its Fabrik entry, and take a major through Setup.`,
+  ].flat();
+  return { note: notes.join(" ") };
 }
