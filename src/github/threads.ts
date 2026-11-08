@@ -21,6 +21,7 @@ import {
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunEndedIn,
   RESEARCH_RUN_FAILED_MARKER,
+  RETRY_ENDED_MARKER,
   RETRY_PUSH_MARKER,
   SESSION_FINISHED,
   startedReviewsIn,
@@ -48,12 +49,14 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, headSha } = value as Record<string, unknown>;
+  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, leftLoop = false, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
   if (source !== "reviewer" && source !== "ci" && source !== "empty-diff") return null;
   // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one; likewise requestChangesFirst (#341).
   if (typeof requestChanges !== "boolean" || typeof conflictRun !== "boolean") return null;
   if (requestChangesFirst !== undefined && !isReviewIds(requestChangesFirst)) return null;
+  // Likewise leftLoop (#416).
+  if (typeof leftLoop !== "boolean") return null;
   if (typeof headSha !== "string") return null;
   return {
     verdict: verdict as Verdict,
@@ -61,6 +64,7 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     requestChanges,
     ...(conflictRun ? { conflictRun: true as const } : {}),
     ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
+    ...(leftLoop ? { leftLoop: true as const } : {}),
     headSha,
   };
 }
@@ -135,15 +139,29 @@ export function conflictAttemptsIn(commentBodies: readonly string[]): string[] {
  * The default branch head of the conflict-only run in flight on a PR (#304),
  * or null, from the Fabrik App's comments on it, oldest first: an attempt
  * note that started one, with neither its push note nor its ended note since.
+ * A Request-changes run's push note, or any Verdict, since ends it too (#416):
+ * agent:implement resumes the Request-changes run owed first, so its push can
+ * land in the conflict-only run's place, and a Verdict judges whatever the PR
+ * is at, so neither leaves that run owed.
  */
 export function conflictRunInFlightIn(commentBodies: readonly string[]): string | null {
   let inFlight: string | null = null;
   for (const body of commentBodies) {
     const attempt = conflictAttemptIn(body);
     if (attempt !== null) inFlight = attempt.outcome === "conflict-run" ? attempt.main : null;
-    else if (body.startsWith(CONFLICT_RUN_MARKER) || body.startsWith(CONFLICT_RUN_ENDED_MARKER)) inFlight = null;
+    else if (endsConflictRun(body)) inFlight = null;
   }
   return inFlight;
+}
+
+/** Whether a comment ends the conflict-only run in flight: its push or ended note, a Request-changes run's push note, or a Verdict (#416). */
+function endsConflictRun(body: string): boolean {
+  return (
+    body.startsWith(CONFLICT_RUN_MARKER) ||
+    body.startsWith(CONFLICT_RUN_ENDED_MARKER) ||
+    body.startsWith(REQUEST_CHANGES_RUN_MARKER) ||
+    verdictsIn([body]).length > 0
+  );
 }
 
 /**
@@ -159,6 +177,29 @@ export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean 
     else if (verdictsIn([body]).length > 0) pushed = false;
   }
   return pushed;
+}
+
+/**
+ * Whether the Kit has noted, since a PR's latest Verdict, that the Retry it
+ * called for won't start, its Ticket having left the Loop (#416), from the
+ * Fabrik App's comments on it, oldest first.
+ */
+export function retryEndedSinceVerdictIn(commentBodies: readonly string[]): boolean {
+  let ended = false;
+  for (const body of commentBodies) {
+    if (body.startsWith(RETRY_ENDED_MARKER)) ended = true;
+    else if (verdictsIn([body]).length > 0) ended = false;
+  }
+  return ended;
+}
+
+/** When the latest Verdict in a PR's history was posted, or null when it has none (#416). */
+export function verdictPostedAtIn(history: readonly PullRequestHistoryItem[]): string | null {
+  let latest: string | null = null;
+  for (const item of history) {
+    if (item.kind === "bot-comment" && verdictsIn([item.body]).length > 0 && (latest === null || item.at >= latest)) latest = item.at;
+  }
+  return latest;
 }
 
 /**

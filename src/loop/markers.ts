@@ -16,7 +16,7 @@ import type { Strength, VerdictRecord } from "./types.ts";
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
 
 export function verdictMarker(record: VerdictRecord): string {
-  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, headSha } = record;
+  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, leftLoop, headSha } = record;
   // Only a conflict-only run's Verdict says so (#304), and only one that gave way to an undelivered Request
   // changes (#341), so every other marker reads as it always has.
   const fields = {
@@ -25,6 +25,7 @@ export function verdictMarker(record: VerdictRecord): string {
     requestChanges,
     ...(conflictRun === true ? { conflictRun } : {}),
     ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
+    ...(leftLoop === true ? { leftLoop } : {}),
     headSha,
   };
   return `<!-- fabrik:verdict ${JSON.stringify(fields)} -->`;
@@ -186,6 +187,13 @@ export const REQUEST_CHANGES_RUN_EMPTY_MARKER = "<!-- fabrik:request-changes-run
 
 /** The first line of the Kit's note on a PR that a Retry pushed to it: the Retry's outcome, which ends its time in flight. */
 export const RETRY_PUSH_MARKER = "<!-- fabrik:retry-push -->";
+
+/**
+ * The first line of the Kit's note that the Retry a PR's latest Verdict called
+ * for never started, and won't, as its Ticket has left `ready-for-agent`
+ * (#416): no Retry is in flight from it.
+ */
+export const RETRY_ENDED_MARKER = "<!-- fabrik:retry-ended -->";
 
 /** How the note of a Retry's push opened before it carried RETRY_PUSH_MARKER, so older PRs read the same. */
 export const UNMARKED_RETRY_PUSH = "The Implementer pushed a fix for the Execution flaw to ";

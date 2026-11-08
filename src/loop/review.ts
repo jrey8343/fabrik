@@ -173,16 +173,17 @@ export function verdictActions(
   operator: string,
 ): Action[] {
   const first = verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator) : null;
+  const next = first ?? nextAfter(verdict, pullRequest);
   const record: VerdictRecord = {
     verdict,
     source,
     requestChanges: pullRequest.requestChangesRun,
     ...(pullRequest.conflictRun ? { conflictRun: true as const } : {}),
     ...(first === null ? {} : { requestChangesFirst: first.reviews }),
+    ...(next !== null && "leftLoop" in next ? { leftLoop: true as const } : {}),
     headSha: event.headSha,
   };
   const by = BY[source];
-  const next = first ?? nextAfter(verdict, pullRequest);
   const body = [
     verdictMarker(record),
     `## Verdict: ${HEADINGS[verdict]}`,
@@ -232,7 +233,7 @@ function requestChangesFirst(
 }
 
 /** What a Verdict leads to beyond its comment: a retry, back to design, or (for a pass) nothing here. */
-function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot): { line: string; actions: Action[] } | null {
+function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot): { line: string; actions: Action[]; leftLoop?: true } | null {
   if (verdict === "pass") return null;
   const retry = verdict === "execution-flaw" ? retryAfterFlaw(pullRequest) : null;
   if (retry !== null) return retry;

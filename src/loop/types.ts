@@ -601,6 +601,14 @@ export interface PullRequestSnapshot {
    */
   readonly pushedSinceVerdict: boolean;
   /**
+   * Whether the Kit has noted since its latest Verdict that the Retry that
+   * Verdict called for never started and won't, its Ticket having left
+   * `ready-for-agent` (#416). Then no Retry is in flight.
+   */
+  readonly retryEndedSinceVerdict: boolean;
+  /** When the Fabrik App posted its latest Verdict, as an ISO 8601 time, or null when it has none. */
+  readonly verdictPostedAt: string | null;
+  /**
    * When its current head was pushed, as an ISO 8601 time, as best its history
    * tells (#389): the latest of its force pushes, the Kit's notes of its own
    * pushes, its opening by the Fabrik App, and its head commit's commit time,
@@ -708,6 +716,12 @@ export interface VerdictRecord {
    * count as one, and started their Request-changes run; absent otherwise.
    */
   readonly requestChangesFirst?: readonly number[];
+  /**
+   * True on an Execution flaw whose Ticket had left `ready-for-agent` by the
+   * time it was given (#416): it called for no Retry, doesn't count as one,
+   * and started nothing; absent otherwise.
+   */
+  readonly leftLoop?: true;
   /** The head commit it was given on. */
   readonly headSha: string;
 }
