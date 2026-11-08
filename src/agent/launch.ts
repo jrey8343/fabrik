@@ -35,6 +35,44 @@ export function schemaOf<T>(read: (value: unknown) => Checked<T>): StandardSchem
 }
 
 /**
+ * A role's output contract: a JSON object in the tag, checked by `read`, or
+ * for the Reviewer plain text, checked by `text`, which throws when it breaks the contract.
+ */
+export type OutputContract<T> = { readonly read: (value: unknown) => Checked<T> } | { readonly text: (reply: string) => T };
+
+/**
+ * The Standard Schema Sandcastle checks a run's JSON reply with: it asks the
+ * agent to fix a reply that breaks the contract, and hands back one that keeps
+ * it as the agent wrote it, never the contract's parsed shape, which the push
+ * job's check would read as a different output (#469).
+ */
+export function replySchemaOf<T>(read: (value: unknown) => Checked<T>): StandardSchemaV1<unknown, unknown> {
+  return {
+    "~standard": {
+      version: 1,
+      vendor: "fabrik",
+      validate(value) {
+        const result = read(value);
+        return result.ok ? { value } : { issues: result.errors.map((message) => ({ message })) };
+      },
+    },
+  };
+}
+
+/**
+ * A run's reply, as Sandcastle hands it back, checked against its contract:
+ * the parsed output, and the output its agent result saves, which the push job
+ * checks against the same contract. A JSON reply is saved as the agent wrote
+ * it, so the push job's check is the only place it's converted (#469).
+ */
+export function settleReply<T>(contract: OutputContract<T>, reply: unknown): { readonly output: T; readonly saved: string } {
+  if ("text" in contract) return { output: contract.text(String(reply)), saved: String(reply).trim() };
+  const checked = contract.read(reply);
+  if (!checked.ok) throw new Error(`The reply breaks its output contract: ${checked.errors.join("; ")}`);
+  return { output: checked.output, saved: JSON.stringify(reply) };
+}
+
+/**
  * The arguments Sandcastle's claudeCode() passes to `claude` (its
  * buildPrintCommand), for the preflight, with any `flags` the run adds before
  * the prompt.
