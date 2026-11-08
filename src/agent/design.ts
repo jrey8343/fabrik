@@ -139,8 +139,10 @@ export const EMPTY_DIFFS_HEADING = "The Implement runs that built nothing";
 export function emptyDiffContext(issue: unknown): string[] {
   const comments = typeof issue === "object" && issue !== null && "comments" in issue && Array.isArray(issue.comments) ? (issue.comments as unknown[]) : [];
   let bodies: string[] = [];
-  for (const comment of comments) {
-    const body = text((comment as { body?: unknown } | null)?.body);
+  for (const comment of comments as ({ body?: unknown; byBot?: unknown } | null)[]) {
+    // Only the Kit's comments count, so quoting a marker plants no reason and ends no session (#426).
+    if (comment?.byBot !== true) continue;
+    const body = text(comment.body);
     if (body.startsWith(SESSION_FINISHED) || LIVE_OUTCOME_MARKER.test(body)) bodies = [];
     else if (body.startsWith(EMPTY_DIFF_MARKER)) bodies.push(body.slice(EMPTY_DIFF_MARKER.length).trim());
   }
