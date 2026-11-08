@@ -867,7 +867,7 @@ function pullRequestGitHub({
             draftEvents: { pageInfo: { hasPreviousPage: false }, nodes: [] },
             createdAt: "2026-11-01T09:00:00Z",
             forcePushes: { nodes: [] },
-            headCommit: { nodes: [] },
+            commits: { pageInfo: { hasPreviousPage: false }, nodes: [] },
             ...(/closingIssuesReferences/.test(pullRequestQuery)
               ? {
                   closingIssuesReferences: {
@@ -2275,7 +2275,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     draftEvents: { pageInfo: { hasPreviousPage: false }, nodes: [] },
     createdAt: "2025-12-01T00:00:00Z",
     forcePushes: { nodes: [] },
-    headCommit: { nodes: [] },
+    commits: { pageInfo: { hasPreviousPage: false }, nodes: [] },
     closingIssuesReferences: { nodes: [] },
     mergeable,
     ...overrides,
@@ -2347,10 +2347,10 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     });
 
     it("is no earlier than its head commit's commit time, as for a push of the Operator's that GitHub records no event for", async () => {
-      const headCommit = { nodes: [{ commit: { oid: HEAD_SHA, committedDate: "2026-01-06T00:00:00Z" } }] };
+      const commits = { pageInfo: { hasPreviousPage: false }, nodes: [{ commit: { oid: HEAD_SHA, committedDate: "2026-01-06T00:00:00Z" } }] };
 
-      expect(await pushedAt({ headCommit })).toBe("2026-01-06T00:00:00Z");
-      expect(await pushedAt({ headCommit: { nodes: [{ commit: { oid: "b".repeat(40), committedDate: "2026-01-06T00:00:00Z" } }] } })).toBe("2026-01-01T00:00:00Z");
+      expect(await pushedAt({ commits })).toBe("2026-01-06T00:00:00Z");
+      expect(await pushedAt({ commits: { pageInfo: { hasPreviousPage: false }, nodes: [{ commit: { oid: "b".repeat(40), committedDate: "2026-01-06T00:00:00Z" } }] } })).toBe("2026-01-01T00:00:00Z");
     });
   });
 

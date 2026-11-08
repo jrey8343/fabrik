@@ -1,6 +1,7 @@
 // Reads the Kit's history back from an issue's or a PR's comments, through
 // the markers the core writes on them (src/loop/markers.ts), into snapshot
-// fields. Pure, no I/O. The snapshot passes in only the comments a marker may
+// fields, and drops the push notes whose push never landed (landedPushNotes)
+// before they're read. Pure, no I/O. The snapshot passes in only the comments a marker may
 // come from: a bot's, where quoting one mustn't fake it.
 import type { SentBack } from "../loop/backToDesign.ts";
 import {
@@ -17,6 +18,7 @@ import {
   type PrototypeRequestMarker,
   prototypeRequestIn,
   prototypeStartedIn,
+  pushedHeadIn,
   REQUEST_CHANGES_RUN_EMPTY_MARKER,
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunEndedIn,
@@ -218,6 +220,40 @@ export function verdictPostedAtIn(history: readonly PullRequestHistoryItem[]): s
  */
 export function isKitPushNote(body: string): boolean {
   return isPushNote(body) || conflictAttemptIn(body)?.outcome === "rebased";
+}
+
+/**
+ * Whether a commit is on a PR's branch, as the snapshot read its latest
+ * commits (#420): null when it isn't among them but the branch has older
+ * commits than were read, so it can't tell.
+ */
+export type OnBranch = (sha: string) => boolean | null;
+
+/**
+ * A PR's comments from the Fabrik App, oldest first, less each push note of a
+ * run's whose push never landed (#420; see pushedHeadMarker), so every reader
+ * takes that run as still in flight. A note is taken as landed when the head it names is on the
+ * branch, or when the Kit has moved on from it since: a Verdict, an attempt to
+ * bring the PR up to date with main, or a later push note that landed, any of
+ * which may have rewritten the branch, as a rebase does. A note that names no
+ * head, as every one from before #420, or whose head the snapshot can't place,
+ * is taken as landed.
+ */
+export function landedPushNotes<Comment extends { readonly body: string }>(comments: readonly Comment[], onBranch: OnBranch): Comment[] {
+  let movedOn = false;
+  const landed: Comment[] = [];
+  for (const comment of [...comments].reverse()) {
+    const { body } = comment;
+    if (isPushNote(body)) {
+      const head = pushedHeadIn(body);
+      if (!movedOn && head !== null && onBranch(head) === false) continue;
+      movedOn = true;
+    } else if (isVerdict(body) || conflictAttemptIn(body) !== null) {
+      movedOn = true;
+    }
+    landed.push(comment);
+  }
+  return landed.reverse();
 }
 
 /** Whether a comment is a Request-changes run's outcome note: its push, or that it committed nothing (#388). */

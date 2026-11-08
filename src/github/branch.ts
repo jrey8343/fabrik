@@ -492,6 +492,8 @@ async function onItsOwnBranch(
       updatedFromMain: !(await isAncestor(git, main, head)) && (await isAncestor(git, main, tip)),
       ...(moved ? { rebase: { onto: head, conflicted: false } } : {}),
       ...(told === null || resolved === null ? {} : { mainMerge: { main: told, resolved } }),
+      // What the push lands, which the run's push note names (#420).
+      pushedHead: tip,
     },
     head: tip,
     async push(name) {
