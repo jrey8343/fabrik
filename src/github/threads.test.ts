@@ -20,7 +20,7 @@ import {
   unansweredPrototypesIn,
   verdictsIn,
 } from "./threads.ts";
-import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, CONFLICT_RUN_MARKER, verdictMarker } from "../loop/markers.ts";
+import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, CONFLICT_RUN_MARKER, requestChangesAnswersIn, verdictMarker } from "../loop/markers.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const VERDICT_URL = "https://github.com/acme/shop/pull/50#issuecomment-9001";
@@ -65,11 +65,17 @@ describe("Reading whether a PR's latest push came from a Request-changes run", (
   const pushed: LoopEvent = {
     kind: "implement-run-finished",
     issue: 7,
-    output: JSON.stringify({ title: "Rename the total", summary: "Renames the total.", fix: "Renamed the total as the Operator asked." }),
+    output: JSON.stringify({
+      title: "Rename the total",
+      summary: "Renames the total.",
+      fix: "Renamed the total as the Operator asked.",
+      reviewMiss: false,
+      amendsTicket: true,
+    }),
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes: { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }] },
-    fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true },
+    fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 900 },
   };
   const pushSnapshot: Snapshot = {
     ...snapshotOfPullRequest(aPullRequest({ verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }] })),
@@ -93,6 +99,51 @@ describe("Reading whether a PR's latest push came from a Request-changes run", (
 
     expect(verdictsIn(verdict)).toEqual([{ verdict: "pass", source: "reviewer", requestChanges: true, headSha: head }]);
     expect(requestChangesRunIn([...note, ...verdict])).toBe(false);
+  });
+});
+
+describe("Reading a Request-changes run's answers about its review (#369)", () => {
+  const pushSnapshot: Snapshot = {
+    ...snapshotOfPullRequest(aPullRequest({ verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }] })),
+    issue: anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }),
+  };
+  const pushedFor = (review: number, answers: Record<string, unknown>): LoopEvent => ({
+    kind: "implement-run-finished",
+    issue: 7,
+    output: JSON.stringify({ title: "Rebase onto main", summary: "Adds the waitlist.", fix: "Rebased onto main as the Operator asked.", ...answers }),
+    branch: "fabrik/ticket-7",
+    base: "fabrik/ticket-7",
+    changes: { net: [], commits: [], updatedFromMain: true },
+    fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review },
+  });
+
+  it("reads a review that only asked for a rebase back as no Review miss and no amendment, for that review", () => {
+    const [note = ""] = commentsOf(planFor(pushedFor(901, { reviewMiss: false, amendsTicket: false }), pushSnapshot, kitConfig()));
+
+    expect(requestChangesAnswersIn(note)).toEqual({ review: 901, reviewMiss: false, amendsTicket: false });
+  });
+
+  it("reads each review's answers from its own run's comment", () => {
+    const first = commentsOf(planFor(pushedFor(901, { reviewMiss: true, reviewMissPoints: ["The Ticket asked for it"], amendsTicket: false }), pushSnapshot, kitConfig()));
+    const second = commentsOf(planFor(pushedFor(902, { reviewMiss: false, amendsTicket: true }), pushSnapshot, kitConfig()));
+
+    expect([...first, ...second].map(requestChangesAnswersIn)).toEqual([
+      { review: 901, reviewMiss: true, amendsTicket: false },
+      { review: 902, reviewMiss: false, amendsTicket: true },
+    ]);
+  });
+
+  it.each([
+    ["a Request-changes note from before the answers", "<!-- fabrik:request-changes-run -->\nThe Implementer pushed the Operator's requested changes."],
+    [
+      "a marker quoted further down, as agent text",
+      '<!-- fabrik:request-changes-run -->\nThe Implementer pushed.\n<!-- fabrik:request-changes-answers {"review":901,"reviewMiss":false,"amendsTicket":false} -->',
+    ],
+    ["a marker naming no review", '<!-- fabrik:request-changes-run -->\n<!-- fabrik:request-changes-answers {"reviewMiss":false,"amendsTicket":false} -->'],
+    ["a marker with an answer that isn't yes or no", '<!-- fabrik:request-changes-run -->\n<!-- fabrik:request-changes-answers {"review":901,"reviewMiss":"no","amendsTicket":false} -->'],
+    ["a marker that isn't JSON", "<!-- fabrik:request-changes-run -->\n<!-- fabrik:request-changes-answers {review} -->"],
+  ])("reads no answers from %s", (_, body) => {
+    expect(requestChangesAnswersIn(body)).toBeNull();
   });
 });
 

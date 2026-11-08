@@ -166,8 +166,11 @@ export type LoopEvent =
         readonly pullRequest: number;
         readonly headSha: string;
         readonly runUrl: string;
-        /** Whether the run was the Operator's Request changes rather than a retry. */
-        readonly requestChanges?: boolean;
+        /**
+         * For a Request-changes run, rather than a retry: the Operator's review
+         * it was started for, which its answers are about (#369).
+         */
+        readonly review?: number;
         /**
          * For a conflict-only run (#304): the default branch's head it was
          * started to bring the PR up to date with. It isn't a retry.

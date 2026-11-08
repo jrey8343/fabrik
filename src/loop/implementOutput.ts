@@ -27,7 +27,35 @@ export interface ImplementOutput {
    * the run gave anything but a list of paths: a bad list never fails the run.
    */
   readonly routes?: readonly string[];
+  /**
+   * For a Request-changes run alone: its two answers about the review it was
+   * started for, which the Kit records on the PR (#369). Every other run
+   * leaves them out.
+   */
+  readonly answers?: ImplementerAnswers;
 }
+
+/**
+ * A Request-changes run's two independent answers about the review it was
+ * started for: whether it holds a Review miss (GLOSSARY.md), and whether it
+ * amends the Ticket. What the Kit records, counts and hands the Retro.
+ */
+export interface RequestChangesAnswers {
+  readonly reviewMiss: boolean;
+  readonly amendsTicket: boolean;
+}
+
+/** The answers as the Implementer gives them: with each point that is a Review miss named, none when there is no Review miss. */
+export interface ImplementerAnswers extends RequestChangesAnswers {
+  readonly points: readonly string[];
+}
+
+/**
+ * Which kind of Implement run an output comes from, and so which contract it's
+ * checked against: a first run's, a run on an existing PR's (a retry or a
+ * conflict-only run), or a Request-changes run's.
+ */
+export type ImplementRunKind = "first" | "pull-request" | "request-changes";
 
 export type ImplementOutputResult =
   | { readonly ok: true; readonly output: ImplementOutput }
@@ -84,13 +112,44 @@ export function readPullRequestRunOutput(value: unknown): ImplementOutputResult 
   return result;
 }
 
-/** Parses the text an agent emitted, then checks it, against the contract for a run on an existing PR when `onPullRequest`. */
-export function parseImplementOutput(text: string, onPullRequest = false): ImplementOutputResult {
+/**
+ * The contract for a Request-changes run: a run on an existing PR's, plus its
+ * two answers about the review it was started for, both required.
+ */
+export function readRequestChangesRunOutput(value: unknown): ImplementOutputResult {
+  const result = readPullRequestRunOutput(value);
+  if (!result.ok) return result;
+  const { reviewMiss, reviewMissPoints, amendsTicket } = value as Record<string, unknown>;
+  const errors: string[] = [];
+  if (typeof reviewMiss !== "boolean") errors.push("reviewMiss must be true or false on a Request-changes run");
+  if (typeof amendsTicket !== "boolean") errors.push("amendsTicket must be true or false on a Request-changes run");
+  const points = Array.isArray(reviewMissPoints) && reviewMissPoints.length > 0 && reviewMissPoints.every(isText) ? reviewMissPoints : null;
+  if (reviewMiss === true && points === null) errors.push("reviewMissPoints must name each point that is a Review miss");
+  if (errors.length > 0) return { ok: false, errors };
+  return {
+    ok: true,
+    output: {
+      ...result.output,
+      // A no names no point, whatever the run listed.
+      answers: { reviewMiss: reviewMiss as boolean, points: reviewMiss === true ? (points as string[]).map((point) => point.trim()) : [], amendsTicket: amendsTicket as boolean },
+    },
+  };
+}
+
+/** The contract each kind of run is checked against, which the agent side's schema and the push job both read. */
+export const IMPLEMENT_OUTPUT_READERS: Readonly<Record<ImplementRunKind, (value: unknown) => ImplementOutputResult>> = {
+  first: readImplementOutput,
+  "pull-request": readPullRequestRunOutput,
+  "request-changes": readRequestChangesRunOutput,
+};
+
+/** Parses the text an agent emitted, then checks it against the contract for `run`, a first run's unless given. */
+export function parseImplementOutput(text: string, run: ImplementRunKind = "first"): ImplementOutputResult {
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch (error) {
     return { ok: false, errors: [`Implementer output is not valid JSON: ${(error as Error).message}`] };
   }
-  return onPullRequest ? readPullRequestRunOutput(value) : readImplementOutput(value);
+  return IMPLEMENT_OUTPUT_READERS[run](value);
 }

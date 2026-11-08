@@ -246,7 +246,8 @@ async function agentResultEvent(
       : {
           pullRequest: input.pullRequest,
           runUrl: thisRunUrl(),
-          requestChanges: input.review !== null,
+          // A Request-changes run's review, which its answers are about (#369).
+          ...(input.review === null ? {} : { review: input.review }),
           ...(input.conflict === null || input.conflict === undefined ? {} : { conflict: input.conflict }),
         };
   if ((retry !== null) !== (built.base.ref === built.name)) {

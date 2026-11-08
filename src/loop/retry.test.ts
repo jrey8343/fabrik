@@ -271,6 +271,9 @@ function retried(
       title: "Handle the empty cart",
       summary: "Shows the empty state for an empty cart, @someone, and tests both cases.",
       fix: "Guards the empty-cart case the Reviewer flagged, @someone.",
+      // A retry ignores these; a Request-changes run owes them (#369).
+      reviewMiss: false,
+      amendsTicket: true,
     }),
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
@@ -467,7 +470,7 @@ describe("The preview deployment of a retry's PR", () => {
 
   it.each([
     ["a retry", uiRetry()],
-    ["a Request-changes run", uiRetry({ fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true } })],
+    ["a Request-changes run", uiRetry({ fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 9 } })],
   ])("is linked on %s's UI PR once the push job has pushed, from Kit config's template and the PR's branch", (_, event) => {
     const actions = actionsOf(planFor(event, retrySnapshot(markedUi()), kitConfig({ ui: UI, preview: PREVIEW })));
 
@@ -527,7 +530,7 @@ describe("A retry whose branch moved while it ran (ADR-0006)", () => {
       verdicts: [earlier("pass", { headSha: HEAD_SHA })],
       changesRequested: { review: 9, reviewer: "jrey", reviewerIsBot: false, commitSha: HEAD_SHA },
     });
-    const event = { ...rebased(true), fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true } };
+    const event = { ...rebased(true), fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 9 } };
 
     const actions = actionsOf(planFor(event, movedSnapshot(pullRequest), kitConfig()));
 

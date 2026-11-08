@@ -13,6 +13,7 @@ import {
   A_REPLAY,
   aComment,
   aCommit,
+  anAnswersComment,
   aFollowUpIssue,
   anEscapeMarkerIssue,
   aLabelAdded,
@@ -576,8 +577,37 @@ describe("the evidence bundle", () => {
           number: 50,
           title: "Build the cart",
           state: "merged",
-          items: [{ kind: "request-changes", at: "2026-11-02T00:00:00Z", body: "Keep pricing out of the cart.", inline }],
+          // A review from before the answers is unanswered, never guessed.
+          items: [{ kind: "request-changes", at: "2026-11-02T00:00:00Z", body: "Keep pricing out of the cart.", inline, reviewMiss: null, amendsTicket: null }],
         },
+      ]);
+    });
+
+    it("carries each Request changes' two answers, from its own run's comment, or null for each when it has none (#369)", () => {
+      const { feedback } = evidenceBundle(
+        aRetroEvidenceInput({
+          facts: factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-05T00:00:00Z", {
+                reviews: [
+                  aReview("2026-11-02T00:00:00Z", { id: 901, body: "Send the confirmation email the Ticket asks for." }),
+                  aReview("2026-11-03T00:00:00Z", { id: 902, body: "Rebase onto main." }),
+                  aReview("2026-11-03T01:00:00Z", { id: 903, body: "Its run failed." }),
+                ],
+                comments: [
+                  anAnswersComment(901, { reviewMiss: true, amendsTicket: false }, "2026-11-02T02:00:00Z"),
+                  anAnswersComment(902, { reviewMiss: false, amendsTicket: false }, "2026-11-03T02:00:00Z"),
+                ],
+              }),
+            ],
+          }),
+        }),
+      );
+
+      expect(feedback[0]?.items.map((item) => (item.kind === "request-changes" ? [item.body, item.reviewMiss, item.amendsTicket] : null))).toEqual([
+        ["Send the confirmation email the Ticket asks for.", true, false],
+        ["Rebase onto main.", false, false],
+        ["Its run failed.", null, null],
       ]);
     });
 
@@ -1130,7 +1160,14 @@ describe("the evidence bundle", () => {
       expect(bundle.trimmed).toBe(true);
       expect(refsOf(bundle)).toEqual(refsOf(whole));
       expect(bundle.sample[0]?.verdicts).toEqual([{ verdict: "pass", source: "reviewer", at: "2026-11-02T00:00:00Z", body: verdict.body }]);
-      expect(bundle.feedback[0]?.items).toContainEqual({ kind: "request-changes", at: "2026-11-02T01:00:00Z", body: requestChanges, inline });
+      expect(bundle.feedback[0]?.items).toContainEqual({
+        kind: "request-changes",
+        at: "2026-11-02T01:00:00Z",
+        body: requestChanges,
+        inline,
+        reviewMiss: null,
+        amendsTicket: null,
+      });
       expect(bundle.streakTable).toEqual(whole.streakTable);
       expect(bundle.streakTable.map(({ number }) => number)).toEqual([12, 13, 14]);
     });

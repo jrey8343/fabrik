@@ -24,6 +24,8 @@ import {
   mergedAgentPullRequestsIn,
   type MetricFacts,
   type OpenPullRequestFacts,
+  requestChangesIn,
+  type RequestChangesReview,
   verdictsOn,
   type Window,
   within,
@@ -225,6 +227,10 @@ export interface WeeklySummary {
   readonly escapesByStrength: WeekOverWeek<EscapesByStrength>;
   /** The Architectural escapes opened in the week, with the evidence against each PR: what the Retro reads. */
   readonly escapesThisWeek: readonly EscapeThisWeek[];
+  /** The Operator's Request changes submitted in the week, by what their runs answered about them (#369). */
+  readonly requestChanges: WeekOverWeek<RequestChangesCounts>;
+  /** Each Request changes submitted in the week whose run answered that it holds a Review miss. */
+  readonly reviewMissesThisWeek: readonly ReviewMissThisWeek[];
   readonly counts: {
     /** Agent PRs merged in the week, across every Product repo. */
     readonly mergedPullRequests: WeekOverWeek<number>;
@@ -245,6 +251,31 @@ export interface WeeklySummary {
   readonly scoringCost: WeekOverWeek<ScoringCost>;
   /** One section per Product repo, in the order the facts came. */
   readonly repos: readonly RepoSection[];
+}
+
+/**
+ * A week's Request changes: how many hold a Review miss and how many amend
+ * the Ticket, two independent answers, and how many have no answer at all.
+ */
+export interface RequestChangesCounts {
+  readonly reviewMiss: number;
+  readonly amendsTicket: number;
+  readonly unanswered: number;
+}
+
+/** A Request changes whose run answered it holds a Review miss, with where to read each part of it. */
+export interface ReviewMissThisWeek {
+  /** `owner/name`. */
+  readonly repo: string;
+  readonly number: number;
+  /** The PR's. */
+  readonly url: string;
+  /** The Request changes review's. */
+  readonly reviewUrl: string;
+  /** The Kit's comment holding the answer. */
+  readonly answerUrl: string;
+  /** The Actions run of the Review whose pass it followed, or null when the store holds none. */
+  readonly passingReviewUrl: string | null;
 }
 
 /** A week's Step-up records, by reason. */
@@ -492,6 +523,8 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
     escapeRate: change("escapeRate"),
     escapesByStrength: change("escapesByStrength"),
     escapesThisWeek: escapesThisWeekOf(weeks.thisWeek, input),
+    requestChanges: change("requestChanges"),
+    reviewMissesThisWeek: thisWeek.reviewMisses,
     counts: {
       mergedPullRequests: change("mergedPullRequests"),
       ticketsDispatched: change("ticketsDispatched"),
@@ -532,6 +565,9 @@ interface WeekMetrics {
   readonly revertRate: RevertRate;
   readonly escapeRate: EscapeRate;
   readonly escapesByStrength: EscapesByStrength;
+  readonly requestChanges: RequestChangesCounts;
+  /** The week's Request changes with a Review miss: the list only this week's summary shows. */
+  readonly reviewMisses: readonly ReviewMissThisWeek[];
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
   readonly retries: number;
@@ -552,6 +588,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
   const scoring = costOf(records.filter((record) => record.role === "score"));
   const escapeWindow = escapeWindowOf(week);
   const escapes = escapesIn(escapeWindow, input);
+  const requestChanges = requestChangesIn(week, input);
   return {
     records: records.length,
     cost,
@@ -567,6 +604,8 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     revertRate: revertRateOf(week, input),
     escapeRate: escapeRateOf(escapeWindow, escapes, input),
     escapesByStrength: escapesByStrengthOf(escapes),
+    requestChanges: requestChangesCountsOf(requestChanges),
+    reviewMisses: reviewMissesOf(requestChanges),
     mergedPullRequests: merged.length,
     ticketsDispatched: tickets.filter((ticket) => {
       const dispatch = dispatchOf(ticket);
@@ -697,6 +736,34 @@ function escapesThisWeekOf(week: Week, input: WeeklySummaryInput): EscapeThisWee
         operatorPushes,
       })),
     }));
+}
+
+/** A week's Request changes, by their answers, counted by when each review was submitted. */
+function requestChangesCountsOf(reviews: readonly RequestChangesReview[]): RequestChangesCounts {
+  const answers = reviews.map(({ answer }) => answer);
+  return {
+    reviewMiss: answers.filter((answer) => answer?.reviewMiss === true).length,
+    amendsTicket: answers.filter((answer) => answer?.amendsTicket === true).length,
+    unanswered: answers.filter((answer) => answer === null).length,
+  };
+}
+
+/** Those of a week's Request changes whose run answered that it holds a Review miss. */
+function reviewMissesOf(reviews: readonly RequestChangesReview[]): ReviewMissThisWeek[] {
+  return reviews.flatMap(({ repo, pullRequest, review, answer, passingReview }) =>
+    answer?.reviewMiss !== true
+      ? []
+      : [
+          {
+            repo,
+            number: pullRequest,
+            url: `https://github.com/${repo}/pull/${pullRequest}`,
+            reviewUrl: review.url,
+            answerUrl: answer.comment.url,
+            passingReviewUrl: passingReview === null ? null : runUrlOf(passingReview),
+          },
+        ],
+  );
 }
 
 /** The Actions run attempt a record came from, in its Product repo. */
@@ -1173,6 +1240,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     ...stepUpReasonRows(counts.stepUpsByReason),
     steppedUpStartsRow(counts.steppedUpStarts),
     row("Human touches per merged PR", humanTouches, (value) => value.toFixed(1)),
+    ...requestChangesRows(summary.requestChanges),
     row("Cycle time (median)", cycleTimeMs, hours),
     row("Operator wait (median)", operatorWaitMs, hours),
     `| Revert rate (30 days) | ${revertCell(revertRate.thisWeek)} | ${revertCell(revertRate.lastWeek)} | ${revertChange} |`,
@@ -1197,7 +1265,13 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
   lines.push(...scoresLines(summary.scores, summary.scoringCost));
   lines.push(...heldLines(summary.repos));
   for (const repo of summary.repos) {
-    lines.push(...repoLines(repo, summary.escapesThisWeek.filter((escape) => escape.repo === repo.repo)));
+    lines.push(
+      ...repoLines(
+        repo,
+        summary.escapesThisWeek.filter((escape) => escape.repo === repo.repo),
+        summary.reviewMissesThisWeek.filter((miss) => miss.repo === repo.repo),
+      ),
+    );
   }
   // The Operator's one mention, last: the week's only scheduled push.
   lines.push(`@${operator}`);
@@ -1281,7 +1355,7 @@ function heldLines(repos: readonly RepoSection[]): string[] {
 /** How many of a repo's Waiting on you items show before the rest collapse into `<details>`. */
 const SHOWN_ITEMS = 10;
 
-function repoLines({ repo, waitingOnYou, stuck }: RepoSection, escapes: readonly EscapeThisWeek[]): string[] {
+function repoLines({ repo, waitingOnYou, stuck }: RepoSection, escapes: readonly EscapeThisWeek[], reviewMisses: readonly ReviewMissThisWeek[]): string[] {
   const lines = [`## ${repo}`, "", "### Waiting on you", ""];
   if (waitingOnYou.length === 0) lines.push("Nothing waiting on you.", "");
   else {
@@ -1291,6 +1365,7 @@ function repoLines({ repo, waitingOnYou, stuck }: RepoSection, escapes: readonly
   }
   if (stuck.length > 0) lines.push("### Stuck", "", ...stuck.map(stuckLine), "");
   if (escapes.length > 0) lines.push("### Architectural escapes this week", "", ...escapes.flatMap(escapeLines), "");
+  if (reviewMisses.length > 0) lines.push("### Review misses this week", "", ...reviewMisses.map(reviewMissLine), "");
   lines.push(liveLinks(repo), "");
   return lines;
 }
@@ -1304,6 +1379,12 @@ function escapeLines({ number, url, pullRequests }: EscapeThisWeek): string[] {
       return `  - [#${number}](${url}): ${review}${operatorPushes ? ", with Operator pushes" : ""}`;
     }),
   ];
+}
+
+/** A Review miss: its PR, the Request changes, the comment holding the answer, and the Review run whose pass it followed. */
+function reviewMissLine({ number, url, reviewUrl, answerUrl, passingReviewUrl }: ReviewMissThisWeek): string {
+  const after = passingReviewUrl === null ? "after no passing Review run on record" : `after the pass of [Review run](${passingReviewUrl})`;
+  return `- [#${number}](${url}): [Request changes](${reviewUrl}), [answered here](${answerUrl}), ${after}`;
 }
 
 function waitingLine(item: WaitingItem): string {
@@ -1409,6 +1490,16 @@ function limitReading({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading | nu
 function row(name: string, { thisWeek, lastWeek }: WeekOverWeek<number | null>, format: (value: number) => string): string {
   const change = thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, format);
   return `| ${name} | ${orNone(thisWeek, format)} | ${orNone(lastWeek, format)} | ${change} |`;
+}
+
+/** The week's Request changes with a Review miss, amending the Ticket, and unanswered, each week over week. */
+function requestChangesRows({ thisWeek, lastWeek }: WeekOverWeek<RequestChangesCounts>): string[] {
+  const rows: [string, keyof RequestChangesCounts][] = [
+    ["Request changes with a Review miss", "reviewMiss"],
+    ["Request changes amending the Ticket", "amendsTicket"],
+    ["Request changes unanswered", "unanswered"],
+  ];
+  return rows.map(([name, key]) => row(name, { thisWeek: thisWeek[key], lastWeek: lastWeek[key] }, count));
 }
 
 /** A row under Step-ups for each reason either week has any of. */

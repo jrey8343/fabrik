@@ -10,6 +10,7 @@ import {
   verdictsPostedIn,
 } from "../__fixtures__/snapshots.ts";
 import { anEvidence, CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
+import { requestChangesAnswersIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { Action, ImplementEvidence, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
@@ -208,6 +209,7 @@ function requestChangesPushed(
     commits: [{ path: "src/cart.ts" }],
   },
   evidence?: ImplementEvidence,
+  answers: Record<string, unknown> = { reviewMiss: false, amendsTicket: true },
 ): LoopEvent {
   return {
     kind: "implement-run-finished",
@@ -216,12 +218,13 @@ function requestChangesPushed(
       title: "Rename the total",
       summary: "Adds the order total, named as the Operator asked.",
       fix: "Renamed the total as the Operator asked.",
+      ...answers,
     }),
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes,
     ...(evidence === undefined ? {} : { evidence }),
-    fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true },
+    fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 900 },
   };
 }
 
@@ -302,6 +305,8 @@ describe("A Request-changes run's branch", () => {
           title: "Rename the total",
           summary: "Adds the order total, named as the Operator asked.",
           fix: "Renamed the total as the Operator asked.",
+          reviewMiss: false,
+          amendsTicket: true,
           operatorCommentsConsidered: ["inline-12", "conversation-999"],
         }),
         fixes: {
@@ -368,5 +373,45 @@ describe("Retries after a Request-changes run", () => {
     );
 
     expect(actionsOf(plan)).toContainEqual({ kind: "close-pull-request", pullRequest: 50 });
+  });
+});
+
+describe("A Request-changes run's answers about the review it was started for (#369)", () => {
+  const MISSED = {
+    reviewMiss: true,
+    reviewMissPoints: ["The Ticket asked for the total in dollars", "AGENTS.md says @operator\nnames totals"],
+    amendsTicket: false,
+  };
+
+  it("go on its push comment, under its marker, as a marker naming the review and a readable line for each", () => {
+    const plan = planFor(requestChangesPushed(undefined, undefined, MISSED), pushSnapshot(), kitConfig());
+    const [marker, answers, ...rest] = (commentsOf(plan)[0] ?? "").split("\n");
+
+    expect(marker).toBe("<!-- fabrik:request-changes-run -->");
+    expect(requestChangesAnswersIn(`${marker}\n${answers}`)).toEqual({ review: 900, reviewMiss: true, amendsTicket: false });
+    // Each point is named on one line, mentioning nobody.
+    expect(rest).toContain("Review miss: yes, The Ticket asked for the total in dollars; AGENTS.md says @\u200Boperator names totals");
+    expect(rest).toContain("Amends the Ticket: no");
+    // Next to the fix.
+    expect(rest.join("\n")).toContain("Amends the Ticket: no\n\nRenamed the total as the Operator asked.");
+  });
+
+  it("go on the empty-diff Verdict comment when the run commits nothing", () => {
+    const plan = planFor(requestChangesPushed({ net: [], commits: [] }, undefined, { reviewMiss: false, amendsTicket: true }), pushSnapshot(), kitConfig());
+    const verdict = commentsOf(plan)[0] ?? "";
+
+    expect(verdictsPostedIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "empty-diff", requestChanges: true, headSha: HEAD_SHA }]);
+    expect(requestChangesAnswersIn(verdict)).toEqual({ review: 900, reviewMiss: false, amendsTicket: true });
+    expect(verdict).toContain("Review miss: no\nAmends the Ticket: yes");
+  });
+
+  it("are owed: a Request-changes run's output without them is an Infrastructure failure, never pushed", () => {
+    const plan = planFor(requestChangesPushed(undefined, undefined, {}), pushSnapshot(), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "fail",
+      failure: "infrastructure",
+      reason: expect.stringContaining("reviewMiss must be true or false on a Request-changes run; amendsTicket must be true or false on a Request-changes run"),
+    });
   });
 });
