@@ -208,7 +208,7 @@ describe("a draft agent PR whose push GitHub never reviewed, because it conflict
   });
 
   it("is the scheduled tick's to catch too", () => {
-    const plan = planFor(TICK, tickSnapshot({ conflicts: { main: MAIN, now: NOW, pullRequests: [{ pullRequest: unreviewedDraft(), mergeable: false }] } }), kitConfig());
+    const plan = planFor(TICK, tickSnapshot({ conflicts: { main: MAIN, now: NOW, implementJobUnderWay: null, pullRequests: [{ pullRequest: unreviewedDraft(), mergeable: false }] } }), kitConfig());
 
     expect(rebasesIn(plan)).toEqual([expect.objectContaining({ pullRequest: 50, onto: MAIN })]);
   });

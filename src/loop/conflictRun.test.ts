@@ -335,7 +335,7 @@ describe("A conflict-only run on a draft whose push GitHub never reviewed (#389)
     expect(verdict).toMatch(/Retry 2 of 2 starts now, stepped up:/);
   });
 
-  it("after a Request-changes run, gets a Verdict marked as a Request-changes one, which costs no retry", () => {
+  it("after a Request-changes run, gets a Verdict marked as a Request-changes one, whose flaw counts as one on that run's push would (#393)", () => {
     const verdict = conflictRunThenRed(unreviewedAfter([PASS_ON_A, "<!-- fabrik:request-changes-run -->\nThe Implementer pushed the Operator's requested changes."]));
 
     expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "ci", requestChanges: true, headSha: "c".repeat(40) }]);
