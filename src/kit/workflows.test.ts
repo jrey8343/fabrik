@@ -1262,7 +1262,9 @@ describe("The conflict check's turns (#341)", () => {
   });
 
   it("gives the Implementer the Product repo's default branch, which a Request-changes run on a conflicting PR merges in", () => {
-    expect(jobIn(loop, "implement")).toContain("FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}");
+    // On the agent step itself: the capture step after it has the same line.
+    const agent = stepsOf(jobIn(loop, "implement")).find((step) => step.includes("name: Run the Implementer"));
+    expect(agent).toContain("FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}");
   });
 });
 

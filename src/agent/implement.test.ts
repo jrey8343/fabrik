@@ -214,6 +214,12 @@ describe("A Request-changes run with the Operator's earlier Request changes on i
     expect(text).toContain("also build each of these the pull request doesn't meet yet");
   });
 
+  it("isn't to act again on an earlier one asking how the branch takes in main, such as a rebase", async () => {
+    const text = (await context()).parts.join("\n");
+
+    expect(text).toContain("One that asks how the branch takes in `main`, such as a rebase, was done when its own run brought `main` in: don't act on it again.");
+  });
+
   it("may name them as weighed, as it's shown them under their ids", async () => {
     expect((await context()).operatorComments.map(({ id }) => id)).toEqual(["review-101"]);
   });
