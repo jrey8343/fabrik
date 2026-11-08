@@ -305,7 +305,9 @@ export type PullRequestHistoryItem =
  * while it worked; a pass settles every review before it, its Review having
  * read them all as part of the Ticket (ADR-0010). A run that ended without
  * pushing settles nothing: its reviews stay unbuilt, and noted, so the Kit
- * doesn't note them again. A dismissed review isn't `standing`, and a run
+ * doesn't note them again. Nor does one that ended in an Infrastructure
+ * failure, whose notice leaves it in flight, marked failed until a later note
+ * starts a run again (#424). A dismissed review isn't `standing`, and a run
  * whose every review was dismissed isn't in flight; `standing` is read from
  * the history unless given.
  */
@@ -320,6 +322,7 @@ export function requestChangesSinceRunIn(
   | "requestChangesRunInFlight"
   | "requestChangesRunReviews"
   | "requestChangesRunSince"
+  | "requestChangesRunFailed"
   | "orphanedChangesRequests"
   | "requestChangesRunDismissed"
 > {
@@ -330,6 +333,8 @@ export function requestChangesSinceRunIn(
   let noted: number[] = [];
   let inFlight: readonly number[] | null = null;
   let since: string | null = null;
+  // Whether the run in flight ended in an Infrastructure failure, which leaves it in flight for the Operator (#424).
+  let failed = false;
   // The reviews there were when the run in flight started, which it read; one that came in later it never saw.
   let read: readonly number[] = [];
   for (const item of ordered) {
@@ -357,7 +362,10 @@ export function requestChangesSinceRunIn(
           noted = [...noted, ...started.filter((review) => !noted.includes(review))];
           inFlight = started;
           since = item.at;
+          failed = false;
           read = reviews.map(({ review }) => review);
+        } else if (item.body.startsWith(IMPLEMENT_RUN_FAILED_MARKER)) {
+          failed = inFlight !== null;
         } else if (settlesRequestChanges(item.body)) {
           // A pass read them all; a Request-changes run's push or Verdict settles only those its run read.
           const settled = isPass(item.body) || inFlight === null ? null : new Set(read);
@@ -380,6 +388,7 @@ export function requestChangesSinceRunIn(
     requestChangesRunInFlight: live.length === 0 ? null : Math.max(...live),
     requestChangesRunReviews: live.length === 0 ? [] : (inFlight ?? []),
     requestChangesRunSince: live.length === 0 ? null : since,
+    requestChangesRunFailed: live.length > 0 && failed,
     // The Kit's note put the PR in draft for reviews since all dismissed, with no outcome yet: what the Operator asked
     // for meanwhile on the draft is the run that's owed now.
     // Every Request changes of the Operator's no run has built, as its landing would start (src/loop/implement.ts).

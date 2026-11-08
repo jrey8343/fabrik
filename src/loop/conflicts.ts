@@ -22,7 +22,8 @@ import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, Plan, Pull
  * Request changes on it (src/loop/undelivered.ts, #341), or else a rebase onto main if
  * it conflicts with it, at the Merge gate or as a draft whose push GitHub never
  * reviewed (#389), or why there's neither. Such a draft waits `reviewMinutes`
- * from its push (reviewGraceMinutes).
+ * from its push (reviewGraceMinutes). `heldTickets` are the Tickets whose
+ * Implement run is held until a reset (#424).
  */
 export function checkConflicts(
   conflicts: ConflictSnapshot,
@@ -30,6 +31,7 @@ export function checkConflicts(
   held: number | null = null,
   runMinutes: number | undefined,
   reviewMinutes: number,
+  heldTickets: readonly number[],
 ): Plan {
   const { main, now } = conflicts;
   const reasons: string[] = [];
@@ -41,7 +43,7 @@ export function checkConflicts(
       actions.push(...unstarted);
       continue;
     }
-    const undelivered = actOnUndelivered(candidate, operator, now, held, runMinutes, conflicts.implementJobUnderWay);
+    const undelivered = actOnUndelivered(candidate, operator, now, held, runMinutes, conflicts.implementJobUnderWay, heldTickets);
     if (undelivered !== null) {
       actions.push(...undelivered);
       continue;

@@ -88,14 +88,31 @@ function requestChangesRun(
  * resumes on whatever head the PR is at now, the Operator's pushes included.
  * A PR that never went back to draft, because that step failed after the
  * note, goes back to draft first: leaving draft would have ended the run.
+ * One that ended in an Infrastructure failure gets a fresh started note as
+ * the Operator's re-add resumes it (#424): the failure notice left it marked
+ * failed, which keeps the conflict check from restarting it, and the note
+ * clears that, so the resumed run is rescued if it stalls in turn (#387).
  */
 export function owedRequestChangesRun(pullRequest: PullRequestSnapshot, config: KitConfig): Action[] | null {
   if (!pullRequest.isAgent || pullRequest.ticket === null || !pullRequest.open) return null;
   const run = runInFlight(pullRequest);
   if (run === null) return orphanedRequestChangesRun(pullRequest, config);
   if (run.kind !== "request-changes") return null;
-  const start = requestChangesRun(pullRequest.ticket, pullRequest.number, run.review, config);
-  return pullRequest.draft ? [start] : [{ kind: "convert-to-draft", pullRequest: pullRequest.number }, start];
+  const { number, requestChangesRunReviews: reviews } = pullRequest;
+  const start = requestChangesRun(pullRequest.ticket, number, run.review, config);
+  const resumed: Action[] = pullRequest.requestChangesRunFailed
+    ? [
+        {
+          kind: "comment",
+          issue: number,
+          body: [
+            requestChangesRunStartedMarker(reviews),
+            `The Kit is starting the Request-changes run for your Request changes on #${number} (${reviewLinks(pullRequest, reviews)}) again, after it failed. It runs on the Step-up model and uses no retry, and Review runs again on its push.`,
+          ].join("\n"),
+        },
+      ]
+    : [];
+  return [...resumed, ...(pullRequest.draft ? [] : [{ kind: "convert-to-draft", pullRequest: number } as const]), start];
 }
 
 /** Whether the PR is still at the head its latest Verdict judged. */
