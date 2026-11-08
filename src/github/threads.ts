@@ -88,15 +88,36 @@ export function requestChangesRunIn(commentBodies: readonly string[]): boolean {
 /**
  * Whether a PR's latest push came from a conflict-only run (#304), from the
  * Fabrik App's comments on it, oldest first, as requestChangesRunIn reads a
- * Request-changes run's: the next Verdict is marked as from that run.
+ * Request-changes run's: the next Verdict is marked as from that run. One
+ * started on a draft whose push GitHub never reviewed (#389) doesn't count:
+ * its Verdict is the first judgment of that push's work, so it's marked as
+ * that push's own would have been.
  */
 export function conflictRunIn(commentBodies: readonly string[]): boolean {
   let latest = false;
+  let onUnreviewedDraft = false;
   for (const body of commentBodies) {
-    if (body.startsWith(CONFLICT_RUN_MARKER)) latest = true;
+    const attempt = conflictAttemptIn(body);
+    if (attempt?.outcome === "conflict-run") onUnreviewedDraft = attempt.unreviewedDraft === true;
+    else if (body.startsWith(CONFLICT_RUN_MARKER)) latest = !onUnreviewedDraft;
     else if (verdictsIn([body]).length > 0) latest = false;
   }
   return latest;
+}
+
+/**
+ * Whether the conflict-only run in flight on a PR (conflictRunInFlightIn) was
+ * started on a draft whose push GitHub never reviewed (#389), from the Fabrik
+ * App's comments on it, oldest first: its push note doesn't say its Verdict
+ * uses no retry.
+ */
+export function conflictRunOnUnreviewedDraftIn(commentBodies: readonly string[]): boolean {
+  let latest = false;
+  for (const body of commentBodies) {
+    const attempt = conflictAttemptIn(body);
+    if (attempt?.outcome === "conflict-run") latest = attempt.unreviewedDraft === true;
+  }
+  return latest && conflictRunInFlightIn(commentBodies) !== null;
 }
 
 /** The default branch heads the Kit's attempt notes on a PR record (#304), oldest first. */
@@ -136,6 +157,16 @@ export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean 
     else if (verdictsIn([body]).length > 0) pushed = false;
   }
   return pushed;
+}
+
+/**
+ * Whether a comment is the Kit's note of a push of its own to a PR's branch
+ * (#389): a run's push note, or the note of a clean rebase onto main. Each is
+ * posted around its push, so the latest one dates the branch's latest push the
+ * Kit made.
+ */
+export function isKitPushNote(body: string): boolean {
+  return isPushNote(body) || conflictAttemptIn(body)?.outcome === "rebased";
 }
 
 /** Whether a comment is a Request-changes run's outcome note: its push, or that it committed nothing (#388). */

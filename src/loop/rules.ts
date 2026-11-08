@@ -212,6 +212,7 @@ function conflictCheck(snapshot: Snapshot, config: KitConfig): Plan {
         snapshot.operator,
         heldOn(snapshot.kitIssues, config),
         implementJobTimeoutMinutes(config.roles.implement.timeoutMinutes),
+        config.roles.review.timeoutMinutes,
       );
 }
 

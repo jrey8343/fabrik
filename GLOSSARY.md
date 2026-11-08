@@ -239,7 +239,7 @@ The Operator's review asking for changes on an agent pull request at the Merge g
 _Avoid_: change request, revision, feedback
 
 **Conflict-only run**:
-An Implementer run, on the Step-up model, that brings an agent pull request at the Merge gate up to date after main moved and left it conflicting, once a plain rebase by the Kit conflicted too: it rebases onto main, resolves the conflicts and changes nothing else. It's neither a Retry nor a Request changes, so it uses no retry and adds no requirement. Each pull request gets one attempt per main head.
+An Implementer run, on the Step-up model, that brings an agent pull request up to date with main once a plain rebase by the Kit conflicted too: one at the Merge gate that main moved under and left conflicting, or a draft one whose push GitHub never reviewed because it conflicts with main. It rebases onto main, resolves the conflicts and changes nothing else. It's neither a Retry nor a Request changes, so it uses no retry and adds no requirement. Each pull request gets one attempt per main head. Only the Verdict on a Merge-gate pull request's run is exempt from the Retry count: on a draft's, the Verdict counts as the unreviewed push's own would have.
 _Avoid_: rebase run, conflict retry
 
 **Send it back**:

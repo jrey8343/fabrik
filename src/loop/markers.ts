@@ -87,24 +87,33 @@ export const CONFLICT_RUN_MARKER = "<!-- fabrik:conflict-run -->";
  * default branch head it tried: `rebased` when the mechanical rebase was
  * clean and pushed, `conflict-run` when it conflicted and a conflict-only run
  * started. Either way the Kit tries that PR no more until the head moves.
+ * An attempt on a draft whose push GitHub never reviewed (#389) ends with
+ * `unreviewed-draft`, so the Verdict that follows is marked as that push's
+ * own would have been, never as a conflict-only run's.
  */
-const CONFLICT_ATTEMPT_MARKER = /^<!-- fabrik:conflict-attempt ([0-9a-f]{40}) (rebased|conflict-run) -->/;
+const CONFLICT_ATTEMPT_MARKER = /^<!-- fabrik:conflict-attempt ([0-9a-f]{40}) (rebased|conflict-run)( unreviewed-draft)? -->/;
 
-/** What a conflict attempt's note records: the default branch head, and how the attempt went. */
+/** What a conflict attempt's note records: the default branch head, how the attempt went, and whether it was on a draft. */
 export interface ConflictAttempt {
   readonly main: string;
   readonly outcome: "rebased" | "conflict-run";
+  /** True on a draft whose push GitHub never reviewed (#389); absent on a PR at the Merge gate, as on every older note. */
+  readonly unreviewedDraft?: true;
 }
 
-export function conflictAttemptMarker({ main, outcome }: ConflictAttempt): string {
-  return `<!-- fabrik:conflict-attempt ${main} ${outcome} -->`;
+export function conflictAttemptMarker({ main, outcome, unreviewedDraft }: ConflictAttempt): string {
+  return `<!-- fabrik:conflict-attempt ${main} ${outcome}${unreviewedDraft === true ? " unreviewed-draft" : ""} -->`;
 }
 
 /** The conflict attempt a comment's first line records, or null when it records none. */
 export function conflictAttemptIn(body: string): ConflictAttempt | null {
   const match = CONFLICT_ATTEMPT_MARKER.exec(body);
   if (match === null) return null;
-  return { main: match[1] as string, outcome: match[2] as ConflictAttempt["outcome"] };
+  return {
+    main: match[1] as string,
+    outcome: match[2] as ConflictAttempt["outcome"],
+    ...(match[3] === undefined ? {} : { unreviewedDraft: true as const }),
+  };
 }
 
 /**

@@ -1,0 +1,25 @@
+# A draft whose push GitHub never reviewed is brought up to date with main
+
+This refines ADR-0011, which stays as written. GitHub starts no `pull_request`-family workflow while a pull request conflicts with its base, so a push onto a draft agent pull request that conflicts with `main` starts no Review, and adding `agent:review` doesn't either. The push may be a Retry's, a first Implement run's whose pull request opened after `main` moved during the run, a Request-changes run's on a pull request that started conflicting mid-run, or the Operator's. ADR-0011's conflict check skipped every draft, on the premise that a draft's next push is reviewed anyway. Here that premise fails: the draft sits conflicting, with no Verdict coming and nothing to move it on.
+
+On every push to `main` and every hourly tick, the conflict check now also acts on a draft agent pull request for a Ticket whose push GitHub never reviewed: one that conflicts with `main` (an unknown mergeable state is left for the next check, as before), has no Verdict on its head, has no Retry, Request-changes run or conflict-only run in flight, and whose head was pushed at least one Review-job timeout ago. Who pushed the head doesn't matter. A draft the Operator parked after a pass has a Verdict on its head, so it's left alone, unless they've pushed to it since. An undelivered Request changes on the pull request (ADR-0015) is still acted on first.
+
+Such a draft takes ADR-0011's path unchanged: a plain rebase onto `main` pushed with a lease, else one conflict-only run on the Step-up model through `agent:implement` on the Ticket, one attempt per `main` head recorded with the attempt marker, and, if the conflict-only run fails, the same hand-off: the Kit says why, adds `ready-for-human`, brings it out of draft and never closes it. The draft stays in draft throughout. The attempt notes say that GitHub started no Review because the pull request conflicts with `main`, and mention nobody; the Operator is mentioned only on the hand-off.
+
+**The grace period** is the Review job's timeout, so the Kit never cuts into a Review that did start before `main` moved. The push time is the latest of the branch's last force push in the pull request's timeline, the Kit's last note of a push of its own (a run's push note or a clean rebase's attempt note), the Fabrik App opening the pull request, and the head commit's commit time. GitHub's timeline records no event for a push that isn't forced, so each of these is a time no later than the push, and the latest is the nearest the Kit can tell. With none known, the Kit doesn't act.
+
+**When the lease refuses the push**, a draft stays in draft and no attempt is recorded, for the next check. ADR-0011 brings a refused pull request out of draft, which is right only for one that was at the Merge gate.
+
+**The Retry count.** The Verdict on the head the rebase or the conflict-only run pushed is the first judgment of the unreviewed push's work, so it's marked as that push's own Verdict would have been. After a Retry or a first Implement run, an Execution flaw counts toward the Ticket's two Retries. After a Request-changes run, it's marked as a Request-changes Verdict and costs no retry (ADR-0010). It is never given the conflict-only run's exemption, whichever of the two brought the pull request up to date. The attempt marker on a draft ends with `unreviewed-draft`, and a conflict-only run's push after such an attempt doesn't mark the next Verdict as a conflict-only run's, so the count stays readable from the pull request's comments alone. A Request-changes run's push note is still the latest push note before that Verdict, so it's marked as one, as before.
+
+## Considered options
+
+- **Tell a Retry to merge `main` in, as a Request-changes run is told (ADR-0015).** Rejected for now: it only helps when `main` moved before the Retry started, and this backstop catches that case one run later. It does nothing for a first Implement run, a Request-changes run that started conflicting mid-run, or the Operator's push.
+- **Leave drafts alone, and have the Operator rebase.** Nothing tells the Operator that the draft is stuck: it has no Verdict and no notification.
+- **Exempt the Verdict after a draft's conflict-only run, as at the Merge gate.** At the Merge gate the head the run rebased already passed, so a flaw after it is the conflict's. On a draft, the head was never judged, so exempting its Verdict would let a Retry's or a first run's flaw go uncounted.
+
+## Consequences
+
+- The PR snapshot reads each pull request's opening time, its latest force push and its head commit's commit time. An Operator push that isn't forced, of a commit made long before, can make the Kit act inside the grace period, cutting into a Review that started; that Review's Verdict is then stale, and the rebased head gets its own.
+- The Kit's notes on a conflict-only run on a draft don't say its Verdict uses no retry.
+- ADR-0011's handling of a pull request at the Merge gate is unchanged: a refused lease still brings it out of draft, and its conflict-only run's Verdict is still exempt.

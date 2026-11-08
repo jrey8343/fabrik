@@ -588,11 +588,27 @@ export interface PullRequestSnapshot {
    */
   readonly conflictRunInFlight: string | null;
   /**
+   * Whether that conflict-only run was started on a draft whose push GitHub
+   * never reviewed (#389), not a PR at the Merge gate: its push note doesn't
+   * say its Verdict uses no retry, as that Verdict counts as the unreviewed
+   * push's own would have. False while none is in flight.
+   */
+  readonly conflictRunOnUnreviewedDraft: boolean;
+  /**
    * Whether a Retry or Request-changes run has pushed to it since its latest
    * Verdict, read from the Kit's note of the push. Until one has, the Retry
    * that Verdict called for is still in flight (src/loop/retry.ts).
    */
   readonly pushedSinceVerdict: boolean;
+  /**
+   * When its current head was pushed, as an ISO 8601 time, as best its history
+   * tells (#389): the latest of its force pushes, the Kit's notes of its own
+   * pushes, its opening by the Fabrik App, and its head commit's commit time,
+   * each of which is no later than the push. Null when none of them is known.
+   * What the conflict check waits a Review job's timeout from before it brings
+   * a draft whose push GitHub never reviewed up to date with main.
+   */
+  readonly headPushedAt: string | null;
   /**
    * The reviews requesting changes on it, oldest first, that were submitted
    * while it was out of draft and that nothing has settled since (#341): no

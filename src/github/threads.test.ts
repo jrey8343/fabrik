@@ -20,7 +20,7 @@ import {
   unansweredPrototypesIn,
   verdictsIn,
 } from "./threads.ts";
-import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, CONFLICT_RUN_MARKER, requestChangesAnswersIn, verdictMarker } from "../loop/markers.ts";
+import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, CONFLICT_RUN_MARKER, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersIn, verdictMarker } from "../loop/markers.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const VERDICT_URL = "https://github.com/acme/shop/pull/50#issuecomment-9001";
@@ -501,6 +501,22 @@ describe("Reading a PR's conflict attempts and conflict-only run (#304)", () => 
     expect(pushedSinceVerdictIn(pushed)).toBe(true);
     expect(conflictRunIn(pushed)).toBe(true);
     expect(conflictRunIn([...pushed, verdict(true)])).toBe(false);
+  });
+
+  it("never marks the next Verdict as from a conflict-only run when its run was started on a draft whose push GitHub never reviewed (#389)", () => {
+    const startedOnDraft = `${conflictAttemptMarker({ main: MAIN, outcome: "conflict-run", unreviewedDraft: true })}\nA conflict-only run starts.`;
+    const pushed = [startedOnDraft, `${CONFLICT_RUN_MARKER}\nPushed.`];
+
+    expect(conflictRunInFlightIn([startedOnDraft])).toBe(MAIN);
+    expect(conflictRunIn(pushed)).toBe(false);
+    expect(pushedSinceVerdictIn(pushed)).toBe(true);
+    expect(conflictAttemptsIn(pushed)).toEqual([MAIN]);
+  });
+
+  it("still marks the next Verdict as from a Request-changes run when that run's push was the one GitHub never reviewed (#389)", () => {
+    const startedOnDraft = `${conflictAttemptMarker({ main: MAIN, outcome: "conflict-run", unreviewedDraft: true })}\nA conflict-only run starts.`;
+
+    expect(requestChangesRunIn([`${REQUEST_CHANGES_RUN_MARKER}\nPushed.`, startedOnDraft, `${CONFLICT_RUN_MARKER}\nPushed.`])).toBe(true);
   });
 
   it("reads a Verdict marked as from a conflict-only run, and an older marker without the mark as from none", () => {

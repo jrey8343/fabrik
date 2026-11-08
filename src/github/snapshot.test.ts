@@ -863,6 +863,9 @@ function pullRequestGitHub({
             comments: { pageInfo: { hasPreviousPage: false }, nodes: [] },
             changesRequests: { nodes: [] },
             draftEvents: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+            createdAt: "2026-11-01T09:00:00Z",
+            forcePushes: { nodes: [] },
+            headCommit: { nodes: [] },
             ...(/closingIssuesReferences/.test(pullRequestQuery)
               ? {
                   closingIssuesReferences: {
@@ -2198,6 +2201,9 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     },
     changesRequests: { nodes: [] },
     draftEvents: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+    createdAt: "2025-12-01T00:00:00Z",
+    forcePushes: { nodes: [] },
+    headCommit: { nodes: [] },
     closingIssuesReferences: { nodes: [] },
     mergeable,
     ...overrides,
@@ -2235,6 +2241,45 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
       [51, true],
     ]);
     expect(snapshot.conflicts?.pullRequests[0]?.pullRequest).toMatchObject({ draft: false, ticket: 7, conflictAttempts: ["8".repeat(40)], conflictRunInFlight: null });
+  });
+
+  describe("when each PR's head was pushed (#389)", () => {
+    const kit = (body: string, createdAt: string) => ({ body, createdAt, author: { __typename: "Bot" } });
+    const pushedAt = async (overrides: Record<string, unknown>) => {
+      const { github } = githubReading([[node(50, "CONFLICTING", { createdAt: "2026-01-01T00:00:00Z", comments: { pageInfo: { hasPreviousPage: false }, nodes: [] }, ...overrides })]]);
+      return (await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN)).conflicts?.pullRequests[0]?.pullRequest.headPushedAt;
+    };
+
+    it("is when the Fabrik App opened it, while nothing since says it was pushed again", async () => {
+      expect(await pushedAt({})).toBe("2026-01-01T00:00:00Z");
+    });
+
+    it("is the latest force push of its branch, as the timeline shows it", async () => {
+      const forcePushes = { nodes: [{ createdAt: "2026-01-02T00:00:00Z" }, { createdAt: "2026-01-03T00:00:00Z" }] };
+
+      expect(await pushedAt({ forcePushes })).toBe("2026-01-03T00:00:00Z");
+    });
+
+    it("falls back to the Kit's latest note of its own push, a person's quoting one counting for nothing", async () => {
+      const comments = {
+        pageInfo: { hasPreviousPage: false },
+        nodes: [
+          kit("<!-- fabrik:retry-push -->\nThe Implementer pushed a fix.", "2026-01-04T00:00:00Z"),
+          kit("<!-- fabrik:request-changes-run -->\nThe Implementer pushed the Operator's requested changes.", "2026-01-05T00:00:00Z"),
+          kit("A comment that records no push.", "2026-01-07T00:00:00Z"),
+          { body: "<!-- fabrik:retry-push -->\nQuoted.", createdAt: "2026-01-08T00:00:00Z", author: { __typename: "User" } },
+        ],
+      };
+
+      expect(await pushedAt({ comments })).toBe("2026-01-05T00:00:00Z");
+    });
+
+    it("is no earlier than its head commit's commit time, as for a push of the Operator's that GitHub records no event for", async () => {
+      const headCommit = { nodes: [{ commit: { oid: HEAD_SHA, committedDate: "2026-01-06T00:00:00Z" } }] };
+
+      expect(await pushedAt({ headCommit })).toBe("2026-01-06T00:00:00Z");
+      expect(await pushedAt({ headCommit: { nodes: [{ commit: { oid: "b".repeat(40), committedDate: "2026-01-06T00:00:00Z" } }] } })).toBe("2026-01-01T00:00:00Z");
+    });
   });
 
   it("holds the default branch's head on a scheduled tick, which names none", async () => {
