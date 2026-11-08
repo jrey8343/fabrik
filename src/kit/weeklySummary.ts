@@ -62,6 +62,8 @@ export interface SpecFacts {
 export interface OpenIssueFacts {
   readonly number: number;
   readonly title: string;
+  /** Who opened it: a `needs-info` issue the Fabrik App filed as the Monitor waits on the Operator. */
+  readonly author: string;
   readonly labels: readonly string[];
   /** ISO 8601. */
   readonly createdAt: string;
@@ -382,6 +384,8 @@ export type WaitingItem =
   | (ItemBase & { readonly kind: "design-round" })
   /** An open `ready-for-human` issue, waiting since it got the label. */
   | (ItemBase & { readonly kind: "ready-for-human" })
+  /** The Fabrik App's open `needs-info` issue, which Triage's question asks the Operator about, unanswered since it got the label (#425). */
+  | (ItemBase & { readonly kind: "monitor-needs-info" })
   /** The Fabrik App's open Audit, filled or still pending, waiting since it was opened. */
   | (ItemBase & { readonly kind: "audit" })
   /** The Fabrik App's open Retro, filled or still pending, waiting since it was opened. */
@@ -894,7 +898,7 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
     repo: facts.repo,
     // An open Audit, Retro, finished Replay or Map waits on the Operator, so it also keeps a quiet week from being skipped.
     waitingOnYou: oldestFirst([
-      ...waitingOnYou(facts, items),
+      ...waitingOnYou(facts, appLogin, items),
       ...openAuditsOf(facts, appLogin, items),
       ...openRetrosOf(facts, appLogin, items),
       ...finishedReplaysOf(facts, operator, items),
@@ -1039,7 +1043,17 @@ function oldestFirst<T extends ItemBase>(items: readonly T[]): T[] {
   return items.toSorted((a, b) => Date.parse(a.since) - Date.parse(b.since));
 }
 
-function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, items: Items): WaitingItem[] {
+/**
+ * When Triage asked the Operator about a `needs-info` issue the Fabrik App
+ * filed as the Monitor, which can't answer itself (#425), or null if it isn't
+ * one or someone has answered: from then on Triage or Stuck has it.
+ */
+function monitorQuestionOf(issue: OpenIssueFacts, appLogin: string): string | null {
+  if (issue.author !== appLogin || !issue.labels.includes(NEEDS_INFO) || answerOf(issue) !== null) return null;
+  return lastAdded(issue.labelEvents, NEEDS_INFO) ?? issue.createdAt;
+}
+
+function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
   const waiting: WaitingItem[] = [];
   for (const issue of openIssues) {
     const round = unansweredRoundOf(issue);
@@ -1048,6 +1062,8 @@ function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, items: Item
       const since = lastAdded(issue.labelEvents, READY_FOR_HUMAN) ?? issue.createdAt;
       waiting.push({ kind: "ready-for-human", ...items.issue(issue, since) });
     }
+    const asked = monitorQuestionOf(issue, appLogin);
+    if (asked !== null) waiting.push({ kind: "monitor-needs-info", ...items.issue(issue, asked) });
   }
   for (const pullRequest of openPullRequests) {
     const passed = passAtHeadOf(pullRequest);
@@ -1393,6 +1409,8 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `Design round unanswered for ${duration(item.age)}`);
     case "ready-for-human":
       return itemLine(item, `ready-for-human for ${duration(item.age)}`);
+    case "monitor-needs-info":
+      return itemLine(item, `Monitor issue's question unanswered for ${duration(item.age)}`);
     case "audit":
       return itemLine(item, `Audit open for ${duration(item.age)}`);
     case "retro":

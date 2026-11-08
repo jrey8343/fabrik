@@ -403,6 +403,29 @@ describe("Applying Triage output", () => {
     });
   });
 
+  it("asks the Operator, not the App, on a needs-info issue the Monitor filed (#425)", () => {
+    const issue = anIssue({ number: 7, author: "fabrik-app[bot]", byApp: true, labels: ["needs-triage", "fabrik:monitor"] });
+
+    const plan = planFor(
+      triaged({ category: "bug", state: "needs-info", comment: "Which release did this start in?" }),
+      snapshotOf(issue, { operator: "jrey8343" }),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: 7,
+          body: "@jrey8343 The Monitor filed this issue, so its question is yours.\n\nWhich release did this start in?",
+        },
+        { kind: "remove-label", issue: 7, label: "needs-triage" },
+        { kind: "add-labels", issue: 7, labels: ["bug", "needs-info"] },
+      ],
+    });
+  });
+
   it("assigns a ready-for-human issue to the Operator, with Triage's comment saying what to do", () => {
     const issue = anIssue({ number: 7, author: "kate", labels: ["needs-triage"] });
 

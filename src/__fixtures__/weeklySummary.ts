@@ -273,7 +273,7 @@ export function aVerdictComment(verdict: Verdict, headSha: string, at: string, o
 
 /** Open issue 12, opened on 2026-10-01, with no labels, comments, label events or sub-issues unless a test says so. */
 export function anOpenIssue(overrides: Partial<OpenIssueFacts> = {}): OpenIssueFacts {
-  return { number: 12, title: "An open issue", labels: [], createdAt: "2026-10-01T00:00:00Z", comments: [], labelEvents: [], subIssues: [], ...overrides };
+  return { number: 12, title: "An open issue", author: "someone", labels: [], createdAt: "2026-10-01T00:00:00Z", comments: [], labelEvents: [], subIssues: [], ...overrides };
 }
 
 /**

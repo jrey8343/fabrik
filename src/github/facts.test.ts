@@ -312,12 +312,13 @@ describe("Gathering a Product repo's GitHub facts", () => {
     expect(facts.specs).toEqual([{ number: 3, labelEvents: [], tickets: [7, 8] }]);
   });
 
-  it("holds every open issue, however long it has sat, with its labels and comments", async () => {
+  it("holds every open issue, however long it has sat, with who opened it, its labels and comments", async () => {
     const github = repoWith({
       openIssues: [
         aRawIssue({
           number: 12,
           title: "Which way?",
+          author: APP,
           createdAt: "2025-01-01T00:00:00Z",
           labels: { nodes: [{ name: "needs-info" }] },
           comments: {
@@ -336,6 +337,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
       {
         number: 12,
         title: "Which way?",
+        author: "fabrik-app[bot]",
         labels: ["needs-info"],
         createdAt: "2025-01-01T00:00:00Z",
         comments: [
@@ -620,6 +622,7 @@ function aRawIssue(overrides: Record<string, unknown> = {}) {
     state: "OPEN",
     createdAt: "2026-10-01T00:00:00Z",
     closedAt: null,
+    author: OPERATOR,
     labels: { nodes: [] },
     comments: { nodes: [] },
     timelineItems: { nodes: [] },
