@@ -183,6 +183,14 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   if (!requestChanges && inFlight !== null && inFlight.kind !== "retry") {
     return { kind: "nothing", reason: `#${pullRequest.number} has a ${inFlight.kind === "request-changes" ? "Request-changes" : "conflict-only"} run in flight, so the retry's branch isn't pushed` };
   }
+  // A Retry lands only while it's the Retry in flight: one the Operator took the PR back from, or left over from an
+  // earlier flaw, never lands as a later one's outcome (#341).
+  if (!requestChanges && fixes.retry !== undefined && (inFlight?.kind !== "retry" || inFlight.retry !== fixes.retry)) {
+    return {
+      kind: "nothing",
+      reason: `Retry ${fixes.retry} of ${MAX_RETRIES} on #${pullRequest.number} isn't the run in flight, so the retry's branch isn't pushed`,
+    };
+  }
   // The push job rebased the run's own commits if the branch moved (ADR-0006). If the branch moves again,
   // the push's lease refuses it, and the run stays in flight as after an Infrastructure failure.
   if (changes.rebase?.conflicted === true) return startAgain(event, fixes, pullRequest, changes.rebase.onto);

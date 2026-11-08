@@ -186,10 +186,10 @@ class Thread {
     return plan;
   }
 
-  /** A Retry finishes with these changes; if its plan pushes, the PR is at `to`. */
-  retryFinishes(changes: BranchChanges, to: string, minutes: number): Plan {
+  /** A Retry finishes with these changes; if its plan pushes, the PR is at `to`. It is Retry `retry`, when named. */
+  retryFinishes(changes: BranchChanges, to: string, minutes: number, retry?: number): Plan {
     this.now = at(minutes);
-    const plan = this.plan(implementRunFinished(changes, this.headSha, false), this.ticketSnapshot());
+    const plan = this.plan(implementRunFinished(changes, this.headSha, false, undefined, retry), this.ticketSnapshot());
     if (actionsOf(plan).some((action) => action.kind === "push-branch")) this.headSha = to;
     return plan;
   }
@@ -217,6 +217,7 @@ function implementRunFinished(
   headSha: string,
   requestChanges: boolean,
   review?: number,
+  retry?: number,
 ): Extract<LoopEvent, { kind: "implement-run-finished" }> {
   return {
     kind: "implement-run-finished",
@@ -229,7 +230,7 @@ function implementRunFinished(
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes,
-    fixes: { pullRequest: 50, headSha, runUrl: RUN, requestChanges, ...(review === undefined ? {} : { review }) },
+    fixes: { pullRequest: 50, headSha, runUrl: RUN, requestChanges, ...(review === undefined ? {} : { review }), ...(retry === undefined ? {} : { retry }) },
   };
 }
 
@@ -690,6 +691,24 @@ describe("An undelivered Request changes while a run is in flight on the PR", ()
     expect(actionsOf(push).some((action) => action.kind === "rebase-onto-main")).toBe(true);
     // The rebase turns the PR back to draft, which doesn't bring the flaw's Retry back: the rebased head gets its Review.
     expect(startsOn(thread.pushed(thread.headSha, 125))).toMatchObject({ role: "review" });
+  });
+
+  it("a Retry the Operator took the PR back from never lands, not even as the outcome of a later flaw's Retry", () => {
+    const thread = new Thread();
+    thread.draft = true;
+    thread.history.push({ kind: "draft", at: at(1) });
+    thread.headSha = B;
+    thread.reviewed("execution-flaw", 5);
+    thread.implement();
+    thread.markReady(10);
+    thread.mainPushed(20, MAIN_2);
+    thread.pushed(thread.headSha, 25);
+    expect(commentsOn(thread.reviewed("execution-flaw", 40), 50)[0]).toContain("Retry 2 of 2");
+
+    // The abandoned Retry 1's job finishes now, before Retry 2's.
+    const abandoned = thread.retryFinishes(BUILT, C, 50, 1);
+    expect(actionsOf(abandoned).some((action) => action.kind === "push-branch")).toBe(false);
+    expect(actionsOf(thread.retryFinishes(BUILT, D, 60, 2))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
   });
 
   it("a Retry the Operator took the PR back from stays over once the Kit's rebase turns the PR to draft again", () => {

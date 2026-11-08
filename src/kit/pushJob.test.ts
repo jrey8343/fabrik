@@ -97,9 +97,16 @@ describe("What the push job applies", () => {
       review: 900,
       conflict: null,
       mainAtStart: null,
+      retry: null,
       startedBy: null,
       capture: { result: null, artifact: null, galleryArtifact: null },
     });
+  });
+
+  it("carries a Retry's number from the Kit job's plan, so a Retry left over from an earlier flaw never lands (#341)", () => {
+    const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", retry: "2" }), 50);
+
+    expect(input).toMatchObject({ kind: "agent-result", retry: 2 });
   });
 
   it("carries main's head as the Kit job read it before the run, never anything from the agent job (#341)", () => {

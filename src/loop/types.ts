@@ -178,6 +178,8 @@ export type LoopEvent =
         readonly requestChanges?: boolean;
         /** For a Request-changes run: the review it was started for, from the Kit job's plan (#341). */
         readonly review?: number;
+        /** For a Retry: its number, from the Kit job's plan, so a Retry left over from an earlier flaw never lands (#341). */
+        readonly retry?: number;
         /**
          * For a conflict-only run (#304): the default branch's head it was
          * started to bring the PR up to date with. It isn't a retry.
