@@ -98,14 +98,15 @@ describe("A third Execution flaw counts as a Design flaw", () => {
     expect(actionsOf(plan)).not.toContainEqual({ kind: "add-labels", issue: 7, labels: ["needs-design"] });
   });
 
-  it("Execution flaws from Request-changes runs don't count toward the third", () => {
+  it("an Execution flaw from a Request-changes run counts toward the third, as the Retry it called for does (#393)", () => {
+    // The first flaw started Retry 1; the Request-changes run's flaw started Retry 2; this one has none left.
     const pullRequest = aPullRequest({
       pushedSinceVerdict: true,
       verdicts: [earlier("execution-flaw"), earlier("execution-flaw", { requestChanges: true })],
     });
     const plan = planFor(reviewed("verdict: execution-flaw\n\nStill throws."), snapshotOfPullRequest(pullRequest), kitConfig());
 
-    expect(actionsOf(plan).map((action) => action.kind)).not.toContain("close-pull-request");
+    expect(actionsOf(plan)).toContainEqual({ kind: "close-pull-request", pullRequest: 50 });
   });
 });
 

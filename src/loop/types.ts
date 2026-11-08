@@ -676,7 +676,10 @@ export interface VerdictRecord {
    * changed nothing, made it an Execution flaw.
    */
   readonly source: "reviewer" | "ci" | "empty-diff";
-  /** Whether it came from a Request-changes run, which doesn't count as a retry. */
+  /**
+   * Whether it came from a Request-changes run, which uses no retry itself. An
+   * Execution flaw on its push still calls for one, and counts (#393).
+   */
   readonly requestChanges: boolean;
   /**
    * True when it came from a conflict-only run (#304), which doesn't count as

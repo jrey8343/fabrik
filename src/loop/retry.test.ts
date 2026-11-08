@@ -11,6 +11,7 @@ import {
 } from "../__fixtures__/snapshots.ts";
 import { anEvidence, CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "./rules.ts";
+import { owedRetry, runInFlight } from "./retry.ts";
 import type { Action, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
@@ -206,14 +207,47 @@ describe("Starting a retry", () => {
     expect(actionsOf(plan)[1]).toMatchObject({ model: "claude-opus-6", effort: "high" });
   });
 
-  it("the retry count ignores Verdicts from a Request-changes run", () => {
+  it("the Retry a Request-changes run's flaw started counts: the flaw on its push starts Retry 2, stepped up", () => {
+    // The Request-changes run used no retry, but its flaw started Retry 1, so the flaw on Retry 1's push calls for Retry 2.
+    const pullRequest = flawedPullRequest([earlier("execution-flaw", { requestChanges: true })]);
+    const plan = planFor(retryLabeled, resumeSnapshot(pullRequest), kitConfig());
+
+    expect(actionsOf(plan)[1]).toMatchObject({ kind: "start-agent-run", retry: 2, model: "claude-opus-5-5", stepUp: true });
+  });
+
+  it("after two Request-changes runs' flaws, each of which started a Retry, a third flaw starts no retry", () => {
     const pullRequest = flawedPullRequest([
       earlier("execution-flaw", { requestChanges: true }),
       earlier("execution-flaw", { requestChanges: true }),
     ]);
+
+    expect(startedRuns(planFor(retryLabeled, resumeSnapshot(pullRequest), kitConfig()))).toEqual([]);
+  });
+
+  it.each([
+    ["a conflict-only run's Verdict", earlier("execution-flaw", { source: "ci", conflictRun: true })],
+    ["a flaw that gave way to an undelivered Request changes", earlier("execution-flaw", { requestChangesFirst: [900] })],
+  ])("%s called for no retry, so it doesn't count toward the two", (_, exempt) => {
+    const pullRequest = flawedPullRequest([exempt, exempt]);
     const plan = planFor(retryLabeled, resumeSnapshot(pullRequest), kitConfig());
 
-    expect(actionsOf(plan)[1]).toMatchObject({ kind: "start-agent-run", model: "claude-sonnet-5-5" });
+    expect(actionsOf(plan)[1]).toMatchObject({ kind: "start-agent-run", retry: 1, model: "claude-sonnet-5-5" });
+  });
+
+  it("after a Request-changes run's flaw, the run in flight and the Retry owed are the one its Verdict announced", () => {
+    // Retry 1 fixed an earlier flaw; then the Operator requested changes, and that run's push had a flaw.
+    const pullRequest = flawedPullRequest([earlier("execution-flaw"), earlier("pass")], { requestChanges: true });
+    const announced = planFor(
+      { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output: "verdict: execution-flaw\n\nStill wrong.", runUrl: RUN, repoUrl: "https://github.com/acme/shop" },
+      snapshotOfPullRequest({ ...pullRequest, verdicts: pullRequest.verdicts.slice(0, -1), pushedSinceVerdict: true }),
+      kitConfig(),
+    );
+    const comments = actionsOf(announced).flatMap((action) => (action.kind === "comment" ? [action.body] : []));
+
+    expect(comments.join("\n")).toContain("Retry 2 of 2 starts now");
+    expect(runInFlight(pullRequest)).toEqual({ kind: "retry", retry: 2, flaw: HEAD_SHA });
+    expect(owedRetry(pullRequest, [], kitConfig())).toMatchObject({ retry: 2 });
+    expect(actionsOf(planFor(retryLabeled, resumeSnapshot(pullRequest), kitConfig()))[1]).toMatchObject({ retry: 2 });
   });
 
   it("an Execution flaw from a Request-changes run still gets a retry, counted from the flaws before it", () => {

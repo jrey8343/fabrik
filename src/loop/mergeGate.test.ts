@@ -391,8 +391,29 @@ describe("Retries after a Request-changes run", () => {
       kitConfig(),
     );
 
-  it("still count correctly: the Request-changes run's flaw isn't counted, so the next flaw starts retry 2, not back to design", () => {
-    // Retry 1 fixed a flaw and passed; the Operator requested changes; that run's push had a flaw; its retry flawed again.
+  it("count the Retry a Request-changes run's flaw started: the flaw on that Retry's push calls for Retry 2 of 2", () => {
+    // The Operator requested changes; that run's push had a flaw, which started Retry 1; Retry 1's push flawed again.
+    const plan = flawOn(aPullRequest({ pushedSinceVerdict: true, verdicts: [earlier("execution-flaw", { requestChanges: true })] }));
+
+    expect(commentsOf(plan)[0]).toContain("Retry 2 of 2 starts now, stepped up");
+    expect(actionsOf(plan)).not.toContainEqual({ kind: "close-pull-request", pullRequest: 50 });
+  });
+
+  it("run out after that: one more flaw sends the Ticket back to design", () => {
+    const plan = flawOn(
+      aPullRequest({
+        pushedSinceVerdict: true,
+        verdicts: [earlier("execution-flaw", { requestChanges: true }), earlier("execution-flaw")],
+      }),
+    );
+
+    expect(actionsOf(plan)).toContainEqual({ kind: "close-pull-request", pullRequest: 50 });
+    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "add-labels", issue: 7, labels: expect.arrayContaining(["needs-design"]) }));
+  });
+
+  it("run out when Retries 1 and 2 were both started: an earlier flaw, then a Request-changes run's flaw, then one more is back to design", () => {
+    // Retry 1 fixed a flaw and passed; the Operator requested changes; that run's push had a flaw, which started
+    // Retry 2; Retry 2's push flawed again.
     const plan = flawOn(
       aPullRequest({
         pushedSinceVerdict: true,
@@ -400,8 +421,8 @@ describe("Retries after a Request-changes run", () => {
       }),
     );
 
-    expect(commentsOf(plan)[0]).toContain("Retry 2 of 2 starts now, stepped up");
-    expect(actionsOf(plan)).not.toContainEqual({ kind: "close-pull-request", pullRequest: 50 });
+    expect(actionsOf(plan)).toContainEqual({ kind: "close-pull-request", pullRequest: 50 });
+    expect(commentsOf(plan).join("\n")).not.toContain("starts now");
   });
 
   it("still run out: two counted flaws before this one send the Ticket back to design", () => {
