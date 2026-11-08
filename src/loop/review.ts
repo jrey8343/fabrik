@@ -102,7 +102,8 @@ export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
       followUps: followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number),
       considered: consideredSection(parsed.considered, event.operatorComments),
     }, snapshot.operator);
-    if (parsed.verdict !== "pass") return { kind: "act", actions };
+    // A pass that gave way to a Request changes deferred during a Retry (#427) keeps the PR in draft for its run.
+    if (parsed.verdict !== "pass" || passGivesWay(pullRequest)) return { kind: "act", actions };
     return {
       kind: "act",
       actions: [
@@ -184,7 +185,8 @@ export function verdictActions(
   },
   operator: string,
 ): Action[] {
-  const first = verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator) : null;
+  const first =
+    verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator) : verdict === "pass" ? deferredFirst(pullRequest) : null;
   const next: VerdictNext | null = first ?? nextAfter(verdict, pullRequest);
   const record: VerdictRecord = {
     verdict,
@@ -218,6 +220,9 @@ export function verdictActions(
   ];
 }
 
+/** A Verdict that gives way to the Operator's Request changes: the reviews it names in its marker, its line and what starts their run. */
+type GaveWay = VerdictNext & { readonly reviews: number[] };
+
 /**
  * What an Execution flaw leads to when the Operator has a Request changes on
  * the PR that no run has built (#341), most often one GitHub never delivered:
@@ -229,7 +234,7 @@ export function verdictActions(
 function requestChangesFirst(
   pullRequest: PullRequestSnapshot,
   operator: string,
-): { readonly reviews: number[]; readonly line: string; readonly actions: Action[] } | null {
+): GaveWay | null {
   if (pullRequest.ticket === null) return null;
   // Not to the reviews of a Request-changes run in flight.
   const reviews = operatorChangesRequests(pullRequest, operator)
@@ -239,6 +244,30 @@ function requestChangesFirst(
   return {
     reviews,
     line: `The Operator's Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, reviews)}) hasn't been built, so it goes first: its Request-changes run starts now, on the Step-up model, and fixes these findings too. This Execution flaw uses no retry.`,
+    // A fresh agent:implement on the Ticket starts the run this Verdict put in flight. It notifies nobody.
+    actions: [{ kind: "add-labels", issue: pullRequest.ticket, labels: [DISPATCH_LABEL] }],
+  };
+}
+
+/** Whether a pass on this PR gives way to the Operator's Request changes deferred while a Retry was in flight (#427). */
+function passGivesWay(pullRequest: PullRequestSnapshot): boolean {
+  return deferredFirst(pullRequest) !== null;
+}
+
+/**
+ * What a pass leads to when the Operator requested changes on the draft while
+ * the Retry it judges was in flight (#427): the Review was never given those
+ * reviews, so the pass settles none of them. Their Request-changes run starts
+ * now, as though they had arrived at the Merge gate, and the PR stays in draft
+ * for it. Its marker names the reviews, so the run is in flight from it. Null
+ * when none is deferred.
+ */
+function deferredFirst(pullRequest: PullRequestSnapshot): GaveWay | null {
+  if (pullRequest.ticket === null || pullRequest.deferredChangesRequests.length === 0) return null;
+  const reviews = [...pullRequest.deferredChangesRequests];
+  return {
+    reviews,
+    line: `The Operator's Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, reviews)}) came in while the Retry worked, so this Review judged #${pullRequest.number} against the Ticket without it. Its Request-changes run starts now, on the Step-up model, and uses no retry, and Review runs again on its push.`,
     // A fresh agent:implement on the Ticket starts the run this Verdict put in flight. It notifies nobody.
     actions: [{ kind: "add-labels", issue: pullRequest.ticket, labels: [DISPATCH_LABEL] }],
   };

@@ -21,7 +21,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
-import { gatherAuditSliceFor, gatherOpenMaps, type OpenMap } from "../github/snapshot.ts";
+import { gatherAuditSliceFor, gatherOpenMaps, deferredChangesRequestsOn, type OpenMap } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
@@ -243,6 +243,7 @@ async function readOperatorFeedback(
   repo: Repo,
   pullRequest: number,
   operator: string,
+  deferred: readonly number[] = [],
 ): Promise<{ operatorComments: OperatorComment[]; requestedChanges: RequestedChange[] }> {
   const base = `/repos/${repo.owner}/${repo.name}`;
   interface Written {
@@ -262,6 +263,9 @@ async function readOperatorFeedback(
     allPages<Written & { state: string; submitted_at?: string | null }>(github, `${base}/pulls/${pullRequest}/reviews`),
   ]);
   const theirs = (written: Written): boolean => written.user?.login === operator && written.user.type !== "Bot";
+  // A review deferred while a Retry was in flight (#427), and its inline comments, aren't this run's to read.
+  const notDeferred = (written: Written & { pull_request_review_id?: number | null }): boolean =>
+    !deferred.includes(written.id) && (written.pull_request_review_id == null || !deferred.includes(written.pull_request_review_id));
   const comments: OperatorComment[] = [
     ...conversation.filter(theirs).map((c) => ({
       id: operatorCommentId("conversation", c.id),
@@ -270,7 +274,7 @@ async function readOperatorFeedback(
       createdAt: c.created_at,
       body: c.body ?? "",
     })),
-    ...inline.filter(theirs).map((c) => ({
+    ...inline.filter((c) => theirs(c) && notDeferred(c)).map((c) => ({
       id: operatorCommentId("inline", c.id),
       url: c.html_url,
       where: { kind: "inline" as const, path: c.path, line: c.line ?? c.original_line ?? null },
@@ -288,7 +292,7 @@ async function readOperatorFeedback(
       })),
   ];
   const requestedChanges: RequestedChange[] = reviews
-    .filter((r) => theirs(r) && r.state === "CHANGES_REQUESTED")
+    .filter((r) => theirs(r) && notDeferred(r) && r.state === "CHANGES_REQUESTED")
     .map((r) => ({
       id: operatorCommentId("review", r.id),
       url: r.html_url,
@@ -352,17 +356,20 @@ interface PullRequestQueryResult {
  * their authors' kind, so only the Fabrik App's Verdicts count as findings.
  * Either way, the Operator's comments on it come apart, in `operatorComments`,
  * and, on a PR the Operator requested changes on, its Request changes reviews
- * in `requestedChanges`, which amend the Ticket (ADR-0010).
+ * in `requestedChanges`, which amend the Ticket (ADR-0010). Those `deferred`
+ * while a Retry was in flight (#427) are left out, with their inline comments:
+ * the Verdict that ends the Retry gives way to them, so its Review never
+ * judges against them, nor does a Retry build them.
  */
 export async function readPullRequest(
   github: Reader,
   repo: Repo,
   number: number,
-  { withComments, operator }: { readonly withComments: boolean; readonly operator: string },
+  { withComments, operator, deferred = [] }: { readonly withComments: boolean; readonly operator: string; readonly deferred?: readonly number[] },
 ): Promise<unknown> {
   const [data, { operatorComments, requestedChanges }] = await Promise.all([
     github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, { owner: repo.owner, name: repo.name, number }),
-    readOperatorFeedback(github, repo, number, operator),
+    readOperatorFeedback(github, repo, number, operator, deferred),
   ]);
   const pullRequest = data.repository.pullRequest;
   if (pullRequest === null) throw new Error(`Pull request #${number} not found`);
@@ -770,9 +777,11 @@ async function main(outDir: string): Promise<void> {
   }
   if (pullRequest !== null) {
     const withComments = process.env["FABRIK_PULL_REQUEST_COMMENTS"] === "true";
+    // A Review or a Retry isn't given the Operator's Request changes deferred while a Retry was in flight (#427); their run is.
+    const deferred = review === null ? await deferredChangesRequestsOn(github, repo, pullRequest, operator) : [];
     await writeFile(
       join(outDir, "pull-request.json"),
-      JSON.stringify(await readPullRequest(github, repo, pullRequest, { withComments, operator })),
+      JSON.stringify(await readPullRequest(github, repo, pullRequest, { withComments, operator, deferred })),
     );
     if (review !== null) await writeFile(join(outDir, "review.json"), JSON.stringify(await readReview(github, repo, pullRequest, review)));
   }

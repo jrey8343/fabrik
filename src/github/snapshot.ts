@@ -1262,6 +1262,15 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
   };
 }
 
+/**
+ * The Operator's Request changes on a PR deferred while a Retry was in flight
+ * (#427), as the Loop's snapshot reads them, for a Review's or a Retry's
+ * inputs to leave out.
+ */
+export async function deferredChangesRequestsOn(github: GitHub, repo: Repo, number: number, operator: string): Promise<readonly number[]> {
+  return (await gatherPullRequest(github, repo, number, operator, null)).pullRequest?.deferredChangesRequests ?? [];
+}
+
 async function gatherPullRequest(
   github: GitHub,
   repo: Repo,

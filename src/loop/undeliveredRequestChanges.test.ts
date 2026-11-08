@@ -22,7 +22,7 @@ import {
   verdictsIn,
 } from "../github/threads.ts";
 import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
-import { requestChangesAnswersIn, verdictMarker } from "./markers.ts";
+import { RETRY_ENDED_MARKER, requestChangesAnswersIn, verdictMarker } from "./markers.ts";
 import { runInFlight } from "./retry.ts";
 import { planFor } from "./rules.ts";
 import type { Action, BranchChanges, KitConfig, KitIssueSnapshot, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
@@ -788,6 +788,97 @@ describe("An undelivered Request changes while a run is in flight on the PR", ()
     thread.mainPushed(20, MAIN_2);
 
     expect(startsOn(thread.pushed(thread.headSha, 25))).toMatchObject({ role: "review" });
+  });
+});
+
+describe("The Operator's Request changes on the draft while a Retry is in flight (#427)", () => {
+  /** PR #50 in draft at B, whose Execution flaw at 05:05 started Retry 1; the Operator requests changes at 05:07. */
+  function deferredDuringRetry(): Thread {
+    const thread = new Thread();
+    thread.draft = true;
+    thread.history.push({ kind: "draft", at: at(1) });
+    thread.headSha = B;
+    thread.reviewed("execution-flaw", 5);
+    thread.implement();
+    thread.review(9000, 7);
+    return thread;
+  }
+
+  it("is acknowledged as deferred until the Retry's Verdict, mentioning nobody, and starts nothing yet", () => {
+    const thread = deferredDuringRetry();
+
+    const plan = thread.delivered(9000, 7);
+
+    const [note] = commentsOn(plan, 50);
+    expect(note).toContain(`${PR_URL}#pullrequestreview-9000`);
+    expect(note).toContain("Retry 1 of 2");
+    expect(note).not.toContain("@");
+    expect(startsOn(plan)).toBeUndefined();
+    expect(addsImplement(plan)).toBe(false);
+    // Noted, so neither check notes it as undelivered.
+    expect(commentsOn(thread.tick(60), 50)).toEqual([]);
+  });
+
+  it("replays the issue: an Execution flaw on Retry 1's push gives way to it, using no Retry, and its Request-changes run starts", () => {
+    const thread = deferredDuringRetry();
+    thread.delivered(9000, 7);
+    expect(actionsOf(thread.retryFinishes(BUILT, C, 10, 1, B))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+
+    const verdict = thread.reviewed("execution-flaw", 20);
+
+    const [line] = commentsOn(verdict, 50);
+    expect(line).toContain("goes first");
+    expect(line).not.toContain("Retry 2 of 2");
+    expect(actionsOf(verdict)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
+    expect(startsOn(thread.implement())).toMatchObject({ requestChanges: { review: 9000 } });
+    // A flaw on the Request-changes run's push calls for Retry 2: the Operator's review cost none.
+    thread.requestChangesRunFinishes(BUILT, D, 30);
+    expect(commentsOn(thread.reviewed("execution-flaw", 40), 50)[0]).toContain("Retry 2 of 2 starts now");
+  });
+
+  it("a pass on Retry 1's push doesn't settle it: the PR stays in draft, and its Request-changes run starts", () => {
+    const thread = deferredDuringRetry();
+    thread.delivered(9000, 7);
+    thread.retryFinishes(BUILT, C, 10, 1, B);
+
+    const verdict = thread.reviewed("pass", 20);
+
+    const [line] = commentsOn(verdict, 50);
+    expect(line).toContain(`${PR_URL}#pullrequestreview-9000`);
+    expect(actionsOf(verdict).some((action) => action.kind === "mark-ready-for-review" || action.kind === "request-review")).toBe(false);
+    expect(actionsOf(verdict)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
+    expect(startsOn(thread.implement())).toMatchObject({ requestChanges: { review: 9000 } });
+    expect(commentsOn(thread.tick(60), 50)).toEqual([]);
+  });
+
+  it("is deferred even when GitHub never delivered it: the Retry's Verdict still gives way to it", () => {
+    const thread = deferredDuringRetry();
+    thread.retryFinishes(BUILT, C, 10, 1, B);
+
+    expect(commentsOn(thread.reviewed("execution-flaw", 20), 50)[0]).toContain("goes first");
+  });
+
+  it("anyone else's on the draft still does nothing", () => {
+    const thread = deferredDuringRetry();
+    thread.review(9001, 8, "teammate");
+    thread.dismiss(9000);
+    thread.retryFinishes(BUILT, C, 10, 1, B);
+
+    expect(commentsOn(thread.reviewed("execution-flaw", 20), 50)[0]).toContain("Retry 2 of 2 starts now");
+  });
+
+  it.each([
+    ["the Operator takes the PR out of draft", (thread: Thread) => thread.markReady(9)],
+    ["the Kit ends the Retry, its Ticket no longer ready-for-agent", (thread: Thread) => thread.history.push({ kind: "bot-comment", at: at(9), body: `${RETRY_ENDED_MARKER}\nNo Retry starts.` })],
+  ])("is deferred no longer once %s: later runs are given it, and no check notes it", (_, ends) => {
+    const thread = deferredDuringRetry();
+    thread.delivered(9000, 7);
+    expect(thread.pullRequest().deferredChangesRequests).toEqual([9000]);
+
+    ends(thread);
+
+    expect(thread.pullRequest().deferredChangesRequests).toEqual([]);
+    expect(thread.pullRequest().notedChangesRequests).toEqual([9000]);
   });
 });
 

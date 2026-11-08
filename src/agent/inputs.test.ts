@@ -563,6 +563,19 @@ describe("The Operator's comments on a PR", () => {
       },
     );
 
+    it.each([false, true])(
+      "leaves out one deferred while a Retry was in flight (#427), its inline comments too, so neither the Retry's Review nor a Retry is given it (withComments: %s)",
+      async (withComments) => {
+        const read = (await readPullRequest(github(), repo, 50, { withComments, operator: "operator", deferred: [4] })) as {
+          requestedChanges?: unknown;
+          operatorComments: { id: string }[];
+        };
+
+        expect(read.requestedChanges).toEqual([requestedChanges[0]]);
+        expect(read.operatorComments.map((comment) => comment.id)).toEqual(["conversation-1"]);
+      },
+    );
+
     it("is left out of the PR input entirely when the Operator has requested none", async () => {
       const none = restGitHub(routes({ reviews: [review(3, OP, "COMMENTED", "Looks close.")] }), graph);
 

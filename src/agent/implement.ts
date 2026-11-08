@@ -190,8 +190,10 @@ export async function requestChangesContext(
   const { number, title } = pullRequest;
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   // An Execution flaw that gave way to this run (#341) called for no Retry, so its findings are this run's to fix too.
+  // A pass that gave way to it (#427) has none.
   const latest = latestVerdictIn(pullRequest.comments);
-  const gaveWay = latest !== undefined && verdictsIn([latest])[0]?.requestChangesFirst !== undefined ? latest : null;
+  const latestRecord = latest === undefined ? undefined : verdictsIn([latest])[0];
+  const gaveWay = latestRecord?.verdict === "execution-flaw" && latestRecord.requestChangesFirst !== undefined ? (latest ?? null) : null;
   const { review, comments } = (JSON.parse(await readFile(reviewFile, "utf8")) ?? {}) as {
     review?: { id?: unknown; body?: unknown; state?: unknown };
     comments?: { id?: unknown; path?: unknown; line?: unknown; body?: unknown }[];
