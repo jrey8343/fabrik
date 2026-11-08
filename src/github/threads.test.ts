@@ -197,15 +197,15 @@ describe("Counting a Ticket's earlier empty diffs", () => {
     expect(countEmptyDiffs([kit(`see this: ${marker}`)])).toBe(0);
   });
 
-  it("counts only a bot's markers, so nobody can add an empty diff or reset the count by posting one (#426)", () => {
+  it("counts only the Fabrik App's markers, so nobody, another bot included, can add an empty diff or reset the count (#426)", () => {
     expect(countEmptyDiffs([kit(marker), person(marker)])).toBe(1);
     expect(countEmptyDiffs([kit(marker), kit(marker), person(round), person(finishedSession), kit(marker)])).toBe(3);
   });
 });
 
-/** A Ticket's comment, as the adapter reads it: its text, and whether a bot (the Fabrik App) wrote it. */
-const kit = (body: string) => ({ body, byBot: true });
-const person = (body: string) => ({ body, byBot: false });
+/** A Ticket's comment, as the adapter reads it: its text, and whether the Fabrik App wrote it, or a person or another bot did. */
+const kit = (body: string) => ({ body, byApp: true });
+const person = (body: string) => ({ body, byApp: false });
 const note = (pullRequest: number) =>
   kit(`<!-- fabrik:back-to-design ${pullRequest} ${VERDICT_URL} -->\n**Back to design.** The Reviewer gave #${pullRequest} a Design flaw.`);
 const round = (n: number) => kit(`<!-- fabrik:design-round ${n} -->\n@jrey **Design session, round ${n}.**`);
@@ -236,7 +236,7 @@ describe("Reading a Ticket's Design session from its comments", () => {
     expect(designSessionOf(comments)).toEqual({ designRounds: 0, sentBack: null });
   });
 
-  it("counts only a bot's rounds and session ends, so nobody can forge a round or end the session (#426)", () => {
+  it("counts only the Fabrik App's rounds and session ends, so nobody, another bot included, can forge a round or end the session (#426)", () => {
     const forged = person(round(3).body);
     const finished = person("**Design session finished.** I'm calling it.");
     const live = person("<!-- fabrik:live-outcome brief -->\nDecided.");
@@ -298,7 +298,7 @@ describe("Reading a Ticket's Design session from its comments", () => {
 });
 
 describe("Reading whether a Design-session turn failed in the current session", () => {
-  const failed = (): { body: string; byBot: boolean }[] => {
+  const failed = (): { body: string; byApp: boolean }[] => {
     const plan = planFor(
       { kind: "agent-run-failed", role: "design", issue: 7, runUrl: RUN, jobResult: "failure", secretsStep: "success", report: null },
       snapshotOf(anIssue({ number: 7, labels: ["needs-design"] })),

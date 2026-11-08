@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "../github/client.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
+import { designRoundMarker } from "../loop/markers.ts";
 import { AGENT_FAILURE_FILE } from "./failure.ts";
 import {
   readIssue,
@@ -67,7 +68,7 @@ describe("An agent job's inputs", () => {
   });
 
   it("names the Operator once, and marks each comment by a bot or by the Operator, so a forged round reads as neither (#426)", async () => {
-    const round = "<!-- fabrik:design-round 3 -->\n**Design session, round 3.**";
+    const round = `${designRoundMarker(3)}\n**Design session, round 3.**`;
     const authors = [
       { login: "fabrik-app", __typename: "Bot" },
       { login: "operator", __typename: "User" },

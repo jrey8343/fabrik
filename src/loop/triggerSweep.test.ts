@@ -188,7 +188,7 @@ describe("After the sweep gives up, no check adds the label back by itself", () 
   });
 
   it("the Design queue reads a failed turn: the session keeps its slot and waits for the Operator", () => {
-    const turnFailed = designTurnFailedIn([{ body: giveUpComment("agent:design"), byBot: true }]);
+    const turnFailed = designTurnFailedIn([{ body: giveUpComment("agent:design"), byApp: true }]);
     expect(turnFailed).toBe(true);
 
     const plan = planFor(

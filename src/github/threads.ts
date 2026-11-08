@@ -464,14 +464,13 @@ export function standingIn(history: readonly PullRequestHistoryItem[]): Readonly
 /**
  * How many empty diffs the Kit has recorded on a Ticket, from its comments
  * oldest first. A Design session starts the count again, because a Ticket
- * that went back to design starts again on its retries. Only a bot's markers
- * count, so nobody can add an empty diff or start the count again by posting
- * one (#426).
+ * that went back to design starts again on its retries. Only the Fabrik App's
+ * comments count (`byApp`), so nobody, another bot included, can add an empty
+ * diff or start the count again by posting a marker (#426).
  */
-export function countEmptyDiffs(comments: readonly BotComment[]): number {
+export function countEmptyDiffs(comments: readonly KitComment[]): number {
   let count = 0;
-  for (const { body, byBot } of comments) {
-    if (!byBot) continue;
+  for (const { body } of kitCommentsIn(comments)) {
     if (isDesignSessionComment(body)) count = 0;
     else if (body.startsWith(EMPTY_DIFF_MARKER)) count += 1;
   }
@@ -482,13 +481,13 @@ export function countEmptyDiffs(comments: readonly BotComment[]): number {
  * Where an issue's current Design session stands, from its comments oldest
  * first: how many rounds it has posted, and the return it follows, if any. A
  * session's end starts the count again, and so does the Kit's note that a
- * Ticket came back, whose session that follows. Only a bot's comments count,
- * so nobody can fake a round, an end or a return by posting one (#426).
+ * Ticket came back, whose session that follows. Only the Fabrik App's
+ * comments count (`byApp`), so nobody, another bot included, can fake a
+ * round, an end or a return by posting one (#426).
  */
-export function designSessionOf(comments: readonly BotComment[]): Pick<IssueSnapshot, "designRounds" | "sentBack"> {
+export function designSessionOf(comments: readonly KitComment[]): Pick<IssueSnapshot, "designRounds" | "sentBack"> {
   let session: Pick<IssueSnapshot, "designRounds" | "sentBack"> = { designRounds: 0, sentBack: null };
-  for (const { body, byBot } of comments) {
-    if (!byBot) continue;
+  for (const { body } of kitCommentsIn(comments)) {
     const returned = sentBackIn(body);
     if (returned !== null) session = { designRounds: 0, sentBack: returned };
     else if (DESIGN_ROUND_MARKER.test(body)) session = { ...session, designRounds: session.designRounds + 1 };
@@ -500,31 +499,33 @@ export function designSessionOf(comments: readonly BotComment[]): Pick<IssueSnap
 /**
  * Whether a Design-session turn has failed in an issue's current session, from
  * its comments oldest first: the Kit's failure notice for the turn, with no
- * end of the session, and no return starting a new one, since. Only a bot's
- * comments count, so nobody can fake a failure, or clear one, by posting a
- * notice or an end (#426).
+ * end of the session, and no return starting a new one, since. Only the
+ * Fabrik App's comments count (`byApp`), so nobody, another bot included, can
+ * fake a failure, or clear one, by posting a notice or an end (#426).
  */
-export function designTurnFailedIn(comments: readonly BotComment[]): boolean {
+export function designTurnFailedIn(comments: readonly KitComment[]): boolean {
   let failed = false;
-  for (const { body, byBot } of comments) {
-    if (!byBot) continue;
+  for (const { body } of kitCommentsIn(comments)) {
     if (body.startsWith(DESIGN_TURN_FAILED_MARKER)) failed = true;
     else if (endsDesignSession(body)) failed = false;
   }
   return failed;
 }
 
-/** A comment on an issue, and whether a bot wrote it. */
-export interface BotComment {
+/** A comment on an issue, and whether the Fabrik App wrote it. */
+export interface KitComment {
   readonly body: string;
-  readonly byBot: boolean;
+  readonly byApp: boolean;
+}
+
+/** The Fabrik App's comments among these, in their order: the only ones a marker may come from. */
+function kitCommentsIn<Comment extends KitComment>(comments: readonly Comment[]): Comment[] {
+  return comments.filter(({ byApp }) => byApp);
 }
 
 /** A comment as the snapshot reads an issue's thread: its id, its text, and whether the Fabrik App wrote it. */
-export interface ThreadComment {
+export interface ThreadComment extends KitComment {
   readonly id: number;
-  readonly body: string;
-  readonly byApp: boolean;
 }
 
 /**
@@ -619,15 +620,9 @@ export function implementRunFailedIn(comments: readonly KitComment[]): boolean {
   return latestKitWordIs(IMPLEMENT_RUN_FAILED_MARKER, comments);
 }
 
-/** A comment on an issue, and whether the Fabrik App wrote it. */
-interface KitComment {
-  readonly body: string;
-  readonly byApp: boolean;
-}
-
 /** Whether the Fabrik App's last comment, of these oldest first, starts with this marker. */
 function latestKitWordIs(marker: string, comments: readonly KitComment[]): boolean {
-  const latest = comments.filter(({ byApp }) => byApp).at(-1);
+  const latest = kitCommentsIn(comments).at(-1);
   return latest !== undefined && latest.body.startsWith(marker);
 }
 
