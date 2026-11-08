@@ -125,6 +125,22 @@ describe("Review: starting one", () => {
 
     expect(plan.kind).toBe("nothing");
   });
+
+  it("agent:review added to an agent PR out of draft comes off, starting no Review, and one comment says why (#417)", () => {
+    const plan = planFor(
+      { kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" },
+      snapshotOfPullRequest(aPullRequest({ draft: false, labels: ["agent:review"] })),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 50, label: "agent:review" },
+        { kind: "comment", issue: 50, body: "agent:review came off and nothing started: #50 has left draft." },
+      ],
+    });
+  });
 });
 
 describe("Review: a stale Verdict", () => {

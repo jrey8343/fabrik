@@ -441,7 +441,7 @@ async function main(): Promise<void> {
   // A push to main's or the tick's plan may rebase an agent PR onto main, as the Fabrik App (#304).
   const remote = { serverUrl: required("GITHUB_SERVER_URL"), repo, token: required("FABRIK_APP_TOKEN") };
   const rebaser = { rebase: (name: string, onto: string) => rebaseBranchOntoMain(name, onto, remote) };
-  const { preview } = await applyPlan(
+  const { preview, readded } = await applyPlan(
     github,
     repo,
     plan,
@@ -466,7 +466,11 @@ async function main(): Promise<void> {
         : `preview-url=${preview.url}\npreview-pull-request=${preview.pullRequest}\n`,
     );
   }
-  await report(describe(plan));
+  // A trigger label already on fires no event, so the adapter took it off first (#417): the summary says so.
+  const readdedLines = readded.map(
+    ({ issue, label }) => `- ${label} was already on #${issue}, so it was taken off and added again, which starts its run`,
+  );
+  await report([describe(plan), ...(readdedLines.length === 0 ? [] : ["", ...readdedLines])].join("\n"));
   if (plan.kind === "fail") {
     console.log(`::error title=Infrastructure failure::${plan.reason}`);
     process.exitCode = 1;

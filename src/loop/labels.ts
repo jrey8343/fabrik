@@ -155,6 +155,14 @@ export const ALL_LABELS: readonly Label[] = [
   ...DECISION_TYPES.map(decisionLabel),
 ];
 
+/** Every label whose `labeled` event starts a run (ADR-0001). GitHub fires none for a label already on. */
+export const TRIGGER_LABELS = [DISPATCH_LABEL, DESIGN_LABEL, REVIEW_LABEL, RESEARCH_LABEL, REPLAY_TRIGGER_LABEL] as const;
+export type TriggerLabel = (typeof TRIGGER_LABELS)[number];
+
+export function isTriggerLabel(label: string): label is TriggerLabel {
+  return (TRIGGER_LABELS as readonly string[]).includes(label);
+}
+
 export function isStateLabel(label: string): label is StateLabel {
   return (STATE_LABELS as readonly string[]).includes(label);
 }

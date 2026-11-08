@@ -5,6 +5,7 @@
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
 import { consideredSection } from "./considered.ts";
+import { declineTrigger } from "./declineTrigger.ts";
 import { followUpsSection } from "./followUps.ts";
 import { DISPATCH_LABEL, REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
@@ -53,6 +54,17 @@ export function startReview(pullRequest: PullRequestSnapshot, config: KitConfig)
       },
     ],
   };
+}
+
+/**
+ * agent:review added to a PR starts a Review as a push does. When none can
+ * start, the label comes off, so the Kit's or the Operator's later re-add
+ * fires a fresh event, and one comment says why (#417).
+ */
+export function startReviewOnLabel(pullRequest: PullRequestSnapshot, config: KitConfig): Plan {
+  const plan = startReview(pullRequest, config);
+  if (plan.kind !== "nothing") return plan;
+  return { kind: "act", actions: declineTrigger(pullRequest.number, REVIEW_LABEL, plan.reason) };
 }
 
 /** Red CI is an Execution flaw, recorded as a Verdict from CI so retries can be counted from the PR alone. */

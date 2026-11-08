@@ -31,13 +31,23 @@ describe("Starting an Implementer", () => {
   });
 
   it.each([
-    ["is closed", anIssue({ number: 7, open: false, labels: ["ready-for-agent", "agent:implement"] })],
-    ["isn't ready-for-agent", anIssue({ number: 7, labels: ["needs-design", "agent:implement"] })],
-    ["already has an open PR", anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], openPullRequests: [50] })],
-  ])("a Ticket that %s only loses the label, and no Implementer starts", (_why, ticket) => {
+    ["is closed", anIssue({ number: 7, open: false, labels: ["ready-for-agent", "agent:implement"] }), "#7 is closed"],
+    ["isn't ready-for-agent", anIssue({ number: 7, labels: ["needs-design", "agent:implement"] }), "#7 isn't ready-for-agent"],
+    [
+      "already has an open PR with no run owed",
+      anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], openPullRequests: [50] }),
+      "#7's open PR #50 is owed no Implement run: no Retry, Request-changes run or conflict-only run waits on it",
+    ],
+  ])("a Ticket that %s loses the label, no Implementer starts, and one comment says why (#417)", (_why, ticket, reason) => {
     const plan = planFor(dispatched(), snapshotOf(ticket), kitConfig());
 
-    expect(plan).toEqual({ kind: "act", actions: [{ kind: "remove-label", issue: 7, label: "agent:implement" }] });
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:implement" },
+        { kind: "comment", issue: 7, body: `agent:implement came off and nothing started: ${reason}.` },
+      ],
+    });
   });
 });
 
@@ -252,6 +262,29 @@ describe("Opening the draft PR", () => {
         },
       ],
     });
+  });
+
+  it("takes off an agent:implement a failed claim left on the Ticket, so it stops holding a slot and a later re-add starts a run (#417)", () => {
+    const stale = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement"] });
+
+    const actions = actionsOf(planFor(finished(), snapshotOf(stale), kitConfig()));
+
+    expect(actions.map((action) => action.kind)).toEqual(["remove-label", "push-branch", "open-pull-request"]);
+    expect(actions[0]).toEqual({ kind: "remove-label", issue: 7, label: "agent:implement" });
+  });
+
+  it("takes that stale agent:implement off before an empty diff's Retry adds it again, so the Retry's labeled event fires (#417)", () => {
+    const stale = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement"] });
+    const empty = finished({ changes: { net: [], commits: [] } });
+
+    const labels = actionsOf(planFor(empty, snapshotOf(stale), kitConfig())).filter(
+      (action) => action.kind === "remove-label" || action.kind === "add-labels",
+    );
+
+    expect(labels).toEqual([
+      { kind: "remove-label", issue: 7, label: "agent:implement" },
+      { kind: "add-labels", issue: 7, labels: ["agent:implement"] },
+    ]);
   });
 
   it.each([

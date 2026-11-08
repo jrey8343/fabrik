@@ -58,9 +58,15 @@ describe("Starting a Researcher", () => {
       aDecision({ parentIssue: { number: 3, open: true, labels: ["enhancement", "ready-for-agent"] } }),
       "#12's parent #3 has no wayfinder:map label, so it isn't a Map",
     ],
-  ])("agent:research on %s starts nothing, and says why", (_subject, decision, reason) => {
+  ])("agent:research on %s comes off, starting nothing, and one comment says why (#417)", (_subject, decision, reason) => {
     const plan = planFor(labelled(), snapshotOf(decision), kitConfig());
 
-    expect(plan).toEqual({ kind: "nothing", reason });
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 12, label: "agent:research" },
+        { kind: "comment", issue: 12, body: `agent:research came off and nothing started: ${reason}.` },
+      ],
+    });
   });
 });

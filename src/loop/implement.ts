@@ -3,6 +3,7 @@
 import { evidenceSection, isUi, withoutEvidence } from "../evidence/uiEvidence.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { consideredSection } from "./considered.ts";
+import { declineTrigger } from "./declineTrigger.ts";
 import { type ImplementerAnswers, parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
@@ -62,9 +63,14 @@ export function startImplementer(
       pullRequest === null || pullRequest.number !== open || pullRequest.ticket !== issueNumber
         ? null
         : (owedRequestChangesRun(pullRequest, config) ?? listed(owedConflictRun(pullRequest, config) ?? owedRetry(pullRequest, issue.labels, config)));
-    return { kind: "act", actions: [removeLabel, ...(resumed ?? [])] };
+    if (resumed === null) {
+      const why = `#${issueNumber}'s open PR #${open} is owed no Implement run: no Retry, Request-changes run or conflict-only run waits on it`;
+      return { kind: "act", actions: declineTrigger(issueNumber, DISPATCH_LABEL, why) };
+    }
+    return { kind: "act", actions: [removeLabel, ...resumed] };
   }
-  if (whyNotBuildable(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
+  const unbuildable = whyNotBuildable(issueNumber, issue);
+  if (unbuildable !== null) return { kind: "act", actions: declineTrigger(issueNumber, DISPATCH_LABEL, unbuildable) };
   const { implement } = config.roles;
   // The second retry Steps up, and every run does while the Ticket is marked for a Stepped-up
   // start (ADR-0014); otherwise the first run and the first retry use the Implementer's model.
@@ -116,13 +122,13 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
 
   // Every commit counts, so a trust-root change can't hide behind a later revert.
   const guard = checkTrustRoot([...changes.net, ...changes.commits]);
-  if (guard.kind === "refuse") return refuse(issueNumber, guard.paths, operator);
+  if (guard.kind === "refuse") return withStaleDispatchOff(refuse(issueNumber, guard.paths, operator), issueNumber, issue);
   // "Did nothing" never passes, however the commits got there.
-  if (changes.net.length === 0) return emptyDiff(issueNumber, issue);
+  if (changes.net.length === 0) return withStaleDispatchOff(emptyDiff(issueNumber, issue), issueNumber, issue);
 
   const { title, summary } = parsed.output;
   const evidence = evidenceFor(event, config, false);
-  return {
+  return withStaleDispatchOff({
     kind: "act",
     actions: [
       { kind: "push-branch", branch },
@@ -137,7 +143,18 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
       },
       ...previewToLink(evidence, config, branch, null),
     ],
-  };
+  }, issueNumber, issue);
+}
+
+/**
+ * The claim job takes agent:implement off as a first run starts; when it
+ * failed, the label is still on, holding a Dispatch slot and swallowing the
+ * next re-add's event, so whatever the run's landing does takes it off
+ * first, before an empty diff's Retry adds it again (#417).
+ */
+function withStaleDispatchOff(plan: Plan, issueNumber: number, issue: IssueSnapshot): Plan {
+  if (plan.kind !== "act" || !issue.labels.includes(DISPATCH_LABEL)) return plan;
+  return { ...plan, actions: [{ kind: "remove-label", issue: issueNumber, label: DISPATCH_LABEL }, ...plan.actions] };
 }
 
 /**

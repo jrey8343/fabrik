@@ -1,5 +1,6 @@
 // The Researcher (#154): which Decisions it may run on, and its run starting
 // on one.
+import { declineTrigger } from "./declineTrigger.ts";
 import { MAP_LABEL, RESEARCH_DECISION_LABEL, RESEARCH_LABEL } from "./labels.ts";
 import { startAgentRun } from "./runs.ts";
 import type { Action, IssueContext, IssueSnapshot, KitConfig, Plan } from "./types.ts";
@@ -7,11 +8,12 @@ import type { Action, IssueContext, IssueSnapshot, KitConfig, Plan } from "./typ
 /**
  * agent:research starts the Researcher on a research Decision. The label
  * comes off as the run starts, as agent:implement does, so re-adding it runs
- * the Decision again. On any other subject nothing starts, and the plan says why.
+ * the Decision again. On any other subject nothing starts: the label comes
+ * off, so a later re-add fires its event, and one comment says why (#417).
  */
 export function startResearcher(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
   const why = whyNotResearchable(issue);
-  if (why !== null) return { kind: "nothing", reason: why };
+  if (why !== null) return { kind: "act", actions: declineTrigger(issueNumber, RESEARCH_LABEL, why) };
   const removeLabel: Action = { kind: "remove-label", issue: issueNumber, label: RESEARCH_LABEL };
   return { kind: "act", actions: [removeLabel, ...startAgentRun("research", issueNumber, config).actions] };
 }

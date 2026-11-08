@@ -1,8 +1,11 @@
 // The adapter's apply side: carries out the plan the core returns, one action
-// at a time, as the token the job holds. It holds no Loop rules.
+// at a time, as the token the job holds. It holds no Loop rules, only how
+// GitHub carries them out: a trigger label left on is cycled so adding it
+// fires its event (#417), since GitHub fires none for a label already on.
 import { prototypePreviewUrl, previewUrl } from "../kit/config.ts";
 import { replayResultsIn, withTicketFinished, withTicketStarted } from "../kit/replay.ts";
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
+import { isTriggerLabel, type TriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { withPrototypeStarted } from "../loop/markers.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
@@ -60,9 +63,20 @@ export interface PrototypePreviewToLink {
   readonly url: string;
 }
 
-/** What the push job hands on from applying a plan: the preview deployment to link, a UI PR's or a prototype round's, when the plan asked for one. */
+/** A trigger label left on the issue, which the adapter took off and put back on so GitHub fired its labeled event (#417). */
+export interface ReaddedLabel {
+  readonly issue: number;
+  readonly label: TriggerLabel;
+}
+
+/**
+ * What the push job hands on from applying a plan: the preview deployment to
+ * link, a UI PR's or a prototype round's, when the plan asked for one; and each
+ * trigger label it re-added, for the step summary.
+ */
 export interface AppliedPlan {
   readonly preview: PreviewToLink | PrototypePreviewToLink | null;
+  readonly readded: readonly ReaddedLabel[];
 }
 
 /** The Actions run applying a plan, by its id, and when it applies it, as an ISO 8601 time. */
@@ -87,8 +101,8 @@ export async function applyPlan(
   run: ApplyingRun | null = null,
   rebaser: MainRebaser | null = null,
 ): Promise<AppliedPlan> {
-  if (plan.kind !== "act") return { preview: null };
-  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run };
+  if (plan.kind !== "act") return { preview: null, readded: [] };
+  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run, readded: [] };
   const applyEach = async (actions: readonly Action[]): Promise<void> => {
     for (const action of actions) {
       if (action.kind !== "rebase-onto-main") {
@@ -116,7 +130,7 @@ export async function applyPlan(
     }
   };
   await applyEach(plan.actions);
-  return { preview: made.preview };
+  return { preview: made.preview, readded: made.readded };
 }
 
 /** What earlier actions in the plan made, for later ones to refer to. */
@@ -129,6 +143,8 @@ interface Made {
   preview: PreviewToLink | PrototypePreviewToLink | null;
   /** The Actions run applying the plan, or null when the job names none. */
   readonly run: ApplyingRun | null;
+  /** Each trigger label the plan re-added, having found it already on. */
+  readonly readded: ReaddedLabel[];
 }
 
 /** A comment a plan posted: its URL for links in text, its id for an edit. */
@@ -358,6 +374,30 @@ async function react(github: GitHubApi, repo: Repo, action: Extract<Action, { ki
   }
 }
 
+/**
+ * How long a trigger label stays on before it counts as left behind: well past
+ * the time a run's start takes to take it off (the claim job, or the role's
+ * own job), so one this old started nothing and won't (#417).
+ */
+const STALE_TRIGGER_MS = 10 * 60 * 1000;
+
+/** When `label` was last added to the issue, as a time in ms, or null when GitHub lists no such event. */
+async function lastAdded(github: GitHubApi, issue: string, label: TriggerLabel): Promise<number | null> {
+  let last: number | null = null;
+  // Oldest first, so the last match on the last page is the latest.
+  for (let page = 1; ; page++) {
+    const events = (await github.rest("GET", `${issue}/events?per_page=100&page=${page}`)) as {
+      event: string;
+      label?: { name: string };
+      created_at: string;
+    }[];
+    for (const event of events) {
+      if (event.event === "labeled" && event.label?.name === label) last = Date.parse(event.created_at);
+    }
+    if (events.length < 100) return last;
+  }
+}
+
 async function applyToIssue(
   github: GitHubApi,
   issue: string,
@@ -386,9 +426,27 @@ async function applyToIssue(
 ): Promise<void> {
   const { created, posted } = made;
   switch (action.kind) {
-    case "add-labels":
-      if (action.labels.length > 0) await github.rest("POST", `${issue}/labels`, { labels: action.labels });
+    case "add-labels": {
+      if (action.labels.length === 0) return;
+      // GitHub fires `labeled` only for a label newly added, so a trigger label
+      // left on (a failed claim left it) is taken off first, or adding it would
+      // start nothing (#417). Read fresh: another job may have taken it off
+      // since the plan was made.
+      const triggers = action.labels.filter(isTriggerLabel);
+      if (triggers.length > 0) {
+        const on = (await github.rest("GET", `${issue}/labels?per_page=100`)) as { name: string }[];
+        const now = Date.parse(made.run?.at ?? new Date().toISOString());
+        for (const label of triggers.filter((trigger) => on.some(({ name }) => name === trigger))) {
+          // One added lately is its run still starting, which takes it off: a second event would start a second run.
+          const added = await lastAdded(github, issue, label);
+          if (added !== null && now - added < STALE_TRIGGER_MS) continue;
+          await github.rest("DELETE", `${issue}/labels/${encodeURIComponent(label)}`, undefined, { allowNotFound: true });
+          made.readded.push({ issue: action.issue, label });
+        }
+      }
+      await github.rest("POST", `${issue}/labels`, { labels: action.labels });
       return;
+    }
     case "remove-label":
       await github.rest("DELETE", `${issue}/labels/${encodeURIComponent(action.label)}`, undefined, {
         allowNotFound: true,
