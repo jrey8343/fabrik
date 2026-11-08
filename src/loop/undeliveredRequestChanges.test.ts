@@ -664,6 +664,38 @@ describe("An undelivered Request changes while a run is in flight on the PR", ()
     expect(actionsOf(thread.retryFinishes(BUILT, D, 90))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
   });
 
+  it("once the Operator dismisses it, a Request changes of theirs on the draft during the flaw's Retry does nothing, as on any draft", () => {
+    const thread = reviewInFlight();
+    thread.reviewed("execution-flaw", 70);
+    thread.dismiss(5810278044);
+    thread.implement();
+    thread.review(5810278099, 80);
+    thread.retryFinishes(BUILT, D, 90, 1);
+
+    expect(commentsOn(thread.reviewed("execution-flaw", 100), 50)[0]).toContain("Retry 2 of 2 starts now");
+  });
+
+  it("once the Operator dismisses it and its Retry has run, it counts for good, whatever Request-changes run lands later", () => {
+    const thread = reviewInFlight();
+    thread.reviewed("execution-flaw", 70);
+    thread.dismiss(5810278044);
+    thread.implement();
+    thread.retryFinishes(BUILT, D, 80, 1);
+    expect(commentsOn(thread.reviewed("execution-flaw", 90), 50)[0]).toContain("Retry 2 of 2");
+    thread.implement();
+    thread.retryFinishes(BUILT, E, 100, 2);
+    thread.reviewed("pass", 110);
+    // An unrelated Request changes, later, at the Merge gate.
+    thread.review(6000, 120);
+    thread.delivered(6000, 120);
+    thread.requestChangesRunFinishes(BUILT, C, 140);
+
+    const third = commentsOn(thread.reviewed("execution-flaw", 150), 50)[0];
+
+    expect(third).not.toContain("Retry 2 of 2");
+    expect(third).toContain("goes back to design");
+  });
+
   it("isn't brought back by dismissing its review after its Request-changes run built it: the flaw still uses no Retry", () => {
     const thread = reviewInFlight();
     thread.reviewed("execution-flaw", 70);
@@ -779,6 +811,19 @@ describe("The Request-changes run an undelivered Request changes started", () =>
     expect(addsImplement(landed)).toBe(true);
     expect(startsOn(thread.implement())).toMatchObject({ requestChanges: { review: 5810278099 } });
     expect(actionsOf(thread.requestChangesRunFinishes(BUILT, C, 120))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+  });
+
+  it("whose review the Operator replaces while no run is working, as after an Infrastructure failure, has the replacement's run started by agent:implement", () => {
+    const thread = runStarted();
+    // The run failed without an outcome; the Operator dismisses its review and submits a corrected one on the draft.
+    thread.dismiss(5810278044);
+    thread.review(5810278099, 70);
+
+    const resumed = thread.implement();
+
+    expect(commentsOn(resumed, 50)[0]).toContain("#pullrequestreview-5810278099");
+    expect(startsOn(resumed)).toMatchObject({ requestChanges: { review: 5810278099 } });
+    expect(actionsOf(thread.requestChangesRunFinishes(BUILT, B, 120))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
   });
 
   it("isn't joined by anyone else's review on the draft, which a resumed run is never started for", () => {

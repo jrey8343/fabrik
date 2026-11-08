@@ -600,6 +600,12 @@ export interface PullRequestSnapshot {
   readonly requestChangesRunReviews: readonly number[];
   /** When the Kit's note or Verdict that started that run was posted, while it's in flight; else null. */
   readonly requestChangesRunSince: string | null;
+  /**
+   * The Operator's Request changes on the draft, after the Kit's note put it in
+   * draft for reviews they have since dismissed every one of, before that run
+   * had an outcome (#341): the run owed now, which agent:implement starts.
+   */
+  readonly orphanedChangesRequests: readonly number[];
   /** Whether the PR has left draft since its latest Verdict, so no Retry that Verdict called for is in flight. */
   readonly leftDraftSinceVerdict: boolean;
   /** Its web address, which the Kit's notes link the Operator's reviews from. */

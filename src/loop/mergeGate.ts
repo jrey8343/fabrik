@@ -89,9 +89,32 @@ function requestChangesRun(
 export function owedRequestChangesRun(pullRequest: PullRequestSnapshot, config: KitConfig): Action[] | null {
   if (!pullRequest.isAgent || pullRequest.ticket === null || !pullRequest.open) return null;
   const run = runInFlight(pullRequest);
-  if (run?.kind !== "request-changes") return null;
+  if (run?.kind !== "request-changes") return orphanedRequestChangesRun(pullRequest, config);
   const start = requestChangesRun(pullRequest.ticket, pullRequest.number, run.review, config);
   return pullRequest.draft ? [start] : [{ kind: "convert-to-draft", pullRequest: pullRequest.number }, start];
+}
+
+/**
+ * The run owed for the Operator's Request changes on the draft once the run
+ * the Kit put it in draft for had every review dismissed, with no outcome
+ * since (#341), as when that run failed or was held: the Kit notes the new
+ * run, which marks it in flight, and starts it. Null when there's none.
+ */
+function orphanedRequestChangesRun(pullRequest: PullRequestSnapshot, config: KitConfig): Action[] | null {
+  const reviews = pullRequest.orphanedChangesRequests;
+  if (reviews.length === 0 || !pullRequest.draft || pullRequest.ticket === null) return null;
+  const { number } = pullRequest;
+  return [
+    {
+      kind: "comment",
+      issue: number,
+      body: [
+        requestChangesRunStartedMarker(reviews),
+        `The Kit is starting the Request-changes run for your Request changes on #${number} (${reviewLinks(pullRequest, reviews)}), as you dismissed the reviews the run it replaces was for. It runs on the Step-up model and uses no retry, and Review runs again on its push.`,
+      ].join("\n"),
+    },
+    requestChangesRun(pullRequest.ticket, number, Math.max(...reviews), config),
+  ];
 }
 
 /**
