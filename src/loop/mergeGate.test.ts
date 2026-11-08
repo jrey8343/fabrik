@@ -425,7 +425,7 @@ describe("Retries after a Request-changes run", () => {
     expect(commentsOf(plan).join("\n")).not.toContain("starts now");
   });
 
-  it("still run out: two counted flaws before this one send the Ticket back to design", () => {
+  it("still run out: a flaw once both Retries are used sends the Ticket back to design", () => {
     const plan = flawOn(
       aPullRequest({
         pushedSinceVerdict: true,

@@ -235,8 +235,8 @@ describe("Starting a retry", () => {
   });
 
   it("after a Request-changes run's flaw, the run in flight and the Retry owed are the one its Verdict announced", () => {
-    // Retry 1 fixed an earlier flaw; then the Operator requested changes, and that run's push had a flaw.
-    const pullRequest = flawedPullRequest([earlier("execution-flaw"), earlier("pass")], { requestChanges: true });
+    // The Request-changes run's push had a flaw, which started Retry 1; Retry 1's push flawed again.
+    const pullRequest = flawedPullRequest([earlier("execution-flaw", { requestChanges: true })]);
     const announced = planFor(
       { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output: "verdict: execution-flaw\n\nStill wrong.", runUrl: RUN, repoUrl: "https://github.com/acme/shop" },
       snapshotOfPullRequest({ ...pullRequest, verdicts: pullRequest.verdicts.slice(0, -1), pushedSinceVerdict: true }),
