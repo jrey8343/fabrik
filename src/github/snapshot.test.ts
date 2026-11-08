@@ -570,6 +570,40 @@ describe("Gathering an issue's blocked-by edges", () => {
   });
 });
 
+describe("Gathering a closed Ticket's agent draft PRs", () => {
+  it("holds only the open draft PRs the Fabrik App opened from this Ticket's own agent branch, which closing it closes (#428)", async () => {
+    const pull = (number: number, isDraft: boolean, headRefName: string, author: string) => ({ number, isDraft, headRefName, author: { __typename: author } });
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (!query.includes("issue(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+        const data = issueData(9);
+        return {
+          repository: {
+            ...data.repository,
+            issue: {
+              ...data.repository.issue,
+              state: "CLOSED",
+              labels: { nodes: [{ name: "ready-for-agent" }] },
+              closedByPullRequestsReferences: {
+                nodes: [
+                  pull(53, true, "fabrik/ticket-8", "Bot"),
+                  pull(50, true, "fabrik/ticket-9", "Bot"),
+                  pull(51, false, "fabrik/ticket-9", "Bot"),
+                  pull(52, true, "someone/fix-9", "User"),
+                ],
+              },
+            },
+          },
+        };
+      },
+    } as unknown as GitHub;
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 9 }, null, null);
+
+    expect(snapshot.issue).toMatchObject({ openPullRequests: [50, 51, 52, 53], openAgentDrafts: [50] });
+  });
+});
+
 /** An issue's parent, as GitHub holds it. */
 interface GitHubParent {
   number: number;
@@ -838,6 +872,8 @@ interface ClosingIssue {
   readonly labels: readonly string[];
   /** Its comments' bodies, oldest first. */
   readonly comments?: readonly string[];
+  /** Its state, open unless a test says otherwise. */
+  readonly state?: "OPEN" | "CLOSED";
 }
 
 /** The pull request a Loop event is about, as GitHub holds it: opened by `author`, with this body, closing these issues. */
@@ -876,6 +912,7 @@ function pullRequestGitHub({
                   closingIssuesReferences: {
                     nodes: closing.map((issue) => ({
                       number: issue.number,
+                      state: issue.state ?? "OPEN",
                       labels: { nodes: issue.labels.map((name) => ({ name })) },
                       ...(/closingIssuesReferences[^]*comments\(/.test(pullRequestQuery)
                         ? { comments: { nodes: (issue.comments ?? []).map((body) => ({ body })) } }
@@ -908,6 +945,12 @@ describe("Gathering the labels of the Ticket a pull request was cut for", () => 
   it("reads no Ticket labels when the PR closes no issue its branch names", async () => {
     expect(await gathered([{ number: 3, labels: ["fabrik:step-up"] }])).toMatchObject({ ticket: 7, ticketLabels: [] });
     expect(await gathered([])).toMatchObject({ ticket: 7, ticketLabels: [] });
+  });
+
+  it("reads whether that Ticket is open, so closing the PR by hand never stops a closed one (#428)", async () => {
+    expect(await gathered([{ number: 7, labels: ["ready-for-agent"] }])).toMatchObject({ ticketOpen: true });
+    expect(await gathered([{ number: 7, labels: ["ready-for-agent"], state: "CLOSED" }])).toMatchObject({ ticketOpen: false });
+    expect(await gathered([{ number: 3, labels: [] }])).toMatchObject({ ticketOpen: false });
   });
 });
 

@@ -68,7 +68,12 @@ export function loopEventFrom(
       return { kind: "pull-request-labeled", pullRequest, label: label.name };
     }
     if (payload["action"] === "ready_for_review") return { kind: "pull-request-left-draft", pullRequest };
-    if (payload["action"] === "closed") return { kind: "pull-request-closed", pullRequest };
+    // Whether it merged, and who closed it, say whether an agent PR was closed by hand (#428).
+    if (payload["action"] === "closed") {
+      const merged = (payload["pull_request"] as { merged?: boolean }).merged === true;
+      const sender = payload["sender"] as { type: string } | undefined;
+      return { kind: "pull-request-closed", pullRequest, merged, closedByBot: sender?.type === "Bot" };
+    }
   }
   // There is no _target form of this event, so the run uses the PR's merge
   // commit's caller workflow and Kit config. An agent PR can't change either:
