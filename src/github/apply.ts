@@ -3,6 +3,7 @@
 import { prototypePreviewUrl, previewUrl } from "../kit/config.ts";
 import { replayResultsIn, withTicketFinished, withTicketStarted } from "../kit/replay.ts";
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
+import { isTriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { withPrototypeStarted } from "../loop/markers.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
@@ -60,9 +61,20 @@ export interface PrototypePreviewToLink {
   readonly url: string;
 }
 
-/** What the push job hands on from applying a plan: the preview deployment to link, a UI PR's or a prototype round's, when the plan asked for one. */
+/** A trigger label the issue already carried, which the adapter took off and put back on so GitHub fired its labeled event (#417). */
+export interface ReaddedLabel {
+  readonly issue: number;
+  readonly label: string;
+}
+
+/**
+ * What the push job hands on from applying a plan: the preview deployment to
+ * link, a UI PR's or a prototype round's, when the plan asked for one; and each
+ * trigger label it re-added, for the step summary.
+ */
 export interface AppliedPlan {
   readonly preview: PreviewToLink | PrototypePreviewToLink | null;
+  readonly readded: readonly ReaddedLabel[];
 }
 
 /** The Actions run applying a plan, by its id, and when it applies it, as an ISO 8601 time. */
@@ -87,8 +99,8 @@ export async function applyPlan(
   run: ApplyingRun | null = null,
   rebaser: MainRebaser | null = null,
 ): Promise<AppliedPlan> {
-  if (plan.kind !== "act") return { preview: null };
-  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run };
+  if (plan.kind !== "act") return { preview: null, readded: [] };
+  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run, readded: [] };
   const applyEach = async (actions: readonly Action[]): Promise<void> => {
     for (const action of actions) {
       if (action.kind !== "rebase-onto-main") {
@@ -116,7 +128,7 @@ export async function applyPlan(
     }
   };
   await applyEach(plan.actions);
-  return { preview: made.preview };
+  return { preview: made.preview, readded: made.readded };
 }
 
 /** What earlier actions in the plan made, for later ones to refer to. */
@@ -129,6 +141,8 @@ interface Made {
   preview: PreviewToLink | PrototypePreviewToLink | null;
   /** The Actions run applying the plan, or null when the job names none. */
   readonly run: ApplyingRun | null;
+  /** Each trigger label the plan re-added, having found it already on. */
+  readonly readded: ReaddedLabel[];
 }
 
 /** A comment a plan posted: its URL for links in text, its id for an edit. */
@@ -386,9 +400,23 @@ async function applyToIssue(
 ): Promise<void> {
   const { created, posted } = made;
   switch (action.kind) {
-    case "add-labels":
-      if (action.labels.length > 0) await github.rest("POST", `${issue}/labels`, { labels: action.labels });
+    case "add-labels": {
+      if (action.labels.length === 0) return;
+      // GitHub fires `labeled` only for a label newly added, so a trigger label
+      // already on (a failed claim left it, or a declined run) is taken off
+      // first, or adding it would start nothing (#417). Read fresh: another
+      // job may have taken it off since the plan was made.
+      const triggers = action.labels.filter(isTriggerLabel);
+      if (triggers.length > 0) {
+        const on = (await github.rest("GET", `${issue}/labels?per_page=100`)) as { name: string }[];
+        for (const label of triggers.filter((trigger) => on.some(({ name }) => name === trigger))) {
+          await github.rest("DELETE", `${issue}/labels/${encodeURIComponent(label)}`, undefined, { allowNotFound: true });
+          made.readded.push({ issue: action.issue, label });
+        }
+      }
+      await github.rest("POST", `${issue}/labels`, { labels: action.labels });
       return;
+    }
     case "remove-label":
       await github.rest("DELETE", `${issue}/labels/${encodeURIComponent(action.label)}`, undefined, {
         allowNotFound: true,

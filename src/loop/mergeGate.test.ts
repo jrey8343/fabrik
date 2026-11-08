@@ -139,10 +139,13 @@ describe("Resuming a Request-changes run after an Infrastructure failure", () =>
     ["no Request-changes run is in flight on it", { ...stalled(), requestChangesRunInFlight: null }],
     ["the PR is closed", { ...stalled(), open: false }],
     ["the PR isn't an agent PR", { ...stalled(), isAgent: false }],
-  ])("starts nothing when %s", (_, pullRequest) => {
+  ])("starts nothing when %s, and says nothing was owed (#417)", (_, pullRequest) => {
     const plan = planFor(resumed, snapshotFor(pullRequest), kitConfig());
 
-    expect(actionsOf(plan)).toEqual([{ kind: "remove-label", issue: 7, label: "agent:implement" }]);
+    expect(actionsOf(plan)).toEqual([
+      { kind: "remove-label", issue: 7, label: "agent:implement" },
+      expect.objectContaining({ kind: "comment", issue: 7, body: expect.stringContaining("is owed no Implement run") }),
+    ]);
   });
 
   it("turns a PR that never went back to draft after the Kit's note to draft first", () => {

@@ -43,7 +43,7 @@ import { retroGate } from "./retroGate.ts";
 import { landRetro } from "./retroLanding.ts";
 import { startWeekly, weeklyRoleOf } from "./weeklyRuns.ts";
 import { dispatch } from "./dispatch.ts";
-import { applyRedChecks, applyReview, startReview } from "./review.ts";
+import { applyRedChecks, applyReview, startReview, startReviewOnLabel } from "./review.ts";
 import type {
   Action,
   IssueContext,
@@ -127,7 +127,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     case "pull-request-labeled":
       return withPullRequest(snapshot, (pullRequest) =>
         event.label === REVIEW_LABEL
-          ? startReview(pullRequest, config)
+          ? startReviewOnLabel(pullRequest, config)
           : event.label === NEEDS_DESIGN
             ? sendBackToDesign(pullRequest)
             : { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` },

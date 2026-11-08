@@ -14,9 +14,9 @@ const issues = "/repos/acme/shop/issues";
 /**
  * A GitHub that records every REST call. Each existing issue's database id is
  * its number plus 1000; a created issue gets the next number from 100. A
- * comment it posts is comment 9300.
+ * comment it posts is comment 9300. An issue's labels are `labelsOn` it, or none.
  */
-function fakeGitHub() {
+function fakeGitHub(labelsOn: Readonly<Record<number, readonly string[]>> = {}) {
   const calls: { method: string; path: string; body: unknown }[] = [];
   let next = 100;
   return {
@@ -27,6 +27,8 @@ function fakeGitHub() {
         const number = next++;
         return { number, id: number + 1000 };
       }
+      const labelled = new RegExp(`^${issues}/(\\d+)/labels\\?`).exec(path);
+      if (method === "GET" && labelled !== null) return (labelsOn[Number(labelled[1])] ?? []).map((name) => ({ name }));
       const existing = new RegExp(`^${issues}/(\\d+)$`).exec(path);
       if (method === "GET" && existing !== null) return { number: Number(existing[1]), id: Number(existing[1]) + 1000 };
       if (method === "POST" && path.endsWith("/comments")) return { id: 9300, html_url: "https://github.com/acme/shop/issues/7#issuecomment-9300" };
@@ -85,6 +87,40 @@ describe("Applying a plan that moves blocked-by edges onto new Tickets", () => {
     expect(lastEdge).toBeLessThan(closing);
   });
 
+});
+
+describe("Applying a trigger label the issue already carries (#417)", () => {
+  const changes = (calls: { method: string; path: string; body: unknown }[]) =>
+    calls.filter(({ method }) => method !== "GET").map(({ method, path, body }) => [method, path, body]);
+
+  it("takes it off and puts it back on, so GitHub fires the labeled event that starts the run", async () => {
+    const github = fakeGitHub({ 7: ["ready-for-agent", "agent:implement"] });
+
+    const applied = await applyPlan(github, repo, { kind: "act", actions: [{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }] });
+
+    expect(changes(github.calls)).toEqual([
+      ["DELETE", `${issues}/7/labels/agent%3Aimplement`, undefined],
+      ["POST", `${issues}/7/labels`, { labels: ["agent:implement"] }],
+    ]);
+    expect(applied.readded).toEqual([{ issue: 7, label: "agent:implement" }]);
+  });
+
+  it("adds a trigger label the issue doesn't carry once, as before", async () => {
+    const github = fakeGitHub({ 50: ["fabrik:step-up"] });
+
+    const applied = await applyPlan(github, repo, { kind: "act", actions: [{ kind: "add-labels", issue: 50, labels: ["agent:review"] }] });
+
+    expect(changes(github.calls)).toEqual([["POST", `${issues}/50/labels`, { labels: ["agent:review"] }]]);
+    expect(applied.readded).toEqual([]);
+  });
+
+  it("never reads the labels to add a label that starts nothing", async () => {
+    const github = fakeGitHub({ 7: ["ready-for-human"] });
+
+    await applyPlan(github, repo, { kind: "act", actions: [{ kind: "add-labels", issue: 7, labels: ["ready-for-human"] }] });
+
+    expect(github.calls).toEqual([{ method: "POST", path: `${issues}/7/labels`, body: { labels: ["ready-for-human"] } }]);
+  });
 });
 
 describe("Applying a comment that names issues the plan created", () => {
@@ -224,7 +260,7 @@ describe("Applying a plan that links a UI PR's preview deployment", () => {
 
     const applied = await applyPlan(fakeGitHub(), repo, plan, heldBranch());
 
-    expect(applied).toEqual({ preview: { pullRequest: 51, url: `https://deploy-preview-51--shop.netlify.app/fabrik-ticket-7/${HEAD}` } });
+    expect(applied).toEqual({ preview: { pullRequest: 51, url: `https://deploy-preview-51--shop.netlify.app/fabrik-ticket-7/${HEAD}` }, readded: [] });
   });
 
   it("hands on a retry's preview for the PR it pushed to, changing nothing on GitHub itself", async () => {
@@ -254,8 +290,8 @@ describe("Applying a plan that links a UI PR's preview deployment", () => {
       ],
     };
 
-    expect(await applyPlan(fakeGitHub(), repo, plan, heldBranch())).toEqual({ preview: null });
-    expect(await applyPlan(fakeGitHub(), repo, { kind: "nothing", reason: "no change" })).toEqual({ preview: null });
+    expect(await applyPlan(fakeGitHub(), repo, plan, heldBranch())).toEqual({ preview: null, readded: [] });
+    expect(await applyPlan(fakeGitHub(), repo, { kind: "nothing", reason: "no change" })).toEqual({ preview: null, readded: [] });
   });
 });
 
@@ -462,7 +498,7 @@ describe("Applying a prototype turn's plan (#155)", () => {
 
       const applied = await applyPlan(github, repo, planLinking("https://{branch_slug}--shop.netlify.app/{sha}"), heldBranch());
 
-      expect(applied).toEqual({ preview: { round: 9300, url: `https://prototype-7--shop.netlify.app/${HEAD}/book` } });
+      expect(applied).toEqual({ preview: { round: 9300, url: `https://prototype-7--shop.netlify.app/${HEAD}/book` }, readded: [] });
       expect(github.calls.map(({ method, path }) => `${method} ${path}`)).toEqual([`POST ${issues}/7/comments`]);
     });
 
@@ -731,7 +767,7 @@ describe("Applying a plan that rebases an agent PR onto main (#304)", () => {
 
     await applyPlan(github, repo, plan, null, null, rebaser);
 
-    expect(github.calls.map(({ path, body }) => [path, body])).toEqual([
+    expect(github.calls.filter(({ method }) => method !== "GET").map(({ path, body }) => [path, body])).toEqual([
       [`${issues}/50/comments`, { body: "conflicted" }],
       [`${issues}/7/labels`, { labels: ["agent:implement"] }],
     ]);

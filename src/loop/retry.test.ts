@@ -308,10 +308,20 @@ describe("agent:implement on a Ticket with an open agent PR", () => {
     expect(startedRuns(planFor(retryLabeled, snapshot, kitConfig()))).toEqual([]);
   });
 
-  it("never starts a fresh run beside the PR, even when there's nothing to resume", () => {
+  it("never starts a fresh run beside the PR, even when there's nothing to resume, and says nothing was owed (#417)", () => {
     const plan = planFor(retryLabeled, resumeSnapshot(aPullRequest({ verdicts: [] })), kitConfig());
 
-    expect(plan).toEqual({ kind: "act", actions: [{ kind: "remove-label", issue: 7, label: "agent:implement" }] });
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:implement" },
+        {
+          kind: "comment",
+          issue: 7,
+          body: "agent:implement came off and nothing started: #7's open PR #50 is owed no Implement run: no Retry, Request-changes run or conflict-only run waits on it.",
+        },
+      ],
+    });
   });
 });
 
