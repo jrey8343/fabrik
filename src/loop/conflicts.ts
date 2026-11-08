@@ -31,7 +31,7 @@ export function checkConflicts(
   held: number | null = null,
   runMinutes: number | undefined,
   reviewMinutes: number,
-  heldTickets: readonly number[] = [],
+  heldTickets: readonly number[],
 ): Plan {
   const { main, now } = conflicts;
   const reasons: string[] = [];

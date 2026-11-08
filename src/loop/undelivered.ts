@@ -68,7 +68,7 @@ export function actOnUndelivered(
   held: number | null = null,
   runMinutes: number = UNDELIVERED_GRACE_MINUTES,
   implementJobUnderWay: boolean | null = null,
-  heldTickets: readonly number[] = [],
+  heldTickets: readonly number[],
 ): Action[] | null {
   // Runs due now are held while `held` names the weekly-limit issue they'd be held on.
   const runHeld = held !== null || (pullRequest.ticket !== null && heldTickets.includes(pullRequest.ticket));

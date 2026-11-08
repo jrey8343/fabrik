@@ -1319,6 +1319,25 @@ describe("A Request-changes run held or failed, with no Implement job behind it"
     },
   );
 
+  it("failed, then re-added by the Operator: the re-add notes the run again, so if it stalls in turn the tick restarts it (#387)", () => {
+    const thread = noted();
+    thread.implement();
+    thread.now = at(20);
+    const event: LoopEvent = { kind: "agent-run-failed", role: "implement", issue: 7, runUrl: RUN, jobResult: "failure", secretsStep: "success", report: null };
+    thread.plan(event, thread.ticketSnapshot());
+    thread.implementJobUnderWay = false;
+    thread.now = at(140);
+
+    const readd = thread.implement();
+
+    expect(startsOn(readd)).toMatchObject({ requestChanges: { review: 777 } });
+    expect(actionsOf(readd)).toContainEqual(
+      expect.objectContaining({ kind: "comment", issue: 50, body: expect.stringMatching(/^<!-- fabrik:request-changes-run-started 777 -->\n.* again, after it failed\./) }),
+    );
+    expect(thread.pullRequest().requestChangesRunFailed).toBe(false);
+    expect(implementsAdded(thread.tick(160))).toBe(1);
+  });
+
   it("a stalled run that was neither held nor failed is still restarted", () => {
     const thread = noted();
     thread.implementJobUnderWay = false;
