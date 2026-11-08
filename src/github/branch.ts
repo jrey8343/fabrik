@@ -412,7 +412,10 @@ async function onItsOwnBranch(
   for (const candidate of heads) {
     if (broughtIn === null && (await isAncestor(git, candidate, tip)) && !(await isAncestor(git, candidate, head))) broughtIn = candidate;
   }
-  const unlikeMerge = broughtIn === null ? null : await unlike((await mergeTree(judging, head, broughtIn)).tree);
+  // A merge git can't make at all, as with a main whose history was rewritten, leaves nothing to compare against: every
+  // path unlike main then counts as the run's, which the trust-root guard judges strictly.
+  const merged = broughtIn === null ? null : await mergeTree(judging, head, broughtIn).catch(() => null);
+  const unlikeMerge = merged === null ? null : await unlike(merged.tree);
   // A path the branch now holds just as main does, or just as git's own merge with it does, came from main, not from this run.
   const own = (path: string): boolean => unlikeMain.has(path) && (unlikeMerge === null || unlikeMerge.has(path));
   const net = (await diff(git, head, tip)).filter((change) => own(change.path) || (change.from !== undefined && own(change.from)));

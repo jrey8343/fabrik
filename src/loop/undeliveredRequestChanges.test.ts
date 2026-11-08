@@ -515,6 +515,21 @@ describe("A delivered Request changes", () => {
     expect(actionsOf(own)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
   });
 
+  it("whose reviews are dismissed while no run works hands an earlier unbuilt Request changes of the Operator's its run on agent:implement, as its landing would", () => {
+    const thread = new Thread();
+    thread.mergeable = true;
+    thread.review(6000, 14);
+    thread.delivered(6000, 14);
+    // The Operator takes the PR back mid-run, so 6000 is noted but never built, then requests changes again.
+    thread.markReady(20);
+    thread.review(7000, 22);
+    thread.delivered(7000, 22);
+    // 7000's run fails without an outcome, and the Operator dismisses 7000.
+    thread.dismiss(7000);
+
+    expect(startsOn(thread.implement())).toMatchObject({ requestChanges: { review: 6000 } });
+  });
+
   it("whose run committed nothing doesn't give way to an earlier review its run read: no run is started for it again", () => {
     const thread = new Thread();
     thread.mergeable = true;
@@ -819,6 +834,25 @@ describe("The Request-changes run an undelivered Request changes started", () =>
     expect(commentsOn(resumed, 50)[0]).toContain("#pullrequestreview-5810278099");
     expect(startsOn(resumed)).toMatchObject({ requestChanges: { review: 5810278099 } });
     expect(actionsOf(thread.requestChangesRunFinishes(BUILT, B, 120))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+  });
+
+  it("whose review the Operator dismisses before pushing their own fix gives way to that push's Review: a flaw on it starts its Retry", () => {
+    const thread = runStarted();
+    thread.dismiss(5810278044);
+    expect(startsOn(thread.pushed(D, 70))).toMatchObject({ role: "review" });
+    expect(commentsOn(thread.reviewed("execution-flaw", 80), 50)[0]).toContain("Retry 1 of 2 starts now");
+
+    expect(startsOn(thread.implement())).toMatchObject({ retry: 1 });
+  });
+
+  it("whose review the Operator dismisses before pushing their own fix doesn't hand the PR back mid-Review when the run lands", () => {
+    const thread = runStarted();
+    thread.dismiss(5810278044);
+    thread.pushed(D, 70);
+
+    const landed = thread.requestChangesRunFinishes(BUILT, B, 75);
+
+    expect(actionsOf(landed).some((action) => action.kind === "push-branch" || action.kind === "mark-ready-for-review")).toBe(false);
   });
 
   it("isn't joined by anyone else's review on the draft, which a resumed run is never started for", () => {

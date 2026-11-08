@@ -202,8 +202,6 @@ export function requestChangesSinceRunIn(
   let noted: number[] = [];
   let inFlight: readonly number[] | null = null;
   let since: string | null = null;
-  // The Operator's reviews on the draft since the run in flight started.
-  let joined: number[] = [];
   // The reviews there were when the run in flight started, which it read; one that came in later it never saw.
   let read: readonly number[] = [];
   for (const item of ordered) {
@@ -221,10 +219,7 @@ export function requestChangesSinceRunIn(
         if (!draft || joins) {
           reviews.push({ review: item.review, reviewer: item.reviewer, reviewerIsBot: item.reviewerIsBot, submittedAt: item.at });
         }
-        if (joins) {
-          noted = [...noted, item.review];
-          joined = [...joined, item.review];
-        }
+        if (joins) noted = [...noted, item.review];
         break;
       }
       case "bot-comment": {
@@ -233,7 +228,6 @@ export function requestChangesSinceRunIn(
         if (started !== null) {
           noted = [...noted, ...started.filter((review) => !noted.includes(review))];
           inFlight = started;
-          joined = [];
           since = item.at;
           read = reviews.map(({ review }) => review);
         } else if (settlesRequestChanges(item.body)) {
@@ -242,13 +236,14 @@ export function requestChangesSinceRunIn(
           reviews = settled === null ? [] : reviews.filter(({ review }) => !settled.has(review));
           noted = noted.filter((review) => reviews.some((unbuilt) => unbuilt.review === review));
           inFlight = null;
-        } else if (requestChangesRunEndedIn(item.body) !== null) {
+        } else if (requestChangesRunEndedIn(item.body) !== null || verdictsIn([item.body]).length > 0) {
+          // No Verdict lands while a run is in flight, so any other Verdict means the run it followed is over: one whose
+          // reviews were all dismissed, its head judged since.
           inFlight = null;
         }
         break;
       }
     }
-    if (inFlight === null) joined = [];
   }
   const live = (inFlight ?? []).filter((review) => standing.has(review));
   return {
@@ -259,7 +254,11 @@ export function requestChangesSinceRunIn(
     requestChangesRunSince: live.length === 0 ? null : since,
     // The Kit's note put the PR in draft for reviews since all dismissed, with no outcome yet: what the Operator asked
     // for meanwhile on the draft is the run that's owed now.
-    orphanedChangesRequests: inFlight !== null && live.length === 0 ? joined.filter((review) => standing.has(review)) : [],
+    // Every Request changes of the Operator's no run has built, as its landing would start (src/loop/implement.ts).
+    orphanedChangesRequests:
+      inFlight !== null && live.length === 0
+        ? reviews.filter(({ reviewer, reviewerIsBot }) => operator !== null && reviewer === operator && !reviewerIsBot).map(({ review }) => review)
+        : [],
     requestChangesRunDismissed: inFlight !== null && live.length === 0,
   };
 }

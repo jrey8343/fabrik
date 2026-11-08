@@ -299,6 +299,23 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     expect(branch.changes.mainMerge).toEqual({ main: rewritten, resolved: false });
   });
 
+  it("that merged a main whose history was rewritten is judged, never failing the push job, and counts every path unlike main as its own", async () => {
+    // Main is force-pushed to a new root, which shares no history with the PR.
+    const seed = join(root, "seed");
+    await git(seed, "checkout", "--quiet", "--orphan", "rewritten");
+    await writeFile(join(seed, "AGENTS.md"), "rules\n");
+    const rewritten = await commit(seed, { "src/shared.ts": "rewritten\n" }, "Main, rewritten");
+    await git(seed, "push", "--quiet", "--force", "origin", "rewritten:main");
+    await git(clone, "fetch", "--quiet", "origin");
+    await git(clone, "merge", "--quiet", "--no-edit", "--allow-unrelated-histories", "-X", "ours", "origin/main");
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change");
+
+    const branch = await rebuild(prHead, rewritten, rewritten);
+
+    expect(branch.changes.mainMerge).toEqual({ main: rewritten, resolved: true });
+    expect(paths(branch.changes.net)).toContain("src/feature.ts");
+  });
+
   it("whose result names a main that's neither main as it started nor as it is now is judged against main as it is now", async () => {
     const told = await mainConflicts();
     await mergesMain();

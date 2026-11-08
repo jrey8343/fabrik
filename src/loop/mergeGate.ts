@@ -89,9 +89,15 @@ function requestChangesRun(
 export function owedRequestChangesRun(pullRequest: PullRequestSnapshot, config: KitConfig): Action[] | null {
   if (!pullRequest.isAgent || pullRequest.ticket === null || !pullRequest.open) return null;
   const run = runInFlight(pullRequest);
-  if (run?.kind !== "request-changes") return orphanedRequestChangesRun(pullRequest, config);
+  if (run === null) return orphanedRequestChangesRun(pullRequest, config);
+  if (run.kind !== "request-changes") return null;
   const start = requestChangesRun(pullRequest.ticket, pullRequest.number, run.review, config);
   return pullRequest.draft ? [start] : [{ kind: "convert-to-draft", pullRequest: pullRequest.number }, start];
+}
+
+/** Whether the PR is still at the head its latest Verdict judged: no push since has a Review to come. */
+export function atLatestVerdict(pullRequest: PullRequestSnapshot): boolean {
+  return pullRequest.verdicts.at(-1)?.headSha === pullRequest.headSha;
 }
 
 /**
@@ -104,9 +110,10 @@ function orphanedRequestChangesRun(pullRequest: PullRequestSnapshot, config: Kit
   const reviews = pullRequest.orphanedChangesRequests;
   if (!pullRequest.draft || pullRequest.ticket === null) return null;
   const { number } = pullRequest;
-  // None of theirs is owed: the run the Kit put the PR in draft for is over, so it goes back to them.
+  // None of theirs is owed: the run the Kit put the PR in draft for is over, so it goes back to them, unless someone
+  // pushed to it since, whose Review then decides.
   if (reviews.length === 0) {
-    return pullRequest.requestChangesRunDismissed && !pullRequest.pushedSinceVerdict
+    return pullRequest.requestChangesRunDismissed && !pullRequest.pushedSinceVerdict && atLatestVerdict(pullRequest)
       ? [
           {
             kind: "comment",
