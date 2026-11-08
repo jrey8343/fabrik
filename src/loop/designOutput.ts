@@ -274,7 +274,7 @@ function readBrief(value: unknown, errors: string[]): DesignAgentBrief | Operato
   const brief = { summary: value.summary, acceptanceCriteria: value.acceptanceCriteria };
   if (value.stepUp === undefined) return brief;
   if (typeof value.stepUp !== "boolean") {
-    errors.push("the brief needs stepUp to be true or false, if it has one");
+    errors.push("a brief needs stepUp to be true or false, if it has one");
     return null;
   }
   return { ...brief, stepUp: value.stepUp };

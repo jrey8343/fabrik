@@ -362,7 +362,7 @@ describe("Setting a Stepped-up start from a Design session's agent brief", () =>
 
   it.each([
     ["keeps the mark on an issue that has it", ["needs-design", "fabrik:step-up"]],
-    ["doesn't add the mark to an issue that hasn't it", ["needs-design"]],
+    ["doesn't add the mark to an issue that doesn't have it", ["needs-design"]],
   ])("leaves fabrik:step-up as it stands when the brief has no stepUp: %s", (_, labels) => {
     const plan = finish({ kind: "brief", comment: "Done.", brief }, labels);
 
