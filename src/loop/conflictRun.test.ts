@@ -1,7 +1,7 @@
 // A conflict-only run (#304): once main moves under an agent PR at the Merge
 // gate and the mechanical rebase conflicts, one Implementer run on the Step-up
-// model rebases the branch and resolves the conflicts. It uses no retry, and
-// when it can't push, the PR goes to the Operator, never closed. These tests
+// model rebases the branch and resolves the conflicts. It uses no retry, though
+// an Execution flaw on its push calls for one (#415), and when it can't push, the PR goes to the Operator, never closed. These tests
 // replay the PR's thread: each plan's comments are posted, and the next
 // snapshot reads them back as the adapter does.
 import { describe, expect, it } from "vitest";
@@ -165,7 +165,7 @@ describe("A conflict-only run", () => {
     expect(note).toContain("- `src/cart.ts`: kept both the empty-cart guard and main's new total.");
   });
 
-  it("uses no retry: the Verdict on its push is marked as from it, and the Ticket's two Retries count as before", () => {
+  it("uses no retry itself, but a flaw on its push calls for one from the Ticket's pool of two, like any other (#415)", () => {
     const thread = new Thread();
     thread.mainMovesAndConflicts(MAIN);
     thread.conflictRunFinishes(RESOLVED, B);
@@ -181,17 +181,16 @@ describe("A conflict-only run", () => {
     expect(verdict).toContain("after a conflict-only run");
     expect(verdict).toMatch(/Retry 1 of 2 starts now:/);
 
-    // That Retry's push is red too: the conflict-only run's flaw counted none, so this is the
-    // Ticket's first counted flaw, still Retry 1; the next is Retry 2, and then they're used up.
+    // That Retry's push is red too: the conflict-only run's flaw started Retry 1, so this one is
+    // Retry 2, and then they're used up. No Retry number starts twice on one PR (ADR-0006).
     const redRetry = (head: string) => {
       thread.comments.push("<!-- fabrik:retry-push -->\nThe Implementer pushed a fix.");
       thread.headSha = head;
       thread.plan(redChecks(head), snapshotOfPullRequest(thread.pullRequest()));
       return thread.comments.at(-1) ?? "";
     };
-    expect(redRetry("c".repeat(40))).toMatch(/Retry 1 of 2 starts now:/);
-    expect(redRetry("d".repeat(40))).toMatch(/Retry 2 of 2 starts now, stepped up:/);
-    expect(redRetry("e".repeat(40))).not.toMatch(/Retry \d of 2 starts now/);
+    expect(redRetry("c".repeat(40))).toMatch(/Retry 2 of 2 starts now, stepped up:/);
+    expect(redRetry("d".repeat(40))).not.toMatch(/Retry \d of 2 starts now/);
   });
 
   describe("that can't push", () => {

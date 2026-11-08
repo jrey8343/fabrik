@@ -77,7 +77,8 @@ export function requestChangesAnswersIn(body: string): RecordedAnswers | null {
 /**
  * The first line of the Kit's note on a PR that a conflict-only run pushed to
  * it (#304): that run's outcome, which ends its time in flight, and marks the
- * next Verdict as from a conflict-only run, which uses no retry.
+ * next Verdict as from a conflict-only run, which uses no retry, though an
+ * Execution flaw on its push calls for one like any other (#415).
  */
 export const CONFLICT_RUN_MARKER = "<!-- fabrik:conflict-run -->";
 
