@@ -188,3 +188,83 @@ describe("main moving under a conflicting agent PR at the Merge gate", () => {
     expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
   });
 });
+
+describe("a draft agent PR whose push GitHub never reviewed, because it conflicts with main (#389)", () => {
+  const NOW = "2026-01-01T00:00:00Z";
+  /** Pushed 70 minutes before the check: past the Review's two jobs, each with a 30-minute timeout. */
+  const PAST_THE_GRACE = "2025-12-31T22:50:00Z";
+
+  /** Agent draft PR #50 for Ticket #7, first pushed by its Implement run an hour ago, with no Verdict on its head. */
+  function unreviewedDraft(overrides: Partial<PullRequestSnapshot> = {}): PullRequestSnapshot {
+    return aPullRequest({ draft: true, verdicts: [], headPushedAt: PAST_THE_GRACE, ...overrides });
+  }
+
+  function check(pullRequest: PullRequestSnapshot, mergeable: boolean | null = false, event: LoopEvent = MAIN_PUSHED): Plan {
+    return planFor(event, conflictsSnapshot([{ pullRequest, mergeable }]), kitConfig());
+  }
+
+  it("rebases its branch onto main's head, from the push-to-main check", () => {
+    expect(rebasesIn(check(unreviewedDraft()))).toEqual([expect.objectContaining({ pullRequest: 50, branch: "fabrik/ticket-7", onto: MAIN })]);
+  });
+
+  it("is the scheduled tick's to catch too", () => {
+    const plan = planFor(TICK, tickSnapshot({ conflicts: { main: MAIN, now: NOW, implementJobUnderWay: null, pullRequests: [{ pullRequest: unreviewedDraft(), mergeable: false }] } }), kitConfig());
+
+    expect(rebasesIn(plan)).toEqual([expect.objectContaining({ pullRequest: 50, onto: MAIN })]);
+  });
+
+  it("doesn't matter who pushed the head: a Retry, a Request-changes run or the Operator", () => {
+    const flaw: VerdictRecord = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: "b".repeat(40) };
+    const afterRetry = unreviewedDraft({ verdicts: [flaw], pushedSinceVerdict: true });
+    const afterRequestChanges = unreviewedDraft({ verdicts: [{ ...PASSED, headSha: "b".repeat(40) }], requestChangesRun: true, pushedSinceVerdict: true });
+    // The Operator's push onto a draft they parked after a pass: the pass is on an older head.
+    const afterOperator = unreviewedDraft({ verdicts: [{ ...PASSED, headSha: "b".repeat(40) }] });
+
+    for (const pullRequest of [afterRetry, afterRequestChanges, afterOperator]) expect(rebasesIn(check(pullRequest))).toHaveLength(1);
+  });
+
+  it.each<[string, Partial<PullRequestSnapshot>, boolean | null, string]>([
+    ["a draft whose head has a Verdict, as one the Operator parked", { verdicts: [PASSED] }, false, `#50 is a draft with a Verdict on ${HEAD.slice(0, 7)}`],
+    ["one with a Retry in flight", { verdicts: [{ verdict: "execution-flaw", source: "ci", requestChanges: false, headSha: "b".repeat(40) }] }, false, "Retry 1 of 2 on #50 is still in flight"],
+    ["one with a conflict-only run in flight", { conflictAttempts: [OLDER_MAIN], conflictRunInFlight: OLDER_MAIN }, false, "conflict-only run on #50 is still in flight"],
+    ["one pushed less than a Review's two jobs' timeouts ago", { headPushedAt: "2025-12-31T23:15:00Z" }, false, "#50 is a draft pushed less than a Review's timeout ago"],
+    ["one with no known push time", { headPushedAt: null }, false, "when aaaaaaa was pushed isn't known"],
+    ["one already tried against this main head", { conflictAttempts: [MAIN] }, false, `#50 was already tried against main at ${MAIN.slice(0, 7)}`],
+    ["one whose mergeable state is unknown", {}, null, "left for the scheduled tick"],
+    ["one that doesn't conflict", {}, true, "#50 doesn't conflict with main"],
+  ])("leaves alone %s, with a reason", (_name, overrides, mergeable, reason) => {
+    expect(check(unreviewedDraft(overrides), mergeable)).toEqual({ kind: "nothing", reason: expect.stringContaining(reason) });
+  });
+
+  it("when the rebase is clean, keeps the PR in draft, records the attempt once it lands, and says GitHub started no Review, mentioning nobody", () => {
+    const [rebase] = rebasesIn(check(unreviewedDraft()));
+
+    expect(rebase?.clean).toEqual([]);
+    const note = commentOn(rebase?.pushed ?? [], 50);
+    expect(note).toMatch(new RegExp(`^<!-- fabrik:conflict-attempt ${MAIN} rebased unreviewed-draft -->`));
+    expect(note).toContain("GitHub started no Review");
+    expect(note).not.toContain("@");
+  });
+
+  it("when the push's lease refuses it, leaves the PR in draft and records no attempt", () => {
+    const [rebase] = rebasesIn(check(unreviewedDraft()));
+
+    expect(rebase?.refused).toEqual([]);
+  });
+
+  it("when the rebase conflicts, records the attempt and starts the conflict-only run on the Ticket, mentioning nobody", () => {
+    const [rebase] = rebasesIn(check(unreviewedDraft()));
+
+    const note = commentOn(rebase?.conflicted ?? [], 50);
+    expect(note).toMatch(new RegExp(`^<!-- fabrik:conflict-attempt ${MAIN} conflict-run unreviewed-draft -->`));
+    expect(note).toContain("GitHub started no Review");
+    expect(note).not.toContain("@");
+    expect(rebase?.conflicted.at(-1)).toEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
+  });
+
+  it("acts first on an undelivered Request changes on it, as for a PR at the Merge gate", () => {
+    const plan = check(unreviewedDraft({ unbuiltChangesRequests: [{ review: 9, reviewer: "operator", reviewerIsBot: false, submittedAt: "2025-12-31T00:00:00Z" }] }));
+
+    expect(rebasesIn(plan)).toEqual([]);
+  });
+});

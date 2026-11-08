@@ -65,6 +65,8 @@ import {
   conflictAttemptsIn,
   conflictRunIn,
   conflictRunInFlightIn,
+  conflictRunOnUnreviewedDraftIn,
+  isKitPushNote,
   type PullRequestHistoryItem,
   pushedSinceVerdictIn,
   requestChangesRunIn,
@@ -171,6 +173,9 @@ const PULL_REQUEST_FIELDS = `
           pageInfo { hasPreviousPage }
           nodes { __typename ... on ConvertToDraftEvent { createdAt } ... on ReadyForReviewEvent { createdAt } }
         }
+        createdAt
+        forcePushes: timelineItems(last: 1, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) { nodes { ... on HeadRefForcePushedEvent { createdAt } } }
+        headCommit: commits(last: 1) { nodes { commit { oid committedDate } } }
         closingIssuesReferences(first: 10) { nodes { number labels(first: 100) { nodes { name } } } }`;
 
 const PULL_REQUEST_QUERY = `
@@ -265,6 +270,9 @@ interface PullRequestQueryResult {
         nodes: { databaseId: number; submittedAt: string | null; author: { login: string; __typename: string } | null }[];
       };
       draftEvents: { pageInfo: { hasPreviousPage: boolean }; nodes: { __typename: string; createdAt?: string }[] };
+      createdAt: string;
+      forcePushes: { nodes: { createdAt: string }[] };
+      headCommit: { nodes: { commit: { oid: string; committedDate: string } }[] };
       closingIssuesReferences: { nodes: { number: number; labels: { nodes: { name: string }[] } }[] };
     } | null;
   };
@@ -1233,12 +1241,10 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
   const standing = new Set(pullRequest.changesRequests.nodes.map(({ databaseId }) => databaseId));
   const history = historyOf(pullRequest, fromBots);
   const ticket = ticketOfAgentBranch(pullRequest.headRefName);
+  const isAgent = isAgentPullRequest({ headRef: pullRequest.headRefName, authorIsBot: pullRequest.author?.__typename === "Bot" });
   return {
     number: pullRequest.number,
-    isAgent: isAgentPullRequest({
-      headRef: pullRequest.headRefName,
-      authorIsBot: pullRequest.author?.__typename === "Bot",
-    }),
+    isAgent,
     ticket,
     ticketLabels: ticketLabelsOf(pullRequest, ticket),
     open: pullRequest.state === "OPEN",
@@ -1251,7 +1257,9 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     conflictRun: conflictRunIn(botComments),
     conflictAttempts: conflictAttemptsIn(botComments),
     conflictRunInFlight: conflictRunInFlightIn(botComments),
+    conflictRunOnUnreviewedDraft: conflictRunOnUnreviewedDraftIn(botComments),
     pushedSinceVerdict: pushedSinceVerdictIn(botComments),
+    headPushedAt: headPushedAtOf(pullRequest, fromBots, isAgent),
     ...requestChangesSinceRunIn(history, standing, operator),
     leftDraftSinceVerdict: leftDraftSinceVerdictIn(history),
     url: pullRequest.url,
@@ -1283,6 +1291,25 @@ function historyOf(pullRequest: PullRequestNode, fromBots: PullRequestNode["comm
     createdAt === undefined ? [] : [{ kind: __typename === "ConvertToDraftEvent" ? "draft" : "ready", at: createdAt }],
   );
   return [...comments, ...reviews, ...drafts];
+}
+
+/**
+ * When a PR's current head was pushed, as best its history tells (#389): the
+ * latest of its last force push, the Kit's last note of a push of its own, its
+ * opening by the Fabrik App, and its head commit's commit time. Each is no
+ * later than that push, and GitHub's timeline records no event for a push that
+ * isn't forced, so the latest of them is the nearest the snapshot can tell.
+ * Null when none of them is known.
+ */
+function headPushedAtOf(pullRequest: PullRequestNode, fromBots: PullRequestNode["comments"]["nodes"], isAgent: boolean): string | null {
+  const head = pullRequest.headCommit.nodes.at(-1)?.commit;
+  const times = [
+    ...pullRequest.forcePushes.nodes.map(({ createdAt }) => createdAt),
+    ...fromBots.filter(({ body }) => isKitPushNote(body)).map(({ createdAt }) => createdAt),
+    ...(isAgent ? [pullRequest.createdAt] : []),
+    ...(head?.oid === pullRequest.headRefOid ? [head.committedDate] : []),
+  ];
+  return times.reduce<string | null>((latest, time) => (latest === null || Date.parse(time) > Date.parse(latest) ? time : latest), null);
 }
 
 /**

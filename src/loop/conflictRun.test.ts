@@ -10,6 +10,7 @@ import {
   conflictAttemptsIn,
   conflictRunIn,
   conflictRunInFlightIn,
+  conflictRunOnUnreviewedDraftIn,
   pushedSinceVerdictIn,
   requestChangesRunIn,
   verdictsIn,
@@ -30,6 +31,7 @@ class Thread {
   headSha = A;
   draft = false;
   labels: string[] = [];
+  headPushedAt: string | null = null;
 
   pullRequest(): PullRequestSnapshot {
     return aPullRequest({
@@ -41,7 +43,9 @@ class Thread {
       conflictRun: conflictRunIn(this.comments),
       conflictAttempts: conflictAttemptsIn(this.comments),
       conflictRunInFlight: conflictRunInFlightIn(this.comments),
+      conflictRunOnUnreviewedDraft: conflictRunOnUnreviewedDraftIn(this.comments),
       pushedSinceVerdict: pushedSinceVerdictIn(this.comments),
+      headPushedAt: this.headPushedAt,
     });
   }
 
@@ -270,5 +274,96 @@ describe("A conflict-only run", () => {
       expect(planFor({ kind: "main-pushed", head: MAIN }, thread.conflictsSnapshot(MAIN), kitConfig())).toMatchObject({ kind: "nothing" });
       expect(thread.mainMovesAndConflicts(NEXT_MAIN)).toMatchObject({ kind: "act" });
     });
+  });
+});
+
+describe("A conflict-only run on a draft whose push GitHub never reviewed (#389)", () => {
+  /**
+   * PR #50 for Ticket #7, a draft whose head B was pushed an hour before the check, by
+   * the run these comments record, and which GitHub never reviewed because it conflicts with main.
+   */
+  function unreviewedAfter(comments: readonly string[]): Thread {
+    const thread = new Thread();
+    thread.comments.splice(0, thread.comments.length, ...comments);
+    thread.draft = true;
+    thread.headSha = B;
+    thread.headPushedAt = "2025-12-31T22:50:00Z";
+    return thread;
+  }
+
+  const FLAW_ON_A = verdictMarker({ verdict: "execution-flaw", source: "ci", requestChanges: false, headSha: A });
+  const PASS_ON_A = verdictMarker({ verdict: "pass", source: "reviewer", requestChanges: false, headSha: A });
+
+  /** The conflict-only run brings the stuck draft up to date, at C, and the Review of its push finds C red. */
+  function conflictRunThenRed(thread: Thread): string {
+    thread.mainMovesAndConflicts(MAIN);
+    thread.conflictRunFinishes(RESOLVED, "c".repeat(40));
+    thread.plan(redChecks("c".repeat(40)), snapshotOfPullRequest(thread.pullRequest()));
+    return thread.comments.at(-1) ?? "";
+  }
+
+  it("starts as for a PR at the Merge gate, and the PR stays in draft", () => {
+    const thread = unreviewedAfter([]);
+    thread.mainMovesAndConflicts(MAIN);
+
+    expect(thread.pullRequest().conflictRunInFlight).toBe(MAIN);
+    expect(thread.draft).toBe(true);
+  });
+
+  it("pushes with a note that doesn't say its Verdict uses no retry", () => {
+    const thread = unreviewedAfter([]);
+    thread.mainMovesAndConflicts(MAIN);
+    thread.conflictRunFinishes(RESOLVED, "c".repeat(40));
+
+    const note = thread.comments.at(-1) ?? "";
+    expect(note).toMatch(/^<!-- fabrik:conflict-run -->\n/);
+    expect(note).not.toContain("uses no retry");
+  });
+
+  it("after a first Implement run, gets a Verdict that counts toward the two Retries, never exempt", () => {
+    const verdict = conflictRunThenRed(unreviewedAfter([]));
+
+    expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "ci", requestChanges: false, headSha: "c".repeat(40) }]);
+    expect(verdict).not.toContain("conflict-only run");
+    expect(verdict).toMatch(/Retry 1 of 2 starts now:/);
+  });
+
+  it("after a Retry, gets a Verdict that counts toward the two Retries, never exempt", () => {
+    const verdict = conflictRunThenRed(unreviewedAfter([FLAW_ON_A, "<!-- fabrik:retry-push -->\nThe Implementer pushed a fix."]));
+
+    expect(verdictsIn([verdict])[0]).not.toHaveProperty("conflictRun");
+    expect(verdict).toMatch(/Retry 2 of 2 starts now, stepped up:/);
+  });
+
+  it("after a Request-changes run, gets a Verdict marked as a Request-changes one, whose flaw counts as one on that run's push would (#393)", () => {
+    const verdict = conflictRunThenRed(unreviewedAfter([PASS_ON_A, "<!-- fabrik:request-changes-run -->\nThe Implementer pushed the Operator's requested changes."]));
+
+    expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "ci", requestChanges: true, headSha: "c".repeat(40) }]);
+    expect(verdict).toMatch(/Retry 1 of 2 starts now:/);
+  });
+
+  it("after a clean rebase of a Request-changes run's push, the Verdict is marked as a Request-changes one too", () => {
+    const thread = unreviewedAfter([PASS_ON_A, "<!-- fabrik:request-changes-run -->\nThe Implementer pushed the Operator's requested changes."]);
+    const plan = planFor({ kind: "main-pushed", head: MAIN }, thread.conflictsSnapshot(MAIN), kitConfig());
+    const rebase = actionsOf(plan).find((action) => action.kind === "rebase-onto-main");
+    if (rebase?.kind === "rebase-onto-main") thread.land([...rebase.clean, ...rebase.pushed]);
+    thread.headSha = "c".repeat(40);
+
+    thread.plan(redChecks("c".repeat(40)), snapshotOfPullRequest(thread.pullRequest()));
+
+    expect(thread.draft).toBe(true);
+    expect(verdictsIn([thread.comments.at(-1) ?? ""])).toEqual([{ verdict: "execution-flaw", source: "ci", requestChanges: true, headSha: "c".repeat(40) }]);
+  });
+
+  it("that can't push hands the PR to the Operator the same way: says why, adds ready-for-human, out of draft, never closed", () => {
+    const thread = unreviewedAfter([]);
+    thread.mainMovesAndConflicts(MAIN);
+
+    const actions = actionsOf(thread.conflictRunFinishes({ net: [], commits: [], updatedFromMain: false }, "c".repeat(40)));
+
+    expect(thread.comments.at(-1)).toMatch(/^<!-- fabrik:conflict-run-ended -->\n@operator /);
+    expect(actions).toContainEqual({ kind: "add-labels", issue: 50, labels: ["ready-for-human"] });
+    expect(actions.some((action) => action.kind === "close-pull-request")).toBe(false);
+    expect(thread.draft).toBe(false);
   });
 });

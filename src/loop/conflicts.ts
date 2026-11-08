@@ -5,7 +5,9 @@
 // Step-up model resolves it. Neither uses a retry. Each PR gets one attempt per
 // main head, recorded on the PR, and a PR only behind main is left alone. The
 // loop is bounded: only the Operator merges to main, and neither attempt ever
-// changes main, only the PR's own branch.
+// changes main, only the PR's own branch. A draft whose push GitHub never
+// reviewed, because the draft conflicts with main, takes the same path (#389,
+// ADR-0016): nothing else would move it on.
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
 import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, requestChangesRunEndedMarker } from "./markers.ts";
@@ -17,9 +19,17 @@ import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, Plan, Pull
  * The conflict check, on a push to the default branch or the scheduled tick:
  * for each open agent PR, the Request-changes run for an undelivered Request
  * changes on it (src/loop/undelivered.ts, #341), or else a rebase onto main if
- * it's at the Merge gate and conflicts with it, or why there's neither.
+ * it conflicts with it, at the Merge gate or as a draft whose push GitHub never
+ * reviewed (#389), or why there's neither. Such a draft waits `reviewMinutes`
+ * from its push (reviewGraceMinutes).
  */
-export function checkConflicts(conflicts: ConflictSnapshot, operator: string, held: number | null = null, runMinutes?: number): Plan {
+export function checkConflicts(
+  conflicts: ConflictSnapshot,
+  operator: string,
+  held: number | null = null,
+  runMinutes: number | undefined,
+  reviewMinutes: number,
+): Plan {
   const { main, now } = conflicts;
   const reasons: string[] = [];
   const actions: Action[] = [];
@@ -33,7 +43,7 @@ export function checkConflicts(conflicts: ConflictSnapshot, operator: string, he
       reasons.push("The default branch has no head, so no PR can conflict with it");
       continue;
     }
-    const why = whyNotRebased(candidate, main, operator);
+    const why = whyNotRebased(candidate, main, operator, now, reviewMinutes);
     if (why !== null) reasons.push(why);
     else actions.push(rebaseOntoMain(candidate.pullRequest, main));
   }
@@ -42,11 +52,19 @@ export function checkConflicts(conflicts: ConflictSnapshot, operator: string, he
 }
 
 /** Why the Kit doesn't bring this PR up to date with main at `main` now, or null when it does. */
-function whyNotRebased({ pullRequest, mergeable }: ConflictCandidate, main: string, operator: string): string | null {
+function whyNotRebased(
+  { pullRequest, mergeable }: ConflictCandidate,
+  main: string,
+  operator: string,
+  now: string,
+  reviewMinutes: number,
+): string | null {
   const { number } = pullRequest;
   if (!pullRequest.isAgent || pullRequest.ticket === null || !pullRequest.open) return `#${number} isn't an open agent PR for a Ticket`;
-  // A draft is still in the Loop, whose next push is reviewed anyway, or the Operator parked it.
-  if (pullRequest.draft) return `#${number} is a draft, so it isn't brought up to date with main`;
+  if (pullRequest.draft) {
+    const why = whyNotUnreviewedDraft(pullRequest, mergeable, now, reviewMinutes);
+    if (why !== null) return why;
+  }
   // Its Request-changes run, which the Kit starts once the review is past its grace period, brings main in itself, by merging (#341).
   if (unnotedChangesRequests(pullRequest, operator).length > 0) {
     return `#${number} has a Request changes from the Operator that no run has started for yet, so its Request-changes run brings main in instead`;
@@ -63,53 +81,105 @@ function whyNotRebased({ pullRequest, mergeable }: ConflictCandidate, main: stri
 }
 
 /**
+ * How long a draft's push is left for a Review that did start, before the Kit
+ * counts it as never reviewed (#389, ADR-0016): a Review is two jobs, the wait
+ * for the PR's required checks and the Reviewer's, each given the Review
+ * role's timeout, so a started one has ended by then.
+ */
+export function reviewGraceMinutes(reviewTimeoutMinutes: number): number {
+  return 2 * reviewTimeoutMinutes;
+}
+
+/**
+ * Why this draft isn't one whose push GitHub never reviewed (#389, ADR-0016),
+ * or null when it is. GitHub starts no pull_request-family workflow while a PR
+ * conflicts with its base, so a push onto a conflicting draft (a Retry's, a
+ * first Implement run's, a Request-changes run's, or the Operator's) starts
+ * no Review, and nothing else moves the draft on. The rest of whyNotRebased's
+ * rules (a run in flight, one attempt per main head, a mergeable state
+ * GitHub has worked out) apply to it as to a PR at the Merge gate.
+ */
+function whyNotUnreviewedDraft(pullRequest: PullRequestSnapshot, mergeable: boolean | null, now: string, reviewMinutes: number): string | null {
+  const { number, headSha, headPushedAt } = pullRequest;
+  const head = headSha.slice(0, 7);
+  // A Verdict on its head: the Loop's next step is already decided, or the Operator parked it after a pass.
+  if (pullRequest.verdicts.some((record) => record.headSha === headSha)) {
+    return `#${number} is a draft with a Verdict on ${head}, so it isn't brought up to date with main`;
+  }
+  // Only a conflict keeps GitHub from starting the Review its push should have.
+  if (mergeable !== false) return null;
+  if (headPushedAt === null) return `#${number} is a draft and when ${head} was pushed isn't known, so it isn't brought up to date with main`;
+  // A Review that did start, before main moved, is given its job's whole timeout to land.
+  if (Date.parse(now) - Date.parse(headPushedAt) < reviewMinutes * 60_000) {
+    return `#${number} is a draft pushed less than a Review's timeout ago, so a Review of ${head} may still land`;
+  }
+  return null;
+}
+
+/**
  * The mechanical rebase of the PR's branch onto main, and what follows it.
- * Either way the PR goes back to draft first, so the push that follows starts
- * a full Review of the combined head, whose pass brings the PR back to the
- * Merge gate. A clean rebase is pushed, using no retry, and the attempt is
- * recorded once it has landed; if its lease refuses it, the PR goes back out
- * of draft with no attempt recorded, for the next check. A conflicting one
+ * Either way a PR at the Merge gate goes back to draft first, so the push that
+ * follows starts a full Review of the combined head, whose pass brings the PR
+ * back to the Merge gate. A clean rebase is pushed, using no retry, and the
+ * attempt is recorded once it has landed; if its lease refuses it, the PR goes
+ * back out of draft with no attempt recorded, for the next check. A conflicting one
  * records the attempt, pushes nothing and starts the
  * conflict-only run through agent:implement on the Ticket, which resumes the
  * run now in flight on its open PR (src/loop/implement.ts).
+ *
+ * A draft whose push GitHub never reviewed (#389, ADR-0016) takes the same
+ * path, but it's in draft already and stays there: a refused lease leaves it
+ * for the next check, where a PR at the Merge gate goes back to it. Its notes
+ * say that GitHub started no Review, and their markers say it was a draft, so
+ * the Verdict that follows is marked as the unreviewed push's own would have
+ * been, never as a conflict-only run's.
  */
 function rebaseOntoMain(pullRequest: PullRequestSnapshot, main: string): Action {
-  const { number } = pullRequest;
+  const { number, draft } = pullRequest;
   const ticket = pullRequest.ticket as number;
   const head = main.slice(0, 7);
   const branch = agentBranchFor(ticket);
+  const unreviewedDraft = draft ? { unreviewedDraft: true as const } : {};
+  const why = draft
+    ? `#${number} is a draft that conflicts with \`main\` at ${head}, so GitHub started no Review of its last push`
+    : `\`main\` moved to ${head} and #${number} conflicted with it`;
+  const toDraft: Action[] = draft ? [] : [{ kind: "convert-to-draft", pullRequest: number }];
   return {
     kind: "rebase-onto-main",
     pullRequest: number,
     branch,
     onto: main,
-    clean: [{ kind: "convert-to-draft", pullRequest: number }],
+    clean: toDraft,
     pushed: [
       {
         kind: "comment",
         issue: number,
         body: [
-          conflictAttemptMarker({ main, outcome: "rebased" }),
-          `\`main\` moved to ${head} and #${number} conflicted with it, so the Kit rebased \`${branch}\` onto it. The rebase was clean, so no agent ran and no retry was used.`,
+          conflictAttemptMarker({ main, outcome: "rebased", ...unreviewedDraft }),
+          `${why}, so the Kit rebased \`${branch}\` onto it. The rebase was clean, so no agent ran and no retry was used.`,
           "",
-          "The PR is back in draft, and Review runs again on the rebased head; a pass brings it back to you.",
+          draft
+            ? "The PR stays in draft, and Review runs on the rebased head."
+            : "The PR is back in draft, and Review runs again on the rebased head; a pass brings it back to you.",
         ].join("\n"),
       },
     ],
-    // The branch moved between the rebase and its push: nothing landed, so nothing is recorded.
-    refused: [{ kind: "mark-ready-for-review", pullRequest: number }],
+    // The branch moved between the rebase and its push: nothing landed, so nothing is recorded. A draft stays one.
+    refused: draft ? [] : [{ kind: "mark-ready-for-review", pullRequest: number }],
     conflicted: [
       {
         kind: "comment",
         issue: number,
         body: [
-          conflictAttemptMarker({ main, outcome: "conflict-run" }),
-          `\`main\` moved to ${head} and #${number} conflicts with it, and rebasing \`${branch}\` onto it conflicts too.`,
+          conflictAttemptMarker({ main, outcome: "conflict-run", ...unreviewedDraft }),
+          `${why}, and rebasing \`${branch}\` onto it conflicts too.`,
           "",
-          "A conflict-only Implementer run starts now on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. It uses no retry. The PR is back in draft, and Review runs again on the run's push.",
+          draft
+            ? "A conflict-only Implementer run starts now on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. The run uses no retry, but the Verdict on its push counts as one on the unreviewed push would have. The PR stays in draft, and Review runs on the run's push."
+            : "A conflict-only Implementer run starts now on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. It uses no retry. The PR is back in draft, and Review runs again on the run's push.",
         ].join("\n"),
       },
-      { kind: "convert-to-draft", pullRequest: number },
+      ...toDraft,
       // A fresh agent:implement on the Ticket starts the run in flight on its open PR. It notifies nobody.
       { kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] },
     ],

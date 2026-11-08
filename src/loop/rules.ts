@@ -3,7 +3,7 @@ import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
 import { failureNotice } from "./failures.ts";
 import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
-import { checkConflicts } from "./conflicts.ts";
+import { checkConflicts, reviewGraceMinutes } from "./conflicts.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
   DESIGN_LABEL,
@@ -212,6 +212,7 @@ function conflictCheck(snapshot: Snapshot, config: KitConfig): Plan {
         snapshot.operator,
         heldOn(snapshot.kitIssues, config),
         implementJobTimeoutMinutes(config.roles.implement.timeoutMinutes),
+        reviewGraceMinutes(config.roles.review.timeoutMinutes),
       );
 }
 
