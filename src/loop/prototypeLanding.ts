@@ -86,9 +86,15 @@ export function applyPrototypeTurn(
     ].join("\n");
     return { kind: "act", actions: [failed(said)] };
   }
-  // Commits that undo each other built nothing either.
+  // Commits that undo each other built nothing either. The turn's intro says why, if it gave a reason (#429).
   if (event.changes.net.length === 0) {
-    const said = `The prototype turn on #${event.issue} built nothing: its branch has no change of its own, so the Kit pushed nothing and there's nothing to look at. [The run](${event.runUrl}) has what the turn did.`;
+    const said = [
+      `The prototype turn on #${event.issue} built nothing: its branch has no change of its own, so the Kit pushed nothing and there's nothing to look at. [The run](${event.runUrl}) has what the turn did.`,
+      "",
+      "**What the prototype turn said:**",
+      "",
+      withoutMentions(parsed.output.intro).trim(),
+    ].join("\n");
     return { kind: "act", actions: [failed(said)] };
   }
   const push: Action = { kind: "push-prototype-branch", issue: event.issue };

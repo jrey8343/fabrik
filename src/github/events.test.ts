@@ -213,12 +213,15 @@ describe("A finished Implement run's UI evidence", () => {
   } as const;
   /** Run 9100's push job, in acme/shop, with what its Implement job passed out. */
   const pushJob = (capture: CaptureOutputs) => ({ ...capture, run: 9100, repoUrl: "https://github.com/acme/shop" });
+  const RUN = "https://github.com/acme/shop/actions/runs/9100/attempts/1";
 
   it("carries the capture result, the head the run built, and where the push job's own run keeps the images and the gallery", () => {
-    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: captured, artifact: 9202, galleryArtifact: 9201 }));
+    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: captured, artifact: 9202, galleryArtifact: 9201 }), RUN);
 
     expect(event).toMatchObject({
       kind: "implement-run-finished",
+      // Its push job's run, which an empty diff's comment links to, a first run's too (#429).
+      runUrl: RUN,
       evidence: {
         result: captured,
         headSha: HEAD,
@@ -230,14 +233,14 @@ describe("A finished Implement run's UI evidence", () => {
   });
 
   it("carries no capture result when capture recorded nothing, as in a repo without a ui block, the Implement job having passed out none", () => {
-    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: null, artifact: null, galleryArtifact: null }));
+    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: null, artifact: null, galleryArtifact: null }), RUN);
 
     expect(event).toMatchObject({ evidence: { headSha: HEAD, run: 9100, artifact: null, gallery: null } });
     expect(event).not.toHaveProperty("evidence.result");
   });
 
   it("links no gallery when the run kept no gallery artifact, though it kept the images", () => {
-    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: captured, artifact: 9202, galleryArtifact: null }));
+    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: captured, artifact: 9202, galleryArtifact: null }), RUN);
 
     expect(event).toMatchObject({ evidence: { artifact: 9202, gallery: null } });
   });

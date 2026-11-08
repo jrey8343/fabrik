@@ -170,6 +170,8 @@ export type LoopEvent =
       readonly changes: BranchChanges;
       /** Its UI evidence, which the push job always passes; the core decides whether the run is UI. */
       readonly evidence?: ImplementEvidence;
+      /** The push job's Actions run, which an empty diff's comment links to, a first run's as much as a retry's (#429). */
+      readonly runUrl: string;
       /**
        * For a retry: the agent PR it fixes, and the head it built on, which is
        * its branch's base, so `changes` holds only the retry's own commits;

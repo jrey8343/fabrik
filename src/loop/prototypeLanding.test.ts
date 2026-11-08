@@ -373,12 +373,27 @@ describe("Landing a prototype turn that made no commit", () => {
             "",
             `The prototype turn on #7 built nothing: its branch has no change of its own, so the Kit pushed nothing and there's nothing to look at. [The run](${RUN}) has what the turn did.`,
             "",
+            "**What the prototype turn said:**",
+            "",
+            "Three ways to book a class, all on `/book`.",
+            "",
             "**1. Carry on without a prototype, or try again?**",
             "➡️ Recommended: Carry on without a prototype. Trying again spends another prototype turn's Sandbox time, and may fail the same way.",
           ].join("\n"),
         },
       ],
     });
+  });
+
+  it("carries the turn's intro, so a reason it gave for building nothing reaches the Operator (#429)", () => {
+    const output = JSON.stringify({ ...ROUND, intro: "Built nothing: the variants need `.claude/settings.json` changed, @someone." });
+
+    const plan = planFor(finished({ output, changes: { net: [], commits: [] }, headSha: null, capture: undefined, gallery: null }), inSession(), kitConfig());
+
+    const [round] = commentsOf(plan);
+    expect(round).toContain("Built nothing: the variants need `.claude/settings.json` changed");
+    // Agent text mentions nobody.
+    expect(round).not.toContain("@someone");
   });
 
   it("counts commits that undo each other as building nothing", () => {

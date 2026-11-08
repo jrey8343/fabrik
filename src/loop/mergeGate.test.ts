@@ -231,6 +231,7 @@ function requestChangesPushed(
 ): LoopEvent {
   return {
     kind: "implement-run-finished",
+    runUrl: "https://github.com/acme/shop/actions/runs/1/attempts/1",
     issue: 7,
     output: JSON.stringify({
       title: "Rename the total",

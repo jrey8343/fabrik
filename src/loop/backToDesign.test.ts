@@ -59,6 +59,7 @@ const usedUp = aPullRequest({ pushedSinceVerdict: true, verdicts: [earlier("exec
 /** The second retry's push job, holding a branch that changed nothing on the PR it fixes. */
 const emptySecondRetry: LoopEvent = {
   kind: "implement-run-finished",
+  runUrl: "https://github.com/acme/shop/actions/runs/1/attempts/1",
   issue: 7,
   output: JSON.stringify({ title: "Handle the empty cart", summary: "Nothing to change.", fix: "Nothing to change." }),
   branch: "fabrik/ticket-7",

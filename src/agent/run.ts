@@ -90,7 +90,7 @@ import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
 import { triageContext } from "./triage.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
-import { mapCapContext, prototypeContext, sentBackContext } from "./design.ts";
+import { emptyDiffContext, mapCapContext, prototypeContext, sentBackContext } from "./design.ts";
 import { PROTOTYPE_AUTHOR, PROTOTYPE_REQUEST_ENV, prototypeTurnContext, startPrototypeBranch } from "./prototype.ts";
 import {
   claudeArgs,
@@ -394,6 +394,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   const { issue, parts: sentBack, operatorComments: sentBackComments } = sentBackContext(JSON.parse(issueText));
   if (spec.readsParentSpec === true) {
     extra.push(...sentBack);
+    // What the Implement runs that built nothing said, which a third one sends the Ticket back to design for (#429).
+    extra.push(...emptyDiffContext(issue));
     // A Design turn on an issue that was never sent back is given none, and its result says nothing of them.
     if (sentBackComments.length > 0) given = sentBackComments;
     extra.push(...mapCapContext(JSON.parse(await readFile(required("FABRIK_MAP_FILE"), "utf8"))));
