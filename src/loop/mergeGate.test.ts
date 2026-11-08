@@ -231,6 +231,7 @@ function requestChangesPushed(
 ): LoopEvent {
   return {
     kind: "implement-run-finished",
+    runUrl: "https://github.com/acme/shop/actions/runs/1/attempts/1",
     issue: 7,
     output: JSON.stringify({
       title: "Rename the total",
@@ -475,6 +476,21 @@ describe("A Request-changes run's answers about the review it was started for (#
     expect(outcome).toMatch(/^<!-- fabrik:request-changes-run-empty -->\n<!-- fabrik:request-changes-answers /);
     expect(requestChangesAnswersIn(outcome ?? "")).toEqual({ review: 900, reviewMiss: false, amendsTicket: true });
     expect(outcome).toContain("Review miss: no\nAmends the Ticket: yes");
+  });
+
+  it.each([
+    ["didn't move", HEAD_SHA],
+    ["moved", "b".repeat(40)],
+  ])("carries what the run said, when it commits nothing on a head that %s, so the Operator learns why (#429)", (_, headSha) => {
+    const plan = planFor(
+      requestChangesPushed({ net: [], commits: [] }),
+      pushSnapshot(aPullRequest({ headSha, verdicts: [earlier("pass", { headSha: HEAD_SHA })] })),
+      kitConfig(),
+    );
+    const [outcome] = commentsOf(plan);
+
+    expect(outcome).toContain("Adds the order total, named as the Operator asked.");
+    expect(outcome).toContain(`[The run](${RUN})`);
   });
 
   it("are owed: a Request-changes run's output without them is an Infrastructure failure, never pushed", () => {

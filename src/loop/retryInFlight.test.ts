@@ -102,6 +102,7 @@ function reviewed(headSha: string, output: string): LoopEvent {
 function retried(headSha: string, requestChanges = false): Extract<LoopEvent, { kind: "implement-run-finished" }> {
   return {
     kind: "implement-run-finished",
+    runUrl: "https://github.com/acme/shop/actions/runs/1/attempts/1",
     issue: 7,
     output: JSON.stringify({ title: "Handle the empty cart", summary: "Handles the empty cart.", fix: "Fixed the build.", reviewMiss: false, amendsTicket: false }),
     branch: "fabrik/ticket-7",

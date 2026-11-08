@@ -126,7 +126,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
   const guard = checkTrustRoot([...changes.net, ...changes.commits]);
   if (guard.kind === "refuse") return withStaleDispatchOff(refuse(issueNumber, guard.paths, operator), issueNumber, issue);
   // "Did nothing" never passes, however the commits got there.
-  if (changes.net.length === 0) return withStaleDispatchOff(emptyDiff(issueNumber, issue), issueNumber, issue);
+  if (changes.net.length === 0) return withStaleDispatchOff(emptyDiff(issueNumber, issue, parsed.output.summary, event.runUrl), issueNumber, issue);
 
   const { title, summary } = parsed.output;
   const evidence = evidenceFor(event, config, false);
@@ -263,7 +263,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   // Merging main in or rebasing onto it, to fix a conflict, is a change even with none of the run's own.
   if (changes.net.length === 0 && changes.updatedFromMain !== true && mainMerge === undefined) {
     // A Request-changes run's empty diff is no Verdict, so it never costs a Retry (#388).
-    if (requestChanges) return { kind: "act", actions: requestChangesRunEmpty(pullRequest, fixes, branch, operator, recorded) };
+    if (requestChanges) return { kind: "act", actions: requestChangesRunEmpty(pullRequest, fixes, branch, operator, recorded, parsed.output.summary) };
     return {
       kind: "act",
       actions: verdictActions(
@@ -272,7 +272,11 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         {
           verdict: "execution-flaw",
           source: "empty-diff",
-          findings: `The Implementer's retry on \`${branch}\` committed no change, so there was nothing to review.`,
+          // The run's summary says why, if it gave a reason; the Verdict links the run itself (#429).
+          findings: [
+            `The Implementer's retry on \`${branch}\` committed no change, so there was nothing to review.`,
+            ...implementerSaid(parsed.output.summary),
+          ].join("\n"),
         },
         operator,
       ),
@@ -329,6 +333,7 @@ function requestChangesRunEmpty(
   branch: string,
   operator: string,
   recorded: AnswerLines | null,
+  summary: string,
 ): Action[] {
   const { number, headSha } = pullRequest;
   const started = fixes.headSha.slice(0, 7);
@@ -342,7 +347,8 @@ function requestChangesRunEmpty(
       : `@${operator} The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}, so your requested changes aren't built, and it's yours from here. No retry was used.`,
     "",
     ...(recorded === null ? [] : [...recorded.lines, ""]),
-    `[The run](${fixes.runUrl})`,
+    // Why it built nothing, if it said, so an Operator handed the PR back knows (#429).
+    ...implementerSaidAndRun(summary, fixes.runUrl).slice(1),
   ].join("\n");
   const comment: Action = { kind: "comment", issue: number, body };
   return moved
@@ -606,10 +612,15 @@ function refuse(issueNumber: number, paths: readonly string[], operator: string,
 
 /**
  * An empty diff is an Execution flaw. With no PR to retry on, the retry is a
- * fresh Implement run, kept silent; the third flaw is a Design flaw.
+ * fresh Implement run, kept silent; the third flaw is a Design flaw. Its
+ * comment carries the run's summary and links the run, so a reason the
+ * Implementer gave for building nothing, such as a Ticket that needs a
+ * trust-root change, reaches the Operator and the Design session that a
+ * third one starts (#429).
  */
-function emptyDiff(issueNumber: number, issue: IssueSnapshot): Plan {
+function emptyDiff(issueNumber: number, issue: IssueSnapshot, summary: string, runUrl: string): Plan {
   const flaw = issue.emptyDiffs + 1;
+  const said = implementerSaidAndRun(summary, runUrl);
   if (flaw > MAX_RETRIES) {
     return {
       kind: "act",
@@ -620,6 +631,7 @@ function emptyDiff(issueNumber: number, issue: IssueSnapshot): Plan {
           body: [
             EMPTY_DIFF_MARKER,
             `The Implementer's branch for #${issueNumber} changed nothing, for the ${ordinal(flaw)} time. A third Execution flaw counts as a Design flaw, so this Ticket goes back to design.`,
+            ...said,
           ].join("\n"),
         },
         { kind: "remove-label", issue: issueNumber, label: READY_FOR_AGENT },
@@ -638,12 +650,27 @@ function emptyDiff(issueNumber: number, issue: IssueSnapshot): Plan {
         body: [
           EMPTY_DIFF_MARKER,
           `The Implementer's branch for #${issueNumber} changed nothing, so the Kit opened no PR. An empty diff is an Execution flaw: retry ${flaw} of ${MAX_RETRIES} starts now${stepUpReasonFor(flaw, issue.labels) === null ? "" : ", stepped up"}.`,
+          ...said,
         ].join("\n"),
       },
       // A fresh label event, as Dispatch would add, starts the retry in this run's own slot.
       { kind: "add-labels", issue: issueNumber, labels: [DISPATCH_LABEL] },
     ],
   };
+}
+
+/**
+ * What a run that committed nothing said, set out for the comment on it: its
+ * summary, which is agent text and so mentions nobody, under a bold label
+ * rather than a heading, so the summary's own headings never sit under it.
+ */
+function implementerSaid(summary: string): string[] {
+  return ["", "**What the Implementer said:**", "", withoutMentions(summary).trim()];
+}
+
+/** implementerSaid, then the link to the run, for a comment that links it nowhere else. */
+function implementerSaidAndRun(summary: string, runUrl: string): string[] {
+  return [...implementerSaid(summary), "", `[The run](${runUrl})`];
 }
 
 function ordinal(n: number): string {

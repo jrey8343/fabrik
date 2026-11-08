@@ -64,6 +64,7 @@ describe("Reading a PR's Verdicts", () => {
 describe("Reading whether a PR's latest push came from a Request-changes run", () => {
   const pushed: LoopEvent = {
     kind: "implement-run-finished",
+    runUrl: "https://github.com/acme/shop/actions/runs/1/attempts/1",
     issue: 7,
     output: JSON.stringify({
       title: "Rename the total",
@@ -124,6 +125,7 @@ describe("Reading a Request-changes run's answers about its review (#369)", () =
   });
   const pushedFor = (review: number, answers: Record<string, unknown>): LoopEvent => ({
     kind: "implement-run-finished",
+    runUrl: "https://github.com/acme/shop/actions/runs/1/attempts/1",
     issue: 7,
     output: JSON.stringify({ title: "Rebase onto main", summary: "Adds the waitlist.", fix: "Rebased onto main as the Operator asked.", ...answers }),
     branch: "fabrik/ticket-7",
@@ -170,6 +172,7 @@ describe("Counting a Ticket's earlier empty diffs", () => {
   it("counts the comment an empty diff posts", () => {
     const empty: LoopEvent = {
       kind: "implement-run-finished",
+      runUrl: "https://github.com/acme/shop/actions/runs/1/attempts/1",
       issue: 7,
       output: JSON.stringify({ title: "Add a waitlist", summary: "Nothing." }),
       branch: "fabrik/ticket-7",

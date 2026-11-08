@@ -16,7 +16,7 @@ import { readTriageOutput } from "../loop/triageOutput.ts";
 import { STRENGTHS } from "../loop/types.ts";
 import { CONSIDERED_PREFIX, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
-import { MAP_CAP_HEADING } from "./design.ts";
+import { EMPTY_DIFFS_HEADING, MAP_CAP_HEADING } from "./design.ts";
 import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
 import { PROTOTYPE_SECTIONS } from "./prototype.ts";
 import { RESEARCH_ISSUE_HEADING, RESEARCH_SECTIONS } from "./research.ts";
@@ -310,6 +310,10 @@ describe("The Map question in the Design prompt", () => {
     const settled = lineStarting(section(await prompt("design"), "Maps"), "- **Treat the Decisions an issue rests on as settled.**");
     expect(settled).toContain("When the issue says which Decisions it rests on, as a Spec-to-be filed from a Map does");
     expect(settled).toContain("don't ask their questions again");
+  });
+
+  it("names the part a Ticket's Implement runs that built nothing arrive under, after the issue (#429)", async () => {
+    expect(await prompt("design")).toContain(`"${EMPTY_DIFFS_HEADING}", after the issue, holds what each run said`);
   });
 
   it("names the part the Map cap arrives under, after the issue", async () => {

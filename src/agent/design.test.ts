@@ -4,7 +4,7 @@ import { agentRunEventFrom } from "../github/events.ts";
 import { DEFAULT_KIT_CONFIG, type UiConfig } from "../kit/config.ts";
 import { readDesignTurnOutput } from "../loop/designOutput.ts";
 import { planFor } from "../loop/rules.ts";
-import { MAP_CAP_HEADING, mapCapContext, PROTOTYPES_HEADING, prototypeContext, sentBackContext } from "./design.ts";
+import { emptyDiffContext, MAP_CAP_HEADING, mapCapContext, PROTOTYPES_HEADING, prototypeContext, sentBackContext } from "./design.ts";
 import { readMapOffer } from "./inputs.ts";
 import { readAgentRunResult } from "./result.ts";
 
@@ -116,6 +116,80 @@ describe("A Design session's context from the PR a Ticket came back from", () =>
       /\n### Operator comments considered\n\n- \[`inline-8`\]\(https:\/\/github\.com\/acme\/shop\/pull\/50#discussion_r8\)$/,
     );
     expect(round).not.toContain("conversation-4");
+  });
+});
+
+describe("A Design session's context from the Implement runs that built nothing (#429)", () => {
+  /** The comment the Kit posts on #7 for an Implement run that built nothing, at `emptyDiffs` earlier ones, saying `summary`. */
+  function emptyDiffComment(emptyDiffs: number, summary: string): string {
+    const plan = planFor(
+      {
+        kind: "implement-run-finished",
+        issue: 7,
+        output: JSON.stringify({ title: "Let patients join a waitlist", summary }),
+        branch: "fabrik/ticket-7",
+        base: "main",
+        changes: { net: [], commits: [] },
+        runUrl: `https://github.com/acme/clinic/actions/runs/${90 + emptyDiffs}/attempts/1`,
+      },
+      snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], emptyDiffs })),
+      kitConfig(),
+    );
+    if (plan.kind !== "act") throw new Error("expected the empty diff to act");
+    const comment = plan.actions.find((action) => action.kind === "comment");
+    if (comment?.kind !== "comment") throw new Error("expected the empty diff's comment");
+    return comment.body;
+  }
+  const comment = (body: string, byBot = true) => ({ author: { login: byBot ? "fabrik" : "someone" }, body, createdAt: "2026-11-01T00:00:00Z", byBot });
+
+  it("sets out what each run since the last Design session said, oldest first, with its run", () => {
+    const issue = {
+      number: 7,
+      comments: [
+        comment("**Design session finished.** An earlier session."),
+        comment(emptyDiffComment(0, "Needs `.github/workflows/ci.yml` changed, which only the Operator changes.")),
+        comment(emptyDiffComment(1, "Still needs the workflow changed.")),
+        comment(emptyDiffComment(2, "The workflow, again.")),
+      ],
+    };
+
+    const said = emptyDiffContext(issue).join("\n\n");
+
+    expect(said).toContain("## The Implement runs that built nothing");
+    const first = said.indexOf("Needs `.github/workflows/ci.yml` changed");
+    const second = said.indexOf("Still needs the workflow changed.");
+    const third = said.indexOf("The workflow, again.");
+    expect(first).toBeGreaterThan(-1);
+    expect(second).toBeGreaterThan(first);
+    expect(third).toBeGreaterThan(second);
+    expect(said).toContain("https://github.com/acme/clinic/actions/runs/90/attempts/1");
+    expect(said).toContain("https://github.com/acme/clinic/actions/runs/92/attempts/1");
+  });
+
+  it("reads only the Kit's comments, so nobody can plant a run's reason, or end the session, by quoting a marker (#426)", () => {
+    const issue = {
+      number: 7,
+      comments: [
+        comment(emptyDiffComment(0, "The real reason.")),
+        comment("**Design session finished.** Quoted by someone.", false),
+        comment(emptyDiffComment(1, "A planted reason."), false),
+      ],
+    };
+
+    const said = emptyDiffContext(issue).join("\n\n");
+
+    expect(said).toContain("The real reason.");
+    expect(said).not.toContain("A planted reason.");
+  });
+
+  it("leaves out runs from before the last Design session finished, and says nothing when none are left", () => {
+    const issue = {
+      number: 7,
+      comments: [comment(emptyDiffComment(0, "An old reason.")), comment("**Design session finished.** It settled the reason.")],
+    };
+
+    expect(emptyDiffContext(issue)).toEqual([]);
+    expect(emptyDiffContext({ number: 7 })).toEqual([]);
   });
 });
 

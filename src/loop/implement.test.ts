@@ -108,6 +108,7 @@ function finished(
     branch: "fabrik/ticket-7",
     base: "main",
     changes: { net: [{ path: "src/waitlist.ts" }], commits: [{ path: "src/waitlist.ts" }] },
+    runUrl: "https://github.com/acme/clinic/actions/runs/1/attempts/1",
     ...overrides,
   };
 }
@@ -201,6 +202,28 @@ describe("An empty diff", () => {
     const [comment] = commentsOf(actionsOf(planFor(empty, snapshotOf(readyTicket()), kitConfig())));
 
     expect(comment).toMatch(/^<!-- fabrik:empty-diff -->\n/);
+  });
+
+  it("carries the Implementer's summary and links the run, so a reason it gave for building nothing reaches the Operator (#429)", () => {
+    const said = finished({
+      changes: { net: [], commits: [] },
+      output: JSON.stringify({
+        title: "Let patients join a waitlist",
+        summary: "Built nothing.\n\n## Questions for the Operator\n\n- The Ticket needs `.github/workflows/ci.yml` changed; @someone, can you make it?",
+      }),
+      runUrl: "https://github.com/acme/clinic/actions/runs/91/attempts/1",
+    });
+
+    for (const emptyDiffs of [0, 1, 2]) {
+      const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], emptyDiffs });
+      const [comment] = commentsOf(actionsOf(planFor(said, snapshotOf(ticket), kitConfig())));
+
+      expect(comment).toContain("## Questions for the Operator");
+      expect(comment).toContain("The Ticket needs `.github/workflows/ci.yml` changed");
+      expect(comment).toContain("[The run](https://github.com/acme/clinic/actions/runs/91/attempts/1)");
+      // Agent text mentions nobody.
+      expect(comment).not.toContain("@someone");
+    }
   });
 
   it("a third one is a Design flaw: the Ticket goes back to needs-design instead of retrying", () => {

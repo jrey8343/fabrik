@@ -168,6 +168,7 @@ export function agentRunEventFrom(
   } | null = null,
   startedBy: number | null = null,
   evidence: PushJobEvidence | null = null,
+  runUrl: string | null = null,
 ): LoopEvent {
   if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
   if (result.role === "audit") throw new Error("An Auditor's result is applied through auditEventFrom");
@@ -186,6 +187,7 @@ export function agentRunEventFrom(
   if (result.branch === undefined || changes === null) {
     throw new Error("An Implement run's result needs the branch it built and the paths that branch changes");
   }
+  if (runUrl === null) throw new Error("An Implement run's event needs its push job's run, which an empty diff's comment links to");
   return {
     kind: "implement-run-finished",
     issue: result.issue,
@@ -193,6 +195,7 @@ export function agentRunEventFrom(
     branch: result.branch.name,
     base: result.branch.base.ref,
     changes,
+    runUrl,
     // A branch with no commits has no head of its own, but changes nothing, so its evidence reaches no PR.
     ...(evidence === null ? {} : { evidence: implementEvidence(evidence, result.branch.head ?? result.branch.base.sha) }),
     // A retry's branch starts at the PR head it built on, which the core checks is still the PR's.

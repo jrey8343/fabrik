@@ -396,6 +396,7 @@ function retried(
     base: "fabrik/ticket-7",
     changes: { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }] },
     fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN },
+    runUrl: RUN,
     ...overrides,
   };
 }
@@ -504,6 +505,16 @@ describe("A retry's branch", () => {
     ]);
     expect(actions).toContainEqual(RETRY_TRIGGER);
     expect(notificationsOf(plan, "jrey")).toEqual([]);
+  });
+
+  it("that changes nothing posts a Verdict carrying the Implementer's summary and linking the run (#429)", () => {
+    const plan = planFor(retried({ changes: { net: [], commits: [] } }), retrySnapshot(), kitConfig());
+
+    const [verdict] = actionsOf(plan).flatMap((action) => (action.kind === "comment" ? [action.body] : []));
+    expect(verdict).toContain("Shows the empty state for an empty cart");
+    // Agent text mentions nobody.
+    expect(verdict).not.toContain("@someone");
+    expect(verdict).toContain(`[The run](${RUN})`);
   });
 
   it("that changes nothing on the second retry starts no third", () => {
