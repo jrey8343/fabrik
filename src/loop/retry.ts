@@ -12,7 +12,7 @@ import type { Action, KitConfig, PullRequestSnapshot, StepUpReason, VerdictRecor
 export const MAX_RETRIES = 2;
 
 /** Whether this retry Steps up: the last one does, while the first run and earlier retries use the Implementer's model. */
-export function stepsUp(retry: number): boolean {
+function stepsUp(retry: number): boolean {
   return retry >= MAX_RETRIES;
 }
 
@@ -51,7 +51,7 @@ export function retryAfterFlaw(pullRequest: PullRequestSnapshot): { readonly lin
   const retry = retryNumber(pullRequest.verdicts);
   if (retry > MAX_RETRIES || pullRequest.ticket === null) return null;
   return {
-    line: `Retry ${retry} of ${MAX_RETRIES} starts now${stepsUp(retry) ? ", stepped up" : ""}: the Implementer fixes these findings on the same branch.`,
+    line: `Retry ${retry} of ${MAX_RETRIES} starts now${stepUpReasonFor(retry, pullRequest.ticketLabels) === null ? "" : ", stepped up"}: the Implementer fixes these findings on the same branch.`,
     // A fresh agent:implement on the Ticket resumes the PR's Implement run (src/loop/implement.ts). It notifies nobody.
     actions: [{ kind: "add-labels", issue: pullRequest.ticket, labels: [DISPATCH_LABEL] }],
   };

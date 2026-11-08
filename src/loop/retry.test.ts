@@ -11,7 +11,7 @@ import {
 } from "../__fixtures__/snapshots.ts";
 import { anEvidence, CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "./rules.ts";
-import type { Action, LoopEvent, Plan, Snapshot, VerdictRecord } from "./types.ts";
+import type { Action, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
@@ -60,6 +60,34 @@ describe("An Execution flaw starts a retry", () => {
 
     expect(planFor(flaw, snapshotOfPullRequest(marked), kitConfig())).toEqual(planFor(flaw, snapshotOfPullRequest(aPullRequest()), kitConfig()));
     expect(actionsOf(planFor(flaw, snapshotOfPullRequest(marked), kitConfig()))).toContainEqual(RETRY_TRIGGER);
+  });
+});
+
+describe("An Execution flaw's Verdict names the Retry it starts", () => {
+  const flaw = reviewed("verdict: execution-flaw\n\nThe empty-cart case throws.");
+  const verdictOn = (pullRequest: PullRequestSnapshot): string => {
+    const comment = actionsOf(planFor(flaw, snapshotOfPullRequest(pullRequest), kitConfig())).find((action) => action.kind === "comment");
+    if (comment?.kind !== "comment") throw new Error("expected a Verdict comment");
+    return comment.body;
+  };
+  const MARKED = ["enhancement", "ready-for-agent", "fabrik:step-up"];
+
+  it("on a Ticket marked fabrik:step-up, says Retry 1 starts stepped up, as it runs on the Step-up model", () => {
+    expect(verdictOn(aPullRequest({ ticketLabels: MARKED }))).toContain("Retry 1 of 2 starts now, stepped up:");
+  });
+
+  it("on a Ticket marked fabrik:step-up, says Retry 2 starts stepped up", () => {
+    expect(verdictOn(aPullRequest({ ticketLabels: MARKED, verdicts: [earlier("execution-flaw")], pushedSinceVerdict: true }))).toContain(
+      "Retry 2 of 2 starts now, stepped up:",
+    );
+  });
+
+  it("on an unmarked Ticket, says Retry 1 starts plain and Retry 2 stepped up", () => {
+    const unmarked = ["enhancement", "ready-for-agent"];
+    expect(verdictOn(aPullRequest({ ticketLabels: unmarked }))).toContain("Retry 1 of 2 starts now:");
+    expect(verdictOn(aPullRequest({ ticketLabels: unmarked, verdicts: [earlier("execution-flaw")], pushedSinceVerdict: true }))).toContain(
+      "Retry 2 of 2 starts now, stepped up:",
+    );
   });
 });
 
