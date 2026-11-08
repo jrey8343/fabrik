@@ -571,11 +571,11 @@ describe("A prototype turn's result the session no longer waits on", () => {
 describe("The Design session after a prototype round", () => {
   /** The session's comments, oldest first, as the push job reads them: rounds 1 and 2, the request, then what the landing posted. */
   const threadAfter = (plan: Plan) => [
-    { id: 9000, body: "<!-- fabrik:design-round 1 -->\n@jrey **Design session, round 1.** …", byBot: true, byApp: true },
-    { id: 9001, body: "Yes, prototype it.", byBot: false, byApp: false },
-    { id: 9002, body: "<!-- fabrik:design-round 2 -->\n@jrey **Design session, round 2.** …", byBot: true, byApp: true },
-    { id: 9003, body: `<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`, byBot: true, byApp: true },
-    ...commentsOf(plan).map((body, i) => ({ id: 9100 + i, body, byBot: true, byApp: true })),
+    { id: 9000, body: "<!-- fabrik:design-round 1 -->\n@jrey **Design session, round 1.** …", byApp: true },
+    { id: 9001, body: "Yes, prototype it.", byApp: false },
+    { id: 9002, body: "<!-- fabrik:design-round 2 -->\n@jrey **Design session, round 2.** …", byApp: true },
+    { id: 9003, body: `<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`, byApp: true },
+    ...commentsOf(plan).map((body, i) => ({ id: 9100 + i, body, byApp: true })),
   ];
 
   it.each([

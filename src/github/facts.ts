@@ -72,7 +72,8 @@ async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: num
     pagesOf<RawDefaultBranchCommit>(github, DEFAULT_BRANCH_QUERY, repo, { since: escapeSince }, (data) => data.repository.defaultBranchRef?.target.history ?? null),
     // The Design queue check's own slice, so Held and the check can't disagree. Its token can't read
     // workflow runs, so it reads Design turns in progress from the issues, as the scheduled tick does.
-    gatherDesignQueueSlice(github, null, repo),
+    // It doesn't know the App's login, so it takes any bot's markers for the App's (byAppOf).
+    gatherDesignQueueSlice(github, null, repo, null),
     pagesOf<RawMonitorIssue>(github, MONITOR_ISSUES_QUERY, repo, { monitor: MONITOR_LABEL }, (data) => data.repository.issues),
     gatherOperatorIssues(github, repo, operator, escapeSince),
     pagesOf<RawOpenKitIssue>(github, OPEN_KIT_ISSUES_QUERY, repo, { label: AUDIT_LABEL }, (data) => data.repository.issues),

@@ -225,8 +225,9 @@ describe("The Design-session turn job's name", () => {
 });
 
 describe("Gathering a Design queue check's needs-design issues", () => {
-  const kit = (body: string, createdAt = "2026-11-02T09:00:00Z") => ({ body, createdAt, author: { __typename: "Bot" } });
-  const person = (body: string, createdAt = "2026-11-02T09:00:00Z") => ({ body, createdAt, author: { __typename: "User" } });
+  const kit = (body: string, createdAt = "2026-11-02T09:00:00Z") => ({ body, createdAt, author: APP_BOT });
+  const person = (body: string, createdAt = "2026-11-02T09:00:00Z") => ({ body, createdAt, author: { login: "jrey", __typename: "User" } });
+  const otherBot = (body: string, createdAt = "2026-11-02T09:00:00Z") => ({ body, createdAt, author: { login: "dependabot", __typename: "Bot" } });
   const labelled = (name: string, createdAt: string) => ({ __typename: "LabeledEvent", createdAt, label: { name } });
   const unlabelled = (name: string, createdAt: string, actor = "Bot") => ({
     __typename: "UnlabeledEvent",
@@ -249,6 +250,7 @@ describe("Gathering a Design queue check's needs-design issues", () => {
   async function gathered(
     nodes: unknown[],
     runs: Parameters<typeof actionsWith>[0] | null = [],
+    appLogin: string | null = null,
   ): Promise<DesignQueueSnapshot> {
     const github = {
       async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
@@ -262,7 +264,7 @@ describe("Gathering a Design queue check's needs-design issues", () => {
       },
     } as unknown as GitHub;
     const actions = runs === null ? null : (actionsWith(runs) as unknown as GitHub);
-    const snapshot = await gatherSnapshot(github, repo, { kind: "design-queue-check" }, null, null, actions);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "design-queue-check" }, null, appLogin, actions);
     if (snapshot.designQueue === null) throw new Error("no Design queue slice");
     return snapshot.designQueue;
   }
@@ -284,6 +286,23 @@ describe("Gathering a Design queue check's needs-design issues", () => {
 
     expect(queue.designTurnsInProgress).toEqual([4]);
     expect(holding(queue)).toEqual({ 3: true, 4: true, 5: true, 6: false });
+  });
+
+  it("reads a round or a failed turn only from the Fabrik App's comments, so nobody, another bot included, can take a slot by forging one (#426)", async () => {
+    const round = "<!-- fabrik:design-round 1 -->\n@jrey **Design session, round 1.**";
+    const failed = "<!-- fabrik:design-turn-failed -->\n@jrey The Design-session turn run failed.";
+    const queue = await gathered(
+      [
+        issue(3, { comments: { nodes: [kit(round)] } }),
+        issue(4, { comments: { nodes: [person(round), otherBot(round)] } }),
+        issue(5, { comments: { nodes: [person(failed), otherBot(failed)] } }),
+      ],
+      [],
+      APP_LOGIN,
+    );
+
+    expect(holding(queue)).toEqual({ 3: true, 4: false, 5: false });
+    expect(queue.issues.map(({ number, designRounds }) => [number, designRounds])).toEqual([[3, 1], [4, 0], [5, 0]]);
   });
 
   it("reads a session whose first turn asked for a Prototype as holding its slot until the prototype turn lands, so the cap holds", async () => {
@@ -870,8 +889,8 @@ describe("Gathering who opened an issue", () => {
 interface ClosingIssue {
   readonly number: number;
   readonly labels: readonly string[];
-  /** Its comments' bodies, oldest first. */
-  readonly comments?: readonly string[];
+  /** Its comments, oldest first: each body, and who wrote it. */
+  readonly comments?: readonly { readonly body: string; readonly author: { readonly login: string; readonly __typename: string } }[];
   /** Its state, open unless a test says otherwise. */
   readonly state?: "OPEN" | "CLOSED";
 }
@@ -915,7 +934,16 @@ function pullRequestGitHub({
                       state: issue.state ?? "OPEN",
                       labels: { nodes: issue.labels.map((name) => ({ name })) },
                       ...(/closingIssuesReferences[^]*comments\(/.test(pullRequestQuery)
-                        ? { comments: { nodes: (issue.comments ?? []).map((body) => ({ body })) } }
+                        ? {
+                            comments: {
+                              nodes: (issue.comments ?? []).map(({ body, author }) => ({
+                                body,
+                                ...(/closingIssuesReferences[^]*comments\([^]*author/.test(pullRequestQuery)
+                                  ? { author }
+                                  : {}),
+                              })),
+                            },
+                          }
                         : {}),
                     })),
                   },
@@ -958,15 +986,25 @@ describe("Gathering the empty diffs of the Ticket a pull request was cut for (#4
   const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
   const gathered = async (closing: readonly ClosingIssue[]) =>
     (await gatherSnapshot(pullRequestGitHub({ body: "Adds a waitlist.\n\nCloses #7", closing }), repo, pushed, null, APP_LOGIN)).pullRequest;
-  const emptyDiff = `${EMPTY_DIFF_MARKER}\nThe Implementer's branch for #7 changed nothing.`;
+  const emptyDiff = { body: `${EMPTY_DIFF_MARKER}\nThe Implementer's branch for #7 changed nothing.`, author: APP_BOT };
 
   it("counts the Ticket's empty diffs from its comments, as the Ticket's own snapshot does", async () => {
     const pullRequest = await gathered([
       { number: 3, labels: [], comments: [emptyDiff] },
-      { number: 7, labels: ["ready-for-agent"], comments: ["Looks good.", emptyDiff, emptyDiff] },
+      { number: 7, labels: ["ready-for-agent"], comments: [{ body: "Looks good.", author: { login: "operator", __typename: "User" } }, emptyDiff, emptyDiff] },
     ]);
 
     expect(pullRequest).toMatchObject({ ticket: 7, ticketEmptyDiffs: 2 });
+  });
+
+  it("counts only the Fabrik App's empty-diff markers, so nobody, another bot included, can spend the Ticket's Retries (#426)", async () => {
+    const forged = [
+      { ...emptyDiff, author: { login: "operator", __typename: "User" } },
+      { ...emptyDiff, author: { login: "dependabot", __typename: "Bot" } },
+    ];
+    const pullRequest = await gathered([{ number: 7, labels: ["ready-for-agent"], comments: [emptyDiff, ...forged] }]);
+
+    expect(pullRequest).toMatchObject({ ticket: 7, ticketEmptyDiffs: 1 });
   });
 
   it("counts none when the PR closes no issue its branch names", async () => {

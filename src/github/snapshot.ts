@@ -189,7 +189,7 @@ const PULL_REQUEST_FIELDS = `
         createdAt
         forcePushes: timelineItems(last: 1, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) { nodes { ... on HeadRefForcePushedEvent { createdAt } } }
         commits(last: 100) { pageInfo { hasPreviousPage } nodes { commit { oid committedDate } } }
-        closingIssuesReferences(first: 10) { nodes { number state labels(first: 100) { nodes { name } } comments(last: 100) { nodes { body } } } }`;
+        closingIssuesReferences(first: 10) { nodes { number state labels(first: 100) { nodes { name } } comments(last: 100) { nodes { body author { login __typename } } } } }`;
 
 const PULL_REQUEST_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -287,7 +287,7 @@ interface PullRequestQueryResult {
       forcePushes: { nodes: { createdAt: string }[] };
       /** Its branch's latest commits, oldest first: the head last. */
       commits: { pageInfo: { hasPreviousPage: boolean }; nodes: { commit: { oid: string; committedDate: string } }[] };
-      closingIssuesReferences: { nodes: { number: number; state: "OPEN" | "CLOSED"; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string }[] } }[] };
+      closingIssuesReferences: { nodes: { number: number; state: "OPEN" | "CLOSED"; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string; author: { login: string; __typename: string } | null }[] } }[] };
     } | null;
   };
 }
@@ -386,7 +386,7 @@ const DESIGN_QUEUE_QUERY = `
           number
           createdAt
           labels(first: 100) { nodes { name } }
-          comments(last: 100) { nodes { body createdAt author { __typename } } }
+          comments(last: 100) { nodes { body createdAt author { login __typename } } }
           timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT], last: 100) {
             nodes {
               __typename
@@ -417,7 +417,7 @@ interface DesignQueueQueryResult {
         number: number;
         createdAt: string;
         labels: { nodes: { name: string }[] };
-        comments: { nodes: { body: string; createdAt: string; author: { __typename: string } | null }[] };
+        comments: { nodes: { body: string; createdAt: string; author: { login: string; __typename: string } | null }[] };
         // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
         timelineItems: { nodes: LabelTimelineItem[] };
       }[];
@@ -891,7 +891,7 @@ async function gatherEventPart(
       if (actions === null) throw new Error("A Dispatch check needs a token that can read workflow runs");
       return gatherDispatch(github, actions, repo, operator, appLogin);
     case "design-queue-check":
-      return gatherDesignQueue(github, actions, repo, operator);
+      return gatherDesignQueue(github, actions, repo, operator, appLogin);
     case "main-pushed":
     case "kit-config-changed":
     case "scheduled-tick":
@@ -1226,7 +1226,6 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
     id: Number(comment.fullDatabaseId),
     body: comment.body,
     createdAt: comment.createdAt,
-    byBot: comment.author?.__typename === "Bot",
     byApp: byAppOf(comment.author, appLogin),
   }));
   const timeline = issue.timelineItems.nodes;
@@ -1259,7 +1258,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       // Every comment read counts for whether the reply that approved the request is still there, not only this session's.
       pendingPrototype: pendingPrototypeIn(thisSession, new Set(comments.map(({ id }) => id))),
       unansweredPrototypes: unansweredPrototypesIn(thisSession),
-      emptyDiffs: countEmptyDiffs(comments.map((comment) => comment.body)),
+      emptyDiffs: countEmptyDiffs(comments),
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),
     },
@@ -1327,7 +1326,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     ticket,
     ticketLabels: ticketLabelsOf(pullRequest, ticket),
     ticketOpen: closedTicketOf(pullRequest, ticket)?.state === "OPEN",
-    ticketEmptyDiffs: ticketEmptyDiffsOf(pullRequest, ticket),
+    ticketEmptyDiffs: ticketEmptyDiffsOf(pullRequest, ticket, appLogin),
     open: pullRequest.state === "OPEN",
     draft: pullRequest.isDraft,
     headSha: pullRequest.headRefOid,
@@ -1415,8 +1414,9 @@ function ticketLabelsOf(pullRequest: PullRequestNode, ticket: number | null): st
  * comments as the Ticket's own snapshot reads them, so a Verdict on its PR
  * counts on from the Retries they used (#415). None when the PR doesn't link it.
  */
-function ticketEmptyDiffsOf(pullRequest: PullRequestNode, ticket: number | null): number {
-  return countEmptyDiffs(closedTicketOf(pullRequest, ticket)?.comments.nodes.map((comment) => comment.body) ?? []);
+function ticketEmptyDiffsOf(pullRequest: PullRequestNode, ticket: number | null, appLogin: string | null): number {
+  const comments = closedTicketOf(pullRequest, ticket)?.comments.nodes ?? [];
+  return countEmptyDiffs(comments.map((comment) => ({ body: comment.body, byApp: byAppOf(comment.author, appLogin) })));
 }
 
 /** The issue among those a PR closes that is the Ticket its agent branch names, or undefined. */
@@ -1630,8 +1630,9 @@ async function gatherDesignQueue(
   actions: GitHub | null,
   repo: Repo,
   operator: string | null,
+  appLogin: string | null,
 ): Promise<EventPart> {
-  const { designQueue, owner } = await gatherDesignQueueSlice(github, actions, repo);
+  const { designQueue, owner } = await gatherDesignQueueSlice(github, actions, repo, appLogin);
   return { issue: null, pullRequest: null, dispatch: null, designQueue, operator: operator ?? owner };
 }
 
@@ -1643,12 +1644,14 @@ async function gatherDesignQueue(
  * their jobs. Without one, as on the scheduled tick's Design queue job (it
  * asks for no Actions permission) and the Weekly summary (its Product-repo
  * token can't read Actions), they are read from the issues instead, erring
- * toward holding a slot: see firstTurnClaimed.
+ * toward holding a slot: see firstTurnClaimed. Its markers are read from the
+ * comments of the Fabrik App, whose bot login is `appLogin` (see byAppOf).
  */
 export async function gatherDesignQueueSlice(
   github: Pick<GitHub, "graphql">,
   actions: Pick<GitHub, "rest"> | null,
   repo: Repo,
+  appLogin: string | null,
 ): Promise<{ readonly designQueue: DesignQueueSnapshot; readonly owner: string }> {
   const issues: DesignQueueIssue[] = [];
   const claimed: number[] = [];
@@ -1665,7 +1668,7 @@ export async function gatherDesignQueueSlice(
       const comments = issue.comments.nodes.map((comment) => ({
         body: comment.body,
         createdAt: comment.createdAt,
-        byBot: comment.author?.__typename === "Bot",
+        byApp: byAppOf(comment.author, appLogin),
       }));
       const timeline = issue.timelineItems.nodes;
       const neededDesignAt = lastNeededDesignAt(timeline);
@@ -1678,7 +1681,7 @@ export async function gatherDesignQueueSlice(
         designRounds: designSessionOf(thisSession).designRounds,
         turnFailed: designTurnFailedIn(thisSession),
         // A third empty diff is the one that sent the Ticket back to design.
-        redesign: session.sentBack !== null || countEmptyDiffs(comments.map((comment) => comment.body)) > MAX_RETRIES,
+        redesign: session.sentBack !== null || countEmptyDiffs(comments) > MAX_RETRIES,
         // The latest time it got needs-design; an issue whose timeline doesn't show it waits from when it opened.
         neededDesignAt: neededDesignAt ?? issue.createdAt,
       });
