@@ -1,4 +1,4 @@
-// An undelivered Request changes (#341, ADR-0014): GitHub starts no workflow
+// An undelivered Request changes (#341, ADR-0015): GitHub starts no workflow
 // for a pull_request-family event while a PR conflicts with its base, so the
 // Operator's Request changes on such a PR reaches the Loop through no event.
 // The conflict check, on a push to main and on the hourly tick, finds one no
