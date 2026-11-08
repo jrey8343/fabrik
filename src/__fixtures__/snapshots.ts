@@ -37,6 +37,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     body: "",
     labels: [],
     openPullRequests: [],
+    openAgentDrafts: [],
     designRounds: 0,
     turnFailed: false,
     firstTurnClaimed: false,

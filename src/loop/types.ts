@@ -386,7 +386,18 @@ export type LoopEvent =
       readonly outcomes: Omit<ReplayOutcomes, "open"> | null;
     }
   | { readonly kind: "pull-request-left-draft"; readonly pullRequest: number }
-  | { readonly kind: "pull-request-closed"; readonly pullRequest: number }
+  | {
+      readonly kind: "pull-request-closed";
+      readonly pullRequest: number;
+      /** Whether it closed by merging. */
+      readonly merged: boolean;
+      /**
+       * Whether a bot closed it, which for an agent PR is the Kit's own close
+       * (Send it back, back to design, a refusal, its Ticket closing), not the
+       * Operator's by hand (#428).
+       */
+      readonly closedByBot: boolean;
+    }
   /** A Dispatch check, which an earlier plan asked for with `check-dispatch`. */
   | { readonly kind: "dispatch-check" }
   /** A Design queue check, which an earlier plan asked for with `check-design-queue` (#147). */
@@ -497,6 +508,11 @@ export interface IssueSnapshot {
   readonly parentIssue: ParentIssueSnapshot | null;
   /** The open pull requests linked to close this issue, oldest first. */
   readonly openPullRequests: readonly number[];
+  /**
+   * Those of them that are open agent draft PRs on its own agent branch, the
+   * kind that holds a max_in_flight slot: closing it closes them (#428).
+   */
+  readonly openAgentDrafts: readonly number[];
   /** How many rounds the Kit has posted in the issue's current Design session (src/loop/design.ts). */
   readonly designRounds: number;
   /** Whether a Design-session turn has failed in its current Design session, read from the Kit's failure notice. */

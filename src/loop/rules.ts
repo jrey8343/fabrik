@@ -26,6 +26,7 @@ import {
 import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
 import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
+import { closeAgentDraftsOf, stopTicketOf } from "./handClosing.ts";
 import { heldOf } from "./heldRun.ts";
 import { scheduledTick } from "./kitIssues.ts";
 import { resumingHeldRuns } from "./resume.ts";
@@ -117,11 +118,12 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withIssue(snapshot, (context) => failureNotice(event, context, config));
     // A closed issue may finish its Spec, free a slot or unblock a Ticket, or end a
     // Design session by hand. Merging an agent PR closes its Ticket through
-    // `Closes #n`, so it lands here.
+    // `Closes #n`, so it lands here. A Ticket closed by hand closes its agent
+    // draft PR, whose slot the Dispatch check then sees free (#428).
     case "issue-closed":
       return withIssue(snapshot, ({ issue }) => ({
         kind: "act",
-        actions: [...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH, CHECK_DESIGN_QUEUE],
+        actions: [...closeAgentDraftsOf(issue), ...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH, CHECK_DESIGN_QUEUE],
       }));
     // A push to an agent draft PR, or agent:review added to resume after a failure, starts a Review.
     case "pull-request-pushed":
@@ -153,13 +155,16 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     // Context for the next run that reads the PR, never a trigger (ADR-0007).
     case "pull-request-commented":
       return withPullRequest(snapshot, (pullRequest) => acknowledgeComment(event, pullRequest, snapshot.operator));
-    // An agent PR that leaves draft or closes no longer holds a slot.
+    // An agent PR that leaves draft or closes no longer holds a slot. One
+    // closed unmerged by hand stops its Ticket first, so the Dispatch check
+    // doesn't start it again (#428).
     case "pull-request-left-draft":
     case "pull-request-closed": {
       const { pullRequest } = snapshot;
       if (pullRequest === null) return missingFromSnapshot("the pull request");
       if (!pullRequest.isAgent) return { kind: "nothing", reason: `#${pullRequest.number} isn't an agent PR` };
-      return { kind: "act", actions: [CHECK_DISPATCH] };
+      const stop = event.kind === "pull-request-closed" ? stopTicketOf(event, pullRequest, snapshot.operator) : [];
+      return { kind: "act", actions: [...stop, CHECK_DISPATCH] };
     }
     case "dispatch-check":
       return snapshot.dispatch === null

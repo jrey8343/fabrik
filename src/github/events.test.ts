@@ -148,6 +148,18 @@ describe("A comment on a pull request", () => {
   });
 });
 
+describe("A pull request closing", () => {
+  it("says whether it merged, and whether a bot closed it, so an agent PR the Operator closed by hand stops its Ticket (#428)", () => {
+    const byHand = { action: "closed", pull_request: { number: 50, merged: false }, sender: { login: "operator", type: "User" } };
+    const byTheKit = { action: "closed", pull_request: { number: 50, merged: false }, sender: { login: "fabrik[bot]", type: "Bot" } };
+    const merged = { action: "closed", pull_request: { number: 50, merged: true }, sender: { login: "operator", type: "User" } };
+
+    expect(loopEventFrom("pull_request_target", byHand)).toEqual({ kind: "pull-request-closed", pullRequest: 50, merged: false, closedByBot: false });
+    expect(loopEventFrom("pull_request_target", byTheKit)).toEqual({ kind: "pull-request-closed", pullRequest: 50, merged: false, closedByBot: true });
+    expect(loopEventFrom("pull_request_target", merged)).toEqual({ kind: "pull-request-closed", pullRequest: 50, merged: true, closedByBot: false });
+  });
+});
+
 describe("A comment on an issue", () => {
   it("is still an issue comment", () => {
     const payload = {

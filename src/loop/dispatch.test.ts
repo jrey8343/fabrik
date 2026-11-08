@@ -13,6 +13,7 @@ import {
   tickSnapshot,
 } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
+import type { LoopEvent } from "./types.ts";
 
 const check = { kind: "dispatch-check" } as const;
 
@@ -217,21 +218,24 @@ describe("What triggers a Dispatch check", () => {
     },
   );
 
-  it.each(["pull-request-left-draft", "pull-request-closed"] as const)(
-    "an agent PR's %s event, which frees a slot",
-    (kind) => {
-      const plan = planFor({ kind, pullRequest: 50 }, snapshotOfPullRequest(aPullRequest({ number: 50 })), kitConfig());
+  const leftDraft: LoopEvent = { kind: "pull-request-left-draft", pullRequest: 50 };
+  const closed: LoopEvent = { kind: "pull-request-closed", pullRequest: 50, merged: true, closedByBot: false };
+
+  it.each([leftDraft, closed])(
+    "an agent PR's $kind event, which frees a slot",
+    (event) => {
+      const plan = planFor(event, snapshotOfPullRequest(aPullRequest({ number: 50 })), kitConfig());
 
       expect(plan).toEqual(checkDispatch);
     },
   );
 
-  it.each(["pull-request-left-draft", "pull-request-closed"] as const)(
-    "not the %s event of a PR the Fabrik App didn't open, which holds no slot",
-    (kind) => {
+  it.each([leftDraft, closed])(
+    "not the $kind event of a PR the Fabrik App didn't open, which holds no slot",
+    (event) => {
       const pullRequest = aPullRequest({ number: 50, isAgent: false });
 
-      const plan = planFor({ kind, pullRequest: 50 }, snapshotOfPullRequest(pullRequest), kitConfig());
+      const plan = planFor(event, snapshotOfPullRequest(pullRequest), kitConfig());
 
       expect(plan).toEqual({ kind: "nothing", reason: "#50 isn't an agent PR" });
     },

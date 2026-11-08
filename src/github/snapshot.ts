@@ -109,7 +109,7 @@ const ISSUE_QUERY = `
             ... on UnlabeledEvent { createdAt label { name } actor { __typename } }
           }
         }
-        closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number } }
+        closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number isDraft headRefName author { __typename } } }
         blockedBy(first: 50) { nodes { number state repository { nameWithOwner } } }
         blocking(first: 50) { nodes { number state repository { nameWithOwner } } }
       }
@@ -132,7 +132,7 @@ interface IssueQueryResult {
       comments: { nodes: { fullDatabaseId: string; body: string; createdAt: string; author: { login: string; __typename: string } | null }[] };
       // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
       timelineItems: { nodes: LabelTimelineItem[] };
-      closedByPullRequestsReferences: { nodes: { number: number }[] };
+      closedByPullRequestsReferences: { nodes: { number: number; isDraft: boolean; headRefName: string; author: { __typename: string } | null }[] };
       blockedBy: DependencyEdges;
       blocking: DependencyEdges;
     } | null;
@@ -1243,6 +1243,11 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       parent: issue.parent?.number ?? null,
       parentIssue: parentIssueOf(issue.parent),
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
+      openAgentDrafts: issue.closedByPullRequestsReferences.nodes
+        .filter((pr) => pr.isDraft && isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }))
+        .filter((pr) => ticketOfAgentBranch(pr.headRefName) === issue.number)
+        .map((pr) => pr.number)
+        .sort((a, b) => a - b),
       designRounds: designSessionOf(thisSession).designRounds,
       sentBack: designSessionOf(comments).sentBack,
       turnFailed: designTurnFailedIn(thisSession),

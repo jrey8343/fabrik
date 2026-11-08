@@ -570,6 +570,40 @@ describe("Gathering an issue's blocked-by edges", () => {
   });
 });
 
+describe("Gathering a closed Ticket's agent draft PRs", () => {
+  it("holds only the open draft PRs the Fabrik App opened from this Ticket's own agent branch, which closing it closes (#428)", async () => {
+    const pull = (number: number, isDraft: boolean, headRefName: string, author: string) => ({ number, isDraft, headRefName, author: { __typename: author } });
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (!query.includes("issue(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+        const data = issueData(9);
+        return {
+          repository: {
+            ...data.repository,
+            issue: {
+              ...data.repository.issue,
+              state: "CLOSED",
+              labels: { nodes: [{ name: "ready-for-agent" }] },
+              closedByPullRequestsReferences: {
+                nodes: [
+                  pull(53, true, "fabrik/ticket-8", "Bot"),
+                  pull(50, true, "fabrik/ticket-9", "Bot"),
+                  pull(51, false, "fabrik/ticket-9", "Bot"),
+                  pull(52, true, "someone/fix-9", "User"),
+                ],
+              },
+            },
+          },
+        };
+      },
+    } as unknown as GitHub;
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 9 }, null, null);
+
+    expect(snapshot.issue).toMatchObject({ openPullRequests: [50, 51, 52, 53], openAgentDrafts: [50] });
+  });
+});
+
 /** An issue's parent, as GitHub holds it. */
 interface GitHubParent {
   number: number;
