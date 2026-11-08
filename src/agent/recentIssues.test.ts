@@ -1,18 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readRecentIssues, type Reader } from "./inputs.ts";
+import { readRecentIssues, type Reader, type RecentIssueNode as Node } from "./inputs.ts";
 
 const repo = { owner: "acme", name: "shop" };
 const NOW = Date.parse("2026-11-08T12:00:00Z");
 const daysAgo = (days: number) => new Date(NOW - days * 86_400_000).toISOString();
-
-interface Node {
-  number: number;
-  title: string;
-  body: string;
-  createdAt: string;
-  updatedAt: string;
-  closedAt: string | null;
-}
 
 const anOpen = (number: number, createdDaysAgo: number, body = `Body of #${number}`): Node => ({
   number,
@@ -52,7 +43,7 @@ function fakeGitHub(open: Node[], closed: Node[], perPage = 100) {
   return { github, served };
 }
 
-describe("Triage's comparison set", () => {
+describe("Triage's Recent issues", () => {
   it("holds the open issues and those closed in the last 30 days, newest created first, without the triaged issue", async () => {
     const { github } = fakeGitHub([anOpen(7, 0), anOpen(3, 20), anOpen(1, 400)], [aClosed(5, 10, 2), aClosed(2, 300, 29), aClosed(4, 60, 31)]);
 

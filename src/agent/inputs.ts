@@ -12,7 +12,7 @@
 //                                in operatorComments (sentBack carries them too, for the closed PR)
 //   FABRIK_PULL_REQUEST_COMMENTS "true" for a retry, whose PR file carries the PR's comments and their authors' kind
 //   FABRIK_REVIEW                optional, a Request-changes run's review on that PR: writes review.json
-//   FABRIK_ROLE=triage           also writes recent-issues.json, Triage's comparison set for a duplicate
+//   FABRIK_ROLE=triage           also writes recent-issues.json, the Recent issues Triage compares against for a duplicate
 //                                (readRecentIssues, #363)
 //   FABRIK_AUDIT_COMMIT          for an Auditor run, the pending Audit's marked commit (FABRIK_ISSUE is the
 //                                Audit): writes audit.json, the Auditor's inputs (readAuditInputs)
@@ -414,9 +414,9 @@ export async function readMapOffer(
   return full ? { kind: "cap-full", cap: config.caps.maps, openMaps } : { kind: "may-offer" };
 }
 
-// --- Triage's comparison set (#363) -----------------------------------------
+// --- Triage's Recent issues (#363) ------------------------------------------
 
-/** Where the inputs step writes Triage's comparison set, beside issue.json. */
+/** Where the inputs step writes Triage's Recent issues, beside issue.json. */
 export const RECENT_ISSUES_FILE = "recent-issues.json";
 
 /** One issue Triage compares a new one against, for a duplicate. */
@@ -435,7 +435,7 @@ export const RECENT_CLOSED_DAYS = 30;
 /** How much of each body Triage is given. */
 export const RECENT_ISSUE_BODY_CHARS = 500;
 
-interface RecentIssueNode {
+export interface RecentIssueNode {
   number: number;
   title: string;
   body: string;
@@ -444,10 +444,23 @@ interface RecentIssueNode {
   closedAt: string | null;
 }
 
-const recentIssuesQuery = (states: "OPEN" | "CLOSED", orderBy: "CREATED_AT" | "UPDATED_AT") => `
+/** The open issues, newest created first. */
+const RECENT_OPEN_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
     repository(owner: $owner, name: $name) {
-      issues(states: ${states}, first: 100, after: $after, orderBy: { field: ${orderBy}, direction: DESC }) {
+      issues(states: OPEN, first: 100, after: $after, orderBy: { field: CREATED_AT, direction: DESC }) {
+        pageInfo { hasNextPage endCursor }
+        nodes { number title body createdAt updatedAt closedAt }
+      }
+    }
+  }
+`;
+
+/** The closed issues, latest updated first: one closed since a time was updated since then too. */
+const RECENT_CLOSED_ISSUES_QUERY = `
+  query ($owner: String!, $name: String!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      issues(states: CLOSED, first: 100, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
         pageInfo { hasNextPage endCursor }
         nodes { number title body createdAt updatedAt closedAt }
       }
@@ -471,19 +484,16 @@ function cut(body: string): string {
 export async function readRecentIssues(github: Pick<Reader, "graphql">, repo: Repo, issue: number, now: number): Promise<RecentIssue[]> {
   const since = now - RECENT_CLOSED_DAYS * DAY_MS;
   // Newest created first, so one more than the cap is enough whichever is the triaged issue.
-  let read = 0;
-  const open = await pagesOf<RecentIssueNode>(
-    github,
-    recentIssuesQuery("OPEN", "CREATED_AT"),
-    repo,
-    {},
-    (data) => data.repository.issues,
-    (page) => (read += page.length) > RECENT_ISSUES_CAP,
-  );
-  // Latest updated first: an issue closed since `since` was updated since then too.
+  let openRead = 0;
+  const enoughOpen = (page: readonly RecentIssueNode[]): boolean => {
+    openRead += page.length;
+    return openRead > RECENT_ISSUES_CAP;
+  };
+  const open = await pagesOf<RecentIssueNode>(github, RECENT_OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues, enoughOpen);
+  // Read until a page reaches an issue last updated before `since`: none after it was closed since.
   const closed = await pagesOf<RecentIssueNode>(
     github,
-    recentIssuesQuery("CLOSED", "UPDATED_AT"),
+    RECENT_CLOSED_ISSUES_QUERY,
     repo,
     {},
     (data) => data.repository.issues,

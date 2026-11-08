@@ -86,13 +86,13 @@ export function readTriageOutput(value: unknown, issue?: number): TriageOutputRe
     errors.push("only the Fast path (ready-for-agent) carries a brief");
   }
 
-  const original = duplicateOf ?? null;
-  if (original !== null) {
-    if (typeof original !== "number" || !Number.isInteger(original) || original < 1) {
-      errors.push(`duplicateOf must be a positive issue number, not ${JSON.stringify(original)}`);
+  const duplicate = duplicateOf ?? null;
+  if (duplicate !== null) {
+    if (typeof duplicate !== "number" || !Number.isInteger(duplicate) || duplicate < 1) {
+      errors.push(`duplicateOf must be a positive issue number, not ${JSON.stringify(duplicate)}`);
     } else if (state !== WONTFIX) {
       errors.push("only a wontfix names an original in duplicateOf");
-    } else if (original === issue) {
+    } else if (duplicate === issue) {
       errors.push(`duplicateOf can't name #${issue}, the issue being triaged`);
     }
   }
@@ -105,7 +105,7 @@ export function readTriageOutput(value: unknown, issue?: number): TriageOutputRe
       state: state as TriageState,
       comment: comment as string,
       brief: agentBrief,
-      duplicateOf: original as number | null,
+      duplicateOf: duplicate as number | null,
     },
   };
 }

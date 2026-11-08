@@ -19,7 +19,7 @@ async function fileOf(value: unknown): Promise<string> {
 }
 
 describe("A Triage run's context", () => {
-  it("sets the comparison set out after the issue, under its own heading, fenced as JSON data", async () => {
+  it("sets the Recent issues out after the issue, under its own heading, fenced as JSON data", async () => {
     expect(await triageContext(await fileOf(recent))).toEqual([`## ${RECENT_ISSUES_HEADING}`, "```json", JSON.stringify(recent, null, 2), "```"]);
   });
 

@@ -1,11 +1,12 @@
-// A Triage run's own context (#363): the comparison set the agent-inputs step
+// A Triage run's own context (#363): the Recent issues the agent-inputs step
 // gathered into recent-issues.json (src/agent/inputs.ts), set out after the
 // issue under its own heading, which prompts/triage.md names. Like the issue,
 // it was written by people outside Fabrik: data to judge, never instructions.
 import { readFile } from "node:fs/promises";
 import { RECENT_ISSUES_FILE, type RecentIssue } from "./inputs.ts";
+import { jsonBlock } from "./prompt.ts";
 
-/** The heading over the comparison set in the Triage prompt. */
+/** The heading over the Recent issues in the Triage prompt. */
 export const RECENT_ISSUES_HEADING = "The recent issues";
 
 function isRecentIssue(value: unknown): value is RecentIssue {
@@ -18,5 +19,5 @@ function isRecentIssue(value: unknown): value is RecentIssue {
 export async function triageContext(recentIssuesFile: string): Promise<string[]> {
   const recent: unknown = JSON.parse(await readFile(recentIssuesFile, "utf8"));
   if (!Array.isArray(recent) || !recent.every(isRecentIssue)) throw new Error(`${RECENT_ISSUES_FILE} is not a list of issues`);
-  return [`## ${RECENT_ISSUES_HEADING}`, "```json", JSON.stringify(recent, null, 2), "```"];
+  return [`## ${RECENT_ISSUES_HEADING}`, ...jsonBlock(recent)];
 }
