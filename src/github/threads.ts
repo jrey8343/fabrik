@@ -297,7 +297,11 @@ export type PullRequestHistoryItem =
  * agent PR opens as a draft. The Operator's own on a draft counts too, once a
  * Request-changes run has put the PR in draft for its reviews: the Kit counts
  * it as noted, so neither check notes it, but it never keeps that run in
- * flight, and the run never read it. Anyone else's on a draft does nothing.
+ * flight, and the run never read it. So does the Operator's own on a draft
+ * while a Retry is in flight (#427), from the Execution flaw that called for
+ * it until the next Verdict, as its push's Review is: it's deferred, so neither
+ * that Review nor a Retry is given it, and that Verdict, pass or flaw, gives
+ * way to it. Anyone else's on a draft does nothing.
  * A run is started by the Kit's note naming its reviews, or by an Execution
  * flaw that gave way to them, and is in flight until it pushes, is given a
  * Verdict or ends, or the PR leaves draft. Its push or Verdict settles the
@@ -325,6 +329,7 @@ export function requestChangesSinceRunIn(
   | "requestChangesRunFailed"
   | "orphanedChangesRequests"
   | "requestChangesRunDismissed"
+  | "deferredChangesRequests"
 > {
   // Stable, so items at the same time keep the order they were read in.
   const ordered = [...history].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
@@ -337,6 +342,10 @@ export function requestChangesSinceRunIn(
   let failed = false;
   // The reviews there were when the run in flight started, which it read; one that came in later it never saw.
   let read: readonly number[] = [];
+  // From an Execution flaw that called for a Retry until the next Verdict, unless the Retry ended or the PR left draft.
+  let retrying = false;
+  // The Operator's reviews on the draft while a Retry was in flight, that no run has been started for yet (#427).
+  let deferred: number[] = [];
   for (const item of ordered) {
     switch (item.kind) {
       case "draft":
@@ -345,20 +354,36 @@ export function requestChangesSinceRunIn(
       case "ready":
         draft = false;
         inFlight = null;
+        // The Operator took the PR back, so a review deferred for the Retry amends the Ticket for every later run as usual.
+        retrying = false;
+        deferred = [];
         break;
       case "changes-requested": {
         const operators = operator !== null && item.reviewer === operator && !item.reviewerIsBot;
         const joins = draft && inFlight !== null && operators;
-        if (!draft || joins) {
+        const defers = draft && inFlight === null && retrying && operators;
+        if (!draft || joins || defers) {
           reviews.push({ review: item.review, reviewer: item.reviewer, reviewerIsBot: item.reviewerIsBot, submittedAt: item.at });
         }
-        if (joins) noted = [...noted, item.review];
+        if (joins || defers) noted = [...noted, item.review];
+        if (defers) deferred = [...deferred, item.review];
         break;
       }
       case "bot-comment": {
         const note = startedReviewsIn(item.body);
-        const started = note ?? verdictsIn([item.body])[0]?.requestChangesFirst ?? null;
+        const verdict = verdictsIn([item.body])[0];
+        if (verdict !== undefined) {
+          retrying = verdict.verdict === "execution-flaw" && verdict.requestChangesFirst === undefined && verdict.ticketNotReady !== true;
+        } else if (item.body.startsWith(RETRY_ENDED_MARKER)) {
+          // No Retry started, so no Verdict of its gives way: the deferred reviews amend the Ticket as usual, still noted.
+          retrying = false;
+          deferred = [];
+        }
+        const started = note ?? verdict?.requestChangesFirst ?? null;
         if (started !== null) {
+          // A pass that gave way to deferred reviews (#427) still settles every other review before it, which its Review read.
+          if (verdict?.verdict === "pass") reviews = reviews.filter(({ review }) => started.includes(review) || deferred.includes(review));
+          deferred = deferred.filter((review) => !started.includes(review));
           noted = [...noted, ...started.filter((review) => !noted.includes(review))];
           inFlight = started;
           since = item.at;
@@ -368,8 +393,9 @@ export function requestChangesSinceRunIn(
           failed = inFlight !== null;
         } else if (settlesRequestChanges(item.body)) {
           // A pass read them all; a Request-changes run's push or Verdict settles only those its run read.
+          // A deferred review was never given to the Review (#427), so even a pass leaves it unbuilt.
           const settled = isPass(item.body) || inFlight === null ? null : new Set(read);
-          reviews = settled === null ? [] : reviews.filter(({ review }) => !settled.has(review));
+          reviews = reviews.filter(({ review }) => (settled === null ? deferred.includes(review) : !settled.has(review)));
           noted = noted.filter((review) => reviews.some((unbuilt) => unbuilt.review === review));
           inFlight = null;
         } else if (requestChangesRunEndedIn(item.body) !== null || verdictsIn([item.body]).length > 0) {
@@ -397,6 +423,7 @@ export function requestChangesSinceRunIn(
         ? reviews.filter(({ reviewer, reviewerIsBot }) => operator !== null && reviewer === operator && !reviewerIsBot).map(({ review }) => review)
         : [],
     requestChangesRunDismissed: inFlight !== null && live.length === 0,
+    deferredChangesRequests: deferred.filter((review) => standing.has(review)),
   };
 }
 

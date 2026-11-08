@@ -6,7 +6,7 @@ import { sentBackByOperator } from "./backToDesign.ts";
 import { heldOn, heldUntilReset } from "./hold.ts";
 import { REVIEW_LABEL } from "./labels.ts";
 import { requestChangesRunStartedMarker } from "./markers.ts";
-import { runInFlight } from "./retry.ts";
+import { runInFlight, runName } from "./retry.ts";
 import { reviewLinks, unnotedChangesRequests } from "./undelivered.ts";
 import type { Action, KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 
@@ -27,6 +27,7 @@ export function requestChanges(event: ChangesRequested, snapshot: Snapshot, conf
   if (event.reviewerIsBot || event.reviewer !== operator) {
     return { kind: "nothing", reason: `${event.reviewer} isn't the Operator, so their review on #${pullRequest.number} starts nothing` };
   }
+  if (pullRequest.deferredChangesRequests.includes(event.review)) return deferredDuringRetry(pullRequest, event.review);
   const why = whyNotAtMergeGate(pullRequest);
   if (why !== null || pullRequest.ticket === null) return { kind: "nothing", reason: why ?? "" };
   const { number } = pullRequest;
@@ -56,6 +57,30 @@ export function requestChanges(event: ChangesRequested, snapshot: Snapshot, conf
       },
       { kind: "convert-to-draft", pullRequest: number },
       requestChangesRun(pullRequest.ticket, number, event.review, config),
+    ],
+  };
+}
+
+/**
+ * The Operator's Request changes on the draft while a Retry is in flight
+ * (#427): the Kit says it defers it, mentioning nobody, and starts nothing. The
+ * Retry's Review judges against the Ticket without it, and a pass or an
+ * Execution flaw that ends the Retry starts its Request-changes run
+ * (src/loop/review.ts), so it never costs a Retry (ADR-0010).
+ */
+function deferredDuringRetry(pullRequest: PullRequestSnapshot, review: number): Plan {
+  const { number } = pullRequest;
+  // Once the Retry has pushed, none is in flight, though its Review may still be working.
+  const run = runInFlight(pullRequest);
+  const retry = run?.kind === "retry" ? runName(run) : "the Retry";
+  return {
+    kind: "act",
+    actions: [
+      {
+        kind: "comment",
+        issue: number,
+        body: `Your Request changes on #${number} (${reviewLinks(pullRequest, [review])}) came in while ${retry} was in flight, so the Kit defers it until the Verdict on that Retry's push. Its Review judges #${number} against the Ticket without it. On a pass or an Execution flaw, the Request-changes run for it starts then, on the Step-up model, using no retry; a Design flaw sends the Ticket back to design, closing #${number}.`,
+      },
     ],
   };
 }

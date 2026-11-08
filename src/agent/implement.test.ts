@@ -57,6 +57,19 @@ describe("A run on an existing PR is shown the PR's current description, to rewr
     expect(parts.join("\n")).not.toContain("UI evidence");
   });
 
+  it("a Request-changes run a pass gave way to (#427) has no findings to fix: the pass is no flaw", async () => {
+    const pass = [
+      verdictMarker({ verdict: "pass", source: "reviewer", requestChanges: false, requestChangesFirst: [9000], headSha: "a".repeat(40) }),
+      "### Checked\n\nIt totals the cart.",
+    ].join("\n");
+    const review = await fileOf({ review: { state: "CHANGES_REQUESTED", body: "Rename the total." }, comments: [] });
+
+    const { parts } = await requestChangesContext(await fileOf({ ...pullRequest, comments: [{ body: pass, author: { __typename: "Bot" } }] }), review);
+
+    expect(parts.join("\n")).not.toContain("## The findings to fix");
+    expect(parts.join("\n")).not.toContain("It totals the cart.");
+  });
+
   it("a Request-changes run sees it too", async () => {
     const review = await fileOf({ review: { state: "CHANGES_REQUESTED", body: "Rename the total." }, comments: [] });
 

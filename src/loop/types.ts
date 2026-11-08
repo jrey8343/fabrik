@@ -678,6 +678,13 @@ export interface PullRequestSnapshot {
    * is over, and the PR is theirs again unless one of their reviews is owed.
    */
   readonly requestChangesRunDismissed: boolean;
+  /**
+   * The Operator's Request changes on the draft while a Retry was in flight
+   * (#427), that no run has been started for: they count as unbuilt and noted,
+   * but neither that Retry's Review nor a Retry is given them, and the Verdict
+   * that ends the Retry, pass or Execution flaw, gives way to them.
+   */
+  readonly deferredChangesRequests: readonly number[];
   /** Whether the PR has left draft since its latest Verdict, so no Retry that Verdict called for is in flight. */
   readonly leftDraftSinceVerdict: boolean;
   /** Its web address, which the Kit's notes link the Operator's reviews from. */
@@ -735,7 +742,8 @@ export interface VerdictRecord {
   /**
    * On an Execution flaw that gave way to the Operator's Request changes no
    * run had built (#341), those reviews' ids: it called for no Retry, doesn't
-   * count as one, and started their Request-changes run; absent otherwise.
+   * count as one, and started their Request-changes run; on a pass that gave
+   * way to those deferred during a Retry (#427), likewise; absent otherwise.
    */
   readonly requestChangesFirst?: readonly number[];
   /**
