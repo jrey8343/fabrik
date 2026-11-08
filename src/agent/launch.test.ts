@@ -2,7 +2,13 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { leaveFailureReport, streamWatch } from "./launch.ts";
+import {
+  IMPLEMENT_OUTPUT_READERS,
+  type ImplementRunKind,
+  parseImplementOutput,
+  readRequestChangesRunOutput,
+} from "../loop/implementOutput.ts";
+import { type Checked, leaveFailureReport, replySchemaOf, settleReply, streamWatch } from "./launch.ts";
 
 const line = (message: unknown) => JSON.stringify(message);
 const init = line({ type: "system", subtype: "init", apiKeySource: "none" });
@@ -114,5 +120,67 @@ describe("The failure report an overage abort leaves", () => {
     await leaveFailureReport(new Error("agent exited 1"), watch, { path, title: "Infrastructure failure" });
 
     expect(JSON.parse(await readFile(path, "utf8")).failure).toBe("crash");
+  });
+});
+
+const IMPLEMENT_REPLIES: Readonly<Record<ImplementRunKind, Record<string, unknown>>> = {
+  first: { title: "Add the booking page", summary: "Adds the page.", routes: ["/book"] },
+  "pull-request": { title: "Add the booking page", summary: "Adds the page.", fix: "Fixed the failing test." },
+  "request-changes": {
+    title: "Add the booking page",
+    summary: "Adds the page.",
+    fix: "Moved the button, as asked.",
+    reviewMiss: true,
+    reviewMissPoints: ["The button was off-screen on mobile."],
+    amendsTicket: false,
+  },
+};
+
+/** What Sandcastle hands back for a reply its schema passed. */
+async function validated(read: (value: unknown) => Checked<unknown>, reply: unknown): Promise<unknown> {
+  const result = await replySchemaOf(read)["~standard"].validate(reply);
+  if (result.issues !== undefined) throw new Error(result.issues.map((issue) => issue.message).join("; "));
+  return result.value;
+}
+
+describe("A run's reply", () => {
+  it.each(Object.keys(IMPLEMENT_REPLIES) as ImplementRunKind[])(
+    "of a %s Implement run, checked on the agent side and saved, passes its push job's check",
+    async (kind) => {
+      const read = IMPLEMENT_OUTPUT_READERS[kind];
+      const { saved } = settleReply({ read }, await validated(read, IMPLEMENT_REPLIES[kind]));
+
+      expect(parseImplementOutput(saved, kind)).toMatchObject({ ok: true });
+    },
+  );
+
+  it("is saved as the agent wrote it", async () => {
+    const reply = IMPLEMENT_REPLIES["request-changes"];
+    const { saved } = settleReply({ read: readRequestChangesRunOutput }, await validated(readRequestChangesRunOutput, reply));
+
+    expect(JSON.parse(saved)).toEqual(reply);
+  });
+
+  it("gives the contract's parsed output for the run to describe", async () => {
+    const reply = IMPLEMENT_REPLIES["request-changes"];
+    const { output } = settleReply({ read: readRequestChangesRunOutput }, await validated(readRequestChangesRunOutput, reply));
+
+    expect(output.answers).toEqual({ reviewMiss: true, points: ["The button was off-screen on mobile."], amendsTicket: false });
+  });
+
+  it("that breaks its contract is sent back to the agent with every problem named", async () => {
+    const result = await replySchemaOf(readRequestChangesRunOutput)["~standard"].validate({ title: "T", summary: "S", fix: "F" });
+
+    expect(result.issues?.map((issue) => issue.message)).toEqual([
+      "reviewMiss must be true or false on a Request-changes run",
+      "amendsTicket must be true or false on a Request-changes run",
+    ]);
+  });
+
+  it("in plain text is checked by its contract and saved trimmed", () => {
+    const { output, saved } = settleReply({ text: (reply) => reply.trim().toUpperCase() }, "  Verdict: pass\n");
+
+    expect(output).toBe("VERDICT: PASS");
+    expect(saved).toBe("Verdict: pass");
   });
 });

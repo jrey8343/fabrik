@@ -65,7 +65,6 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
-import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { captureFailureOf } from "../evidence/uiEvidence.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
@@ -93,7 +92,16 @@ import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
 import { mapCapContext, prototypeContext, sentBackContext } from "./design.ts";
 import { PROTOTYPE_AUTHOR, PROTOTYPE_REQUEST_ENV, prototypeTurnContext, startPrototypeBranch } from "./prototype.ts";
-import { claudeArgs, leaveFailureReport, readyHook, schemaOf, setAgentEnv, streamWatch } from "./launch.ts";
+import {
+  claudeArgs,
+  leaveFailureReport,
+  type OutputContract,
+  readyHook,
+  replySchemaOf,
+  setAgentEnv,
+  settleReply,
+  streamWatch,
+} from "./launch.ts";
 import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
@@ -130,11 +138,8 @@ interface RoleSpec<T> {
    * never told it may offer a Map or a Prototype.
    */
   readonly prompt?: KitPrompt;
-  /**
-   * The output contract: a JSON object in the tag, checked by `schema`, or
-   * for the Reviewer plain text, checked by `text`, which throws when it breaks the contract.
-   */
-  readonly output: { readonly schema: StandardSchemaV1<unknown, T> } | { readonly text: (reply: string) => T };
+  /** The output contract: plain text for the Reviewer, a JSON object for every other role. */
+  readonly output: OutputContract<T>;
   /** How the Product's own instructions for this role relate to the Kit's prompt. */
   readonly instructionsNote: string;
   readonly describe: (issue: number, output: T) => string;
@@ -194,7 +199,7 @@ function readReview(reply: string): ParsedVerdict & { ok: true } {
 const ROLE_SPECS = {
   triage: {
     role: "triage",
-    output: { schema: schemaOf(readTriageOutput) },
+    output: { read: readTriageOutput },
     comparesIssues: true,
     instructionsNote:
       "The Operator wrote these for this repo. They refine the rules above but never loosen the six Fast-path tests.",
@@ -202,7 +207,7 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<TriageOutput>,
   design: {
     role: "design",
-    output: { schema: schemaOf(readDesignTurnOutput) },
+    output: { read: readDesignTurnOutput },
     instructionsNote:
       "The Operator wrote these for this repo. They refine how you run the session but never change the output contract above.",
     describe: (issue, output) => {
@@ -231,14 +236,14 @@ const ROLE_SPECS = {
     role: "design",
     prompt: "prototype",
     // A prototype turn ends only in a prototype-round, so Sandcastle asks the agent to fix any other kind.
-    output: { schema: schemaOf(readPrototypeTurnOutput) },
+    output: { read: readPrototypeTurnOutput },
     instructionsNote:
       "The Operator wrote these for this repo's Design sessions. They refine how you build the variants here but never change the rules or the output contract above.",
     describe: (issue, output) => `The prototype turn on #${issue} built ${output.variants.length} variants`,
   } satisfies RoleSpec<PrototypeRoundOutput>,
   implement: {
     role: "implement",
-    output: { schema: schemaOf(readImplementOutput) },
+    output: { read: readImplementOutput },
     instructionsNote:
       "The Operator wrote these for this repo. They refine how you build here but never change the rules or the output contract above.",
     describe: (issue, output) => `The Implementer on #${issue} finished: ${output.title}`,
@@ -256,7 +261,7 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<ParsedVerdict & { ok: true }>,
   audit: {
     role: "audit",
-    output: { schema: schemaOf(readAuditOutput) },
+    output: { read: readAuditOutput },
     instructionsNote:
       "The Operator wrote these for this repo. They refine where you look and what you weigh here but never let you change anything, and never change the output contract above.",
     describe: (issue, output) => `The Auditor on #${issue} proposed ${output.candidates.length} candidate(s)`,
@@ -265,7 +270,7 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<AuditOutput>,
   retro: {
     role: "retro",
-    output: { schema: schemaOf(readRetroOutput) },
+    output: { read: readRetroOutput },
     instructionsNote:
       "The Operator wrote these for this repo. They say where to look and what to weigh here but never lift a rule above, never let you change anything, and never change the output contract above.",
     describe: (issue, output) => `The Retro on #${issue} proposed ${output.proposals.length} change(s)`,
@@ -274,7 +279,7 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<RetroOutput>,
   research: {
     role: "research",
-    output: { schema: schemaOf(readResearchOutput) },
+    output: { read: readResearchOutput },
     instructionsNote:
       "The Operator wrote these for this repo. They say where to look and what to weigh here but never let you decide, never let you write any file but the findings file, and never change the output contract above.",
     describe: (issue, output) => `The Researcher on #${issue} found ${output.keyFacts.length} key fact(s)`,
@@ -432,14 +437,12 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   }
   const runsProductCode =
     spec.reviewsPullRequest !== true && spec.replay !== "review" && spec.audits !== true && spec.retros !== true && spec.researches !== true;
+  // A run on an existing PR owes a fix as well, and a Request-changes run its two answers, which its push job checks too.
+  const contract: OutputContract<T> =
+    kind === "first" ? spec.output : ({ read: IMPLEMENT_OUTPUT_READERS[kind] } as unknown as OutputContract<T>);
   const output =
-    "schema" in spec.output
-      ? Output.object({
-          tag: prompt,
-          // A run on an existing PR owes a fix as well, and a Request-changes run its two answers, which its push job checks too.
-          schema: kind === "first" ? spec.output.schema : schemaOf(IMPLEMENT_OUTPUT_READERS[kind]),
-          maxRetries: 1,
-        })
+    "read" in contract
+      ? Output.object({ tag: prompt, schema: replySchemaOf(contract.read), maxRetries: 1 })
       : Output.string({ tag: prompt });
 
   // The agent inherits this process's env (noSandbox), so set what it needs here.
@@ -482,9 +485,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     watch.checkInit();
 
     // Text output is checked here, so a reply that breaks its contract fails this job, never passes.
-    // Either output kind puts what the tag held on the result.
-    const reply = (result as { output?: unknown }).output;
-    const checked = "text" in spec.output ? spec.output.text(String(reply)) : (reply as T);
+    // Either output kind puts what the tag held on the result; a JSON reply is saved as the agent wrote it.
+    const { output: parsed, saved } = settleReply(contract, (result as { output?: unknown }).output);
     // The Researcher commits nothing itself: the Kit commits what it left, as the Fabrik Researcher.
     if (spec.researches === true) await commitResearch(productDir, issueNumber);
     // A replay arm's commits go out as a patch from baseSha, which nothing pushes; every other run's as a bundle.
@@ -497,14 +499,14 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     const artifact: AgentRunResult = {
       role: name,
       issue: subject,
-      output: "text" in spec.output ? String(reply).trim() : JSON.stringify(reply),
+      output: saved,
       ...(built === null ? {} : { branch: built }),
       ...(given === null ? {} : { operatorComments: given }),
       ...(window === null ? {} : { window }),
       ...(mergeMain === null ? {} : { mergeMain }),
     };
     await writeFile(join(outDir, AGENT_RESULT_FILE), `${JSON.stringify(artifact, null, 2)}\n`);
-    console.log(spec.describe(subject, checked));
+    console.log(spec.describe(subject, parsed));
   } catch (error) {
     // Left for the push job, which posts the failure notice (loop.yml).
     await leaveFailureReport(error, watch, { path: join(outDir, AGENT_FAILURE_FILE), title: "Infrastructure failure" });
