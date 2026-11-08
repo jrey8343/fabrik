@@ -545,8 +545,9 @@ export interface PullRequestSnapshot {
   /** The Ticket its agent branch was cut for, or null if it isn't on one. */
   readonly ticket: number | null;
   /**
-   * That Ticket's labels as this snapshot read them, or none when there's no
-   * Ticket or it can't be read: whether a Retry the PR's Verdict starts Steps up (ADR-0014).
+   * That Ticket's labels as this snapshot read them, through the PR's closing
+   * link to it, or none when there's no Ticket or the PR doesn't link it. Its
+   * Verdict reads them to say whether the Retry it starts Steps up (ADR-0014).
    */
   readonly ticketLabels: readonly string[];
   readonly open: boolean;

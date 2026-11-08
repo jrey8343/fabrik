@@ -12,7 +12,7 @@ import type { Action, KitConfig, PullRequestSnapshot, StepUpReason, VerdictRecor
 export const MAX_RETRIES = 2;
 
 /** Whether this retry Steps up: the last one does, while the first run and earlier retries use the Implementer's model. */
-export function stepsUp(retry: number): boolean {
+function stepsUp(retry: number): boolean {
   return retry >= MAX_RETRIES;
 }
 
