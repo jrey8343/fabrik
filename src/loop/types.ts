@@ -176,6 +176,8 @@ export type LoopEvent =
         readonly runUrl: string;
         /** Whether the run was the Operator's Request changes rather than a retry. */
         readonly requestChanges?: boolean;
+        /** For a Request-changes run: the review it was started for, from the Kit job's plan (#341). */
+        readonly review?: number;
         /**
          * For a conflict-only run (#304): the default branch's head it was
          * started to bring the PR up to date with. It isn't a retry.
@@ -588,6 +590,12 @@ export interface PullRequestSnapshot {
    * and the PR hasn't left draft since it started.
    */
   readonly requestChangesRunInFlight: number | null;
+  /**
+   * Every review that Request-changes run is for, dismissed or not, while it's
+   * in flight, and none otherwise: a run started for any of them is that run,
+   * and only it lands (#341).
+   */
+  readonly requestChangesRunReviews: readonly number[];
   /** Its web address, which the Kit's notes link the Operator's reviews from. */
   readonly url: string;
   /**

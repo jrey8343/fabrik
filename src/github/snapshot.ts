@@ -69,6 +69,7 @@ import {
   pushedSinceVerdictIn,
   requestChangesRunIn,
   requestChangesSinceRunIn,
+  verdictsStanding,
   researchRunFailedIn,
   verdictsIn,
 } from "./threads.ts";
@@ -1162,6 +1163,8 @@ type PullRequestNode = NonNullable<PullRequestQueryResult["repository"]["pullReq
 function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | null): PullRequestSnapshot {
   const fromBots = pullRequest.comments.nodes.filter((comment) => comment.author?.__typename === "Bot");
   const botComments = fromBots.map((comment) => comment.body);
+  // Every review still requesting changes, however old: GitHub lists a dismissed one no longer.
+  const standing = new Set(pullRequest.changesRequests.nodes.map(({ databaseId }) => databaseId));
   return {
     number: pullRequest.number,
     isAgent: isAgentPullRequest({
@@ -1174,13 +1177,13 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     headSha: pullRequest.headRefOid,
     labels: pullRequest.labels.nodes.map((label) => label.name),
     // Only a bot's markers count, so nobody can fake a Verdict or a Request-changes run by quoting one.
-    verdicts: verdictsIn(botComments),
+    verdicts: verdictsStanding(verdictsIn(botComments), standing),
     requestChangesRun: requestChangesRunIn(botComments),
     conflictRun: conflictRunIn(botComments),
     conflictAttempts: conflictAttemptsIn(botComments),
     conflictRunInFlight: conflictRunInFlightIn(botComments),
     pushedSinceVerdict: pushedSinceVerdictIn(botComments),
-    ...requestChangesSinceRunIn(historyOf(pullRequest, fromBots)),
+    ...requestChangesSinceRunIn(historyOf(pullRequest, fromBots), standing),
     url: pullRequest.url,
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
     uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,

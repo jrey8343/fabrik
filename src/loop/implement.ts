@@ -10,7 +10,8 @@ import { withoutMentions } from "./mentions.ts";
 import { conflictRunEnded, owedConflictRun, requestChangesRunEnded } from "./conflicts.ts";
 import { CONFLICT_RUN_MARKER, EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { owedRequestChangesRun } from "./mergeGate.ts";
-import { MAX_RETRIES, owedRetry, runInFlight, runName, stepsUp } from "./retry.ts";
+import { MAX_RETRIES, owedRetry, type RunInFlight, runInFlight, runName, stepsUp } from "./retry.ts";
+import { reviewLinks } from "./undelivered.ts";
 import { verdictActions } from "./review.ts";
 import type {
   Action,
@@ -161,10 +162,19 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   }
   if (fixes.conflict !== undefined) return applyConflictRun(event, fixes.conflict, pullRequest, operator, parsed.output, config);
   const requestChanges = fixes.requestChanges === true;
-  // A Request-changes run lands only while it's in flight (#341): one started twice for the same review, or whose
-  // run already had its outcome, pushes nothing over it.
-  if (requestChanges && runInFlight(pullRequest)?.kind !== "request-changes") {
-    return { kind: "nothing", reason: `#${pullRequest.number} has no Request-changes run in flight, so the run's branch isn't pushed` };
+  // A Request-changes run lands only while it's the one in flight (#341): one started twice for the same review,
+  // whose run already had its outcome, or left over for a review a later run took over from, pushes nothing over it.
+  const inFlight = runInFlight(pullRequest);
+  if (requestChanges && inFlight?.kind !== "request-changes") return requestChangesRunDropped(pullRequest, fixes.review, inFlight);
+  if (requestChanges && fixes.review !== undefined && !pullRequest.requestChangesRunReviews.includes(fixes.review)) {
+    return {
+      kind: "nothing",
+      reason: `#${pullRequest.number}'s Request-changes run in flight isn't the one for review ${fixes.review}, so the run's branch isn't pushed`,
+    };
+  }
+  // Nor does a Retry while a Request-changes or conflict-only run is in flight, which it would push over.
+  if (!requestChanges && inFlight !== null && inFlight.kind !== "retry") {
+    return { kind: "nothing", reason: `#${pullRequest.number} has a ${inFlight.kind === "request-changes" ? "Request-changes" : "conflict-only"} run in flight, so the retry's branch isn't pushed` };
   }
   // The push job rebased the run's own commits if the branch moved (ADR-0006). If the branch moves again,
   // the push's lease refuses it, and the run stays in flight as after an Infrastructure failure.
@@ -366,6 +376,43 @@ function whyNotRetriedOnto(
   if (!issue.open) return `#${issueNumber} is closed`;
   if (!issue.labels.includes(READY_FOR_AGENT)) return `#${issueNumber} isn't ${READY_FOR_AGENT}`;
   return null;
+}
+
+/**
+ * A Request-changes run that finished with none in flight for it (#341): its
+ * branch is never pushed. Mostly that needs no word, as for a second run of a
+ * review whose first already landed, or one the Operator took the PR back
+ * from. But once the Operator has dismissed the review the Kit noted it for,
+ * nothing else would move the PR on: an Execution flaw that gave way to the
+ * review is the flaw it was, and its Retry starts; otherwise the Kit put the
+ * PR in draft for this run, and puts it back at the Merge gate.
+ */
+function requestChangesRunDropped(pullRequest: PullRequestSnapshot, review: number | undefined, inFlight: RunInFlight | null): Plan {
+  const nothing: Plan = { kind: "nothing", reason: `#${pullRequest.number} has no Request-changes run in flight, so the run's branch isn't pushed` };
+  const dismissed =
+    review !== undefined &&
+    pullRequest.notedChangesRequests.includes(review) &&
+    !pullRequest.unbuiltChangesRequests.some((unbuilt) => unbuilt.review === review);
+  if (!dismissed || pullRequest.ticket === null || !pullRequest.open || !pullRequest.draft) return nothing;
+  const lead = `Your Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, [review])}) was dismissed while its run worked, so the Kit didn't push the run's work.`;
+  if (inFlight?.kind === "retry") {
+    return {
+      kind: "act",
+      actions: [
+        { kind: "comment", issue: pullRequest.number, body: `${lead} The Execution flaw that gave way to it is the flaw it was: ${runName(inFlight)} starts now.` },
+        // A fresh agent:implement on the Ticket starts the Retry now owed. It notifies nobody.
+        { kind: "add-labels", issue: pullRequest.ticket, labels: [DISPATCH_LABEL] },
+      ],
+    };
+  }
+  if (inFlight !== null || pullRequest.pushedSinceVerdict) return nothing;
+  return {
+    kind: "act",
+    actions: [
+      { kind: "comment", issue: pullRequest.number, body: `${lead} #${pullRequest.number} is back at the Merge gate.` },
+      { kind: "mark-ready-for-review", pullRequest: pullRequest.number },
+    ],
+  };
 }
 
 /**

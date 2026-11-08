@@ -89,6 +89,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     unbuiltChangesRequests: [],
     notedChangesRequests: [],
     requestChangesRunInFlight: null,
+    requestChangesRunReviews: [],
     url: "https://github.com/acme/shop/pull/50",
     uiEvidenceMarker: null,
     ...overrides,

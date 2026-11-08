@@ -103,12 +103,20 @@ describe("main moving under a conflicting agent PR at the Merge gate", () => {
     expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("Request-changes run on #50 is still in flight") });
   });
 
-  it("skips a PR with a Retry in flight", () => {
+  it("skips a PR with a Retry in flight, which is a draft", () => {
+    const flaw: VerdictRecord = { verdict: "execution-flaw", source: "ci", requestChanges: false, headSha: HEAD };
+
+    const plan = planFor(MAIN_PUSHED, conflictsSnapshot([{ pullRequest: atMergeGate({ verdicts: [flaw], draft: true }), mergeable: false }]), kitConfig());
+
+    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("#50 is a draft") });
+  });
+
+  it("isn't held by an Execution flaw on a PR that has since left draft: no Retry works on it", () => {
     const flaw: VerdictRecord = { verdict: "execution-flaw", source: "ci", requestChanges: false, headSha: HEAD };
 
     const plan = planFor(MAIN_PUSHED, conflictsSnapshot([{ pullRequest: atMergeGate({ verdicts: [flaw] }), mergeable: false }]), kitConfig());
 
-    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("Retry 1 of 2 on #50 is still in flight") });
+    expect(plan.kind === "act" && plan.actions.some((action) => action.kind === "rebase-onto-main")).toBe(true);
   });
 
   it("skips a PR with a conflict-only run in flight", () => {

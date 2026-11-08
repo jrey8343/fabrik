@@ -17,7 +17,9 @@ import {
   pushedSinceVerdictIn,
   requestChangesRunIn,
   requestChangesSinceRunIn,
+  standingIn,
   verdictsIn,
+  verdictsStanding,
 } from "../github/threads.ts";
 import { verdictMarker } from "./markers.ts";
 import { planFor } from "./rules.ts";
@@ -68,7 +70,7 @@ class Thread {
       headSha: this.headSha,
       draft: this.draft,
       labels: this.labels,
-      verdicts: verdictsIn(comments),
+      verdicts: verdictsStanding(verdictsIn(comments), standingIn(this.history)),
       requestChangesRun: requestChangesRunIn(comments),
       conflictRun: conflictRunIn(comments),
       conflictAttempts: conflictAttemptsIn(comments),
@@ -132,9 +134,14 @@ class Thread {
     }
   }
 
+  /** The review of each Request-changes run a plan started, in order. */
+  readonly startedFor: number[] = [];
+
   plan(event: LoopEvent, snapshot: Snapshot): Plan {
     const plan = planFor(event, snapshot, kitConfig());
     if (plan.kind === "act") this.land(plan.actions);
+    const review = startsOn(plan)?.requestChanges?.review;
+    if (review !== undefined) this.startedFor.push(review);
     return plan;
   }
 
@@ -165,10 +172,13 @@ class Thread {
     return this.plan({ kind: "label-added", issue: 7, label: "agent:implement" }, this.ticketSnapshot());
   }
 
-  /** The Request-changes run finishes with these changes; if its plan pushes, the PR is at `to`. */
-  requestChangesRunFinishes(changes: BranchChanges, to: string, minutes: number): Plan {
+  /**
+   * The Request-changes run finishes with these changes; if its plan pushes, the PR is at `to`. It is the run
+   * started for `review`, the latest a plan started one for unless named.
+   */
+  requestChangesRunFinishes(changes: BranchChanges, to: string, minutes: number, review = this.startedFor.at(-1)): Plan {
     this.now = at(minutes);
-    const plan = this.plan(implementRunFinished(changes, this.headSha, true), this.ticketSnapshot());
+    const plan = this.plan(implementRunFinished(changes, this.headSha, true, review), this.ticketSnapshot());
     if (actionsOf(plan).some((action) => action.kind === "push-branch")) this.headSha = to;
     return plan;
   }
@@ -199,7 +209,12 @@ class Thread {
   }
 }
 
-function implementRunFinished(changes: BranchChanges, headSha: string, requestChanges: boolean): Extract<LoopEvent, { kind: "implement-run-finished" }> {
+function implementRunFinished(
+  changes: BranchChanges,
+  headSha: string,
+  requestChanges: boolean,
+  review?: number,
+): Extract<LoopEvent, { kind: "implement-run-finished" }> {
   return {
     kind: "implement-run-finished",
     issue: 7,
@@ -211,7 +226,7 @@ function implementRunFinished(changes: BranchChanges, headSha: string, requestCh
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes,
-    fixes: { pullRequest: 50, headSha, runUrl: RUN, requestChanges },
+    fixes: { pullRequest: 50, headSha, runUrl: RUN, requestChanges, ...(review === undefined ? {} : { review }) },
   };
 }
 
@@ -457,6 +472,56 @@ describe("A delivered Request changes", () => {
     expect(actionsOf(second).some((action) => action.kind === "push-branch")).toBe(false);
     expect(reasonOf(second)).toContain("no Request-changes run in flight");
   });
+
+  it("whose run lands only as its own: a run left over for an earlier review pushes nothing over the run a later one started", () => {
+    const thread = new Thread();
+    thread.mergeable = true;
+    thread.review(201, 14);
+    thread.delivered(201, 14);
+    // The Operator takes the PR back mid-run, then requests changes again, which starts a second run.
+    thread.markReady(20);
+    thread.review(202, 22);
+    thread.delivered(202, 22);
+
+    const leftOver = thread.requestChangesRunFinishes(BUILT, B, 40, 201);
+    const own = thread.requestChangesRunFinishes(BUILT, C, 50, 202);
+
+    expect(actionsOf(leftOver).some((action) => action.kind === "push-branch")).toBe(false);
+    expect(reasonOf(leftOver)).toContain("review 201");
+    expect(actionsOf(own)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+  });
+
+  it("holds back a Retry that finishes while its run is in flight: even one that committed nothing posts no Verdict", () => {
+    const thread = new Thread();
+    thread.draft = true;
+    thread.history.push({ kind: "draft", at: at(1) });
+    thread.headSha = B;
+    thread.reviewed("execution-flaw", 5);
+    expect(startsOn(thread.implement())).toMatchObject({ retry: 1 });
+    // Mid-Retry, the Operator takes the PR back and requests changes, which starts their run.
+    thread.markReady(10);
+    thread.review(201, 11);
+    thread.delivered(201, 11);
+
+    for (const changes of [{ net: [], commits: [], updatedFromMain: false }, BUILT]) {
+      const retry = thread.retryFinishes(changes, C, 20);
+      expect(commentsOn(retry, 50)).toEqual([]);
+      expect(reasonOf(retry)).toContain("has a Request-changes run in flight");
+    }
+  });
+
+  it("whose run still lands for an undelivered note's other review once the Operator dismisses the latest it named", () => {
+    const thread = new Thread();
+    thread.review(101, 10);
+    thread.review(102, 12);
+    thread.tick(60);
+    thread.implement();
+    thread.dismiss(102);
+
+    const landed = thread.requestChangesRunFinishes(BUILT, B, 90, 102);
+
+    expect(actionsOf(landed)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+  });
 });
 
 describe("An undelivered Request changes while a run is in flight on the PR", () => {
@@ -522,6 +587,45 @@ describe("An undelivered Request changes while a run is in flight on the PR", ()
 
     expect(startsOn(thread.implement())).toMatchObject({ retry: 1 });
   });
+
+  it("once the Operator dismisses it while the Request-changes run works, the run's work isn't pushed, and the flaw's Retry starts", () => {
+    const thread = reviewInFlight();
+    thread.reviewed("execution-flaw", 70);
+    thread.implement();
+    thread.dismiss(5810278044);
+
+    const landed = thread.requestChangesRunFinishes(BUILT, D, 90);
+
+    expect(actionsOf(landed).some((action) => action.kind === "push-branch")).toBe(false);
+    expect(commentsOn(landed, 50)[0]).toContain("Retry");
+    expect(addsImplement(landed)).toBe(true);
+    expect(startsOn(thread.implement())).toMatchObject({ retry: 1 });
+  });
+
+  it("once the Operator dismisses it, the flaw counts toward the Ticket's two Retries like any other", () => {
+    const thread = reviewInFlight();
+    thread.reviewed("execution-flaw", 70);
+    thread.dismiss(5810278044);
+    thread.implement();
+    thread.retryFinishes(BUILT, D, 90);
+
+    const next = thread.reviewed("execution-flaw", 100);
+
+    expect(commentsOn(next, 50)[0]).toContain("Retry 2 of 2 starts now");
+  });
+
+  it("once the Operator dismisses it after its Request-changes run handed the PR over, no Retry is left in flight to hold the PR", () => {
+    const thread = reviewInFlight();
+    thread.mergeable = false;
+    thread.reviewed("execution-flaw", 70);
+    thread.implement();
+    thread.requestChangesRunFinishes({ net: [], commits: [], updatedFromMain: false, mainMerge: { main: MAIN, resolved: false } }, D, 90);
+    thread.dismiss(5810278044);
+
+    const push = thread.mainPushed(120, MAIN_2);
+
+    expect(actionsOf(push).some((action) => action.kind === "rebase-onto-main")).toBe(true);
+  });
 });
 
 describe("The Request-changes run an undelivered Request changes started", () => {
@@ -552,6 +656,30 @@ describe("The Request-changes run an undelivered Request changes started", () =>
 
     expect(startsOn(thread.implement())).toBeUndefined();
     expect(commentsOn(thread.tick(120), 50)).toEqual([]);
+  });
+
+  it("once the Operator dismisses its review, its run's work isn't pushed, and the PR goes back to the Merge gate, saying so", () => {
+    const thread = runStarted();
+    thread.dismiss(5810278044);
+
+    const landed = thread.requestChangesRunFinishes(BUILT, B, 90);
+
+    expect(actionsOf(landed).some((action) => action.kind === "push-branch")).toBe(false);
+    expect(commentsOn(landed, 50)[0]).toContain("dismissed");
+    expect(actionsOf(landed)).toContainEqual({ kind: "mark-ready-for-review", pullRequest: 50 });
+  });
+
+  it("whose review the Operator replaces mid-run still lands, and the replacement goes first if the Review finds it unbuilt", () => {
+    const thread = runStarted();
+    thread.dismiss(5810278044);
+    thread.review(5810278099, 70);
+
+    const landed = thread.requestChangesRunFinishes(BUILT, B, 90);
+    expect(actionsOf(landed)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+
+    const verdict = thread.reviewed("execution-flaw", 100);
+    expect(commentsOn(verdict, 50)[0]).toContain("#pullrequestreview-5810278099");
+    expect(commentsOn(verdict, 50)[0]).toContain("goes first");
   });
 
   it("still starts when the PR never went back to draft after the note: re-adding agent:implement turns it to draft first", () => {

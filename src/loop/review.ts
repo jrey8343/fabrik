@@ -211,8 +211,11 @@ function requestChangesFirst(
   pullRequest: PullRequestSnapshot,
   operator: string,
 ): { readonly reviews: number[]; readonly line: string; readonly actions: Action[] } | null {
-  if (pullRequest.requestChangesRun || pullRequest.ticket === null) return null;
-  const reviews = operatorChangesRequests(pullRequest, operator).map(({ review }) => review);
+  if (pullRequest.ticket === null) return null;
+  // Not to the reviews of a Request-changes run in flight, such as one whose own empty diff this Verdict is.
+  const reviews = operatorChangesRequests(pullRequest, operator)
+    .map(({ review }) => review)
+    .filter((review) => !pullRequest.requestChangesRunReviews.includes(review));
   if (reviews.length === 0) return null;
   return {
     reviews,
