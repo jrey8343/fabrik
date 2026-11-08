@@ -152,6 +152,8 @@ function openIssueNumbersIn(repo: Repo, edges: DependencyEdges): number[] {
     .map((issue) => issue.number);
 }
 
+const PULL_REQUEST_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { __typename } }";
+
 /** What the snapshot reads of a PR, by itself or as one of the open agent PRs the conflict check weighs. */
 const PULL_REQUEST_FIELDS = `
         number
@@ -163,7 +165,7 @@ const PULL_REQUEST_FIELDS = `
         author { login __typename }
         body
         labels(first: 100) { nodes { name } }
-        comments(last: 100) { pageInfo { hasPreviousPage } nodes { body createdAt author { __typename } } }
+        comments(last: 100) { ${PULL_REQUEST_COMMENTS} }
         changesRequests: reviews(last: 50, states: [CHANGES_REQUESTED]) { nodes { databaseId submittedAt author { login __typename } } }
         draftEvents: timelineItems(last: 100, itemTypes: [CONVERT_TO_DRAFT_EVENT, READY_FOR_REVIEW_EVENT]) {
           pageInfo { hasPreviousPage }
@@ -180,6 +182,53 @@ const PULL_REQUEST_QUERY = `
   }
 `;
 
+interface PullRequestComments {
+  pageInfo: { hasPreviousPage: boolean; startCursor?: string | null };
+  nodes: { body: string; createdAt: string; author: { __typename: string } | null }[];
+}
+
+/** A PR's comments before the ones already read, a page at a time, newest page first. */
+const PULL_REQUEST_EARLIER_COMMENTS_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!, $before: String!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        comments(last: 100, before: $before) { ${PULL_REQUEST_COMMENTS} }
+      }
+    }
+  }
+`;
+
+/**
+ * How many pages of a PR's earlier comments the snapshot reads at most, 100
+ * to a page, beyond the latest 100. Past that, a review from before the
+ * oldest comment read is left out, as historyOf says.
+ */
+const EARLIER_COMMENT_PAGES = 9;
+
+/**
+ * The PR with its earlier comments read too, so what started or settled its
+ * Request changes (#341), and its Verdicts, are read however long its thread
+ * has grown.
+ */
+async function withEarlierComments<Node extends { number: number; comments: PullRequestComments }>(
+  github: Pick<GitHub, "graphql">,
+  repo: Repo,
+  pullRequest: Node,
+): Promise<Node> {
+  let { pageInfo, nodes } = pullRequest.comments;
+  for (let page = 0; page < EARLIER_COMMENT_PAGES && pageInfo.hasPreviousPage && typeof pageInfo.startCursor === "string"; page += 1) {
+    const data = await github.graphql<{ repository: { pullRequest: { comments: PullRequestComments } | null } }>(
+      PULL_REQUEST_EARLIER_COMMENTS_QUERY,
+      { owner: repo.owner, name: repo.name, number: pullRequest.number, before: pageInfo.startCursor },
+    );
+    const earlier = data.repository.pullRequest?.comments;
+    if (earlier === undefined) break;
+    nodes = [...earlier.nodes, ...nodes];
+    pageInfo = earlier.pageInfo;
+  }
+  return { ...pullRequest, comments: { pageInfo, nodes } };
+}
+
 interface PullRequestQueryResult {
   repository: {
     owner: { login: string };
@@ -193,10 +242,7 @@ interface PullRequestQueryResult {
       author: { login: string; __typename: string } | null;
       body: string;
       labels: { nodes: { name: string }[] };
-      comments: {
-        pageInfo: { hasPreviousPage: boolean };
-        nodes: { body: string; createdAt: string; author: { __typename: string } | null }[];
-      };
+      comments: PullRequestComments;
       changesRequests: {
         nodes: { databaseId: number; submittedAt: string | null; author: { login: string; __typename: string } | null }[];
       };
@@ -1149,7 +1195,7 @@ async function gatherPullRequest(
   }
   return {
     issue: null,
-    pullRequest: pullRequestSnapshotOf(pullRequest, appLogin),
+    pullRequest: pullRequestSnapshotOf(await withEarlierComments(github, repo, pullRequest), appLogin),
     dispatch: null,
     designQueue: null,
     operator: operator ?? data.repository.owner.login,
@@ -1192,9 +1238,10 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
 
 /**
  * What tells whether an agent PR's Request changes have been built (#341):
- * the Kit's comments, the reviews, and its draft changes. The comments and
- * draft changes are the latest 100 of each, so a review from before the
- * oldest one read of either, when there were more, is left out: whatever
+ * the Kit's comments, the reviews, and its draft changes. The comments are the
+ * latest thousand (withEarlierComments) and the draft changes the latest 100,
+ * so a review from before the oldest one read of either, when there were
+ * more, is left out: whatever
  * settled it, or found it out of draft, may be among those not read, and a
  * review taken for unbuilt would start a run for work long since built.
  */
@@ -1263,29 +1310,33 @@ async function gatherConflicts(
   appLogin: string | null,
   wait: (ms: number) => Promise<void>,
 ): Promise<ConflictSnapshot> {
-  let candidates: ConflictCandidate[] = [];
+  type AgentNode = ConflictsQueryResult["repository"]["pullRequests"]["nodes"][number];
+  let agents: { node: AgentNode; mergeable: boolean | null }[] = [];
   let head: string | null = null;
   for (let read = 1; read <= MERGEABLE_READS; read += 1) {
     if (read > 1) await wait(MERGEABLE_WAIT_MS);
-    candidates = [];
+    agents = [];
     let after: string | null = null;
     do {
       const data: ConflictsQueryResult = await github.graphql<ConflictsQueryResult>(CONFLICTS_QUERY, { owner: repo.owner, name: repo.name, after });
       // Read with the page's mergeable states, so both are of the same main.
       if (after === null) head = data.repository.defaultBranchRef?.target.oid ?? null;
       const { pageInfo, nodes } = data.repository.pullRequests;
-      candidates.push(
-        ...nodes.flatMap((node) => {
-          const pullRequest = pullRequestSnapshotOf(node, appLogin);
-          if (!pullRequest.isAgent) return [];
-          return [{ pullRequest, mergeable: node.mergeable === "UNKNOWN" ? null : node.mergeable === "MERGEABLE" }];
-        }),
+      agents.push(
+        ...nodes.flatMap((node) =>
+          pullRequestSnapshotOf(node, appLogin).isAgent ? [{ node, mergeable: node.mergeable === "UNKNOWN" ? null : node.mergeable === "MERGEABLE" }] : [],
+        ),
       );
       after = pageInfo.hasNextPage ? pageInfo.endCursor : null;
     } while (after !== null);
-    if (candidates.every(({ mergeable }) => mergeable !== null)) break;
+    if (agents.every(({ mergeable }) => mergeable !== null)) break;
   }
-  return { main: head, now, pullRequests: candidates };
+  // Each agent PR's earlier comments are read once, after the last read.
+  const pullRequests: ConflictCandidate[] = [];
+  for (const { node, mergeable } of agents) {
+    pullRequests.push({ pullRequest: pullRequestSnapshotOf(await withEarlierComments(github, repo, node), appLogin), mergeable });
+  }
+  return { main: head, now, pullRequests };
 }
 
 async function gatherDispatch(

@@ -2282,4 +2282,47 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     // What settled 101 may be among the comments before the 100 it read.
     expect(unbuilt(cut)).toEqual([102]);
   });
+
+  it("reads an agent PR's earlier comments, a page at a time, so a long thread still shows what its Request changes are (#341)", async () => {
+    const operator = { login: "jrey", __typename: "User" };
+    const bot = { __typename: "Bot" };
+    const started = { body: "<!-- fabrik:request-changes-run-started 101 -->\nThe Kit is starting the Request-changes run.", createdAt: "2026-11-07T04:01:00Z", author: bot };
+    const latest = node(50, "CONFLICTING", {
+      comments: { pageInfo: { hasPreviousPage: true, startCursor: "c-100" }, nodes: [{ body: "Looks close.", createdAt: "2026-11-07T05:00:00Z", author: { __typename: "User" } }] },
+      changesRequests: { nodes: [{ databaseId: 101, submittedAt: "2026-11-07T04:00:00Z", author: operator }] },
+      draftEvents: {
+        pageInfo: { hasPreviousPage: false },
+        nodes: [
+          { __typename: "ReadyForReviewEvent", createdAt: "2026-11-07T03:00:00Z" },
+          { __typename: "ConvertToDraftEvent", createdAt: "2026-11-07T04:01:00Z" },
+        ],
+      },
+      isDraft: true,
+    });
+    const befores: unknown[] = [];
+    const github = {
+      [ANSWERS_CONFLICTS]: true,
+      async graphql(query: string, variables: Record<string, unknown>) {
+        if (isConflictsQuery(query)) {
+          return { repository: { defaultBranchRef: { target: { oid: "d".repeat(40) } }, pullRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [latest] } } };
+        }
+        if (query.includes("pullRequest(number: $number)") && "before" in variables) {
+          befores.push(variables["before"]);
+          // The Kit's note that started the run for 101 is among the earlier comments.
+          return { repository: { pullRequest: { comments: { pageInfo: { hasPreviousPage: false, startCursor: "c-0" }, nodes: [started] } } } };
+        }
+        const none = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+        return { repository: { owner: { login: "acme" }, defaultBranchRef: null, issues: none, pullRequests: none } };
+      },
+    } as unknown as GitHub;
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN);
+
+    expect(befores).toEqual(["c-100"]);
+    expect(snapshot.conflicts?.pullRequests[0]?.pullRequest).toMatchObject({
+      unbuiltChangesRequests: [{ review: 101 }],
+      notedChangesRequests: [101],
+      requestChangesRunInFlight: 101,
+    });
+  });
 });
