@@ -254,6 +254,51 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     expect(branch.changes.mainMerge).toEqual({ main, resolved: false });
   });
 
+  it("is judged on the PR's head as the push job reads it, never on the head the run's result says it started on", async () => {
+    const main = await mainConflicts();
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change, without main");
+
+    // The result names the fork point on main as the head it started on, which merges cleanly with main.
+    const fork = await git(clone, "merge-base", prHead, main);
+    const branch = await rebuild(fork, null, main, true);
+
+    expect(branch.changes.mainMerge).toEqual({ main, resolved: false });
+  });
+
+  it("is judged against main as it is now when its result names none, if main moved after the Kit job read it and the PR conflicts with that", async () => {
+    const started = await git(remote, "rev-parse", "refs/heads/main");
+    const main = await mainConflicts();
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change, without main");
+
+    const branch = await rebuild(prHead, null, started, true);
+
+    expect(branch.changes.mainMerge).toEqual({ main, resolved: false });
+  });
+
+  it("that committed nothing is still judged when its result names no main, if its PR conflicted with main as it started", async () => {
+    const main = await mainConflicts();
+
+    const branch = await rebuildAgentBranch({ name: BRANCH, base: { ref: BRANCH, sha: prHead }, head: null }, join(root, "none.bundle"), REMOTE(), {
+      requestChanges: true,
+      mergeMain: null,
+      started: main,
+    });
+
+    expect(branch.changes.mainMerge).toEqual({ main, resolved: false });
+  });
+
+  it("whose PR shares no history with main as it started, after main was rewritten, is handed over rather than failing the push job", async () => {
+    const seed = join(root, "seed");
+    await git(seed, "checkout", "--quiet", "--orphan", "rewritten");
+    const rewritten = await commit(seed, { "src/shared.ts": "rewritten\n" }, "Main, rewritten");
+    await git(seed, "push", "--quiet", "origin", "rewritten");
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change");
+
+    const branch = await rebuild(prHead, null, rewritten, true);
+
+    expect(branch.changes.mainMerge).toEqual({ main: rewritten, resolved: false });
+  });
+
   it("whose result names a main that's neither main as it started nor as it is now is judged against main as it is now", async () => {
     const told = await mainConflicts();
     await mergesMain();

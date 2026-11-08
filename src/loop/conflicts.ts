@@ -192,7 +192,7 @@ export function requestChangesRunEnded(pullRequest: number, main: string, operat
         requestChangesRunEndedMarker(main),
         `@${operator} The Request-changes run on #${pullRequest} didn't land: ${why}.`,
         "",
-        `The PR conflicted with \`main\` at ${head} when the run started, and your requested changes aren't built, so it's yours from here. The Kit won't bring it up to date until \`main\` moves past ${head}; when it does, your Request changes still goes first. No retry was used.`,
+        `The Kit judged the run against \`main\` at ${head}, and your requested changes aren't built, so it's yours from here. The Kit won't bring it up to date until \`main\` moves past ${head}; when it does, your Request changes still goes first. No retry was used.`,
         "",
         `[The run](${runUrl})`,
       ].join("\n"),

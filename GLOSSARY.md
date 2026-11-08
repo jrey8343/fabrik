@@ -179,7 +179,7 @@ A Verdict that the right design was built wrongly, so the Implementer can fix it
 _Avoid_: bug, failing review
 
 **Retry**:
-An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and doesn't count toward the two, unless the Operator dismisses every one of those reviews before their run lands.
+An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and never counts toward the two.
 _Avoid_: rerun, attempt
 
 **Design flaw**:

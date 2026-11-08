@@ -69,9 +69,15 @@ export async function rebuildAgentBranch(
 ): Promise<AgentBranchGit> {
   const { git, url } = await emptyRepository(remote);
   if (branch.head === null) {
-    const { mergeMain = null, started = null } = judged;
-    const now = mergeMain === null ? null : await mainNow(git, url);
-    const told = mergeMain === null ? null : mergeMain === started || mergeMain === now ? mergeMain : (now ?? started ?? mergeMain);
+    const { requestChanges = false, mergeMain = null, started = null } = judged;
+    const now = requestChanges ? await mainNow(git, url) : null;
+    const told = !requestChanges
+      ? null
+      : mergeMain !== null
+        ? mergeMain === started || mergeMain === now
+          ? mergeMain
+          : (now ?? started ?? mergeMain)
+        : await conflictingOnRemote(git, url, branch.name, [started, now]);
     return {
       changes: {
         net: [],
@@ -95,6 +101,22 @@ export interface Judged {
   readonly mergeMain?: string | null;
   /** The main head the Kit job read before the run started, if it read one. */
   readonly started?: string | null;
+}
+
+/**
+ * For a run that committed nothing: the first of these main heads the PR's
+ * branch, as it is on the remote now, conflicts with, or null. Nothing is
+ * fetched until it's needed, and a head that can't be fetched is skipped.
+ */
+async function conflictingOnRemote(git: Git, url: string, branch: string, mains: readonly (string | null)[]): Promise<string | null> {
+  const head = await headNow(git, url, branch);
+  if (head === null) return null;
+  const fetched: string[] = [];
+  for (const main of mains) {
+    if (main === null || fetched.includes(main)) continue;
+    if (await git("fetch", "--quiet", url, main).then(() => true, () => false)) fetched.push(main);
+  }
+  return conflictingMain(git, head, fetched);
 }
 
 /** The default branch's head on the remote now, or null if it can't be read. */
@@ -233,6 +255,26 @@ async function mergeTree(git: Run,ours: string, theirs: string): Promise<{ reado
     if (tree === null) throw error;
     return { tree, conflicted: true };
   }
+}
+
+/**
+ * Whether `ours` conflicts with `theirs`, by git's own merge: a merge git
+ * can't make at all, as of histories main's rewrite left unrelated, counts
+ * as a conflict, so the run is handed over rather than the push job failing.
+ */
+function conflicts(git: Run, ours: string, theirs: string): Promise<boolean> {
+  return mergeTree(git, ours, theirs).then(
+    ({ conflicted }) => conflicted,
+    () => true,
+  );
+}
+
+/** The first of these main heads the PR's `head` conflicts with, by its own .gitattributes, or null. */
+async function conflictingMain(git: Git, head: string, mains: readonly string[]): Promise<string | null> {
+  for (const main of mains) {
+    if (await conflicts(git.with({ GIT_ATTR_SOURCE: head }), head, main)) return main;
+  }
+  return null;
 }
 
 /** A first run, cut from main: everything it changes is its own. Its push replaces whatever an earlier run left on the agent branch. */
@@ -374,25 +416,18 @@ async function onItsOwnBranch(
   // A path the branch now holds just as main does, or just as git's own merge with it does, came from main, not from this run.
   const own = (path: string): boolean => unlikeMain.has(path) && (unlikeMerge === null || unlikeMerge.has(path));
   const net = (await diff(git, head, tip)).filter((change) => own(change.path) || (change.from !== undefined && own(change.from)));
-  // The main it was told to merge counts only if it's one of those heads; otherwise it's main as the run started.
   // A Request-changes run is judged against the main it was told to merge, from its result, when that's one of those
-  // heads, and otherwise main as it is now. One whose result names none is still judged, against main as it started,
-  // if the head it started on conflicted with that: the agent job writes the result, so leaving it out decides nothing.
-  const conflictedAtStart =
-    requestChanges &&
-    mergeMain === null &&
-    started !== null &&
-    (await mergeTree(git.with({ GIT_ATTR_SOURCE: branch.base.sha }), branch.base.sha, started)).conflicted;
+  // heads, and otherwise main as it is now. One whose result names none is still judged, against main as it started
+  // or as it is now, if the PR's head, as this job reads it, conflicts with that: the agent job writes the result, and
+  // the head it says it started on, so neither decides whether the run is judged.
   const told = !requestChanges
     ? null
     : mergeMain !== null
       ? heads.includes(mergeMain)
         ? mergeMain
         : main
-      : conflictedAtStart
-        ? started
-        : null;
-  const resolved = told === null ? null : (await isAncestor(git, told, tip)) || !(await mergeTree(judging, tip, told)).conflicted;
+      : await conflictingMain(git, head, [...(started === null ? [] : [started]), main]);
+  const resolved = told === null ? null : (await isAncestor(git, told, tip)) || !(await conflicts(judging, tip, told));
   return {
     changes: {
       net,
