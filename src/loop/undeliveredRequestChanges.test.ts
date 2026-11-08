@@ -25,7 +25,7 @@ import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 import { requestChangesAnswersIn, verdictMarker } from "./markers.ts";
 import { runInFlight } from "./retry.ts";
 import { planFor } from "./rules.ts";
-import type { Action, BranchChanges, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
+import type { Action, BranchChanges, KitConfig, KitIssueSnapshot, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const PR_URL = "https://github.com/acme/shop/pull/50";
@@ -62,6 +62,9 @@ class Thread {
    * null when it couldn't read it.
    */
   implementJobUnderWay: boolean | null = null;
+  /** The Kit-owned issues every snapshot reads, a held run's weekly-limit issues among them; the tick closes them. */
+  kitIssues: KitIssueSnapshot[] = [];
+  config: KitConfig = kitConfig();
   /** What a mechanical rebase onto main pushes the PR to, when the conflict check plans one. */
   rebasedTo = E;
   /** When set, this action fails as the adapter applies it, and every action after it is never applied. */
@@ -102,6 +105,7 @@ class Thread {
   ticketSnapshot(): Snapshot {
     return snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }), {
       pullRequest: this.pullRequest(),
+      kitIssues: this.kitIssues,
     });
   }
 
@@ -128,6 +132,10 @@ class Thread {
     for (const action of actions) {
       if (action.kind === this.failsAt) return;
       if (action.kind === "comment" && action.issue === 50) this.history.push({ kind: "bot-comment", at: this.now, body: action.body });
+      if (action.kind === "comment") {
+        this.kitIssues = this.kitIssues.map((issue) => (issue.number === action.issue ? { ...issue, comments: [...issue.comments, action.body] } : issue));
+      }
+      if (action.kind === "close") this.kitIssues = this.kitIssues.filter((issue) => issue.number !== action.issue);
       if (action.kind === "convert-to-draft") {
         this.draft = true;
         this.history.push({ kind: "draft", at: this.now });
@@ -151,7 +159,7 @@ class Thread {
   readonly startedFor: number[] = [];
 
   plan(event: LoopEvent, snapshot: Snapshot): Plan {
-    const plan = planFor(event, snapshot, kitConfig());
+    const plan = planFor(event, snapshot, this.config);
     if (plan.kind === "act") this.land(plan.actions);
     const review = startsOn(plan)?.requestChanges?.review;
     if (review !== undefined) this.startedFor.push(review);
@@ -161,14 +169,16 @@ class Thread {
   /** The scheduled tick at `minutes`. */
   tick(minutes: number): Plan {
     this.now = at(minutes);
-    return this.plan({ kind: "scheduled-tick", now: this.now }, tickSnapshot({ conflicts: this.conflicts() }));
+    // The Ticket a held Implement run waits on, as the tick reads it to resume the run.
+    const held = [{ number: 7, open: true, labels: ["enhancement", "ready-for-agent"], draft: null, byApp: false, body: "" }];
+    return this.plan({ kind: "scheduled-tick", now: this.now }, tickSnapshot({ conflicts: this.conflicts(), kitIssues: this.kitIssues, held }));
   }
 
   /** A push to main at `minutes`, to `head`. */
   mainPushed(minutes: number, head = this.main): Plan {
     this.now = at(minutes);
     this.main = head;
-    return this.plan({ kind: "main-pushed", head }, repoSnapshot({ conflicts: this.conflicts() }));
+    return this.plan({ kind: "main-pushed", head }, repoSnapshot({ conflicts: this.conflicts(), kitIssues: this.kitIssues }));
   }
 
   /** GitHub delivers the Operator's review to the Loop at `minutes`: the event path's Request changes. */
@@ -1215,4 +1225,104 @@ describe("A Request-changes run noted on a draft with no Implement job behind it
       expect(addsImplement(thread.mainPushed(65))).toBe(false);
     },
   );
+});
+
+// #424: a Request-changes run the Kit held while every Subscription is used up, or one that ended in an
+// Infrastructure failure, has no Implement job behind it either, but it isn't stalled: the reset resumes a held run,
+// and only the Operator's re-add of agent:implement starts a failed one again, as its notice says.
+describe("A Request-changes run held or failed, with no Implement job behind it", () => {
+  const TWO_SUBSCRIPTIONS = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
+  const RESETS_AT = at(300);
+
+  /** How many times the plan adds agent:implement to the Ticket. */
+  const implementsAdded = (plan: Plan): number =>
+    actionsOf(plan).filter((action) => action.kind === "add-labels" && action.issue === 7 && action.labels.includes("agent:implement")).length;
+
+  /** The weekly-limit issue a Triage run on #9 refused on `subscription` opens, as the adapter reads it back as `number`. */
+  function refusedOn(subscription: string, kitIssues: readonly KitIssueSnapshot[], number: number): KitIssueSnapshot {
+    const event: LoopEvent = {
+      kind: "agent-run-failed",
+      role: "triage",
+      issue: 9,
+      runUrl: RUN,
+      jobResult: "failure",
+      secretsStep: "success",
+      report: { failure: "weekly-limit", detail: `resets at ${RESETS_AT}`, resetsAt: RESETS_AT },
+      subscription,
+    };
+    const plan = planFor(event, snapshotOf(anIssue({ number: 9, labels: ["needs-triage"] }), { kitIssues }), TWO_SUBSCRIPTIONS);
+    const opened = actionsOf(plan).find((action) => action.kind === "open-issue");
+    if (opened?.kind !== "open-issue") throw new Error(`expected the refusal to open an issue: ${JSON.stringify(plan)}`);
+    return { number, labels: opened.labels, body: opened.body, comments: [] };
+  }
+
+  /** The claim of a delivered review noted its run at 05:14 and turned the PR to draft. */
+  function noted(): Thread {
+    const thread = new Thread();
+    thread.mergeable = true;
+    thread.review(777, 14);
+    thread.delivered(777, 14);
+    expect(thread.draft).toBe(true);
+    return thread;
+  }
+
+  /** Noted, then held by its agent:implement at 05:14: both Subscriptions are used up until 10:00. */
+  function held(): Thread {
+    const thread = noted();
+    thread.config = TWO_SUBSCRIPTIONS;
+    const first = refusedOn("Claude token", [], 41);
+    thread.kitIssues = [first, refusedOn("Claude token 2", [first], 42)];
+    expect(actionsOf(thread.implement())).toContainEqual(expect.objectContaining({ kind: "hold-agent-run", role: "implement", issue: 7 }));
+    thread.implementJobUnderWay = false;
+    return thread;
+  }
+
+  /** The held comments on the weekly-limit issues still open. */
+  const heldComments = (thread: Thread): string[] =>
+    thread.kitIssues.flatMap((issue) => issue.comments.filter((body) => body.includes("is held until")));
+
+  it("held: isn't restarted by the next two ticks, so the weekly-limit issue gets no second held comment", () => {
+    const thread = held();
+    expect(heldComments(thread)).toHaveLength(1);
+
+    expect(implementsAdded(thread.tick(75))).toBe(0);
+    expect(implementsAdded(thread.tick(135))).toBe(0);
+
+    expect(heldComments(thread)).toHaveLength(1);
+  });
+
+  it("held: the reset tick adds agent:implement to the Ticket once, which starts the run", () => {
+    const thread = held();
+    thread.tick(75);
+
+    const reset = thread.tick(301);
+
+    expect(actionsOf(reset)).toContainEqual(expect.objectContaining({ kind: "close", issue: 41 }));
+    expect(implementsAdded(reset)).toBe(1);
+    expect(startsOn(thread.implement())).toMatchObject({ requestChanges: { review: 777 } });
+  });
+
+  it.each(["crash", "weekly-limit"] as const)(
+    "failed (%s, rotation off): isn't restarted by the next two ticks, and the Operator's re-add starts it",
+    (failure) => {
+      const thread = noted();
+      thread.implement();
+      thread.now = at(20);
+      const report = failure === "crash" ? null : { failure, detail: `resets at ${at(3000)}`, resetsAt: at(3000) };
+      const event: LoopEvent = { kind: "agent-run-failed", role: "implement", issue: 7, runUrl: RUN, jobResult: "failure", secretsStep: "success", report };
+      thread.plan(event, thread.ticketSnapshot());
+      thread.implementJobUnderWay = false;
+
+      expect(implementsAdded(thread.tick(75))).toBe(0);
+      expect(implementsAdded(thread.tick(135))).toBe(0);
+      expect(startsOn(thread.implement())).toMatchObject({ requestChanges: { review: 777 } });
+    },
+  );
+
+  it("a stalled run that was neither held nor failed is still restarted", () => {
+    const thread = noted();
+    thread.implementJobUnderWay = false;
+
+    expect(implementsAdded(thread.tick(75))).toBe(1);
+  });
 });

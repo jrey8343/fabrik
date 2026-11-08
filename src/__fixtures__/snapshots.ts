@@ -101,6 +101,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     requestChangesRunSince: null,
     orphanedChangesRequests: [],
     requestChangesRunDismissed: false,
+    requestChangesRunFailed: false,
     leftDraftSinceVerdict: false,
     url: "https://github.com/acme/shop/pull/50",
     uiEvidenceMarker: null,

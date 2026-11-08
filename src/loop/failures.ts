@@ -40,7 +40,10 @@ const RERUN_FAILURES: readonly InfrastructureFailure[] = ["weekly-limit", "usage
  * run keeps Dispatch off its Decision until the Operator re-adds
  * agent:research (#154), and a failed Implement run on a Ticket with no open
  * PR keeps Dispatch off it until the Operator re-adds agent:implement (#418).
- * A notice on a PR needs none: the open PR holds its Ticket off Dispatch.
+ * An Implement notice on the Ticket's PR carries it too, so the conflict
+ * check leaves a failed Request-changes run for that re-add rather than
+ * restart it every hour (#424); the open PR already holds its Ticket off
+ * Dispatch. Any other notice on a PR needs none.
  */
 const FAILURE_MARKERS: Partial<Record<AgentRole, string>> = {
   design: DESIGN_TURN_FAILED_MARKER,
@@ -207,7 +210,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     };
   }
   const body = noticeBody({
-    marker: target === run.issue ? FAILURE_MARKERS[run.role] : undefined,
+    marker: target === run.issue || run.role === "implement" ? FAILURE_MARKERS[run.role] : undefined,
     mention: repoWide === null ? operator : null,
     failed: `${failedRun} failed: ${howItFailed(failure, run, config)}.`,
     detail: run.report?.detail ?? "",

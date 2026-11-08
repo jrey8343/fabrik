@@ -166,12 +166,21 @@ describe("Failure notices", () => {
     expect(commentOf(plan)).toMatch(/^<!-- fabrik:implement-run-failed -->\n@operator The Implement run on #7 failed: /);
   });
 
-  it("an Implement failure on a Ticket with an open PR leaves its notice on the PR unmarked, since the PR holds the Ticket off Dispatch", () => {
+  it("an Implement failure on a Ticket with an open PR marks its notice on the PR, so the conflict check never restarts the run (#424)", () => {
     const issue = anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [12] });
 
     const plan = planFor(failed({ role: "implement" }), snapshotOf(issue), kitConfig());
 
-    expect(commentOf(plan)).not.toContain("fabrik:implement-run-failed");
+    expect(plan).toMatchObject({ kind: "act", actions: expect.arrayContaining([expect.objectContaining({ kind: "comment", issue: 12 })]) });
+    expect(commentOf(plan)).toMatch(/^<!-- fabrik:implement-run-failed -->/);
+  });
+
+  it("a Review failure's notice on the PR carries no failure marker", () => {
+    const issue = anIssue({ number: 7, openPullRequests: [12] });
+
+    const plan = planFor(failed({ role: "review", report: { failure: "missing-output", detail: "" } }), snapshotOf(issue), kitConfig());
+
+    expect(commentOf(plan)).not.toContain("-failed -->");
   });
 
   it("a Review failure names agent:review on the PR, where the review trigger lives", () => {

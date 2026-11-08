@@ -12,6 +12,7 @@ import {
   isKitIssueLabel,
   isStateLabel,
   isWayfinderLabel,
+  type Label,
   NEEDS_DESIGN,
   NEEDS_INFO,
   NEEDS_TRIAGE,
@@ -225,6 +226,7 @@ function conflictCheck(snapshot: Snapshot, config: KitConfig): Plan {
         heldOn(snapshot.kitIssues, config),
         implementJobTimeoutMinutes(config.roles.implement.timeoutMinutes),
         reviewGraceMinutes(config.roles.review.timeoutMinutes),
+        heldOf("implement", snapshot.kitIssues),
       );
 }
 
@@ -250,15 +252,29 @@ function scheduledTickWith(gates: readonly TickGate[], now: string, snapshot: Sn
   return gates.reduce((plan, gate) => alongside(plan, gate(now, { ...snapshot, kitIssues }, config)), tick);
 }
 
-/** Both plans' actions and notes, or why neither acts. */
+/**
+ * Both plans' actions and notes, or why neither acts. A label the first
+ * already adds to an issue the second doesn't add again: two adds would each
+ * be a label event, and each start a run, as when the reset tick resumes a
+ * held Request-changes run that its conflict gate, no longer seeing it held,
+ * restarts too (#424).
+ */
 function alongside(first: Plan, second: Plan): Plan {
   if (first.kind === "fail") return first;
   if (second.kind === "fail") return second;
   if (first.kind === "nothing" && second.kind === "nothing") {
     return { kind: "nothing", reason: `${first.reason}; ${second.reason}` };
   }
+  const earlier = actionsOf(first);
+  const added = (issue: number, label: Label): boolean =>
+    earlier.some((action) => action.kind === "add-labels" && action.issue === issue && action.labels.includes(label));
+  const later = actionsOf(second).flatMap((action): Action[] => {
+    if (action.kind !== "add-labels") return [action];
+    const labels = action.labels.filter((label) => !added(action.issue, label));
+    return labels.length === 0 ? [] : [{ ...action, labels }];
+  });
   const notes = [...notesOf(first), ...notesOf(second)];
-  return { kind: "act", actions: [...actionsOf(first), ...actionsOf(second)], ...(notes.length === 0 ? {} : { notes }) };
+  return { kind: "act", actions: [...earlier, ...later], ...(notes.length === 0 ? {} : { notes }) };
 }
 
 function notesOf(plan: Plan): readonly string[] {

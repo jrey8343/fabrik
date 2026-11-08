@@ -660,6 +660,13 @@ export interface PullRequestSnapshot {
   /** When the Kit's note or Verdict that started that run was posted, while it's in flight; else null. */
   readonly requestChangesRunSince: string | null;
   /**
+   * Whether the Kit's Implement failure notice came after that run started,
+   * while it's in flight (#424): it ended in an Infrastructure failure, which
+   * leaves it in flight for the Operator's re-add of agent:implement to resume,
+   * and the Loop never restarts it by itself.
+   */
+  readonly requestChangesRunFailed: boolean;
+  /**
    * The Operator's Request changes on the draft, after the Kit's note put it in
    * draft for reviews they have since dismissed every one of, before that run
    * had an outcome (#341): the run owed now, which agent:implement starts.

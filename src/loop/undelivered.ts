@@ -57,7 +57,9 @@ function actsOn(pullRequest: PullRequestSnapshot): boolean {
  * (src/loop/implement.ts). The run reads all the Operator's Request changes,
  * and, when the PR conflicts with main, merges main in. The note goes first:
  * if the rest fails, the next check, or re-adding agent:implement, still
- * starts the run.
+ * starts the run. `held` is the weekly-limit issue a run due now is held on,
+ * or null when it would start, and `heldTickets` the Tickets whose Implement
+ * run is held (#424).
  */
 export function actOnUndelivered(
   { pullRequest, mergeable }: ConflictCandidate,
@@ -66,8 +68,11 @@ export function actOnUndelivered(
   held: number | null = null,
   runMinutes: number = UNDELIVERED_GRACE_MINUTES,
   implementJobUnderWay: boolean | null = null,
+  heldTickets: readonly number[] = [],
 ): Action[] | null {
-  const stalled = stalledRequestChangesRun(pullRequest, now, implementJobUnderWay);
+  // Runs due now are held while `held` names the weekly-limit issue they'd be held on.
+  const runHeld = held !== null || (pullRequest.ticket !== null && heldTickets.includes(pullRequest.ticket));
+  const stalled = stalledRequestChangesRun(pullRequest, now, implementJobUnderWay, runHeld);
   if (stalled !== null) return stalled;
   if (!actsOn(pullRequest)) return null;
   const unnoted = unnotedChangesRequests(pullRequest, operator);
@@ -126,10 +131,22 @@ export function actOnUndelivered(
  *   ran. A run that is genuinely working has its Implement job, or the push
  *   job that lands it, under way, so the check leaves it alone. So does a
  *   check that couldn't read the jobs.
+ *
+ * A run that is held, or would be held were it started now (`runHeld`), isn't stalled
+ * (#424): the reset that frees a Subscription resumes it, and starting it now
+ * would only hold it again, with another held comment, every hour. Nor is a
+ * run that ended in an Infrastructure failure: its notice says the Loop won't
+ * retry it, and only the Operator's re-add of agent:implement starts it again.
  */
-function stalledRequestChangesRun(pullRequest: PullRequestSnapshot, now: string, implementJobUnderWay: boolean | null): Action[] | null {
+function stalledRequestChangesRun(
+  pullRequest: PullRequestSnapshot,
+  now: string,
+  implementJobUnderWay: boolean | null,
+  runHeld: boolean,
+): Action[] | null {
   const { ticket, requestChangesRunSince: since } = pullRequest;
   if (!pullRequest.isAgent || ticket === null || !pullRequest.open) return null;
+  if (runHeld || pullRequest.requestChangesRunFailed) return null;
   if (pullRequest.draft && implementJobUnderWay !== false) return null;
   if (pullRequest.requestChangesRunInFlight === null || since === null) return null;
   if (Date.parse(now) - Date.parse(since) < UNDELIVERED_GRACE_MINUTES * 60_000) return null;
