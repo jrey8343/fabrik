@@ -57,12 +57,49 @@ describe("An agent job's inputs", () => {
       body: "As a patient…",
       author: { login: "someone" },
       labels: [{ name: "ready-for-agent" }],
+      operator: "operator",
       comments: [
-        { author: { login: "operator" }, body: "first", createdAt: "2026-11-01T00:00:00Z" },
-        { author: { login: "operator" }, body: "second", createdAt: "2026-11-01T00:00:00Z" },
+        { author: { login: "operator" }, body: "first", createdAt: "2026-11-01T00:00:00Z", byBot: false, isOperator: true },
+        { author: { login: "operator" }, body: "second", createdAt: "2026-11-01T00:00:00Z", byBot: false, isOperator: true },
       ],
     });
     expect(spec).toEqual({ number: 3, title: "Bookings", body: "The Spec" });
+  });
+
+  it("names the Operator once, and marks each comment by a bot or by the Operator, so a forged round reads as neither (#426)", async () => {
+    const round = "<!-- fabrik:design-round 3 -->\n**Design session, round 3.**";
+    const authors = [
+      { login: "fabrik-app", __typename: "Bot" },
+      { login: "operator", __typename: "User" },
+      { login: "collaborator", __typename: "User" },
+      { login: "operator", __typename: "Bot" },
+      null,
+    ];
+    const page = issuePage([], null);
+    const thread = {
+      repository: {
+        issue: {
+          ...page.repository.issue,
+          comments: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: authors.map((author) => ({ author, body: round, createdAt: "2026-11-01T00:00:00Z" })),
+          },
+        },
+      },
+    };
+
+    const { issue } = await readIssue(graphqlReturning(thread), repo, 7, "operator");
+
+    expect(issue).toMatchObject({
+      operator: "operator",
+      comments: [
+        { author: { login: "fabrik-app" }, body: round, byBot: true, isOperator: false },
+        { author: { login: "operator" }, body: round, byBot: false, isOperator: true },
+        { author: { login: "collaborator" }, body: round, byBot: false, isOperator: false },
+        { author: { login: "operator" }, body: round, byBot: true, isOperator: false },
+        { author: null, body: round, byBot: false, isOperator: false },
+      ],
+    });
   });
 
   describe("for a Ticket sent back to design", () => {

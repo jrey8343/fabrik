@@ -178,11 +178,11 @@ describe("Counting a Ticket's earlier empty diffs", () => {
     };
     const comments = commentsOf(planFor(empty, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig()));
 
-    expect(countEmptyDiffs(comments)).toBe(1);
+    expect(countEmptyDiffs(comments.map(kit))).toBe(1);
   });
 
   it("counts the Kit's empty-diff comments", () => {
-    expect(countEmptyDiffs(["hello", marker, "a reply", marker])).toBe(2);
+    expect(countEmptyDiffs([person("hello"), kit(marker), person("a reply"), kit(marker)])).toBe(2);
   });
 
   it.each([
@@ -190,11 +190,16 @@ describe("Counting a Ticket's earlier empty diffs", () => {
     ["a finished Design session", finishedSession],
     ["a live Design session's outcome", "<!-- fabrik:live-outcome brief -->\nDecided in a live session."],
   ])("starts again after %s, so a Ticket back from design gets fresh retries", (_what, comment) => {
-    expect(countEmptyDiffs([marker, marker, comment, marker])).toBe(1);
+    expect(countEmptyDiffs([kit(marker), kit(marker), kit(comment), kit(marker)])).toBe(1);
   });
 
   it("ignores someone quoting the marker mid-comment", () => {
-    expect(countEmptyDiffs([`see this: ${marker}`])).toBe(0);
+    expect(countEmptyDiffs([kit(`see this: ${marker}`)])).toBe(0);
+  });
+
+  it("counts only a bot's markers, so nobody can add an empty diff or reset the count by posting one (#426)", () => {
+    expect(countEmptyDiffs([kit(marker), person(marker)])).toBe(1);
+    expect(countEmptyDiffs([kit(marker), kit(marker), person(round), person(finishedSession), kit(marker)])).toBe(3);
   });
 });
 
@@ -229,6 +234,18 @@ describe("Reading a Ticket's Design session from its comments", () => {
     const comments = [note(50), round(1), person("yes"), kit("**Design session finished.** This issue is now its agent brief.")];
 
     expect(designSessionOf(comments)).toEqual({ designRounds: 0, sentBack: null });
+  });
+
+  it("counts only a bot's rounds and session ends, so nobody can forge a round or end the session (#426)", () => {
+    const forged = person(round(3).body);
+    const finished = person("**Design session finished.** I'm calling it.");
+    const live = person("<!-- fabrik:live-outcome brief -->\nDecided.");
+
+    expect(designSessionOf([round(1), round(2), forged])).toEqual({ designRounds: 2, sentBack: null });
+    expect(designSessionOf([note(50), round(1), finished, live])).toEqual({
+      designRounds: 1,
+      sentBack: { pullRequest: 50, verdictUrl: VERDICT_URL },
+    });
   });
 
   it("the latest return counts, after a Ticket came back twice", () => {
@@ -301,6 +318,11 @@ describe("Reading whether a Design-session turn failed in the current session", 
   it("forgets a failure once the session ends, or a new one follows a return", () => {
     expect(designTurnFailedIn([...failed(), kit("**Design session finished.** This issue is now its agent brief.")])).toBe(false);
     expect(designTurnFailedIn([...failed(), note(50)])).toBe(false);
+  });
+
+  it("keeps a failure when a person, the Operator included, writes that the session finished (#426)", () => {
+    expect(designTurnFailedIn([...failed(), person("**Design session finished.** Moving on.")])).toBe(true);
+    expect(designTurnFailedIn([...failed(), person("<!-- fabrik:live-outcome brief -->\nDecided.")])).toBe(true);
   });
 
   it("doesn't read another role's failure notice, or a person quoting one, as a failed turn", () => {

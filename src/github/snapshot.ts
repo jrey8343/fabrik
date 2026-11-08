@@ -189,7 +189,7 @@ const PULL_REQUEST_FIELDS = `
         createdAt
         forcePushes: timelineItems(last: 1, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) { nodes { ... on HeadRefForcePushedEvent { createdAt } } }
         commits(last: 100) { pageInfo { hasPreviousPage } nodes { commit { oid committedDate } } }
-        closingIssuesReferences(first: 10) { nodes { number state labels(first: 100) { nodes { name } } comments(last: 100) { nodes { body } } } }`;
+        closingIssuesReferences(first: 10) { nodes { number state labels(first: 100) { nodes { name } } comments(last: 100) { nodes { body author { __typename } } } } }`;
 
 const PULL_REQUEST_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -287,7 +287,7 @@ interface PullRequestQueryResult {
       forcePushes: { nodes: { createdAt: string }[] };
       /** Its branch's latest commits, oldest first: the head last. */
       commits: { pageInfo: { hasPreviousPage: boolean }; nodes: { commit: { oid: string; committedDate: string } }[] };
-      closingIssuesReferences: { nodes: { number: number; state: "OPEN" | "CLOSED"; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string }[] } }[] };
+      closingIssuesReferences: { nodes: { number: number; state: "OPEN" | "CLOSED"; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string; author: { __typename: string } | null }[] } }[] };
     } | null;
   };
 }
@@ -1259,7 +1259,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       // Every comment read counts for whether the reply that approved the request is still there, not only this session's.
       pendingPrototype: pendingPrototypeIn(thisSession, new Set(comments.map(({ id }) => id))),
       unansweredPrototypes: unansweredPrototypesIn(thisSession),
-      emptyDiffs: countEmptyDiffs(comments.map((comment) => comment.body)),
+      emptyDiffs: countEmptyDiffs(comments),
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),
     },
@@ -1416,7 +1416,8 @@ function ticketLabelsOf(pullRequest: PullRequestNode, ticket: number | null): st
  * counts on from the Retries they used (#415). None when the PR doesn't link it.
  */
 function ticketEmptyDiffsOf(pullRequest: PullRequestNode, ticket: number | null): number {
-  return countEmptyDiffs(closedTicketOf(pullRequest, ticket)?.comments.nodes.map((comment) => comment.body) ?? []);
+  const comments = closedTicketOf(pullRequest, ticket)?.comments.nodes ?? [];
+  return countEmptyDiffs(comments.map((comment) => ({ body: comment.body, byBot: comment.author?.__typename === "Bot" })));
 }
 
 /** The issue among those a PR closes that is the Ticket its agent branch names, or undefined. */
@@ -1678,7 +1679,7 @@ export async function gatherDesignQueueSlice(
         designRounds: designSessionOf(thisSession).designRounds,
         turnFailed: designTurnFailedIn(thisSession),
         // A third empty diff is the one that sent the Ticket back to design.
-        redesign: session.sentBack !== null || countEmptyDiffs(comments.map((comment) => comment.body)) > MAX_RETRIES,
+        redesign: session.sentBack !== null || countEmptyDiffs(comments) > MAX_RETRIES,
         // The latest time it got needs-design; an issue whose timeline doesn't show it waits from when it opened.
         neededDesignAt: neededDesignAt ?? issue.createdAt,
       });

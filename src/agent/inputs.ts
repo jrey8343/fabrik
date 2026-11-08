@@ -75,7 +75,10 @@ interface IssueQueryResult {
 
 /**
  * The issue as `gh issue view --json number,title,body,author,labels,comments`
- * shapes it, every comment included, and its parent Spec. When the issue's
+ * shapes it, every comment included, and its parent Spec. It names the
+ * Operator's login once, in `operator`, and each comment carries `byBot` and
+ * `isOperator`, so the agent can tell the Kit's comments and the Operator's
+ * from anyone else's (#426). When the issue's
  * current Design session follows the Kit's note that the Ticket came back from
  * an agent PR, the issue also carries `sentBack`: what that closed PR was
  * judged on and what it built (see readSentBack).
@@ -96,10 +99,19 @@ export async function readIssue(
     comments.push(...issue.comments.nodes);
     after = issue.comments.pageInfo.hasNextPage ? issue.comments.pageInfo.endCursor : null;
   } while (after !== null);
+  // GraphQL gives a bot's login without its `[bot]`, so the login alone can't tell the Kit's comments from a person's (#426).
+  const thread = comments.map(({ author, body, createdAt }) => {
+    const byBot = author?.__typename === "Bot";
+    return {
+      author: author === null ? null : { login: author.login },
+      body,
+      createdAt,
+      byBot,
+      isOperator: !byBot && author?.login === operator,
+    };
+  });
   // Only a bot's note counts, as in the core's snapshot, so quoting one can't fake a return.
-  const { sentBack } = designSessionOf(
-    comments.map((comment) => ({ body: comment.body, byBot: comment.author?.__typename === "Bot" })),
-  );
+  const { sentBack } = designSessionOf(thread);
   return {
     issue: {
       number: issue.number,
@@ -107,7 +119,8 @@ export async function readIssue(
       body: issue.body,
       author: issue.author === null ? { login: "ghost" } : { login: issue.author.login },
       labels: issue.labels.nodes,
-      comments: comments.map(({ author, body, createdAt }) => ({ author: author === null ? null : { login: author.login }, body, createdAt })),
+      operator,
+      comments: thread,
       ...(sentBack === null ? {} : { sentBack: await readSentBack(github, repo, sentBack, operator) }),
     },
     spec: issue.parent,

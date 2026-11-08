@@ -870,8 +870,8 @@ describe("Gathering who opened an issue", () => {
 interface ClosingIssue {
   readonly number: number;
   readonly labels: readonly string[];
-  /** Its comments' bodies, oldest first. */
-  readonly comments?: readonly string[];
+  /** Its comments, oldest first: each body, and whether a bot wrote it. */
+  readonly comments?: readonly { readonly body: string; readonly bot: boolean }[];
   /** Its state, open unless a test says otherwise. */
   readonly state?: "OPEN" | "CLOSED";
 }
@@ -915,7 +915,16 @@ function pullRequestGitHub({
                       state: issue.state ?? "OPEN",
                       labels: { nodes: issue.labels.map((name) => ({ name })) },
                       ...(/closingIssuesReferences[^]*comments\(/.test(pullRequestQuery)
-                        ? { comments: { nodes: (issue.comments ?? []).map((body) => ({ body })) } }
+                        ? {
+                            comments: {
+                              nodes: (issue.comments ?? []).map(({ body, bot }) => ({
+                                body,
+                                ...(/closingIssuesReferences[^]*comments\([^]*author/.test(pullRequestQuery)
+                                  ? { author: { __typename: bot ? "Bot" : "User" } }
+                                  : {}),
+                              })),
+                            },
+                          }
                         : {}),
                     })),
                   },
@@ -958,15 +967,21 @@ describe("Gathering the empty diffs of the Ticket a pull request was cut for (#4
   const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
   const gathered = async (closing: readonly ClosingIssue[]) =>
     (await gatherSnapshot(pullRequestGitHub({ body: "Adds a waitlist.\n\nCloses #7", closing }), repo, pushed, null, APP_LOGIN)).pullRequest;
-  const emptyDiff = `${EMPTY_DIFF_MARKER}\nThe Implementer's branch for #7 changed nothing.`;
+  const emptyDiff = { body: `${EMPTY_DIFF_MARKER}\nThe Implementer's branch for #7 changed nothing.`, bot: true };
 
   it("counts the Ticket's empty diffs from its comments, as the Ticket's own snapshot does", async () => {
     const pullRequest = await gathered([
       { number: 3, labels: [], comments: [emptyDiff] },
-      { number: 7, labels: ["ready-for-agent"], comments: ["Looks good.", emptyDiff, emptyDiff] },
+      { number: 7, labels: ["ready-for-agent"], comments: [{ body: "Looks good.", bot: false }, emptyDiff, emptyDiff] },
     ]);
 
     expect(pullRequest).toMatchObject({ ticket: 7, ticketEmptyDiffs: 2 });
+  });
+
+  it("counts only a bot's empty-diff markers, so nobody can spend the Ticket's Retries by posting one (#426)", async () => {
+    const pullRequest = await gathered([{ number: 7, labels: ["ready-for-agent"], comments: [emptyDiff, { ...emptyDiff, bot: false }] }]);
+
+    expect(pullRequest).toMatchObject({ ticket: 7, ticketEmptyDiffs: 1 });
   });
 
   it("counts none when the PR closes no issue its branch names", async () => {

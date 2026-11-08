@@ -464,11 +464,14 @@ export function standingIn(history: readonly PullRequestHistoryItem[]): Readonly
 /**
  * How many empty diffs the Kit has recorded on a Ticket, from its comments
  * oldest first. A Design session starts the count again, because a Ticket
- * that went back to design starts again on its retries.
+ * that went back to design starts again on its retries. Only a bot's markers
+ * count, so nobody can add an empty diff or start the count again by posting
+ * one (#426).
  */
-export function countEmptyDiffs(commentBodies: readonly string[]): number {
+export function countEmptyDiffs(comments: readonly BotComment[]): number {
   let count = 0;
-  for (const body of commentBodies) {
+  for (const { body, byBot } of comments) {
+    if (!byBot) continue;
     if (isDesignSessionComment(body)) count = 0;
     else if (body.startsWith(EMPTY_DIFF_MARKER)) count += 1;
   }
@@ -479,15 +482,14 @@ export function countEmptyDiffs(commentBodies: readonly string[]): number {
  * Where an issue's current Design session stands, from its comments oldest
  * first: how many rounds it has posted, and the return it follows, if any. A
  * session's end starts the count again, and so does the Kit's note that a
- * Ticket came back, whose session that follows. Only a bot's note counts, so
- * nobody can fake a return by quoting one.
+ * Ticket came back, whose session that follows. Only a bot's comments count,
+ * so nobody can fake a round, an end or a return by posting one (#426).
  */
-export function designSessionOf(
-  comments: readonly { readonly body: string; readonly byBot: boolean }[],
-): Pick<IssueSnapshot, "designRounds" | "sentBack"> {
+export function designSessionOf(comments: readonly BotComment[]): Pick<IssueSnapshot, "designRounds" | "sentBack"> {
   let session: Pick<IssueSnapshot, "designRounds" | "sentBack"> = { designRounds: 0, sentBack: null };
   for (const { body, byBot } of comments) {
-    const returned = byBot ? sentBackIn(body) : null;
+    if (!byBot) continue;
+    const returned = sentBackIn(body);
     if (returned !== null) session = { designRounds: 0, sentBack: returned };
     else if (DESIGN_ROUND_MARKER.test(body)) session = { ...session, designRounds: session.designRounds + 1 };
     else if (isDesignSessionComment(body)) session = { designRounds: 0, sentBack: null };
@@ -499,17 +501,23 @@ export function designSessionOf(
  * Whether a Design-session turn has failed in an issue's current session, from
  * its comments oldest first: the Kit's failure notice for the turn, with no
  * end of the session, and no return starting a new one, since. Only a bot's
- * notice counts, so nobody can fake one by quoting it.
+ * comments count, so nobody can fake a failure, or clear one, by posting a
+ * notice or an end (#426).
  */
-export function designTurnFailedIn(comments: readonly { readonly body: string; readonly byBot: boolean }[]): boolean {
+export function designTurnFailedIn(comments: readonly BotComment[]): boolean {
   let failed = false;
   for (const { body, byBot } of comments) {
-    if (byBot && body.startsWith(DESIGN_TURN_FAILED_MARKER)) failed = true;
-    else if ((byBot && sentBackIn(body) !== null) || body.startsWith(SESSION_FINISHED) || LIVE_OUTCOME_MARKER.test(body)) {
-      failed = false;
-    }
+    if (!byBot) continue;
+    if (body.startsWith(DESIGN_TURN_FAILED_MARKER)) failed = true;
+    else if (endsDesignSession(body)) failed = false;
   }
   return failed;
+}
+
+/** A comment on an issue, and whether a bot wrote it. */
+export interface BotComment {
+  readonly body: string;
+  readonly byBot: boolean;
 }
 
 /** A comment as the snapshot reads an issue's thread: its id, its text, and whether the Fabrik App wrote it. */
