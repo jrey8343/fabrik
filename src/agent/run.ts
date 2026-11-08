@@ -138,10 +138,7 @@ interface RoleSpec<T> {
    * never told it may offer a Map or a Prototype.
    */
   readonly prompt?: KitPrompt;
-  /**
-   * The output contract: a JSON object in the tag, checked by `read`, or
-   * for the Reviewer plain text, checked by `text`, which throws when it breaks the contract.
-   */
+  /** The output contract: plain text for the Reviewer, a JSON object for every other role. */
   readonly output: OutputContract<T>;
   /** How the Product's own instructions for this role relate to the Kit's prompt. */
   readonly instructionsNote: string;
@@ -489,7 +486,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
 
     // Text output is checked here, so a reply that breaks its contract fails this job, never passes.
     // Either output kind puts what the tag held on the result; a JSON reply is saved as the agent wrote it.
-    const { output: checked, saved } = settleReply(contract, (result as { output?: unknown }).output);
+    const { output: parsed, saved } = settleReply(contract, (result as { output?: unknown }).output);
     // The Researcher commits nothing itself: the Kit commits what it left, as the Fabrik Researcher.
     if (spec.researches === true) await commitResearch(productDir, issueNumber);
     // A replay arm's commits go out as a patch from baseSha, which nothing pushes; every other run's as a bundle.
@@ -509,7 +506,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       ...(mergeMain === null ? {} : { mergeMain }),
     };
     await writeFile(join(outDir, AGENT_RESULT_FILE), `${JSON.stringify(artifact, null, 2)}\n`);
-    console.log(spec.describe(subject, checked));
+    console.log(spec.describe(subject, parsed));
   } catch (error) {
     // Left for the push job, which posts the failure notice (loop.yml).
     await leaveFailureReport(error, watch, { path: join(outDir, AGENT_FAILURE_FILE), title: "Infrastructure failure" });

@@ -20,7 +20,11 @@ import { transcriptWriter } from "./transcript.ts";
 
 export type Checked<T> = { readonly ok: true; readonly output: T } | { readonly ok: false; readonly errors: readonly string[] };
 
-/** A Standard Schema over an output contract, so Sandcastle can ask the agent to fix a malformed output. */
+/**
+ * A Standard Schema over an output contract, so Sandcastle can ask the agent
+ * to fix a malformed output, which hands back the contract's parsed output. An
+ * agent run whose output a push job checks again uses replySchemaOf instead.
+ */
 export function schemaOf<T>(read: (value: unknown) => Checked<T>): StandardSchemaV1<unknown, T> {
   return {
     "~standard": {
@@ -66,7 +70,11 @@ export function replySchemaOf<T>(read: (value: unknown) => Checked<T>): Standard
  * it, so the push job's check is the only place it's converted (#469).
  */
 export function settleReply<T>(contract: OutputContract<T>, reply: unknown): { readonly output: T; readonly saved: string } {
-  if ("text" in contract) return { output: contract.text(String(reply)), saved: String(reply).trim() };
+  if ("text" in contract) {
+    const text = String(reply);
+    return { output: contract.text(text), saved: text.trim() };
+  }
+  // Sandcastle has passed the reply already; reading it again gives the parsed output.
   const checked = contract.read(reply);
   if (!checked.ok) throw new Error(`The reply breaks its output contract: ${checked.errors.join("; ")}`);
   return { output: checked.output, saved: JSON.stringify(reply) };
