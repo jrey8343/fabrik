@@ -348,14 +348,38 @@ describe("A Request-changes run's branch", () => {
     expect(actionsOf(plan)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
   });
 
-  it("that changes nothing is an Execution flaw marked as from a Request-changes run, so it uses no retry", () => {
+  it("that changes nothing, on a head that didn't move, posts no Verdict and starts no Retry: it hands the PR to the Operator, out of draft (#388)", () => {
     const plan = planFor(requestChangesPushed({ net: [], commits: [] }), pushSnapshot(), kitConfig());
+    const comments = commentsOf(plan);
 
-    expect(verdictsPostedIn(commentsOf(plan))).toEqual([
-      { verdict: "execution-flaw", source: "empty-diff", requestChanges: true, headSha: HEAD_SHA },
-    ]);
-    expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
-    expect(commentsOf(plan)[0]).toContain("Retry 1 of 2 starts now:");
+    expect(verdictsPostedIn(comments)).toEqual([]);
+    expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "add-labels", issue: 7 }));
+    expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "push-branch" }));
+    expect(comments).toHaveLength(1);
+    expect(notificationsOf(plan)).toEqual(["mention on #50"]);
+    expect(comments[0]).toContain("committed nothing");
+    expect(comments[0]).toContain("No retry was used.");
+    expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 50, labels: ["ready-for-human"] });
+    expect(actionsOf(plan)).toContainEqual({ kind: "mark-ready-for-review", pullRequest: 50 });
+    expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "close-pull-request" }));
+  });
+
+  it("that changes nothing, on a head that moved while it worked, posts no Verdict and starts no Retry: Review runs on the new head (#388)", () => {
+    const moved = "b".repeat(40);
+    const plan = planFor(
+      requestChangesPushed({ net: [], commits: [] }),
+      pushSnapshot(aPullRequest({ headSha: moved, verdicts: [earlier("pass", { headSha: HEAD_SHA })] })),
+      kitConfig(),
+    );
+    const comments = commentsOf(plan);
+
+    expect(verdictsPostedIn(comments)).toEqual([]);
+    expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "add-labels", issue: 7 }));
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toContain("bbbbbbb");
+    expect(notificationsOf(plan)).toEqual([]);
+    expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:review"] });
+    expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "mark-ready-for-review" }));
   });
 });
 
@@ -412,13 +436,21 @@ describe("A Request-changes run's answers about the review it was started for (#
     expect(rest.join("\n")).toContain("Amends the Ticket: no\n\nRenamed the total as the Operator asked.");
   });
 
-  it("go on the empty-diff Verdict comment when the run commits nothing", () => {
-    const plan = planFor(requestChangesPushed({ net: [], commits: [] }, undefined, { reviewMiss: false, amendsTicket: true }), pushSnapshot(), kitConfig());
-    const verdict = commentsOf(plan)[0] ?? "";
+  it.each([
+    ["didn't move", HEAD_SHA],
+    ["moved", "b".repeat(40)],
+  ])("go on its outcome comment, under its marker, when the run commits nothing on a head that %s (#388)", (_, headSha) => {
+    const plan = planFor(
+      requestChangesPushed({ net: [], commits: [] }, undefined, { reviewMiss: false, amendsTicket: true }),
+      pushSnapshot(aPullRequest({ headSha, verdicts: [earlier("pass", { headSha: HEAD_SHA })] })),
+      kitConfig(),
+    );
+    const [outcome, ...more] = commentsOf(plan);
 
-    expect(verdictsPostedIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "empty-diff", requestChanges: true, headSha: HEAD_SHA }]);
-    expect(requestChangesAnswersIn(verdict)).toEqual({ review: 900, reviewMiss: false, amendsTicket: true });
-    expect(verdict).toContain("Review miss: no\nAmends the Ticket: yes");
+    expect(more).toEqual([]);
+    expect(outcome).toMatch(/^<!-- fabrik:request-changes-run-empty -->\n<!-- fabrik:request-changes-answers /);
+    expect(requestChangesAnswersIn(outcome ?? "")).toEqual({ review: 900, reviewMiss: false, amendsTicket: true });
+    expect(outcome).toContain("Review miss: no\nAmends the Ticket: yes");
   });
 
   it("are owed: a Request-changes run's output without them is an Infrastructure failure, never pushed", () => {

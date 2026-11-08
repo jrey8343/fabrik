@@ -163,22 +163,16 @@ export function verdictActions(
     findings,
     followUps = [],
     considered = [],
-    answers = null,
   }: {
     readonly verdict: Verdict;
     readonly source: VerdictRecord["source"];
     readonly findings: string;
     readonly followUps?: readonly string[];
     readonly considered?: readonly string[];
-    /** A Request-changes run's answers (#369), when its empty diff is the Verdict: their marker goes right under the Verdict's, their lines after the findings. */
-    readonly answers?: AnswerLines | null;
   },
   operator: string,
 ): Action[] {
-  // A Request-changes run's own empty diff never gives way: it read every Request changes there was, and giving way
-  // would only start another run on the same reviews (#341).
-  const ownEmptyDiff = source === "empty-diff" && pullRequest.requestChangesRun;
-  const first = verdict === "execution-flaw" && !ownEmptyDiff ? requestChangesFirst(pullRequest, operator) : null;
+  const first = verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator) : null;
   const record: VerdictRecord = {
     verdict,
     source,
@@ -191,12 +185,10 @@ export function verdictActions(
   const next = first ?? nextAfter(verdict, pullRequest);
   const body = [
     verdictMarker(record),
-    ...(answers === null ? [] : [answers.marker]),
     `## Verdict: ${HEADINGS[verdict]}`,
     "",
     `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}${record.conflictRun === true ? ", after a conflict-only run, so it uses no retry" : ""}.`,
     ...(findings === "" ? [] : ["", findings]),
-    ...(answers === null ? [] : ["", ...answers.lines]),
     ...followUps,
     ...(next === null ? [] : ["", next.line]),
     "",
@@ -226,7 +218,7 @@ function requestChangesFirst(
   operator: string,
 ): { readonly reviews: number[]; readonly line: string; readonly actions: Action[] } | null {
   if (pullRequest.ticket === null) return null;
-  // Not to the reviews of a Request-changes run in flight, such as one whose own empty diff this Verdict is.
+  // Not to the reviews of a Request-changes run in flight.
   const reviews = operatorChangesRequests(pullRequest, operator)
     .map(({ review }) => review)
     .filter((review) => !pullRequest.requestChangesRunReviews.includes(review));

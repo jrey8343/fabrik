@@ -22,7 +22,8 @@ import {
   verdictsIn,
 } from "../github/threads.ts";
 import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
-import { verdictMarker } from "./markers.ts";
+import { requestChangesAnswersIn, verdictMarker } from "./markers.ts";
+import { runInFlight } from "./retry.ts";
 import { planFor } from "./rules.ts";
 import type { Action, BranchChanges, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 
@@ -1062,5 +1063,71 @@ describe("A Request changes submitted while the Kit's mechanical rebase was unde
 
     expect(commentsOn(verdict, 50)[0]).toContain("goes first");
     expect(startsOn(thread.implement())).toMatchObject({ requestChanges: { review: 5810278044 } });
+  });
+});
+
+describe("A Request-changes run that commits nothing on a PR that doesn't conflict (#388)", () => {
+  const EMPTY: BranchChanges = { net: [], commits: [], updatedFromMain: false };
+
+  /** The Operator's delivered Request changes 777 started its run on A, at 14. */
+  function runStartedOnA(): Thread {
+    const thread = new Thread();
+    thread.mergeable = true;
+    thread.review(777, 14);
+    thread.delivered(777, 14);
+    return thread;
+  }
+
+  it("on a head that didn't move hands the PR to the Operator: no Verdict, no Retry, and nothing starts the run again", () => {
+    const thread = runStartedOnA();
+
+    const plan = thread.requestChangesRunFinishes(EMPTY, B, 40);
+
+    expect(verdictsIn(commentsOn(plan, 50))).toEqual([]);
+    expect(addsImplement(plan)).toBe(false);
+    expect(thread.draft).toBe(false);
+    expect(thread.labels).toEqual(["ready-for-human"]);
+    expect(runInFlight(thread.pullRequest())).toBeNull();
+    // It counts as no conflict attempt.
+    expect(thread.pullRequest().conflictAttempts).toEqual([]);
+    expect(startsOn(thread.implement())).toBeUndefined();
+    for (const check of [thread.tick(120), thread.mainPushed(130, MAIN_2)]) {
+      expect(commentsOn(check, 50)).toEqual([]);
+      expect(addsImplement(check)).toBe(false);
+    }
+    expect(thread.startedFor).toEqual([777]);
+  });
+
+  it("on a head the Operator pushed while it worked has Review judge that head: its Verdict is marked as from the run, and its flaw starts Retry 1", () => {
+    const thread = runStartedOnA();
+    // The Operator pushes the requested change themselves mid-run: no Review of B gives a Verdict while the run is in flight.
+    expect(thread.pushed(B, 20).kind).toBe("nothing");
+
+    const plan = thread.plan(implementRunFinished(EMPTY, A, true, 777), thread.ticketSnapshot());
+
+    expect(verdictsIn(commentsOn(plan, 50))).toEqual([]);
+    expect(addsImplement(plan)).toBe(false);
+    expect(thread.labels).toEqual(["agent:review"]);
+    expect(thread.draft).toBe(true);
+    expect(runInFlight(thread.pullRequest())).toBeNull();
+
+    const verdict = thread.reviewed("execution-flaw", 50);
+
+    expect(verdictsIn(commentsOn(verdict, 50))).toEqual([{ verdict: "execution-flaw", source: "reviewer", requestChanges: true, headSha: B }]);
+    expect(commentsOn(verdict, 50)[0]).toContain("Retry 1 of 2 starts now:");
+    expect(startsOn(thread.implement())).toMatchObject({ retry: 1 });
+    for (const check of [thread.tick(120), thread.mainPushed(130, MAIN_2)]) {
+      expect(commentsOn(check, 50)).toEqual([]);
+      expect(startsOn(check)).toBeUndefined();
+    }
+    expect(thread.startedFor).toEqual([777]);
+  });
+
+  it("whose answers are read back from its outcome comment", () => {
+    const thread = runStartedOnA();
+
+    const [outcome] = commentsOn(thread.requestChangesRunFinishes(EMPTY, B, 40), 50);
+
+    expect(requestChangesAnswersIn(outcome ?? "")).toEqual({ review: 777, reviewMiss: false, amendsTicket: true });
   });
 });

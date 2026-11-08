@@ -4,7 +4,7 @@ import { evidenceSection, isUi, withoutEvidence } from "../evidence/uiEvidence.t
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { consideredSection } from "./considered.ts";
 import { type ImplementerAnswers, parseImplementOutput } from "./implementOutput.ts";
-import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
+import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
 import { conflictRunEnded, owedConflictRun, requestChangesRunEnded } from "./conflicts.ts";
@@ -12,6 +12,7 @@ import {
   CONFLICT_RUN_MARKER,
   EMPTY_DIFF_MARKER,
   requestChangesAnswersMarker,
+  REQUEST_CHANGES_RUN_EMPTY_MARKER,
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunStartedMarker,
   RETRY_PUSH_MARKER,
@@ -242,17 +243,17 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   const recorded = fixes.review !== undefined && answers !== undefined ? answerLines(fixes.review, answers) : null;
   // Merging main in or rebasing onto it, to fix a conflict, is a change even with none of the run's own.
   if (changes.net.length === 0 && changes.updatedFromMain !== true && mainMerge === undefined) {
+    // A Request-changes run's empty diff is no Verdict, so it never costs a Retry (#388).
+    if (requestChanges) return { kind: "act", actions: requestChangesRunEmpty(pullRequest, fixes, branch, operator, recorded) };
     return {
       kind: "act",
       actions: verdictActions(
         fixes,
-        // Its Verdict is the Request-changes run's, so it uses no retry.
-        requestChanges ? { ...pullRequest, requestChangesRun: true } : pullRequest,
+        pullRequest,
         {
           verdict: "execution-flaw",
           source: "empty-diff",
-          findings: `The Implementer's ${requestChanges ? "Request-changes run" : "retry"} on \`${branch}\` committed no change, so there was nothing to review.`,
-          answers: recorded,
+          findings: `The Implementer's retry on \`${branch}\` committed no change, so there was nothing to review.`,
         },
         operator,
       ),
@@ -288,6 +289,46 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       ...previewToLink(evidence, config, branch, pullRequest.number),
     ],
   };
+}
+
+/**
+ * A Request-changes run, not told to merge main in, that committed nothing
+ * (#388). It posts no Verdict and starts no Retry: its note is its outcome,
+ * which ends its time in flight and settles the Request changes it read, and
+ * carries its answers about its review (#369). The empty-diff rule judges only
+ * the run's own commits, so a head that moved while it worked, as when the
+ * Operator pushed the change themselves, was never judged: Review runs on it,
+ * through agent:review, and its Verdict, marked as from a Request-changes
+ * run, decides what's next. A head that didn't move goes to the Operator, as
+ * a Request-changes run that couldn't bring main in does, but its note counts
+ * as no conflict attempt. The PR is never closed.
+ */
+function requestChangesRunEmpty(
+  pullRequest: PullRequestSnapshot,
+  fixes: NonNullable<ImplementRunFinished["fixes"]>,
+  branch: string,
+  operator: string,
+  recorded: AnswerLines | null,
+): Action[] {
+  const { number, headSha } = pullRequest;
+  const started = fixes.headSha.slice(0, 7);
+  const head = headSha.slice(0, 7);
+  const moved = headSha !== fixes.headSha;
+  const body = [
+    REQUEST_CHANGES_RUN_EMPTY_MARKER,
+    ...(recorded === null ? [] : [recorded.marker]),
+    moved
+      ? `The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}, the head it started on, which moved to ${head} while it worked. Review runs on ${head}, and its Verdict decides what's next. No retry was used.`
+      : `@${operator} The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}, so your requested changes aren't built, and it's yours from here. No retry was used.`,
+    "",
+    ...(recorded === null ? [] : [...recorded.lines, ""]),
+    `[The run](${fixes.runUrl})`,
+  ].join("\n");
+  const comment: Action = { kind: "comment", issue: number, body };
+  return moved
+    ? // It notifies nobody, and takes itself off as the Review starts.
+      [comment, { kind: "add-labels", issue: number, labels: [REVIEW_LABEL] }]
+    : [comment, { kind: "add-labels", issue: number, labels: [READY_FOR_HUMAN] }, { kind: "mark-ready-for-review", pullRequest: number }];
 }
 
 /**
