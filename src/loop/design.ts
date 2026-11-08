@@ -5,6 +5,7 @@ import type { SentBack } from "./backToDesign.ts";
 import { withCarriedLines } from "./carriedLines.ts";
 import { consideredSection } from "./considered.ts";
 import {
+  type DesignAgentBrief,
   dependencyOrder,
   parseDesignTurnOutput,
   type DesignTurnOutput,
@@ -602,7 +603,7 @@ function commaList(issues: readonly CreatedIssue[]): (string | CreatedIssue)[] {
 }
 
 /** The small outcome: the issue becomes its own agent brief, ready for an Implementer. */
-function rewriteAsBrief(issueNumber: number, comment: string, brief: AgentBrief, issue: IssueSnapshot): Action[] {
+function rewriteAsBrief(issueNumber: number, comment: string, brief: DesignAgentBrief, issue: IssueSnapshot): Action[] {
   return [
     { kind: "edit-issue-body", issue: issueNumber, body: rewrittenBody(briefBody(brief), issue) },
     {
@@ -615,7 +616,11 @@ function rewriteAsBrief(issueNumber: number, comment: string, brief: AgentBrief,
       ].join("\n"),
     },
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
-    { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_AGENT] },
+    // The session sets or clears the Stepped-up start as it rewrites the Ticket (ADR-0014); left out, the mark stays as it is.
+    ...(brief.stepUp === false && issue.labels.includes(STEP_UP_LABEL)
+      ? [{ kind: "remove-label", issue: issueNumber, label: STEP_UP_LABEL } as const]
+      : []),
+    { kind: "add-labels", issue: issueNumber, labels: brief.stepUp === true ? [READY_FOR_AGENT, STEP_UP_LABEL] : [READY_FOR_AGENT] },
   ];
 }
 
