@@ -46,11 +46,12 @@ const REMOTE = () => ({ serverUrl: `file://${root}`, repo: { owner: "acme", name
  * what it made on top of `baseSha`; `mergeMain` is the main head a
  * Request-changes run was told to merge in (#341).
  */
-async function rebuild(baseSha: string, mergeMain: string | null = null, mainAtStart: string | null = null) {
+/** A run on its own branch: a Request-changes run whenever it names a main to merge, unless told otherwise. */
+async function rebuild(baseSha: string, mergeMain: string | null = null, started: string | null = null, requestChanges = mergeMain !== null) {
   const head = await git(clone, "rev-parse", "HEAD");
   const bundle = join(root, "agent-branch.bundle");
   await git(clone, "bundle", "create", "--quiet", bundle, `refs/heads/${BRANCH}`, `^${baseSha}`);
-  return rebuildAgentBranch({ name: BRANCH, base: { ref: BRANCH, sha: baseSha }, head }, bundle, REMOTE(), mergeMain, mainAtStart);
+  return rebuildAgentBranch({ name: BRANCH, base: { ref: BRANCH, sha: baseSha }, head }, bundle, REMOTE(), { requestChanges, mergeMain, started });
 }
 
 const paths = (changes: readonly { path: string; from?: string }[]) => [...new Set(changes.map((change) => change.path))].sort();
@@ -220,10 +221,51 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
   it("that committed nothing didn't resolve it", async () => {
     const main = await mainConflicts();
 
-    const branch = await rebuildAgentBranch({ name: BRANCH, base: { ref: BRANCH, sha: prHead }, head: null }, join(root, "none.bundle"), REMOTE(), main);
+    const branch = await rebuildAgentBranch({ name: BRANCH, base: { ref: BRANCH, sha: prHead }, head: null }, join(root, "none.bundle"), REMOTE(), {
+      requestChanges: true,
+      mergeMain: main,
+      started: main,
+    });
 
     expect(branch.changes.mainMerge).toEqual({ main, resolved: false });
     expect(branch.head).toBeNull();
+  });
+
+  it("that committed nothing is judged against the main it was told to merge when main moved on after the Kit job read it", async () => {
+    // The Kit job read main before it moved, and the PR didn't conflict then; the run was told to merge main as it is now.
+    const started = await git(remote, "rev-parse", "refs/heads/main");
+    const main = await mainConflicts();
+
+    const branch = await rebuildAgentBranch({ name: BRANCH, base: { ref: BRANCH, sha: prHead }, head: null }, join(root, "none.bundle"), REMOTE(), {
+      requestChanges: true,
+      mergeMain: main,
+      started,
+    });
+
+    expect(branch.changes.mainMerge).toEqual({ main, resolved: false });
+  });
+
+  it("is judged against main as the run started, even when its result names no main to merge, if its PR conflicted with it", async () => {
+    const main = await mainConflicts();
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change, without main");
+
+    const branch = await rebuild(prHead, null, main, true);
+
+    expect(branch.changes.mainMerge).toEqual({ main, resolved: false });
+  });
+
+  it("whose result names a main that's neither main as it started nor as it is now is judged against main as it is now", async () => {
+    const told = await mainConflicts();
+    await mergesMain();
+    const seed = join(root, "seed");
+    const between = await commit(seed, { "src/shared.ts": "shared from main, again\n" }, "Main moves on");
+    await git(seed, "push", "--quiet", "origin", "main");
+    const now = await commit(seed, { "src/shared.ts": "shared from main, a third time\n" }, "Main moves on again");
+    await git(seed, "push", "--quiet", "origin", "main");
+
+    const branch = await rebuild(prHead, between, told);
+
+    expect(branch.changes.mainMerge).toEqual({ main: now, resolved: false });
   });
 
   it("is the only run judged against a main head: any other has no mainMerge", async () => {
@@ -358,7 +400,7 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "refuse", paths: ["AGENTS.md"] });
   });
 
-  it("judges the conflict against main as the run started when its result names some other commit", async () => {
+  it("judges the conflict against main itself when its result names some other commit", async () => {
     const main = await mainConflicts();
     await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change, without main");
 
