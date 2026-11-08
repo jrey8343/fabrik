@@ -1830,7 +1830,7 @@ describe("the Weekly summary", () => {
           ],
         }),
       );
-      expect(body).toContain("- [#15](https://github.com/owner/product/issues/15) TypeError in checkout: Monitor issue in needs-info for 30 hours, its question is yours");
+      expect(body).toContain("- [#15](https://github.com/owner/product/issues/15) TypeError in checkout: Monitor issue's question unanswered for 30 hours");
     });
 
     it("gives each repo a section listing what waits on the Operator, with its age and any Operator wait", () => {
