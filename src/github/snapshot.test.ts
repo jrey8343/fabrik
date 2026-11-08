@@ -2325,4 +2325,35 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
       requestChangesRunInFlight: 101,
     });
   });
+
+  it("counts the Operator's own Request changes on the draft while their run works, and no one else's (#341)", async () => {
+    const bot = { __typename: "Bot" };
+    const review = (databaseId: number, submittedAt: string, login: string) => ({ databaseId, submittedAt, author: { login, __typename: "User" } });
+    const pullRequest = node(50, "CONFLICTING", {
+      comments: {
+        pageInfo: { hasPreviousPage: false },
+        nodes: [{ body: "<!-- fabrik:request-changes-run-started 101 -->\nStarting.", createdAt: "2026-11-07T04:01:00Z", author: bot }],
+      },
+      changesRequests: {
+        nodes: [review(101, "2026-11-07T04:00:00Z", "jrey"), review(102, "2026-11-07T04:30:00Z", "jrey"), review(103, "2026-11-07T04:31:00Z", "teammate")],
+      },
+      draftEvents: {
+        pageInfo: { hasPreviousPage: false },
+        nodes: [
+          { __typename: "ReadyForReviewEvent", createdAt: "2026-11-07T03:00:00Z" },
+          { __typename: "ConvertToDraftEvent", createdAt: "2026-11-07T04:01:00Z" },
+        ],
+      },
+      isDraft: true,
+    });
+
+    const snapshot = await gatherSnapshot(githubReading([[pullRequest]]).github, repo, { kind: "main-pushed", head: MAIN }, "jrey", APP_LOGIN);
+
+    expect(snapshot.conflicts?.pullRequests[0]?.pullRequest).toMatchObject({
+      unbuiltChangesRequests: [{ review: 101 }, { review: 102 }],
+      notedChangesRequests: [101, 102],
+      requestChangesRunInFlight: 101,
+      requestChangesRunReviews: [101],
+    });
+  });
 });

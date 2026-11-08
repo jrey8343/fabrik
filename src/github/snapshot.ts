@@ -70,6 +70,7 @@ import {
   requestChangesRunIn,
   requestChangesSinceRunIn,
   verdictsStanding,
+  leftDraftSinceVerdictIn,
   researchRunFailedIn,
   verdictsIn,
 } from "./threads.ts";
@@ -474,9 +475,9 @@ export async function gatherSnapshot(
   // A push to the default branch may leave an agent PR conflicting with it; the tick catches any the push missed (#304).
   const conflicts =
     event.kind === "main-pushed" || event.kind === "kit-config-changed"
-      ? await gatherConflicts(github, repo, new Date().toISOString(), appLogin, wait)
+      ? await gatherConflicts(github, repo, new Date().toISOString(), appLogin, operator ?? owner, wait)
       : event.kind === "scheduled-tick"
-        ? await gatherConflicts(github, repo, event.now, appLogin, wait)
+        ? await gatherConflicts(github, repo, event.now, appLogin, operator ?? owner, wait)
         : null;
   // By default the Operator owns the Product repos they run Fabrik in.
   const theOperator = part?.operator ?? operator ?? owner;
@@ -1212,7 +1213,7 @@ async function gatherPullRequest(
   }
   return {
     issue: null,
-    pullRequest: pullRequestSnapshotOf(await withEarlierComments(github, repo, pullRequest), appLogin),
+    pullRequest: pullRequestSnapshotOf(await withEarlierComments(github, repo, pullRequest), appLogin, operator ?? data.repository.owner.login),
     dispatch: null,
     designQueue: null,
     operator: operator ?? data.repository.owner.login,
@@ -1223,11 +1224,12 @@ async function gatherPullRequest(
 type PullRequestNode = NonNullable<PullRequestQueryResult["repository"]["pullRequest"]>;
 
 /** A PR as the core sees it, from what PULL_REQUEST_FIELDS read of it. */
-function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | null): PullRequestSnapshot {
+function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | null, operator: string | null = null): PullRequestSnapshot {
   const fromBots = pullRequest.comments.nodes.filter((comment) => comment.author?.__typename === "Bot");
   const botComments = fromBots.map((comment) => comment.body);
   // Every review still requesting changes, however old: GitHub lists a dismissed one no longer.
   const standing = new Set(pullRequest.changesRequests.nodes.map(({ databaseId }) => databaseId));
+  const history = historyOf(pullRequest, fromBots);
   return {
     number: pullRequest.number,
     isAgent: isAgentPullRequest({
@@ -1240,13 +1242,14 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     headSha: pullRequest.headRefOid,
     labels: pullRequest.labels.nodes.map((label) => label.name),
     // Only a bot's markers count, so nobody can fake a Verdict or a Request-changes run by quoting one.
-    verdicts: verdictsStanding(verdictsIn(botComments), standing),
+    verdicts: verdictsStanding(botComments, standing),
     requestChangesRun: requestChangesRunIn(botComments),
     conflictRun: conflictRunIn(botComments),
     conflictAttempts: conflictAttemptsIn(botComments),
     conflictRunInFlight: conflictRunInFlightIn(botComments),
     pushedSinceVerdict: pushedSinceVerdictIn(botComments),
-    ...requestChangesSinceRunIn(historyOf(pullRequest, fromBots), standing),
+    ...requestChangesSinceRunIn(history, standing, operator),
+    leftDraftSinceVerdict: leftDraftSinceVerdictIn(history),
     url: pullRequest.url,
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
     uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
@@ -1325,6 +1328,7 @@ async function gatherConflicts(
   repo: Repo,
   now: string,
   appLogin: string | null,
+  operator: string,
   wait: (ms: number) => Promise<void>,
 ): Promise<ConflictSnapshot> {
   type AgentNode = ConflictsQueryResult["repository"]["pullRequests"]["nodes"][number];
@@ -1351,7 +1355,7 @@ async function gatherConflicts(
   // Each agent PR's earlier comments are read once, after the last read.
   const pullRequests: ConflictCandidate[] = [];
   for (const { node, mergeable } of agents) {
-    pullRequests.push({ pullRequest: pullRequestSnapshotOf(await withEarlierComments(github, repo, node), appLogin), mergeable });
+    pullRequests.push({ pullRequest: pullRequestSnapshotOf(await withEarlierComments(github, repo, node), appLogin, operator), mergeable });
   }
   return { main: head, now, pullRequests };
 }

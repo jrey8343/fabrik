@@ -166,29 +166,36 @@ export type PullRequestHistoryItem =
  *
  * A review counts only if the PR was out of draft when it was submitted, as
  * the event path's Request changes only acts on one at the Merge gate; an
- * agent PR opens as a draft. One on a draft counts too while a
- * Request-changes run is in flight, and is that run's from then on. A run is
- * started by the Kit's note naming its reviews, or by an Execution flaw that
- * gave way to them, and is in flight until it pushes, is given a Verdict or
- * ends, or the PR leaves draft. Its push or Verdict settles the reviews there
- * were when it started, which it read, but not one that came in while it
- * worked; a pass settles every review before it, its Review having read them
- * all as part of the Ticket (ADR-0010). A run that ended without pushing
- * settles nothing: its reviews stay unbuilt, and noted, so the Kit doesn't
- * note them again. A dismissed review isn't `standing`, and a run whose every
- * review was dismissed isn't in flight; `standing` is read from the history
- * unless given.
+ * agent PR opens as a draft. The Operator's own on a draft counts too, once a
+ * Request-changes run has put the PR in draft for its reviews: the Kit counts
+ * it as noted, so neither check notes it, but it never keeps that run in
+ * flight, and the run never read it. Anyone else's on a draft does nothing.
+ * A run is started by the Kit's note naming its reviews, or by an Execution
+ * flaw that gave way to them, and is in flight until it pushes, is given a
+ * Verdict or ends, or the PR leaves draft. Its push or Verdict settles the
+ * reviews there were when it started, which it read, but not one that came in
+ * while it worked; a pass settles every review before it, its Review having
+ * read them all as part of the Ticket (ADR-0010). A run that ended without
+ * pushing settles nothing: its reviews stay unbuilt, and noted, so the Kit
+ * doesn't note them again. A dismissed review isn't `standing`, and a run
+ * whose every review was dismissed isn't in flight; `standing` is read from
+ * the history unless given.
  */
 export function requestChangesSinceRunIn(
   history: readonly PullRequestHistoryItem[],
   standing: ReadonlySet<number> = standingIn(history),
-): Pick<PullRequestSnapshot, "unbuiltChangesRequests" | "notedChangesRequests" | "requestChangesRunInFlight" | "requestChangesRunReviews"> {
+  operator: string | null = null,
+): Pick<
+  PullRequestSnapshot,
+  "unbuiltChangesRequests" | "notedChangesRequests" | "requestChangesRunInFlight" | "requestChangesRunReviews" | "requestChangesRunSince"
+> {
   // Stable, so items at the same time keep the order they were read in.
   const ordered = [...history].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
   let draft = true;
   let reviews: UnbuiltChangesRequest[] = [];
   let noted: number[] = [];
   let inFlight: readonly number[] | null = null;
+  let since: string | null = null;
   // The reviews there were when the run in flight started, which it read; one that came in later it never saw.
   let read: readonly number[] = [];
   for (const item of ordered) {
@@ -200,19 +207,21 @@ export function requestChangesSinceRunIn(
         draft = false;
         inFlight = null;
         break;
-      case "changes-requested":
-        // A review on a draft counts only while a Request-changes run is in flight, which is why the PR is a draft:
-        // it amends what that run builds, so it becomes that run's too.
-        if (!draft || inFlight !== null) {
+      case "changes-requested": {
+        const operators = operator !== null && item.reviewer === operator && !item.reviewerIsBot;
+        const joins = draft && inFlight !== null && operators;
+        if (!draft || joins) {
           reviews.push({ review: item.review, reviewer: item.reviewer, reviewerIsBot: item.reviewerIsBot, submittedAt: item.at });
         }
-        if (draft && inFlight !== null) inFlight = [...inFlight, item.review];
+        if (joins) noted = [...noted, item.review];
         break;
+      }
       case "bot-comment": {
         const started = startedReviewsIn(item.body) ?? verdictsIn([item.body])[0]?.requestChangesFirst ?? null;
         if (started !== null) {
           noted = [...noted, ...started.filter((review) => !noted.includes(review))];
           inFlight = started;
+          since = item.at;
           read = reviews.map(({ review }) => review);
         } else if (settlesRequestChanges(item.body)) {
           // A pass read them all; a Request-changes run's push or Verdict settles only those its run read.
@@ -233,7 +242,23 @@ export function requestChangesSinceRunIn(
     notedChangesRequests: noted,
     requestChangesRunInFlight: live.length === 0 ? null : Math.max(...live),
     requestChangesRunReviews: live.length === 0 ? [] : (inFlight ?? []),
+    requestChangesRunSince: live.length === 0 ? null : since,
   };
+}
+
+/**
+ * Whether the PR has left draft since its latest Verdict: a Retry that Verdict
+ * called for works on a draft, so once the Operator took the PR back, or the
+ * Kit handed it to them, none is in flight, even if the PR is a draft again.
+ */
+export function leftDraftSinceVerdictIn(history: readonly PullRequestHistoryItem[]): boolean {
+  const ordered = [...history].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  let left = false;
+  for (const item of ordered) {
+    if (item.kind === "bot-comment" && verdictsIn([item.body]).length > 0) left = false;
+    else if (item.kind === "ready") left = true;
+  }
+  return left;
 }
 
 /** Whether a Kit comment settles the Request changes before it: a Request-changes run's push note or Verdict, or a pass. */
@@ -252,13 +277,27 @@ export function standingIn(history: readonly PullRequestHistoryItem[]): Readonly
 }
 
 /**
- * The Verdicts as they stand (#341): an Execution flaw that gave way to Request
- * changes the Operator has since dismissed, every one, is the Execution flaw it
- * would have been, and counts toward the Ticket's Retries like any other.
+ * The Verdicts in these comments as they stand (#341): an Execution flaw that
+ * gave way to Request changes the Operator then dismissed, every one, before
+ * its Request-changes run landed is the Execution flaw it would have been, and
+ * counts toward the Ticket's Retries like any other. Once that run has pushed
+ * or been given a Verdict, the flaw gave way for good, whatever is dismissed
+ * later.
  */
-export function verdictsStanding(verdicts: readonly VerdictRecord[], standing: ReadonlySet<number>): VerdictRecord[] {
-  return verdicts.map((record) => {
-    if (record.requestChangesFirst === undefined || record.requestChangesFirst.some((review) => standing.has(review))) return record;
+export function verdictsStanding(comments: readonly string[], standing: ReadonlySet<number>): VerdictRecord[] {
+  const records: VerdictRecord[] = [];
+  // The gave-way flaws whose Request-changes run hasn't landed yet, by index.
+  let unlanded: number[] = [];
+  for (const body of comments) {
+    if (body.startsWith(REQUEST_CHANGES_RUN_MARKER)) unlanded = [];
+    const [record] = verdictsIn([body]);
+    if (record === undefined) continue;
+    if (record.requestChanges) unlanded = [];
+    records.push(record);
+    if (record.requestChangesFirst !== undefined) unlanded.push(records.length - 1);
+  }
+  return records.map((record, index) => {
+    if (!unlanded.includes(index) || record.requestChangesFirst?.some((review) => standing.has(review)) !== false) return record;
     const { requestChangesFirst: _dismissed, ...flaw } = record;
     return flaw;
   });

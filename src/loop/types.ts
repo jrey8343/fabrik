@@ -596,6 +596,10 @@ export interface PullRequestSnapshot {
    * and only it lands (#341).
    */
   readonly requestChangesRunReviews: readonly number[];
+  /** When the Kit's note or Verdict that started that run was posted, while it's in flight; else null. */
+  readonly requestChangesRunSince: string | null;
+  /** Whether the PR has left draft since its latest Verdict, so no Retry that Verdict called for is in flight. */
+  readonly leftDraftSinceVerdict: boolean;
   /** Its web address, which the Kit's notes link the Operator's reviews from. */
   readonly url: string;
   /**

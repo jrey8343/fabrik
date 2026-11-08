@@ -96,7 +96,12 @@ describe("main moving under a conflicting agent PR at the Merge gate", () => {
   });
 
   it("doesn't rebase a PR with a Request-changes run in flight that never went back to draft: it starts that run, which brings main in", () => {
-    const pullRequest = atMergeGate({ notedChangesRequests: [9], requestChangesRunInFlight: 9, requestChangesRunReviews: [9] });
+    const pullRequest = atMergeGate({
+      notedChangesRequests: [9],
+      requestChangesRunInFlight: 9,
+      requestChangesRunReviews: [9],
+      requestChangesRunSince: "2025-12-31T00:00:00Z",
+    });
 
     const plan = planFor(MAIN_PUSHED, conflictsSnapshot([{ pullRequest, mergeable: false }]), kitConfig());
 

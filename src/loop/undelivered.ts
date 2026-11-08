@@ -64,12 +64,17 @@ export function actOnUndelivered(
   operator: string,
   now: string,
   held: number | null = null,
+  runMinutes: number = UNDELIVERED_GRACE_MINUTES,
 ): Action[] | null {
-  const stalled = stalledRequestChangesRun(pullRequest);
+  const stalled = stalledRequestChangesRun(pullRequest, now);
   if (stalled !== null) return stalled;
   if (!actsOn(pullRequest)) return null;
   const unnoted = unnotedChangesRequests(pullRequest, operator);
-  const cutoff = Date.parse(now) - UNDELIVERED_GRACE_MINUTES * 60_000;
+  // GitHub delivers a review on a PR that merges cleanly, so a run may be working for it whose claim never noted it:
+  // the Kit waits until that run can't still be working (`runMinutes`, the Implement job's timeout) before starting
+  // another. A PR that conflicts, or may, had none started.
+  const grace = mergeable === true ? Math.max(runMinutes, UNDELIVERED_GRACE_MINUTES) : UNDELIVERED_GRACE_MINUTES;
+  const cutoff = Date.parse(now) - grace * 60_000;
   if (!unnoted.some(({ submittedAt }) => Date.parse(submittedAt) <= cutoff)) return null;
   const reviews = unnoted.map(({ review }) => review);
   const { number } = pullRequest;
@@ -109,11 +114,15 @@ export function actOnUndelivered(
  * A Request-changes run in flight on a PR still out of draft, or null: the
  * Kit noted it, but the PR was never turned to draft and the run never
  * started, as when what followed the note failed (#341). Only that leaves one
- * so: the PR leaving draft ends the run in flight. The check starts it, with a
- * fresh agent:implement, which turns the PR to draft first.
+ * so: the PR leaving draft ends the run in flight. A note younger than the
+ * grace period is left alone, since the job that posted it turns the PR to
+ * draft moments later. The check starts it, with a fresh agent:implement,
+ * which turns the PR to draft first.
  */
-function stalledRequestChangesRun(pullRequest: PullRequestSnapshot): Action[] | null {
-  const { ticket } = pullRequest;
+function stalledRequestChangesRun(pullRequest: PullRequestSnapshot, now: string): Action[] | null {
+  const { ticket, requestChangesRunSince: since } = pullRequest;
   if (!pullRequest.isAgent || ticket === null || !pullRequest.open || pullRequest.draft) return null;
-  return pullRequest.requestChangesRunInFlight === null ? null : [{ kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] }];
+  if (pullRequest.requestChangesRunInFlight === null || since === null) return null;
+  if (Date.parse(now) - Date.parse(since) < UNDELIVERED_GRACE_MINUTES * 60_000) return null;
+  return [{ kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] }];
 }

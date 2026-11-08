@@ -2,6 +2,7 @@ import { auditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
 import { failureNotice } from "./failures.ts";
+import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 import { checkConflicts } from "./conflicts.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
@@ -206,7 +207,12 @@ function thenCheckDesignQueue(plan: Plan): Plan {
 function conflictCheck(snapshot: Snapshot, config: KitConfig): Plan {
   return snapshot.conflicts === null
     ? missingFromSnapshot("the open agent PRs a conflict check weighs")
-    : checkConflicts(snapshot.conflicts, snapshot.operator, heldOn(snapshot.kitIssues, config));
+    : checkConflicts(
+        snapshot.conflicts,
+        snapshot.operator,
+        heldOn(snapshot.kitIssues, config),
+        implementJobTimeoutMinutes(config.roles.implement.timeoutMinutes),
+      );
 }
 
 /** The conflict check as one of the tick's gates. */

@@ -8,10 +8,17 @@ import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
 import { conflictRunEnded, owedConflictRun, requestChangesRunEnded } from "./conflicts.ts";
-import { CONFLICT_RUN_MARKER, EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, UNMARKED_RETRY_PUSH } from "./markers.ts";
+import {
+  CONFLICT_RUN_MARKER,
+  EMPTY_DIFF_MARKER,
+  REQUEST_CHANGES_RUN_MARKER,
+  requestChangesRunStartedMarker,
+  RETRY_PUSH_MARKER,
+  UNMARKED_RETRY_PUSH,
+} from "./markers.ts";
 import { owedRequestChangesRun } from "./mergeGate.ts";
 import { MAX_RETRIES, owedRetry, type RunInFlight, runInFlight, runName, stepsUp } from "./retry.ts";
-import { reviewLinks } from "./undelivered.ts";
+import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { verdictActions } from "./review.ts";
 import type {
   Action,
@@ -165,7 +172,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   // A Request-changes run lands only while it's the one in flight (#341): one started twice for the same review,
   // whose run already had its outcome, or left over for a review a later run took over from, pushes nothing over it.
   const inFlight = runInFlight(pullRequest);
-  if (requestChanges && inFlight?.kind !== "request-changes") return requestChangesRunDropped(pullRequest, fixes.review, inFlight);
+  if (requestChanges && inFlight?.kind !== "request-changes") return requestChangesRunDropped(pullRequest, fixes.review, inFlight, operator);
   if (requestChanges && fixes.review !== undefined && !pullRequest.requestChangesRunReviews.includes(fixes.review)) {
     return {
       kind: "nothing",
@@ -383,11 +390,18 @@ function whyNotRetriedOnto(
  * branch is never pushed. Mostly that needs no word, as for a second run of a
  * review whose first already landed, or one the Operator took the PR back
  * from. But once the Operator has dismissed the review the Kit noted it for,
- * nothing else would move the PR on: an Execution flaw that gave way to the
- * review is the flaw it was, and its Retry starts; otherwise the Kit put the
- * PR in draft for this run, and puts it back at the Merge gate.
+ * nothing else would move the PR on. A Request changes of theirs no run has
+ * built, as one they submitted on the draft meanwhile, goes first: the Kit
+ * starts its run. Otherwise an Execution flaw that gave way to the review is
+ * the flaw it was, and its Retry starts; otherwise the Kit put the PR in
+ * draft for this run, and puts it back at the Merge gate.
  */
-function requestChangesRunDropped(pullRequest: PullRequestSnapshot, review: number | undefined, inFlight: RunInFlight | null): Plan {
+function requestChangesRunDropped(
+  pullRequest: PullRequestSnapshot,
+  review: number | undefined,
+  inFlight: RunInFlight | null,
+  operator: string,
+): Plan {
   const nothing: Plan = { kind: "nothing", reason: `#${pullRequest.number} has no Request-changes run in flight, so the run's branch isn't pushed` };
   const dismissed =
     review !== undefined &&
@@ -395,6 +409,24 @@ function requestChangesRunDropped(pullRequest: PullRequestSnapshot, review: numb
     !pullRequest.unbuiltChangesRequests.some((unbuilt) => unbuilt.review === review);
   if (!dismissed || pullRequest.ticket === null || !pullRequest.open || !pullRequest.draft) return nothing;
   const lead = `Your Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, [review])}) was dismissed while its run worked, so the Kit didn't push the run's work.`;
+  const waiting = operatorChangesRequests(pullRequest, operator).map((unbuilt) => unbuilt.review);
+  if (waiting.length > 0 && (inFlight === null || inFlight.kind === "retry")) {
+    return {
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: pullRequest.number,
+          body: [
+            requestChangesRunStartedMarker(waiting),
+            `${lead} The Kit is starting the Request-changes run for your Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, waiting)}) instead. It runs on the Step-up model and uses no retry, and Review runs again on its push.`,
+          ].join("\n"),
+        },
+        // A fresh agent:implement on the Ticket starts the run the note put in flight. It notifies nobody.
+        { kind: "add-labels", issue: pullRequest.ticket, labels: [DISPATCH_LABEL] },
+      ],
+    };
+  }
   if (inFlight?.kind === "retry") {
     return {
       kind: "act",

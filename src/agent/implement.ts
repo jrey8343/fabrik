@@ -249,7 +249,7 @@ export async function requestChangesContext(
       ...(earlier.length === 0
         ? []
         : [
-            "On this run, also build each of these the pull request doesn't meet yet, as well as the requested changes above: GitHub may have started no run for one. Where they differ, the later one wins. One that asks how the branch takes in `main`, such as a rebase, was done when its own run brought `main` in: don't act on it again.",
+            "On this run, also build each of these the pull request doesn't meet yet, as well as the requested changes above: GitHub may have started no run for one. Where they differ, the later one wins. One that asks how the branch takes in `main`, such as a rebase, never rewrites the PR's history: if the PR doesn't hold `origin/main` yet, merge it in instead.",
           ]),
       ...operatorCommentsSection(others, 2, "(The Operator hasn't commented on it beyond the Request changes above.)"),
     ],

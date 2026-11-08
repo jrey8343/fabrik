@@ -19,12 +19,12 @@ import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, Plan, Pull
  * changes on it (src/loop/undelivered.ts, #341), or else a rebase onto main if
  * it's at the Merge gate and conflicts with it, or why there's neither.
  */
-export function checkConflicts(conflicts: ConflictSnapshot, operator: string, held: number | null = null): Plan {
+export function checkConflicts(conflicts: ConflictSnapshot, operator: string, held: number | null = null, runMinutes?: number): Plan {
   const { main, now } = conflicts;
   const reasons: string[] = [];
   const actions: Action[] = [];
   for (const candidate of conflicts.pullRequests) {
-    const undelivered = actOnUndelivered(candidate, operator, now, held);
+    const undelivered = actOnUndelivered(candidate, operator, now, held, runMinutes);
     if (undelivered !== null) {
       actions.push(...undelivered);
       continue;

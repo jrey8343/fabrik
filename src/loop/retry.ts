@@ -72,8 +72,9 @@ export function runInFlight(pullRequest: PullRequestSnapshot): RunInFlight | nul
   if (pullRequest.conflictRunInFlight !== null) return { kind: "conflict", main: pullRequest.conflictRunInFlight };
   const latest = pullRequest.verdicts.at(-1);
   if (latest === undefined || pullRequest.pushedSinceVerdict || latest.verdict !== "execution-flaw") return null;
-  // A Retry works on a draft: once the PR has left draft, as when the Kit handed it to the Operator, none is in flight.
-  if (!pullRequest.draft) return null;
+  // A Retry works on a draft: once the PR has left draft since the flaw, as when the Operator took it back or the Kit
+  // handed it to them, none is in flight, even after something turns the PR to draft again.
+  if (!pullRequest.draft || pullRequest.leftDraftSinceVerdict) return null;
   // One that gave way to the Operator's Request changes (#341) called for no Retry, while any of those reviews
   // stands; once the Operator has dismissed them all, it's the Execution flaw it would have been.
   const gaveWayTo = latest.requestChangesFirst ?? [];

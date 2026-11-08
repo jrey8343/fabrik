@@ -13,6 +13,7 @@ import {
   conflictAttemptsIn,
   conflictRunIn,
   conflictRunInFlightIn,
+  leftDraftSinceVerdictIn,
   type PullRequestHistoryItem,
   pushedSinceVerdictIn,
   requestChangesRunIn,
@@ -21,6 +22,7 @@ import {
   verdictsIn,
   verdictsStanding,
 } from "../github/threads.ts";
+import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 import { verdictMarker } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { Action, BranchChanges, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
@@ -70,13 +72,14 @@ class Thread {
       headSha: this.headSha,
       draft: this.draft,
       labels: this.labels,
-      verdicts: verdictsStanding(verdictsIn(comments), standingIn(this.history)),
+      verdicts: verdictsStanding(comments, standingIn(this.history)),
       requestChangesRun: requestChangesRunIn(comments),
       conflictRun: conflictRunIn(comments),
       conflictAttempts: conflictAttemptsIn(comments),
       conflictRunInFlight: conflictRunInFlightIn(comments),
       pushedSinceVerdict: pushedSinceVerdictIn(comments),
-      ...requestChangesSinceRunIn(this.history),
+      ...requestChangesSinceRunIn(this.history, standingIn(this.history), "operator"),
+      leftDraftSinceVerdict: leftDraftSinceVerdictIn(this.history),
       url: PR_URL,
     });
   }
@@ -281,12 +284,14 @@ describe("An undelivered Request changes", () => {
 });
 
 describe("An undelivered Request changes, beyond the first tick", () => {
-  it("on a PR that doesn't conflict: does the same, and the note doesn't mention a conflict", () => {
+  it("on a PR that doesn't conflict: does the same once the run GitHub would have started can't still be working, and the note doesn't mention a conflict", () => {
     const thread = new Thread();
     thread.mergeable = true;
     thread.review(5810278044, 14);
+    // GitHub delivered it, but its claim failed before noting it: its run may still be working until the Implement job's timeout.
+    expect(commentsOn(thread.tick(60), 50)).toEqual([]);
 
-    const tick = thread.tick(60);
+    const tick = thread.tick(14 + implementJobTimeoutMinutes(kitConfig().roles.implement.timeoutMinutes) + 1);
 
     expect(actionsOf(tick)).toContainEqual({ kind: "convert-to-draft", pullRequest: 50 });
     expect(addsImplement(tick)).toBe(true);
@@ -509,6 +514,22 @@ describe("A delivered Request changes", () => {
     expect(actionsOf(own)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
   });
 
+  it("whose run committed nothing doesn't give way to an earlier review its run read: no run is started for it again", () => {
+    const thread = new Thread();
+    thread.mergeable = true;
+    thread.review(201, 14);
+    thread.delivered(201, 14);
+    // The Operator takes the PR back mid-run, so 201 is noted but never built, then requests changes again.
+    thread.markReady(20);
+    thread.review(202, 22);
+    thread.delivered(202, 22);
+
+    const empty = thread.requestChangesRunFinishes({ net: [], commits: [], updatedFromMain: false }, B, 40, 202);
+
+    expect(commentsOn(empty, 50)[0]).not.toContain("goes first");
+    expect(startsOn(thread.implement())?.requestChanges).toBeUndefined();
+  });
+
   it("holds back a Retry that finishes while its run is in flight: even one that committed nothing posts no Verdict", () => {
     const thread = new Thread();
     thread.draft = true;
@@ -632,6 +653,30 @@ describe("An undelivered Request changes while a run is in flight on the PR", ()
     expect(commentsOn(next, 50)[0]).toContain("Retry 2 of 2 starts now");
   });
 
+  it("once the Operator dismisses it while its Retry works, a Request changes of theirs on the draft doesn't stop the Retry landing", () => {
+    const thread = reviewInFlight();
+    thread.reviewed("execution-flaw", 70);
+    thread.dismiss(5810278044);
+    expect(startsOn(thread.implement())).toMatchObject({ retry: 1 });
+    thread.review(5810278099, 80);
+
+    expect(actionsOf(thread.retryFinishes(BUILT, D, 90))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+  });
+
+  it("isn't brought back by dismissing its review after its Request-changes run built it: the flaw still uses no Retry", () => {
+    const thread = reviewInFlight();
+    thread.reviewed("execution-flaw", 70);
+    thread.implement();
+    thread.requestChangesRunFinishes(BUILT, D, 90);
+    thread.reviewed("pass", 100);
+    thread.dismiss(5810278044);
+    thread.review(6000, 110);
+    thread.delivered(6000, 110);
+    thread.requestChangesRunFinishes(BUILT, E, 130);
+
+    expect(commentsOn(thread.reviewed("execution-flaw", 140), 50)[0]).toContain("Retry 1 of 2 starts now");
+  });
+
   it("once the Operator dismisses it after its Request-changes run handed the PR over, no Retry is left in flight to hold the PR", () => {
     const thread = reviewInFlight();
     thread.mergeable = false;
@@ -643,6 +688,22 @@ describe("An undelivered Request changes while a run is in flight on the PR", ()
     const push = thread.mainPushed(120, MAIN_2);
 
     expect(actionsOf(push).some((action) => action.kind === "rebase-onto-main")).toBe(true);
+    // The rebase turns the PR back to draft, which doesn't bring the flaw's Retry back: the rebased head gets its Review.
+    expect(startsOn(thread.pushed(thread.headSha, 125))).toMatchObject({ role: "review" });
+  });
+
+  it("a Retry the Operator took the PR back from stays over once the Kit's rebase turns the PR to draft again", () => {
+    const thread = new Thread();
+    thread.draft = true;
+    thread.history.push({ kind: "draft", at: at(1) });
+    thread.headSha = B;
+    thread.reviewed("execution-flaw", 5);
+    thread.implement();
+    thread.markReady(10);
+
+    thread.mainPushed(20, MAIN_2);
+
+    expect(startsOn(thread.pushed(thread.headSha, 25))).toMatchObject({ role: "review" });
   });
 });
 
@@ -687,17 +748,35 @@ describe("The Request-changes run an undelivered Request changes started", () =>
     expect(actionsOf(landed)).toContainEqual({ kind: "mark-ready-for-review", pullRequest: 50 });
   });
 
-  it("whose review the Operator replaces mid-run still lands, and the replacement goes first if the Review finds it unbuilt", () => {
+  it("whose review the Operator replaces mid-run pushes nothing of the dismissed one, and starts the replacement's run instead", () => {
     const thread = runStarted();
     thread.dismiss(5810278044);
     thread.review(5810278099, 70);
 
     const landed = thread.requestChangesRunFinishes(BUILT, B, 90);
-    expect(actionsOf(landed)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
 
-    const verdict = thread.reviewed("execution-flaw", 100);
-    expect(commentsOn(verdict, 50)[0]).toContain("#pullrequestreview-5810278099");
-    expect(commentsOn(verdict, 50)[0]).toContain("goes first");
+    expect(actionsOf(landed).some((action) => action.kind === "push-branch")).toBe(false);
+    expect(commentsOn(landed, 50)[0]).toContain("#pullrequestreview-5810278099");
+    expect(addsImplement(landed)).toBe(true);
+    expect(startsOn(thread.implement())).toMatchObject({ requestChanges: { review: 5810278099 } });
+    expect(actionsOf(thread.requestChangesRunFinishes(BUILT, C, 120))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+  });
+
+  it("isn't joined by anyone else's review on the draft, which a resumed run is never started for", () => {
+    const thread = runStarted();
+    // Later, so with the larger ids: a run in flight is for the latest of its reviews.
+    thread.review(9810278044, 70, "teammate");
+    thread.review(9810278045, 71, "operator", true);
+
+    expect(startsOn(thread.implement())).toMatchObject({ requestChanges: { review: 5810278044 } });
+  });
+
+  it("a review that joined it is never noted as undelivered once the run hands the PR over", () => {
+    const thread = runStarted();
+    thread.review(5810278099, 70);
+    thread.requestChangesRunFinishes({ net: [], commits: [], updatedFromMain: false, mainMerge: { main: MAIN, resolved: false } }, B, 90);
+
+    expect(commentsOn(thread.tick(180), 50)).toEqual([]);
   });
 
   it("still starts when the PR never went back to draft after the note: re-adding agent:implement turns it to draft first", () => {
@@ -733,6 +812,17 @@ describe("The Request-changes run an undelivered Request changes started", () =>
       expect(startsOn(resumed)).toMatchObject({ requestChanges: { review: 5810278044 } });
     },
   );
+
+  it("isn't started again by a check that reads the PR in the moment between the note and turning the PR to draft", () => {
+    const thread = new Thread();
+    thread.mergeable = true;
+    thread.review(777, 14);
+    thread.failsAt = "convert-to-draft";
+    thread.delivered(777, 14);
+    thread.failsAt = null;
+
+    expect(addsImplement(thread.mainPushed(14))).toBe(false);
+  });
 
   it("of a delivered review whose claim failed before turning the PR to draft is started by the next check", () => {
     const thread = new Thread();

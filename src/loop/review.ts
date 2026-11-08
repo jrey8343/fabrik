@@ -166,7 +166,10 @@ export function verdictActions(
   },
   operator: string,
 ): Action[] {
-  const first = verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator) : null;
+  // A Request-changes run's own empty diff never gives way: it read every Request changes there was, and giving way
+  // would only start another run on the same reviews (#341).
+  const ownEmptyDiff = source === "empty-diff" && pullRequest.requestChangesRun;
+  const first = verdict === "execution-flaw" && !ownEmptyDiff ? requestChangesFirst(pullRequest, operator) : null;
   const record: VerdictRecord = {
     verdict,
     source,
