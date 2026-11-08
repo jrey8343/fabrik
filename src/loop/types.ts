@@ -565,6 +565,13 @@ export interface PullRequestSnapshot {
    * Verdict reads them to say whether the Retry it starts Steps up (ADR-0014).
    */
   readonly ticketLabels: readonly string[];
+  /**
+   * How many Implement runs on that Ticket ended in an empty diff since its
+   * last Design session, read like IssueSnapshot.emptyDiffs from the Ticket's
+   * comments through the PR's closing link, or 0 when there's no such link.
+   * Each used up one of the Ticket's Retries, so a Verdict counts on from them (#415).
+   */
+  readonly ticketEmptyDiffs: number;
   readonly open: boolean;
   readonly draft: boolean;
   /** Its head commit now. */
@@ -589,9 +596,9 @@ export interface PullRequestSnapshot {
   readonly conflictRunInFlight: string | null;
   /**
    * Whether that conflict-only run was started on a draft whose push GitHub
-   * never reviewed (#389), not a PR at the Merge gate: its push note doesn't
-   * say its Verdict uses no retry, as that Verdict counts as the unreviewed
-   * push's own would have. False while none is in flight.
+   * never reviewed (#389), not a PR at the Merge gate: its Verdict counts as
+   * the unreviewed push's own would have, so it isn't marked as from a
+   * conflict-only run. False while none is in flight.
    */
   readonly conflictRunOnUnreviewedDraft: boolean;
   /**
@@ -698,8 +705,9 @@ export interface VerdictRecord {
    */
   readonly requestChanges: boolean;
   /**
-   * True when it came from a conflict-only run (#304), which doesn't count as
-   * a retry either; absent otherwise, as on every marker from before them.
+   * True when it came from a conflict-only run (#304), which isn't a retry
+   * either, though an Execution flaw on its push calls for one and counts
+   * (#415); absent otherwise, as on every marker from before them.
    */
   readonly conflictRun?: true;
   /**

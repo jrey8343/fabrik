@@ -389,12 +389,13 @@ function applyConflictRun(
         kind: "comment",
         issue: pullRequest.number,
         body: [
-          // Marks the push as the run's outcome, and the next Verdict as from a conflict-only run, which uses no retry,
-          // unless the run was on a draft whose push GitHub never reviewed (#389): that Verdict counts as the push's own.
+          // Marks the push as the run's outcome, and the next Verdict as from a conflict-only run, which uses no retry but
+          // whose Execution flaw calls for one and counts (#415), unless the run was on a draft whose push GitHub never
+          // reviewed (#389): that Verdict is the push's own, unmarked.
           CONFLICT_RUN_MARKER,
           pullRequest.conflictRunOnUnreviewedDraft
             ? `The Implementer rebased \`${branch}\` onto \`main\` at ${main.slice(0, 7)} and resolved its conflicts; Review runs on it, and its Verdict counts as one on the push GitHub never reviewed would have.`
-            : `The Implementer rebased \`${branch}\` onto \`main\` at ${main.slice(0, 7)} and resolved its conflicts; Review runs again on it, and its Verdict uses no retry.`,
+            : `The Implementer rebased \`${branch}\` onto \`main\` at ${main.slice(0, 7)} and resolved its conflicts; Review runs again on it. The run used no retry, but an Execution flaw on it calls for one like any other.`,
           "",
           // Present: the on-a-PR contract requires it. It lists each conflicted file and how it was resolved.
           withoutMentions(output.fix ?? ""),

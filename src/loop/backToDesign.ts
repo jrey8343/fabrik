@@ -48,7 +48,7 @@ export function sentBackByOperator(pullRequest: PullRequestSnapshot): Action[] {
 export function backToDesignLine(pullRequest: PullRequestSnapshot, reason: BackToDesignReason): string {
   const ticket = pullRequest.ticket;
   const why =
-    reason === "design-flaw" ? "" : "This is the PR's third Execution flaw, which counts as a Design flaw. ";
+    reason === "design-flaw" ? "" : "This is the Ticket's third Execution flaw, which counts as a Design flaw. ";
   const branch = ticket === null ? "" : `, keeping its branch \`${agentBranchFor(ticket)}\``;
   const back = ticket === null ? "" : `, and #${ticket} goes back to design`;
   return `${why}This PR closes unmerged${branch}${back}.`;
@@ -70,7 +70,7 @@ export function backToDesignActions(
   const what =
     reason === "design-flaw"
       ? `The Reviewer gave #${pullRequest.number} a Design flaw`
-      : `#${pullRequest.number} had its third Execution flaw, which counts as a Design flaw`;
+      : `#${pullRequest.number} brought this Ticket's third Execution flaw, which counts as a Design flaw`;
   return [
     close,
     {

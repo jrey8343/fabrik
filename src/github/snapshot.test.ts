@@ -10,7 +10,7 @@ import type { RunRecord } from "../kit/runRecord.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
+import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
 import {
@@ -833,6 +833,8 @@ describe("Gathering who opened an issue", () => {
 interface ClosingIssue {
   readonly number: number;
   readonly labels: readonly string[];
+  /** Its comments' bodies, oldest first. */
+  readonly comments?: readonly string[];
 }
 
 /** The pull request a Loop event is about, as GitHub holds it: opened by `author`, with this body, closing these issues. */
@@ -869,7 +871,13 @@ function pullRequestGitHub({
             ...(/closingIssuesReferences/.test(pullRequestQuery)
               ? {
                   closingIssuesReferences: {
-                    nodes: closing.map((issue) => ({ number: issue.number, labels: { nodes: issue.labels.map((name) => ({ name })) } })),
+                    nodes: closing.map((issue) => ({
+                      number: issue.number,
+                      labels: { nodes: issue.labels.map((name) => ({ name })) },
+                      ...(/closingIssuesReferences[^]*comments\(/.test(pullRequestQuery)
+                        ? { comments: { nodes: (issue.comments ?? []).map((body) => ({ body })) } }
+                        : {}),
+                    })),
                   },
                 }
               : {}),
@@ -897,6 +905,26 @@ describe("Gathering the labels of the Ticket a pull request was cut for", () => 
   it("reads no Ticket labels when the PR closes no issue its branch names", async () => {
     expect(await gathered([{ number: 3, labels: ["fabrik:step-up"] }])).toMatchObject({ ticket: 7, ticketLabels: [] });
     expect(await gathered([])).toMatchObject({ ticket: 7, ticketLabels: [] });
+  });
+});
+
+describe("Gathering the empty diffs of the Ticket a pull request was cut for (#415)", () => {
+  const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
+  const gathered = async (closing: readonly ClosingIssue[]) =>
+    (await gatherSnapshot(pullRequestGitHub({ body: "Adds a waitlist.\n\nCloses #7", closing }), repo, pushed, null, APP_LOGIN)).pullRequest;
+  const emptyDiff = `${EMPTY_DIFF_MARKER}\nThe Implementer's branch for #7 changed nothing.`;
+
+  it("counts the Ticket's empty diffs from its comments, as the Ticket's own snapshot does", async () => {
+    const pullRequest = await gathered([
+      { number: 3, labels: [], comments: [emptyDiff] },
+      { number: 7, labels: ["ready-for-agent"], comments: ["Looks good.", emptyDiff, emptyDiff] },
+    ]);
+
+    expect(pullRequest).toMatchObject({ ticket: 7, ticketEmptyDiffs: 2 });
+  });
+
+  it("counts none when the PR closes no issue its branch names", async () => {
+    expect(await gathered([{ number: 3, labels: [], comments: [emptyDiff] }])).toMatchObject({ ticket: 7, ticketEmptyDiffs: 0 });
   });
 });
 
