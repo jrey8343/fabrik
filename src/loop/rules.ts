@@ -43,6 +43,7 @@ import { retroGate } from "./retroGate.ts";
 import { landRetro } from "./retroLanding.ts";
 import { startWeekly, weeklyRoleOf } from "./weeklyRuns.ts";
 import { dispatch } from "./dispatch.ts";
+import { sweepStuckTriggers } from "./triggerSweep.ts";
 import { applyRedChecks, applyReview, startReview, startReviewOnLabel } from "./review.ts";
 import type {
   Action,
@@ -186,7 +187,11 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // conflicting with main that a push to main missed (#304). And it runs a
       // Dispatch check, so a Ticket left waiting while every slot was full, or
       // marked ready by an event the Loop missed, starts within the hour (#418).
-      return thenCheckQueues(scheduledTickWith([auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config));
+      // First of all it sweeps trigger labels with no run behind them (#419),
+      // so a slot it frees can be filled by this tick's queue checks.
+      return thenCheckQueues(
+        alongside(stuckTriggers(event.now, snapshot), scheduledTickWith([auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config)),
+      );
   }
 }
 
@@ -197,12 +202,17 @@ const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
 function thenCheckQueues(plan: Plan): Plan {
   switch (plan.kind) {
     case "act":
-      return { kind: "act", actions: [...plan.actions, CHECK_DISPATCH, CHECK_DESIGN_QUEUE] };
+      return { ...plan, actions: [...plan.actions, CHECK_DISPATCH, CHECK_DESIGN_QUEUE] };
     case "nothing":
       return { kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] };
     case "fail":
       return plan;
   }
+}
+
+/** The stuck-trigger sweep (src/loop/triggerSweep.ts) on the snapshot's trigger-sweep slice, which only the tick gathers. */
+function stuckTriggers(now: string, snapshot: Snapshot): Plan {
+  return snapshot.triggers === null ? missingFromSnapshot("the trigger labels the stuck-trigger sweep weighs") : sweepStuckTriggers(now, snapshot.triggers, snapshot.operator);
 }
 
 /** The conflict check (src/loop/conflicts.ts) on the snapshot's conflict slice, which a push to main and the tick gather. */
@@ -240,14 +250,19 @@ function scheduledTickWith(gates: readonly TickGate[], now: string, snapshot: Sn
   return gates.reduce((plan, gate) => alongside(plan, gate(now, { ...snapshot, kitIssues }, config)), tick);
 }
 
-/** Both plans' actions, or why neither acts. */
+/** Both plans' actions and notes, or why neither acts. */
 function alongside(first: Plan, second: Plan): Plan {
   if (first.kind === "fail") return first;
   if (second.kind === "fail") return second;
   if (first.kind === "nothing" && second.kind === "nothing") {
     return { kind: "nothing", reason: `${first.reason}; ${second.reason}` };
   }
-  return { kind: "act", actions: [...actionsOf(first), ...actionsOf(second)] };
+  const notes = [...notesOf(first), ...notesOf(second)];
+  return { kind: "act", actions: [...actionsOf(first), ...actionsOf(second)], ...(notes.length === 0 ? {} : { notes }) };
+}
+
+function notesOf(plan: Plan): readonly string[] {
+  return plan.kind === "act" ? (plan.notes ?? []) : [];
 }
 
 function actionsOf(plan: Plan): readonly Action[] {

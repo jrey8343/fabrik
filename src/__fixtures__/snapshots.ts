@@ -7,11 +7,13 @@ import type {
   DispatchSnapshot,
   IssueSnapshot,
   KitConfig,
+  LabelledTrigger,
   NamedPullRequestSnapshot,
   Plan,
   PullRequestSnapshot,
   ResearchDecisionSnapshot,
   RetroIssueSnapshot,
+  RolesUnderWay,
   Snapshot,
   TicketSnapshot,
 } from "../loop/types.ts";
@@ -64,7 +66,7 @@ function parentOf({ parent, parentIssue }: Partial<IssueSnapshot>): Pick<IssueSn
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, conflicts: null, ...overrides };
+  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, conflicts: null, triggers: null, ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
@@ -111,7 +113,7 @@ export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
   overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "conflicts">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, conflicts: null, ...overrides };
+  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, conflicts: null, triggers: null, ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -171,6 +173,7 @@ export function dispatchSnapshotOf(
     held: null,
     openMaps: null,
     conflicts: null,
+    triggers: null,
   };
 }
 
@@ -208,12 +211,13 @@ export function designQueueSnapshotOf(
     held: null,
     openMaps: null,
     conflicts: null,
+    triggers: null,
   };
 }
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
-export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, conflicts: null, ...overrides };
+export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts" | "triggers">> = {}): Snapshot {
+  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, conflicts: null, triggers: null, ...overrides };
 }
 
 /**
@@ -221,17 +225,27 @@ export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kit
  * every tick gathers. By default the repo is unaudited, with its default
  * branch at HEAD_SHA, and has had no Retro, with its store ready but nothing
  * new to read, so the retro gate opens nothing. Its replay slice is the one
- * a tick gathers with no replay issue open, unless a test gives one.
+ * a tick gathers with no replay issue open, unless a test gives one, and
+ * its trigger-sweep slice holds no trigger label, with nothing under way.
  */
-export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts">> = {}): Snapshot {
+export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts" | "triggers">> = {}): Snapshot {
   return repoSnapshot({
     conflicts: { main: HEAD_SHA, now: "2026-01-01T00:00:00Z", implementJobUnderWay: null, pullRequests: [] },
     audit: { head: HEAD_SHA, issues: [] },
     retro: { storeReady: true, issues: [], agentPullRequestClosed: false, escapeFiled: false },
     replay: { issues: [], capacity: null, acceptance: null },
     held: [],
+    triggers: { underWay: NOTHING_UNDER_WAY, labelled: [] },
     ...overrides,
   });
+}
+
+/** No role's job under way anywhere in the repo. */
+export const NOTHING_UNDER_WAY: RolesUnderWay = { implement: false, research: false, review: false, claim: false, designTurns: [] };
+
+/** A trigger label on an open issue: by default agent:implement on #7, added an hour before the tick at 04:00, never re-added by the Kit. */
+export function aLabelledTrigger(overrides: Partial<LabelledTrigger> = {}): LabelledTrigger {
+  return { number: 7, label: "agent:implement", lastAddedAt: "2026-11-09T03:00:00Z", readded: false, ...overrides };
 }
 
 /** The commit anAuditIssue() audited unless a test says otherwise. */

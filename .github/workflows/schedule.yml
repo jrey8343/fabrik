@@ -92,8 +92,9 @@ jobs:
       cancel-in-progress: false
       queue: max
     permissions:
-      # Only for the conflict check, which reads whether an Implement job is under way before restarting a stalled
-      # Request-changes run (#387); the Fabrik App has no Actions permission. The caller's tick job grants it.
+      # For the conflict check, which reads whether an Implement job is under way before restarting a stalled
+      # Request-changes run (#387), and the stuck-trigger sweep, which reads whether a trigger label has a run
+      # behind it (#419); the Fabrik App has no Actions permission. The caller's tick job grants it.
       actions: read
     outputs:
       # "true" when the plan asked for a Dispatch check.

@@ -6,7 +6,7 @@ import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, Repl
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { SentBack } from "./backToDesign.ts";
-import type { Label } from "./labels.ts";
+import type { Label, TriggerLabel } from "./labels.ts";
 import type { PrototypeRequestMarker } from "./markers.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
@@ -881,6 +881,47 @@ export interface Snapshot {
    * the conflict check weighs (src/loop/conflicts.ts, #304).
    */
   readonly conflicts: ConflictSnapshot | null;
+  /**
+   * Gathered for a scheduled tick only: what the stuck-trigger sweep weighs
+   * (src/loop/triggerSweep.ts, #419).
+   */
+  readonly triggers: TriggerSweepSnapshot | null;
+}
+
+/** What the stuck-trigger sweep weighs (src/loop/triggerSweep.ts, #419). */
+export interface TriggerSweepSnapshot {
+  /** Each role's jobs unfinished anywhere in the repo, or null when the Actions API couldn't be read. */
+  readonly underWay: RolesUnderWay | null;
+  /** Each trigger label on an open issue or PR, one entry per label. Empty when `underWay` is null: nothing more is read. */
+  readonly labelled: readonly LabelledTrigger[];
+}
+
+/**
+ * Which roles have a job in a workflow run not yet finished, anywhere in the
+ * repo, a job its run skipped aside: a trigger label with one of its role's
+ * jobs under way has a run behind it.
+ */
+export interface RolesUnderWay {
+  /** An `Implement` job. */
+  readonly implement: boolean;
+  /** A `Research` job. */
+  readonly research: boolean;
+  /** A `Review checks` or `Review` job. */
+  readonly review: boolean;
+  /** A `Claim the work` job. */
+  readonly claim: boolean;
+  /** The issue of each `Design-session turn #N` or `Prototype turn #N` job, lowest first. */
+  readonly designTurns: readonly number[];
+}
+
+/** A trigger label on an open issue or PR, as the stuck-trigger sweep reads it. */
+export interface LabelledTrigger {
+  readonly number: number;
+  readonly label: TriggerLabel;
+  /** When it was last added, ISO 8601, from the timeline's latest `labeled` event for it; null when the timeline doesn't show one. */
+  readonly lastAddedAt: string | null;
+  /** Whether the Kit's stuck-trigger re-add comment for it came after it last came off: the Kit has re-added it once already. */
+  readonly readded: boolean;
 }
 
 /** What the conflict check weighs (src/loop/conflicts.ts, #304). */
@@ -1007,6 +1048,12 @@ export interface ReplaySnapshot {
  */
 export interface ReplayIssueSnapshot extends ReplayIssue {
   readonly labels: readonly string[];
+  /**
+   * Whether the Kit gave up on agent:replay here, since nothing started twice
+   * (#419), and nobody has added it since: the Fabrik App's give-up comment
+   * comes after the label's latest `labeled` event.
+   */
+  readonly gaveUp: boolean;
 }
 
 /** What the spare-capacity gate weighs beside the Kit-owned issues (src/loop/replayGate.ts). */

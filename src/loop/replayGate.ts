@@ -13,7 +13,7 @@ import { heldOf } from "./heldRun.ts";
 import { REPLAY_TRIGGER_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { spelled } from "./readable.ts";
 import { chosenSubscription } from "./subscriptions.ts";
-import type { Action, KitConfig, KitIssueSnapshot, Plan, ReplaySnapshot, Snapshot } from "./types.ts";
+import type { KitConfig, KitIssueSnapshot, Plan, ReplaySnapshot, Snapshot } from "./types.ts";
 
 /**
  * The replay step: what the tick does next for the Replays, or why nothing.
@@ -117,11 +117,13 @@ export function whyUsedUp(kitIssues: readonly KitIssueSnapshot[]): string | null
 }
 
 /**
- * The step as the Kit carries it out. A start adds agent:replay; on an issue
- * that still has it, as after a claim that never ran, it takes it off first,
- * since adding a label an issue has fires no event, and nothing would ever
- * start the Ticket. A release ends the run that never landed on a fresh read
- * of the body, with the comment its results get should that end the Replay.
+ * The step as the Kit carries it out. A start adds agent:replay, except on an
+ * issue that still has it, as after a claim that never ran, which the
+ * stuck-trigger sweep (src/loop/triggerSweep.ts, #419) adds again once and
+ * then gives up on, and on one the Kit gave up on, until someone adds it
+ * again: retrying it on every tick would only fail the same way. A release
+ * ends the run that never landed on a fresh read of the body, with the
+ * comment its results get should that end the Replay.
  */
 function planOf(step: ReplayStep, { issues }: ReplaySnapshot, operator: string): Plan {
   switch (step.kind) {
@@ -136,9 +138,14 @@ function planOf(step: ReplayStep, { issues }: ReplaySnapshot, operator: string):
       return { kind: "act", actions: [{ kind: "release-replay-ticket", issue, ticket, run, reason, resultsReady: resultsReady(operator) }] };
     }
     case "start": {
-      const labelled = issues.some((issue) => issue.number === step.issue && issue.labels.includes(REPLAY_TRIGGER_LABEL));
-      const add: Action = { kind: "add-labels", issue: step.issue, labels: [REPLAY_TRIGGER_LABEL] };
-      return { kind: "act", actions: labelled ? [{ kind: "remove-label", issue: step.issue, label: REPLAY_TRIGGER_LABEL }, add] : [add] };
+      const issue = issues.find(({ number }) => number === step.issue);
+      if (issue?.labels.includes(REPLAY_TRIGGER_LABEL) === true) {
+        return { kind: "nothing", reason: `#${step.issue} still has ${REPLAY_TRIGGER_LABEL}, which the stuck-trigger sweep sees to` };
+      }
+      if (issue?.gaveUp === true) {
+        return { kind: "nothing", reason: `The Kit gave up on ${REPLAY_TRIGGER_LABEL} on #${step.issue}, so only adding it again starts its next Ticket` };
+      }
+      return { kind: "act", actions: [{ kind: "add-labels", issue: step.issue, labels: [REPLAY_TRIGGER_LABEL] }] };
     }
   }
 }

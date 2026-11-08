@@ -26,6 +26,7 @@ import {
   REPLAY_TRIGGER_LABEL,
   RESEARCH_DECISION_LABEL,
   RETRO_LABEL,
+  TRIGGER_LABELS,
   WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
 import { escapeMarkerIn } from "../loop/markers.ts";
@@ -40,6 +41,7 @@ import type {
   DispatchSnapshot,
   HeldTargetSnapshot,
   KitIssueSnapshot,
+  LabelledTrigger,
   LoopEvent,
   NamedPullRequestSnapshot,
   ParentIssueSnapshot,
@@ -48,10 +50,12 @@ import type {
   ReplaySnapshot,
   ResearchDecisionSnapshot,
   RetroSnapshot,
+  RolesUnderWay,
   Snapshot,
   SpecSnapshot,
   StartingComment,
   TicketSnapshot,
+  TriggerSweepSnapshot,
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
 import { type GitHub, pagesOf, type Repo } from "./client.ts";
@@ -78,6 +82,10 @@ import {
   leftDraftSinceVerdictIn,
   implementRunFailedIn,
   researchRunFailedIn,
+  lastAddedAtIn,
+  stuckTriggerGaveUpIn,
+  stuckTriggerReaddedIn,
+  type TriggerHistoryEntry,
   verdictsIn,
 } from "./threads.ts";
 
@@ -433,6 +441,16 @@ export const IMPLEMENT_JOB_NAME = "Implement";
 export const RESEARCH_JOB_NAME = "Research";
 
 /**
+ * The names of the claim job and the two Review jobs in
+ * .github/workflows/loop.yml (a test holds them together), which the
+ * stuck-trigger sweep reads a run behind a trigger label by (#419). Called
+ * from a Product repo's caller workflow, each shows up as `<caller job> / <name>`.
+ */
+export const CLAIM_JOB_NAME = "Claim the work";
+export const REVIEW_CHECKS_JOB_NAME = "Review checks";
+export const REVIEW_JOB_NAME = "Review";
+
+/**
  * The name of the Design job in .github/workflows/loop.yml, which follows it
  * with ` #<issue>` (a test holds the two together). Called from a Product
  * repo's caller workflow, it shows up as `<caller job> / Design-session turn #7`.
@@ -454,8 +472,9 @@ export const PROTOTYPE_JOB_NAME = "Prototype turn";
  * `[bot]`, which tells the App's issues apart from any other bot's; null when
  * the run doesn't know it, as the Kit job, which only routes, doesn't, so any
  * bot's issue is taken for the App's (see byAppOf). A
- * Dispatch check also reads workflow runs, through `actions`, and so does a
- * conflict check when it's given them (#387): the Fabrik App has no Actions
+ * Dispatch check also reads workflow runs, through `actions`, and so do a
+ * conflict check when it's given them (#387), and the scheduled tick's
+ * stuck-trigger sweep (#419): the Fabrik App has no Actions
  * permission (ADR-0002), so that is the job's own read-only GITHUB_TOKEN. A
  * scheduled tick also reads whether the fabrik-runs store is private,
  * through `store` (see gatherRetroSlice), and the store's Run records through
@@ -490,6 +509,7 @@ export async function gatherSnapshot(
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
   const held = event.kind === "scheduled-tick" ? await gatherHeld(github, repo, kitIssues, appLogin) : null;
+  const triggers = event.kind === "scheduled-tick" ? await gatherTriggerSweep(github, actions, repo, appLogin) : null;
   // A push to the default branch may leave an agent PR conflicting with it; the tick catches any the push missed (#304).
   const conflicts =
     event.kind === "main-pushed" || event.kind === "kit-config-changed"
@@ -508,8 +528,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps, conflicts }
-    : { ...part, spec, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps, conflicts };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps, conflicts, triggers }
+    : { ...part, spec, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps, conflicts, triggers };
 }
 
 /**
@@ -898,7 +918,7 @@ async function gatherEventPart(
 
 type EventPart = Omit<
   Snapshot,
-  "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "replay" | "namedPullRequests" | "held" | "openMaps" | "conflicts"
+  "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "replay" | "namedPullRequests" | "held" | "openMaps" | "conflicts" | "triggers"
 >;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body author { login __typename } }";
@@ -1003,6 +1023,23 @@ async function earlierComments(
   return earlier.flat();
 }
 
+/** A label event or a comment, as an issue's or PR's timeline lists them. */
+type TriggerTimelineItem =
+  | { __typename: "LabeledEvent" | "UnlabeledEvent"; createdAt: string; label: { name: string } | null }
+  | { __typename: "IssueComment"; body: string; author: Actor };
+
+/** The latest timeline items the sweep reads an issue or PR by: enough to hold a label's last add, and the Kit's re-add after it. */
+const TRIGGER_TIMELINE = `
+  timelineItems(itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ISSUE_COMMENT], last: 100) {
+    nodes {
+      __typename
+      ... on LabeledEvent { createdAt label { name } }
+      ... on UnlabeledEvent { createdAt label { name } }
+      ... on IssueComment { body author { login __typename } }
+    }
+  }
+`;
+
 // Every open replay issue, oldest first, with its body whole and the comments
 // the App's are read from, as the Kit-owned issues' are.
 const REPLAY_ISSUES_QUERY = `
@@ -1015,6 +1052,7 @@ const REPLAY_ISSUES_QUERY = `
           author { login __typename }
           labels(first: 100) { nodes { name } }
           comments(last: 100) { ${KIT_ISSUE_COMMENTS} }
+          ${TRIGGER_TIMELINE}
         }
       }
     }
@@ -1053,7 +1091,16 @@ async function gatherReplaySlice(
 
 interface ReplayIssuesQueryResult {
   repository: {
-    issues: { nodes: { number: number; body: string; author: Actor; labels: { nodes: { name: string }[] }; comments: KitIssueComments }[] };
+    issues: {
+      nodes: {
+        number: number;
+        body: string;
+        author: Actor;
+        labels: { nodes: { name: string }[] };
+        comments: KitIssueComments;
+        timelineItems: { nodes: TriggerTimelineItem[] };
+      }[];
+    };
   };
 }
 
@@ -1070,6 +1117,8 @@ async function gatherReplayIssues(github: GitHub, repo: Repo, appLogin: string |
         body: issue.body,
         comments: comments.filter((comment) => byAppOf(comment.author, appLogin)).map((comment) => comment.body),
         labels: issue.labels.nodes.map((label) => label.name),
+        // Its run never started twice, so the Kit took agent:replay off (#419): the replay step leaves it be.
+        gaveUp: stuckTriggerGaveUpIn(triggerHistoryOf(issue.timelineItems.nodes, appLogin), REPLAY_TRIGGER_LABEL),
       };
     }),
   );
@@ -1736,6 +1785,115 @@ export async function designTurnsInProgress(github: Pick<GitHub, "rest">, repo: 
       .map(Number),
   );
   return [...issues].sort((a, b) => a - b);
+}
+
+/**
+ * What the stuck-trigger sweep weighs on the scheduled tick (#419): which
+ * roles have a job under way, and then each trigger label on an open issue or
+ * PR. Without a token that can read workflow runs, or when the Actions API
+ * fails, neither: the sweep then leaves every label alone.
+ */
+async function gatherTriggerSweep(
+  github: Pick<GitHub, "graphql">,
+  actions: Pick<GitHub, "rest"> | null,
+  repo: Repo,
+  appLogin: string | null,
+): Promise<TriggerSweepSnapshot> {
+  const underWay = actions === null ? null : await readRolesUnderWay(actions, repo);
+  if (underWay === null) return { underWay: null, labelled: [] };
+  const [issues, pullRequests] = await Promise.all([
+    gatherLabelledTriggers(github, repo, "issues", appLogin),
+    gatherLabelledTriggers(github, repo, "pullRequests", appLogin),
+  ]);
+  return { underWay, labelled: [...issues, ...pullRequests] };
+}
+
+/**
+ * Which roles have a job under way, across every workflow run in the repo
+ * not yet finished, a job its run skipped aside, as readImplementJobUnderWay
+ * reads an Implement job; null when the Actions API couldn't be read.
+ */
+async function readRolesUnderWay(github: Pick<GitHub, "rest">, repo: Repo): Promise<RolesUnderWay | null> {
+  let jobs: Job[];
+  try {
+    jobs = (await jobsOfUnfinishedRuns(github, repo)).filter(({ conclusion }) => conclusion !== "skipped");
+  } catch {
+    return null;
+  }
+  const anyJobNamed = (...names: string[]) => jobs.some(({ name }) => names.some((jobName) => isJobNamed(name, jobName)));
+  const designTurns = new Set(jobs.flatMap((job) => DESIGN_JOB.exec(job.name)?.[1] ?? []).map(Number));
+  return {
+    implement: anyJobNamed(IMPLEMENT_JOB_NAME),
+    research: anyJobNamed(RESEARCH_JOB_NAME),
+    review: anyJobNamed(REVIEW_CHECKS_JOB_NAME, REVIEW_JOB_NAME),
+    claim: anyJobNamed(CLAIM_JOB_NAME),
+    designTurns: [...designTurns].sort((a, b) => a - b),
+  };
+}
+
+function labelledTriggersQuery(kind: "issues" | "pullRequests"): string {
+  return `
+    query ($owner: String!, $name: String!, $triggers: [String!]!, $after: String) {
+      repository(owner: $owner, name: $name) {
+        ${kind}(states: OPEN, labels: $triggers, first: 50, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes { number labels(first: 100) { nodes { name } } ${TRIGGER_TIMELINE} }
+        }
+      }
+    }
+  `;
+}
+
+type LabelledTriggersQueryResult = {
+  repository: Record<
+    "issues" | "pullRequests",
+    {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: { number: number; labels: { nodes: { name: string }[] }; timelineItems: { nodes: TriggerTimelineItem[] } }[];
+    }
+  >;
+};
+
+/**
+ * Each trigger label on an open issue, or an open PR, one entry per label,
+ * with when it was last added and whether the Kit's re-add came after it last
+ * came off. Only the Fabrik App's comments count as the Kit's word.
+ */
+async function gatherLabelledTriggers(
+  github: Pick<GitHub, "graphql">,
+  repo: Repo,
+  kind: "issues" | "pullRequests",
+  appLogin: string | null,
+): Promise<LabelledTrigger[]> {
+  const labelled: LabelledTrigger[] = [];
+  let after: string | null = null;
+  do {
+    const page: LabelledTriggersQueryResult = await github.graphql<LabelledTriggersQueryResult>(labelledTriggersQuery(kind), {
+      owner: repo.owner,
+      name: repo.name,
+      triggers: [...TRIGGER_LABELS],
+      after,
+    });
+    const items = page.repository[kind];
+    for (const node of items.nodes) {
+      const history = triggerHistoryOf(node.timelineItems.nodes, appLogin);
+      const on = node.labels.nodes.map(({ name }) => name);
+      for (const label of TRIGGER_LABELS.filter((trigger) => on.includes(trigger))) {
+        labelled.push({ number: node.number, label, lastAddedAt: lastAddedAtIn(history, label), readded: stuckTriggerReaddedIn(history, label) });
+      }
+    }
+    after = items.pageInfo.hasNextPage ? items.pageInfo.endCursor : null;
+  } while (after !== null);
+  return labelled;
+}
+
+/** A timeline, oldest first, as the stuck-trigger readers take it: label events, and the Fabrik App's comments alone. */
+function triggerHistoryOf(items: readonly TriggerTimelineItem[], appLogin: string | null): TriggerHistoryEntry[] {
+  return items.flatMap((item): TriggerHistoryEntry[] => {
+    if (item.__typename === "IssueComment") return byAppOf(item.author, appLogin) ? [{ kind: "kit-comment", body: item.body }] : [];
+    if (item.label === null) return [];
+    return [{ kind: item.__typename === "LabeledEvent" ? "labeled" : "unlabeled", label: item.label.name, at: item.createdAt }];
+  });
 }
 
 /** Every job, finished or not, of every workflow run not yet completed. */
