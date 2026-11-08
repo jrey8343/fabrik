@@ -206,9 +206,9 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         pullRequest.number,
         mainMerge.main,
         operator,
-        nothing
-          ? `it committed nothing, so \`${branch}\` still conflicts with \`main\``
-          : `\`${branch}\` as it left it still conflicts with \`main\`: it didn't merge \`main\` in`,
+        // A run that committed nothing left the branch as it was, which the Kit doesn't read again: someone else may
+        // have brought main in meanwhile.
+        nothing ? "it committed nothing" : `\`${branch}\` as it left it still conflicts with \`main\`: it didn't merge \`main\` in`,
         fixes.runUrl,
       ),
     };
@@ -246,7 +246,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
           requestChanges ? REQUEST_CHANGES_RUN_MARKER : RETRY_PUSH_MARKER,
           requestChanges
-            ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mainMerge === undefined ? "" : `, resolving its conflict with \`main\` at ${mainMerge.main.slice(0, 7)}`}; Review runs again on it.`
+            ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mainMerge === undefined ? "" : `, which no longer conflicts with \`main\` at ${mainMerge.main.slice(0, 7)}`}; Review runs again on it.`
             : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
           "",
           // Present: the on-a-PR contract above requires it.

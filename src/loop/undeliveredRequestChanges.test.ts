@@ -435,6 +435,20 @@ describe("A delivered Request changes", () => {
     expect(startsOn(plan)).toMatchObject({ requestChanges: { review: 777 } });
   });
 
+  it("names an earlier one of the Operator's GitHub never delivered too, which its run reads, so no check notes that one later", () => {
+    const thread = new Thread();
+    thread.review(101, 5);
+    thread.mergeable = true;
+    thread.review(102, 8);
+
+    const [note] = commentsOn(thread.delivered(102, 8), 50);
+    thread.markReady(30);
+
+    expect(note).toContain("#pullrequestreview-101");
+    expect(note).toContain("#pullrequestreview-102");
+    expect(commentsOn(thread.tick(60), 50)).toEqual([]);
+  });
+
   it("is never taken for undelivered, even once its run stalled and the Operator took the PR out of draft", () => {
     const thread = new Thread();
     thread.mergeable = true;
@@ -805,7 +819,8 @@ describe("A Request-changes run told to merge main in", () => {
     );
 
     expect(actionsOf(plan)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
-    expect(commentsOn(plan, 50)[0]).toContain("resolving its conflict with `main` at 9999999");
+    // It says what the push job saw, not who brought main in: the Operator may have, while the run worked.
+    expect(commentsOn(plan, 50)[0]).toContain("which no longer conflicts with `main` at 9999999");
     expect(commentsOn(plan, 50)[0]).toContain("Conflicted files");
   });
 

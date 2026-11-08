@@ -7,6 +7,7 @@
 // the Kit starts is marked on the PR by the note that started it
 // (src/github/threads.ts), so neither check ever notes the same review twice,
 // and the conflict check leaves the PR to that run.
+import { heldUntilReset } from "./hold.ts";
 import { DISPATCH_LABEL } from "./labels.ts";
 import { undeliveredMarker } from "./markers.ts";
 import type { Action, ConflictCandidate, PullRequestSnapshot, UnbuiltChangesRequest } from "./types.ts";
@@ -58,7 +59,12 @@ function actsOn(pullRequest: PullRequestSnapshot): boolean {
  * if the rest fails, the next check, or re-adding agent:implement, still
  * starts the run.
  */
-export function actOnUndelivered({ pullRequest, mergeable }: ConflictCandidate, operator: string, now: string): Action[] | null {
+export function actOnUndelivered(
+  { pullRequest, mergeable }: ConflictCandidate,
+  operator: string,
+  now: string,
+  held: number | null = null,
+): Action[] | null {
   const stalled = stalledRequestChangesRun(pullRequest);
   if (stalled !== null) return stalled;
   if (!actsOn(pullRequest)) return null;
@@ -87,7 +93,9 @@ export function actOnUndelivered({ pullRequest, mergeable }: ConflictCandidate, 
     undeliveredMarker(reviews),
     opening,
     "",
-    `The Kit is starting the Request-changes run now${merging} so there's nothing for you to resubmit. It runs on the Step-up model and uses no retry. The PR is back in draft, and Review runs again on the run's push.`,
+    held === null
+      ? `The Kit is starting the Request-changes run now${merging} so there's nothing for you to resubmit. It runs on the Step-up model and uses no retry. The PR is back in draft, and Review runs again on the run's push.`
+      : `The Kit has put the Request-changes run in flight${merging} so there's nothing for you to resubmit, but ${heldUntilReset(held)}. It runs on the Step-up model and uses no retry. The PR is back in draft, and Review runs again on the run's push.`,
   ].join("\n");
   return [
     { kind: "comment", issue: number, body },

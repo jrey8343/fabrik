@@ -19,12 +19,12 @@ import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, Plan, Pull
  * changes on it (src/loop/undelivered.ts, #341), or else a rebase onto main if
  * it's at the Merge gate and conflicts with it, or why there's neither.
  */
-export function checkConflicts(conflicts: ConflictSnapshot, operator: string): Plan {
+export function checkConflicts(conflicts: ConflictSnapshot, operator: string, held: number | null = null): Plan {
   const { main, now } = conflicts;
   const reasons: string[] = [];
   const actions: Action[] = [];
   for (const candidate of conflicts.pullRequests) {
-    const undelivered = actOnUndelivered(candidate, operator, now);
+    const undelivered = actOnUndelivered(candidate, operator, now, held);
     if (undelivered !== null) {
       actions.push(...undelivered);
       continue;
@@ -192,7 +192,7 @@ export function requestChangesRunEnded(pullRequest: number, main: string, operat
         requestChangesRunEndedMarker(main),
         `@${operator} The Request-changes run on #${pullRequest} didn't land: ${why}.`,
         "",
-        `The PR conflicts with \`main\` at ${head} and your requested changes aren't built, so it's yours from here. The Kit won't bring it up to date until \`main\` moves past ${head}; when it does, your Request changes still goes first. No retry was used.`,
+        `The PR conflicted with \`main\` at ${head} when the run started, and your requested changes aren't built, so it's yours from here. The Kit won't bring it up to date until \`main\` moves past ${head}; when it does, your Request changes still goes first. No retry was used.`,
         "",
         `[The run](${runUrl})`,
       ].join("\n"),

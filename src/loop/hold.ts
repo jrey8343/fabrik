@@ -73,6 +73,20 @@ export function runsDueAreHeld(kitIssues: readonly KitIssueSnapshot[], config: P
 }
 
 /**
+ * The weekly-limit issue a run due now is held on, or null when it would
+ * start: what a note promising a run names, so it never says the run is
+ * starting while it waits for a reset (#341).
+ */
+export function heldOn(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): number | null {
+  return runsDueAreHeld(kitIssues, config) ? (holdingOn(kitIssues).on?.number ?? null) : null;
+}
+
+/** How a note promising a Request-changes run says it waits on `held`, its weekly-limit issue. */
+export function heldUntilReset(held: number): string {
+  return `every Subscription is used up, so it's held on #${held} until the weekly limit resets, and starts then`;
+}
+
+/**
  * Where a run held while no Subscription is free is named: the weekly-limit
  * issue that buzzed the Operator, else the first to reset, else the first
  * open; and when it is held until, the earliest reset across them.

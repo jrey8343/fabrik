@@ -85,14 +85,15 @@ export function undeliveredMarker(reviews: readonly number[]): string {
 
 /**
  * The first line of the Kit's note that it started the Request-changes run for
- * the Operator's review GitHub delivered (#341), by id. Like the undelivered
- * note, it marks that run in flight, so every Request-changes run the Kit
- * starts is read from the PR's comments alone.
+ * the Operator's review GitHub delivered (#341), and for any earlier one of
+ * theirs no run was started for, by id. Like the undelivered note, it marks
+ * that run in flight, so every Request-changes run the Kit starts is read from
+ * the PR's comments alone.
  */
-const STARTED_MARKER = /^<!-- fabrik:request-changes-run-started ([1-9][0-9]*) -->/;
+const STARTED_MARKER = /^<!-- fabrik:request-changes-run-started ([1-9][0-9]*(?:,[1-9][0-9]*)*) -->/;
 
-export function requestChangesRunStartedMarker(review: number): string {
-  return `<!-- fabrik:request-changes-run-started ${review} -->`;
+export function requestChangesRunStartedMarker(reviews: readonly number[]): string {
+  return `<!-- fabrik:request-changes-run-started ${reviews.join(",")} -->`;
 }
 
 /**

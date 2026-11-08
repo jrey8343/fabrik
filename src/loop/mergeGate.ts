@@ -3,9 +3,10 @@
 // model with their review as input (it isn't a retry), or add needs-design to
 // the PR, which sends its Ticket back to design as a Design flaw does.
 import { sentBackByOperator } from "./backToDesign.ts";
+import { heldOn, heldUntilReset } from "./hold.ts";
 import { requestChangesRunStartedMarker } from "./markers.ts";
 import { runInFlight } from "./retry.ts";
-import { reviewLinks } from "./undelivered.ts";
+import { reviewLinks, unnotedChangesRequests } from "./undelivered.ts";
 import type { Action, KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 
 type ChangesRequested = Extract<LoopEvent, { kind: "pull-request-changes-requested" }>;
@@ -28,17 +29,28 @@ export function requestChanges(event: ChangesRequested, snapshot: Snapshot, conf
   const why = whyNotAtMergeGate(pullRequest);
   if (why !== null || pullRequest.ticket === null) return { kind: "nothing", reason: why ?? "" };
   const { number } = pullRequest;
+  // Any earlier one of the Operator's no run was started for, as one GitHub never delivered, goes in this run too:
+  // the run reads every Request changes of theirs, so neither check notes that one later.
+  const earlier = unnotedChangesRequests(pullRequest, operator)
+    .map(({ review }) => review)
+    .filter((review) => review !== event.review);
+  const reviews = [...earlier, event.review];
+  const held = heldOn(snapshot.kitIssues, config);
+  const starting =
+    held === null
+      ? `The Kit is starting the Request-changes run for your Request changes on #${number} (${reviewLinks(pullRequest, reviews)}).`
+      : `The Kit has put the Request-changes run for your Request changes on #${number} (${reviewLinks(pullRequest, reviews)}) in flight, but ${heldUntilReset(held)}.`;
   return {
     kind: "act",
     actions: [
-      // Marks the run in flight on the PR itself (#341), so the conflict check never notes this review as undelivered,
+      // Marks the run in flight on the PR itself (#341), so the conflict check never notes these reviews as undelivered,
       // and a Review of a head the Operator pushes meanwhile waits for the run (ADR-0006). It mentions nobody.
       {
         kind: "comment",
         issue: number,
         body: [
-          requestChangesRunStartedMarker(event.review),
-          `The Kit is starting the Request-changes run for your Request changes on #${number} (${reviewLinks(pullRequest, [event.review])}). It runs on the Step-up model and uses no retry. The PR is back in draft, and Review runs again on the run's push.`,
+          requestChangesRunStartedMarker(reviews),
+          `${starting} It runs on the Step-up model and uses no retry. The PR is back in draft, and Review runs again on the run's push.`,
         ].join("\n"),
       },
       { kind: "convert-to-draft", pullRequest: number },

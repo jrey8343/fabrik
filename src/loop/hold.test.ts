@@ -559,3 +559,38 @@ describe("The Audit due while a Subscription's weekly-limit issue is open, with 
     expect(opened([weeklyLimitIssue(41, "Claude token", LATER, true)], kitConfig())).toEqual([]);
   });
 });
+
+describe("A Request-changes run held while every Subscription is used up (#341)", () => {
+  /** PR #50 for Ticket #7, passed and at the Merge gate, with the Operator's Request changes 777 on it from 05:00. */
+  const atMergeGate = () =>
+    aPullRequest({
+      draft: false,
+      verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: "a".repeat(40) }],
+      unbuiltChangesRequests: [{ review: 777, reviewer: "operator", reviewerIsBot: false, submittedAt: "2026-11-08T05:00:00.000Z" }],
+    });
+  const noteIn = (plan: Plan): string =>
+    (plan.kind === "act" ? plan.actions : []).flatMap((action) => (action.kind === "comment" && action.issue === 50 ? [action.body] : []))[0] ?? "";
+
+  it("says on the PR, as the delivered review's run is noted, that it starts once the weekly limit resets, naming the issue it's held on", () => {
+    const snapshot = { ...snapshotOfPullRequest(atMergeGate()), kitIssues: BOTH_USED_UP };
+    const event: LoopEvent = { kind: "pull-request-changes-requested", pullRequest: 50, review: 777, reviewer: "operator", reviewerIsBot: false };
+
+    const note = noteIn(planFor(event, snapshot, TWO_SUBSCRIPTIONS));
+
+    expect(note).toContain("held on #41");
+    expect(note).not.toContain("is starting");
+  });
+
+  it("says so too in the note for one GitHub never delivered", () => {
+    const now = "2026-11-08T06:00:00.000Z";
+    const snapshot = tickSnapshot({
+      kitIssues: BOTH_USED_UP,
+      conflicts: { main: "9".repeat(40), now, pullRequests: [{ pullRequest: atMergeGate(), mergeable: false }] },
+    });
+
+    const note = noteIn(planFor({ kind: "scheduled-tick", now }, snapshot, TWO_SUBSCRIPTIONS));
+
+    expect(note).toContain("held on #41");
+    expect(note).not.toContain("is starting");
+  });
+});
