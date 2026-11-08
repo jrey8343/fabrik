@@ -309,6 +309,38 @@ describe("Applying Triage output", () => {
     });
   });
 
+  it("closes a wontfix that names an original as a duplicate, its comment naming the original", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage"] });
+
+    const plan = planFor(
+      triaged({ category: "bug", state: "wontfix", comment: "The same crash as the one already filed.", duplicateOf: 12 }),
+      snapshotOf(issue),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "comment", issue: 7, body: "The same crash as the one already filed.\n\nClosing as a duplicate of #12." },
+        { kind: "remove-label", issue: 7, label: "needs-triage" },
+        { kind: "add-labels", issue: 7, labels: ["bug", "wontfix"] },
+        { kind: "close", issue: 7, reason: "duplicate" },
+      ],
+    });
+  });
+
+  it("refuses a duplicateOf naming the issue being triaged as output that breaks its contract", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage"] });
+
+    const plan = planFor(triaged({ category: "bug", state: "wontfix", comment: "Dupe.", duplicateOf: 7 }), snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "fail",
+      failure: "infrastructure",
+      reason: "Triage on #7 emitted output that breaks its contract: duplicateOf can't name #7, the issue being triaged",
+    });
+  });
+
   it("@-mentions the author of a needs-info issue with Triage's question, as its one notification", () => {
     const issue = anIssue({ number: 7, author: "kate", labels: ["needs-triage"] });
 

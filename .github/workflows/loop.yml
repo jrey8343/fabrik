@@ -254,6 +254,8 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
           FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          # The open issues and those closed in the last 30 days, which Triage compares the issue against for a duplicate (#363).
+          FABRIK_RECENT_ISSUES_FILE: ${{ runner.temp }}/recent-issues.json
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
         run: node ../kit/src/agent/run.ts triage
 

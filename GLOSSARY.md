@@ -119,7 +119,7 @@ The rule that gives a new issue `needs-triage`, unless a skill made it or it alr
 _Avoid_: inbox, new-issue hook
 
 **Triage**:
-The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside.
+The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside. An issue it sets aside as a duplicate of a recent one closes as GitHub's *duplicate*, naming the original; any other it sets aside closes as *not planned*.
 _Avoid_: sorting
 
 **Design session**:

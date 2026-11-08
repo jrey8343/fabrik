@@ -12,6 +12,8 @@
 //                                in operatorComments (sentBack carries them too, for the closed PR)
 //   FABRIK_PULL_REQUEST_COMMENTS "true" for a retry, whose PR file carries the PR's comments and their authors' kind
 //   FABRIK_REVIEW                optional, a Request-changes run's review on that PR: writes review.json
+//   FABRIK_ROLE=triage           also writes recent-issues.json, Triage's comparison set for a duplicate
+//                                (readRecentIssues, #363)
 //   FABRIK_AUDIT_COMMIT          for an Auditor run, the pending Audit's marked commit (FABRIK_ISSUE is the
 //                                Audit): writes audit.json, the Auditor's inputs (readAuditInputs)
 //   FABRIK_OUT_DIR               optional, where a failed GitHub call leaves its failure report
@@ -412,6 +414,91 @@ export async function readMapOffer(
   return full ? { kind: "cap-full", cap: config.caps.maps, openMaps } : { kind: "may-offer" };
 }
 
+// --- Triage's comparison set (#363) -----------------------------------------
+
+/** Where the inputs step writes Triage's comparison set, beside issue.json. */
+export const RECENT_ISSUES_FILE = "recent-issues.json";
+
+/** One issue Triage compares a new one against, for a duplicate. */
+export interface RecentIssue {
+  readonly number: number;
+  readonly title: string;
+  readonly state: "open" | "closed";
+  /** The first RECENT_ISSUE_BODY_CHARS characters of its body, marked with … when cut. */
+  readonly body: string;
+}
+
+/** How many issues Triage compares against: the most recently created. */
+export const RECENT_ISSUES_CAP = 50;
+/** How far back a closed issue still counts. */
+export const RECENT_CLOSED_DAYS = 30;
+/** How much of each body Triage is given. */
+export const RECENT_ISSUE_BODY_CHARS = 500;
+
+interface RecentIssueNode {
+  number: number;
+  title: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+}
+
+const recentIssuesQuery = (states: "OPEN" | "CLOSED", orderBy: "CREATED_AT" | "UPDATED_AT") => `
+  query ($owner: String!, $name: String!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      issues(states: ${states}, first: 100, after: $after, orderBy: { field: ${orderBy}, direction: DESC }) {
+        pageInfo { hasNextPage endCursor }
+        nodes { number title body createdAt updatedAt closedAt }
+      }
+    }
+  }
+`;
+
+function cut(body: string): string {
+  const chars = Array.from(body);
+  return chars.length <= RECENT_ISSUE_BODY_CHARS ? body : `${chars.slice(0, RECENT_ISSUE_BODY_CHARS).join("")}…`;
+}
+
+/**
+ * What a Triage run compares its issue against for a duplicate: every open
+ * issue and every issue closed in the last 30 days, the 50 most recently
+ * created, newest first, without the triaged issue. GitHub's issues
+ * connection holds no pull requests. Issues the Monitor filed stay in, since
+ * a person re-reporting one is the likeliest duplicate. Everything here is
+ * data for Triage, never instructions to it.
+ */
+export async function readRecentIssues(github: Pick<Reader, "graphql">, repo: Repo, issue: number, now: number): Promise<RecentIssue[]> {
+  const since = now - RECENT_CLOSED_DAYS * DAY_MS;
+  // Newest created first, so one more than the cap is enough whichever is the triaged issue.
+  let read = 0;
+  const open = await pagesOf<RecentIssueNode>(
+    github,
+    recentIssuesQuery("OPEN", "CREATED_AT"),
+    repo,
+    {},
+    (data) => data.repository.issues,
+    (page) => (read += page.length) > RECENT_ISSUES_CAP,
+  );
+  // Latest updated first: an issue closed since `since` was updated since then too.
+  const closed = await pagesOf<RecentIssueNode>(
+    github,
+    recentIssuesQuery("CLOSED", "UPDATED_AT"),
+    repo,
+    {},
+    (data) => data.repository.issues,
+    (page) => page.some(({ updatedAt }) => Date.parse(updatedAt) < since),
+  );
+  return [
+    ...open.map((node) => ({ node, state: "open" as const })),
+    ...closed.filter(({ closedAt }) => closedAt !== null && Date.parse(closedAt) >= since).map((node) => ({ node, state: "closed" as const })),
+  ]
+    .filter(({ node }) => node.number !== issue)
+    .sort((a, b) => Date.parse(b.node.createdAt) - Date.parse(a.node.createdAt))
+    .slice(0, RECENT_ISSUES_CAP)
+    .map(({ node, state }) => ({ number: node.number, title: node.title, state, body: cut(node.body) }));
+}
+
 // --- An Auditor run's inputs (#150) -----------------------------------------
 
 /** The Audit an Auditor run fills in: the pending one, at the commit its audit marker names. */
@@ -667,6 +754,9 @@ async function main(outDir: string): Promise<void> {
   // A turn on an invalid Kit config fails before its agent starts (src/agent/run.ts), so it's told nothing of Maps.
   if (process.env["FABRIK_ROLE"] === "design" && resolved.ok) {
     await writeFile(join(outDir, MAP_INPUTS_FILE), JSON.stringify(await readMapOffer(github, repo, resolved.config, spec)));
+  }
+  if (process.env["FABRIK_ROLE"] === "triage") {
+    await writeFile(join(outDir, RECENT_ISSUES_FILE), JSON.stringify(await readRecentIssues(github, repo, issueNumber, Date.now())));
   }
   if (pullRequest !== null) {
     const withComments = process.env["FABRIK_PULL_REQUEST_COMMENTS"] === "true";

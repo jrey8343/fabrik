@@ -1009,7 +1009,7 @@ export type Action =
       readonly line: readonly (string | PostedComment)[];
     }
   | { readonly kind: "assign"; readonly issue: number; readonly assignee: string }
-  | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" | "completed" }
+  | { readonly kind: "close"; readonly issue: number; readonly reason: "not_planned" | "completed" | "duplicate" }
   | {
       readonly kind: "open-issue";
       readonly title: string;
