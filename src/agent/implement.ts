@@ -15,6 +15,7 @@ import { agentBranchFor, IMPLEMENTER_AUTHOR } from "../loop/agentPullRequest.ts"
 import { verdictsIn } from "../github/threads.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 import { givenOperatorComments, operatorCommentId, operatorCommentsSection, operatorInputSections } from "./operatorComments.ts";
+import type { ImplementRunKind } from "../loop/implementOutput.ts";
 import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -268,10 +269,12 @@ export async function ticketContext(productDir: string, specFile: string): Promi
 export interface ImplementInput {
   readonly branch: BuiltBranch;
   readonly parts: string[];
-  /** Whether it works on an existing PR (a retry or a Request-changes run), whose output owes a fix too. */
-  readonly onPullRequest: boolean;
-  /** Whether it's a Request-changes run, whose output owes its two answers about the review too (#369). */
-  readonly requestChanges: boolean;
+  /**
+   * Which kind of run it is, and so which output contract it owes: a run on an
+   * existing PR owes a fix too, and a Request-changes run its two answers about
+   * the review as well (#369).
+   */
+  readonly kind: ImplementRunKind;
   /** For a run on an existing PR, the Operator comments it was given; null for a first run. */
   readonly operatorComments: GivenOperatorComment[] | null;
 }
@@ -294,16 +297,16 @@ export async function implementInput(
   const onPullRequest = files.pullRequest !== "";
   const branch = onPullRequest ? await continueAgentBranch(productDir, ticket) : await startAgentBranch(productDir, ticket);
   const parts = await implementContext(productDir, files.spec, config);
-  if (!onPullRequest) return { branch, parts, onPullRequest, requestChanges: false, operatorComments: null };
+  if (!onPullRequest) return { branch, parts, kind: "first", operatorComments: null };
   const conflict = files.conflict ?? "";
-  const requestChanges = conflict === "" && files.review !== "";
   const context =
     conflict !== ""
       ? await conflictContext(files.pullRequest, conflict)
       : files.review === ""
         ? await retryContext(files.pullRequest)
         : await requestChangesContext(files.pullRequest, files.review);
-  return { branch, parts: [...parts, ...context.parts], onPullRequest, requestChanges, operatorComments: context.operatorComments };
+  const kind = conflict === "" && files.review !== "" ? "request-changes" : "pull-request";
+  return { branch, parts: [...parts, ...context.parts], kind, operatorComments: context.operatorComments };
 }
 
 /**

@@ -32,22 +32,29 @@ export interface ImplementOutput {
    * started for, which the Kit records on the PR (#369). Every other run
    * leaves them out.
    */
-  readonly answers?: RequestChangesAnswers;
+  readonly answers?: ImplementerAnswers;
 }
 
 /**
  * A Request-changes run's two independent answers about the review it was
- * started for: whether it holds a Review miss (GLOSSARY.md), naming each such
- * point, and whether it amends the Ticket.
+ * started for: whether it holds a Review miss (GLOSSARY.md), and whether it
+ * amends the Ticket. What the Kit records, counts and hands the Retro.
  */
 export interface RequestChangesAnswers {
   readonly reviewMiss: boolean;
-  /** Each point that is a Review miss; none when there is no Review miss. */
-  readonly points: readonly string[];
   readonly amendsTicket: boolean;
 }
 
-/** Which run's contract an Implementer output is checked against: a first run's, a retry's or conflict-only run's, or a Request-changes run's. */
+/** The answers as the Implementer gives them: with each point that is a Review miss named, none when there is no Review miss. */
+export interface ImplementerAnswers extends RequestChangesAnswers {
+  readonly points: readonly string[];
+}
+
+/**
+ * Which kind of Implement run an output comes from, and so which contract it's
+ * checked against: a first run's, a run on an existing PR's (a retry or a
+ * conflict-only run), or a Request-changes run's.
+ */
 export type ImplementRunKind = "first" | "pull-request" | "request-changes";
 
 export type ImplementOutputResult =
@@ -129,8 +136,8 @@ export function readRequestChangesRunOutput(value: unknown): ImplementOutputResu
   };
 }
 
-/** The contract each kind of run is checked against. */
-const READERS: Readonly<Record<ImplementRunKind, (value: unknown) => ImplementOutputResult>> = {
+/** The contract each kind of run is checked against, which the agent side's schema and the push job both read. */
+export const IMPLEMENT_OUTPUT_READERS: Readonly<Record<ImplementRunKind, (value: unknown) => ImplementOutputResult>> = {
   first: readImplementOutput,
   "pull-request": readPullRequestRunOutput,
   "request-changes": readRequestChangesRunOutput,
@@ -144,5 +151,5 @@ export function parseImplementOutput(text: string, run: ImplementRunKind = "firs
   } catch (error) {
     return { ok: false, errors: [`Implementer output is not valid JSON: ${(error as Error).message}`] };
   }
-  return READERS[run](value);
+  return IMPLEMENT_OUTPUT_READERS[run](value);
 }

@@ -91,7 +91,7 @@ function retried(headSha: string, requestChanges = false): Extract<LoopEvent, { 
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes: { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }] },
-    fixes: { pullRequest: 50, headSha, runUrl: RUN, ...(requestChanges ? { requestChanges: true, review: 9 } : {}) },
+    fixes: { pullRequest: 50, headSha, runUrl: RUN, ...(requestChanges ? { review: 9 } : {}) },
   };
 }
 

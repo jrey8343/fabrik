@@ -16,12 +16,11 @@ import {
   designTurnFailedIn,
   pendingPrototypeIn,
   pushedSinceVerdictIn,
-  requestChangesAnswersIn,
   requestChangesRunIn,
   unansweredPrototypesIn,
   verdictsIn,
 } from "./threads.ts";
-import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, CONFLICT_RUN_MARKER, verdictMarker } from "../loop/markers.ts";
+import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, CONFLICT_RUN_MARKER, requestChangesAnswersIn, verdictMarker } from "../loop/markers.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const VERDICT_URL = "https://github.com/acme/shop/pull/50#issuecomment-9001";
@@ -76,7 +75,7 @@ describe("Reading whether a PR's latest push came from a Request-changes run", (
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes: { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }] },
-    fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true, review: 900 },
+    fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 900 },
   };
   const pushSnapshot: Snapshot = {
     ...snapshotOfPullRequest(aPullRequest({ verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }] })),
@@ -115,7 +114,7 @@ describe("Reading a Request-changes run's answers about its review (#369)", () =
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes: { net: [], commits: [], updatedFromMain: true },
-    fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true, review },
+    fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review },
   });
 
   it("reads a review that only asked for a rebase back as no Review miss and no amendment, for that review", () => {

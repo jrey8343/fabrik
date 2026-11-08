@@ -12,10 +12,11 @@
 // transcripts read through the transcript digest (src/kit/transcriptDigest.ts),
 // as the judge reads them, and the whole held to one budget, cut least
 // important first. Pure, no I/O.
-import { requestChangesAnswersIn, verdictsIn } from "../github/threads.ts";
+import { verdictsIn } from "../github/threads.ts";
+import type { RequestChangesAnswers } from "../loop/implementOutput.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { followUpsIn } from "../loop/followUps.ts";
-import { escapeMarkerIn, fromPullRequestIn, fromRetroIn } from "../loop/markers.ts";
+import { escapeMarkerIn, fromPullRequestIn, fromRetroIn, requestChangesAnswersIn } from "../loop/markers.ts";
 import { retrosIn, retroWindowStart } from "../loop/retro.ts";
 import { type RetroEvidence, type RetroIssueSnapshot, STRENGTHS, type Strength, type Verdict, type VerdictRecord } from "../loop/types.ts";
 import { isLive, recordPathOf, type RunRecord, runKey } from "./runRecord.ts";
@@ -388,9 +389,7 @@ function mergedIn(window: Window, { pullRequests }: MetricFacts): AgentPullReque
 }
 
 /** What a Request-changes run answered about the review it was started for (#369), and the Kit's comment that holds it. */
-export interface RequestChangesAnswer {
-  readonly reviewMiss: boolean;
-  readonly amendsTicket: boolean;
+export interface RequestChangesAnswer extends RequestChangesAnswers {
   readonly comment: CommentFacts;
 }
 
@@ -626,9 +625,7 @@ export type OperatorFeedback =
        * What its own run answered (#369): whether it holds a Review miss, and
        * whether it amends the Ticket. Null for each when it's unanswered.
        */
-      readonly reviewMiss: boolean | null;
-      readonly amendsTicket: boolean | null;
-    }
+    } & { readonly [Answer in keyof RequestChangesAnswers]: RequestChangesAnswers[Answer] | null }
   | {
       /** A run of consecutive commits the Operator made, at the last one's time, with what they changed. */
       readonly kind: "push";

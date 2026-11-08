@@ -25,6 +25,7 @@ import {
   type MetricFacts,
   type OpenPullRequestFacts,
   requestChangesIn,
+  type RequestChangesReview,
   verdictsOn,
   type Window,
   within,
@@ -523,7 +524,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
     escapesByStrength: change("escapesByStrength"),
     escapesThisWeek: escapesThisWeekOf(weeks.thisWeek, input),
     requestChanges: change("requestChanges"),
-    reviewMissesThisWeek: reviewMissesThisWeekOf(weeks.thisWeek, input),
+    reviewMissesThisWeek: thisWeek.reviewMisses,
     counts: {
       mergedPullRequests: change("mergedPullRequests"),
       ticketsDispatched: change("ticketsDispatched"),
@@ -565,6 +566,8 @@ interface WeekMetrics {
   readonly escapeRate: EscapeRate;
   readonly escapesByStrength: EscapesByStrength;
   readonly requestChanges: RequestChangesCounts;
+  /** The week's Request changes with a Review miss: the list only this week's summary shows. */
+  readonly reviewMisses: readonly ReviewMissThisWeek[];
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
   readonly retries: number;
@@ -585,6 +588,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
   const scoring = costOf(records.filter((record) => record.role === "score"));
   const escapeWindow = escapeWindowOf(week);
   const escapes = escapesIn(escapeWindow, input);
+  const requestChanges = requestChangesIn(week, input);
   return {
     records: records.length,
     cost,
@@ -600,7 +604,8 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     revertRate: revertRateOf(week, input),
     escapeRate: escapeRateOf(escapeWindow, escapes, input),
     escapesByStrength: escapesByStrengthOf(escapes),
-    requestChanges: requestChangesCountsOf(week, input),
+    requestChanges: requestChangesCountsOf(requestChanges),
+    reviewMisses: reviewMissesOf(requestChanges),
     mergedPullRequests: merged.length,
     ticketsDispatched: tickets.filter((ticket) => {
       const dispatch = dispatchOf(ticket);
@@ -733,9 +738,9 @@ function escapesThisWeekOf(week: Week, input: WeeklySummaryInput): EscapeThisWee
     }));
 }
 
-/** The week's Request changes, by their answers, counted by when each review was submitted. */
-function requestChangesCountsOf(week: Week, input: WeeklySummaryInput): RequestChangesCounts {
-  const answers = requestChangesIn(week, input).map(({ answer }) => answer);
+/** A week's Request changes, by their answers, counted by when each review was submitted. */
+function requestChangesCountsOf(reviews: readonly RequestChangesReview[]): RequestChangesCounts {
+  const answers = reviews.map(({ answer }) => answer);
   return {
     reviewMiss: answers.filter((answer) => answer?.reviewMiss === true).length,
     amendsTicket: answers.filter((answer) => answer?.amendsTicket === true).length,
@@ -743,9 +748,9 @@ function requestChangesCountsOf(week: Week, input: WeeklySummaryInput): RequestC
   };
 }
 
-/** The Request changes submitted in the week whose run answered it holds a Review miss. */
-function reviewMissesThisWeekOf(week: Week, input: WeeklySummaryInput): ReviewMissThisWeek[] {
-  return requestChangesIn(week, input).flatMap(({ repo, pullRequest, review, answer, passingReview }) =>
+/** Those of a week's Request changes whose run answered that it holds a Review miss. */
+function reviewMissesOf(reviews: readonly RequestChangesReview[]): ReviewMissThisWeek[] {
+  return reviews.flatMap(({ repo, pullRequest, review, answer, passingReview }) =>
     answer?.reviewMiss !== true
       ? []
       : [

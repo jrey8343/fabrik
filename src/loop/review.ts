@@ -9,7 +9,7 @@ import { followUpsSection } from "./followUps.ts";
 import { REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw, whyAwaitingRun } from "./retry.ts";
-import { type AnswerLines, verdictMarker } from "./markers.ts";
+import { verdictMarker } from "./markers.ts";
 import { parseVerdict } from "./verdict.ts";
 import type {
   Action,
@@ -138,6 +138,12 @@ const HEADINGS: Readonly<Record<Verdict, string>> = {
 
 /** Names the Verdict comment, so the note on a Ticket sent back to design can link it. */
 const VERDICT_COMMENT: PostedComment = { posted: "verdict" };
+
+/** A Request-changes run's answers as its outcome comment carries them: the marker line, and the lines people read (#369). */
+export interface AnswerLines {
+  readonly marker: string;
+  readonly lines: readonly string[];
+}
 
 /**
  * The Verdict comment (it mentions nobody), and agent:review off so re-adding

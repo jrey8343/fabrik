@@ -3,15 +3,15 @@
 import { evidenceSection, isUi, withoutEvidence } from "../evidence/uiEvidence.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { consideredSection } from "./considered.ts";
-import { parseImplementOutput } from "./implementOutput.ts";
+import { type ImplementerAnswers, parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
 import { conflictRunEnded, owedConflictRun } from "./conflicts.ts";
-import { answerLines, CONFLICT_RUN_MARKER, EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, UNMARKED_RETRY_PUSH } from "./markers.ts";
+import { CONFLICT_RUN_MARKER, EMPTY_DIFF_MARKER, requestChangesAnswersMarker, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { owedRequestChangesRun } from "./mergeGate.ts";
 import { implementSettings, MAX_RETRIES, owedRetry, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
-import { verdictActions } from "./review.ts";
+import { type AnswerLines, verdictActions } from "./review.ts";
 import type {
   Action,
   IssueContext,
@@ -137,7 +137,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   const { issue: issueNumber, changes, branch, fixes } = event;
   const { issue, pullRequest, operator } = snapshot;
   if (fixes === undefined) throw new Error("A first Implement run lands through applyImplementation");
-  const parsed = parseImplementOutput(event.output, fixes.requestChanges === true ? "request-changes" : "pull-request");
+  const parsed = parseImplementOutput(event.output, fixes.review === undefined ? "pull-request" : "request-changes");
   // A conflict-only run that can't land still ends, or it would stay in flight for good, its PR withheld from every Verdict (#304).
   const conflictEnds = (why: string): Plan | null =>
     fixes.conflict !== undefined && pullRequest !== null && pullRequest.open && pullRequest.number === fixes.pullRequest && pullRequest.conflictRunInFlight === fixes.conflict
@@ -166,10 +166,10 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
 
   const guard = checkTrustRoot([...changes.net, ...changes.commits]);
   if (guard.kind === "refuse") return refuse(issueNumber, guard.paths, operator, pullRequest.number);
-  const requestChanges = fixes.requestChanges === true;
+  const requestChanges = fixes.review !== undefined;
   // The run's answers about the review it was started for, recorded with its outcome either way (#369).
   const { answers } = parsed.output;
-  const recorded = requestChanges && answers !== undefined && fixes.review !== undefined ? answerLines(fixes.review, answers) : null;
+  const recorded = fixes.review !== undefined && answers !== undefined ? answerLines(fixes.review, answers) : null;
   // Merging main in or rebasing onto it, to fix a conflict, is a change even with none of the run's own.
   if (changes.net.length === 0 && changes.updatedFromMain !== true) {
     return {
@@ -216,6 +216,20 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       { kind: "push-branch", branch },
       ...previewToLink(evidence, config, branch, pullRequest.number),
     ],
+  };
+}
+
+/**
+ * The marker and readable lines for a Request-changes run's answers about
+ * `review`: `Review miss: yes, <point>; <point>` or `Review miss: no`, then
+ * `Amends the Ticket: yes` or `no`. Each point is agent text, so it's put on
+ * one line and mentions nobody.
+ */
+function answerLines(review: number, { reviewMiss, points, amendsTicket }: ImplementerAnswers): AnswerLines {
+  const named = points.map((point) => withoutMentions(point.replace(/\s+/g, " ").trim())).join("; ");
+  return {
+    marker: requestChangesAnswersMarker({ review, reviewMiss, amendsTicket }),
+    lines: [reviewMiss ? `Review miss: yes, ${named}` : "Review miss: no", `Amends the Ticket: ${amendsTicket ? "yes" : "no"}`],
   };
 }
 

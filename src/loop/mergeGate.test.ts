@@ -10,7 +10,7 @@ import {
   verdictsPostedIn,
 } from "../__fixtures__/snapshots.ts";
 import { anEvidence, CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
-import { requestChangesAnswersIn } from "../github/threads.ts";
+import { requestChangesAnswersIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { Action, ImplementEvidence, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
@@ -224,7 +224,7 @@ function requestChangesPushed(
     base: "fabrik/ticket-7",
     changes,
     ...(evidence === undefined ? {} : { evidence }),
-    fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, requestChanges: true, review: 900 },
+    fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 900 },
   };
 }
 
