@@ -35,17 +35,17 @@ export function implementSettings(reason: StepUpReason | null, config: KitConfig
 
 /**
  * Which retry an Execution flaw calls for, given the Verdicts posted before it:
- * one more than the earlier Execution flaws. Verdicts from a Request-changes
- * run or a conflict-only run (#304) don't count, nor does one that gave way to
- * an undelivered Request changes (#341), and an Infrastructure failure posts
- * no Verdict at all.
+ * one more than the earlier Execution flaws that each called for one. A
+ * Request-changes run uses no retry, but a flaw on its push calls for one like
+ * any other, so it counts (#393). A conflict-only run's Verdict (#304) and a
+ * flaw that gave way to an undelivered Request changes (#341) call for none,
+ * so they don't, and an Infrastructure failure posts no Verdict at all.
  */
 export function retryNumber(earlier: readonly VerdictRecord[]): number {
   return (
     1 +
-    earlier.filter(
-      (record) => record.verdict === "execution-flaw" && !record.requestChanges && record.conflictRun !== true && record.requestChangesFirst === undefined,
-    ).length
+    earlier.filter((record) => record.verdict === "execution-flaw" && record.conflictRun !== true && record.requestChangesFirst === undefined)
+      .length
   );
 }
 

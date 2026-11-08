@@ -744,23 +744,23 @@ describe("An undelivered Request changes while a run is in flight on the PR", ()
     expect(actionsOf(thread.retryFinishes(BUILT, D, 60, 2))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
   });
 
-  it("a Retry the Operator took the PR back from never lands as a later flaw's Retry of the same number", () => {
+  it("a Retry the Operator took the PR back from never lands, while the later flaw's Retry, numbered after it, does", () => {
     const thread = new Thread();
     thread.mergeable = true;
     thread.review(6000, 5);
     thread.delivered(6000, 5);
     thread.requestChangesRunFinishes(BUILT, B, 10);
-    // A flaw on a Request-changes run's push doesn't count, so this one and the next both call Retry 1.
+    // A flaw on a Request-changes run's push calls for Retry 1 like any other, and counts, so the next calls Retry 2 (#393).
     expect(commentsOn(thread.reviewed("execution-flaw", 15), 50)[0]).toContain("Retry 1 of 2");
     thread.implement();
     thread.markReady(20);
     thread.mergeable = false;
     thread.mainPushed(30, MAIN_2);
     thread.pushed(thread.headSha, 35);
-    expect(commentsOn(thread.reviewed("execution-flaw", 40), 50)[0]).toContain("Retry 1 of 2");
+    expect(commentsOn(thread.reviewed("execution-flaw", 40), 50)[0]).toContain("Retry 2 of 2");
 
     const abandoned = thread.retryFinishes(BUILT, C, 50, 1, B);
-    const own = thread.retryFinishes(BUILT, D, 60, 1, E);
+    const own = thread.retryFinishes(BUILT, D, 60, 2, E);
 
     expect(actionsOf(abandoned).some((action) => action.kind === "push-branch")).toBe(false);
     expect(actionsOf(own)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
