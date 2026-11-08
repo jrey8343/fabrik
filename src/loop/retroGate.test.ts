@@ -276,7 +276,8 @@ describe("The tick's other rules", () => {
         { kind: "comment", issue: 41, body: expect.stringMatching(/^The weekly usage limit reset at 2026-11-07 03:00 UTC/) },
         { kind: "close", issue: 41, reason: "completed" },
         expect.objectContaining({ kind: "open-issue", title: "Retro: week of 2026-11-02", labels: ["fabrik:retro"], assignees: [] }),
-        { kind: "check-dispatch" }, { kind: "check-design-queue" },
+        { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
       ],
     });
     expect(notificationsOf(plan)).toEqual([]);
@@ -290,7 +291,8 @@ describe("The tick's other rules", () => {
       actions: [
         expect.objectContaining({ kind: "comment", issue: 41 }),
         { kind: "close", issue: 41, reason: "completed" },
-        { kind: "check-dispatch" }, { kind: "check-design-queue" },
+        { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
       ],
     });
   });
@@ -400,7 +402,8 @@ describe("The scheduled-tick rule", () => {
         expect.objectContaining({ kind: "comment", issue: 41 }),
         { kind: "close", issue: 41, reason: "completed" },
         expect.objectContaining({ kind: "open-issue", title: "Retro: week of 2026-11-02", labels: ["fabrik:retro"], assignees: [] }),
-        { kind: "check-dispatch" }, { kind: "check-design-queue" },
+        { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
       ],
     });
     expect(notificationsOf(plan)).toEqual([]);

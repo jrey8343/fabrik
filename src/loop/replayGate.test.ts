@@ -95,7 +95,8 @@ describe("The scheduled tick's replay step", () => {
           expect.objectContaining({ kind: "comment", issue: 41 }),
           { kind: "close", issue: 41, reason: "completed" },
           { kind: "add-labels", issue: 140, labels: ["agent:replay"] },
-          { kind: "check-dispatch" }, { kind: "check-design-queue" },
+          { kind: "check-dispatch" },
+          { kind: "check-design-queue" },
         ],
       });
       expect(actionsOf(plan).slice(0, 2)).toEqual(actionsOf(planFor({ kind: "scheduled-tick", now: WEDNESDAY }, tickSnapshot({ kitIssues: [weeklyLimitIssue(41, "Claude token 2", EARLIER)] }), TWO_SUBSCRIPTIONS)).slice(0, 2));
@@ -171,7 +172,8 @@ describe("The scheduled tick's replay step, beside its gates", () => {
             reason: "run 9001 never landed, still in progress 211 minutes after it started, past the 210 a replay Ticket's run can last, as when its replay-record job couldn't run",
             resultsReady: expect.stringContaining("@operator **This Replay's results are in.**"),
           },
-          { kind: "check-dispatch" }, { kind: "check-design-queue" },
+          { kind: "check-dispatch" },
+          { kind: "check-design-queue" },
         ],
       });
     });
@@ -200,7 +202,8 @@ describe("The scheduled tick's replay step, beside its gates", () => {
       actions: [
         { kind: "remove-label", issue: 140, label: "agent:replay" },
         { kind: "add-labels", issue: 140, labels: ["agent:replay"] },
-        { kind: "check-dispatch" }, { kind: "check-design-queue" },
+        { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
       ],
     });
   });

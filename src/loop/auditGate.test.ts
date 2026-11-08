@@ -211,7 +211,8 @@ describe("The tick's other rules", () => {
         { kind: "comment", issue: 41, body: expect.stringMatching(/^The weekly usage limit reset at 2026-11-08 03:00 UTC/) },
         { kind: "close", issue: 41, reason: "completed" },
         expect.objectContaining({ kind: "open-issue", title: "Audit: week of 2026-11-02", labels: ["fabrik:audit"], assignees: [] }),
-        { kind: "check-dispatch" }, { kind: "check-design-queue" },
+        { kind: "check-dispatch" },
+        { kind: "check-design-queue" },
       ],
     });
     expect(notificationsOf(plan)).toEqual([]);

@@ -292,7 +292,7 @@ function labelAdded(
   if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
   if (label === RESEARCH_LABEL) return startResearcher(issueNumber, context, config);
   if (label === REPLAY_TRIGGER_LABEL) return startReplay(issueNumber, context, replay?.issues ?? null);
-  if (label === READY_FOR_AGENT) return readyForAgent(issueNumber, context.issue);
+  if (label === READY_FOR_AGENT) return checkDispatchWhenReady(issueNumber, context.issue);
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }
@@ -306,7 +306,7 @@ function labelAdded(
  * which weighs it with the rest. Triage marking it asks for one already, so the
  * Dispatch job's concurrency group absorbs the second.
  */
-function readyForAgent(issueNumber: number, issue: IssueSnapshot): Plan {
+function checkDispatchWhenReady(issueNumber: number, issue: IssueSnapshot): Plan {
   if (!issue.open) return { kind: "nothing", reason: `#${issueNumber} is closed` };
   return { kind: "act", actions: [CHECK_DISPATCH] };
 }
