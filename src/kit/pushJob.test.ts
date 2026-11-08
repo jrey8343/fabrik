@@ -96,9 +96,19 @@ describe("What the push job applies", () => {
       pullRequest: 50,
       review: 900,
       conflict: null,
+      mainAtStart: null,
       startedBy: null,
       capture: { result: null, artifact: null, galleryArtifact: null },
     });
+  });
+
+  it("carries main's head as the Kit job read it before the run, never anything from the agent job (#341)", () => {
+    const main = "9".repeat(40);
+    const implement = { ...ok(), outputs: { ...ok().outputs, "main-at-start": "8".repeat(40) } };
+
+    const input = pushJobInput(needs("implement", { implement }, { ticket: "7", "pull-request": "50", review: "900", "main-at-start": main }), 50);
+
+    expect(input).toMatchObject({ kind: "agent-result", mainAtStart: main });
   });
 
   it("applies a conflict-only run's result with the main head the Kit job's plan started it for (#304)", () => {

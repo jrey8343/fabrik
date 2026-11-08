@@ -42,6 +42,13 @@ describe("The Kit job's routing of a replay Ticket (#156)", () => {
   });
 });
 
+describe("The Kit job's main head for a run on an agent PR's branch (#341)", () => {
+  it("passes out main's head as it read it, which the push job takes for the main the run may have brought in", () => {
+    expect(kitJobOutputs(null, null, kitConfig(), "9".repeat(40))).toMatchObject({ "main-at-start": "9".repeat(40) });
+    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "main-at-start": "" });
+  });
+});
+
 describe("The Kit job's routing", () => {
   // The Retro evidence job, then the Retro job, run on the retro route (#151), both within retro-timeout-minutes.
   it("routes the App's pending Retro to the Retro jobs, within roles.retro's timeout, on its model and effort, with no Ticket, PR or commit", () => {

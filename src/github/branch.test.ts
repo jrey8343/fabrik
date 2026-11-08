@@ -46,11 +46,11 @@ const REMOTE = () => ({ serverUrl: `file://${root}`, repo: { owner: "acme", name
  * what it made on top of `baseSha`; `mergeMain` is the main head a
  * Request-changes run was told to merge in (#341).
  */
-async function rebuild(baseSha: string, mergeMain: string | null = null) {
+async function rebuild(baseSha: string, mergeMain: string | null = null, mainAtStart: string | null = null) {
   const head = await git(clone, "rev-parse", "HEAD");
   const bundle = join(root, "agent-branch.bundle");
   await git(clone, "bundle", "create", "--quiet", bundle, `refs/heads/${BRANCH}`, `^${baseSha}`);
-  return rebuildAgentBranch({ name: BRANCH, base: { ref: BRANCH, sha: baseSha }, head }, bundle, REMOTE(), mergeMain);
+  return rebuildAgentBranch({ name: BRANCH, base: { ref: BRANCH, sha: baseSha }, head }, bundle, REMOTE(), mergeMain, mainAtStart);
 }
 
 const paths = (changes: readonly { path: string; from?: string }[]) => [...new Set(changes.map((change) => change.path))].sort();
@@ -182,7 +182,7 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     await mergesMain();
     await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change");
 
-    const branch = await rebuild(prHead, main);
+    const branch = await rebuild(prHead, main, main);
 
     expect(branch.changes.mainMerge).toEqual({ main, resolved: true });
   });
@@ -194,7 +194,7 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     await commit(seed, { "src/shared.ts": "shared from main, again\n" }, "Main moves on again");
     await git(seed, "push", "--quiet", "origin", "main");
 
-    const branch = await rebuild(prHead, main);
+    const branch = await rebuild(prHead, main, main);
 
     expect(branch.changes.mainMerge).toEqual({ main, resolved: true });
   });
@@ -203,7 +203,7 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     const main = await mainConflicts();
     await commit(clone, { "src/shared.ts": "shared v1\n" }, "Drop the PR's change to shared, as asked");
 
-    const branch = await rebuild(prHead, main);
+    const branch = await rebuild(prHead, main, main);
 
     expect(branch.changes.mainMerge).toEqual({ main, resolved: true });
   });
@@ -212,7 +212,7 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     const main = await mainConflicts();
     await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change, without main");
 
-    const branch = await rebuild(prHead, main);
+    const branch = await rebuild(prHead, main, main);
 
     expect(branch.changes.mainMerge).toEqual({ main, resolved: false });
   });
@@ -250,7 +250,7 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     await git(clone, "checkout", "--quiet", "-B", BRANCH, `origin/${BRANCH}`);
     await mergesMain();
 
-    const branch = await rebuild(head, main);
+    const branch = await rebuild(head, main, main);
 
     expect(paths(branch.changes.net)).toEqual(["src/shared.ts"]);
     expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "allow" });
@@ -273,7 +273,7 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     await writeFile(join(clone, "AGENTS.md"), "a from both\n");
     await git(clone, "commit", "--quiet", "-am", "Merge main, resolving both");
 
-    const branch = await rebuild(head, main);
+    const branch = await rebuild(head, main, main);
 
     expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "refuse", paths: ["AGENTS.md"] });
   });
@@ -319,7 +319,7 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     await git(clone, "checkout", "--quiet", "-B", BRANCH, `origin/${BRANCH}`);
     await mergesMain();
 
-    const branch = await rebuild(head, told);
+    const branch = await rebuild(head, told, told);
 
     expect(paths(branch.changes.net)).toEqual(["src/shared.ts"]);
     expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "allow" });
@@ -329,7 +329,7 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
   it("doesn't count as its own a trust-root file git merged cleanly when it merged main unasked, and main moved on before its push", async () => {
     const head = await operatorChangesRules();
     const seed = join(root, "seed");
-    await commit(seed, { "AGENTS.md": "a\nb\nc\nd\nE\n" }, "Main changes the rules' last line");
+    const started = await commit(seed, { "AGENTS.md": "a\nb\nc\nd\nE\n" }, "Main changes the rules' last line");
     await git(seed, "push", "--quiet", "origin", "main");
     await git(clone, "fetch", "--quiet", "origin");
     await git(clone, "checkout", "--quiet", "-B", BRANCH, `origin/${BRANCH}`);
@@ -338,9 +338,35 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     await commit(seed, { "src/other.ts": "other\n" }, "Main moves on");
     await git(seed, "push", "--quiet", "origin", "main");
 
-    const branch = await rebuild(head);
+    const branch = await rebuild(head, null, started);
 
     expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "allow" });
+  });
+
+  it("never takes as main's a commit main's head never was, though main's history holds it", async () => {
+    // Two commits pushed to main at once: the first weakens the rules, the second puts them back. Main was never at the first.
+    const seed = join(root, "seed");
+    const weaker = await commit(seed, { "AGENTS.md": "weaker\n" }, "Weaker rules");
+    const strict = await commit(seed, { "AGENTS.md": "strict\n" }, "Strict again");
+    await git(seed, "push", "--quiet", "origin", "main");
+    await git(clone, "fetch", "--quiet", "origin");
+    await git(clone, "merge", "--quiet", "--no-edit", weaker);
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change");
+
+    const branch = await rebuild(prHead, null, strict);
+
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "refuse", paths: ["AGENTS.md"] });
+  });
+
+  it("judges the conflict against main as the run started when its result names some other commit", async () => {
+    const main = await mainConflicts();
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "The requested change, without main");
+
+    // The main the PR was cut from: one of main's heads, which the branch holds, so it would read as resolved.
+    const base = await git(clone, "merge-base", prHead, main);
+    const branch = await rebuild(prHead, base, main);
+
+    expect(branch.changes.mainMerge).toEqual({ main, resolved: false });
   });
 
   it("merges as the PR's own .gitattributes say, so a file both changed that git unions doesn't keep the conflict", async () => {
@@ -356,7 +382,7 @@ describe("A Request-changes run told to merge main in, because its PR conflicted
     await git(clone, "checkout", "--quiet", "-B", BRANCH, `origin/${BRANCH}`);
     await commit(clone, { "src/shared.ts": "shared v1\n" }, "Drop the PR's change to shared, as asked");
 
-    const branch = await rebuild(head, main);
+    const branch = await rebuild(head, main, main);
 
     expect(branch.changes.mainMerge).toEqual({ main, resolved: true });
   });

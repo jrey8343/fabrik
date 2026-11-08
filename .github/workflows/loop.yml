@@ -98,6 +98,9 @@ jobs:
       review: ${{ steps.route.outputs.review }}
       # For a conflict-only run (#304): the default branch head it rebases the PR's branch onto, a full sha.
       conflict: ${{ steps.route.outputs.conflict }}
+      # For a run on an agent PR's branch (#341): main's head as this job read it, before the run started. The push job
+      # takes it, and main as it is then, for the only heads the run may have brought in: the agent job can't write it.
+      main-at-start: ${{ steps.route.outputs.main-at-start }}
       # For an Auditor run: the pending Audit's marked commit, which the Audit job checks out.
       audit-commit: ${{ steps.route.outputs.audit-commit }}
       # The model and effort the plan chose for its agent run, a Step-up included.

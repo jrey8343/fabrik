@@ -1266,6 +1266,10 @@ describe("The conflict check's turns (#341)", () => {
     const agent = stepsOf(jobIn(loop, "implement")).find((step) => step.includes("name: Run the Implementer"));
     expect(agent).toContain("FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}");
   });
+
+  it("passes the push job main's head as the Kit job read it, from the Kit job, which no agent runs in", () => {
+    expect(jobIn(loop, "kit")).toContain("\n      main-at-start: ${{ steps.route.outputs.main-at-start }}\n");
+  });
 });
 
 describe("The store-token action, which the record actions share", () => {

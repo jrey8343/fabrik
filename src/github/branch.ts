@@ -55,27 +55,36 @@ const HEAD_REF = "refs/fabrik/head";
  * branch head a Request-changes run was told to merge in (#341), because the
  * head it started on conflicted with it: whether it resolved the conflict is
  * judged against that head, never main as it is now, which may have moved
- * while it ran. It comes from the run's result, so it counts only if it was
- * one of main's heads, and it never decides which of the run's paths read as
- * main's. A run told to merge it that made no commits resolved nothing.
+ * while it ran. It comes from the run's result, which the agent job writes, so
+ * it counts only if it's main as the run started (`started`, which the Kit
+ * job read before the run) or as it is now, and it never decides which of the
+ * run's paths read as main's. A run told to merge it that made no commits
+ * resolved nothing.
  */
 export async function rebuildAgentBranch(
   branch: BuiltBranch,
   bundlePath: string,
   remote: Remote,
   mergeMain: string | null = null,
+  started: string | null = null,
 ): Promise<AgentBranchGit> {
   const { git, url } = await emptyRepository(remote);
   if (branch.head === null) {
+    const told = started ?? mergeMain;
     return {
-      changes: { net: [], commits: [], updatedFromMain: false, ...(mergeMain === null ? {} : { mainMerge: { main: mergeMain, resolved: false } }) },
+      changes: {
+        net: [],
+        commits: [],
+        updatedFromMain: false,
+        ...(mergeMain === null || told === null ? {} : { mainMerge: { main: told, resolved: false } }),
+      },
       head: null,
       push: () => Promise.reject(new Error(`${branch.name} has no commits to push`)),
     };
   }
   if (isPrototypeBranch(branch.name)) return fastForwardOnly(git, url, branch, bundlePath);
   return branch.base.ref === branch.name
-    ? onItsOwnBranch(git, url, branch, bundlePath, mergeMain)
+    ? onItsOwnBranch(git, url, branch, bundlePath, mergeMain, started)
     : cutFromMain(git, url, branch, bundlePath);
 }
 
@@ -284,8 +293,10 @@ async function fastForwardOnly(git: Git, url: string, branch: BuiltBranch, bundl
  * judged as the run's. A path the branch holds just as git's own merge of the
  * PR's head and the main the run brought in would have it is main's, not the
  * run's, though it reads unlike both: a file both had changed that merged
- * cleanly. The main it brought in is the newest of main's heads the branch
- * holds and the PR's head didn't, never a commit only the run names. A
+ * cleanly. The main it brought in is main as it is now, or else as the run
+ * started, whichever the branch holds and the PR's head didn't: never a
+ * commit only the run names, nor one main's history holds but main never
+ * was at. A
  * Request-changes run told to merge `mergeMain` in (#341) resolved its
  * conflict when the branch holds that head, or merges cleanly with it. Merges
  * follow the PR's .gitattributes as they were before the run.
@@ -296,10 +307,19 @@ async function onItsOwnBranch(
   branch: BuiltBranch,
   bundlePath: string,
   mergeMain: string | null,
+  startedAt: string | null,
 ): Promise<AgentBranchGit> {
   const ref = `refs/heads/${branch.name}`;
   await git("fetch", "--quiet", url, branch.base.sha);
   await git("fetch", "--quiet", url, `+HEAD:${MAIN_REF}`);
+  // Main as the run started is in main's history already, unless a force-push took it out, when it's no head now.
+  const started =
+    startedAt === null
+      ? null
+      : await git("fetch", "--quiet", url, startedAt).then(
+          () => startedAt,
+          () => null,
+        );
   const built = await fetchBundle(git, branch, bundlePath);
   const main = (await git("rev-parse", "--verify", `${MAIN_REF}^{commit}`)).trim();
   const head = (await headNow(git, url, branch.name)) ?? branch.base.sha;
@@ -324,17 +344,20 @@ async function onItsOwnBranch(
   const unlike = async (from: string): Promise<Set<string>> =>
     new Set((await git("diff", "--name-only", "-z", "--no-ext-diff", from, tip)).split("\0").filter(Boolean));
   const unlikeMain = await unlike(main);
-  // Main's heads, newest first: its first parents. The main the run brought in is the newest of these it
-  // holds that the PR's head didn't, which the push job works out for itself, whatever the run's result says.
-  const mainHeads = (await git("rev-list", "--first-parent", main)).split("\n").filter(Boolean);
-  const runHolds = new Set((await git("rev-list", tip, "--not", head)).split("\n").filter(Boolean));
-  const broughtIn = mainHeads.find((commit) => runHolds.has(commit)) ?? null;
+  // Main's heads the run can have brought in, newest first: main as it is now, and as the Kit job read it before
+  // the run started. Neither comes from the agent job. The main the run brought in is the first of them it holds
+  // that the PR's head didn't; a commit main was never at, though its history holds one, never is.
+  const heads = [main, ...(started === null || started === main ? [] : [started])];
+  let broughtIn: string | null = null;
+  for (const candidate of heads) {
+    if (broughtIn === null && (await isAncestor(git, candidate, tip)) && !(await isAncestor(git, candidate, head))) broughtIn = candidate;
+  }
   const unlikeMerge = broughtIn === null ? null : await unlike((await mergeTree(judging, head, broughtIn)).tree);
   // A path the branch now holds just as main does, or just as git's own merge with it does, came from main, not from this run.
   const own = (path: string): boolean => unlikeMain.has(path) && (unlikeMerge === null || unlikeMerge.has(path));
   const net = (await diff(git, head, tip)).filter((change) => own(change.path) || (change.from !== undefined && own(change.from)));
-  // The main it was told to merge counts only if it was one of main's heads; otherwise it's main as it is now.
-  const told = mergeMain === null ? null : mainHeads.includes(mergeMain) ? mergeMain : main;
+  // The main it was told to merge counts only if it's one of those heads; otherwise it's main as the run started.
+  const told = mergeMain === null ? null : heads.includes(mergeMain) ? mergeMain : (started ?? main);
   const resolved = told === null ? null : (await isAncestor(git, told, tip)) || !(await mergeTree(judging, tip, told)).conflicted;
   return {
     changes: {

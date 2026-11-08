@@ -187,6 +187,23 @@ interface PullRequestComments {
   nodes: { body: string; createdAt: string; author: { __typename: string } | null }[];
 }
 
+const DEFAULT_BRANCH_HEAD_QUERY = `
+  query ($owner: String!, $name: String!) {
+    repository(owner: $owner, name: $name) {
+      defaultBranchRef { target { oid } }
+    }
+  }
+`;
+
+/** The default branch's head, a full sha, or null when it has none. */
+export async function defaultBranchHead(github: Pick<GitHub, "graphql">, repo: Repo): Promise<string | null> {
+  const data = await github.graphql<{ repository: { defaultBranchRef: { target: { oid: string } } | null } }>(DEFAULT_BRANCH_HEAD_QUERY, {
+    owner: repo.owner,
+    name: repo.name,
+  });
+  return data.repository.defaultBranchRef?.target.oid ?? null;
+}
+
 /** A PR's comments before the ones already read, a page at a time, newest page first. */
 const PULL_REQUEST_EARLIER_COMMENTS_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!, $before: String!) {

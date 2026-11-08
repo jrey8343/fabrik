@@ -257,10 +257,11 @@ async function agentResultEvent(
         : `The retry on #${retry.pullRequest} didn't build on ${built.name}`,
     );
   }
-  // The main head a Request-changes run was told to merge in (#341), which the Kit's own step in the agent job worked
-  // out before the agent ran. Only a Request-changes run is ever told to, whatever the result says.
+  // The main head a Request-changes run was told to merge in (#341), from its result, which the agent job writes: the
+  // push job checks it against main as the Kit job read it before the run, which the agent can't rewrite, and main as
+  // it is now. Only a Request-changes run is ever told to, whatever the result says.
   const mergeMain = retry?.requestChanges === true ? (result.mergeMain ?? null) : null;
-  const branch = await rebuildAgentBranch(built, bundlePath, remote(), mergeMain);
+  const branch = await rebuildAgentBranch(built, bundlePath, remote(), mergeMain, input.mainAtStart ?? null);
   // The capture result and artifact ids come from the Implement job's outputs; the core decides whether the run is UI.
   const capture = input.capture ?? { result: null, artifact: null, galleryArtifact: null };
   const evidence = { ...capture, run: Number(required("GITHUB_RUN_ID")), repoUrl: thisRepoUrl() };
