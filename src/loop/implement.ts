@@ -8,7 +8,7 @@ import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN } from "
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
 import { conflictRunEnded, owedConflictRun } from "./conflicts.ts";
-import { CONFLICT_RUN_MARKER, EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, UNMARKED_RETRY_PUSH } from "./markers.ts";
+import { answerLines, CONFLICT_RUN_MARKER, EMPTY_DIFF_MARKER, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { owedRequestChangesRun } from "./mergeGate.ts";
 import { implementSettings, MAX_RETRIES, owedRetry, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
 import { verdictActions } from "./review.ts";
@@ -137,7 +137,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   const { issue: issueNumber, changes, branch, fixes } = event;
   const { issue, pullRequest, operator } = snapshot;
   if (fixes === undefined) throw new Error("A first Implement run lands through applyImplementation");
-  const parsed = parseImplementOutput(event.output, true);
+  const parsed = parseImplementOutput(event.output, fixes.requestChanges === true ? "request-changes" : "pull-request");
   // A conflict-only run that can't land still ends, or it would stay in flight for good, its PR withheld from every Verdict (#304).
   const conflictEnds = (why: string): Plan | null =>
     fixes.conflict !== undefined && pullRequest !== null && pullRequest.open && pullRequest.number === fixes.pullRequest && pullRequest.conflictRunInFlight === fixes.conflict
@@ -167,6 +167,9 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   const guard = checkTrustRoot([...changes.net, ...changes.commits]);
   if (guard.kind === "refuse") return refuse(issueNumber, guard.paths, operator, pullRequest.number);
   const requestChanges = fixes.requestChanges === true;
+  // The run's answers about the review it was started for, recorded with its outcome either way (#369).
+  const { answers } = parsed.output;
+  const recorded = requestChanges && answers !== undefined && fixes.review !== undefined ? answerLines(fixes.review, answers) : null;
   // Merging main in or rebasing onto it, to fix a conflict, is a change even with none of the run's own.
   if (changes.net.length === 0 && changes.updatedFromMain !== true) {
     return {
@@ -179,6 +182,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           verdict: "execution-flaw",
           source: "empty-diff",
           findings: `The Implementer's ${requestChanges ? "Request-changes run" : "retry"} on \`${branch}\` committed no change, so there was nothing to review.`,
+          answers: recorded,
         },
       ),
     };
@@ -198,10 +202,12 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         body: [
           // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
           requestChanges ? REQUEST_CHANGES_RUN_MARKER : RETRY_PUSH_MARKER,
+          ...(recorded === null ? [] : [recorded.marker]),
           requestChanges
             ? `The Implementer pushed the Operator's requested changes to \`${branch}\`; Review runs again on it.`
             : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
           "",
+          ...(recorded === null ? [] : [...recorded.lines, ""]),
           // Present: the on-a-PR contract above requires it.
           withoutMentions(parsed.output.fix ?? ""),
           ...consideredSection(parsed.output.operatorCommentsConsidered ?? [], fixes.operatorComments),

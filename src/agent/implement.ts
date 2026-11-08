@@ -270,6 +270,8 @@ export interface ImplementInput {
   readonly parts: string[];
   /** Whether it works on an existing PR (a retry or a Request-changes run), whose output owes a fix too. */
   readonly onPullRequest: boolean;
+  /** Whether it's a Request-changes run, whose output owes its two answers about the review too (#369). */
+  readonly requestChanges: boolean;
   /** For a run on an existing PR, the Operator comments it was given; null for a first run. */
   readonly operatorComments: GivenOperatorComment[] | null;
 }
@@ -292,15 +294,16 @@ export async function implementInput(
   const onPullRequest = files.pullRequest !== "";
   const branch = onPullRequest ? await continueAgentBranch(productDir, ticket) : await startAgentBranch(productDir, ticket);
   const parts = await implementContext(productDir, files.spec, config);
-  if (!onPullRequest) return { branch, parts, onPullRequest, operatorComments: null };
+  if (!onPullRequest) return { branch, parts, onPullRequest, requestChanges: false, operatorComments: null };
   const conflict = files.conflict ?? "";
+  const requestChanges = conflict === "" && files.review !== "";
   const context =
     conflict !== ""
       ? await conflictContext(files.pullRequest, conflict)
       : files.review === ""
         ? await retryContext(files.pullRequest)
         : await requestChangesContext(files.pullRequest, files.review);
-  return { branch, parts: [...parts, ...context.parts], onPullRequest, operatorComments: context.operatorComments };
+  return { branch, parts: [...parts, ...context.parts], onPullRequest, requestChanges, operatorComments: context.operatorComments };
 }
 
 /**

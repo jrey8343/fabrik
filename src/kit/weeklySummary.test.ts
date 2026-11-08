@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   aComment,
   aCommit,
+  anAnswersComment,
   aDesignRound,
   aLabelAdded,
   A_REPLAY,
@@ -872,8 +873,8 @@ describe("the Weekly summary", () => {
         touches(
           {
             comments: [
-              { author: "operator", byBot: false, body: "Looks good, merging.", at: "2026-11-05T00:00:00Z" },
-              { author: "operator", byBot: false, body: "Answering round 2: yes.", at: "2026-11-05T01:00:00Z" },
+              { url: "https://github.com/owner/product/pull/50#issuecomment-2", author: "operator", byBot: false, body: "Looks good, merging.", at: "2026-11-05T00:00:00Z" },
+              { url: "https://github.com/owner/product/pull/50#issuecomment-2", author: "operator", byBot: false, body: "Answering round 2: yes.", at: "2026-11-05T01:00:00Z" },
             ],
             reviews: [aReview("2026-11-05T02:00:00Z", { state: "commented" })],
           },
@@ -952,7 +953,7 @@ describe("the Weekly summary", () => {
                 verdict("execution-flaw", "2026-11-03T06:00:00Z"),
                 verdict("pass", "2026-11-03T12:00:00Z"), // the last pass: 12 hours
                 verdict("pass", "2026-11-03T20:00:00Z", { byBot: false, author: "operator" }), // quoting a marker fakes nothing
-                { author: "operator", byBot: false, body: "Merging.", at: "2026-11-03T22:00:00Z" },
+                { url: "https://github.com/owner/product/pull/50#issuecomment-2", author: "operator", byBot: false, body: "Merging.", at: "2026-11-03T22:00:00Z" },
               ],
             }),
             aMergedPullRequest("2026-11-05T00:00:00Z", { number: 51 }), // no passing Verdict: left out
@@ -2549,5 +2550,145 @@ describe("the Weekly summary", () => {
       }),
     );
     expect(result).toMatchObject({ kind: "summary", summary: { week: "2026-11-02", cost: { thisWeek: 0.5, lastWeek: 3 } } });
+  });
+});
+
+describe("Request changes in the Weekly summary (#369)", () => {
+  // This week runs from 2026-11-01T13:00Z to 2026-11-08T13:00Z; last week the seven days before.
+  const MISS = { reviewMiss: true, amendsTicket: false };
+  const AMENDS = { reviewMiss: false, amendsTicket: true };
+  const summaryOf = (facts: GitHubFacts[], records: RunRecord[] = [aRunRecord()]) => {
+    const result = weeklySummary(input({ records, facts }));
+    if (result.kind !== "summary") throw new Error("expected a summary");
+    return result;
+  };
+
+  it("counts the Request changes submitted in each week with a Review miss, amending the Ticket, and unanswered", () => {
+    const { summary } = summaryOf([
+      factsOf({
+        pullRequests: [
+          aMergedPullRequest("2026-11-06T00:00:00Z", {
+            reviews: [
+              aReview("2026-10-30T00:00:00Z", { id: 800 }), // last week's, answered this week
+              aReview("2026-11-03T00:00:00Z", { id: 901 }),
+              aReview("2026-11-04T00:00:00Z", { id: 903 }), // from before the answers, such as the Pilot's #59 and #60
+            ],
+            comments: [
+              anAnswersComment(800, { reviewMiss: true, amendsTicket: true }, "2026-11-02T00:00:00Z"),
+              anAnswersComment(901, MISS, "2026-11-03T02:00:00Z"),
+              aComment("<!-- fabrik:request-changes-run -->\nThe Implementer pushed the Operator's requested changes.", "2026-11-04T02:00:00Z"),
+            ],
+          }),
+        ],
+        openPullRequests: [
+          anOpenPullRequest({ number: 52, reviews: [aReview("2026-11-05T00:00:00Z", { id: 902 })], comments: [anAnswersComment(902, AMENDS, "2026-11-05T02:00:00Z")] }),
+        ],
+      }),
+    ]);
+
+    expect(summary.requestChanges).toEqual({
+      thisWeek: { reviewMiss: 1, amendsTicket: 1, unanswered: 1 },
+      lastWeek: { reviewMiss: 1, amendsTicket: 1, unanswered: 0 },
+    });
+  });
+
+  it("attributes each answer to the review its run was started for, so a review with no run of its own is unanswered", () => {
+    const { summary } = summaryOf([
+      factsOf({
+        openPullRequests: [
+          anOpenPullRequest({
+            reviews: [aReview("2026-11-03T00:00:00Z", { id: 901 }), aReview("2026-11-03T01:00:00Z", { id: 902 })],
+            // One run, started for the later review, which read the earlier one as an amendment.
+            comments: [anAnswersComment(902, MISS, "2026-11-03T03:00:00Z")],
+          }),
+        ],
+      }),
+    ]);
+
+    expect(summary.requestChanges.thisWeek).toEqual({ reviewMiss: 1, amendsTicket: 0, unanswered: 1 });
+  });
+
+  it.each([
+    ["someone but the Operator", aReview("2026-11-03T00:00:00Z", { id: 901, author: "someone-else" }), anAnswersComment(901, MISS, "2026-11-03T02:00:00Z")],
+    ["an approval", aReview("2026-11-03T00:00:00Z", { id: 901, state: "approved" }), anAnswersComment(901, MISS, "2026-11-03T02:00:00Z")],
+  ])("counts no review by %s", (_, review, answer) => {
+    const { summary } = summaryOf([factsOf({ openPullRequests: [anOpenPullRequest({ reviews: [review], comments: [answer] })] })]);
+
+    expect(summary.requestChanges.thisWeek).toEqual({ reviewMiss: 0, amendsTicket: 0, unanswered: 0 });
+  });
+
+  it("reads an answer only from a bot's comment, so quoting a marker answers nothing", () => {
+    const quoted = anAnswersComment(901, MISS, "2026-11-03T02:00:00Z", { byBot: false, author: "operator" });
+    const { summary } = summaryOf([
+      factsOf({ openPullRequests: [anOpenPullRequest({ reviews: [aReview("2026-11-03T00:00:00Z", { id: 901 })], comments: [quoted] })] }),
+    ]);
+
+    expect(summary.requestChanges.thisWeek).toEqual({ reviewMiss: 0, amendsTicket: 0, unanswered: 1 });
+  });
+
+  it("shows the two rows and the unanswered count in the table, each week over week", () => {
+    const { body } = summaryOf([
+      factsOf({
+        openPullRequests: [
+          anOpenPullRequest({
+            reviews: [aReview("2026-10-30T00:00:00Z", { id: 800 }), aReview("2026-11-03T00:00:00Z", { id: 901 }), aReview("2026-11-04T00:00:00Z", { id: 902 })],
+            comments: [anAnswersComment(800, AMENDS, "2026-10-30T02:00:00Z"), anAnswersComment(901, MISS, "2026-11-03T02:00:00Z")],
+          }),
+        ],
+      }),
+    ]);
+
+    expect(body).toContain(
+      [
+        "| Request changes with a Review miss | 1 | 0 | +1 |",
+        "| Request changes amending the Ticket | 0 | 1 | -1 |",
+        "| Request changes unanswered | 1 | 0 | +1 |",
+      ].join("\n"),
+    );
+  });
+
+  it("lists each Review miss this week with links to the review, the answer's comment and the Review run whose pass it followed", () => {
+    const { summary, body } = summaryOf(
+      [
+        factsOf({
+          pullRequests: [
+            aMergedPullRequest("2026-11-06T00:00:00Z", {
+              reviews: [aReview("2026-11-03T00:00:00Z", { id: 901 }), aReview("2026-11-04T00:00:00Z", { id: 902 })],
+              comments: [anAnswersComment(901, MISS, "2026-11-03T02:00:00Z"), anAnswersComment(902, AMENDS, "2026-11-04T02:00:00Z")],
+            }),
+          ],
+          openPullRequests: [
+            anOpenPullRequest({ number: 52, reviews: [aReview("2026-11-05T00:00:00Z", { id: 903 })], comments: [anAnswersComment(903, MISS, "2026-11-05T02:00:00Z")] }),
+          ],
+        }),
+      ],
+      [
+        aRunRecord({ runId: 1001, role: "review", verdict: "pass", endedAt: "2026-11-02T18:00:00Z" }),
+        aRunRecord({ runId: 1002, role: "review", verdict: "pass", endedAt: "2026-11-02T20:00:00Z" }), // the pass the review followed
+        aRunRecord({ runId: 1003, role: "review", verdict: "pass", endedAt: "2026-11-03T05:00:00Z" }), // after it
+      ],
+    );
+
+    expect(summary.reviewMissesThisWeek).toHaveLength(2);
+    expect(body).toContain(
+      [
+        "### Review misses this week",
+        "",
+        "- [#50](https://github.com/owner/product/pull/50): [Request changes](https://github.com/owner/product/pull/50#pullrequestreview-901), [answered here](https://github.com/owner/product/pull/50#issuecomment-9011), after the pass of [Review run](https://github.com/owner/product/actions/runs/1002/attempts/1)",
+        "- [#52](https://github.com/owner/product/pull/52): [Request changes](https://github.com/owner/product/pull/50#pullrequestreview-903), [answered here](https://github.com/owner/product/pull/50#issuecomment-9031), after no passing Review run on record",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("leaves the Review misses list out of a week with none", () => {
+    const { body } = summaryOf([
+      factsOf({
+        openPullRequests: [anOpenPullRequest({ reviews: [aReview("2026-11-03T00:00:00Z", { id: 901 })], comments: [anAnswersComment(901, AMENDS, "2026-11-03T02:00:00Z")] })],
+      }),
+    ]);
+
+    expect(body).toContain("| Request changes amending the Ticket | 1 | 0 | +1 |");
+    expect(body).not.toContain("Review misses this week");
   });
 });

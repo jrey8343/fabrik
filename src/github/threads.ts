@@ -15,6 +15,8 @@ import {
   PROTOTYPE_FAILURE_ROUND_MARKER,
   PROTOTYPE_ROUND_MARKER,
   type PrototypeRequestMarker,
+  type RecordedAnswers,
+  REQUEST_CHANGES_ANSWERS_MARKER,
   prototypeRequestIn,
   prototypeStartedIn,
   REQUEST_CHANGES_RUN_MARKER,
@@ -51,6 +53,27 @@ function readVerdictMarker(body: string): VerdictRecord | null {
   // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one.
   if (typeof requestChanges !== "boolean" || typeof conflictRun !== "boolean" || typeof headSha !== "string") return null;
   return { verdict: verdict as Verdict, source, requestChanges, ...(conflictRun ? { conflictRun: true as const } : {}), headSha };
+}
+
+/**
+ * A Request-changes run's two answers about the review it was started for
+ * (#369), read from the second line of the Kit's comment holding them, or
+ * null when that line holds none: every comment from before the answers, and
+ * every other comment. Only a bot's comment should be passed in.
+ */
+export function requestChangesAnswersIn(body: string): RecordedAnswers | null {
+  const json = REQUEST_CHANGES_ANSWERS_MARKER.exec(body.split("\n", 2)[1] ?? "")?.[1];
+  if (json === undefined) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const { review, reviewMiss, amendsTicket } = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(review) || (review as number) <= 0 || typeof reviewMiss !== "boolean" || typeof amendsTicket !== "boolean") return null;
+  return { review: review as number, reviewMiss, amendsTicket };
 }
 
 /**

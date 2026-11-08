@@ -4,13 +4,15 @@
 // adapter gathers them (src/github/facts.ts), and the store's Run records: the
 // agent PRs merged in a window, each with its Ticket, Dispatch, Human touches,
 // last passing Verdict and whether it was reverted; the Verdicts on a PR; and
-// the Architectural escapes opened in a window, with what let each PR through.
+// the Architectural escapes opened in a window, with what let each PR through;
+// and the Request changes submitted in a window, each with what its run
+// answered about it (#369).
 // Then the evidence bundle a Retro reads for its window (evidenceBundle), each
 // of its items carrying the ref the Retro cites it by (refsOf): its runs'
 // transcripts read through the transcript digest (src/kit/transcriptDigest.ts),
 // as the judge reads them, and the whole held to one budget, cut least
 // important first. Pure, no I/O.
-import { verdictsIn } from "../github/threads.ts";
+import { requestChangesAnswersIn, verdictsIn } from "../github/threads.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { followUpsIn } from "../loop/followUps.ts";
 import { escapeMarkerIn, fromPullRequestIn, fromRetroIn } from "../loop/markers.ts";
@@ -66,6 +68,10 @@ export interface CommitFacts {
 
 /** A review left on an agent PR. */
 export interface ReviewFacts {
+  /** Its database id: what a Request-changes run's answers name it by (#369). */
+  readonly id: number;
+  /** Where it's shown on its PR. */
+  readonly url: string;
   readonly author: string;
   readonly state: "approved" | "changes-requested" | "commented" | "dismissed";
   /** What the review says, "" when it says nothing beyond its inline comments. */
@@ -86,6 +92,8 @@ export interface InlineCommentFacts {
 
 /** A comment on an issue or a PR. */
 export interface CommentFacts {
+  /** Where it's shown on its issue or PR. */
+  readonly url: string;
   readonly author: string;
   /** Whether a bot, such as the Fabrik App, wrote it: only a bot's markers count, so quoting one fakes nothing. */
   readonly byBot: boolean;
@@ -379,6 +387,66 @@ function mergedIn(window: Window, { pullRequests }: MetricFacts): AgentPullReque
   return pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null && within(window, pullRequest.mergedAt));
 }
 
+/** What a Request-changes run answered about the review it was started for (#369), and the Kit's comment that holds it. */
+export interface RequestChangesAnswer {
+  readonly reviewMiss: boolean;
+  readonly amendsTicket: boolean;
+  readonly comment: CommentFacts;
+}
+
+/** A Request changes the Operator submitted on an agent PR, and what its run answered about it. */
+export interface RequestChangesReview {
+  /** `owner/name`. */
+  readonly repo: string;
+  readonly pullRequest: number;
+  readonly review: ReviewFacts;
+  /**
+   * Its run's answers, or null when it has none: its run is held, failed, was
+   * replaced by Send it back, or came before the answers. Never guessed.
+   */
+  readonly answer: RequestChangesAnswer | null;
+  /** The last Review record on the PR with a pass Verdict that ended before the review: the pass it followed, or null when the store holds none. */
+  readonly passingReview: RunRecord | null;
+}
+
+/**
+ * The answer to `review` among a PR's comments: the one a bot's comment
+ * records for that review alone, so a run never answers for a later Request
+ * changes it read as an amendment, and quoting a marker answers nothing.
+ */
+export function answerTo(review: ReviewFacts, comments: readonly CommentFacts[]): RequestChangesAnswer | null {
+  for (const comment of comments) {
+    if (!comment.byBot) continue;
+    const answers = requestChangesAnswersIn(comment.body);
+    if (answers?.review === review.id) return { reviewMiss: answers.reviewMiss, amendsTicket: answers.amendsTicket, comment };
+  }
+  return null;
+}
+
+/**
+ * The Request changes the Operator submitted in the window on each repo's
+ * agent PRs, merged, closed or open, in the order the facts came, each with
+ * its run's answers, counted by when the review was submitted.
+ */
+export function requestChangesIn(window: Window, { records, facts, operator }: MetricsInput): RequestChangesReview[] {
+  return facts.flatMap((repo) => {
+    const passes = records
+      .filter((record) => record.repo === repo.repo && record.role === "review" && record.verdict === "pass")
+      .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
+    return [...repo.pullRequests, ...repo.openPullRequests].flatMap(({ number, reviews, comments }) =>
+      reviews
+        .filter((review) => review.author === operator && review.state === "changes-requested" && within(window, review.at))
+        .map((review) => ({
+          repo: repo.repo,
+          pullRequest: number,
+          review,
+          answer: answerTo(review, comments),
+          passingReview: passes.findLast((record) => record.pullRequest === number && Date.parse(record.endedAt) <= Date.parse(review.at)) ?? null,
+        })),
+    );
+  });
+}
+
 // The evidence bundle: what one Retro reads of one Product repo for its window.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -554,6 +622,12 @@ export type OperatorFeedback =
       readonly at: string;
       readonly body: string;
       readonly inline: readonly InlineCommentFacts[];
+      /**
+       * What its own run answered (#369): whether it holds a Review miss, and
+       * whether it amends the Ticket. Null for each when it's unanswered.
+       */
+      readonly reviewMiss: boolean | null;
+      readonly amendsTicket: boolean | null;
     }
   | {
       /** A run of consecutive commits the Operator made, at the last one's time, with what they changed. */
@@ -961,7 +1035,17 @@ function operatorFeedbackOn(
   const theirs = reviews.filter((review) => review.author === operator && within(window, review.at));
   const requestChanges = theirs
     .filter((review) => review.state === "changes-requested")
-    .map((review): OperatorFeedback => ({ kind: "request-changes", at: review.at, body: review.body, inline: review.comments }));
+    .map((review): OperatorFeedback => {
+      const answer = answerTo(review, comments);
+      return {
+        kind: "request-changes",
+        at: review.at,
+        body: review.body,
+        inline: review.comments,
+        reviewMiss: answer?.reviewMiss ?? null,
+        amendsTicket: answer?.amendsTicket ?? null,
+      };
+    });
   const reviewComments = theirs
     .filter((review) => review.state !== "changes-requested" && (review.body.trim() !== "" || review.comments.length > 0))
     .map((review): OperatorFeedback => ({ kind: "comment", at: review.at, body: review.body, inline: review.comments }));

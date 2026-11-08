@@ -245,9 +245,9 @@ const LABEL_EVENTS = `
     }
   }
 `;
-const COMMENTS = `comments(last: 100) { nodes { body createdAt author ${ACTOR} } }`;
+const COMMENTS = `comments(last: 100) { nodes { url body createdAt author ${ACTOR} } }`;
 const COMMIT = "commit { oid message committedDate author { email user { login } } }";
-const REVIEWS = `reviews(first: 100) { nodes { author ${ACTOR} state submittedAt body comments(first: 50) { nodes { path line body } } } }`;
+const REVIEWS = `reviews(first: 100) { nodes { databaseId url author ${ACTOR} state submittedAt body comments(first: 50) { nodes { path line body } } } }`;
 const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
 
 const OPEN_ISSUE_BODIES_QUERY = `
@@ -412,6 +412,7 @@ interface RawLabelEvent {
 }
 
 interface RawComment {
+  url: string;
   body: string;
   createdAt: string;
   author: RawActor | null;
@@ -422,6 +423,8 @@ interface RawCommit {
 }
 
 interface RawReview {
+  databaseId: number;
+  url: string;
   author: RawActor | null;
   state: string;
   submittedAt: string | null;
@@ -574,6 +577,8 @@ function reviewOf(review: RawReview): ReviewFacts[] {
   if (state === undefined || review.submittedAt === null) return [];
   return [
     {
+      id: review.databaseId,
+      url: review.url,
       author: loginOf(review.author),
       state,
       body: review.body,
@@ -659,7 +664,7 @@ function openKitIssueOf(issue: RawOpenKitIssue): OpenAuditFacts & OpenRetroFacts
 }
 
 function commentOf(comment: RawComment): CommentFacts {
-  return { author: loginOf(comment.author), byBot: comment.author?.__typename === "Bot", body: comment.body, at: comment.createdAt };
+  return { url: comment.url, author: loginOf(comment.author), byBot: comment.author?.__typename === "Bot", body: comment.body, at: comment.createdAt };
 }
 
 function labelEventsOf(nodes: readonly RawLabelEvent[]): LabelEvent[] {

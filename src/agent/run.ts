@@ -73,7 +73,7 @@ import { writeOutputs, writeSummary } from "../kit/stepFiles.ts";
 import { prototypeRole } from "../loop/design.ts";
 import { type DesignTurnOutput, type PrototypeRoundOutput, readDesignTurnOutput, readPrototypeTurnOutput } from "../loop/designOutput.ts";
 import { rotationIsOn } from "../loop/subscriptions.ts";
-import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput } from "../loop/implementOutput.ts";
+import { type ImplementOutput, readImplementOutput, readPullRequestRunOutput, readRequestChangesRunOutput } from "../loop/implementOutput.ts";
 import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
 import { type AuditOutput, readAuditOutput } from "../loop/auditOutput.ts";
 import { readRetroOutput, type RetroOutput } from "../loop/retroOutput.ts";
@@ -322,6 +322,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   // The Implementer builds on its own branch from main, with its test secrets; the Researcher's findings go on the Decision's throwaway branch.
   let branch: BuiltBranch | null = null;
   let onPullRequest = false;
+  let requestChanges = false;
   // The Operator comments a run on an agent PR is given, recorded before the agent runs.
   let given: GivenOperatorComment[] | null = null;
   const extra: string[] = [];
@@ -349,6 +350,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     branch = input.branch;
     extra.push(...input.parts);
     onPullRequest = input.onPullRequest;
+    requestChanges = input.requestChanges;
     given = input.operatorComments;
   }
   if (prototypeTurn) {
@@ -420,8 +422,12 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     "schema" in spec.output
       ? Output.object({
           tag: prompt,
-          // A run on an existing PR owes a fix as well, which its push job checks too.
-          schema: onPullRequest ? schemaOf(readPullRequestRunOutput) : spec.output.schema,
+          // A run on an existing PR owes a fix as well, and a Request-changes run its two answers, which its push job checks too.
+          schema: requestChanges
+            ? schemaOf(readRequestChangesRunOutput)
+            : onPullRequest
+              ? schemaOf(readPullRequestRunOutput)
+              : spec.output.schema,
           maxRetries: 1,
         })
       : Output.string({ tag: prompt });

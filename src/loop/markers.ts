@@ -9,6 +9,8 @@
 // Replay's markers, which only the Replay module reads and writes, live
 // beside its rules (src/kit/replay.ts).
 import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
+import type { RequestChangesAnswers } from "./implementOutput.ts";
+import { withoutMentions } from "./mentions.ts";
 import type { Strength, VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
@@ -23,6 +25,46 @@ export function verdictMarker(record: VerdictRecord): string {
 
 /** The first line of the Kit's note on a PR that a Request-changes run pushed to it. */
 export const REQUEST_CHANGES_RUN_MARKER = "<!-- fabrik:request-changes-run -->";
+
+/** What a Request-changes run answered about the review it was started for (#369), as its marker records it. */
+export interface RecordedAnswers {
+  /** The Request changes review the run was started for, and answers for alone. */
+  readonly review: number;
+  readonly reviewMiss: boolean;
+  readonly amendsTicket: boolean;
+}
+
+/**
+ * The second line of a Request-changes run's outcome comment (#369), its push
+ * note or its empty-diff Verdict, right under that comment's own marker:
+ * the run's two answers about the review it was started for. Only the Kit
+ * writes that line, so agent text further down can't fake it.
+ */
+export const REQUEST_CHANGES_ANSWERS_MARKER = /^<!-- fabrik:request-changes-answers (\{.*?\}) -->$/;
+
+export function requestChangesAnswersMarker({ review, reviewMiss, amendsTicket }: RecordedAnswers): string {
+  return `<!-- fabrik:request-changes-answers ${JSON.stringify({ review, reviewMiss, amendsTicket })} -->`;
+}
+
+/** A Request-changes run's answers as its outcome comment carries them: the marker line, and the lines people read. */
+export interface AnswerLines {
+  readonly marker: string;
+  readonly lines: readonly string[];
+}
+
+/**
+ * The marker and readable lines for a Request-changes run's answers about
+ * `review`: `Review miss: yes, <point>; <point>` or `Review miss: no`, then
+ * `Amends the Ticket: yes` or `no`. Each point is agent text, so it's put on
+ * one line and mentions nobody.
+ */
+export function answerLines(review: number, { reviewMiss, points, amendsTicket }: RequestChangesAnswers): AnswerLines {
+  const named = points.map((point) => withoutMentions(point.replace(/\s+/g, " ").trim())).join("; ");
+  return {
+    marker: requestChangesAnswersMarker({ review, reviewMiss, amendsTicket }),
+    lines: [reviewMiss ? `Review miss: yes, ${named}` : "Review miss: no", `Amends the Ticket: ${amendsTicket ? "yes" : "no"}`],
+  };
+}
 
 /**
  * The first line of the Kit's note on a PR that a conflict-only run pushed to

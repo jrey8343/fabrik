@@ -9,7 +9,7 @@ import { followUpsSection } from "./followUps.ts";
 import { REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw, whyAwaitingRun } from "./retry.ts";
-import { verdictMarker } from "./markers.ts";
+import { type AnswerLines, verdictMarker } from "./markers.ts";
 import { parseVerdict } from "./verdict.ts";
 import type {
   Action,
@@ -156,12 +156,15 @@ export function verdictActions(
     findings,
     followUps = [],
     considered = [],
+    answers = null,
   }: {
     readonly verdict: Verdict;
     readonly source: VerdictRecord["source"];
     readonly findings: string;
     readonly followUps?: readonly string[];
     readonly considered?: readonly string[];
+    /** A Request-changes run's answers (#369), when its empty diff is the Verdict: their marker goes right under the Verdict's, their lines after the findings. */
+    readonly answers?: AnswerLines | null;
   },
 ): Action[] {
   const record: VerdictRecord = {
@@ -175,10 +178,12 @@ export function verdictActions(
   const next = nextAfter(verdict, pullRequest);
   const body = [
     verdictMarker(record),
+    ...(answers === null ? [] : [answers.marker]),
     `## Verdict: ${HEADINGS[verdict]}`,
     "",
     `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}${record.conflictRun === true ? ", after a conflict-only run, so it uses no retry" : ""}.`,
     ...(findings === "" ? [] : ["", findings]),
+    ...(answers === null ? [] : ["", ...answers.lines]),
     ...followUps,
     ...(next === null ? [] : ["", next.line]),
     "",
