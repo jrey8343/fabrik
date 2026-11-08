@@ -118,8 +118,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withIssue(snapshot, (context) => failureNotice(event, context, config));
     // A closed issue may finish its Spec, free a slot or unblock a Ticket, or end a
     // Design session by hand. Merging an agent PR closes its Ticket through
-    // `Closes #n`, so it lands here. A Ticket closed by hand closes its agent
-    // draft PR, whose slot the Dispatch check then sees free (#428).
+    // `Closes #n`, so it lands here. A closed Ticket's agent draft PR closes
+    // too, and the Dispatch check then sees its slot free (#428).
     case "issue-closed":
       return withIssue(snapshot, ({ issue }) => ({
         kind: "act",
@@ -155,17 +155,16 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     // Context for the next run that reads the PR, never a trigger (ADR-0007).
     case "pull-request-commented":
       return withPullRequest(snapshot, (pullRequest) => acknowledgeComment(event, pullRequest, snapshot.operator));
-    // An agent PR that leaves draft or closes no longer holds a slot. One
-    // closed unmerged by hand stops its Ticket first, so the Dispatch check
-    // doesn't start it again (#428).
+    // An agent PR that leaves draft or closes no longer holds a slot.
     case "pull-request-left-draft":
-    case "pull-request-closed": {
-      const { pullRequest } = snapshot;
-      if (pullRequest === null) return missingFromSnapshot("the pull request");
-      if (!pullRequest.isAgent) return { kind: "nothing", reason: `#${pullRequest.number} isn't an agent PR` };
-      const stop = event.kind === "pull-request-closed" ? stopTicketOf(event, pullRequest, snapshot.operator) : [];
-      return { kind: "act", actions: [...stop, CHECK_DISPATCH] };
-    }
+      return withAgentPullRequest(snapshot, () => ({ kind: "act", actions: [CHECK_DISPATCH] }));
+    // One closed unmerged by hand stops its Ticket first, so the Dispatch check
+    // doesn't start it again (#428).
+    case "pull-request-closed":
+      return withAgentPullRequest(snapshot, (pullRequest) => ({
+        kind: "act",
+        actions: [...stopTicketOf(event, pullRequest, snapshot.operator), CHECK_DISPATCH],
+      }));
     case "dispatch-check":
       return snapshot.dispatch === null
         ? missingFromSnapshot("the Tickets a Dispatch check weighs")
@@ -299,6 +298,13 @@ function withIssue(snapshot: Snapshot, decide: (context: IssueContext) => Plan):
 /** Decides a pull-request event, which needs the pull request in the snapshot. */
 function withPullRequest(snapshot: Snapshot, decide: (pullRequest: PullRequestSnapshot) => Plan): Plan {
   return snapshot.pullRequest === null ? missingFromSnapshot("the pull request") : decide(snapshot.pullRequest);
+}
+
+/** Decides a pull-request event only an agent PR holds a slot for. */
+function withAgentPullRequest(snapshot: Snapshot, decide: (pullRequest: PullRequestSnapshot) => Plan): Plan {
+  return withPullRequest(snapshot, (pullRequest) =>
+    pullRequest.isAgent ? decide(pullRequest) : { kind: "nothing", reason: `#${pullRequest.number} isn't an agent PR` },
+  );
 }
 
 /** The adapter gathered the wrong snapshot for the event: fail rather than guess. */

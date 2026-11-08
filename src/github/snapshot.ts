@@ -189,7 +189,7 @@ const PULL_REQUEST_FIELDS = `
         createdAt
         forcePushes: timelineItems(last: 1, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) { nodes { ... on HeadRefForcePushedEvent { createdAt } } }
         commits(last: 100) { pageInfo { hasPreviousPage } nodes { commit { oid committedDate } } }
-        closingIssuesReferences(first: 10) { nodes { number labels(first: 100) { nodes { name } } comments(last: 100) { nodes { body } } } }`;
+        closingIssuesReferences(first: 10) { nodes { number state labels(first: 100) { nodes { name } } comments(last: 100) { nodes { body } } } }`;
 
 const PULL_REQUEST_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -287,7 +287,7 @@ interface PullRequestQueryResult {
       forcePushes: { nodes: { createdAt: string }[] };
       /** Its branch's latest commits, oldest first: the head last. */
       commits: { pageInfo: { hasPreviousPage: boolean }; nodes: { commit: { oid: string; committedDate: string } }[] };
-      closingIssuesReferences: { nodes: { number: number; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string }[] } }[] };
+      closingIssuesReferences: { nodes: { number: number; state: "OPEN" | "CLOSED"; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string }[] } }[] };
     } | null;
   };
 }
@@ -1244,8 +1244,12 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       parentIssue: parentIssueOf(issue.parent),
       openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
       openAgentDrafts: issue.closedByPullRequestsReferences.nodes
-        .filter((pr) => pr.isDraft && isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }))
-        .filter((pr) => ticketOfAgentBranch(pr.headRefName) === issue.number)
+        .filter(
+          (pr) =>
+            pr.isDraft &&
+            isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }) &&
+            ticketOfAgentBranch(pr.headRefName) === issue.number,
+        )
         .map((pr) => pr.number)
         .sort((a, b) => a - b),
       designRounds: designSessionOf(thisSession).designRounds,
@@ -1322,6 +1326,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     isAgent,
     ticket,
     ticketLabels: ticketLabelsOf(pullRequest, ticket),
+    ticketOpen: closedTicketOf(pullRequest, ticket)?.state === "OPEN",
     ticketEmptyDiffs: ticketEmptyDiffsOf(pullRequest, ticket),
     open: pullRequest.state === "OPEN",
     draft: pullRequest.isDraft,

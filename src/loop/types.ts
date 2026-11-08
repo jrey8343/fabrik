@@ -392,9 +392,11 @@ export type LoopEvent =
       /** Whether it closed by merging. */
       readonly merged: boolean;
       /**
-       * Whether a bot closed it, which for an agent PR is the Kit's own close
-       * (Send it back, back to design, a refusal, its Ticket closing), not the
-       * Operator's by hand (#428).
+       * Whether a bot closed it, which for an agent PR is taken for the Kit's
+       * own close (Send it back, back to design, a refusal, its Ticket
+       * closing), not the Operator's by hand (#428). The Kit job doesn't know
+       * the App's login, so another bot's close counts as the Kit's too, and
+       * only frees the PR's slot, as every close did before.
        */
       readonly closedByBot: boolean;
     }
@@ -586,6 +588,8 @@ export interface PullRequestSnapshot {
    * Verdict reads them to say whether the Retry it starts Steps up (ADR-0014).
    */
   readonly ticketLabels: readonly string[];
+  /** Whether that Ticket is open, read the same way; false when there's no Ticket or the PR doesn't link it. */
+  readonly ticketOpen: boolean;
   /**
    * How many Implement runs on that Ticket ended in an empty diff since its
    * last Design session, read like IssueSnapshot.emptyDiffs from the Ticket's

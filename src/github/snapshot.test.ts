@@ -872,6 +872,8 @@ interface ClosingIssue {
   readonly labels: readonly string[];
   /** Its comments' bodies, oldest first. */
   readonly comments?: readonly string[];
+  /** Its state, open unless a test says otherwise. */
+  readonly state?: "OPEN" | "CLOSED";
 }
 
 /** The pull request a Loop event is about, as GitHub holds it: opened by `author`, with this body, closing these issues. */
@@ -910,6 +912,7 @@ function pullRequestGitHub({
                   closingIssuesReferences: {
                     nodes: closing.map((issue) => ({
                       number: issue.number,
+                      state: issue.state ?? "OPEN",
                       labels: { nodes: issue.labels.map((name) => ({ name })) },
                       ...(/closingIssuesReferences[^]*comments\(/.test(pullRequestQuery)
                         ? { comments: { nodes: (issue.comments ?? []).map((body) => ({ body })) } }
@@ -942,6 +945,12 @@ describe("Gathering the labels of the Ticket a pull request was cut for", () => 
   it("reads no Ticket labels when the PR closes no issue its branch names", async () => {
     expect(await gathered([{ number: 3, labels: ["fabrik:step-up"] }])).toMatchObject({ ticket: 7, ticketLabels: [] });
     expect(await gathered([])).toMatchObject({ ticket: 7, ticketLabels: [] });
+  });
+
+  it("reads whether that Ticket is open, so closing the PR by hand never stops a closed one (#428)", async () => {
+    expect(await gathered([{ number: 7, labels: ["ready-for-agent"] }])).toMatchObject({ ticketOpen: true });
+    expect(await gathered([{ number: 7, labels: ["ready-for-agent"], state: "CLOSED" }])).toMatchObject({ ticketOpen: false });
+    expect(await gathered([{ number: 3, labels: [] }])).toMatchObject({ ticketOpen: false });
   });
 });
 
