@@ -249,6 +249,7 @@ async function agentResultEvent(
           requestChanges: input.review !== null,
           ...(input.review === null ? {} : { review: input.review }),
           ...(input.retry === undefined || input.retry === null ? {} : { retry: input.retry }),
+          ...(input.retryFlaw === undefined || input.retryFlaw === null ? {} : { retryFlaw: input.retryFlaw }),
           ...(input.conflict === null || input.conflict === undefined ? {} : { conflict: input.conflict }),
         };
   if ((retry !== null) !== (built.base.ref === built.name)) {

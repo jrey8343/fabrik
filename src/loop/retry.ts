@@ -48,7 +48,8 @@ export function retryAfterFlaw(pullRequest: PullRequestSnapshot): { readonly lin
 
 /** The Implement run an agent PR's latest Verdict, or the Operator's review, called for, that hasn't pushed yet. */
 export type RunInFlight =
-  | { readonly kind: "retry"; readonly retry: number }
+  /** A Retry, numbered, for the Execution flaw on this head: a Verdict is given once per head, so it names the flaw. */
+  | { readonly kind: "retry"; readonly retry: number; readonly flaw: string }
   | { readonly kind: "request-changes"; readonly review: number }
   /** A conflict-only run (#304), started for this default branch head. */
   | { readonly kind: "conflict"; readonly main: string };
@@ -75,12 +76,11 @@ export function runInFlight(pullRequest: PullRequestSnapshot): RunInFlight | nul
   // A Retry works on a draft: once the PR has left draft since the flaw, as when the Operator took it back or the Kit
   // handed it to them, none is in flight, even after something turns the PR to draft again.
   if (!pullRequest.draft || pullRequest.leftDraftSinceVerdict) return null;
-  // One that gave way to the Operator's Request changes (#341) called for no Retry, while any of those reviews
-  // stands; once the Operator has dismissed them all, it's the Execution flaw it would have been.
-  const gaveWayTo = latest.requestChangesFirst ?? [];
-  if (pullRequest.unbuiltChangesRequests.some(({ review: unbuilt }) => gaveWayTo.includes(unbuilt))) return null;
+  // One that gave way to the Operator's Request changes (#341) called for no Retry, and never owes one: its
+  // Request-changes run fixes its findings, and if the Operator dismisses those reviews, the PR is theirs.
+  if (latest.requestChangesFirst !== undefined) return null;
   const retry = retryNumber(pullRequest.verdicts.slice(0, -1));
-  return retry > MAX_RETRIES ? null : { kind: "retry", retry };
+  return retry > MAX_RETRIES ? null : { kind: "retry", retry, flaw: latest.headSha };
 }
 
 /** How the Kit's comments name a run in flight, at the start of a sentence. */
@@ -125,6 +125,7 @@ export function owedRetry(pullRequest: PullRequestSnapshot, config: KitConfig): 
     effort,
     timeoutMinutes: implement.timeoutMinutes,
     retry: run.retry,
+    retryFlaw: run.flaw,
     stepUp: stepsUp(run.retry),
   };
 }

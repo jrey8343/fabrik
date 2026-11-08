@@ -102,8 +102,21 @@ export function owedRequestChangesRun(pullRequest: PullRequestSnapshot, config: 
  */
 function orphanedRequestChangesRun(pullRequest: PullRequestSnapshot, config: KitConfig): Action[] | null {
   const reviews = pullRequest.orphanedChangesRequests;
-  if (reviews.length === 0 || !pullRequest.draft || pullRequest.ticket === null) return null;
+  if (!pullRequest.draft || pullRequest.ticket === null) return null;
   const { number } = pullRequest;
+  // None of theirs is owed: the run the Kit put the PR in draft for is over, so it goes back to them.
+  if (reviews.length === 0) {
+    return pullRequest.requestChangesRunDismissed && !pullRequest.pushedSinceVerdict
+      ? [
+          {
+            kind: "comment",
+            issue: number,
+            body: `You dismissed the Request changes the Kit put #${number} in draft for, so no run is owed for it, and #${number} is back at the Merge gate.`,
+          },
+          { kind: "mark-ready-for-review", pullRequest: number },
+        ]
+      : null;
+  }
   return [
     {
       kind: "comment",

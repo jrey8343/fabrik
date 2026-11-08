@@ -69,7 +69,6 @@ import {
   pushedSinceVerdictIn,
   requestChangesRunIn,
   requestChangesSinceRunIn,
-  verdictsStanding,
   leftDraftSinceVerdictIn,
   researchRunFailedIn,
   verdictsIn,
@@ -1242,7 +1241,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     headSha: pullRequest.headRefOid,
     labels: pullRequest.labels.nodes.map((label) => label.name),
     // Only a bot's markers count, so nobody can fake a Verdict or a Request-changes run by quoting one.
-    verdicts: verdictsStanding(botComments, standing),
+    verdicts: verdictsIn(botComments),
     requestChangesRun: requestChangesRunIn(botComments),
     conflictRun: conflictRunIn(botComments),
     conflictAttempts: conflictAttemptsIn(botComments),

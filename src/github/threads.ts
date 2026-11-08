@@ -193,6 +193,7 @@ export function requestChangesSinceRunIn(
   | "requestChangesRunReviews"
   | "requestChangesRunSince"
   | "orphanedChangesRequests"
+  | "requestChangesRunDismissed"
 > {
   // Stable, so items at the same time keep the order they were read in.
   const ordered = [...history].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
@@ -201,7 +202,6 @@ export function requestChangesSinceRunIn(
   let noted: number[] = [];
   let inFlight: readonly number[] | null = null;
   let since: string | null = null;
-  let gaveWay = false;
   // The Operator's reviews on the draft since the run in flight started.
   let joined: number[] = [];
   // The reviews there were when the run in flight started, which it read; one that came in later it never saw.
@@ -217,9 +217,7 @@ export function requestChangesSinceRunIn(
         break;
       case "changes-requested": {
         const operators = operator !== null && item.reviewer === operator && !item.reviewerIsBot;
-        // A gave-way flaw's run is the PR's only while one of its reviews stands; once they're all dismissed, the
-        // flaw's Retry is what's in flight, and a review on that draft does nothing, as on any.
-        const joins = draft && inFlight !== null && operators && (!gaveWay || inFlight.some((review) => standing.has(review)));
+        const joins = draft && inFlight !== null && operators;
         if (!draft || joins) {
           reviews.push({ review: item.review, reviewer: item.reviewer, reviewerIsBot: item.reviewerIsBot, submittedAt: item.at });
         }
@@ -235,7 +233,6 @@ export function requestChangesSinceRunIn(
         if (started !== null) {
           noted = [...noted, ...started.filter((review) => !noted.includes(review))];
           inFlight = started;
-          gaveWay = note === null;
           joined = [];
           since = item.at;
           read = reviews.map(({ review }) => review);
@@ -263,6 +260,7 @@ export function requestChangesSinceRunIn(
     // The Kit's note put the PR in draft for reviews since all dismissed, with no outcome yet: what the Operator asked
     // for meanwhile on the draft is the run that's owed now.
     orphanedChangesRequests: inFlight !== null && live.length === 0 ? joined.filter((review) => standing.has(review)) : [],
+    requestChangesRunDismissed: inFlight !== null && live.length === 0,
   };
 }
 
@@ -294,49 +292,6 @@ function isPass(body: string): boolean {
 /** The reviews still requesting changes: GitHub lists a dismissed one no longer. */
 export function standingIn(history: readonly PullRequestHistoryItem[]): ReadonlySet<number> {
   return new Set(history.flatMap((item) => (item.kind === "changes-requested" ? [item.review] : [])));
-}
-
-/**
- * The Verdicts in these comments as they stand (#341): an Execution flaw that
- * gave way to Request changes the Operator then dismissed, every one, before
- * its Request-changes run landed is the Execution flaw it would have been, and
- * counts toward the Ticket's Retries like any other. Once that run has pushed
- * or been given a Verdict, the flaw gave way for good, whatever is dismissed
- * later.
- */
-export function verdictsStanding(comments: readonly string[], standing: ReadonlySet<number>): VerdictRecord[] {
-  const records: VerdictRecord[] = [];
-  // The gave-way flaws whose Request-changes run hasn't landed yet, and those whose Retry ran instead, by index.
-  let unlanded: number[] = [];
-  const fellBack = new Set<number>();
-  // The reviews of the Request-changes run in flight: its landing settles only a flaw that gave way to one of them.
-  let run: readonly number[] = [];
-  const lands = (): void => {
-    unlanded = unlanded.filter((index) => !(records[index]?.requestChangesFirst ?? []).some((review) => run.includes(review)));
-  };
-  for (const body of comments) {
-    run = startedReviewsIn(body) ?? run;
-    if (body.startsWith(REQUEST_CHANGES_RUN_MARKER)) lands();
-    // Only a flaw whose reviews were all dismissed has a Retry, which then pushed: it counts for good.
-    if (body.startsWith(RETRY_PUSH_MARKER) || body.startsWith(UNMARKED_RETRY_PUSH)) {
-      for (const index of unlanded) fellBack.add(index);
-      unlanded = [];
-    }
-    const [record] = verdictsIn([body]);
-    if (record === undefined) continue;
-    if (record.requestChanges) lands();
-    records.push(record);
-    if (record.requestChangesFirst !== undefined) {
-      unlanded.push(records.length - 1);
-      run = record.requestChangesFirst;
-    }
-  }
-  return records.map((record, index) => {
-    const dismissed = unlanded.includes(index) && record.requestChangesFirst?.some((review) => standing.has(review)) === false;
-    if (!fellBack.has(index) && !dismissed) return record;
-    const { requestChangesFirst: _dismissed, ...flaw } = record;
-    return flaw;
-  });
 }
 
 /**

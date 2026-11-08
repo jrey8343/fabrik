@@ -20,7 +20,6 @@ import {
   requestChangesSinceRunIn,
   standingIn,
   verdictsIn,
-  verdictsStanding,
 } from "../github/threads.ts";
 import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 import { verdictMarker } from "./markers.ts";
@@ -72,7 +71,7 @@ class Thread {
       headSha: this.headSha,
       draft: this.draft,
       labels: this.labels,
-      verdicts: verdictsStanding(comments, standingIn(this.history)),
+      verdicts: verdictsIn(comments),
       requestChangesRun: requestChangesRunIn(comments),
       conflictRun: conflictRunIn(comments),
       conflictAttempts: conflictAttemptsIn(comments),
@@ -187,9 +186,9 @@ class Thread {
   }
 
   /** A Retry finishes with these changes; if its plan pushes, the PR is at `to`. It is Retry `retry`, when named. */
-  retryFinishes(changes: BranchChanges, to: string, minutes: number, retry?: number): Plan {
+  retryFinishes(changes: BranchChanges, to: string, minutes: number, retry?: number, flaw?: string): Plan {
     this.now = at(minutes);
-    const plan = this.plan(implementRunFinished(changes, this.headSha, false, undefined, retry), this.ticketSnapshot());
+    const plan = this.plan(implementRunFinished(changes, this.headSha, false, undefined, retry, flaw), this.ticketSnapshot());
     if (actionsOf(plan).some((action) => action.kind === "push-branch")) this.headSha = to;
     return plan;
   }
@@ -218,6 +217,7 @@ function implementRunFinished(
   requestChanges: boolean,
   review?: number,
   retry?: number,
+  retryFlaw?: string,
 ): Extract<LoopEvent, { kind: "implement-run-finished" }> {
   return {
     kind: "implement-run-finished",
@@ -230,7 +230,7 @@ function implementRunFinished(
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
     changes,
-    fixes: { pullRequest: 50, headSha, runUrl: RUN, requestChanges, ...(review === undefined ? {} : { review }), ...(retry === undefined ? {} : { retry }) },
+    fixes: { pullRequest: 50, headSha, runUrl: RUN, requestChanges, ...(review === undefined ? {} : { review }), ...(retry === undefined ? {} : { retry }), ...(retryFlaw === undefined ? {} : { retryFlaw }) },
   };
 }
 
@@ -620,15 +620,24 @@ describe("An undelivered Request changes while a run is in flight on the PR", ()
     expect(commentsOn(thread.tick(80), 50)).toEqual([]);
   });
 
-  it("once the Operator dismisses the review a Verdict gave way to, the flaw is the Execution flaw it was: agent:implement starts its Retry", () => {
+  it("once the Operator dismisses the review a Verdict gave way to, its run is over: agent:implement hands the PR back at the Merge gate, and the flaw never costs a Retry", () => {
     const thread = reviewInFlight();
     thread.reviewed("execution-flaw", 70);
     thread.dismiss(5810278044);
 
-    expect(startsOn(thread.implement())).toMatchObject({ retry: 1 });
+    const resumed = thread.implement();
+
+    expect(startsOn(resumed)).toBeUndefined();
+    expect(commentsOn(resumed, 50)[0]).toContain("dismissed");
+    expect(actionsOf(resumed)).toContainEqual({ kind: "mark-ready-for-review", pullRequest: 50 });
+    // A later Request changes, and an Execution flaw on its run's push: the flaw that gave way used none of the two.
+    thread.review(6000, 90);
+    thread.delivered(6000, 90);
+    thread.requestChangesRunFinishes(BUILT, D, 110);
+    expect(commentsOn(thread.reviewed("execution-flaw", 120), 50)[0]).toContain("Retry 1 of 2 starts now");
   });
 
-  it("once the Operator dismisses it while the Request-changes run works, the run's work isn't pushed, and the flaw's Retry starts", () => {
+  it("once the Operator dismisses it while the Request-changes run works, the run's work isn't pushed, and the PR goes back to the Merge gate", () => {
     const thread = reviewInFlight();
     thread.reviewed("execution-flaw", 70);
     thread.implement();
@@ -637,63 +646,27 @@ describe("An undelivered Request changes while a run is in flight on the PR", ()
     const landed = thread.requestChangesRunFinishes(BUILT, D, 90);
 
     expect(actionsOf(landed).some((action) => action.kind === "push-branch")).toBe(false);
-    expect(commentsOn(landed, 50)[0]).toContain("Retry");
-    expect(addsImplement(landed)).toBe(true);
-    expect(startsOn(thread.implement())).toMatchObject({ retry: 1 });
+    expect(commentsOn(landed, 50)[0]).toContain("dismissed");
+    expect(addsImplement(landed)).toBe(false);
+    expect(actionsOf(landed)).toContainEqual({ kind: "mark-ready-for-review", pullRequest: 50 });
   });
 
-  it("once the Operator dismisses it, the flaw counts toward the Ticket's two Retries like any other", () => {
+  it.each([
+    ["before", true],
+    ["after", false],
+  ] as const)("a Request changes of the Operator's on the draft while that run works, submitted %s they dismiss the one it gave way to, gets its run instead", (_when, first) => {
     const thread = reviewInFlight();
     thread.reviewed("execution-flaw", 70);
-    thread.dismiss(5810278044);
     thread.implement();
-    thread.retryFinishes(BUILT, D, 90);
-
-    const next = thread.reviewed("execution-flaw", 100);
-
-    expect(commentsOn(next, 50)[0]).toContain("Retry 2 of 2 starts now");
-  });
-
-  it("once the Operator dismisses it while its Retry works, a Request changes of theirs on the draft doesn't stop the Retry landing", () => {
-    const thread = reviewInFlight();
-    thread.reviewed("execution-flaw", 70);
+    if (first) thread.review(5810278099, 80);
     thread.dismiss(5810278044);
-    expect(startsOn(thread.implement())).toMatchObject({ retry: 1 });
-    thread.review(5810278099, 80);
+    if (!first) thread.review(5810278099, 80);
 
-    expect(actionsOf(thread.retryFinishes(BUILT, D, 90))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
-  });
+    const landed = thread.requestChangesRunFinishes(BUILT, D, 90);
 
-  it("once the Operator dismisses it, a Request changes of theirs on the draft during the flaw's Retry does nothing, as on any draft", () => {
-    const thread = reviewInFlight();
-    thread.reviewed("execution-flaw", 70);
-    thread.dismiss(5810278044);
-    thread.implement();
-    thread.review(5810278099, 80);
-    thread.retryFinishes(BUILT, D, 90, 1);
-
-    expect(commentsOn(thread.reviewed("execution-flaw", 100), 50)[0]).toContain("Retry 2 of 2 starts now");
-  });
-
-  it("once the Operator dismisses it and its Retry has run, it counts for good, whatever Request-changes run lands later", () => {
-    const thread = reviewInFlight();
-    thread.reviewed("execution-flaw", 70);
-    thread.dismiss(5810278044);
-    thread.implement();
-    thread.retryFinishes(BUILT, D, 80, 1);
-    expect(commentsOn(thread.reviewed("execution-flaw", 90), 50)[0]).toContain("Retry 2 of 2");
-    thread.implement();
-    thread.retryFinishes(BUILT, E, 100, 2);
-    thread.reviewed("pass", 110);
-    // An unrelated Request changes, later, at the Merge gate.
-    thread.review(6000, 120);
-    thread.delivered(6000, 120);
-    thread.requestChangesRunFinishes(BUILT, C, 140);
-
-    const third = commentsOn(thread.reviewed("execution-flaw", 150), 50)[0];
-
-    expect(third).not.toContain("Retry 2 of 2");
-    expect(third).toContain("goes back to design");
+    expect(actionsOf(landed).some((action) => action.kind === "push-branch")).toBe(false);
+    expect(commentsOn(landed, 50)[0]).toContain("#pullrequestreview-5810278099");
+    expect(startsOn(thread.implement())).toMatchObject({ requestChanges: { review: 5810278099 } });
   });
 
   it("isn't brought back by dismissing its review after its Request-changes run built it: the flaw still uses no Retry", () => {
@@ -741,6 +714,28 @@ describe("An undelivered Request changes while a run is in flight on the PR", ()
     const abandoned = thread.retryFinishes(BUILT, C, 50, 1);
     expect(actionsOf(abandoned).some((action) => action.kind === "push-branch")).toBe(false);
     expect(actionsOf(thread.retryFinishes(BUILT, D, 60, 2))).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+  });
+
+  it("a Retry the Operator took the PR back from never lands as a later flaw's Retry of the same number", () => {
+    const thread = new Thread();
+    thread.mergeable = true;
+    thread.review(6000, 5);
+    thread.delivered(6000, 5);
+    thread.requestChangesRunFinishes(BUILT, B, 10);
+    // A flaw on a Request-changes run's push doesn't count, so this one and the next both call Retry 1.
+    expect(commentsOn(thread.reviewed("execution-flaw", 15), 50)[0]).toContain("Retry 1 of 2");
+    thread.implement();
+    thread.markReady(20);
+    thread.mergeable = false;
+    thread.mainPushed(30, MAIN_2);
+    thread.pushed(thread.headSha, 35);
+    expect(commentsOn(thread.reviewed("execution-flaw", 40), 50)[0]).toContain("Retry 1 of 2");
+
+    const abandoned = thread.retryFinishes(BUILT, C, 50, 1, B);
+    const own = thread.retryFinishes(BUILT, D, 60, 1, E);
+
+    expect(actionsOf(abandoned).some((action) => action.kind === "push-branch")).toBe(false);
+    expect(actionsOf(own)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
   });
 
   it("a Retry the Operator took the PR back from stays over once the Kit's rebase turns the PR to draft again", () => {

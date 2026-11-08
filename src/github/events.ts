@@ -159,6 +159,7 @@ export function agentRunEventFrom(
     readonly requestChanges?: boolean;
     readonly review?: number;
     readonly retry?: number;
+    readonly retryFlaw?: string;
     readonly conflict?: string;
   } | null = null,
   startedBy: number | null = null,

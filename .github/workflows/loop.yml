@@ -109,6 +109,8 @@ jobs:
       # Which run the plan started, for its Run record: its Retry number (0 for none), and "true"
       # or "false" for whether it Steps up and whether it's the Operator's Request-changes run.
       retry: ${{ steps.route.outputs.retry }}
+      # For a Retry on an agent PR (#341): the head its Execution flaw was given on, which the push job lands it for.
+      retry-flaw: ${{ steps.route.outputs.retry-flaw }}
       step-up: ${{ steps.route.outputs.step-up }}
       request-changes: ${{ steps.route.outputs.request-changes }}
       # The Subscription the plan's agent run is given: the Fabrik vault item its

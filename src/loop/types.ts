@@ -180,6 +180,8 @@ export type LoopEvent =
         readonly review?: number;
         /** For a Retry: its number, from the Kit job's plan, so a Retry left over from an earlier flaw never lands (#341). */
         readonly retry?: number;
+        /** For a Retry: the head of the Execution flaw it was started for, from the Kit job's plan (#341). */
+        readonly retryFlaw?: string;
         /**
          * For a conflict-only run (#304): the default branch's head it was
          * started to bring the PR up to date with. It isn't a retry.
@@ -606,6 +608,12 @@ export interface PullRequestSnapshot {
    * had an outcome (#341): the run owed now, which agent:implement starts.
    */
   readonly orphanedChangesRequests: readonly number[];
+  /**
+   * Whether the Operator has dismissed every review of the Request-changes run
+   * the Kit put the PR in draft for, before it had an outcome (#341): that run
+   * is over, and the PR is theirs again unless one of their reviews is owed.
+   */
+  readonly requestChangesRunDismissed: boolean;
   /** Whether the PR has left draft since its latest Verdict, so no Retry that Verdict called for is in flight. */
   readonly leftDraftSinceVerdict: boolean;
   /** Its web address, which the Kit's notes link the Operator's reviews from. */
@@ -1077,6 +1085,8 @@ export type Action =
       readonly conflict?: { readonly main: string };
       /** For an Implement run that is a Retry: its Retry number, and whether it Steps up. */
       readonly retry?: number;
+      /** For a Retry on an agent PR: the head the Execution flaw it fixes was given on (#341). */
+      readonly retryFlaw?: string;
       readonly stepUp?: boolean;
       /** For an Auditor run: the pending Audit's marked commit, which its job checks out and reads up to. */
       readonly commit?: string;

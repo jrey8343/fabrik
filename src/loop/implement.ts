@@ -185,7 +185,11 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   }
   // A Retry lands only while it's the Retry in flight: one the Operator took the PR back from, or left over from an
   // earlier flaw, never lands as a later one's outcome (#341).
-  if (!requestChanges && fixes.retry !== undefined && (inFlight?.kind !== "retry" || inFlight.retry !== fixes.retry)) {
+  const otherRetry =
+    inFlight?.kind !== "retry" ||
+    (fixes.retry !== undefined && inFlight.retry !== fixes.retry) ||
+    (fixes.retryFlaw !== undefined && inFlight.flaw !== fixes.retryFlaw);
+  if (!requestChanges && (fixes.retry !== undefined || fixes.retryFlaw !== undefined) && otherRetry) {
     return {
       kind: "nothing",
       reason: `Retry ${fixes.retry} of ${MAX_RETRIES} on #${pullRequest.number} isn't the run in flight, so the retry's branch isn't pushed`,
@@ -399,10 +403,10 @@ function whyNotRetriedOnto(
  * review whose first already landed, or one the Operator took the PR back
  * from. But once the Operator has dismissed the review the Kit noted it for,
  * nothing else would move the PR on. A Request changes of theirs no run has
- * built, as one they submitted on the draft meanwhile, goes first: the Kit
- * starts its run. Otherwise an Execution flaw that gave way to the review is
- * the flaw it was, and its Retry starts; otherwise the Kit put the PR in
- * draft for this run, and puts it back at the Merge gate.
+ * built, as one they submitted on the draft meanwhile, gets its run;
+ * otherwise the Kit put the PR in draft for this run, and puts it back at the
+ * Merge gate. An Execution flaw that gave way to the review never owes a
+ * Retry (src/loop/retry.ts): the PR is the Operator's again.
  */
 function requestChangesRunDropped(
   pullRequest: PullRequestSnapshot,
@@ -418,7 +422,7 @@ function requestChangesRunDropped(
   if (!dismissed || pullRequest.ticket === null || !pullRequest.open || !pullRequest.draft) return nothing;
   const lead = `Your Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, [review])}) was dismissed while its run worked, so the Kit didn't push the run's work.`;
   const waiting = operatorChangesRequests(pullRequest, operator).map((unbuilt) => unbuilt.review);
-  if (waiting.length > 0 && (inFlight === null || inFlight.kind === "retry")) {
+  if (waiting.length > 0 && inFlight === null) {
     return {
       kind: "act",
       actions: [
@@ -431,16 +435,6 @@ function requestChangesRunDropped(
           ].join("\n"),
         },
         // A fresh agent:implement on the Ticket starts the run the note put in flight. It notifies nobody.
-        { kind: "add-labels", issue: pullRequest.ticket, labels: [DISPATCH_LABEL] },
-      ],
-    };
-  }
-  if (inFlight?.kind === "retry") {
-    return {
-      kind: "act",
-      actions: [
-        { kind: "comment", issue: pullRequest.number, body: `${lead} The Execution flaw that gave way to it is the flaw it was: ${runName(inFlight)} starts now.` },
-        // A fresh agent:implement on the Ticket starts the Retry now owed. It notifies nobody.
         { kind: "add-labels", issue: pullRequest.ticket, labels: [DISPATCH_LABEL] },
       ],
     };

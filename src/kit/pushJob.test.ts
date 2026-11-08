@@ -98,6 +98,7 @@ describe("What the push job applies", () => {
       conflict: null,
       mainAtStart: null,
       retry: null,
+      retryFlaw: null,
       startedBy: null,
       capture: { result: null, artifact: null, galleryArtifact: null },
     });

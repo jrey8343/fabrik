@@ -97,6 +97,8 @@ describe("Starting a retry", () => {
           timeoutMinutes: 60,
           subscription: "Claude token",
           retry: 1,
+          // The flaw it fixes, by the head it was given on, which its push lands only for (#341).
+          retryFlaw: HEAD_SHA,
           stepUp: false,
         },
       ],
