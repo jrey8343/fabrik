@@ -183,21 +183,23 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // Retro when each is due. It also catches a Design session slot freed by
       // an event the Loop doesn't watch, such as needs-design coming off by hand.
       // It also takes the Replays' next step, and catches an agent PR left
-      // conflicting with main that a push to main missed (#304).
-      return thenCheckDesignQueue(scheduledTickWith([auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config));
+      // conflicting with main that a push to main missed (#304). And it runs a
+      // Dispatch check, so a Ticket left waiting while every slot was full, or
+      // marked ready by an event the Loop missed, starts within the hour (#418).
+      return thenCheckQueues(scheduledTickWith([auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config));
   }
 }
 
 const CHECK_DISPATCH: Action = { kind: "check-dispatch" };
 const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
 
-/** The plan, then a Design queue check once it has landed. */
-function thenCheckDesignQueue(plan: Plan): Plan {
+/** The plan, then a Dispatch check and a Design queue check once it has landed. */
+function thenCheckQueues(plan: Plan): Plan {
   switch (plan.kind) {
     case "act":
-      return { kind: "act", actions: [...plan.actions, CHECK_DESIGN_QUEUE] };
+      return { kind: "act", actions: [...plan.actions, CHECK_DISPATCH, CHECK_DESIGN_QUEUE] };
     case "nothing":
-      return { kind: "act", actions: [CHECK_DESIGN_QUEUE] };
+      return { kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] };
     case "fail":
       return plan;
   }
@@ -276,7 +278,7 @@ function missingFromSnapshot(what: string): Plan {
  * startQueuedSession); adding agent:implement starts (or resumes) an
  * Implement run; and adding agent:research starts a Researcher run, whether
  * Dispatch added it to release a research Decision or the Operator re-added
- * it by hand.
+ * it by hand; and adding ready-for-agent asks for a Dispatch check.
  */
 function labelAdded(
   issueNumber: number,
@@ -290,11 +292,23 @@ function labelAdded(
   if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
   if (label === RESEARCH_LABEL) return startResearcher(issueNumber, context, config);
   if (label === REPLAY_TRIGGER_LABEL) return startReplay(issueNumber, context, replay?.issues ?? null);
+  if (label === READY_FOR_AGENT) return readyForAgent(issueNumber, context.issue);
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }
   if (!context.issue.open) return { kind: "nothing", reason: `#${issueNumber} is closed` };
   return startAgentRun("triage", issueNumber, config);
+}
+
+/**
+ * A Ticket marked ready-for-agent by hand, such as one re-marked after a
+ * refusal or a sub-issue that skipped Intake, asks for a Dispatch check (#418),
+ * which weighs it with the rest. Triage marking it asks for one already, so the
+ * Dispatch job's concurrency group absorbs the second.
+ */
+function readyForAgent(issueNumber: number, issue: IssueSnapshot): Plan {
+  if (!issue.open) return { kind: "nothing", reason: `#${issueNumber} is closed` };
+  return { kind: "act", actions: [CHECK_DISPATCH] };
 }
 
 /** Intake: a new issue gets needs-triage unless something has already given it a place. */

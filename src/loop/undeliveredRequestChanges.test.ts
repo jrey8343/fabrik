@@ -1145,8 +1145,9 @@ describe("A Request-changes run that commits nothing on a PR that doesn't confli
 // #387: a Request-changes run the claim noted on a draft, with no Implement job behind it, as when the Operator
 // re-ran only a claim that had failed: Implement had already run, and the Kit dropped its push.
 describe("A Request-changes run noted on a draft with no Implement job behind it", () => {
-  /** What the plan does about the PR: the tick also asks for its Design queue check, every hour. */
-  const onThePullRequest = (plan: Plan): readonly Action[] => actionsOf(plan).filter((action) => action.kind !== "check-design-queue");
+  /** What the plan does about the PR: the tick also asks for its Dispatch and Design queue checks, every hour. */
+  const onThePullRequest = (plan: Plan): readonly Action[] =>
+    actionsOf(plan).filter((action) => action.kind !== "check-dispatch" && action.kind !== "check-design-queue");
 
   /** The claim of a delivered review noted its run at 05:14 and turned the PR to draft; no Implement job followed. */
   function noted(): Thread {

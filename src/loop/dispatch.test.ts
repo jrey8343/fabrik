@@ -10,6 +10,7 @@ import {
   repoSnapshot,
   snapshotOf,
   snapshotOfPullRequest,
+  tickSnapshot,
 } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 
@@ -411,5 +412,31 @@ describe("A max_in_flight of 0, with research Decisions to release", () => {
     const plan = planFor(check, snapshot, kitConfig({ maxInFlight: 0 }));
 
     expect(plan).toEqual({ kind: "nothing", reason: "Dispatch is paused because max_in_flight is 0, so #4 and #12 wait" });
+  });
+});
+
+// A Ticket the Operator marks ready-for-agent by hand, a refused one re-marked or a sub-issue that skipped Intake,
+// waits for no unrelated event to be picked up (#418).
+describe("What triggers a Dispatch check (#418)", () => {
+  it("the Operator adding ready-for-agent to an open issue", () => {
+    const issue = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"] });
+
+    const plan = planFor({ kind: "label-added", issue: 7, label: "ready-for-agent" }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }] });
+  });
+
+  it("but not ready-for-agent added to a closed issue, which no check would release", () => {
+    const issue = anIssue({ number: 7, open: false, labels: ["ready-for-agent"] });
+
+    const plan = planFor({ kind: "label-added", issue: 7, label: "ready-for-agent" }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({ kind: "nothing", reason: "#7 is closed" });
+  });
+
+  it("the hourly scheduled tick, which picks up a Ticket left waiting while every slot was full", () => {
+    const plan = planFor({ kind: "scheduled-tick", now: "2026-11-09T04:05:00.000Z" }, tickSnapshot(), kitConfig());
+
+    expect(plan).toEqual({ kind: "act", actions: expect.arrayContaining([{ kind: "check-dispatch" }]) });
   });
 });
