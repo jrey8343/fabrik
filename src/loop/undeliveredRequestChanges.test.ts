@@ -855,6 +855,30 @@ describe("The Request-changes run an undelivered Request changes started", () =>
     expect(actionsOf(landed).some((action) => action.kind === "push-branch" || action.kind === "mark-ready-for-review")).toBe(false);
   });
 
+  it.each([
+    ["while its run worked, a push that got no Review", "live"],
+    ["at the Merge gate, before the review", "gate"],
+  ] as const)("whose review the Operator dismisses after pushing %s starts a Review of that head, never leaving the PR in draft", (_case, when) => {
+    const thread = new Thread();
+    thread.mergeable = true;
+    // A push at the Merge gate starts no Review: the PR is out of draft.
+    if (when === "gate") thread.headSha = C;
+    thread.review(777, 14);
+    thread.delivered(777, 14);
+    if (when === "live") expect(reasonOf(thread.pushed(D, 20))).toMatch(/still in flight/);
+    thread.dismiss(777);
+
+    const landed = thread.requestChangesRunFinishes(BUILT, B, 30);
+    const resumed = thread.implement();
+
+    for (const plan of [landed, resumed]) {
+      expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:review"] });
+      expect(actionsOf(plan).some((action) => action.kind === "mark-ready-for-review")).toBe(false);
+    }
+    const review = thread.plan({ kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" }, snapshotOfPullRequest(thread.pullRequest()));
+    expect(startsOn(review)).toMatchObject({ role: "review", issue: 50 });
+  });
+
   it("isn't joined by anyone else's review on the draft, which a resumed run is never started for", () => {
     const thread = runStarted();
     // Later, so with the larger ids: a run in flight is for the latest of its reviews.

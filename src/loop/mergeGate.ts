@@ -4,6 +4,7 @@
 // the PR, which sends its Ticket back to design as a Design flaw does.
 import { sentBackByOperator } from "./backToDesign.ts";
 import { heldOn, heldUntilReset } from "./hold.ts";
+import { REVIEW_LABEL } from "./labels.ts";
 import { requestChangesRunStartedMarker } from "./markers.ts";
 import { runInFlight } from "./retry.ts";
 import { reviewLinks, unnotedChangesRequests } from "./undelivered.ts";
@@ -95,9 +96,31 @@ export function owedRequestChangesRun(pullRequest: PullRequestSnapshot, config: 
   return pullRequest.draft ? [start] : [{ kind: "convert-to-draft", pullRequest: pullRequest.number }, start];
 }
 
-/** Whether the PR is still at the head its latest Verdict judged: no push since has a Review to come. */
-export function atLatestVerdict(pullRequest: PullRequestSnapshot): boolean {
+/** Whether the PR is still at the head its latest Verdict judged. */
+function atLatestVerdict(pullRequest: PullRequestSnapshot): boolean {
   return pullRequest.verdicts.at(-1)?.headSha === pullRequest.headSha;
+}
+
+/**
+ * The PR back from a Request-changes run the Operator dismissed every review
+ * of, with nothing else owed (#341), after `lead`: at the Merge gate, while
+ * it's still at the head its latest Verdict judged. A head that moved since,
+ * as the Operator's own push, gets a Review instead, through agent:review:
+ * one pushed while the run was in flight, or at the Merge gate, had none, and
+ * one pushed since gets only the one Verdict a head is given.
+ */
+export function handBack(pullRequest: PullRequestSnapshot, lead: string): Action[] {
+  const { number } = pullRequest;
+  return atLatestVerdict(pullRequest)
+    ? [
+        { kind: "comment", issue: number, body: `${lead} #${number} is back at the Merge gate.` },
+        { kind: "mark-ready-for-review", pullRequest: number },
+      ]
+    : [
+        { kind: "comment", issue: number, body: `${lead} Review runs on #${number}'s head, which moved since its last Verdict.` },
+        // It notifies nobody, and takes itself off as the Review starts.
+        { kind: "add-labels", issue: number, labels: [REVIEW_LABEL] },
+      ];
 }
 
 /**
@@ -110,18 +133,10 @@ function orphanedRequestChangesRun(pullRequest: PullRequestSnapshot, config: Kit
   const reviews = pullRequest.orphanedChangesRequests;
   if (!pullRequest.draft || pullRequest.ticket === null) return null;
   const { number } = pullRequest;
-  // None of theirs is owed: the run the Kit put the PR in draft for is over, so it goes back to them, unless someone
-  // pushed to it since, whose Review then decides.
+  // None of theirs is owed: the run the Kit put the PR in draft for is over, so the PR goes back to them.
   if (reviews.length === 0) {
-    return pullRequest.requestChangesRunDismissed && !pullRequest.pushedSinceVerdict && atLatestVerdict(pullRequest)
-      ? [
-          {
-            kind: "comment",
-            issue: number,
-            body: `You dismissed the Request changes the Kit put #${number} in draft for, so no run is owed for it, and #${number} is back at the Merge gate.`,
-          },
-          { kind: "mark-ready-for-review", pullRequest: number },
-        ]
+    return pullRequest.requestChangesRunDismissed && !pullRequest.pushedSinceVerdict
+      ? handBack(pullRequest, `You dismissed the Request changes the Kit put #${number} in draft for, so no run is owed for it.`)
       : null;
   }
   return [

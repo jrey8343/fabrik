@@ -16,7 +16,7 @@ import {
   RETRY_PUSH_MARKER,
   UNMARKED_RETRY_PUSH,
 } from "./markers.ts";
-import { atLatestVerdict, owedRequestChangesRun } from "./mergeGate.ts";
+import { handBack, owedRequestChangesRun } from "./mergeGate.ts";
 import { MAX_RETRIES, owedRetry, type RunInFlight, runInFlight, runName, stepsUp } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { verdictActions } from "./review.ts";
@@ -439,14 +439,8 @@ function requestChangesRunDropped(
       ],
     };
   }
-  if (inFlight !== null || pullRequest.pushedSinceVerdict || !atLatestVerdict(pullRequest)) return nothing;
-  return {
-    kind: "act",
-    actions: [
-      { kind: "comment", issue: pullRequest.number, body: `${lead} #${pullRequest.number} is back at the Merge gate.` },
-      { kind: "mark-ready-for-review", pullRequest: pullRequest.number },
-    ],
-  };
+  if (inFlight !== null || pullRequest.pushedSinceVerdict) return nothing;
+  return { kind: "act", actions: handBack(pullRequest, lead) };
 }
 
 /**
