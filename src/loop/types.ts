@@ -68,6 +68,14 @@ export interface BranchChanges {
    */
   readonly rebase?: { readonly onto: string; readonly conflicted: boolean };
   /**
+   * For a Request-changes run its agent job told to merge main in (#341),
+   * because the head it started on conflicted with main: the default branch
+   * head it was told to merge, and whether the branch it built resolves that
+   * conflict, holding that head or merging cleanly with it. Absent for every
+   * other run.
+   */
+  readonly mainMerge?: { readonly main: string; readonly resolved: boolean };
+  /**
    * For a prototype turn's branch (#155) that moved while the turn ran, as a
    * live Design session's push may move it: the head the turn started on
    * (null when it cut the branch afresh, there being none) and where the
@@ -171,6 +179,10 @@ export type LoopEvent =
          * it was started for, which its answers are about (#369).
          */
         readonly review?: number;
+        /** For a Retry: its number, from the Kit job's plan, so a Retry left over from an earlier flaw never lands (#341). */
+        readonly retry?: number;
+        /** For a Retry: the head of the Execution flaw it was started for, from the Kit job's plan (#341). */
+        readonly retryFlaw?: string;
         /**
          * For a conflict-only run (#304): the default branch's head it was
          * started to bring the PR up to date with. It isn't a retry.
@@ -577,12 +589,54 @@ export interface PullRequestSnapshot {
   readonly conflictRunInFlight: string | null;
   /**
    * Whether a Retry or Request-changes run has pushed to it since its latest
-   * Verdict, read from the Kit's note of the push. Until one has, the run that
-   * Verdict (or the Operator's review) called for is still in flight (src/loop/retry.ts).
+   * Verdict, read from the Kit's note of the push. Until one has, the Retry
+   * that Verdict called for is still in flight (src/loop/retry.ts).
    */
   readonly pushedSinceVerdict: boolean;
-  /** The latest review that requested changes on it, if any: what a stalled Request-changes run resumes from. */
-  readonly changesRequested: ChangesRequestedReview | null;
+  /**
+   * The reviews requesting changes on it, oldest first, that were submitted
+   * while it was out of draft and that nothing has settled since (#341): no
+   * Request-changes run has pushed or been given a Verdict, and no Review has
+   * passed it. A run that ended without pushing settles nothing.
+   */
+  readonly unbuiltChangesRequests: readonly UnbuiltChangesRequest[];
+  /**
+   * Of those, the ids a Request-changes run was started for (#341): named by
+   * the Kit's note that started it, whether the review was delivered or not,
+   * or by an Execution flaw that gave way to it. The Kit never notes one twice.
+   */
+  readonly notedChangesRequests: readonly number[];
+  /**
+   * The review the Request-changes run in flight on it is for (#341), or null:
+   * the latest of those its starting note named that the Operator hasn't
+   * dismissed, while that run hasn't pushed, been given a Verdict or ended,
+   * and the PR hasn't left draft since it started.
+   */
+  readonly requestChangesRunInFlight: number | null;
+  /**
+   * Every review that Request-changes run is for, dismissed or not, while it's
+   * in flight, and none otherwise: a run started for any of them is that run,
+   * and only it lands (#341).
+   */
+  readonly requestChangesRunReviews: readonly number[];
+  /** When the Kit's note or Verdict that started that run was posted, while it's in flight; else null. */
+  readonly requestChangesRunSince: string | null;
+  /**
+   * The Operator's Request changes on the draft, after the Kit's note put it in
+   * draft for reviews they have since dismissed every one of, before that run
+   * had an outcome (#341): the run owed now, which agent:implement starts.
+   */
+  readonly orphanedChangesRequests: readonly number[];
+  /**
+   * Whether the Operator has dismissed every review of the Request-changes run
+   * the Kit put the PR in draft for, before it had an outcome (#341): that run
+   * is over, and the PR is theirs again unless one of their reviews is owed.
+   */
+  readonly requestChangesRunDismissed: boolean;
+  /** Whether the PR has left draft since its latest Verdict, so no Retry that Verdict called for is in flight. */
+  readonly leftDraftSinceVerdict: boolean;
+  /** Its web address, which the Kit's notes link the Operator's reviews from. */
+  readonly url: string;
   /**
    * Where its UI evidence is kept, read from the marker in the body the Fabrik
    * App wrote (src/evidence/uiEvidence.ts), or null when it has none: not a UI PR.
@@ -590,13 +644,13 @@ export interface PullRequestSnapshot {
   readonly uiEvidenceMarker: EvidenceMarker | null;
 }
 
-/** A review requesting changes on a PR, as GitHub records it. */
-export interface ChangesRequestedReview {
+/** A review requesting changes on an agent PR that no Request-changes run has built yet (#341). */
+export interface UnbuiltChangesRequest {
   readonly review: number;
   readonly reviewer: string;
   readonly reviewerIsBot: boolean;
-  /** The PR's head commit when the review was submitted. */
-  readonly commitSha: string;
+  /** When it was submitted, as an ISO 8601 time. */
+  readonly submittedAt: string;
 }
 
 /** The Reviewer's judgment on a PR (GLOSSARY.md). */
@@ -629,6 +683,12 @@ export interface VerdictRecord {
    * a retry either; absent otherwise, as on every marker from before them.
    */
   readonly conflictRun?: true;
+  /**
+   * On an Execution flaw that gave way to the Operator's Request changes no
+   * run had built (#341), those reviews' ids: it called for no Retry, doesn't
+   * count as one, and started their Request-changes run; absent otherwise.
+   */
+  readonly requestChangesFirst?: readonly number[];
   /** The head commit it was given on. */
   readonly headSha: string;
 }
@@ -773,6 +833,8 @@ export interface Snapshot {
 export interface ConflictSnapshot {
   /** The default branch's head commit, or null when it has none. */
   readonly main: string | null;
+  /** When the adapter read it, as an ISO 8601 time: what an undelivered Request changes' grace period is measured to (#341). */
+  readonly now: string;
   /** Every open agent PR, with whether GitHub says it merges cleanly into the default branch. */
   readonly pullRequests: readonly ConflictCandidate[];
 }
@@ -1042,6 +1104,8 @@ export type Action =
       readonly conflict?: { readonly main: string };
       /** For an Implement run that is a Retry: its Retry number. */
       readonly retry?: number;
+      /** For a Retry on an agent PR: the head the Execution flaw it fixes was given on (#341). */
+      readonly retryFlaw?: string;
       /**
        * For an Implement run: whether it runs on the Step-up model, and why. A
        * first run that doesn't Step up carries neither.

@@ -43,6 +43,12 @@ export type PushJobInput =
       readonly review: number | null;
       /** For an Implement run: the default branch head a conflict-only run (#304) was started for, else null. */
       readonly conflict?: string | null;
+      /** For an Implement run on an agent PR: the default branch head as the Kit job read it, before the run (#341). */
+      readonly mainAtStart?: string | null;
+      /** For a Retry: its number, from the Kit job's plan (#341); null for any other run. */
+      readonly retry?: number | null;
+      /** For a Retry: the head of the Execution flaw it fixes, from the Kit job's plan (#341); null for any other run. */
+      readonly retryFlaw?: string | null;
       /** For a Design-session turn the Operator's reply started: that comment, which must still exist for the turn to post. */
       readonly startedBy: number | null;
       /** For an Implement run: what its job passed out about UI evidence. */
@@ -157,7 +163,14 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
         issue,
         pullRequest: route === "implement" ? pullRequest : null,
         review: route === "implement" ? numberOr(kit.outputs["review"]) : null,
-        ...(route === "implement" ? { conflict } : {}),
+        ...(route === "implement"
+          ? {
+              conflict,
+              mainAtStart: shaOr(kit.outputs["main-at-start"]),
+              retry: numberOr(kit.outputs["retry"]),
+              retryFlaw: shaOr(kit.outputs["retry-flaw"]),
+            }
+          : {}),
         // A Design turn routed from a comment answers that reply (src/loop/design.ts).
         startedBy: route === "design" ? eventComment : null,
         ...(route === "implement" ? { capture: captureOutputs(job.outputs) } : {}),

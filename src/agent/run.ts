@@ -334,6 +334,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   let kind: ImplementRunKind = "first";
   // The Operator comments a run on an agent PR is given, recorded before the agent runs.
   let given: GivenOperatorComment[] | null = null;
+  // The main head a Request-changes run was told to merge in (#341), recorded before the agent runs.
+  let mergeMain: string | null = null;
   const extra: string[] = [];
   if (spec.buildsBranch === true) {
     setImplementerEnv(config);
@@ -355,11 +357,14 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
             review: reviewFile,
             // A conflict-only run (#304) rebases its PR's branch onto this main head, from the Kit job's plan.
             conflict: process.env["FABRIK_CONFLICT_MAIN"] ?? "",
+            // The branch a Request-changes run on a conflicting PR merges in (#341).
+            defaultBranch: process.env["FABRIK_DEFAULT_BRANCH"] ?? "",
           });
     branch = input.branch;
     extra.push(...input.parts);
     kind = input.kind;
     given = input.operatorComments;
+    mergeMain = "mergeMain" in input ? input.mergeMain : null;
   }
   if (prototypeTurn) {
     // The Claude token and the Sandbox's values and test secrets, as the Implementer's, committing as the Fabrik Prototype.
@@ -496,6 +501,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       ...(built === null ? {} : { branch: built }),
       ...(given === null ? {} : { operatorComments: given }),
       ...(window === null ? {} : { window }),
+      ...(mergeMain === null ? {} : { mergeMain }),
     };
     await writeFile(join(outDir, AGENT_RESULT_FILE), `${JSON.stringify(artifact, null, 2)}\n`);
     console.log(spec.describe(subject, checked));

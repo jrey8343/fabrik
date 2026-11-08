@@ -125,6 +125,8 @@ describe("Starting a retry", () => {
           timeoutMinutes: 60,
           subscription: "Claude token",
           retry: 1,
+          // The flaw it fixes, by the head it was given on, which its push lands only for (#341).
+          retryFlaw: HEAD_SHA,
           stepUp: false,
           stepUpReason: null,
         },
@@ -497,10 +499,15 @@ describe("The preview deployment of a retry's PR", () => {
   const markedUi = () => aPullRequest({ verdicts: flawedPullRequest().verdicts, uiEvidenceMarker: { run: 8000, artifact: 8002 } });
 
   it.each([
-    ["a retry", uiRetry()],
-    ["a Request-changes run", uiRetry({ fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 9 } })],
-  ])("is linked on %s's UI PR once the push job has pushed, from Kit config's template and the PR's branch", (_, event) => {
-    const actions = actionsOf(planFor(event, retrySnapshot(markedUi()), kitConfig({ ui: UI, preview: PREVIEW })));
+    ["a retry", uiRetry(), markedUi()],
+    [
+      "a Request-changes run",
+      uiRetry({ fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 900 } }),
+      // The run the Kit's note started for review 900 is in flight.
+      { ...markedUi(), notedChangesRequests: [900], requestChangesRunInFlight: 900, requestChangesRunReviews: [900] },
+    ],
+  ])("is linked on %s's UI PR once the push job has pushed, from Kit config's template and the PR's branch", (_, event, pullRequest) => {
+    const actions = actionsOf(planFor(event, retrySnapshot(pullRequest), kitConfig({ ui: UI, preview: PREVIEW })));
 
     expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch", "link-preview"]);
     expect(actions[3]).toEqual({ kind: "link-preview", pullRequest: 50, template: "https://{branch_slug}.shop.pages.dev", branch: "fabrik/ticket-7" });
@@ -556,7 +563,9 @@ describe("A retry whose branch moved while it ran (ADR-0006)", () => {
   it("a Request-changes run that conflicts starts again from the same review", () => {
     const pullRequest = aPullRequest({
       verdicts: [earlier("pass", { headSha: HEAD_SHA })],
-      changesRequested: { review: 9, reviewer: "jrey", reviewerIsBot: false, commitSha: HEAD_SHA },
+      notedChangesRequests: [9],
+      requestChangesRunInFlight: 9,
+      requestChangesRunReviews: [9],
     });
     const event = { ...rebased(true), fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 9 } };
 

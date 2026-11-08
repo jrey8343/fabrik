@@ -2,9 +2,12 @@
 // can request changes, which starts one Request-changes run on the Step-up
 // model with their review as input (it isn't a retry), or add needs-design to
 // the PR, which sends its Ticket back to design as a Design flaw does.
-import { whyNotReviewable } from "./agentPullRequest.ts";
 import { sentBackByOperator } from "./backToDesign.ts";
+import { heldOn, heldUntilReset } from "./hold.ts";
+import { REVIEW_LABEL } from "./labels.ts";
+import { requestChangesRunStartedMarker } from "./markers.ts";
 import { runInFlight } from "./retry.ts";
+import { reviewLinks, unnotedChangesRequests } from "./undelivered.ts";
 import type { Action, KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 
 type ChangesRequested = Extract<LoopEvent, { kind: "pull-request-changes-requested" }>;
@@ -26,11 +29,33 @@ export function requestChanges(event: ChangesRequested, snapshot: Snapshot, conf
   }
   const why = whyNotAtMergeGate(pullRequest);
   if (why !== null || pullRequest.ticket === null) return { kind: "nothing", reason: why ?? "" };
+  const { number } = pullRequest;
+  // Any earlier one of the Operator's no run was started for, as one GitHub never delivered, goes in this run too:
+  // the run reads every Request changes of theirs, so neither check notes that one later.
+  const earlier = unnotedChangesRequests(pullRequest, operator)
+    .map(({ review }) => review)
+    .filter((review) => review !== event.review);
+  const reviews = [...earlier, event.review];
+  const held = heldOn(snapshot.kitIssues, config);
+  const starting =
+    held === null
+      ? `The Kit is starting the Request-changes run for your Request changes on #${number} (${reviewLinks(pullRequest, reviews)}).`
+      : `The Kit has put the Request-changes run for your Request changes on #${number} (${reviewLinks(pullRequest, reviews)}) in flight, but ${heldUntilReset(held)}.`;
   return {
     kind: "act",
     actions: [
-      { kind: "convert-to-draft", pullRequest: pullRequest.number },
-      requestChangesRun(pullRequest.ticket, pullRequest.number, event.review, config),
+      // Marks the run in flight on the PR itself (#341), so the conflict check never notes these reviews as undelivered,
+      // and a Review of a head the Operator pushes meanwhile waits for the run (ADR-0006). It mentions nobody.
+      {
+        kind: "comment",
+        issue: number,
+        body: [
+          requestChangesRunStartedMarker(reviews),
+          `${starting} It runs on the Step-up model and uses no retry. The PR is back in draft, and Review runs again on the run's push.`,
+        ].join("\n"),
+      },
+      { kind: "convert-to-draft", pullRequest: number },
+      requestChangesRun(pullRequest.ticket, number, event.review, config),
     ],
   };
 }
@@ -57,21 +82,76 @@ function requestChangesRun(
 }
 
 /**
- * The Request-changes run an agent PR is still owed, or null: one the Operator
- * asked for that stalled before it pushed. Its PR went back to draft, the pass
- * it had is still the latest Verdict, and the Operator's review requesting
- * changes is on the head that passed. It resumes on whatever head the PR is at
- * now, the Operator's pushes included.
+ * The Request-changes run an agent PR is still owed, with what starts it, or
+ * null: the one in flight on it (#341), which the Kit's note started, or an
+ * Execution flaw that gave way to it, and which hasn't pushed or ended. It
+ * resumes on whatever head the PR is at now, the Operator's pushes included.
+ * A PR that never went back to draft, because that step failed after the
+ * note, goes back to draft first: leaving draft would have ended the run.
  */
-export function owedRequestChangesRun(
-  pullRequest: PullRequestSnapshot,
-  operator: string,
-  config: KitConfig,
-): Extract<Action, { kind: "start-agent-run" }> | null {
-  if (whyNotReviewable(pullRequest) !== null || pullRequest.ticket === null) return null;
-  const run = runInFlight(pullRequest, operator);
-  if (run?.kind !== "request-changes") return null;
-  return requestChangesRun(pullRequest.ticket, pullRequest.number, run.review, config);
+export function owedRequestChangesRun(pullRequest: PullRequestSnapshot, config: KitConfig): Action[] | null {
+  if (!pullRequest.isAgent || pullRequest.ticket === null || !pullRequest.open) return null;
+  const run = runInFlight(pullRequest);
+  if (run === null) return orphanedRequestChangesRun(pullRequest, config);
+  if (run.kind !== "request-changes") return null;
+  const start = requestChangesRun(pullRequest.ticket, pullRequest.number, run.review, config);
+  return pullRequest.draft ? [start] : [{ kind: "convert-to-draft", pullRequest: pullRequest.number }, start];
+}
+
+/** Whether the PR is still at the head its latest Verdict judged. */
+function atLatestVerdict(pullRequest: PullRequestSnapshot): boolean {
+  return pullRequest.verdicts.at(-1)?.headSha === pullRequest.headSha;
+}
+
+/**
+ * The PR back from a Request-changes run the Operator dismissed every review
+ * of, with nothing else owed (#341), after `lead`: at the Merge gate, while
+ * it's still at the head its latest Verdict judged. A head that moved since,
+ * as the Operator's own push, gets a Review instead, through agent:review:
+ * one pushed while the run was in flight, or at the Merge gate, had none, and
+ * one pushed since gets only the one Verdict a head is given.
+ */
+export function handBack(pullRequest: PullRequestSnapshot, lead: string): Action[] {
+  const { number } = pullRequest;
+  return atLatestVerdict(pullRequest)
+    ? [
+        { kind: "comment", issue: number, body: `${lead} #${number} is back at the Merge gate.` },
+        { kind: "mark-ready-for-review", pullRequest: number },
+      ]
+    : [
+        { kind: "comment", issue: number, body: `${lead} Review runs on #${number}'s head, which moved since its last Verdict.` },
+        // It notifies nobody, and takes itself off as the Review starts.
+        { kind: "add-labels", issue: number, labels: [REVIEW_LABEL] },
+      ];
+}
+
+/**
+ * The run owed for the Operator's Request changes on the draft once the run
+ * the Kit put it in draft for had every review dismissed, with no outcome
+ * since (#341), as when that run failed or was held: the Kit notes the new
+ * run, which marks it in flight, and starts it. Null when there's none.
+ */
+function orphanedRequestChangesRun(pullRequest: PullRequestSnapshot, config: KitConfig): Action[] | null {
+  const reviews = pullRequest.orphanedChangesRequests;
+  if (!pullRequest.draft || pullRequest.ticket === null) return null;
+  const { number } = pullRequest;
+  // None of theirs is owed: the run the Kit put the PR in draft for is over, so the PR goes back to them.
+  if (reviews.length === 0) {
+    return pullRequest.requestChangesRunDismissed && !pullRequest.pushedSinceVerdict
+      ? handBack(pullRequest, `You dismissed the Request changes the Kit put #${number} in draft for, so no run is owed for it.`)
+      : null;
+  }
+  return [
+    {
+      kind: "comment",
+      issue: number,
+      body: [
+        requestChangesRunStartedMarker(reviews),
+        `The Kit is starting the Request-changes run for your Request changes on #${number} (${reviewLinks(pullRequest, reviews)}), as you dismissed the reviews the run it replaces was for. It runs on the Step-up model and uses no retry, and Review runs again on its push.`,
+      ].join("\n"),
+    },
+    requestChangesRun(pullRequest.ticket, number, Math.max(...reviews), config),
+  ];
 }
 
 /**

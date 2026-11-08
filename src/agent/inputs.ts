@@ -10,7 +10,7 @@
 //                                a Ticket back in design from an agent PR carries that PR in issue.json's sentBack
 //   FABRIK_PULL_REQUEST          optional, a PR: writes pull-request.json, with the Operator's comments on it
 //                                in operatorComments (sentBack carries them too, for the closed PR)
-//   FABRIK_PULL_REQUEST_COMMENTS "true" for a retry, whose PR file carries the PR's comments and their authors' kind
+//   FABRIK_PULL_REQUEST_COMMENTS "true" for a run on an agent PR (a retry, or a Request-changes run that reads a Verdict that gave way to it), whose PR file carries the PR's comments and their authors' kind
 //   FABRIK_REVIEW                optional, a Request-changes run's review on that PR: writes review.json
 //   FABRIK_ROLE=triage           also writes recent-issues.json, the Recent issues Triage compares against for a duplicate
 //                                (readRecentIssues, #363)

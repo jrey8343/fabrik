@@ -18,13 +18,15 @@ import {
   prototypeRequestIn,
   prototypeStartedIn,
   REQUEST_CHANGES_RUN_MARKER,
+  requestChangesRunEndedIn,
   RESEARCH_RUN_FAILED_MARKER,
   RETRY_PUSH_MARKER,
   SESSION_FINISHED,
+  startedReviewsIn,
   UNMARKED_RETRY_PUSH,
   VERDICT_MARKER,
 } from "../loop/markers.ts";
-import type { IssueSnapshot, PendingPrototype, Verdict, VerdictRecord } from "../loop/types.ts";
+import type { IssueSnapshot, PendingPrototype, PullRequestSnapshot, UnbuiltChangesRequest, Verdict, VerdictRecord } from "../loop/types.ts";
 import { VERDICTS } from "../loop/verdict.ts";
 
 /** The Verdicts recorded in these comments, oldest first. Comments without a valid marker are skipped. */
@@ -45,12 +47,26 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const { verdict, source, requestChanges, conflictRun = false, headSha } = value as Record<string, unknown>;
+  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
   if (source !== "reviewer" && source !== "ci" && source !== "empty-diff") return null;
-  // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one.
-  if (typeof requestChanges !== "boolean" || typeof conflictRun !== "boolean" || typeof headSha !== "string") return null;
-  return { verdict: verdict as Verdict, source, requestChanges, ...(conflictRun ? { conflictRun: true as const } : {}), headSha };
+  // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one; likewise requestChangesFirst (#341).
+  if (typeof requestChanges !== "boolean" || typeof conflictRun !== "boolean") return null;
+  if (requestChangesFirst !== undefined && !isReviewIds(requestChangesFirst)) return null;
+  if (typeof headSha !== "string") return null;
+  return {
+    verdict: verdict as Verdict,
+    source,
+    requestChanges,
+    ...(conflictRun ? { conflictRun: true as const } : {}),
+    ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
+    headSha,
+  };
+}
+
+/** Whether a marker's field is a non-empty list of review ids. */
+function isReviewIds(value: unknown): value is number[] {
+  return Array.isArray(value) && value.length > 0 && value.every((id) => Number.isSafeInteger(id) && id > 0);
 }
 
 /**
@@ -84,8 +100,9 @@ export function conflictRunIn(commentBodies: readonly string[]): boolean {
 /** The default branch heads the Kit's attempt notes on a PR record (#304), oldest first. */
 export function conflictAttemptsIn(commentBodies: readonly string[]): string[] {
   return commentBodies.flatMap((body) => {
-    const attempt = conflictAttemptIn(body);
-    return attempt === null ? [] : [attempt.main];
+    const attempt = conflictAttemptIn(body)?.main ?? requestChangesRunEndedIn(body);
+    // A Request-changes run that couldn't bring main in (#341) counts as that head's attempt too.
+    return attempt === null ? [] : [attempt];
   });
 }
 
@@ -127,6 +144,153 @@ function isPushNote(body: string): boolean {
     body.startsWith(CONFLICT_RUN_MARKER) ||
     body.startsWith(UNMARKED_RETRY_PUSH)
   );
+}
+
+/** One thing in an agent PR's history that tells whether a Request changes has been built (#341). */
+export type PullRequestHistoryItem =
+  | { readonly kind: "bot-comment"; readonly at: string; readonly body: string }
+  | {
+      readonly kind: "changes-requested";
+      readonly at: string;
+      readonly review: number;
+      readonly reviewer: string;
+      readonly reviewerIsBot: boolean;
+    }
+  /** The PR went to draft, or came out of it. */
+  | { readonly kind: "draft" | "ready"; readonly at: string };
+
+/**
+ * Where an agent PR's Request changes stand (#341), from its history in any
+ * order: the reviews requesting changes that nothing has settled, those a
+ * Request-changes run was started for, and the review of the one in flight.
+ *
+ * A review counts only if the PR was out of draft when it was submitted, as
+ * the event path's Request changes only acts on one at the Merge gate; an
+ * agent PR opens as a draft. The Operator's own on a draft counts too, once a
+ * Request-changes run has put the PR in draft for its reviews: the Kit counts
+ * it as noted, so neither check notes it, but it never keeps that run in
+ * flight, and the run never read it. Anyone else's on a draft does nothing.
+ * A run is started by the Kit's note naming its reviews, or by an Execution
+ * flaw that gave way to them, and is in flight until it pushes, is given a
+ * Verdict or ends, or the PR leaves draft. Its push or Verdict settles the
+ * reviews there were when it started, which it read, but not one that came in
+ * while it worked; a pass settles every review before it, its Review having
+ * read them all as part of the Ticket (ADR-0010). A run that ended without
+ * pushing settles nothing: its reviews stay unbuilt, and noted, so the Kit
+ * doesn't note them again. A dismissed review isn't `standing`, and a run
+ * whose every review was dismissed isn't in flight; `standing` is read from
+ * the history unless given.
+ */
+export function requestChangesSinceRunIn(
+  history: readonly PullRequestHistoryItem[],
+  standing: ReadonlySet<number> = standingIn(history),
+  operator: string | null = null,
+): Pick<
+  PullRequestSnapshot,
+  "unbuiltChangesRequests"
+  | "notedChangesRequests"
+  | "requestChangesRunInFlight"
+  | "requestChangesRunReviews"
+  | "requestChangesRunSince"
+  | "orphanedChangesRequests"
+  | "requestChangesRunDismissed"
+> {
+  // Stable, so items at the same time keep the order they were read in.
+  const ordered = [...history].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  let draft = true;
+  let reviews: UnbuiltChangesRequest[] = [];
+  let noted: number[] = [];
+  let inFlight: readonly number[] | null = null;
+  let since: string | null = null;
+  // The reviews there were when the run in flight started, which it read; one that came in later it never saw.
+  let read: readonly number[] = [];
+  for (const item of ordered) {
+    switch (item.kind) {
+      case "draft":
+        draft = true;
+        break;
+      case "ready":
+        draft = false;
+        inFlight = null;
+        break;
+      case "changes-requested": {
+        const operators = operator !== null && item.reviewer === operator && !item.reviewerIsBot;
+        const joins = draft && inFlight !== null && operators;
+        if (!draft || joins) {
+          reviews.push({ review: item.review, reviewer: item.reviewer, reviewerIsBot: item.reviewerIsBot, submittedAt: item.at });
+        }
+        if (joins) noted = [...noted, item.review];
+        break;
+      }
+      case "bot-comment": {
+        const note = startedReviewsIn(item.body);
+        const started = note ?? verdictsIn([item.body])[0]?.requestChangesFirst ?? null;
+        if (started !== null) {
+          noted = [...noted, ...started.filter((review) => !noted.includes(review))];
+          inFlight = started;
+          since = item.at;
+          read = reviews.map(({ review }) => review);
+        } else if (settlesRequestChanges(item.body)) {
+          // A pass read them all; a Request-changes run's push or Verdict settles only those its run read.
+          const settled = isPass(item.body) || inFlight === null ? null : new Set(read);
+          reviews = settled === null ? [] : reviews.filter(({ review }) => !settled.has(review));
+          noted = noted.filter((review) => reviews.some((unbuilt) => unbuilt.review === review));
+          inFlight = null;
+        } else if (requestChangesRunEndedIn(item.body) !== null || verdictsIn([item.body]).length > 0) {
+          // No Verdict lands while a run is in flight, so any other Verdict means the run it followed is over: one whose
+          // reviews were all dismissed, its head judged since.
+          inFlight = null;
+        }
+        break;
+      }
+    }
+  }
+  const live = (inFlight ?? []).filter((review) => standing.has(review));
+  return {
+    unbuiltChangesRequests: reviews,
+    notedChangesRequests: noted,
+    requestChangesRunInFlight: live.length === 0 ? null : Math.max(...live),
+    requestChangesRunReviews: live.length === 0 ? [] : (inFlight ?? []),
+    requestChangesRunSince: live.length === 0 ? null : since,
+    // The Kit's note put the PR in draft for reviews since all dismissed, with no outcome yet: what the Operator asked
+    // for meanwhile on the draft is the run that's owed now.
+    // Every Request changes of the Operator's no run has built, as its landing would start (src/loop/implement.ts).
+    orphanedChangesRequests:
+      inFlight !== null && live.length === 0
+        ? reviews.filter(({ reviewer, reviewerIsBot }) => operator !== null && reviewer === operator && !reviewerIsBot).map(({ review }) => review)
+        : [],
+    requestChangesRunDismissed: inFlight !== null && live.length === 0,
+  };
+}
+
+/**
+ * Whether the PR has left draft since its latest Verdict: a Retry that Verdict
+ * called for works on a draft, so once the Operator took the PR back, or the
+ * Kit handed it to them, none is in flight, even if the PR is a draft again.
+ */
+export function leftDraftSinceVerdictIn(history: readonly PullRequestHistoryItem[]): boolean {
+  const ordered = [...history].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  let left = false;
+  for (const item of ordered) {
+    if (item.kind === "bot-comment" && verdictsIn([item.body]).length > 0) left = false;
+    else if (item.kind === "ready") left = true;
+  }
+  return left;
+}
+
+/** Whether a Kit comment settles the Request changes before it: a Request-changes run's push note or Verdict, or a pass. */
+function settlesRequestChanges(body: string): boolean {
+  if (body.startsWith(REQUEST_CHANGES_RUN_MARKER)) return true;
+  return verdictsIn([body]).some((record) => record.requestChanges || record.verdict === "pass");
+}
+
+function isPass(body: string): boolean {
+  return verdictsIn([body]).some((record) => record.verdict === "pass");
+}
+
+/** The reviews still requesting changes: GitHub lists a dismissed one no longer. */
+export function standingIn(history: readonly PullRequestHistoryItem[]): ReadonlySet<number> {
+  return new Set(history.flatMap((item) => (item.kind === "changes-requested" ? [item.review] : [])));
 }
 
 /**

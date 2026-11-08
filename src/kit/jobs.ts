@@ -31,11 +31,14 @@
 //   review                   for a Request-changes run, the Operator's review id; else empty
 //   conflict                 for a conflict-only run (#304), the default branch head it rebases the PR's
 //                            branch onto, a full sha; else empty
+//   main-at-start            for an Implement run on an agent PR's branch, the default branch head this job
+//                            read before the run started (#341), a full sha; else empty
 //   audit-commit             for an Auditor run, the pending Audit's marked commit, which the Audit job
 //                            checks out; else empty
 //   model, effort            the model and effort the plan chose for its agent run (a Step-up, say),
 //                            empty when it starts none or leaves effort to the CLI
 //   retry                    for an Implement run, its Retry number (0 for a first or Request-changes run); else empty
+//   retry-flaw               for a Retry on an agent PR, the head its Execution flaw was given on (#341); else empty
 //   step-up, request-changes "true" when the run Steps up, or is the Operator's Request-changes run; else "false"
 //   step-up-reason           why the run Steps up: retry, marked, request-changes or conflict-only; else empty
 //   dispatch-timeout-minutes the Dispatch job's Kit config timeout
@@ -62,7 +65,7 @@ import { join, resolve } from "node:path";
 import { agentRunIn, replayRunIn } from "../github/apply.ts";
 import { GitHub, type Repo } from "../github/client.ts";
 import { loopEventFrom } from "../github/events.ts";
-import { gatherSnapshot } from "../github/snapshot.ts";
+import { defaultBranchHead, gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { prototypeRequestJson } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
@@ -117,6 +120,7 @@ async function main(productDir: string): Promise<void> {
   let plan: Plan | null = null;
   let ticket: number | null = null;
   let summary: string | null = null;
+  let mainAtStart: string | null = null;
   if (event === null) {
     console.log(`The Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
   } else {
@@ -129,8 +133,12 @@ async function main(productDir: string): Promise<void> {
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
     summary = kitJobSummary(plan, config, snapshot.kitIssues);
     ticket = snapshot.pullRequest?.ticket ?? null;
+    // A run on an agent PR's branch may bring main in: the push job takes main as this job read it, before the
+    // run started, for one of the heads it may have brought in (#341), as the agent job can't write this job's outputs.
+    const run = agentRunIn(plan);
+    if (run?.role === "implement" && run.pullRequest !== undefined) mainAtStart = await defaultBranchHead(github, repo);
   }
-  const outputs = kitJobOutputs(plan, ticket, config);
+  const outputs = kitJobOutputs(plan, ticket, config, mainAtStart);
   await appendFile(
     required("GITHUB_OUTPUT"),
     Object.entries(outputs)
@@ -148,7 +156,12 @@ async function main(productDir: string): Promise<void> {
  * the routed agent job needs before it starts. `ticket` is the Ticket the
  * snapshot's PR was cut for, if it has one.
  */
-export function kitJobOutputs(plan: Plan | null, ticket: number | null, config: KitConfig): Readonly<Record<string, string>> {
+export function kitJobOutputs(
+  plan: Plan | null,
+  ticket: number | null,
+  config: KitConfig,
+  mainAtStart: string | null = null,
+): Readonly<Record<string, string>> {
   const run = plan === null ? null : agentRunIn(plan);
   const replay = plan === null ? null : replayRunIn(plan);
   // A Review's subject is the PR itself; a retry is an Implement run on the Ticket that fixes its PR.
@@ -174,12 +187,16 @@ export function kitJobOutputs(plan: Plan | null, ticket: number | null, config: 
     review: run?.requestChanges === undefined ? "" : String(run.requestChanges.review),
     // A conflict-only run's main head, which its prompt names and its push job's event carries.
     conflict: run?.conflict?.main ?? "",
+    // For a run on an agent PR's branch: main's head as this job read it, before the run started (#341).
+    "main-at-start": mainAtStart ?? "",
     // An Auditor run reads the Product repo up to the commit its pending Audit marks.
     "audit-commit": run?.role === "audit" ? (run.commit ?? "") : "",
     model: run?.model ?? "",
     effort: run?.effort ?? "",
     // Which run it is, for its Run record: nothing reads these before the push job writes one.
     retry: run?.role === "implement" ? String(run.retry ?? 0) : "",
+    // A Retry on an agent PR: the head of the Execution flaw it fixes, so its push lands only for that flaw (#341).
+    "retry-flaw": run?.role === "implement" ? (run.retryFlaw ?? "") : "",
     "step-up": String(run?.stepUp === true),
     // Only ever one of the Kit's own Step-up reasons, never agent text.
     "step-up-reason": run?.stepUp === true ? (run.stepUpReason ?? "") : "",

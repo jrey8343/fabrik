@@ -78,7 +78,14 @@ describe("Reading whether a PR's latest push came from a Request-changes run", (
     fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 900 },
   };
   const pushSnapshot: Snapshot = {
-    ...snapshotOfPullRequest(aPullRequest({ verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }] })),
+    ...snapshotOfPullRequest(
+      aPullRequest({
+        verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }],
+        notedChangesRequests: [900],
+        requestChangesRunInFlight: 900,
+        requestChangesRunReviews: [900],
+      }),
+    ),
     issue: anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }),
   };
 
@@ -103,10 +110,18 @@ describe("Reading whether a PR's latest push came from a Request-changes run", (
 });
 
 describe("Reading a Request-changes run's answers about its review (#369)", () => {
-  const pushSnapshot: Snapshot = {
-    ...snapshotOfPullRequest(aPullRequest({ verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }] })),
+  // The Request-changes run the Kit's note started for `review` is in flight (#341).
+  const pushSnapshot = (review: number): Snapshot => ({
+    ...snapshotOfPullRequest(
+      aPullRequest({
+        verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }],
+        notedChangesRequests: [review],
+        requestChangesRunInFlight: review,
+        requestChangesRunReviews: [review],
+      }),
+    ),
     issue: anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }),
-  };
+  });
   const pushedFor = (review: number, answers: Record<string, unknown>): LoopEvent => ({
     kind: "implement-run-finished",
     issue: 7,
@@ -118,14 +133,14 @@ describe("Reading a Request-changes run's answers about its review (#369)", () =
   });
 
   it("reads a review that only asked for a rebase back as no Review miss and no amendment, for that review", () => {
-    const [note = ""] = commentsOf(planFor(pushedFor(901, { reviewMiss: false, amendsTicket: false }), pushSnapshot, kitConfig()));
+    const [note = ""] = commentsOf(planFor(pushedFor(901, { reviewMiss: false, amendsTicket: false }), pushSnapshot(901), kitConfig()));
 
     expect(requestChangesAnswersIn(note)).toEqual({ review: 901, reviewMiss: false, amendsTicket: false });
   });
 
   it("reads each review's answers from its own run's comment", () => {
-    const first = commentsOf(planFor(pushedFor(901, { reviewMiss: true, reviewMissPoints: ["The Ticket asked for it"], amendsTicket: false }), pushSnapshot, kitConfig()));
-    const second = commentsOf(planFor(pushedFor(902, { reviewMiss: false, amendsTicket: true }), pushSnapshot, kitConfig()));
+    const first = commentsOf(planFor(pushedFor(901, { reviewMiss: true, reviewMissPoints: ["The Ticket asked for it"], amendsTicket: false }), pushSnapshot(901), kitConfig()));
+    const second = commentsOf(planFor(pushedFor(902, { reviewMiss: false, amendsTicket: true }), pushSnapshot(902), kitConfig()));
 
     expect([...first, ...second].map(requestChangesAnswersIn)).toEqual([
       { review: 901, reviewMiss: true, amendsTicket: false },

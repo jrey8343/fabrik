@@ -8,21 +8,31 @@
 // changes main, only the PR's own branch.
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
-import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER } from "./markers.ts";
+import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, requestChangesRunEndedMarker } from "./markers.ts";
 import { runInFlight, runName } from "./retry.ts";
+import { actOnUndelivered, unnotedChangesRequests } from "./undelivered.ts";
 import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, Plan, PullRequestSnapshot } from "./types.ts";
 
 /**
  * The conflict check, on a push to the default branch or the scheduled tick:
- * a rebase onto main for each open agent PR at the Merge gate that conflicts
- * with it, or why there's none.
+ * for each open agent PR, the Request-changes run for an undelivered Request
+ * changes on it (src/loop/undelivered.ts, #341), or else a rebase onto main if
+ * it's at the Merge gate and conflicts with it, or why there's neither.
  */
-export function checkConflicts(conflicts: ConflictSnapshot, operator: string): Plan {
-  const { main } = conflicts;
-  if (main === null) return { kind: "nothing", reason: "The default branch has no head, so no PR can conflict with it" };
+export function checkConflicts(conflicts: ConflictSnapshot, operator: string, held: number | null = null, runMinutes?: number): Plan {
+  const { main, now } = conflicts;
   const reasons: string[] = [];
   const actions: Action[] = [];
   for (const candidate of conflicts.pullRequests) {
+    const undelivered = actOnUndelivered(candidate, operator, now, held, runMinutes);
+    if (undelivered !== null) {
+      actions.push(...undelivered);
+      continue;
+    }
+    if (main === null) {
+      reasons.push("The default branch has no head, so no PR can conflict with it");
+      continue;
+    }
     const why = whyNotRebased(candidate, main, operator);
     if (why !== null) reasons.push(why);
     else actions.push(rebaseOntoMain(candidate.pullRequest, main));
@@ -37,7 +47,11 @@ function whyNotRebased({ pullRequest, mergeable }: ConflictCandidate, main: stri
   if (!pullRequest.isAgent || pullRequest.ticket === null || !pullRequest.open) return `#${number} isn't an open agent PR for a Ticket`;
   // A draft is still in the Loop, whose next push is reviewed anyway, or the Operator parked it.
   if (pullRequest.draft) return `#${number} is a draft, so it isn't brought up to date with main`;
-  const run = runInFlight(pullRequest, operator);
+  // Its Request-changes run, which the Kit starts once the review is past its grace period, brings main in itself, by merging (#341).
+  if (unnotedChangesRequests(pullRequest, operator).length > 0) {
+    return `#${number} has a Request changes from the Operator that no run has started for yet, so its Request-changes run brings main in instead`;
+  }
+  const run = runInFlight(pullRequest);
   if (run !== null) return `${runName(run)} on #${number} is still in flight, so main isn't brought in now: its push is rebased when it lands`;
   if (pullRequest.conflictAttempts.includes(main)) {
     return `#${number} was already tried against main at ${main.slice(0, 7)}, so it waits for main to move or for the Operator`;
@@ -156,5 +170,36 @@ export function conflictRunEnded(
     { kind: "add-labels", issue: pullRequest, labels: [READY_FOR_HUMAN] },
     // Out of draft, the next conflict check weighs it again once main moves.
     ...(draft ? [{ kind: "mark-ready-for-review" as const, pullRequest }] : []),
+  ];
+}
+
+/**
+ * A Request-changes run told to merge main in (#341) that ended without
+ * pushing: what it built still conflicts with main, or the trust-root guard
+ * refused it. As for a conflict-only run, the Kit says why on the PR, ends the
+ * run's time in flight, adds ready-for-human to the PR, and brings it back out
+ * of draft to the Merge gate. It never closes the PR, and the note counts as
+ * main's conflict attempt, so the conflict check doesn't try again until main
+ * moves. The run settles nothing: once main moves and the PR is brought up to
+ * date, an Execution flaw on it still gives way to the Operator's Request
+ * changes, which no run has built yet.
+ */
+export function requestChangesRunEnded(pullRequest: number, main: string, operator: string, why: string, runUrl: string): Action[] {
+  const head = main.slice(0, 7);
+  return [
+    {
+      kind: "comment",
+      issue: pullRequest,
+      body: [
+        requestChangesRunEndedMarker(main),
+        `@${operator} The Request-changes run on #${pullRequest} didn't land: ${why}.`,
+        "",
+        `The Kit judged the run against \`main\` at ${head}, and your requested changes aren't built, so it's yours from here. The Kit won't bring it up to date until \`main\` moves past ${head}; when it does, your Request changes still goes first. No retry was used.`,
+        "",
+        `[The run](${runUrl})`,
+      ].join("\n"),
+    },
+    { kind: "add-labels", issue: pullRequest, labels: [READY_FOR_HUMAN] },
+    { kind: "mark-ready-for-review", pullRequest },
   ];
 }

@@ -6,9 +6,10 @@ import { whyNotReviewable } from "./agentPullRequest.ts";
 import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
 import { consideredSection } from "./considered.ts";
 import { followUpsSection } from "./followUps.ts";
-import { REVIEW_LABEL } from "./labels.ts";
+import { DISPATCH_LABEL, REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw, whyAwaitingRun } from "./retry.ts";
+import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { verdictMarker } from "./markers.ts";
 import { parseVerdict } from "./verdict.ts";
 import type {
@@ -33,8 +34,8 @@ type Reviewed = Extract<LoopEvent, { kind: "review-run-finished" }>;
  * before anything else. A UI PR's Review carries where its marker says the UI
  * evidence is kept, so the Reviewer sees the screenshots; the Verdict is the same.
  */
-export function startReview(pullRequest: PullRequestSnapshot, operator: string, config: KitConfig): Plan {
-  const why = whyNotReviewable(pullRequest) ?? whyAwaitingRun(pullRequest, operator);
+export function startReview(pullRequest: PullRequestSnapshot, config: KitConfig): Plan {
+  const why = whyNotReviewable(pullRequest) ?? whyAwaitingRun(pullRequest);
   if (why !== null) return { kind: "nothing", reason: why };
   const { model, effort, timeoutMinutes } = config.roles.review;
   const { number, uiEvidenceMarker } = pullRequest;
@@ -65,7 +66,7 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot): Plan {
       "",
       ...event.failed.map((name) => `- \`${name.replace(/`/g, "'")}\``),
     ].join("\n");
-    return { kind: "act", actions: verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings }) };
+    return { kind: "act", actions: verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings }, snapshot.operator) };
   });
 }
 
@@ -88,7 +89,7 @@ export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
       findings: parsed.verdict === "pass" && findings !== "" ? `### Checked\n\n${findings}` : findings,
       followUps: followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number),
       considered: consideredSection(parsed.considered, event.operatorComments),
-    });
+    }, snapshot.operator);
     if (parsed.verdict !== "pass") return { kind: "act", actions };
     return {
       kind: "act",
@@ -104,7 +105,7 @@ export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
 /** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once. */
 function landVerdict(
   event: RedChecks | Reviewed,
-  { pullRequest, operator }: Snapshot,
+  { pullRequest }: Snapshot,
   decide: (pullRequest: PullRequestSnapshot) => Plan,
 ): Plan {
   if (pullRequest === null) {
@@ -119,7 +120,7 @@ function landVerdict(
     return { kind: "nothing", reason: `#${pullRequest.number} already has a Verdict on ${event.headSha.slice(0, 7)}` };
   }
   // A Review that started before the run was called for lands nothing either.
-  const awaiting = whyAwaitingRun(pullRequest, operator);
+  const awaiting = whyAwaitingRun(pullRequest);
   if (awaiting !== null) return { kind: "nothing", reason: awaiting };
   return decide(pullRequest);
 }
@@ -172,16 +173,22 @@ export function verdictActions(
     /** A Request-changes run's answers (#369), when its empty diff is the Verdict: their marker goes right under the Verdict's, their lines after the findings. */
     readonly answers?: AnswerLines | null;
   },
+  operator: string,
 ): Action[] {
+  // A Request-changes run's own empty diff never gives way: it read every Request changes there was, and giving way
+  // would only start another run on the same reviews (#341).
+  const ownEmptyDiff = source === "empty-diff" && pullRequest.requestChangesRun;
+  const first = verdict === "execution-flaw" && !ownEmptyDiff ? requestChangesFirst(pullRequest, operator) : null;
   const record: VerdictRecord = {
     verdict,
     source,
     requestChanges: pullRequest.requestChangesRun,
     ...(pullRequest.conflictRun ? { conflictRun: true as const } : {}),
+    ...(first === null ? {} : { requestChangesFirst: first.reviews }),
     headSha: event.headSha,
   };
   const by = BY[source];
-  const next = nextAfter(verdict, pullRequest);
+  const next = first ?? nextAfter(verdict, pullRequest);
   const body = [
     verdictMarker(record),
     ...(answers === null ? [] : [answers.marker]),
@@ -204,6 +211,32 @@ export function verdictActions(
     { kind: "comment", issue: pullRequest.number, body, key: VERDICT_COMMENT.posted },
     ...(next?.actions ?? []),
   ];
+}
+
+/**
+ * What an Execution flaw leads to when the Operator has a Request changes on
+ * the PR that no run has built (#341), most often one GitHub never delivered:
+ * it gives way, calling for no Retry and using none, and starts their
+ * Request-changes run in its place, which reads these findings with the
+ * reviews. Its marker names the reviews, so the run is in flight from it.
+ * Null when the flaw is a Request-changes run's own, or there's no such review.
+ */
+function requestChangesFirst(
+  pullRequest: PullRequestSnapshot,
+  operator: string,
+): { readonly reviews: number[]; readonly line: string; readonly actions: Action[] } | null {
+  if (pullRequest.ticket === null) return null;
+  // Not to the reviews of a Request-changes run in flight, such as one whose own empty diff this Verdict is.
+  const reviews = operatorChangesRequests(pullRequest, operator)
+    .map(({ review }) => review)
+    .filter((review) => !pullRequest.requestChangesRunReviews.includes(review));
+  if (reviews.length === 0) return null;
+  return {
+    reviews,
+    line: `The Operator's Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, reviews)}) hasn't been built, so it goes first: its Request-changes run starts now, on the Step-up model, and fixes these findings too. This Execution flaw uses no retry.`,
+    // A fresh agent:implement on the Ticket starts the run this Verdict put in flight. It notifies nobody.
+    actions: [{ kind: "add-labels", issue: pullRequest.ticket, labels: [DISPATCH_LABEL] }],
+  };
 }
 
 /** What a Verdict leads to beyond its comment: a retry, back to design, or (for a pass) nothing here. */

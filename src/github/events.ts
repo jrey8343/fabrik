@@ -153,7 +153,14 @@ export interface PushJobEvidence extends CaptureOutputs {
 export function agentRunEventFrom(
   result: AgentRunResult,
   changes: BranchChanges | null = null,
-  retry: { readonly pullRequest: number; readonly runUrl: string; readonly review?: number; readonly conflict?: string } | null = null,
+  retry: {
+    readonly pullRequest: number;
+    readonly runUrl: string;
+    readonly review?: number;
+    readonly retry?: number;
+    readonly retryFlaw?: string;
+    readonly conflict?: string;
+  } | null = null,
   startedBy: number | null = null,
   evidence: PushJobEvidence | null = null,
 ): LoopEvent {

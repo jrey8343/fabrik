@@ -2,6 +2,7 @@ import { auditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
 import { failureNotice } from "./failures.ts";
+import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 import { checkConflicts } from "./conflicts.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
@@ -27,7 +28,7 @@ import { closeSpecAfter } from "./specClosing.ts";
 import { heldOf } from "./heldRun.ts";
 import { scheduledTick } from "./kitIssues.ts";
 import { resumingHeldRuns } from "./resume.ts";
-import { heldWhileUsedUp } from "./hold.ts";
+import { heldOn, heldWhileUsedUp } from "./hold.ts";
 import { mapCapOf } from "./mapCap.ts";
 import { startResearcher } from "./research.ts";
 import { landResearch } from "./researchLanding.ts";
@@ -122,11 +123,11 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       }));
     // A push to an agent draft PR, or agent:review added to resume after a failure, starts a Review.
     case "pull-request-pushed":
-      return withPullRequest(snapshot, (pullRequest) => startReview(pullRequest, snapshot.operator, config));
+      return withPullRequest(snapshot, (pullRequest) => startReview(pullRequest, config));
     case "pull-request-labeled":
       return withPullRequest(snapshot, (pullRequest) =>
         event.label === REVIEW_LABEL
-          ? startReview(pullRequest, snapshot.operator, config)
+          ? startReview(pullRequest, config)
           : event.label === NEEDS_DESIGN
             ? sendBackToDesign(pullRequest)
             : { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` },
@@ -171,11 +172,11 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
         : checkDesignQueue(snapshot.designQueue, config, heldOf("design", snapshot.kitIssues));
     // Main moved, so an agent PR at the Merge gate may now conflict with it (#304).
     case "main-pushed":
-      return conflictCheck(snapshot);
+      return conflictCheck(snapshot, config);
     case "kit-config-changed":
       // max_in_flight or caps.design_sessions may have gone up, or from 0 back
       // above it, so see what can start now. It's a push to main too.
-      return alongside({ kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] }, conflictCheck(snapshot));
+      return alongside({ kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] }, conflictCheck(snapshot, config));
     case "scheduled-tick":
       // The tick closes each weekly-limit issue after its reset, resuming the
       // runs held until then, and opens the week's pending Audit and pending
@@ -203,15 +204,20 @@ function thenCheckDesignQueue(plan: Plan): Plan {
 }
 
 /** The conflict check (src/loop/conflicts.ts) on the snapshot's conflict slice, which a push to main and the tick gather. */
-function conflictCheck(snapshot: Snapshot): Plan {
+function conflictCheck(snapshot: Snapshot, config: KitConfig): Plan {
   return snapshot.conflicts === null
     ? missingFromSnapshot("the open agent PRs a conflict check weighs")
-    : checkConflicts(snapshot.conflicts, snapshot.operator);
+    : checkConflicts(
+        snapshot.conflicts,
+        snapshot.operator,
+        heldOn(snapshot.kitIssues, config),
+        implementJobTimeoutMinutes(config.roles.implement.timeoutMinutes),
+      );
 }
 
 /** The conflict check as one of the tick's gates. */
-function conflictGate(_now: string, snapshot: Snapshot): Plan {
-  return conflictCheck(snapshot);
+function conflictGate(_now: string, snapshot: Snapshot, config: KitConfig): Plan {
+  return conflictCheck(snapshot, config);
 }
 
 /** A gate the scheduled tick runs, the audit gate or the retro gate: what it opens this tick, or why it opens nothing. */

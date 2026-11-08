@@ -98,6 +98,9 @@ jobs:
       review: ${{ steps.route.outputs.review }}
       # For a conflict-only run (#304): the default branch head it rebases the PR's branch onto, a full sha.
       conflict: ${{ steps.route.outputs.conflict }}
+      # For a run on an agent PR's branch (#341): main's head as this job read it, before the run started. The push job
+      # takes it, and main as it is then, for the only heads the run may have brought in: the agent job can't write it.
+      main-at-start: ${{ steps.route.outputs.main-at-start }}
       # For an Auditor run: the pending Audit's marked commit, which the Audit job checks out.
       audit-commit: ${{ steps.route.outputs.audit-commit }}
       # The model and effort the plan chose for its agent run, a Step-up included.
@@ -107,6 +110,8 @@ jobs:
       # or "false" for whether it Steps up and whether it's the Operator's Request-changes run,
       # and why it Steps up (retry, marked, request-changes or conflict-only; empty for none).
       retry: ${{ steps.route.outputs.retry }}
+      # For a Retry on an agent PR (#341): the head its Execution flaw was given on, which the push job lands it for.
+      retry-flaw: ${{ steps.route.outputs.retry-flaw }}
       step-up: ${{ steps.route.outputs.step-up }}
       step-up-reason: ${{ steps.route.outputs.step-up-reason }}
       request-changes: ${{ steps.route.outputs.request-changes }}
@@ -783,6 +788,8 @@ jobs:
           FABRIK_REVIEW_FILE: ${{ needs.kit.outputs.review != '' && format('{0}/review.json', runner.temp) || '' }}
           # A conflict-only run's main head (#304): it rebases onto it and resolves the conflicts, nothing else.
           FABRIK_CONFLICT_MAIN: ${{ needs.kit.outputs.conflict }}
+          # The branch a Request-changes run on a PR that conflicts with it merges in (#341).
+          FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
           FABRIK_MODEL: ${{ needs.kit.outputs.model }}
           FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
@@ -1633,6 +1640,13 @@ jobs:
     if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # A push to the default branch runs the conflict check, as the scheduled tick does: it takes turns with
+    # the tick and with the next push's check, queueing, so two never note the same Request changes (#341).
+    # Every other push job runs at once.
+    concurrency:
+      group: ${{ github.event_name == 'push' && 'fabrik-tick' || format('fabrik-push-{0}', github.run_id) }}
+      cancel-in-progress: false
+      queue: max
     permissions: {}
     outputs:
       # "true" when the plan asked for a Dispatch check.

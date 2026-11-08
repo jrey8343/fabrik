@@ -36,13 +36,21 @@ const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const atMergeGate = aPullRequest({ draft: false });
 
 describe("Request changes at the Merge gate", () => {
-  it("puts the PR back in draft and starts one Implementer run on the Step-up model, with the Operator's review as input", () => {
+  it("notes the run on the PR, puts the PR back in draft and starts one Implementer run on the Step-up model, with the Operator's review as input", () => {
     const config = kitConfig();
     const plan = planFor(changesRequested(), snapshotOfPullRequest(atMergeGate), config);
 
     expect(plan).toEqual({
       kind: "act",
       actions: [
+        {
+          kind: "comment",
+          issue: 50,
+          body: [
+            "<!-- fabrik:request-changes-run-started 900 -->",
+            "The Kit is starting the Request-changes run for your Request changes on #50 ([review 900](https://github.com/acme/shop/pull/50#pullrequestreview-900)). It runs on the Step-up model and uses no retry. The PR is back in draft, and Review runs again on the run's push.",
+          ].join("\n"),
+        },
         { kind: "convert-to-draft", pullRequest: 50 },
         {
           kind: "start-agent-run",
@@ -77,12 +85,14 @@ describe("Request changes at the Merge gate", () => {
 });
 
 describe("Resuming a Request-changes run after an Infrastructure failure", () => {
-  /** The PR the failed run left: back in draft, its pass still the latest Verdict on its head, and the Operator's review on it. */
-  const stalled = (review: Partial<NonNullable<PullRequestSnapshot["changesRequested"]>> = {}) =>
+  /** The PR the failed run left: back in draft, its pass still the latest Verdict on its head, and the run the Kit's note started for the Operator's review still in flight. */
+  const stalled = () =>
     aPullRequest({
       draft: true,
       verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }],
-      changesRequested: { review: 900, reviewer: "operator", reviewerIsBot: false, commitSha: HEAD_SHA, ...review },
+      unbuiltChangesRequests: [{ review: 900, reviewer: "operator", reviewerIsBot: false, submittedAt: "2026-01-01T00:00:00Z" }],
+      notedChangesRequests: [900],
+      requestChangesRunInFlight: 900,
     });
   const resumed: LoopEvent = { kind: "label-added", issue: 7, label: "agent:implement" };
   const snapshotFor = (pullRequest: PullRequestSnapshot): Snapshot =>
@@ -125,15 +135,20 @@ describe("Resuming a Request-changes run after an Infrastructure failure", () =>
   });
 
   it.each([
-    ["the review isn't the Operator's", stalled({ reviewer: "someone" })],
-    ["the review is a bot's", stalled({ reviewerIsBot: true })],
-    ["the review was on an older commit", stalled({ commitSha: "b".repeat(40) })],
-    ["no review requested changes", aPullRequest({ verdicts: stalled().verdicts, changesRequested: null })],
-    ["the PR has left draft for the Merge gate", { ...stalled(), draft: false }],
+    // It pushed, was given a Verdict or ended, the Operator dismissed its review, or the PR left draft since it started.
+    ["no Request-changes run is in flight on it", { ...stalled(), requestChangesRunInFlight: null }],
+    ["the PR is closed", { ...stalled(), open: false }],
+    ["the PR isn't an agent PR", { ...stalled(), isAgent: false }],
   ])("starts nothing when %s", (_, pullRequest) => {
     const plan = planFor(resumed, snapshotFor(pullRequest), kitConfig());
 
     expect(actionsOf(plan)).toEqual([{ kind: "remove-label", issue: 7, label: "agent:implement" }]);
+  });
+
+  it("turns a PR that never went back to draft after the Kit's note to draft first", () => {
+    const plan = planFor(resumed, snapshotFor({ ...stalled(), draft: false }), kitConfig());
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["remove-label", "convert-to-draft", "start-agent-run"]);
   });
 
   it("a failed Request-changes run's notice names agent:implement on the Ticket", () => {
@@ -236,7 +251,8 @@ function pushSnapshot(
   pullRequest: PullRequestSnapshot = aPullRequest({ verdicts: [earlier("pass", { headSha: HEAD_SHA })] }),
 ): Snapshot {
   return {
-    ...snapshotOfPullRequest(pullRequest),
+    // The Request-changes run the Kit's note started for review 900 is in flight.
+    ...snapshotOfPullRequest({ ...pullRequest, notedChangesRequests: [900], requestChangesRunInFlight: 900, requestChangesRunReviews: [900] }),
     issue: anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }),
   };
 }
