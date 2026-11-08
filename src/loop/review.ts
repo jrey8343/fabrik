@@ -188,7 +188,7 @@ export function verdictActions(
     verdictMarker(record),
     `## Verdict: ${HEADINGS[verdict]}`,
     "",
-    `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}${record.conflictRun === true ? ", after a conflict-only run, so it uses no retry" : ""}.`,
+    `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}${record.conflictRun === true ? ", after a conflict-only run" : ""}.`,
     ...(findings === "" ? [] : ["", findings]),
     ...followUps,
     ...(next === null ? [] : ["", next.line]),

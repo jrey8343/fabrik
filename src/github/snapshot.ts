@@ -178,7 +178,7 @@ const PULL_REQUEST_FIELDS = `
         createdAt
         forcePushes: timelineItems(last: 1, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) { nodes { ... on HeadRefForcePushedEvent { createdAt } } }
         headCommit: commits(last: 1) { nodes { commit { oid committedDate } } }
-        closingIssuesReferences(first: 10) { nodes { number labels(first: 100) { nodes { name } } } }`;
+        closingIssuesReferences(first: 10) { nodes { number labels(first: 100) { nodes { name } } comments(last: 100) { nodes { body } } } }`;
 
 const PULL_REQUEST_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -275,7 +275,7 @@ interface PullRequestQueryResult {
       createdAt: string;
       forcePushes: { nodes: { createdAt: string }[] };
       headCommit: { nodes: { commit: { oid: string; committedDate: string } }[] };
-      closingIssuesReferences: { nodes: { number: number; labels: { nodes: { name: string }[] } }[] };
+      closingIssuesReferences: { nodes: { number: number; labels: { nodes: { name: string }[] }; comments: { nodes: { body: string }[] } }[] };
     } | null;
   };
 }
@@ -1249,6 +1249,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     isAgent,
     ticket,
     ticketLabels: ticketLabelsOf(pullRequest, ticket),
+    ticketEmptyDiffs: ticketEmptyDiffsOf(pullRequest, ticket),
     open: pullRequest.state === "OPEN",
     draft: pullRequest.isDraft,
     headSha: pullRequest.headRefOid,
@@ -1322,8 +1323,21 @@ function headPushedAtOf(pullRequest: PullRequestNode, fromBots: PullRequestNode[
  * number stays the branch's: a closing link to another issue doesn't count.
  */
 function ticketLabelsOf(pullRequest: PullRequestNode, ticket: number | null): string[] {
-  const closed = pullRequest.closingIssuesReferences.nodes.find((issue) => issue.number === ticket);
-  return closed?.labels.nodes.map((label) => label.name) ?? [];
+  return closedTicketOf(pullRequest, ticket)?.labels.nodes.map((label) => label.name) ?? [];
+}
+
+/**
+ * How many empty diffs the Kit has recorded on that Ticket, read from its
+ * comments as the Ticket's own snapshot reads them, so a Verdict on its PR
+ * counts on from the Retries they used (#415). None when the PR doesn't link it.
+ */
+function ticketEmptyDiffsOf(pullRequest: PullRequestNode, ticket: number | null): number {
+  return countEmptyDiffs(closedTicketOf(pullRequest, ticket)?.comments.nodes.map((comment) => comment.body) ?? []);
+}
+
+/** The issue among those a PR closes that is the Ticket its agent branch names, or undefined. */
+function closedTicketOf(pullRequest: PullRequestNode, ticket: number | null): PullRequestNode["closingIssuesReferences"]["nodes"][number] | undefined {
+  return pullRequest.closingIssuesReferences.nodes.find((issue) => issue.number === ticket);
 }
 
 /** How many times the conflict check reads open agent PRs while GitHub still works out whether one merges cleanly (#304). */

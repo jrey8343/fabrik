@@ -241,7 +241,7 @@ describe("A Review while a Retry is in flight", () => {
     thread.retryPushes(B, C);
     const third = thread.pushRed(C).landed;
 
-    expect(thread.comments.at(-1)).toContain("This is the PR's third Execution flaw");
+    expect(thread.comments.at(-1)).toContain("This is the Ticket's third Execution flaw");
     expect(actionsOf(third)).toContainEqual({ kind: "close-pull-request", pullRequest: 50 });
     expect(actionsOf(third)).not.toContainEqual(RETRY_TRIGGER);
     const resumed = thread.plan({ kind: "label-added", issue: 7, label: "agent:implement" }, thread.ticketSnapshot());

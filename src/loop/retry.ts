@@ -1,6 +1,7 @@
 // Execution-flaw retries: an Execution flaw on an agent PR re-runs the
 // Implementer on the same branch with the findings as input, then Review runs
-// again. Retries are counted from the PR's earlier Verdict comments alone, and
+// again. A Ticket gets two Retries in all, one pool counted from its empty
+// diffs before the PR opened and the PR's earlier Verdicts (#415), and they
 // stay silent: no mention, assignment or review request. While one is in
 // flight, no other head gets a Verdict, so each flaw starts exactly one
 // Implementer attempt (ADR-0006).
@@ -35,21 +36,20 @@ export function implementSettings(reason: StepUpReason | null, config: KitConfig
 }
 
 /**
- * Which retry an Execution flaw calls for, given the Verdicts posted before it:
- * one more than the earlier Execution flaws that each called for one. A
- * Request-changes run uses no retry, but a flaw on its push calls for one like
- * any other, so it counts (#393). A conflict-only run's Verdict (#304), a
- * flaw that gave way to an undelivered Request changes (#341) and one on a
- * Ticket no longer `ready-for-agent` (#416) call for none, so they don't, and an
- * Infrastructure failure posts no Verdict at all.
+* Which retry an Execution flaw calls for, given the Verdicts posted before it
+ * and the Ticket's empty diffs before its PR opened: one more than those empty
+ * diffs and the earlier Execution flaws that each called for one, as they draw
+ * on one pool of Retries (#415). A Request-changes run (#393) and a
+ * conflict-only run (#304) use no retry, but a flaw on their push calls for one
+ * like any other, so it counts. A flaw that gave way to an undelivered Request
+ * changes (#341) and one on a Ticket no longer `ready-for-agent` (#416) call
+ * for none, so they don't, and an Infrastructure failure posts no Verdict at all.
  */
-export function retryNumber(earlier: readonly VerdictRecord[]): number {
+export function retryNumber(earlier: readonly VerdictRecord[], emptyDiffs: number): number {
   return (
     1 +
-    earlier.filter(
-      (record) =>
-        record.verdict === "execution-flaw" && record.conflictRun !== true && record.requestChangesFirst === undefined && record.ticketNotReady !== true,
-    ).length
+    emptyDiffs +
+    earlier.filter((record) => record.verdict === "execution-flaw" && record.requestChangesFirst === undefined && record.ticketNotReady !== true).length
   );
 }
 
@@ -79,7 +79,7 @@ export interface VerdictNext {
  */
 export function retryAfterFlaw(pullRequest: PullRequestSnapshot): VerdictNext | null {
   const { ticket } = pullRequest;
-  const retry = retryNumber(pullRequest.verdicts);
+  const retry = retryNumber(pullRequest.verdicts, pullRequest.ticketEmptyDiffs);
   if (retry > MAX_RETRIES || ticket === null) return null;
   if (ticketNotReady(pullRequest)) {
     return { line: ticketNotReadyLine(pullRequest.number, ticket), actions: [], ticketNotReady: true };
@@ -132,7 +132,7 @@ export function runInFlight(pullRequest: PullRequestSnapshot): RunInFlight | nul
   // One that gave way to the Operator's Request changes (#341) called for no Retry, and never owes one: its
   // Request-changes run fixes its findings, and if the Operator dismisses those reviews, the PR is theirs.
   if (latest.requestChangesFirst !== undefined) return null;
-  const retry = retryNumber(pullRequest.verdicts.slice(0, -1));
+  const retry = retryNumber(pullRequest.verdicts.slice(0, -1), pullRequest.ticketEmptyDiffs);
   return retry > MAX_RETRIES ? null : { kind: "retry", retry, flaw: latest.headSha };
 }
 

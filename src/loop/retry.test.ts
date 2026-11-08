@@ -224,10 +224,15 @@ describe("Starting a retry", () => {
     expect(startedRuns(planFor(retryLabeled, resumeSnapshot(pullRequest), kitConfig()))).toEqual([]);
   });
 
-  it.each([
-    ["a conflict-only run's Verdict", earlier("execution-flaw", { source: "ci", conflictRun: true })],
-    ["a flaw that gave way to an undelivered Request changes", earlier("execution-flaw", { requestChangesFirst: [900] })],
-  ])("%s called for no retry, so it doesn't count toward the two", (_, exempt) => {
+  it("the Retry a conflict-only run's flaw started counts: the flaw on its push starts Retry 2, stepped up (#415)", () => {
+    const pullRequest = flawedPullRequest([earlier("execution-flaw", { source: "ci", conflictRun: true })]);
+    const plan = planFor(retryLabeled, resumeSnapshot(pullRequest), kitConfig());
+
+    expect(actionsOf(plan)[1]).toMatchObject({ kind: "start-agent-run", retry: 2, model: "claude-opus-5-5", stepUp: true });
+  });
+
+  it("a flaw that gave way to an undelivered Request changes called for no retry, so it doesn't count toward the two", () => {
+    const exempt = earlier("execution-flaw", { requestChangesFirst: [900] });
     const pullRequest = flawedPullRequest([exempt, exempt]);
     const plan = planFor(retryLabeled, resumeSnapshot(pullRequest), kitConfig());
 
@@ -321,6 +326,44 @@ describe("A Verdict when the retries are used up", () => {
 
     expect(actionsOf(plan)[0]).toMatchObject({ kind: "comment", issue: 50 });
     expect(actionsOf(plan)).not.toContainEqual(RETRY_TRIGGER);
+  });
+});
+
+// A Ticket gets two Retries in all: an empty diff before its PR opened used one up (#415).
+describe("A Ticket's Retries are one pool, shared by empty diffs before its PR and Verdicts on it", () => {
+  const flaw = reviewed("verdict: execution-flaw\n\nThe empty-cart case throws.");
+  const verdictOn = (pullRequest: PullRequestSnapshot): string => {
+    const comment = actionsOf(planFor(flaw, snapshotOfPullRequest(pullRequest), kitConfig())).find((action) => action.kind === "comment");
+    if (comment?.kind !== "comment") throw new Error("expected a Verdict comment");
+    return comment.body;
+  };
+
+  it("after one empty diff, the PR's first flaw starts Retry 2, stepped up, and that Retry runs on the Step-up model", () => {
+    expect(verdictOn(aPullRequest({ ticketEmptyDiffs: 1 }))).toContain("Retry 2 of 2 starts now, stepped up:");
+
+    const pullRequest = { ...flawedPullRequest(), ticketEmptyDiffs: 1 };
+    expect(actionsOf(planFor(retryLabeled, resumeSnapshot(pullRequest), kitConfig()))[1]).toMatchObject({
+      kind: "start-agent-run",
+      retry: 2,
+      model: "claude-opus-5-5",
+      stepUp: true,
+      stepUpReason: "retry",
+    });
+  });
+
+  it("after two empty diffs, the stepped-up run that opened the PR was Retry 2, so the PR's first flaw starts none and goes back to design", () => {
+    const plan = planFor(flaw, snapshotOfPullRequest(aPullRequest({ ticketEmptyDiffs: 2 })), kitConfig());
+
+    expect(verdictOn(aPullRequest({ ticketEmptyDiffs: 2 }))).not.toMatch(/Retry \d of 2 starts now/);
+    expect(actionsOf(plan)).not.toContainEqual(RETRY_TRIGGER);
+    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "add-labels", issue: 7, labels: ["needs-design"] }));
+    expect(startedRuns(planFor(retryLabeled, resumeSnapshot({ ...flawedPullRequest(), ticketEmptyDiffs: 2 }), kitConfig()))).toEqual([]);
+  });
+
+  it("after one empty diff and Retry 2's flaw on the PR, the next flaw starts no third", () => {
+    const pullRequest = aPullRequest({ ticketEmptyDiffs: 1, pushedSinceVerdict: true, verdicts: [earlier("execution-flaw")] });
+
+    expect(verdictOn(pullRequest)).not.toMatch(/Retry \d of 2 starts now/);
   });
 });
 

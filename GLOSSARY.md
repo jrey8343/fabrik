@@ -183,7 +183,7 @@ A Verdict that the right design was built wrongly, so the Implementer can fix it
 _Avoid_: bug, failing review
 
 **Retry**:
-An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head. A Request-changes run isn't a Retry, but an Execution flaw on its push calls for one and counts. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and never counts toward the two. Nor does one on a Ticket no longer `ready-for-agent`.
+An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head, in one pool: an empty diff before its pull request opened uses one, and the Verdicts on the pull request count on from there. A Request-changes run or a conflict-only run isn't a Retry, but an Execution flaw on its push calls for one and counts. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and never counts toward the two. Nor does one on a Ticket no longer `ready-for-agent`.
 _Avoid_: rerun, attempt
 
 **Design flaw**:
@@ -239,7 +239,7 @@ The Operator's review asking for changes on an agent pull request at the Merge g
 _Avoid_: change request, revision, feedback
 
 **Conflict-only run**:
-An Implementer run, on the Step-up model, that brings an agent pull request up to date with main once a plain rebase by the Kit conflicted too: one at the Merge gate that main moved under and left conflicting, or a draft one whose push GitHub never reviewed because it conflicts with main. It rebases onto main, resolves the conflicts and changes nothing else. It's neither a Retry nor a Request changes, so it uses no retry and adds no requirement. Each pull request gets one attempt per main head. Only the Verdict on a Merge-gate pull request's run is exempt from the Retry count: on a draft's, the Verdict counts as the unreviewed push's own would have.
+An Implementer run, on the Step-up model, that brings an agent pull request up to date with main once a plain rebase by the Kit conflicted too: one at the Merge gate that main moved under and left conflicting, or a draft one whose push GitHub never reviewed because it conflicts with main. It rebases onto main, resolves the conflicts and changes nothing else. It's neither a Retry nor a Request changes, so it uses no retry and adds no requirement. Each pull request gets one attempt per main head. An Execution flaw on its push calls for a Retry and counts like any other.
 _Avoid_: rebase run, conflict retry
 
 **Send it back**:

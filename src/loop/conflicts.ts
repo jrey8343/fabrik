@@ -183,7 +183,7 @@ function rebaseOntoMain(pullRequest: PullRequestSnapshot, main: string): Action 
           "",
           draft
             ? "A conflict-only Implementer run starts now on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. The run uses no retry, but the Verdict on its push counts as one on the unreviewed push would have. The PR stays in draft, and Review runs on the run's push."
-            : "A conflict-only Implementer run starts now on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. It uses no retry. The PR is back in draft, and Review runs again on the run's push.",
+            : "A conflict-only Implementer run starts now on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. It uses no retry, but an Execution flaw on its push calls for one like any other. The PR is back in draft, and Review runs again on the run's push.",
         ].join("\n"),
       },
       ...toDraft,
