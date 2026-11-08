@@ -42,8 +42,9 @@ export interface RecordedAnswers {
  */
 export const REQUEST_CHANGES_ANSWERS_MARKER = /^<!-- fabrik:request-changes-answers (\{.*?\}) -->$/;
 
+/** The answers marker line for a Request-changes run's answers about its review, which requestChangesAnswersIn reads back. */
 export function requestChangesAnswersMarker({ review, reviewMiss, amendsTicket }: RecordedAnswers): string {
-  return `<!-- fabrik:request-changes-answers ${JSON.stringify({ review, reviewMiss, amendsTicket })} -->`;
+  return `<!-- fabrik:request-changes-answers ${markerJson({ review, reviewMiss, amendsTicket })} -->`;
 }
 
 /** A Request-changes run's answers as its outcome comment carries them: the marker line, and the lines people read. */
