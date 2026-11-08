@@ -608,6 +608,15 @@ export interface PullRequestSnapshot {
    */
   readonly pushedSinceVerdict: boolean;
   /**
+   * The Kit's note since its latest Verdict on the Retry that Verdict called
+   * for, which never started (#416), or null: `restarted` when the Kit re-added
+   * agent:implement for it, which it does once, or `ended` when its Ticket was
+   * no longer `ready-for-agent`, so no Retry is in flight.
+   */
+  readonly retryNoteSinceVerdict: "restarted" | "ended" | null;
+  /** When the Fabrik App posted its latest Verdict, as an ISO 8601 time, or null when it has none. */
+  readonly verdictPostedAt: string | null;
+  /**
    * When its current head was pushed, as an ISO 8601 time, as best its history
    * tells (#389): the latest of its force pushes, the Kit's notes of its own
    * pushes, its opening by the Fabrik App, and its head commit's commit time,
@@ -716,6 +725,12 @@ export interface VerdictRecord {
    * count as one, and started their Request-changes run; absent otherwise.
    */
   readonly requestChangesFirst?: readonly number[];
+  /**
+   * True on an Execution flaw whose Ticket was no longer `ready-for-agent`
+   * when it was given (#416): it called for no Retry, doesn't count as one,
+   * and started nothing; absent otherwise.
+   */
+  readonly ticketNotReady?: true;
   /** The head commit it was given on. */
   readonly headSha: string;
 }
