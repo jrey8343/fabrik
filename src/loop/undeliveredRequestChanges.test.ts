@@ -57,6 +57,11 @@ class Thread {
   mergeable: boolean | null = false;
   main = MAIN;
   now = at(0);
+  /**
+   * Whether an Implement job is under way anywhere in the repo, as the conflict check reads it from the Actions API:
+   * null when it couldn't read it.
+   */
+  implementJobUnderWay: boolean | null = null;
   /** What a mechanical rebase onto main pushes the PR to, when the conflict check plans one. */
   rebasedTo = E;
   /** When set, this action fails as the adapter applies it, and every action after it is never applied. */
@@ -86,7 +91,12 @@ class Thread {
 
   /** What the conflict check weighs, now. */
   conflicts(): NonNullable<Snapshot["conflicts"]> {
-    return { main: this.main, now: this.now, pullRequests: [{ pullRequest: this.pullRequest(), mergeable: this.mergeable }] };
+    return {
+      main: this.main,
+      now: this.now,
+      implementJobUnderWay: this.implementJobUnderWay,
+      pullRequests: [{ pullRequest: this.pullRequest(), mergeable: this.mergeable }],
+    };
   }
 
   ticketSnapshot(): Snapshot {
@@ -1130,4 +1140,78 @@ describe("A Request-changes run that commits nothing on a PR that doesn't confli
 
     expect(requestChangesAnswersIn(outcome ?? "")).toEqual({ review: 777, reviewMiss: false, amendsTicket: true });
   });
+});
+
+// #387: a Request-changes run the claim noted on a draft, with no Implement job behind it, as when the Operator
+// re-ran only a claim that had failed: Implement had already run, and the Kit dropped its push.
+describe("A Request-changes run noted on a draft with no Implement job behind it", () => {
+  /** What the plan does about the PR: the tick also asks for its Design queue check, every hour. */
+  const onThePullRequest = (plan: Plan): readonly Action[] => actionsOf(plan).filter((action) => action.kind !== "check-design-queue");
+
+  /** The claim of a delivered review noted its run at 05:14 and turned the PR to draft; no Implement job followed. */
+  function noted(): Thread {
+    const thread = new Thread();
+    thread.mergeable = true;
+    thread.review(777, 14);
+    thread.delivered(777, 14);
+    expect(thread.draft).toBe(true);
+    return thread;
+  }
+
+  it.each(["mainPushed", "tick"] as const)("is restarted by the %s check once past the grace period: one agent:implement on the Ticket, and nothing else", (check) => {
+    const thread = noted();
+    thread.implementJobUnderWay = false;
+
+    const plan = thread[check](30);
+
+    expect(onThePullRequest(plan)).toEqual([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]);
+    const resumed = thread.implement();
+    expect(startsOn(resumed)).toMatchObject({ requestChanges: { review: 777 } });
+    expect(actionsOf(resumed)).not.toContainEqual({ kind: "convert-to-draft", pullRequest: 50 });
+  });
+
+  it("isn't restarted while an Implement job is under way anywhere in the repo: it may be the run's own", () => {
+    const thread = noted();
+    thread.implementJobUnderWay = true;
+
+    expect(addsImplement(thread.mainPushed(90))).toBe(false);
+  });
+
+  it("isn't restarted within the grace period of its note", () => {
+    const thread = noted();
+    thread.implementJobUnderWay = false;
+
+    expect(addsImplement(thread.mainPushed(23))).toBe(false);
+  });
+
+  it("isn't restarted when the check couldn't read whether an Implement job is under way", () => {
+    const thread = noted();
+    thread.implementJobUnderWay = null;
+
+    expect(addsImplement(thread.mainPushed(90))).toBe(false);
+  });
+
+  it("isn't restarted once it has pushed", () => {
+    const thread = noted();
+    thread.implement();
+    thread.requestChangesRunFinishes(BUILT, B, 40);
+    thread.implementJobUnderWay = false;
+
+    expect(addsImplement(thread.mainPushed(90))).toBe(false);
+  });
+
+  it.each([null, true, false])(
+    "leaves the out-of-draft restart (#341) as it was, whatever the Implement jobs read (%s)",
+    (underWay) => {
+      const thread = new Thread();
+      thread.review(5810278044, 14);
+      thread.failsAt = "convert-to-draft";
+      thread.tick(60);
+      thread.failsAt = null;
+      thread.implementJobUnderWay = underWay;
+
+      expect(onThePullRequest(thread.tick(120))).toEqual([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]);
+      expect(addsImplement(thread.mainPushed(65))).toBe(false);
+    },
+  );
 });

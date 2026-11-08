@@ -585,7 +585,7 @@ describe("A Request-changes run held while every Subscription is used up (#341)"
     const now = "2026-11-08T06:00:00.000Z";
     const snapshot = tickSnapshot({
       kitIssues: BOTH_USED_UP,
-      conflicts: { main: "9".repeat(40), now, pullRequests: [{ pullRequest: atMergeGate(), mergeable: false }] },
+      conflicts: { main: "9".repeat(40), now, implementJobUnderWay: null, pullRequests: [{ pullRequest: atMergeGate(), mergeable: false }] },
     });
 
     const note = noteIn(planFor({ kind: "scheduled-tick", now }, snapshot, TWO_SUBSCRIPTIONS));

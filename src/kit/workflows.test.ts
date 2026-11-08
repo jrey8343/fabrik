@@ -1315,6 +1315,24 @@ describe("The conflict check's turns (#341)", () => {
   });
 });
 
+// #387: before restarting a stalled Request-changes run on a draft, the conflict check reads whether an Implement
+// job is under way, which the Fabrik App can't: it has no Actions permission (ADR-0002).
+describe("The conflict check's read of the Implement jobs under way (#387)", () => {
+  const tick = jobIn(schedule, "tick");
+  const callerTick = jobIn(readFileSync(new URL("templates/fabrik.yml", root), "utf8"), "tick");
+
+  it("gives a push to the default branch's push job a token that reads workflow runs, and no other push job", () => {
+    expect(jobIn(loop, "push")).toMatch(/\n    permissions:\n(?: {6}#.*\n)* {6}actions: read\n(?! {6})/);
+    expect(jobIn(loop, "push")).toContain("\n          actions-token: ${{ github.event_name == 'push' && github.token || '' }}\n");
+  });
+
+  it("gives the scheduled tick a token that reads workflow runs, which the caller's tick job grants", () => {
+    expect(tick).toMatch(/\n    permissions:\n(?: {6}#.*\n)* {6}actions: read\n(?! {6})/);
+    expect(tick).toContain("\n          actions-token: ${{ github.token }}\n");
+    expect(callerTick).toMatch(/\n    permissions:\n(?: {6}.*\n)*? {6}actions: read\n/);
+  });
+});
+
 describe("The store-token action, which the record actions share", () => {
   const action = readFileSync(new URL(".github/actions/store-token/action.yml", root), "utf8");
   const steps = action.split(/\n(?=    - )/);

@@ -19,7 +19,7 @@ function atMergeGate(overrides: Partial<PullRequestSnapshot> = {}): PullRequestS
 }
 
 function conflictsSnapshot(candidates: readonly ConflictCandidate[], main: string | null = MAIN): Snapshot {
-  return { ...snapshotOfPullRequest(aPullRequest()), pullRequest: null, conflicts: { main, now: "2026-01-01T00:00:00Z", pullRequests: candidates } };
+  return { ...snapshotOfPullRequest(aPullRequest()), pullRequest: null, conflicts: { main, now: "2026-01-01T00:00:00Z", implementJobUnderWay: null, pullRequests: candidates } };
 }
 
 const MAIN_PUSHED: LoopEvent = { kind: "main-pushed", head: MAIN };
@@ -155,7 +155,7 @@ describe("main moving under a conflicting agent PR at the Merge gate", () => {
   });
 
   it("is the scheduled tick's to catch too, so a PR the push missed is acted on within the hour", () => {
-    const plan = planFor(TICK, tickSnapshot({ conflicts: { main: MAIN, now: "2026-01-01T00:00:00Z", pullRequests: [{ pullRequest: atMergeGate(), mergeable: false }] } }), kitConfig());
+    const plan = planFor(TICK, tickSnapshot({ conflicts: { main: MAIN, now: "2026-01-01T00:00:00Z", implementJobUnderWay: null, pullRequests: [{ pullRequest: atMergeGate(), mergeable: false }] } }), kitConfig());
 
     expect(rebasesIn(plan)).toEqual([expect.objectContaining({ pullRequest: 50, onto: MAIN })]);
   });
