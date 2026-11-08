@@ -55,4 +55,6 @@ When the reset time is known, the Kit's scheduled tick closes this issue after t
 - **Every step ticked, with a pull request:** post the closing comment, linking the pull request and saying the issue closes when it merges. Leave the issue open: the merge closes it.
 - **The Operator stops partway:** post a comment saying which steps are done and the step the session stopped at. Leave the issue open and assigned. Running `/fabrik-pair <n>` again picks up from there.
 
+A closed issue keeps its labels, `ready-for-human` included, whether you closed it or its pull request's merge did. That's normal: closed issues keep their state label, so don't remove it.
+
 Closing the issue already makes the Kit check whether its Spec can close and what Dispatch can now release, so do neither yourself.
