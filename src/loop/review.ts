@@ -5,7 +5,7 @@
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
 import { consideredSection } from "./considered.ts";
-import { declineTrigger } from "./declined.ts";
+import { declineTrigger } from "./declineTrigger.ts";
 import { followUpsSection } from "./followUps.ts";
 import { DISPATCH_LABEL, REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";

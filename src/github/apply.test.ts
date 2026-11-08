@@ -14,9 +14,13 @@ const issues = "/repos/acme/shop/issues";
 /**
  * A GitHub that records every REST call. Each existing issue's database id is
  * its number plus 1000; a created issue gets the next number from 100. A
- * comment it posts is comment 9300. An issue's labels are `labelsOn` it, or none.
+ * comment it posts is comment 9300. An issue's labels are `labelsOn` it, or
+ * none, and each was added at the time `addedAt` it gives, on one page of events.
  */
-function fakeGitHub(labelsOn: Readonly<Record<number, readonly string[]>> = {}) {
+function fakeGitHub(
+  labelsOn: Readonly<Record<number, readonly string[]>> = {},
+  addedAt: Readonly<Record<number, Readonly<Record<string, string>>>> = {},
+) {
   const calls: { method: string; path: string; body: unknown }[] = [];
   let next = 100;
   return {
@@ -29,6 +33,11 @@ function fakeGitHub(labelsOn: Readonly<Record<number, readonly string[]>> = {}) 
       }
       const labelled = new RegExp(`^${issues}/(\\d+)/labels\\?`).exec(path);
       if (method === "GET" && labelled !== null) return (labelsOn[Number(labelled[1])] ?? []).map((name) => ({ name }));
+      const events = new RegExp(`^${issues}/(\\d+)/events\\?per_page=100&page=(\\d+)$`).exec(path);
+      if (method === "GET" && events !== null) {
+        if (events[2] !== "1") return [];
+        return Object.entries(addedAt[Number(events[1])] ?? {}).map(([name, at]) => ({ event: "labeled", label: { name }, created_at: at }));
+      }
       const existing = new RegExp(`^${issues}/(\\d+)$`).exec(path);
       if (method === "GET" && existing !== null) return { number: Number(existing[1]), id: Number(existing[1]) + 1000 };
       if (method === "POST" && path.endsWith("/comments")) return { id: 9300, html_url: "https://github.com/acme/shop/issues/7#issuecomment-9300" };
@@ -93,15 +102,35 @@ describe("Applying a trigger label the issue already carries (#417)", () => {
   const changes = (calls: { method: string; path: string; body: unknown }[]) =>
     calls.filter(({ method }) => method !== "GET").map(({ method, path, body }) => [method, path, body]);
 
-  it("takes it off and puts it back on, so GitHub fires the labeled event that starts the run", async () => {
-    const github = fakeGitHub({ 7: ["ready-for-agent", "agent:implement"] });
+  const run = { id: 9001, at: "2026-11-09T12:00:00.000Z" };
+  const addImplement: Plan = { kind: "act", actions: [{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }] };
 
-    const applied = await applyPlan(github, repo, { kind: "act", actions: [{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }] });
+  it("takes off one added long enough ago that its run would have claimed it, and puts it back on, so GitHub fires the labeled event that starts the run", async () => {
+    const github = fakeGitHub({ 7: ["ready-for-agent", "agent:implement"] }, { 7: { "agent:implement": "2026-11-09T11:49:00Z" } });
+
+    const applied = await applyPlan(github, repo, addImplement, null, run);
 
     expect(changes(github.calls)).toEqual([
       ["DELETE", `${issues}/7/labels/agent%3Aimplement`, undefined],
       ["POST", `${issues}/7/labels`, { labels: ["agent:implement"] }],
     ]);
+    expect(applied.readded).toEqual([{ issue: 7, label: "agent:implement" }]);
+  });
+
+  it("leaves one added in the last 10 minutes on, since its run is still starting and a second event would start a second run", async () => {
+    const github = fakeGitHub({ 7: ["ready-for-agent", "agent:implement"] }, { 7: { "agent:implement": "2026-11-09T11:52:00Z" } });
+
+    const applied = await applyPlan(github, repo, addImplement, null, run);
+
+    expect(changes(github.calls)).toEqual([["POST", `${issues}/7/labels`, { labels: ["agent:implement"] }]]);
+    expect(applied.readded).toEqual([]);
+  });
+
+  it("re-adds one whose labeled event GitHub no longer lists, as stale", async () => {
+    const github = fakeGitHub({ 7: ["ready-for-agent", "agent:implement"] });
+
+    const applied = await applyPlan(github, repo, addImplement, null, run);
+
     expect(applied.readded).toEqual([{ issue: 7, label: "agent:implement" }]);
   });
 

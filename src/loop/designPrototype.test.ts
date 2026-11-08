@@ -202,9 +202,15 @@ describe("agent:design on an issue whose Design session has a pending prototype 
     });
   });
 
-  it("only takes agent:design off an issue that has left its Design session, starting nothing", () => {
+  it("takes agent:design off an issue that has left its Design session, starting nothing, and says why (#417)", () => {
     const plan = planFor(added, issue({ labels: ["ready-for-agent", "agent:design"] }), kitConfig({ ui: UI, roles }));
 
-    expect(plan).toEqual({ kind: "act", actions: [{ kind: "remove-label", issue: 7, label: "agent:design" }] });
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:design" },
+        { kind: "comment", issue: 7, body: "agent:design came off and nothing started: #7 no longer has needs-design." },
+      ],
+    });
   });
 });

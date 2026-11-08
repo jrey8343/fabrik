@@ -3,7 +3,7 @@
 import { evidenceSection, isUi, withoutEvidence } from "../evidence/uiEvidence.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { consideredSection } from "./considered.ts";
-import { declineTrigger } from "./declined.ts";
+import { declineTrigger } from "./declineTrigger.ts";
 import { type ImplementerAnswers, parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";

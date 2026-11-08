@@ -273,14 +273,17 @@ describe("agent:design", () => {
   });
 
   it.each([
-    ["is closed", { open: false }],
-    ["no longer has needs-design", { labels: ["ready-for-agent", "agent:design"] }],
-  ])("only comes off an issue that %s", (_, overrides) => {
+    ["is closed", { open: false }, "#7 is closed"],
+    ["no longer has needs-design", { labels: ["ready-for-agent", "agent:design"] }, "#7 no longer has needs-design"],
+  ])("comes off an issue that %s, starting nothing, and one comment says why (#417)", (_, overrides, reason) => {
     const issue = anIssue({ number: 7, labels: ["needs-design", "agent:design"], ...overrides });
 
     expect(planFor(added, snapshotOf(issue), kitConfig())).toEqual({
       kind: "act",
-      actions: [{ kind: "remove-label", issue: 7, label: "agent:design" }],
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:design" },
+        { kind: "comment", issue: 7, body: `agent:design came off and nothing started: ${reason}.` },
+      ],
     });
   });
 });

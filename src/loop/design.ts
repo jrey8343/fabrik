@@ -4,6 +4,7 @@
 import type { SentBack } from "./backToDesign.ts";
 import { withCarriedLines } from "./carriedLines.ts";
 import { consideredSection } from "./considered.ts";
+import { declineTrigger } from "./declineTrigger.ts";
 import {
   type DesignAgentBrief,
   dependencyOrder,
@@ -87,7 +88,9 @@ const CHECK_DESIGN_QUEUE: Action = { kind: "check-design-queue" };
  */
 export function startQueuedSession(issueNumber: number, { issue }: IssueContext, config: KitConfig): Plan {
   const removeLabel: Action = { kind: "remove-label", issue: issueNumber, label: DESIGN_LABEL };
-  if (whileInSession(issueNumber, issue) !== null) return { kind: "act", actions: [removeLabel] };
+  // Out of session, the label comes off and one comment says why nothing started (#417).
+  const outOfSession = whileInSession(issueNumber, issue);
+  if (outOfSession?.kind === "nothing") return { kind: "act", actions: declineTrigger(issueNumber, DESIGN_LABEL, outOfSession.reason) };
   const pending = whyNoPrototype(config) === null ? issue.pendingPrototype : null;
   if (pending !== null && !pending.started) {
     const started: Action = { kind: "mark-prototype-request", issue: issueNumber, comment: pending.comment, started: true };
