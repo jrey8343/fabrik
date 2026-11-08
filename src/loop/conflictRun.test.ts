@@ -52,7 +52,7 @@ class Thread {
   }
 
   conflictsSnapshot(main: string): Snapshot {
-    return { ...snapshotOfPullRequest(this.pullRequest()), pullRequest: null, conflicts: { main, now: "2026-01-01T00:00:00Z", pullRequests: [{ pullRequest: this.pullRequest(), mergeable: false }] } };
+    return { ...snapshotOfPullRequest(this.pullRequest()), pullRequest: null, conflicts: { main, now: "2026-01-01T00:00:00Z", implementRunUnderWay: null, pullRequests: [{ pullRequest: this.pullRequest(), mergeable: false }] } };
   }
 
   /** Applies these actions to the thread as the adapter would. */

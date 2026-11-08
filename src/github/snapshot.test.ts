@@ -2242,7 +2242,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "scheduled-tick", now: "2026-11-07T10:17:00Z" }, null, APP_LOGIN);
 
-    expect(snapshot.conflicts).toEqual({ main: "d".repeat(40), now: "2026-11-07T10:17:00Z", pullRequests: [] });
+    expect(snapshot.conflicts).toEqual({ main: "d".repeat(40), now: "2026-11-07T10:17:00Z", implementRunUnderWay: null, pullRequests: [] });
   });
 
   it("reads again while GitHub is still working out whether a PR conflicts, until it knows", async () => {
@@ -2262,6 +2262,40 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     expect(snapshot.conflicts?.pullRequests[0]?.mergeable).toBeNull();
     expect(reads()).toBe(MERGEABLE_READS);
     expect(waits).toHaveLength(MERGEABLE_READS - 1);
+  });
+
+  // #387: what the conflict check weighs before restarting a stalled Request-changes run on a draft.
+  it.each([
+    ["running", [{ name: "fabrik / Implement", status: "in_progress" }]],
+    ["queued behind its concurrency group", [{ name: "fabrik / Implement", status: "queued" }]],
+    ["done, with its push job still to land it", [{ name: "fabrik / Implement", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }]],
+  ])("reads an Implement job under way when one is %s", async (_, jobs) => {
+    const { github } = githubReading([[]]);
+    const actions = actionsWith([{ id: 1, status: "in_progress", jobs }]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.conflicts?.implementRunUnderWay).toBe(true);
+  });
+
+  it("reads no Implement job under way when the only unfinished runs skipped theirs, and finished runs don't count", async () => {
+    const { github } = githubReading([[]]);
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "completed", conclusion: "skipped" }, { name: "fabrik / Push", status: "in_progress" }] },
+      { id: 2, status: "completed", jobs: [{ name: "fabrik / Implement", status: "in_progress" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "scheduled-tick", now: "2026-11-07T10:17:00Z" }, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.conflicts?.implementRunUnderWay).toBe(false);
+  });
+
+  it("reads whether an Implement job is under way as unknown without a token that can read workflow runs", async () => {
+    const { github } = githubReading([[]]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN);
+
+    expect(snapshot.conflicts?.implementRunUnderWay).toBeNull();
   });
 
   it("isn't gathered for any other event", async () => {

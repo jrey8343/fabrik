@@ -90,7 +90,10 @@ jobs:
       group: fabrik-tick
       cancel-in-progress: false
       queue: max
-    permissions: {}
+    permissions:
+      # Only for the conflict check, which reads whether an Implement job is under way before restarting a stalled
+      # Request-changes run (#387); the Fabrik App has no Actions permission. The caller's tick job grants it.
+      actions: read
     outputs:
       # "true" when the plan asked for a Design queue check.
       design-queue: ${{ steps.loop.outputs.design-queue }}
@@ -123,12 +126,12 @@ jobs:
           find-store: "true"
           # The replay step's checkout of the store, empty when it made none.
           store-dir: ${{ steps.replay-store.outputs.store-dir }}
+          actions-token: ${{ github.token }}
 
   # The hourly Design queue check (#147), which catches a slot freed by an
   # event the Loop doesn't watch, such as needs-design coming off by hand.
-  # The caller grants this workflow no Actions permission, so it passes no
-  # actions token and the check reads first turns in progress from the issues
-  # (src/github/snapshot.ts).
+  # It asks for no Actions permission and passes no actions token, so the check
+  # reads first turns in progress from the issues (src/github/snapshot.ts).
   design-queue:
     name: Design queue
     needs: [kit, tick]

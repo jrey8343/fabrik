@@ -1647,7 +1647,10 @@ jobs:
       group: ${{ github.event_name == 'push' && 'fabrik-tick' || format('fabrik-push-{0}', github.run_id) }}
       cancel-in-progress: false
       queue: max
-    permissions: {}
+    permissions:
+      # Only for a push to the default branch's conflict check, which reads whether an Implement job is under way
+      # before restarting a stalled Request-changes run (#387); the Fabrik App has no Actions permission.
+      actions: read
     outputs:
       # "true" when the plan asked for a Dispatch check.
       dispatch: ${{ steps.loop.outputs.dispatch }}
@@ -1695,6 +1698,7 @@ jobs:
         uses: ./kit/.github/actions/run-loop
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          actions-token: ${{ github.event_name == 'push' && github.token || '' }}
 
       # A UI PR's preview deployment (#153): when the plan pushed a UI PR whose
       # Kit config declares preview.url, polls the URL it filled in, for a few

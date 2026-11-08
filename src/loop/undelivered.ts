@@ -65,8 +65,9 @@ export function actOnUndelivered(
   now: string,
   held: number | null = null,
   runMinutes: number = UNDELIVERED_GRACE_MINUTES,
+  implementRunUnderWay: boolean | null = null,
 ): Action[] | null {
-  const stalled = stalledRequestChangesRun(pullRequest, now);
+  const stalled = stalledRequestChangesRun(pullRequest, now, implementRunUnderWay);
   if (stalled !== null) return stalled;
   if (!actsOn(pullRequest)) return null;
   const unnoted = unnotedChangesRequests(pullRequest, operator);
@@ -111,17 +112,25 @@ export function actOnUndelivered(
 }
 
 /**
- * A Request-changes run in flight on a PR still out of draft, or null: the
- * Kit noted it, but the PR was never turned to draft and the run never
- * started, as when what followed the note failed (#341). Only that leaves one
- * so: the PR leaving draft ends the run in flight. A note younger than the
- * grace period is left alone, since the job that posted it turns the PR to
- * draft moments later. The check starts it, with a fresh agent:implement,
- * which turns the PR to draft first.
+ * A Request-changes run in flight that no job is working, or null. The check
+ * starts it with a fresh agent:implement, which turns a PR still out of draft
+ * to draft first. A note younger than the grace period is left alone either
+ * way. It is stalled when:
+ * - The PR is still out of draft: the Kit noted the run, but what followed the
+ *   note failed, so the PR was never turned to draft and the run never started
+ *   (#341). Only that leaves one so: the PR leaving draft ends the run in
+ *   flight. The job that posted the note turns the PR to draft moments later.
+ * - The PR is a draft and no Implement job is under way anywhere in the repo
+ *   (#387): the claim noted the run with no Implement job behind it, as when
+ *   the Operator re-ran only a claim that had failed after its Implement job
+ *   ran. A run that is genuinely working has its Implement job, or the push
+ *   job that lands it, under way, so the check leaves it alone. So does a
+ *   check that couldn't read the jobs.
  */
-function stalledRequestChangesRun(pullRequest: PullRequestSnapshot, now: string): Action[] | null {
+function stalledRequestChangesRun(pullRequest: PullRequestSnapshot, now: string, implementRunUnderWay: boolean | null): Action[] | null {
   const { ticket, requestChangesRunSince: since } = pullRequest;
-  if (!pullRequest.isAgent || ticket === null || !pullRequest.open || pullRequest.draft) return null;
+  if (!pullRequest.isAgent || ticket === null || !pullRequest.open) return null;
+  if (pullRequest.draft && implementRunUnderWay !== false) return null;
   if (pullRequest.requestChangesRunInFlight === null || since === null) return null;
   if (Date.parse(now) - Date.parse(since) < UNDELIVERED_GRACE_MINUTES * 60_000) return null;
   return [{ kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] }];

@@ -835,6 +835,13 @@ export interface ConflictSnapshot {
   readonly main: string | null;
   /** When the adapter read it, as an ISO 8601 time: what an undelivered Request changes' grace period is measured to (#341). */
   readonly now: string;
+  /**
+   * Whether an Implement job is under way anywhere in the repo, read from the Actions API: one in a workflow run
+   * not yet finished, waiting, running, or done with its push job still to land it, and not skipped. Null when the
+   * check had no token that can read workflow runs. A stalled Request-changes run on a draft is restarted only when
+   * it reads false (#387).
+   */
+  readonly implementRunUnderWay: boolean | null;
   /** Every open agent PR, with whether GitHub says it merges cleanly into the default branch. */
   readonly pullRequests: readonly ConflictCandidate[];
 }

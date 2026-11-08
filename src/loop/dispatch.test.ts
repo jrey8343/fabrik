@@ -179,7 +179,7 @@ describe("What triggers a Dispatch check", () => {
   });
 
   it("a change to the Kit config, so raising max_in_flight from 0 resumes Dispatch straight away", () => {
-    const plan = planFor({ kind: "kit-config-changed", head: HEAD_SHA }, repoSnapshot({ conflicts: { main: HEAD_SHA, now: "2026-01-01T00:00:00Z", pullRequests: [] } }), kitConfig());
+    const plan = planFor({ kind: "kit-config-changed", head: HEAD_SHA }, repoSnapshot({ conflicts: { main: HEAD_SHA, now: "2026-01-01T00:00:00Z", implementRunUnderWay: null, pullRequests: [] } }), kitConfig());
 
     expect(plan.kind === "act" && plan.actions).toContainEqual({ kind: "check-dispatch" });
   });
