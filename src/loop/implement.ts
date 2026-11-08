@@ -263,7 +263,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   // Merging main in or rebasing onto it, to fix a conflict, is a change even with none of the run's own.
   if (changes.net.length === 0 && changes.updatedFromMain !== true && mainMerge === undefined) {
     // A Request-changes run's empty diff is no Verdict, so it never costs a Retry (#388).
-    if (requestChanges) return { kind: "act", actions: requestChangesRunEmpty(pullRequest, fixes, branch, operator, recorded) };
+    if (requestChanges) return { kind: "act", actions: requestChangesRunEmpty(pullRequest, fixes, branch, operator, recorded, parsed.output.summary) };
     return {
       kind: "act",
       actions: verdictActions(
@@ -275,7 +275,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           // The run's summary says why, if it gave a reason; the Verdict links the run itself (#429).
           findings: [
             `The Implementer's retry on \`${branch}\` committed no change, so there was nothing to review.`,
-            ...emptyDiffSummary(parsed.output.summary),
+            ...implementerSaid(parsed.output.summary),
           ].join("\n"),
         },
         operator,
@@ -333,6 +333,7 @@ function requestChangesRunEmpty(
   branch: string,
   operator: string,
   recorded: AnswerLines | null,
+  summary: string,
 ): Action[] {
   const { number, headSha } = pullRequest;
   const started = fixes.headSha.slice(0, 7);
@@ -346,7 +347,8 @@ function requestChangesRunEmpty(
       : `@${operator} The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}, so your requested changes aren't built, and it's yours from here. No retry was used.`,
     "",
     ...(recorded === null ? [] : [...recorded.lines, ""]),
-    `[The run](${fixes.runUrl})`,
+    // Why it built nothing, if it said, so an Operator handed the PR back knows (#429).
+    ...implementerSaidAndRun(summary, fixes.runUrl).slice(1),
   ].join("\n");
   const comment: Action = { kind: "comment", issue: number, body };
   return moved
@@ -618,7 +620,7 @@ function refuse(issueNumber: number, paths: readonly string[], operator: string,
  */
 function emptyDiff(issueNumber: number, issue: IssueSnapshot, summary: string, runUrl: string): Plan {
   const flaw = issue.emptyDiffs + 1;
-  const said = emptyDiffSaid(summary, runUrl);
+  const said = implementerSaidAndRun(summary, runUrl);
   if (flaw > MAX_RETRIES) {
     return {
       kind: "act",
@@ -657,16 +659,18 @@ function emptyDiff(issueNumber: number, issue: IssueSnapshot, summary: string, r
   };
 }
 
-/** The heading an empty diff's comment sets the run's summary out under, which src/agent/design.ts reads back. */
-export const EMPTY_DIFF_SUMMARY_HEADING = "What the Implementer said";
-
-/** The run's summary, which is agent text and so mentions nobody, and the link to the run. */
-function emptyDiffSaid(summary: string, runUrl: string): string[] {
-  return [...emptyDiffSummary(summary), "", `[The run](${runUrl})`];
+/**
+ * What a run that committed nothing said, set out for the comment on it: its
+ * summary, which is agent text and so mentions nobody, under a bold label
+ * rather than a heading, so the summary's own headings never sit under it.
+ */
+function implementerSaid(summary: string): string[] {
+  return ["", "**What the Implementer said:**", "", withoutMentions(summary).trim()];
 }
 
-function emptyDiffSummary(summary: string): string[] {
-  return ["", `### ${EMPTY_DIFF_SUMMARY_HEADING}`, "", withoutMentions(summary).trim()];
+/** implementerSaid, then the link to the run, for a comment that links it nowhere else. */
+function implementerSaidAndRun(summary: string, runUrl: string): string[] {
+  return [...implementerSaid(summary), "", `[The run](${runUrl})`];
 }
 
 function ordinal(n: number): string {

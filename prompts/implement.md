@@ -68,7 +68,7 @@ The Kit refuses, and hands to the Operator, any branch that changes a file that 
 
 If the Ticket can't be built without changing one of these, make no commits, and in your summary name the file and say why the Ticket needs it.
 
-You hold no GitHub credential. Don't call `gh` or the GitHub API: the Kit pushes your branch and opens the draft PR after you finish, from your commits and the output below. A run that commits nothing counts as a failed attempt, so commit what you built. When you can't build the Ticket at all, as when it needs one of the files above changed, commit nothing and say why in your summary: the Kit posts it on the Ticket with the failed attempt, and the Design session a third failed attempt starts is given it.
+You hold no GitHub credential. Don't call `gh` or the GitHub API: the Kit pushes your branch and opens the draft PR after you finish, from your commits and the output below. A run that commits nothing counts as a failed attempt, so commit what you built. When you can't build the Ticket at all, as when it needs one of the files above changed, commit nothing and say why in your summary: the Kit posts it on the Ticket with the Execution flaw, and the Design session a third Execution flaw starts is given it.
 
 ## Your output
 
