@@ -125,28 +125,51 @@ export async function allPages<T>(
   }
 }
 
+/**
+ * Whether a second try of a call that failed with `error` could succeed
+ * without doubling a change (#421). A read (`write` false) retries after any
+ * 5xx, a call GitHub never answered, or a secondary rate limit; a write only
+ * after a 502, 503 or 504, which GitHub answers when the call never reached
+ * it, or a secondary rate limit, which refuses it unmade. A primary rate
+ * limit, with no requests left until it resets, retries neither.
+ */
+function worthRetrying(error: GitHubError, write: boolean): boolean {
+  const secondaryLimit = refusalOf(error) === "rate-limited" && error.rateLimitRemaining !== "0";
+  if (secondaryLimit) return true;
+  if (write) return error.status === 502 || error.status === 503 || error.status === 504;
+  return error.status === 0 || error.status >= 500;
+}
+
+/** The longest a retry waits on GitHub's `retry-after`, so a job's timeout never runs out waiting. */
+const LONGEST_RETRY_WAIT_MS = 60_000;
+
 /** A GitHub API client authenticated as the Fabrik App. */
 export class GitHub {
   readonly #token: string;
   readonly #apiUrl: string;
+  readonly #retryDelaysMs: readonly number[];
 
-  constructor(token: string, apiUrl = "https://api.github.com") {
+  /**
+   * `retryDelaysMs` is how long to wait before each retry of a call worth
+   * retrying, one retry to each: by default twice, after 1 and 4 seconds,
+   * unless GitHub's `retry-after` asks for longer.
+   */
+  constructor(token: string, apiUrl = "https://api.github.com", options: { readonly retryDelaysMs?: readonly number[] } = {}) {
     this.#token = token;
     this.#apiUrl = apiUrl;
+    this.#retryDelaysMs = options.retryDelaysMs ?? [1_000, 4_000];
   }
 
   /** A REST call; with `allowNotFound`, a 404 (say, removing a label already gone) returns null. */
   async rest(method: string, path: string, body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<unknown> {
-    const request = `${method} ${path}`;
-    const response = await fetched(request, `${this.#apiUrl}${path}`, {
-      method,
-      headers: this.#headers(),
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    // A GraphQL query is a read, though it's POSTed; only a mutation changes anything.
+    const write = path === "/graphql" ? isMutation(body) : !["GET", "HEAD"].includes(method.toUpperCase());
+    const response = await this.#answered(`${method} ${path}`, `${this.#apiUrl}${path}`, {
+      write,
+      notFoundIsNull: options.allowNotFound === true,
+      init: { method, headers: this.#headers(), ...(body === undefined ? {} : { body: JSON.stringify(body) }) },
     });
-    if (response.status === 404 && options.allowNotFound === true) return null;
-    if (!response.ok) {
-      throw await failedResponse(request, response);
-    }
+    if (response === null) return null;
     return response.status === 204 ? null : response.json();
   }
 
@@ -168,13 +191,37 @@ export class GitHub {
   /** A file's text from the repo at `ref`, or null if it doesn't exist there. Reads only; never runs it. */
   async fileText(repo: Repo, path: string, ref: string): Promise<string | null> {
     const url = `${this.#apiUrl}/repos/${repo.owner}/${repo.name}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`;
-    const request = `GET ${path}@${ref}`;
-    const response = await fetched(request, url, { headers: { ...this.#headers(), accept: "application/vnd.github.raw+json" } });
-    if (response.status === 404) return null;
-    if (!response.ok) {
-      throw await failedResponse(request, response);
+    const response = await this.#answered(`GET ${path}@${ref}`, url, {
+      write: false,
+      notFoundIsNull: true,
+      init: { headers: { ...this.#headers(), accept: "application/vnd.github.raw+json" } },
+    });
+    return response === null ? null : response.text();
+  }
+
+  /**
+   * GitHub's answer to a call, once it answers with success, trying a
+   * failure worth it again; null for a 404 when `notFoundIsNull`. `write`
+   * says whether the call changes anything (see worthRetrying).
+   */
+  async #answered(
+    request: string,
+    url: string,
+    call: { readonly write: boolean; readonly notFoundIsNull: boolean; readonly init: RequestInit },
+  ): Promise<Response | null> {
+    const { write, notFoundIsNull, init } = call;
+    for (let tries = 0; ; tries++) {
+      // A call GitHub never answered comes back as a GitHubError with status 0.
+      const response = await fetched(request, url, init).catch((error: unknown) => error);
+      if (response instanceof Response) {
+        if (response.status === 404 && notFoundIsNull) return null;
+        if (response.ok) return response;
+      }
+      const error = response instanceof Response ? await failedResponse(request, response) : response;
+      const delay = this.#retryDelaysMs[tries];
+      if (!(error instanceof GitHubError) || delay === undefined || !worthRetrying(error, write)) throw error;
+      await sleep(Math.max(delay, response instanceof Response ? retryAfterMs(response) : 0));
     }
-    return response.text();
   }
 
   #headers(): Record<string, string> {
@@ -185,6 +232,22 @@ export class GitHub {
       "x-github-api-version": "2022-11-28",
     };
   }
+}
+
+/** Whether a GraphQL call's body is a mutation, which changes something, rather than a query. */
+function isMutation(body: unknown): boolean {
+  const query = typeof body === "object" && body !== null ? (body as { query?: unknown }).query : undefined;
+  return typeof query === "string" && /^\s*mutation\b/.test(query);
+}
+
+/** How long GitHub's `retry-after` header asks a retry to wait, at most a minute; 0 when it gives none. */
+function retryAfterMs(response: Response): number {
+  const seconds = Number(response.headers.get("retry-after"));
+  return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1_000, LONGEST_RETRY_WAIT_MS) : 0;
+}
+
+function sleep(ms: number): Promise<void> {
+  return ms <= 0 ? Promise.resolve() : new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** One page of a GraphQL connection, as a query selecting its `pageInfo { hasNextPage endCursor }` and `nodes` gets it. */

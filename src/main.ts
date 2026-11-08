@@ -11,6 +11,7 @@ import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { prototypeBranchFor } from "./loop/designOutput.ts";
 import { applyPlan, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { GitHub, type Repo } from "./github/client.ts";
+import { describePlan } from "./github/describePlan.ts";
 import {
   agentFailureEventFrom,
   agentRunEventFrom,
@@ -24,13 +25,14 @@ import {
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
+import { claimLanding, type Landing, type LandingFailure, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
 import { readReplayRunEnded } from "./kit/replayRecord.ts";
 import { readStoreReplayGates, readStoreRunRecords, readStoreScoreFiles } from "./kit/storeCheckout.ts";
 import type { ReplayStore } from "./github/replaySlice.ts";
 import { planFor } from "./loop/rules.ts";
-import type { Action, KitConfig, LoopEvent, Plan } from "./loop/types.ts";
+import type { KitConfig, LoopEvent } from "./loop/types.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -38,97 +40,6 @@ function required(name: string): string {
     throw new Error(`${name} is not set`);
   }
   return value;
-}
-
-function describe(plan: Plan): string {
-  switch (plan.kind) {
-    case "nothing":
-      return `Nothing to do: ${plan.reason}`;
-    case "fail":
-      return `The run failed (${plan.failure} failure): ${plan.reason}`;
-    case "act":
-      // Notes, such as what a Retro's landing dropped, change nothing on GitHub, so they follow the actions, set apart.
-      return [...plan.actions.map(describeAction), ...(plan.notes === undefined ? [] : ["", ...plan.notes.map((note) => `- ${note}`)])].join("\n");
-  }
-}
-
-function describeAction(action: Action): string {
-  switch (action.kind) {
-    case "add-labels":
-      return `- add labels on #${action.issue}: ${action.labels.join(", ") || "(none new)"}`;
-    case "remove-label":
-      return `- remove label on #${action.issue}: ${action.label}`;
-    case "comment":
-    case "comment-linking":
-      return `- comment on #${action.issue}`;
-    case "close-pull-request":
-      return `- close #${action.pullRequest} unmerged, keeping its branch`;
-    case "assign":
-      return `- assign #${action.issue} to ${action.assignee}`;
-    case "close":
-      return `- close #${action.issue} as ${action.reason.replace("_", " ")}`;
-    case "open-issue":
-      return `- open the issue "${action.title}"${action.assignees.length > 0 ? `, assigned to ${action.assignees.join(", ")}` : ""}`;
-    case "edit-issue-body":
-      return `- rewrite the body of #${action.issue}`;
-    case "append-to-decisions-so-far":
-      return `- append a line to the Decisions so far of Map #${action.issue}`;
-    case "create-issue":
-      return [
-        `- create "${action.title}" (${action.labels.join(", ")})`,
-        action.assignees === undefined || action.assignees.length === 0 ? "" : `, assigned to ${action.assignees.join(", ")}`,
-        action.parent === null
-          ? ""
-          : `, a sub-issue of ${typeof action.parent === "number" ? `#${action.parent}` : action.parent.created}`,
-        action.blockedBy.length === 0
-          ? ""
-          : `, blocked by ${action.blockedBy.map((b) => (typeof b === "number" ? `#${b}` : b.created)).join(", ")}`,
-      ].join("");
-    case "add-blocked-by":
-      return `- make #${action.issue} blocked by ${action.blocker.created}`;
-    case "close-as-superseded":
-      return `- close #${action.issue} as superseded`;
-    case "start-agent-run":
-      return `- a ${action.role} run on #${action.issue}${action.pullRequest === undefined ? "" : `, ${action.conflict !== undefined ? "resolving its conflict with main on" : action.requestChanges === undefined ? "retrying" : "with the Operator's requested changes on"} #${action.pullRequest}`} (${action.model}), which the Kit job routes to its agent job`;
-    case "start-replay":
-      return `- replay #${action.ticket.ticket} of replay #${action.issue}, both arms, which the Kit job routes to its replay jobs`;
-    case "mark-replay-started":
-      return `- mark #${action.ticket} in progress on replay #${action.issue} in this run`;
-    case "release-replay-ticket":
-      return `- end run ${action.run} of #${action.ticket} on replay #${action.issue}, which never landed, as an Infrastructure failure`;
-    case "hold-agent-run":
-      return `- hold the ${action.role} run on #${action.issue}${action.until === null ? "" : ` until ${action.until}`}, starting no agent job`;
-    case "drop-held-run":
-      return `- drop the held ${action.role} run on #${action.issue} rather than resume it: ${action.reason}`;
-    case "check-dispatch":
-      return "- run a Dispatch check";
-    case "check-design-queue":
-      return "- run a Design queue check";
-    case "link-preview":
-      return `- link the preview deployment of ${action.pullRequest === null ? "the PR it opens" : `#${action.pullRequest}`} once it answers, or say it never answered`;
-    case "link-prototype-preview":
-      return `- link each variant's preview in #${action.issue}'s prototype round once it answers, or say it never answered`;
-    case "push-branch":
-      return `- push ${action.branch}`;
-    case "rebase-onto-main":
-      return `- rebase ${action.branch} of #${action.pullRequest} onto main at ${action.onto.slice(0, 7)}, with no agent: pushed with a lease if clean, else a conflict-only run starts`;
-    case "push-prototype-branch":
-      return `- push ${prototypeBranchFor(action.issue)}, only as a fast-forward`;
-    case "mark-prototype-request":
-      return `- mark #${action.issue}'s prototype request ${action.started ? "as its prototype turn started" : "as waiting for its prototype turn again"}`;
-    case "open-pull-request":
-      return `- open a draft PR from ${action.head} to ${action.base} that closes #${action.issue}`;
-    case "convert-to-draft":
-      return `- put #${action.pullRequest} back in draft`;
-    case "mark-ready-for-review":
-      return `- take #${action.pullRequest} out of draft`;
-    case "request-review":
-      return `- request ${action.reviewer}'s review on #${action.pullRequest}`;
-    case "react":
-      return action.on.kind === "conversation"
-        ? `- react ${action.content} to comment ${action.on.comment} on #${action.pullRequest}`
-        : `- react ${action.content} to each inline comment of review ${action.on.review} on #${action.pullRequest}`;
-  }
 }
 
 type EventSource = { event: LoopEvent | null; source: string; branch: AgentBranchGit | null };
@@ -371,11 +282,70 @@ function storeCheckoutAt(dir: string | undefined, config: KitConfig): ReplayStor
   };
 }
 
+/** Whether this job has written its step summary's heading yet. */
+let reported = false;
+/** Whether this job has said its landing failed, which it says once. */
+let failureReported = false;
+/** The Operator, once the Kit config naming them has loaded, whom a landing failure's comment @-mentions. */
+let operator: string | null = null;
+
+/** Writes `text` to the log and the step summary, under one heading however many times a job reports. */
 async function report(text: string): Promise<void> {
   console.log(text);
   const summary = process.env["GITHUB_STEP_SUMMARY"];
   if (summary !== undefined && summary !== "") {
-    await appendFile(summary, `### Fabrik Loop\n\n${text}\n`);
+    await appendFile(summary, `${reported ? "" : "### Fabrik Loop\n\n"}${text}\n\n`);
+    reported = true;
+  }
+}
+
+/**
+ * What this job lands, for the push job (FABRIK_NEEDS) and the claim job
+ * (FABRIK_CLAIM), read from the Actions event and the jobs before it alone,
+ * so it's known before any call to GitHub can fail; null for any other job,
+ * or when even that can't be read.
+ */
+async function thisLanding(): Promise<Landing | null> {
+  try {
+    const needsText = process.env["FABRIK_NEEDS"];
+    const claim = process.env["FABRIK_CLAIM"] === "true";
+    if ((needsText === undefined || needsText === "") && !claim) return null;
+    const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as {
+      issue?: { number?: unknown };
+      pull_request?: { number?: unknown };
+    };
+    const issue = typeof payload.issue?.number === "number" ? payload.issue.number : null;
+    // A claim a review started is on its PR, which the event names in place of an issue.
+    const pullRequest = typeof payload.pull_request?.number === "number" ? payload.pull_request.number : null;
+    if (claim) return claimLanding(issue ?? pullRequest, thisRunUrl());
+    // The comment's id only tells a Design reply's run from another; it never changes where a failure is said.
+    return pushLanding(pushJobInput(JSON.parse(needsText!) as Needs, issue), thisRunUrl());
+  } catch (error) {
+    console.log(`::warning title=Landing unknown::${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+/**
+ * Says a push job's or claim job's landing failed (#421): the step summary,
+ * an `::error` annotation and one comment on the run's issue or PR, since
+ * Setup turns Actions notifications off and a red job alone tells the
+ * Operator nothing. A comment GitHub won't take is only warned of.
+ */
+async function reportLandingFailure(landing: Landing, failure: LandingFailure): Promise<void> {
+  // Once only: a fail plan's report that itself throws reaches main's catch too.
+  if (failureReported) return;
+  failureReported = true;
+  const { summary, comment } = landingFailureReport(landing, failure, operator);
+  await report(summary);
+  console.log(`::error title=The ${landing.job} job failed::${summary.split("\n")[0]}`);
+  if (comment === null) return;
+  try {
+    const repo = required("GITHUB_REPOSITORY");
+    const github = new GitHub(required("FABRIK_APP_TOKEN"), process.env["GITHUB_API_URL"]);
+    await github.rest("POST", `/repos/${repo}/issues/${comment.issue}/comments`, { body: comment.body });
+  } catch (error) {
+    console.log(`::warning title=Failure not commented::#${comment.issue}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -396,7 +366,7 @@ async function loadKit(github: GitHub, repo: Repo): Promise<KitConfig | null> {
   return check.config;
 }
 
-async function main(): Promise<void> {
+async function main(landing: Landing | null): Promise<void> {
   const [owner, name] = required("GITHUB_REPOSITORY").split("/");
   if (owner === undefined || name === undefined) {
     throw new Error("GITHUB_REPOSITORY is not owner/name");
@@ -411,6 +381,7 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  operator = config.operator;
 
   const { event, source, branch } = await loopEvent(repo, config);
   if (event === null) {
@@ -470,14 +441,19 @@ async function main(): Promise<void> {
   const readdedLines = readded.map(
     ({ issue, label }) => `- ${label} was already on #${issue}, so it was taken off and added again, which starts its run`,
   );
-  await report([describe(plan), ...(readdedLines.length === 0 ? [] : ["", ...readdedLines])].join("\n"));
+  await report([describePlan(plan), ...(readdedLines.length === 0 ? [] : ["", ...readdedLines])].join("\n"));
   if (plan.kind === "fail") {
     console.log(`::error title=Infrastructure failure::${plan.reason}`);
+    if (landing !== null) await reportLandingFailure(landing, plan);
     process.exitCode = 1;
   }
 }
 
-main().catch((error: unknown) => {
+const landing = await thisLanding();
+// A red push or claim job says what it was about to land, whatever stops it.
+if (landing !== null) await report(`The ${landing.job} job is landing ${landing.doing}.`);
+await main(landing).catch(async (error: unknown) => {
   console.error(error instanceof Error ? error.message : error);
+  if (landing !== null) await reportLandingFailure(landing, { kind: "error", error });
   process.exitCode = 1;
 });

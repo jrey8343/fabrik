@@ -5,7 +5,8 @@ import { UI } from "../__fixtures__/uiEvidence.ts";
 import { replayMarksIn } from "../kit/replay.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
-import { applyPlan } from "./apply.ts";
+import { applyPlan, PlanNotApplied } from "./apply.ts";
+import { GitHubError } from "./client.ts";
 import { pendingPrototypeIn } from "./threads.ts";
 
 const repo = { owner: "acme", name: "shop" };
@@ -815,5 +816,32 @@ describe("Applying a plan that rebases an agent PR onto main (#304)", () => {
 
   it("fails rather than guess when the job holds no way to rebase", async () => {
     await expect(applyPlan(fakeGitHub(), repo, plan)).rejects.toThrow(/rebase/);
+  });
+});
+
+// #421 (and #408's Finding 1): a call that fails partway leaves some of the plan on GitHub, and the failure says which.
+describe("Applying a plan when one of its actions fails", () => {
+  it("throws, naming the action that failed, the ones already applied and the ones never applied, with GitHub's failure", async () => {
+    const github = fakeGitHub();
+    const failure = new GitHubError("GitHub PATCH failed: 502", 502, { request: `PATCH ${issues}/7` });
+    const failing = {
+      ...github,
+      async rest(method: string, path: string, body?: unknown): Promise<unknown> {
+        if (method === "PATCH") throw failure;
+        return github.rest(method, path, body);
+      },
+    };
+    const comment = { kind: "comment", issue: 7, body: "Verdict" } as const;
+    const close = { kind: "close", issue: 7, reason: "completed" } as const;
+    const label = { kind: "remove-label", issue: 7, label: "agent:review" } as const;
+
+    const error = await applyPlan(failing, repo, { kind: "act", actions: [comment, close, label] }).then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(PlanNotApplied);
+    expect(error).toMatchObject({ failed: close, applied: [comment], unapplied: [label], cause: failure });
+    expect(github.calls.map((call) => call.method)).toEqual(["POST"]);
   });
 });

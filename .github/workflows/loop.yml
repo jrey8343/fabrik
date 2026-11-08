@@ -663,6 +663,9 @@ jobs:
       # For a replay: the Ticket the claim marked in progress in this run, empty when it marked
       # none, as when another run claimed it first. The replay jobs run only on that Ticket.
       replay-ticket: ${{ steps.claim.outputs.replay-ticket }}
+    env:
+      # Tells src/main.ts this is the claim job, so a claim that fails says so on the issue (#421).
+      FABRIK_CLAIM: "true"
     steps:
       - name: Check out the Kit (never the Product repo)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -86,12 +86,50 @@ export interface ApplyingRun {
 }
 
 /**
+ * A replay claim another run won first: the Ticket isn't waiting to run any
+ * more, so this run doesn't claim it. Under the claim job's concurrency queue
+ * that's expected, and needs nothing of the Operator.
+ */
+export class ReplayTicketTaken extends Error {
+  /** The replay Ticket, and the replay issue it's on. */
+  readonly ticket: number;
+  readonly issue: number;
+
+  constructor(ticket: number, issue: number, run: number) {
+    super(`#${ticket} isn't waiting to run on replay #${issue}, so run ${run} doesn't claim it`);
+    this.name = "ReplayTicketTaken";
+    this.ticket = ticket;
+    this.issue = issue;
+  }
+}
+
+/**
+ * A plan applied only in part (#421): `failed` threw `cause`, after the
+ * actions `applied` had landed, so those in `unapplied` never did. Each is
+ * one of the plan's own actions: a failure inside a rebase onto main names
+ * the rebase.
+ */
+export class PlanNotApplied extends Error {
+  readonly failed: Action;
+  readonly applied: readonly Action[];
+  readonly unapplied: readonly Action[];
+
+  constructor(failed: Action, applied: readonly Action[], unapplied: readonly Action[], cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "PlanNotApplied";
+    this.failed = failed;
+    this.applied = applied;
+    this.unapplied = unapplied;
+  }
+}
+
+/**
  * Applies each action in the plan, in order, and returns what the push job
- * hands on from it. Only the push job of an Implement run, a Researcher run or
- * a prototype turn has a branch to push. `run` is the Actions run applying
- * it, which a replay Ticket's claim marks it in progress in, from then.
- * `rebaser` carries out a rebase onto main, which a push to main's or the
- * tick's plan may ask for.
+ * hands on from it; throws a PlanNotApplied when an action fails. Only the
+ * push job of an Implement run, a Researcher run or a prototype turn has a
+ * branch to push. `run` is the Actions run applying it, which a replay
+ * Ticket's claim marks it in progress in, from then. `rebaser` carries out a
+ * rebase onto main, which a push to main's or the tick's plan may ask for.
  */
 export async function applyPlan(
   github: GitHubApi,
@@ -129,7 +167,13 @@ export async function applyPlan(
       await applyEach(pushed ? action.pushed : action.refused);
     }
   };
-  await applyEach(plan.actions);
+  for (const [i, action] of plan.actions.entries()) {
+    try {
+      await applyEach([action]);
+    } catch (error) {
+      throw new PlanNotApplied(action, plan.actions.slice(0, i), plan.actions.slice(i + 1), error);
+    }
+  }
   return { preview: made.preview, readded: made.readded };
 }
 
@@ -500,9 +544,7 @@ async function applyToIssue(
       // Read fresh, so a run that claimed the Ticket since the plan was made keeps it.
       const { body } = (await github.rest("GET", issue)) as { body: string | null };
       const marked = withTicketStarted(body ?? "", action.ticket, made.run.id, made.run.at);
-      if (marked === null) {
-        throw new Error(`#${action.ticket} isn't waiting to run on replay #${action.issue}, so run ${made.run.id} doesn't claim it`);
-      }
+      if (marked === null) throw new ReplayTicketTaken(action.ticket, action.issue, made.run.id);
       await github.rest("PATCH", issue, { body: marked });
       return;
     }

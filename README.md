@@ -284,6 +284,7 @@ The Kit pushes to the Operator's phone only when it is their move, and once a we
 | Design-session round | Push | @-mentions the Operator. Round 1 is the push for a Ticket sent back to design too, and a prototype round, or its failure round, is a round. |
 | Merge gate | Push | Requests the Operator's review. |
 | A Kit run fails | Push | The failure notice @-mentions the Operator. |
+| The push job or claim job fails | Push | One comment on the run's issue or PR @-mentions the Operator, saying what the Kit was landing, what failed and how to recover. |
 | `needs-info` | Push | Triage's comment @-mentions the issue's author. |
 | `ready-for-human` | Push | Assigns the Operator. |
 | Claude token expired or revoked | Push, once per repo | The rotation issue assigns the Operator. With rotation on, it names the Subscription whose token to rotate. |
@@ -305,6 +306,7 @@ The Kit pushes to the Operator's phone only when it is their move, and once a we
 | Map cap | Silent | A full cap holds new Maps with no comment, label or mention: the Design session offers none, and a `map` outcome refused at the cap gets a comment that mentions nobody. The Weekly summary's Held names the open Map. |
 
 - **Held work is silent.** Work a full cap holds (see `caps` in the [Kit config](#kit-config)) waits with no comment, label or notification. It pushes when its slot opens, as a Design session's round 1 does, and the Weekly summary's **Held** section shows, per Product repo, how many `needs-design` issues wait for a slot and how long the oldest has waited, how many Sentry error groups wait for a Monitor issue slot, and which open Maps fill the Map cap.
+- **A red push or claim job says why, and Re-run failed jobs recovers it.** Setup turns Actions notifications off, so when the push job or the claim job fails, whether GitHub refused or failed a call (the Kit's GitHub client already tries a failed read, and a write GitHub never took, twice more first) or the Loop wouldn't land the run, the job's step summary and one comment on the run's issue or PR say what it was landing, what failed, which of its plan's actions landed and which didn't. An agent's finished work waits in the run's `fabrik-agent-result` artifact, which Actions keeps for 7 days: open the run and choose **Re-run jobs → Re-run failed jobs** before then, and the push job lands it. A push to `main` has no issue to comment on, so only its step summary says.
 - **There is no push budget.** Every push but the Weekly summary is the Operator's move, and the Weekly summary is one a week, so the Kit never holds one back: it caps the sources, never the pushes.
 
 ## Kit config
