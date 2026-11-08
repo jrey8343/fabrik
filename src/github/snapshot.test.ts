@@ -829,11 +829,18 @@ describe("Gathering who opened an issue", () => {
   });
 });
 
-/** The pull request a Loop event is about, as GitHub holds it: opened by `author`, with this body. */
+/** An issue a PR's body closes, as GitHub links it: its number and labels. */
+interface ClosingIssue {
+  readonly number: number;
+  readonly labels: readonly string[];
+}
+
+/** The pull request a Loop event is about, as GitHub holds it: opened by `author`, with this body, closing these issues. */
 function pullRequestGitHub({
   author = APP_BOT,
   body = "",
-}: { author?: { login: string; __typename: string } | null; body?: string } = {}): GitHub {
+  closing = [],
+}: { author?: { login: string; __typename: string } | null; body?: string; closing?: readonly ClosingIssue[] } = {}): GitHub {
   return {
     async graphql(query: string): Promise<unknown> {
       if (!query.includes("pullRequest(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
@@ -854,12 +861,39 @@ function pullRequestGitHub({
             labels: { nodes: [] },
             comments: { nodes: [] },
             reviews: { nodes: [] },
+            ...(/closingIssuesReferences/.test(pullRequestQuery)
+              ? {
+                  closingIssuesReferences: {
+                    nodes: closing.map((issue) => ({ number: issue.number, labels: { nodes: issue.labels.map((name) => ({ name })) } })),
+                  },
+                }
+              : {}),
           },
         },
       };
     },
   } as unknown as GitHub;
 }
+
+describe("Gathering the labels of the Ticket a pull request was cut for", () => {
+  const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
+  const gathered = async (closing: readonly ClosingIssue[]) =>
+    (await gatherSnapshot(pullRequestGitHub({ body: "Adds a waitlist.\n\nCloses #7", closing }), repo, pushed, null, APP_LOGIN)).pullRequest;
+
+  it("reads the labels of the Ticket its agent branch names, from the issues it closes", async () => {
+    const pullRequest = await gathered([
+      { number: 3, labels: ["bug"] },
+      { number: 7, labels: ["enhancement", "ready-for-agent", "fabrik:step-up"] },
+    ]);
+
+    expect(pullRequest).toMatchObject({ ticket: 7, ticketLabels: ["enhancement", "ready-for-agent", "fabrik:step-up"] });
+  });
+
+  it("reads no Ticket labels when the PR closes no issue its branch names", async () => {
+    expect(await gathered([{ number: 3, labels: ["fabrik:step-up"] }])).toMatchObject({ ticket: 7, ticketLabels: [] });
+    expect(await gathered([])).toMatchObject({ ticket: 7, ticketLabels: [] });
+  });
+});
 
 describe("Gathering a pull request's UI evidence marker", () => {
   const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
@@ -2157,6 +2191,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     labels: { nodes: [] },
     comments: { nodes: [{ body: `<!-- fabrik:conflict-attempt ${"8".repeat(40)} rebased -->\nRebased.`, author: { __typename: "Bot" } }] },
     reviews: { nodes: [] },
+    closingIssuesReferences: { nodes: [] },
     mergeable,
     ...overrides,
   });

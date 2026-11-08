@@ -160,7 +160,8 @@ const PULL_REQUEST_FIELDS = `
         body
         labels(first: 100) { nodes { name } }
         comments(last: 100) { nodes { body author { __typename } } }
-        reviews(last: 1, states: [CHANGES_REQUESTED]) { nodes { databaseId author { login __typename } commit { oid } } }`;
+        reviews(last: 1, states: [CHANGES_REQUESTED]) { nodes { databaseId author { login __typename } commit { oid } } }
+        closingIssuesReferences(first: 10) { nodes { number labels(first: 100) { nodes { name } } } }`;
 
 const PULL_REQUEST_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -188,6 +189,7 @@ interface PullRequestQueryResult {
       reviews: {
         nodes: { databaseId: number; author: { login: string; __typename: string } | null; commit: { oid: string } | null }[];
       };
+      closingIssuesReferences: { nodes: { number: number; labels: { nodes: { name: string }[] } }[] };
     } | null;
   };
 }
@@ -1151,13 +1153,15 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
   const botComments = pullRequest.comments.nodes
     .filter((comment) => comment.author?.__typename === "Bot")
     .map((comment) => comment.body);
+  const ticket = ticketOfAgentBranch(pullRequest.headRefName);
   return {
     number: pullRequest.number,
     isAgent: isAgentPullRequest({
       headRef: pullRequest.headRefName,
       authorIsBot: pullRequest.author?.__typename === "Bot",
     }),
-    ticket: ticketOfAgentBranch(pullRequest.headRefName),
+    ticket,
+    ticketLabels: ticketLabelsOf(pullRequest, ticket),
     open: pullRequest.state === "OPEN",
     draft: pullRequest.isDraft,
     headSha: pullRequest.headRefOid,
@@ -1173,6 +1177,16 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
     uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
   };
+}
+
+/**
+ * The labels of the Ticket a PR's agent branch names, read from the issues
+ * its `Closes #n` links, or none when it links no such issue. The Ticket's
+ * number stays the branch's: a closing link to another issue doesn't count.
+ */
+function ticketLabelsOf(pullRequest: PullRequestNode, ticket: number | null): string[] {
+  const closed = pullRequest.closingIssuesReferences.nodes.find((issue) => issue.number === ticket);
+  return closed?.labels.nodes.map((label) => label.name) ?? [];
 }
 
 /** How many times the conflict check reads open agent PRs while GitHub still works out whether one merges cleanly (#304). */
