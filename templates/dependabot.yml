@@ -1,6 +1,8 @@
 # Fabrik's Dependabot shim in a Product repo (ADR-0003). It opens a PR each time
-# Fabrik cuts a release, bumping the one pin in .github/workflows/fabrik.yml,
-# and the Operator merges it through the Merge gate like any other change.
+# Fabrik cuts a patch or minor release, bumping the one pin in
+# .github/workflows/fabrik.yml, and the Operator merges it through the Merge
+# gate like any other change. A major arrives only through Setup, which
+# rewrites the caller workflow a major may change.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -10,6 +12,12 @@ updates:
     # Only the Kit pin; this entry leaves the Product's other actions alone.
     allow:
       - dependency-name: "jrey8343/fabrik*"
+    # Never a major: one may need a caller job to grant a new permission, which
+    # a bump can't carry, and a caller that grants too little fails every run
+    # at startup. Setup at the new major rewrites the caller instead.
+    ignore:
+      - dependency-name: "jrey8343/fabrik*"
+        update-types: ["version-update:semver-major"]
     # Each pinned Fabrik workflow is its own dependency to Dependabot; one group
     # bumps them in one PR, so the caller never pins two releases at once.
     groups:

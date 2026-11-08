@@ -16,8 +16,8 @@ export type CallerCheck =
  */
 export const KIT_REPO = "jrey8343/fabrik";
 
-/** A `uses:` line naming Fabrik, optionally quoted and as a list item, capturing the ref. */
-const FABRIK_USES = /^\s*(?:-\s+)?uses:\s*["']?jrey8343\/fabrik(?:\/[^@\s"']*)?@([^\s"'#]+)["']?\s*(?:#.*)?$/;
+/** A `uses:` line naming Fabrik, optionally quoted and as a list item, capturing the path within Fabrik (if any) and the ref. */
+const FABRIK_USES = /^\s*(?:-\s+)?uses:\s*["']?jrey8343\/fabrik(\/[^@\s"']*)?@([^\s"'#]+)["']?\s*(?:#.*)?$/;
 
 /** An exact semver release tag, such as v1.2.3 or v1.2.3-pre.1. */
 const EXACT_RELEASE = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
@@ -33,7 +33,15 @@ export const CALLER_JOBS = ["loop", "tick"] as const;
 export function fabrikRefsIn(text: string): string[] {
   return text.split("\n").flatMap((line) => {
     const match = FABRIK_USES.exec(line);
-    return match?.[1] === undefined ? [] : [match[1]];
+    return match?.[2] === undefined ? [] : [match[2]];
+  });
+}
+
+/** What every `uses:` line in the workflow that names Fabrik uses, `jrey8343/fabrik/<path>@<ref>`, unquoted, in order. */
+export function fabrikUsesIn(text: string): string[] {
+  return text.split("\n").flatMap((line) => {
+    const match = FABRIK_USES.exec(line);
+    return match?.[2] === undefined ? [] : [`${KIT_REPO}${match[1] ?? ""}@${match[2]}`];
   });
 }
 
