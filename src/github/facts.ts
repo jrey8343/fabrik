@@ -303,6 +303,7 @@ const OPEN_PULL_REQUESTS_QUERY = `
 
 const ISSUE_FIELDS = `
   number title state createdAt closedAt
+  author ${ACTOR}
   labels(first: 50) { nodes { name } }
   ${COMMENTS}
   ${LABEL_EVENTS}
@@ -467,6 +468,7 @@ interface RawOpenPullRequest {
 interface RawIssue {
   number: number;
   title: string;
+  author: RawActor | null;
   state: "OPEN" | "CLOSED";
   createdAt: string;
   closedAt: string | null;
@@ -635,6 +637,7 @@ function openIssueOf(issue: RawIssue): OpenIssueFacts {
   return {
     number: issue.number,
     title: issue.title,
+    author: loginOf(issue.author),
     labels: issue.labels.nodes.map((label) => label.name),
     createdAt: issue.createdAt,
     comments: issue.comments.nodes.map(commentOf),

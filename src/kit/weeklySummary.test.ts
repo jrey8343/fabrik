@@ -424,6 +424,38 @@ describe("the Weekly summary", () => {
       ]);
     });
 
+    it("lists the App's needs-info issue nobody answered as the Operator's, waiting since it got needs-info (#425)", () => {
+      const asked = (overrides: Parameters<typeof anOpenIssue>[0]) =>
+        anOpenIssue({
+          number: 15,
+          title: "TypeError in checkout",
+          author: "fabrik-app[bot]",
+          labels: ["bug", "needs-info", "fabrik:monitor"],
+          labelEvents: [aLabelAdded("needs-info", "2026-11-06T20:00:00Z")],
+          comments: [aComment("@operator The Monitor filed this issue, so its question is yours.", "2026-11-06T20:00:00Z", { author: "fabrik-app[bot]", byBot: true })],
+          ...overrides,
+        });
+      const waiting = waitingIn({
+        openIssues: [
+          asked({}),
+          // A person filed it: Triage asked them, not the Operator.
+          asked({ number: 16, author: "kate" }),
+          // Someone answered: Triage has it again, or Stuck lists it.
+          asked({ number: 17, comments: [aComment("Since 2.3.", "2026-11-07T20:00:00Z", { author: "operator", byBot: false })] }),
+        ],
+      });
+      expect(waiting).toEqual([
+        {
+          kind: "monitor-needs-info",
+          number: 15,
+          title: "TypeError in checkout",
+          url: "https://github.com/owner/product/issues/15",
+          since: "2026-11-06T20:00:00Z",
+          age: 2 * 24 * HOUR,
+        },
+      ]);
+    });
+
     describe("with an open Audit", () => {
       const waitingIn = (facts: Parameters<typeof factsOf>[0]) => {
         const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)] }));
@@ -1788,6 +1820,17 @@ describe("the Weekly summary", () => {
       );
       expect(body).toContain("- [#13](https://github.com/owner/product/issues/13) Ask @&#8203;someone about \\[x\\] and \\<b\\>: ready-for-human for 30 hours");
       expect(body.match(/@(?!&#8203;)\w/g)).toEqual(["@o"]);
+    });
+
+    it("says a Monitor issue in needs-info waits on the Operator's answer (#425)", () => {
+      const body = bodyOf(
+        factsOf({
+          openIssues: [
+            anOpenIssue({ number: 15, title: "TypeError in checkout", author: "fabrik-app[bot]", labels: ["needs-info"], labelEvents: [aLabelAdded("needs-info", hoursAgo(30))] }),
+          ],
+        }),
+      );
+      expect(body).toContain("- [#15](https://github.com/owner/product/issues/15) TypeError in checkout: Monitor issue in needs-info for 30 hours, its question is yours");
     });
 
     it("gives each repo a section listing what waits on the Operator, with its age and any Operator wait", () => {

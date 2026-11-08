@@ -391,7 +391,7 @@ function applyTriage(issueNumber: number, text: string, issue: IssueSnapshot, op
   return {
     kind: "act",
     actions: [
-      { kind: "comment", issue: issueNumber, body: triageComment(output, issue.author) },
+      { kind: "comment", issue: issueNumber, body: triageComment(output, issue, operator) },
       { kind: "remove-label", issue: issueNumber, label: NEEDS_TRIAGE },
       ...[...staleStates, ...staleCategories].map((label) => ({ kind: "remove-label" as const, issue: issueNumber, label })),
       { kind: "add-labels", issue: issueNumber, labels: added },
@@ -421,12 +421,17 @@ function outcome(issueNumber: number, { state, duplicateOf }: TriageOutput, oper
 }
 
 /**
- * Triage's comment: addressed to the author on needs-info, and followed on the
- * Fast path by the agent brief the Implementer works to.
+ * Triage's comment: addressed to the author on needs-info, or to the Operator
+ * when the App filed the issue as the Monitor (#425), and followed on the Fast
+ * path by the agent brief the Implementer works to.
  */
-function triageComment({ state, comment, brief, duplicateOf }: TriageOutput, author: string): string {
+function triageComment({ state, comment, brief, duplicateOf }: TriageOutput, issue: IssueSnapshot, operator: string): string {
   // needs-info's one notification: the question reaches its author by @-mention.
-  if (state === NEEDS_INFO) return `@${author}\n\n${comment}`;
+  // The App never answers, and a bot's reply never restarts Triage, so the
+  // Monitor's issue asks the Operator.
+  if (state === NEEDS_INFO) {
+    return issue.byApp ? `@${operator} The Monitor filed this issue, so its question is yours.\n\n${comment}` : `@${issue.author}\n\n${comment}`;
+  }
   if (duplicateOf !== null) return `${comment}\n\nClosing as a duplicate of #${duplicateOf}.`;
   if (brief === null) return comment;
   return [

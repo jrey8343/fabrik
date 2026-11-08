@@ -287,7 +287,7 @@ The Kit pushes to the Operator's phone only when it is their move, and once a we
 | Merge gate | Push | Requests the Operator's review. |
 | A Kit run fails | Push | The failure notice @-mentions the Operator. |
 | The push job or claim job fails | Push | One comment on the run's issue or PR @-mentions the Operator, saying what the Kit was landing, what failed and how to recover. |
-| `needs-info` | Push | Triage's comment @-mentions the issue's author. |
+| `needs-info` | Push | Triage's comment @-mentions the issue's author, or the Operator when the Monitor filed it. A Monitor issue in `needs-info` stays in the Weekly summary's Waiting on you until someone answers. |
 | `ready-for-human` | Push | Assigns the Operator. |
 | Claude token expired or revoked | Push, once per repo | The rotation issue assigns the Operator. With rotation on, it names the Subscription whose token to rotate. |
 | Weekly usage limit reached | Push, once per window per repo | The weekly-limit issue @-mentions the Operator. With rotation on, see the next two rows. |
@@ -298,7 +298,7 @@ The Kit pushes to the Operator's phone only when it is their move, and once a we
 | Implement draft PR, Execution-flaw retry, back-to-design note | Silent | The PR and the Verdict are the record. |
 | Fast path, Design session finished, Spec closed, `wontfix` | Silent | |
 | Skills-source bump PR | Silent | The PR requests no review; the Operator merges it when they choose. |
-| Monitor issues | Silent | An error or red-main issue gets `needs-triage` from Intake and reaches the Operator through Triage, never a push of its own. The Monitor never comments, apart from the note it closes its red-main issue with. |
+| Monitor issues | Silent | An error or red-main issue gets `needs-triage` from Intake and reaches the Operator through Triage, never a push of its own: if Triage asks for more, its question @-mentions the Operator. The Monitor never comments, apart from the note it closes its red-main issue with. |
 | Audit | Silent | No state label, assignee or mention; a failed run closes it the same way. It surfaces in the Weekly summary's Waiting on you while it's open. |
 | Retro | Silent | No state label, assignee or mention, and no push; a failed run closes it the same way. It surfaces in the Weekly summary's Waiting on you while it's open. |
 | Replay accepted, rejected, or a Ticket finished | Silent | The body's plan and results, and a rejection's one comment, mention nobody. |
