@@ -10,7 +10,7 @@ import type { RunRecord } from "../kit/runRecord.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
+import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
 import {
@@ -1230,6 +1230,7 @@ describe("Gathering a Dispatch check's Tickets", () => {
                       ],
                     },
                     closedByPullRequestsReferences: { nodes: [] },
+                    comments: { nodes: [] },
                   },
                 ],
               },
@@ -1244,6 +1245,49 @@ describe("Gathering a Dispatch check's Tickets", () => {
     const snapshot = await gatherSnapshot(github, repo, { kind: "dispatch-check" }, null, null, actionsWith([]) as unknown as GitHub);
 
     expect(snapshot.dispatch?.tickets).toMatchObject([{ number: 6, openBlockers: [10], notPlannedBlockers: [9] }]);
+  });
+
+  /** The read-only API, holding one open ready-for-agent Ticket, #6, with these comments, and no research Decision. */
+  function ticketGitHub(comments: { body: string; author: { login: string; __typename: string } | null }[]): GitHub {
+    return {
+      async graphql(query: string): Promise<unknown> {
+        if (query.includes("labels: [$ready]")) {
+          // Each comment's author by login, so the Fabrik App's comments are told apart from another bot's.
+          expect(query).toContain("comments(last: 100) { nodes { body author { login __typename } } }");
+          const ticket = {
+            number: 6,
+            state: "OPEN",
+            labels: { nodes: [{ name: "ready-for-agent" }] },
+            subIssues: { totalCount: 0 },
+            blockedBy: { nodes: [] },
+            closedByPullRequestsReferences: { nodes: [] },
+            comments: { nodes: comments },
+          };
+          return {
+            repository: { owner: { login: "acme" }, issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [ticket] }, pullRequests: { nodes: [] } },
+          };
+        }
+        return { repository: { owner: { login: "acme" }, issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } };
+      },
+    } as unknown as GitHub;
+  }
+
+  const PERSON = { login: "operator", __typename: "User" };
+  const OTHER_BOT = { login: "dependabot", __typename: "Bot" };
+  const NOTICE = `${IMPLEMENT_RUN_FAILED_MARKER}\n@operator The Implement run on #6 failed: it crashed.`;
+
+  // So a check, the hourly tick's included, leaves a broken Ticket for the Operator to re-add agent:implement (#418).
+  it.each([
+    ["the Kit's failure notice is its last comment", [{ body: NOTICE, author: APP_BOT }], true],
+    ["the Operator has only replied since the Kit's failure notice", [{ body: NOTICE, author: APP_BOT }, { body: "Looking into it", author: PERSON }], true],
+    ["the Kit has commented since its failure notice", [{ body: NOTICE, author: APP_BOT }, { body: "Something later.", author: APP_BOT }], false],
+    ["a person quoted the failure notice", [{ body: NOTICE, author: PERSON }], false],
+    ["another bot posted a look-alike failure notice", [{ body: NOTICE, author: OTHER_BOT }], false],
+    ["it has no comments", [], false],
+  ])("reads a Ticket's last Implement run as failed only when the Kit's failure notice is its latest word: %s", async (_case, comments, failed) => {
+    const snapshot = await gatherSnapshot(ticketGitHub(comments), repo, { kind: "dispatch-check" }, null, APP_LOGIN, actionsWith([]) as unknown as GitHub);
+
+    expect(snapshot.dispatch?.tickets[0]?.lastRunFailed).toBe(failed);
   });
 });
 
@@ -2058,7 +2102,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
         asked.push(query);
         if (query.includes("$replay")) return { repository: { issues: { nodes: replayIssues } } };
         if (query.includes("$ready")) {
-          const ticket = { number: 31, state: "OPEN", labels: { nodes: [{ name: "ready-for-agent" }] }, subIssues: { totalCount: 0 }, blockedBy: { nodes: [] }, closedByPullRequestsReferences: { nodes: [] } };
+          const ticket = { number: 31, state: "OPEN", labels: { nodes: [{ name: "ready-for-agent" }] }, subIssues: { totalCount: 0 }, blockedBy: { nodes: [] }, closedByPullRequestsReferences: { nodes: [] }, comments: { nodes: [] } };
           return { repository: { owner: { login: "acme" }, issues: { ...none, nodes: [ticket] }, pullRequests: { nodes: [] } } };
         }
         if (query.includes("$research")) return { repository: { issues: none } };
@@ -2137,7 +2181,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
       const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding(records));
 
       expect(snapshot.replay?.capacity).toEqual({
-        tickets: [{ number: 31, open: true, labels: ["ready-for-agent"], openBlockers: [], notPlannedBlockers: [], subIssues: 0, openLinkedPullRequests: [] }],
+        tickets: [{ number: 31, open: true, labels: ["ready-for-agent"], openBlockers: [], notPlannedBlockers: [], subIssues: 0, openLinkedPullRequests: [], lastRunFailed: false }],
         researchDecisions: [],
         weeklyLimits: { "Claude token": aReading(0.3) },
       });

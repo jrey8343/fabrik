@@ -122,7 +122,8 @@ function count(n: number, one: string, many: string): string {
 
 /**
  * Why this Ticket can't start an Implementer, or null if it can: it must be one
- * open, ready, buildable Ticket that nothing is already working on.
+ * open, ready, buildable Ticket that nothing is already working on, and whose
+ * last Implement run didn't fail.
  */
 function whyNotEligible(ticket: TicketSnapshot): string | null {
   const name = `#${ticket.number}`;
@@ -138,6 +139,9 @@ function whyNotEligible(ticket: TicketSnapshot): string | null {
     return `${name} already has the open PR ${list(ticket.openLinkedPullRequests)}`;
   }
   if (ticket.labels.includes(DISPATCH_LABEL)) return `${name} already has ${DISPATCH_LABEL}`;
+  // A broken Ticket mustn't burn runs on every check, the hourly tick's included (#418):
+  // its failure notice tells the Operator to re-add agent:implement, its only resume.
+  if (ticket.lastRunFailed) return `${name}'s last Implement run failed, so only adding ${DISPATCH_LABEL} again runs it`;
   return null;
 }
 

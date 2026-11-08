@@ -240,7 +240,7 @@ describe("The weekly-limit issue", () => {
         {
           kind: "comment",
           issue: 7,
-          body: expect.stringMatching(/^The Implement run on #7 failed: it hit the weekly usage limit\./),
+          body: expect.stringMatching(/^<!-- fabrik:implement-run-failed -->\nThe Implement run on #7 failed: it hit the weekly usage limit\./),
         },
         {
           kind: "open-issue",

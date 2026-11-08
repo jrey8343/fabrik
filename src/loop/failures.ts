@@ -17,7 +17,7 @@ import { prototypeRole } from "./design.ts";
 import { heldInOrder, type HoldableRun, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
 import { canHold, heldAfterKill } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
-import { DESIGN_TURN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
+import { DESIGN_TURN_FAILED_MARKER, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
 import type { Action, AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 import { failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
@@ -36,13 +36,16 @@ const RERUN_FAILURES: readonly InfrastructureFailure[] = ["weekly-limit", "usage
 
 /**
  * The first line of a failure notice the snapshot reads back: a failed
- * Design-session turn keeps its session's slot (#147), and a failed
- * Researcher run keeps Dispatch off its Decision until the Operator re-adds
- * agent:research (#154).
+ * Design-session turn keeps its session's slot (#147), a failed Researcher
+ * run keeps Dispatch off its Decision until the Operator re-adds
+ * agent:research (#154), and a failed Implement run on a Ticket with no open
+ * PR keeps Dispatch off it until the Operator re-adds agent:implement (#418).
+ * A notice on a PR needs none: the open PR holds its Ticket off Dispatch.
  */
 const FAILURE_MARKERS: Partial<Record<AgentRole, string>> = {
   design: DESIGN_TURN_FAILED_MARKER,
   research: RESEARCH_RUN_FAILED_MARKER,
+  implement: IMPLEMENT_RUN_FAILED_MARKER,
 };
 
 /**
@@ -204,7 +207,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     };
   }
   const body = noticeBody({
-    marker: FAILURE_MARKERS[run.role],
+    marker: target === run.issue ? FAILURE_MARKERS[run.role] : undefined,
     mention: repoWide === null ? operator : null,
     failed: `${failedRun} failed: ${howItFailed(failure, run, config)}.`,
     detail: run.report?.detail ?? "",

@@ -124,6 +124,7 @@ export function aTicket(overrides: Partial<TicketSnapshot> = {}): TicketSnapshot
     notPlannedBlockers: [],
     subIssues: 0,
     openLinkedPullRequests: [],
+    lastRunFailed: false,
     ...overrides,
   };
 }

@@ -231,6 +231,13 @@ export const DESIGN_TURN_FAILED_MARKER = "<!-- fabrik:design-turn-failed -->";
  */
 export const RESEARCH_RUN_FAILED_MARKER = "<!-- fabrik:research-run-failed -->";
 
+/**
+ * The first line of the Kit's notice that a Ticket's Implement run failed,
+ * posted on the Ticket when it has no open PR: Dispatch leaves the Ticket
+ * alone until the Operator re-adds agent:implement (#418).
+ */
+export const IMPLEMENT_RUN_FAILED_MARKER = "<!-- fabrik:implement-run-failed -->";
+
 /** How the comment that ends a Design session starts, either way it ends. */
 export const SESSION_FINISHED = "**Design session finished.**";
 

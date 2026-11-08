@@ -748,6 +748,12 @@ export interface TicketSnapshot {
   readonly subIssues: number;
   /** The open pull requests linked to close it. */
   readonly openLinkedPullRequests: readonly number[];
+  /**
+   * Whether the Kit's Implement failure notice is its latest run's word, read
+   * from the Kit's comments on it: only the Operator re-adding agent:implement
+   * runs it again then (#418).
+   */
+  readonly lastRunFailed: boolean;
 }
 
 /**

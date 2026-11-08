@@ -43,6 +43,12 @@ describe("A Dispatch check", () => {
       { labels: ["ready-for-agent", "agent:implement"] },
       "#12 already has agent:implement",
     ],
+    // So the hourly tick's check can't start a broken Ticket again every hour (#418).
+    [
+      "had its last Implement run fail",
+      { lastRunFailed: true },
+      "#12's last Implement run failed, so only adding agent:implement again runs it",
+    ],
   ])("doesn't dispatch a Ticket that %s, saying why", (_, overrides, why) => {
     const plan = planFor(check, dispatchSnapshotOf([aTicket({ number: 12, ...overrides })]), kitConfig());
 
