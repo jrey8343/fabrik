@@ -22,7 +22,7 @@ describe("How an agent job reports its own failure", () => {
 
   it("a preflight that refuses before the agent starts is a metered-billing failure", () => {
     const error = new Error(
-      'Sandbox command failed (exit 1): node "/kit/src/preflight/main.ts"\nMetered-billing preflight refused the run (Infrastructure failure):\n::error title=Metered-billing route::ANTHROPIC_API_KEY is set',
+      'Command failed (exit 1): node "/kit/src/preflight/main.ts"\nMetered-billing preflight refused the run (Infrastructure failure):\n::error title=Metered-billing route::ANTHROPIC_API_KEY is set',
     );
 
     expect(failureReportFor({ error, lines: [], initRefused: null })).toEqual({
@@ -32,7 +32,7 @@ describe("How an agent job reports its own failure", () => {
   });
 
   it("a Product setup command that fails before the preflight is a crash, not a billing refusal", () => {
-    const error = new Error("Sandbox command failed (exit 2): (npm run stub) && node \"/kit/src/preflight/main.ts\"\nnpm ERR! missing script: stub");
+    const error = new Error("Command failed (exit 2): (npm run stub) && node \"/kit/src/preflight/main.ts\"\nnpm ERR! missing script: stub");
 
     expect(failureReportFor({ error, lines: [], initRefused: null }).failure).toBe("crash");
   });

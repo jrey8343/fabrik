@@ -5,6 +5,7 @@ import { CODING_STANDARDS_FILE, KIT_PROMPT_NAMES, kitPromptPath } from "../guard
 import { MAX_AUDIT_CANDIDATES, readAuditOutput } from "../loop/auditOutput.ts";
 import { readDesignTurnOutput, readPrototypeTurnOutput } from "../loop/designOutput.ts";
 import { readPullRequestRunOutput, readRequestChangesRunOutput } from "../loop/implementOutput.ts";
+import { CONFLICT_RUN_MARKER } from "../loop/markers.ts";
 import { readResearchOutput } from "../loop/researchOutput.ts";
 import {
   LOOSENING_STREAK_MINIMUM,
@@ -101,6 +102,16 @@ describe("The prompts of the runs that read an agent PR", () => {
     expect(examples).toContainEqual(
       expect.objectContaining({ ok: true, verdict: "pass", followUps: [expect.objectContaining({ title: expect.any(String) })] }),
     );
+  });
+
+  it("review leaves a rebased PR unflagged without pointing at the Kit's conflict-run note, which its input never carries", async () => {
+    const text = await prompt("review");
+    expect(text).not.toContain(CONFLICT_RUN_MARKER);
+    expect(text).toContain("don't flag a PR for having been rebased onto `main`");
+  });
+
+  it("implement opens with no slash command, which no installed skill answers to", async () => {
+    expect(await prompt("implement")).not.toMatch(/^\//);
   });
 
   it("implement describes the output field that names the Operator comments it weighed, which its example carries", async () => {
