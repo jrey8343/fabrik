@@ -958,14 +958,22 @@ type EventPart = Omit<
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body author { login __typename } }";
 
-/** How many open Kit-owned issues every snapshot reads, oldest first: an issue past them isn't read. */
+/** How many open Kit-owned issues each page of them holds, oldest first. */
 const KIT_ISSUES_PAGE = 20;
 
+/**
+ * How many pages of open Kit-owned issues a snapshot reads at most: with more
+ * open than they hold, the snapshot fails rather than act without them all (#441).
+ */
+const KIT_ISSUES_PAGES = 10;
+
 const KIT_ISSUES_QUERY = `
-  query ($owner: String!, $name: String!, $labels: [String!]!) {
+  query ($owner: String!, $name: String!, $labels: [String!]!, $after: String) {
     repository(owner: $owner, name: $name) {
       owner { login }
-      issues(states: OPEN, labels: $labels, first: ${KIT_ISSUES_PAGE}, orderBy: { field: CREATED_AT, direction: ASC }) {
+      issues(states: OPEN, labels: $labels, first: ${KIT_ISSUES_PAGE}, after: $after, orderBy: { field: CREATED_AT, direction: ASC }) {
+        totalCount
+        pageInfo { hasNextPage endCursor }
         nodes {
           number
           body
@@ -1007,34 +1015,59 @@ interface KitIssueNode {
 interface KitIssuesQueryResult {
   repository: {
     owner: { login: string };
-    issues: { nodes: KitIssueNode[] };
+    issues: {
+      totalCount?: number;
+      pageInfo?: { hasNextPage: boolean; endCursor: string | null };
+      nodes: KitIssueNode[];
+    };
   };
 }
 
 /**
  * The open issues carrying a Kit-owned label (src/loop/kitIssues.ts), which
- * every event's snapshot holds. Their markers steer agent runs (a held marker
+ * every event's snapshot holds, every one of them, a page at a time (#441).
+ * Their markers steer agent runs (a held marker
  * resumes one), so only the App's own text is read (ADR-0007): the body of an
  * issue the App opened, and the App's comments, every one of them, however
- * many pages they take. Anyone else's comment is left out. The Weekly summary
- * reads them too (src/github/facts.ts), so its Held runs are the Loop's.
+ * many pages they take. Anyone else's comment is left out. With more open than
+ * KIT_ISSUES_PAGES pages hold, it fails, naming how many are open, since a
+ * weekly-limit issue it couldn't see would start runs on a used-up Subscription.
+ * The Weekly summary reads them too (src/github/facts.ts), so its Held runs are
+ * the Loop's.
  */
 export async function gatherKitIssues(
   github: Pick<GitHub, "graphql">,
   repo: Repo,
   appLogin: string | null,
 ): Promise<{ owner: string; kitIssues: KitIssueSnapshot[] }> {
-  const data = await github.graphql<KitIssuesQueryResult>(KIT_ISSUES_QUERY, {
-    owner: repo.owner,
-    name: repo.name,
-    labels: KIT_ISSUE_LABELS,
-  });
-  const kitIssues = await Promise.all(data.repository.issues.nodes.map((issue) => kitIssueOf(github, repo, issue, appLogin)));
-  return { owner: data.repository.owner.login, kitIssues };
+  const nodes: KitIssueNode[] = [];
+  let owner = "";
+  let after: string | null = null;
+  for (let page = 0; ; page += 1) {
+    const data: KitIssuesQueryResult = await github.graphql<KitIssuesQueryResult>(KIT_ISSUES_QUERY, {
+      owner: repo.owner,
+      name: repo.name,
+      labels: KIT_ISSUE_LABELS,
+      after,
+    });
+    const { totalCount, pageInfo, nodes: onPage } = data.repository.issues;
+    owner = data.repository.owner.login;
+    nodes.push(...onPage);
+    if (pageInfo?.hasNextPage !== true || pageInfo.endCursor === null) break;
+    if (page + 1 >= KIT_ISSUES_PAGES) {
+      throw new Error(
+        `${totalCount ?? `More than ${nodes.length}`} open issues carry a Kit-owned label, more than the ${KIT_ISSUES_PAGE * KIT_ISSUES_PAGES} the Kit reads, ` +
+          "so it stops rather than act without seeing them all. Close the ones no longer needed.",
+      );
+    }
+    after = pageInfo.endCursor;
+  }
+  const kitIssues = await Promise.all(nodes.map((issue) => kitIssueOf(github, repo, issue, appLogin)));
+  return { owner, kitIssues };
 }
 
 /** A Kit-owned issue as kitIssues holds it: only the App's own text, every comment of it. */
-async function kitIssueOf(github: GitHub, repo: Repo, issue: KitIssueNode, appLogin: string | null): Promise<KitIssueSnapshot> {
+async function kitIssueOf(github: Pick<GitHub, "graphql">, repo: Repo, issue: KitIssueNode, appLogin: string | null): Promise<KitIssueSnapshot> {
   const comments = [...(await earlierComments(github, repo, issue.number, issue.comments)), ...issue.comments.nodes];
   return {
     number: issue.number,
@@ -1134,8 +1167,7 @@ const REPLAY_ISSUES_QUERY = `
 /**
  * What the replay step weighs on the scheduled tick at `now` (#156). With
  * no replay issue among the open Kit-owned
- * issues, it reads nothing new, unless that page is full, since one may be
- * past it. Else it reads every open replay issue: its body whole, though the
+ * issues, it reads nothing new. Else it reads every open replay issue: its body whole, though the
  * Operator files it, since the request is the Operator's own text, which the
  * Kit-owned issues leave out (ADR-0007), and the App's comments alone. Only
  * while one is the Operator's does it read what the spare-capacity gate
@@ -1152,8 +1184,7 @@ async function gatherReplaySlice(
   appLogin: string | null,
   store: ReplayStore,
 ): Promise<ReplaySnapshot> {
-  const maybeOpen = kitIssues.length >= KIT_ISSUES_PAGE || kitIssues.some((issue) => issue.labels.includes(REPLAY_LABEL));
-  if (!maybeOpen) return { issues: [], capacity: null, acceptance: null };
+  if (!kitIssues.some((issue) => issue.labels.includes(REPLAY_LABEL))) return { issues: [], capacity: null, acceptance: null };
   const issues = await gatherReplayIssues(github, repo, appLogin);
   if (!issues.some((issue) => isOperatorsReplay(issue, operator))) return { issues, capacity: null, acceptance: null };
   const [dispatch, records] = await Promise.all([gatherDispatchCandidates(github, repo, appLogin), store.records()]);

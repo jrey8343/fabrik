@@ -2310,6 +2310,49 @@ describe("Gathering the Kit-owned issues, whose markers steer agent runs (ADR-00
 
     expect(snapshot.kitIssues[0]?.comments).toEqual(comments.map((comment) => comment.body));
   });
+
+  /**
+   * The read-only API, holding `open` Kit-owned weekly-limit issues, #1 the
+   * oldest, which it serves `first` at a time after the cursor, as GitHub's
+   * `issues(first:, after:)` does. Its `totalCount` is `open`.
+   */
+  function githubHolding(open: number) {
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("issueOrPullRequest")) return { repository: {} };
+        if (query.includes("defaultBranchRef")) return { repository: { defaultBranchRef: null, issues: { nodes: [] } } };
+        const retro = nothingNewForTheRetro(query);
+        if (retro !== undefined) return retro;
+        const first = Number(/issues\(states: OPEN, labels: \$labels, first: (\d+)/.exec(query)?.[1]);
+        const start = typeof variables["after"] === "string" ? Number(variables["after"]) : 0;
+        const end = Math.min(open, start + first);
+        const nodes = Array.from({ length: end - start }, (_, at) => ({
+          number: start + at + 1,
+          body: "",
+          author: APP,
+          labels: { nodes: [{ name: "fabrik:weekly-limit" }] },
+          comments: { pageInfo: { hasPreviousPage: false, startCursor: null }, nodes: [] },
+        }));
+        return {
+          repository: {
+            owner: { login: "acme" },
+            issues: { totalCount: open, pageInfo: { hasNextPage: end < open, endCursor: String(end) }, nodes },
+          },
+        };
+      },
+    } as unknown as GitHub;
+    return github;
+  }
+
+  it("reads every open Kit-owned issue, page after page, so the 21st, the newest, isn't cut off (#441)", async () => {
+    const snapshot = await gatherSnapshot(githubHolding(21), repo, tick, null, "fabrik-app[bot]");
+
+    expect(snapshot.kitIssues.map(({ number }) => number)).toEqual(Array.from({ length: 21 }, (_, at) => at + 1));
+  });
+
+  it("fails, naming how many are open, rather than act on some of them when more are open than it reads (#441)", async () => {
+    await expect(gatherSnapshot(githubHolding(250), repo, tick, null, "fabrik-app[bot]")).rejects.toThrow(/250 open issues/);
+  });
 });
 
 describe("Gathering a scheduled tick's replay slice (#156)", () => {
@@ -2382,13 +2425,14 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
     expect(store.reads).toBe(0);
   });
 
-  it("reads the replay issues when the Kit-issue page is full, since one may be past it", async () => {
-    const full = Array.from({ length: 20 }, (_, at) => anIssueNode(41 + at, ["fabrik:audit"]));
-    const { github } = githubWith(full, [anIssueNode(140, ["fabrik:replay"], { body: acceptedBody() })]);
+  it("reads no replay issue when none is among twenty or more open Kit-owned issues, since it reads every one of them (#441)", async () => {
+    const many = Array.from({ length: 20 }, (_, at) => anIssueNode(41 + at, ["fabrik:audit"]));
+    const { github, asked } = githubWith(many, [anIssueNode(140, ["fabrik:replay"], { body: acceptedBody() })]);
 
     const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding([]));
 
-    expect(snapshot.replay?.issues.map(({ number }) => number)).toEqual([140]);
+    expect(snapshot.replay).toEqual({ issues: [], capacity: null, acceptance: null });
+    expect(asked.some((query) => query.includes("$replay"))).toBe(false);
   });
 
   describe("with a replay issue open", () => {
