@@ -22,7 +22,9 @@ import type {
   TicketFacts,
 } from "../kit/weeklySummary.ts";
 import { designRoundMarker, fromPullRequestLine, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker, verdictMarker } from "../loop/markers.ts";
-import type { Verdict } from "../loop/types.ts";
+import { type HeldRun, heldMarker } from "../loop/heldRun.ts";
+import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
+import type { KitIssueSnapshot, Verdict } from "../loop/types.ts";
 import { aMonitorIssueBody } from "./monitor.ts";
 
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
@@ -193,6 +195,7 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     openRetros: [],
     openReplays: [],
     openMaps: [],
+    kitIssues: [],
     ...overrides,
   };
 }
@@ -277,8 +280,8 @@ export function anOpenIssue(overrides: Partial<OpenIssueFacts> = {}): OpenIssueF
 }
 
 /**
- * Open agent PR 50, a draft at head `h…h` opened on 2026-10-01, with nothing
- * on it unless a test says so. A commit given only its time is the
+ * Open agent PR 50, a draft for Ticket 7 at head `h…h` opened on 2026-10-01,
+ * with nothing on it unless a test says so. A commit given only its time is the
  * Operator's, as aCommit makes it.
  */
 export function anOpenPullRequest(
@@ -286,6 +289,7 @@ export function anOpenPullRequest(
 ): OpenPullRequestFacts {
   return {
     number: 50,
+    ticket: 7,
     title: "Build the thing",
     draft: true,
     headSha: "h".repeat(40),
@@ -294,6 +298,20 @@ export function anOpenPullRequest(
     reviews: [],
     comments: [],
     labelEvents: [],
+    ...overrides,
+  };
+}
+
+/**
+ * Open weekly-limit issue 20, the Fabrik App's, whose limit resets at
+ * `resetsAt` (none said when null), holding these runs with a held marker each.
+ */
+export function aWeeklyLimitIssue(resetsAt: string | null, held: readonly HeldRun[] = [], overrides: Partial<KitIssueSnapshot> = {}): KitIssueSnapshot {
+  return {
+    number: 20,
+    labels: ["fabrik:weekly-limit"],
+    body: ["The weekly usage limit is reached.", ...(resetsAt === null ? [] : ["", resetsAtMarker(resetsAt)])].join("\n"),
+    comments: held.map((run) => `The run is held.\n\n${heldMarker(run)}`),
     ...overrides,
   };
 }

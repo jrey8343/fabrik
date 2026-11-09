@@ -4,13 +4,26 @@
 // model call.
 import { researchRunFailedIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
-import { DECISION_TYPES, decisionLabel, type DecisionLabel, MAP_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, RESEARCH_LABEL } from "../loop/labels.ts";
+import {
+  DECISION_TYPES,
+  decisionLabel,
+  type DecisionLabel,
+  MAP_LABEL,
+  NEEDS_DESIGN,
+  NEEDS_INFO,
+  READY_FOR_AGENT,
+  READY_FOR_HUMAN,
+  RESEARCH_LABEL,
+  WEEKLY_LIMIT_LABEL,
+} from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
+import { RUN_NAMES, waitingHeldRuns } from "../loop/heldRun.ts";
+import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
-import { type DesignQueueSnapshot, type InfrastructureFailure, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { type AgentRole, type DesignQueueSnapshot, type InfrastructureFailure, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
@@ -150,6 +163,12 @@ export interface GitHubFacts extends MetricFacts {
   readonly openReplays: readonly OpenReplayFacts[];
   /** The repo's open Maps, by number, oldest first, read as the Map cap reads them: whoever charted them. */
   readonly openMaps: readonly number[];
+  /**
+   * The repo's open Kit-owned issues, read as the Loop's snapshot reads them:
+   * Held names the held runs their weekly-limit issues' held markers name,
+   * and Stuck leaves those runs out, as the Kit resumes them itself.
+   */
+  readonly kitIssues: readonly KitIssueSnapshot[];
 }
 
 /** A Product repo whose GitHub facts couldn't be read this run, and why. */
@@ -369,6 +388,8 @@ export interface Held {
   readonly monitor: HeldMonitor | null;
   /** The open Maps filling the Map cap (caps.maps), so no Design session offers a new one. */
   readonly maps: HeldMaps | null;
+  /** The Held runs waiting on the open weekly-limit issues while every Subscription is used up. */
+  readonly runs: HeldRuns | null;
 }
 
 export interface HeldDesignSessions {
@@ -390,6 +411,27 @@ export interface HeldMonitor {
 export interface HeldMaps {
   /** Every open Map, whoever charted it, lowest number first. */
   readonly open: readonly number[];
+}
+
+export interface HeldRuns {
+  /** Each Held run, in the order the scheduled tick resumes them. */
+  readonly runs: readonly HeldRunItem[];
+  /** Every open weekly-limit issue, oldest first, with when its limit resets. */
+  readonly weeklyLimitIssues: readonly WeeklyLimitIssue[];
+}
+
+export interface HeldRunItem {
+  readonly role: AgentRole;
+  /** The issue or PR its trigger label lives on: a Review's PR, every other role's issue. */
+  readonly issue: number;
+  /** The weekly-limit issues whose held markers hold it. */
+  readonly heldOn: readonly number[];
+}
+
+export interface WeeklyLimitIssue {
+  readonly number: number;
+  /** When its limit resets, ISO 8601, or null when it doesn't say. */
+  readonly resetsAt: string | null;
 }
 
 interface ItemBase {
@@ -1006,11 +1048,30 @@ function failedResearchOf({ openIssues }: GitHubFacts, appLogin: string, items: 
 }
 
 /** What a cap holds in the repo, or null when nothing is held. */
-function heldIn({ designQueue, monitorIssues, openMaps }: GitHubFacts, appLogin: string, now: number): Held | null {
+function heldIn({ designQueue, monitorIssues, openMaps, kitIssues }: GitHubFacts, appLogin: string, now: number): Held | null {
   const designSessions = heldDesignSessionsOf(designQueue, now);
   const monitor = heldMonitorOf(monitorIssues, appLogin);
   const mapCap = heldMapsOf(openMaps);
-  return designSessions === null && monitor === null && mapCap === null ? null : { designSessions, monitor, maps: mapCap };
+  const runs = heldRunsOf(kitIssues);
+  return designSessions === null && monitor === null && mapCap === null && runs === null ? null : { designSessions, monitor, maps: mapCap, runs };
+}
+
+/**
+ * The Held runs, read by the scheduled tick's own rule (waitingHeldRuns), so
+ * the summary and the resume can't disagree, with the open weekly-limit issues
+ * they wait on. Null while no run is held.
+ */
+function heldRunsOf(kitIssues: readonly KitIssueSnapshot[]): HeldRuns | null {
+  const runs = waitingHeldRuns(kitIssues).map(({ run, markers }) => ({
+    role: run.role,
+    issue: run.issue,
+    heldOn: [...markers].flatMap(([issue, held]) => (held > 0 ? [issue] : [])),
+  }));
+  if (runs.length === 0) return null;
+  const weeklyLimitIssues = kitIssues
+    .filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL))
+    .map((issue) => ({ number: issue.number, resetsAt: resetsAtOf(issue) }));
+  return { runs, weeklyLimitIssues };
 }
 
 /**
@@ -1105,16 +1166,27 @@ function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, appLogin: s
   return oldestFirst(waiting);
 }
 
-function stuck({ repo, openIssues, openPullRequests }: GitHubFacts, records: readonly RunRecord[], items: Items, now: number): StuckItem[] {
+/**
+ * Loop work that hasn't moved in more than 24 hours. A Held run isn't stuck:
+ * the Kit resumes it itself at the reset, and Held names it, so a Ticket or
+ * PR a held marker names is left out, its failed run and its draft alike.
+ */
+function stuck({ repo, openIssues, openPullRequests, kitIssues }: GitHubFacts, records: readonly RunRecord[], items: Items, now: number): StuckItem[] {
+  const held = new Set(waitingHeldRuns(kitIssues).map(({ run }) => run.issue));
+  const isHeld = (...numbers: readonly (number | null)[]) => numbers.some((number) => number !== null && held.has(number));
   const found: StuckItem[] = [];
   for (const issue of openIssues) {
     const answered = issue.labels.includes(NEEDS_INFO) ? answerOf(issue) : null;
     if (answered !== null) found.push({ kind: "needs-info-answered", ...items.issue(issue, answered) });
     const failed = failedLastRunOf(issue, repo, records);
-    if (failed !== null) found.push({ kind: "infrastructure-failure", ...items.issue(issue, failed.endedAt), failure: failed.failure });
+    if (failed !== null && !isHeld(issue.number, failed.pullRequest)) {
+      found.push({ kind: "infrastructure-failure", ...items.issue(issue, failed.endedAt), failure: failed.failure });
+    }
   }
   for (const pullRequest of openPullRequests) {
-    if (pullRequest.draft) found.push({ kind: "idle-draft", ...items.pullRequest(pullRequest, lastActivityOf(pullRequest)) });
+    if (pullRequest.draft && !isHeld(pullRequest.number, pullRequest.ticket)) {
+      found.push({ kind: "idle-draft", ...items.pullRequest(pullRequest, lastActivityOf(pullRequest)) });
+    }
   }
   return oldestFirst(found.filter((item) => now - Date.parse(item.since) > STUCK_AFTER_MS));
 }
@@ -1134,20 +1206,20 @@ function answerOf(issue: OpenIssueFacts): string | null {
  * An open Ticket's latest record, if it ended in an Infrastructure failure:
  * the run nothing has picked up again. A judge run's record (role `score`) is
  * left out: scoring a run never picks its Ticket up, and a judge's own failure
- * never leaves the Ticket stuck.
+ * never leaves the Ticket stuck. With the run's PR, where a Review is held.
  */
 function failedLastRunOf(
   issue: OpenIssueFacts,
   repo: string,
   records: readonly RunRecord[],
-): { readonly endedAt: string; readonly failure: InfrastructureFailure } | null {
+): { readonly endedAt: string; readonly failure: InfrastructureFailure; readonly pullRequest: number | null } | null {
   const latest = records
     .filter((record) => record.repo === repo && record.issue === issue.number && record.role !== "score")
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
     .at(-1);
   if (latest === undefined || latest.infrastructureFailure === null) return null;
   if (latest.role !== "implement" && latest.role !== "review") return null;
-  return { endedAt: latest.endedAt, failure: latest.infrastructureFailure };
+  return { endedAt: latest.endedAt, failure: latest.infrastructureFailure, pullRequest: latest.pullRequest };
 }
 
 /** A PR's latest commit, comment or label event, or when it was opened. */
@@ -1242,7 +1314,8 @@ function localTime(time: number, timeZone: string): string {
 // theirs when their Spec ships. The open Retro gets no section, only its line
 // in Waiting on you, and so do an open Map and a failed research Decision.
 // Scores shows only in a week with score files, and never a run's own scores.
-// Held shows what the Design-session, Monitor and Map caps hold.
+// Held shows what the Design-session, Monitor and Map caps hold, and the Held
+// runs waiting on a weekly-limit issue.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords }: WeeklySummaryInput): string {
   const { cost, unknownCost, replaySpend, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
@@ -1312,7 +1385,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords 
   }
   lines.push(...subscriptionUsageLines(weeklyLimit, summary.subscriptions, timeZone), "");
   lines.push(...scoresLines(summary.scores, summary.scoringCost));
-  lines.push(...heldLines(summary.repos));
+  lines.push(...heldLines(summary.repos, timeZone));
   for (const repo of summary.repos) {
     lines.push(
       ...repoLines(
@@ -1388,7 +1461,7 @@ function scorerName(scorer: string): string {
 }
 
 /** The Held section: a line per repo and source with work held, or nothing at all when no repo has any. */
-function heldLines(repos: readonly RepoSection[]): string[] {
+function heldLines(repos: readonly RepoSection[], timeZone: string): string[] {
   const lines = repos.flatMap(({ repo, held }) => {
     const shown: string[] = [];
     const design = held?.designSessions ?? null;
@@ -1407,9 +1480,24 @@ function heldLines(repos: readonly RepoSection[]): string[] {
       const open = spelled(maps.open.map((map) => `[#${map}](https://github.com/${repo}/issues/${map})`), "and");
       shown.push(`- ${repo}: the Map cap is full with ${open} open, so Design sessions offer no new Map`);
     }
+    const runs = held?.runs ?? null;
+    if (runs !== null) shown.push(...heldRunsLines(repo, runs, timeZone));
     return shown;
   });
   return lines.length === 0 ? [] : ["## Held", "", ...lines, ""];
+}
+
+/** The Held runs, each with its role and the weekly-limit issues holding it, then each open weekly-limit issue with its reset. */
+function heldRunsLines(repo: string, { runs, weeklyLimitIssues }: HeldRuns, timeZone: string): string[] {
+  const link = (number: number) => `[#${number}](https://github.com/${repo}/issues/${number})`;
+  return [
+    `- ${repo}: ${runs.length === 1 ? "1 held run" : `${runs.length} held runs`}, which the Kit resumes itself at the reset:`,
+    ...runs.map(({ role, issue, heldOn }) => `  - the ${RUN_NAMES[role]} run on ${link(issue)}, held on ${spelled(heldOn.map(link), "and")}`),
+    ...weeklyLimitIssues.map(({ number, resetsAt }) => {
+      const reset = resetsAt === null ? "its reset not known" : `resetting ${localTime(Date.parse(resetsAt), timeZone)} (${timeZone})`;
+      return `- ${repo}: weekly-limit issue ${link(number)} open, ${reset}`;
+    }),
+  ];
 }
 
 /** How many of a repo's Waiting on you items show before the rest collapse into `<details>`. */

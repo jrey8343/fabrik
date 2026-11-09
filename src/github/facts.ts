@@ -32,6 +32,7 @@ import { CALLER_PATH } from "../setup/shims.ts";
 import { type GitHub, GitHubError, pagesOf, type Repo } from "./client.ts";
 import {
   gatherDesignQueueSlice,
+  gatherKitIssues,
   gatherOpenMaps,
   loginOf,
   type RawWeeklyIssue,
@@ -92,7 +93,7 @@ export async function gatherEveryRepoFacts(
 async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(reach).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, openMaps, openReplays] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, openMaps, openReplays, { kitIssues }] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
@@ -109,6 +110,9 @@ async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: num
     // The Map cap's own read, so Held and the cap can't disagree.
     gatherOpenMaps(github, repo),
     pagesOf<RawOpenReplay>(github, OPEN_REPLAYS_QUERY, repo, { replay: REPLAY_LABEL }, (data) => data.repository.issues),
+    // The Loop's own read, so Held and the scheduled tick's resume can't disagree. It doesn't know
+    // the App's login, so it takes any bot's text for the App's, as the Design queue slice does.
+    gatherKitIssues(github, repo, null),
   ]);
   const issues = [...new Map([...updatedIssues, ...openIssues].map((issue) => [issue.number, issue])).values()];
   return {
@@ -130,6 +134,7 @@ async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: num
     openRetros: openRetros.map(openKitIssueOf),
     openReplays: openReplays.map(({ number, title, createdAt, lastEditedAt, body, author }) => ({ number, title, author: loginOf(author), createdAt, lastEditedAt, body })),
     openMaps: openMaps.map((map) => map.number),
+    kitIssues,
   };
 }
 
@@ -320,6 +325,7 @@ const OPEN_PULL_REQUESTS_QUERY = `
         nodes {
           number title isDraft headRefOid headRefName createdAt
           author ${ACTOR}
+          closingIssuesReferences(first: 10) { nodes { number } }
           commits(last: 100) { nodes { ${COMMIT} } }
           ${REVIEWS}
           ${COMMENTS}
@@ -488,6 +494,7 @@ interface RawOpenPullRequest {
   headRefName: string;
   createdAt: string;
   author: RawActor | null;
+  closingIssuesReferences: { nodes: { number: number }[] };
   commits: { nodes: RawCommit[] };
   reviews: { nodes: RawReview[] };
   comments: { nodes: RawComment[] };
@@ -634,6 +641,7 @@ function commitOf({ commit }: RawCommit): CommitFacts {
 function openPullRequestOf(pr: RawOpenPullRequest): OpenPullRequestFacts {
   return {
     number: pr.number,
+    ticket: pr.closingIssuesReferences.nodes[0]?.number ?? null,
     title: pr.title,
     draft: pr.isDraft,
     headSha: pr.headRefOid,

@@ -983,10 +983,11 @@ interface KitIssuesQueryResult {
  * every event's snapshot holds. Their markers steer agent runs (a held marker
  * resumes one), so only the App's own text is read (ADR-0007): the body of an
  * issue the App opened, and the App's comments, every one of them, however
- * many pages they take. Anyone else's comment is left out.
+ * many pages they take. Anyone else's comment is left out. The Weekly summary
+ * reads them too (src/github/facts.ts), so its Held runs are the Loop's.
  */
-async function gatherKitIssues(
-  github: GitHub,
+export async function gatherKitIssues(
+  github: Pick<GitHub, "graphql">,
   repo: Repo,
   appLogin: string | null,
 ): Promise<{ owner: string; kitIssues: KitIssueSnapshot[] }> {
@@ -1011,7 +1012,7 @@ async function gatherKitIssues(
 
 /** The comments before this page, oldest first. */
 async function earlierComments(
-  github: GitHub,
+  github: Pick<GitHub, "graphql">,
   repo: Repo,
   number: number,
   page: KitIssueComments,

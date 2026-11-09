@@ -91,6 +91,8 @@ interface RawRepo {
   openMaps?: unknown[];
   /** The open issues with the fabrik:replay label. */
   openReplays?: unknown[];
+  /** The open issues with a Kit-owned label. */
+  kitIssues?: unknown[];
 }
 
 /** A read-only GraphQL API over `raw`, answering each facts query with one page. */
@@ -119,6 +121,10 @@ function repoWith(raw: RawRepo) {
         expect(variables["replay"]).toBe("fabrik:replay");
         expect(query).toContain("issues(states: OPEN, labels: [$replay]");
         return answer({ repository: { issues: page(raw.openReplays) } });
+      }
+      if (query.includes("labels: $labels")) {
+        expect(variables["labels"]).toContain("fabrik:weekly-limit");
+        return answer({ repository: { owner: { login: "jrey8343" }, issues: { nodes: raw.kitIssues ?? [] } } });
       }
       if (query.includes("labels: [$label]")) {
         if (variables["label"] === "fabrik:audit") return answer({ repository: { issues: page(raw.openAudits) } });
@@ -366,7 +372,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 
-  it("holds the open agent PRs alone, with their head, draft state, commits, reviews and activity", async () => {
+  it("holds the open agent PRs alone, with their Ticket from Closes #n, head, draft state, commits, reviews and activity", async () => {
     const github = repoWith({
       openPullRequests: [
         {
@@ -377,6 +383,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
           headRefName: "fabrik/ticket-7",
           createdAt: "2026-11-01T00:00:00Z",
           author: APP,
+          closingIssuesReferences: { nodes: [{ number: 7 }] },
           commits: { nodes: [aRawCommit("1", "2026-11-02T00:00:00Z", "A fix", { email: "jared@example.com", user: { login: "jrey8343" } })] },
           reviews: { nodes: [{ author: OPERATOR, state: "COMMENTED", submittedAt: "2026-11-02T01:00:00Z", body: "Why here?", comments: { nodes: [] } }] },
           comments: { nodes: [] },
@@ -390,6 +397,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
           headRefName: "fabrik/ticket-9",
           createdAt: "2026-11-01T00:00:00Z",
           author: OPERATOR,
+          closingIssuesReferences: { nodes: [{ number: 9 }] },
           commits: { nodes: [] },
           reviews: { nodes: [] },
           comments: { nodes: [] },
@@ -403,6 +411,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
     expect(facts.openPullRequests).toEqual([
       {
         number: 50,
+        ticket: 7,
         title: "Build the thing",
         draft: true,
         headSha: "h".repeat(40),
@@ -412,6 +421,29 @@ describe("Gathering a Product repo's GitHub facts", () => {
         comments: [],
         labelEvents: [],
       },
+    ]);
+  });
+
+  it("holds the open Kit-owned issues as the Loop reads them, so Held names the held runs: a bot's body and comments alone", async () => {
+    const held = '<!-- fabrik:held {"issue":7,"role":"implement","label":"agent:implement"} -->';
+    const github = repoWith({
+      kitIssues: [
+        {
+          number: 20,
+          body: "The weekly usage limit is reached.\n<!-- fabrik:resets-at 2026-11-10T22:00:00Z -->",
+          author: APP,
+          labels: { nodes: [{ name: "fabrik:weekly-limit" }] },
+          comments: { nodes: [{ body: held, author: APP }, { body: "Quoting it", author: OPERATOR }] },
+        },
+        { number: 21, body: "Faked", author: OPERATOR, labels: { nodes: [{ name: "fabrik:weekly-limit" }] }, comments: { nodes: [] } },
+      ],
+    });
+
+    const { kitIssues } = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(kitIssues).toEqual([
+      { number: 20, labels: ["fabrik:weekly-limit"], body: "The weekly usage limit is reached.\n<!-- fabrik:resets-at 2026-11-10T22:00:00Z -->", comments: [held] },
+      { number: 21, labels: ["fabrik:weekly-limit"], body: "", comments: [] },
     ]);
   });
 
@@ -690,6 +722,7 @@ describe("Gathering a Product repo's GitHub facts for a Retro", () => {
             headRefName: "fabrik/ticket-9",
             createdAt: "2026-11-01T00:00:00Z",
             author: APP,
+            closingIssuesReferences: { nodes: [{ number: 9 }] },
             commits: { nodes: [aRawCommit("3", "2026-11-04T00:00:00Z", "Add the logo", OPERATOR_COMMIT)] },
             reviews: { nodes: [] },
             comments: { nodes: [] },
