@@ -46,6 +46,9 @@ outputs:
   replay-ticket:
     description: For loop.yml's claim job on a replay, the replay Ticket the plan marked in progress in this run (#156); empty when it marked none.
     value: ${{ steps.loop.outputs.replay-ticket }}
+  empty-diff:
+    description: '"true" when the plan landed an Implement run whose branch changed nothing, an empty diff, which the Run record then says.'
+    value: ${{ steps.loop.outputs.empty-diff }}
   preview-url:
     description: For a UI PR whose Kit config declares preview.url, the preview deployment the plan asked to link, filled in for the PR as its push left it; empty otherwise.
     value: ${{ steps.loop.outputs.preview-url }}

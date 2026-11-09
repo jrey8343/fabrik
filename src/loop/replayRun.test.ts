@@ -222,8 +222,8 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
     it("shows the Ticket's results as it finishes, each arm's linking its patch, and posts nothing while another Ticket waits", () => {
       const plan = finished(running.body);
 
-      expect(bodyOf(plan)).toContain("replays/acme/shop/140/12-baseline.patch");
-      expect(bodyOf(plan)).toContain("replays/acme/shop/140/12-variant.patch");
+      expect(bodyOf(plan)).toContain("replays/acme/shop/140/12-baseline-9001.patch");
+      expect(bodyOf(plan)).toContain("replays/acme/shop/140/12-variant-9001.patch");
       expect(commentsOf(plan)).toEqual([]);
     });
 
@@ -235,7 +235,7 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
 
         expect(commentsOf(plan)).toEqual([{ kind: "comment", issue: 140, body: expect.stringContaining("@operator") }]);
         expect(notificationsOf(plan)).toEqual(["mention on #140"]);
-        expect(bodyOf(plan)).toContain("replays/acme/shop/140/7-variant.patch");
+        expect(bodyOf(plan)).toContain("replays/acme/shop/140/7-variant-8001.patch");
       });
 
       it("posts it when the last Ticket fails a second time too, since every Ticket is then done or failed", () => {

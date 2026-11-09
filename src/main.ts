@@ -9,7 +9,7 @@ import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult } from "./agen
 import { type AgentBranchGit, rebaseBranchOntoMain, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { prototypeBranchFor } from "./loop/designOutput.ts";
-import { applyPlan, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
+import { applyPlan, emptyDiffIn, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { GitHub, type Repo } from "./github/client.ts";
 import { describePlan } from "./github/describePlan.ts";
 import {
@@ -425,6 +425,8 @@ async function main(landing: Landing | null): Promise<void> {
   // The replay jobs run only on the Ticket this run's claim marked in progress, once it has.
   const claimed = replayClaimIn(plan);
   if (claimed !== null) await appendFile(required("GITHUB_OUTPUT"), `replay-ticket=${claimed}\n`);
+  // The push job's Run record says the Implement run left an empty diff, once this plan has counted it (#448).
+  if (emptyDiffIn(plan)) await appendFile(required("GITHUB_OUTPUT"), "empty-diff=true\n");
   // The Design queue job runs the check likewise, once this plan has landed.
   if (wantsDesignQueueCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "design-queue=true\n");
   // The push job's preview step polls it and links it, once this plan has pushed (src/kit/previewLink.ts): a UI

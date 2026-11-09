@@ -31,6 +31,10 @@ inputs:
   role:
     description: The agent role the Kit job routed to (needs.kit.outputs.route), whose transcript the agent job kept.
     required: true
+  empty-diff:
+    description: '"true" when the Loop found the Implement run branch changed nothing, an empty diff (the run-loop empty-diff output), which the record says.'
+    required: false
+    default: ""
 
 outputs:
   score:
@@ -74,4 +78,5 @@ runs:
         FABRIK_PRODUCT_TOKEN: ${{ steps.tokens.outputs.kit-config-token }}
         FABRIK_STORE_TOKEN: ${{ steps.tokens.outputs.store-token }}
         FABRIK_TRANSCRIPT_DIR: ${{ runner.temp }}/transcript
+        FABRIK_EMPTY_DIFF: ${{ inputs.empty-diff }}
       run: node src/kit/record-main.ts

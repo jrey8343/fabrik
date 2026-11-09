@@ -1766,6 +1766,7 @@ jobs:
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
           role: ${{ needs.kit.outputs.route }}
+          empty-diff: ${{ steps.loop.outputs.empty-diff }}
 
   # Dispatch (ADR-0001): runs when the push job's plan asked for a check, on a
   # fresh snapshot taken after that plan's labels landed. Like the push job, it

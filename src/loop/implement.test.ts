@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { anEvidence, CAPTURED, CAPTURED_SHA, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
 import type { CaptureResult } from "../evidence/uiEvidence.ts";
+import { emptyDiffIn } from "../github/apply.ts";
 import { planFor } from "./rules.ts";
 import type { Action, ImplementEvidence, LoopEvent, Plan } from "./types.ts";
 
@@ -196,6 +197,15 @@ describe("An empty diff", () => {
     const actions = actionsOf(planFor(undone, snapshotOf(readyTicket()), kitConfig()));
 
     expect(actions).toContainEqual({ kind: "add-labels", issue: 7, labels: ["ready-for-human"] });
+  });
+
+  it("is told to the run's Run record, as the plan's empty diff, and only an empty diff is", () => {
+    const planOn = (event: LoopEvent, emptyDiffs = 0) =>
+      planFor(event, snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], emptyDiffs })), kitConfig());
+
+    expect([0, 1, 2].map((emptyDiffs) => emptyDiffIn(planOn(empty, emptyDiffs)))).toEqual([true, true, true]);
+    expect(emptyDiffIn(planOn(finished()))).toBe(false);
+    expect(emptyDiffIn(planOn(finished({ changes: { net: [], commits: [{ path: "CLAUDE.md" }] } })))).toBe(false);
   });
 
   it("is marked so later runs can count it", () => {

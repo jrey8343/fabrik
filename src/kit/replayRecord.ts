@@ -118,8 +118,8 @@ export function replayRunFiles(context: ReplayRunContext, arms: Readonly<Record<
   for (const { arm, implement, review } of runs) {
     const artifacts = arms[arm];
     if (implement.kind === "ran") {
-      // Each arm of a Ticket has one patch and one gates file, so only the run the Ticket is done in keeps them.
-      const at = { issue: context.issue, ticket: context.ticket, arm };
+      // Each arm of a Ticket has one patch and one gates file in each run, and only the run the Ticket is done in writes them.
+      const at = { issue: context.issue, ticket: context.ticket, arm, run: context.runId };
       const results: StoreFile[] =
         end.kind !== "done"
           ? []
@@ -223,7 +223,7 @@ function unreadInputsDetail(run: ArmRun): string | null {
 function gatesFile(context: ReplayRunContext, arm: ReplayArm, text: string | null): StoreFile[] {
   const gates = text === null ? null : readReplayArmGates(parsedJson(text));
   if (gates === null || gates.ticket !== context.ticket || gates.arm !== arm || gates.run !== context.runId) return [];
-  return [{ path: replayGatesPath(context.repo, { issue: context.issue, ticket: context.ticket, arm }), content: storeJson(gates) }];
+  return [{ path: replayGatesPath(context.repo, { issue: context.issue, ticket: context.ticket, arm, run: context.runId }), content: storeJson(gates) }];
 }
 
 /** A run's transcript, if it left one, then its record. */

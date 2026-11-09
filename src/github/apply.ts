@@ -7,7 +7,7 @@ import { replayResultsIn, withTicketFinished, withTicketStarted } from "../kit/r
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
 import { isTriggerLabel, type TriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
-import { withPrototypeStarted } from "../loop/markers.ts";
+import { EMPTY_DIFF_MARKER, withPrototypeStarted } from "../loop/markers.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
 import type { MainRebase } from "./branch.ts";
 import type { GitHub, Repo } from "./client.ts";
@@ -274,6 +274,15 @@ export function wantsDispatchCheck(plan: Plan): boolean {
 export function replayClaimIn(plan: Plan): number | null {
   const mark = plan.kind === "act" ? plan.actions.find((action) => action.kind === "mark-replay-started") : undefined;
   return mark?.kind === "mark-replay-started" ? mark.ticket : null;
+}
+
+/**
+ * Whether the plan lands an Implement run whose branch changed nothing, an
+ * empty diff, which the push job's Run record then says: the plan's comment
+ * marked as one, as later runs count it.
+ */
+export function emptyDiffIn(plan: Plan): boolean {
+  return plan.kind === "act" && plan.actions.some((action) => action.kind === "comment" && action.body.startsWith(EMPTY_DIFF_MARKER));
 }
 
 /** Whether the plan asks for a Design queue check, which the Design queue job then runs. */

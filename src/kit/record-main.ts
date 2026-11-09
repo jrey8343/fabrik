@@ -10,7 +10,8 @@
 // Reads FABRIK_NEEDS and the agent job's artifacts as src/main.ts does, the
 // transcript from FABRIK_TRANSCRIPT_DIR, and two Fabrik App tokens:
 // FABRIK_PRODUCT_TOKEN, to read the Product's Kit config, and FABRIK_STORE_TOKEN,
-// scoped to the store, empty when it couldn't be minted.
+// scoped to the store, empty when it couldn't be minted. FABRIK_EMPTY_DIFF is
+// "true" when the Loop found the Implement run's branch changed nothing.
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -91,6 +92,7 @@ async function recordRun(): Promise<Recorded> {
     agentResult: await readIfPresent(join(agentDir, AGENT_RESULT_FILE)),
     failureReport: await readIfPresent(join(agentDir, AGENT_FAILURE_FILE)),
     transcript: transcript?.lines ?? null,
+    emptyDiff: process.env["FABRIK_EMPTY_DIFF"] === "true",
   });
   const store = new GitHub(storeToken, apiUrl);
   const write = await writeRunRecord(store, files, transcript?.gzip ?? null, (ms) => sleep(ms));

@@ -80,8 +80,8 @@ describe("The replay-record job's files, for both arms of one replay Ticket's ru
     const armFiles = (arm: ReplayArm) => [
       `transcripts/${month}/9001-1-implement-replay-${arm}.jsonl.gz`,
       `runs/${month}/9001-1-implement-replay-${arm}.json`,
-      `replays/acme/shop/140/12-${arm}.patch`,
-      `replays/acme/shop/140/12-${arm}.gates.json`,
+      `replays/acme/shop/140/12-${arm}-9001.patch`,
+      `replays/acme/shop/140/12-${arm}-9001.gates.json`,
       `transcripts/${month}/9001-1-review-replay-${arm}.jsonl.gz`,
       `runs/${month}/9001-1-review-replay-${arm}.json`,
       `transcripts/${month}/9001-1-score-replay-${arm}.jsonl.gz`,
@@ -98,6 +98,21 @@ describe("The replay-record job's files, for both arms of one replay Ticket's ru
     const store = storeWith({ files: paths });
 
     expect(await writeReplayRun(store, files, noWait)).toEqual({ kind: "written", written: [], existing: paths });
+  });
+
+  it("writes a Ticket's second run's patch and gates beside its first's, as when the first run never landed", async () => {
+    const second = { ...CONTEXT, runId: 9003 };
+    const gates = { gates: line({ ticket: 12, arm: "baseline", run: 9003, gates: "passed", hiddenTests: "failed" }) };
+    const files = replayRunFiles(second, { baseline: armRan("baseline", gates), variant: armRan("variant", { gates: null }) }, KIT, ENDED_AT);
+    const store = storeWith({ files: ["replays/acme/shop/140/12-baseline-9001.patch", "replays/acme/shop/140/12-baseline-9001.gates.json"] });
+
+    await writeReplayRun(store, files, noWait);
+
+    expect(store.writes.filter((path) => path.startsWith("replays/"))).toEqual([
+      "replays/acme/shop/140/12-baseline-9003.patch",
+      "replays/acme/shop/140/12-baseline-9003.gates.json",
+      "replays/acme/shop/140/12-variant-9003.patch",
+    ]);
   });
 
   it("writes nothing to a store others can read", async () => {
