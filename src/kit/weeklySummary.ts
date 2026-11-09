@@ -20,10 +20,11 @@ import { holdsSlot } from "../loop/designQueue.ts";
 import { RUN_NAMES, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
-import { DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, refusedByMapCap } from "../loop/markers.ts";
+import { auditMarksIn, DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, refusedByMapCap, retroMarksIn } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
 import { type AgentRole, type DesignQueueSnapshot, type InfrastructureFailure, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { FAILED_RUNS_A_WEEK, failedInWeek, weekStart } from "../loop/weeklyGate.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
@@ -127,6 +128,18 @@ export interface OpenRetroFacts {
   readonly createdAt: string;
 }
 
+/** A `fabrik:audit` or `fabrik:retro` issue, open or closed, as Stuck reads a week's failed runs from it. */
+export interface WeeklyRunIssueFacts {
+  readonly number: number;
+  readonly title: string;
+  /** Who opened it: only the Fabrik App's Audits and Retros count. */
+  readonly author: string;
+  /** ISO 8601. */
+  readonly createdAt: string;
+  /** Its body, whose markers say whether its run failed. */
+  readonly body: string;
+}
+
 /** An open `fabrik:replay` issue, as Waiting on you reads it. */
 export interface OpenReplayFacts {
   readonly number: number;
@@ -160,6 +173,10 @@ export interface GitHubFacts extends MetricFacts {
   readonly openAudits: readonly OpenAuditFacts[];
   /** The repo's open `fabrik:retro` issues, whoever opened them. */
   readonly openRetros: readonly OpenRetroFacts[];
+  /** The repo's newest `fabrik:audit` issues, open and closed, whoever opened them, as the audit gate reads them. */
+  readonly audits: readonly WeeklyRunIssueFacts[];
+  /** The repo's newest `fabrik:retro` issues, open and closed, whoever opened them, as the retro gate reads them. */
+  readonly retros: readonly WeeklyRunIssueFacts[];
   /** The repo's open `fabrik:replay` issues, whoever filed them. */
   readonly openReplays: readonly OpenReplayFacts[];
   /** The repo's open Maps, by number, oldest first, read as the Map cap reads them: whoever charted them. */
@@ -505,7 +522,13 @@ export type StuckItem =
   /** An agent PR out of draft the Operator reviewed at `since`, after its passing Verdict, that the Kit hasn't acted on. */
   | (ItemBase & { readonly kind: "reviewed" })
   /** An open Ticket whose latest record, ended at `since`, was an Infrastructure failure or timeout. */
-  | (ItemBase & { readonly kind: "infrastructure-failure"; readonly failure: InfrastructureFailure });
+  | (ItemBase & { readonly kind: "infrastructure-failure"; readonly failure: InfrastructureFailure })
+  /**
+   * The Fabrik App's Audits or Retros whose runs failed in one week, enough
+   * of them that the next waits for next week (src/loop/weeklyGate.ts), the
+   * last opened in the summary's week, and is this item, at `since`.
+   */
+  | (ItemBase & { readonly kind: "weekly-runs-failed"; readonly issueName: "Audit" | "Retro"; readonly failed: readonly ItemBase[] });
 
 export interface RevertRate {
   readonly reverted: number;
@@ -1007,9 +1030,10 @@ function hasUnknownCostBasis(record: RunRecord): boolean {
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
-function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: filedAt }: WeeklySummaryInput): RepoSection {
+function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: filedAt, timeZone }: WeeklySummaryInput): RepoSection {
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
+  const { thisWeek } = weeksEndingAt(now, timeZone);
   return {
     repo: facts.repo,
     // An open Audit, Retro, finished Replay or Map waits on the Operator, so it also keeps a quiet week from being skipped.
@@ -1021,10 +1045,39 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
       ...openMapsOf(facts, items),
       ...failedResearchOf(facts, appLogin, items),
     ]),
-    stuck: stuck(facts, records, operator, items, now),
+    // A week given up on is Stuck however recently its last run failed: nothing moves it until the next week.
+    stuck: oldestFirst([
+      ...stuck(facts, records, operator, items, now),
+      ...weekGivenUp("Audit", facts.audits, (body) => auditMarksIn(body).failed, appLogin, thisWeek, items),
+      ...weekGivenUp("Retro", facts.retros, (body) => retroMarksIn(body).failed, appLogin, thisWeek, items),
+    ]),
     held: heldIn(facts, appLogin, now),
     unread: null,
   };
+}
+
+/**
+ * The Fabrik App's Audits or Retros, by `issueName`, whose runs failed in one
+ * week, UTC Monday to Monday as the gate counts it, enough of them that the
+ * next waits for next week, when the last was opened in the summary's `week`.
+ */
+function weekGivenUp(
+  issueName: "Audit" | "Retro",
+  issues: readonly WeeklyRunIssueFacts[],
+  failed: (body: string) => boolean,
+  appLogin: string,
+  week: Week,
+  items: Items,
+): StuckItem[] {
+  const runs = issues.filter((issue) => issue.author === appLogin).map((issue) => ({ ...issue, failed: failed(issue.body) }));
+  const weeks = new Set(runs.filter(({ createdAt }) => within(week, createdAt)).map(({ createdAt }) => weekStart(createdAt)));
+  return [...weeks].flatMap((start) => {
+    const inWeek = failedInWeek(runs, start);
+    const last = inWeek[FAILED_RUNS_A_WEEK - 1];
+    if (last === undefined || !within(week, last.createdAt)) return [];
+    const givenUp = inWeek.slice(0, FAILED_RUNS_A_WEEK);
+    return [{ kind: "weekly-runs-failed", issueName, ...items.issue(last, last.createdAt), failed: givenUp.map((run) => items.issue(run, run.createdAt)) }];
+  });
 }
 
 /** The Fabrik App's open Audits, aged from when each was opened: a person's `fabrik:audit` issue is no Audit. */
@@ -1643,6 +1696,8 @@ function stuckLine(item: StuckItem): string {
       return itemLine(item, `reviewed by you ${duration(item.age)} ago; the Kit hasn't acted`);
     case "infrastructure-failure":
       return itemLine(item, `last run ended in an Infrastructure failure (${item.failure}) ${duration(item.age)} ago`);
+    case "weekly-runs-failed":
+      return `- ${item.issueName} failed ${item.failed.length === 2 ? "twice" : `${item.failed.length} times`} this week (${item.failed.map(({ number, url }) => `[#${number}](${url})`).join(", ")})`;
   }
 }
 

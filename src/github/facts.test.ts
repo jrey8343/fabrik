@@ -87,6 +87,10 @@ interface RawRepo {
   openAudits?: unknown[];
   /** The open issues with the fabrik:retro label. */
   openRetros?: unknown[];
+  /** The newest fabrik:audit issues, open and closed, as the audit gate reads them. */
+  audits?: unknown[];
+  /** The newest fabrik:retro issues, open and closed, as the retro gate reads them. */
+  retros?: unknown[];
   /** The open issues with the wayfinder:map label. */
   openMaps?: unknown[];
   /** The open issues with the fabrik:replay label. */
@@ -125,6 +129,12 @@ function repoWith(raw: RawRepo) {
       if (query.includes("labels: $labels")) {
         expect(variables["labels"]).toContain("fabrik:weekly-limit");
         return answer({ repository: { owner: { login: "jrey8343" }, issues: { nodes: raw.kitIssues ?? [] } } });
+      }
+      if (query.includes("issues(labels: [$label], states: [OPEN, CLOSED]")) {
+        const weekly = (nodes: unknown[] = []) => answer({ repository: { defaultBranchRef: null, issues: { nodes } } });
+        if (variables["label"] === "fabrik:audit") return weekly(raw.audits);
+        if (variables["label"] === "fabrik:retro") return weekly(raw.retros);
+        throw new Error(`Unexpected label: ${String(variables["label"])}`);
       }
       if (query.includes("labels: [$label]")) {
         if (variables["label"] === "fabrik:audit") return answer({ repository: { issues: page(raw.openAudits) } });
@@ -564,6 +574,26 @@ describe("Gathering a Product repo's GitHub facts", () => {
     expect(facts.openRetros).toEqual([
       { number: 120, title: "Retro: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-07T00:00:00Z" },
       { number: 121, title: "My own retro", author: "jrey8343", createdAt: "2026-11-08T00:00:00Z" },
+    ]);
+  });
+
+  it("holds the fabrik:audit and fabrik:retro issues, open and closed, with who opened them, when, and their bodies, as the gates read them", async () => {
+    const github = repoWith({
+      audits: [
+        { number: 96, title: "Audit: week of 2026-11-02", state: "CLOSED", stateReason: "NOT_PLANNED", createdAt: "2026-11-08T02:05:00Z", body: "failed", author: APP },
+        { number: 95, title: "My own audit", state: "OPEN", stateReason: null, createdAt: "2026-11-08T00:05:00Z", body: "mine", author: OPERATOR },
+      ],
+      retros: [{ number: 120, title: "Retro: week of 2026-11-02", state: "OPEN", stateReason: null, createdAt: "2026-11-07T00:05:00Z", body: "pending", author: null }],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect([facts.audits, facts.retros]).toEqual([
+      [
+        { number: 96, title: "Audit: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-08T02:05:00Z", body: "failed" },
+        { number: 95, title: "My own audit", author: "jrey8343", createdAt: "2026-11-08T00:05:00Z", body: "mine" },
+      ],
+      [{ number: 120, title: "Retro: week of 2026-11-02", author: "ghost", createdAt: "2026-11-07T00:05:00Z", body: "pending" }],
     ]);
   });
 

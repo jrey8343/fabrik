@@ -194,6 +194,8 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     followUpIssues: [],
     openAudits: [],
     openRetros: [],
+    audits: [],
+    retros: [],
     openReplays: [],
     openMaps: [],
     kitIssues: [],

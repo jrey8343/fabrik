@@ -24,6 +24,7 @@ import type {
   SpecFacts,
   TicketFacts,
   UnreadRepo,
+  WeeklyRunIssueFacts,
 } from "../kit/weeklySummary.ts";
 import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { AUDIT_LABEL, MONITOR_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/labels.ts";
@@ -93,7 +94,7 @@ export async function gatherEveryRepoFacts(
 async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(reach).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, openMaps, openReplays, { kitIssues }] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, audits, retros, openMaps, openReplays, { kitIssues }] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
@@ -107,6 +108,9 @@ async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: num
     gatherOperatorIssues(github, repo, operator, escapeSince),
     pagesOf<RawOpenKitIssue>(github, OPEN_KIT_ISSUES_QUERY, repo, { label: AUDIT_LABEL }, (data) => data.repository.issues),
     pagesOf<RawOpenKitIssue>(github, OPEN_KIT_ISSUES_QUERY, repo, { label: RETRO_LABEL }, (data) => data.repository.issues),
+    // The weekly gates' own read, so Stuck and the gates count the same failed runs.
+    gatherWeeklyRunIssues(github, repo, AUDIT_LABEL),
+    gatherWeeklyRunIssues(github, repo, RETRO_LABEL),
     // The Map cap's own read, so Held and the cap can't disagree.
     gatherOpenMaps(github, repo),
     pagesOf<RawOpenReplay>(github, OPEN_REPLAYS_QUERY, repo, { replay: REPLAY_LABEL }, (data) => data.repository.issues),
@@ -132,6 +136,8 @@ async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: num
       .map(({ number, title, author, body }) => ({ number, title, author: loginOf(author), body })),
     openAudits: openAudits.map(openKitIssueOf),
     openRetros: openRetros.map(openKitIssueOf),
+    audits,
+    retros,
     openReplays: openReplays.map(({ number, title, createdAt, lastEditedAt, body, author }) => ({ number, title, author: loginOf(author), createdAt, lastEditedAt, body })),
     openMaps: openMaps.map((map) => map.number),
     kitIssues,
@@ -167,6 +173,12 @@ export async function gatherRetroFacts(
     Promise.all(facts.openPullRequests.map(async (pullRequest) => ({ ...pullRequest, commits: await Promise.all(pullRequest.commits.map(withPatch)) }))),
   ]);
   return { ...facts, pullRequests, openPullRequests };
+}
+
+/** The newest issues with a weekly gate's label, `fabrik:audit` or `fabrik:retro`, open and closed, read as the gate reads them (weeklyIssuesQuery). */
+async function gatherWeeklyRunIssues(github: Pick<GitHub, "graphql">, repo: Repo, label: string): Promise<WeeklyRunIssueFacts[]> {
+  const data = await github.graphql<WeeklyIssuesQueryResult>(weeklyIssuesQuery(), { owner: repo.owner, name: repo.name, label });
+  return data.repository.issues.nodes.map(({ number, title, author, createdAt, body }) => ({ number, title, author: loginOf(author), createdAt, body }));
 }
 
 /** What a Retro reads of the Retros before it, and of the issues filed from them. */

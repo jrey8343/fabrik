@@ -1,7 +1,20 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
-import { anIssue, aPullRequest, AUDITED_SHA, auditBody, designQueueSnapshotOf, HEAD_SHA, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import {
+  anIssue,
+  aPullRequest,
+  AUDITED_SHA,
+  auditBody,
+  designQueueSnapshotOf,
+  HEAD_SHA,
+  kitConfig,
+  notificationsOf,
+  RETRO_WINDOW_END,
+  retroBody,
+  snapshotOf,
+  snapshotOfPullRequest,
+} from "../__fixtures__/snapshots.ts";
 import { aReading, acceptedBody } from "../__fixtures__/replay.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
@@ -1573,6 +1586,53 @@ describe("Gathering a Dispatch check's research Decisions", () => {
     const decisions = await gathered([[aResearchNode(12, { comments })]]);
 
     expect(decisions?.[0]?.lastRunFailed).toBe(failed);
+  });
+});
+
+describe("Gathering a weekly run's gate issues as it fails", () => {
+  const failed = { kind: "agent-run-failed", role: "audit", issue: 98, runUrl: "https://github.com/acme/shop/actions/runs/42", jobResult: "failure", secretsStep: "success", report: null } as const;
+  const EARLIER = { number: 97, title: "Audit: week of 2026-11-02", state: "CLOSED", stateReason: "NOT_PLANNED", createdAt: "2026-11-08T00:05:00Z", body: `The Auditor's run failed: it crashed.\n\n<!-- fabrik:audit ${AUDITED_SHA} -->\n<!-- fabrik:audit-failed -->`, author: APP_BOT };
+  const PENDING = { number: 98, title: "Audit: week of 2026-11-02", state: "OPEN", stateReason: null, createdAt: "2026-11-08T02:05:00Z", body: auditBody(AUDITED_SHA, "pending"), author: APP_BOT };
+
+  /** The pending Audit #98 as issueGitHub holds it, with these `fabrik:audit` issues, counting the weekly issue reads. */
+  function githubWith(labels: string[], nodes: unknown[]) {
+    const issue = issueGitHub({ author: APP_BOT, body: auditBody(AUDITED_SHA, "pending"), labels });
+    const reads: unknown[] = [];
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("defaultBranchRef")) {
+          reads.push(variables["label"]);
+          return { repository: { defaultBranchRef: null, issues: { nodes: variables["label"] === "fabrik:audit" ? nodes : [] } } };
+        }
+        return issue.graphql(query, variables);
+      },
+    } as unknown as GitHub;
+    return { github, reads };
+  }
+
+  it("holds the Audit's gate issues, so the week's second failure tells the Operator", async () => {
+    const { github } = githubWith(["fabrik:audit"], [PENDING, EARLIER]);
+
+    const snapshot = await gatherSnapshot(github, repo, failed, null, APP_LOGIN);
+
+    expect(snapshot.weeklyIssues?.map(({ number, byApp }) => ({ number, byApp }))).toEqual([
+      { number: 98, byApp: true },
+      { number: 97, byApp: true },
+    ]);
+    expect(notificationsOf(planFor(failed, snapshot, kitConfig()), snapshot.operator)).toEqual(["mention on #98"]);
+  });
+
+  it("reads none for an issue that's neither an Audit nor a Retro, or an event that fails no weekly run", async () => {
+    const other = githubWith(["needs-triage"], [PENDING, EARLIER]);
+    const commented = githubWith(["fabrik:audit"], [PENDING, EARLIER]);
+
+    const snapshots = [
+      await gatherSnapshot(other.github, repo, failed, null, APP_LOGIN),
+      await gatherSnapshot(commented.github, repo, { kind: "label-added", issue: 98, label: "needs-triage" }, null, APP_LOGIN),
+    ];
+
+    expect(snapshots.map((snapshot) => snapshot.weeklyIssues)).toEqual([null, null]);
+    expect([...other.reads, ...commented.reads]).toEqual([]);
   });
 });
 

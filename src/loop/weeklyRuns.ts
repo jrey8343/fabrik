@@ -4,18 +4,30 @@
 // failed run leaves the issue closed as not planned, with one line on how it
 // failed. The tick tries it again, so unlike a Ticket's failure there's no
 // trigger label to re-add and nobody to tell, unless the failure stalls the
-// whole repo. Neither run is ever held, since the tick can't start one at a
-// reset: one due while every Subscription is used up leaves its issue the same
-// way. Pure, no I/O.
-import { isPendingAudit, startAuditorRun } from "./audit.ts";
+// whole repo, or it's the week's second failure, after which the next one
+// waits for next week (src/loop/weeklyGate.ts). Neither run is ever held,
+// since the tick can't start one at a reset: one due while every Subscription
+// is used up leaves its issue the same way. Pure, no I/O.
+import { auditsIn, isPendingAudit, startAuditorRun } from "./audit.ts";
 import { RUN_NAMES } from "./heldRun.ts";
 import { runsDueAreHeld } from "./hold.ts";
 import { repoWideNotice } from "./kitIssues.ts";
 import { AUDIT_FAILED_MARKER, auditMarker, auditMarksIn, RETRO_FAILED_MARKER, retroMarker, retroMarksIn } from "./markers.ts";
-import { isPendingRetro } from "./retro.ts";
+import { isPendingRetro, retrosIn } from "./retro.ts";
 import { startAgentRun } from "./runs.ts";
 import type { RanOn } from "./subscriptions.ts";
-import type { Action, AgentRole, HeldTargetSnapshot, InfrastructureFailure, IssueContext, IssueSnapshot, KitConfig, Plan } from "./types.ts";
+import type {
+  Action,
+  AgentRole,
+  HeldTargetSnapshot,
+  InfrastructureFailure,
+  IssueContext,
+  IssueSnapshot,
+  KitConfig,
+  Plan,
+  WeeklyIssueSnapshot,
+} from "./types.ts";
+import { FAILED_RUNS_A_WEEK, failedInWeek, type WeeklyIssue, weekStart } from "./weeklyGate.ts";
 
 /** The roles whose run is for a pending issue the scheduled tick opened, and which have no trigger label. */
 export type WeeklyRole = Extract<AgentRole, "audit" | "retro">;
@@ -32,6 +44,8 @@ export interface WeeklyRun {
   readonly start: (context: IssueContext, config: KitConfig) => Plan;
   /** The marker lines its failed body ends with: its own marker, kept when the body has one, then its failed marker. */
   readonly failedMarkers: (body: string) => readonly string[];
+  /** Its gate's issues as the gate weighs them: the App's alone, with whether each one's run failed. */
+  readonly gateIssues: (issues: readonly WeeklyIssueSnapshot[]) => readonly WeeklyIssue[];
 }
 
 const WEEKLY_RUNS: Readonly<Record<WeeklyRole, WeeklyRun>> = {
@@ -44,6 +58,7 @@ const WEEKLY_RUNS: Readonly<Record<WeeklyRole, WeeklyRun>> = {
       const { commit } = auditMarksIn(body);
       return [...(commit === null ? [] : [auditMarker(commit)]), AUDIT_FAILED_MARKER];
     },
+    gateIssues: auditsIn,
   },
   retro: {
     issueName: "Retro",
@@ -54,6 +69,7 @@ const WEEKLY_RUNS: Readonly<Record<WeeklyRole, WeeklyRun>> = {
       const { windowEnd } = retroMarksIn(body);
       return [...(windowEnd === null ? [] : [retroMarker(windowEnd)]), RETRO_FAILED_MARKER];
     },
+    gateIssues: retrosIn,
   },
 };
 
@@ -91,10 +107,11 @@ export interface WeeklyRunFailure {
  * an Auditor run failed, or a Retro run's evidence job or agent job did, or
  * its reply broke its output contract: the issue's body becomes one line on
  * how the run failed, keeping its own marker, with the failed marker in place
- * of the pending one, and it closes as not planned, mentioning nobody. A dead
- * token or the weekly limit also gets the Kit's repo-wide notice, as for any
- * run. An issue that's no longer pending (the Operator closed it, say)
- * changes nothing.
+ * of the pending one, and it closes as not planned, mentioning nobody, unless
+ * it's the week's second failed run: then the Operator is told why the next
+ * one waits for next week (#443). A dead token or the weekly limit also gets
+ * the Kit's repo-wide notice, as for any run. An issue that's no longer
+ * pending (the Operator closed it, say) changes nothing.
  */
 export function failWeekly(
   role: WeeklyRole,
@@ -110,18 +127,61 @@ export function failWeekly(
     ranOn === undefined || runUrl === null
       ? null
       : repoWideNotice(failure, context, { run: `The ${RUN_NAMES[role]} run on #${issue.number}`, runUrl, resetsAt, ...ranOn });
-  return { kind: "act", actions: [...failedIssue(role, issue, how, runUrl), ...(repoWide?.actions ?? [])] };
+  const [edit, close] = failedIssue(role, issue, how, runUrl);
+  return { kind: "act", actions: [edit, ...givingUpOnTheWeek(role, context, how, runUrl), close, ...(repoWide?.actions ?? [])] };
+}
+
+/**
+ * When this failed run is the one that gives up on its pending issue's week,
+ * as FAILED_RUNS_A_WEEK failed runs in a week hold its gate back until the
+ * next (src/loop/weeklyGate.ts): a comment on it @-mentioning the Operator,
+ * with each of the week's failed runs, how it failed and its link, read from
+ * the line each earlier one's body was left with. Otherwise nothing.
+ */
+function givingUpOnTheWeek(role: WeeklyRole, { issue, operator, weeklyIssues }: IssueContext, how: string, runUrl: string | null): Action[] {
+  const run = WEEKLY_RUNS[role];
+  const own = weeklyIssues?.find((weekly) => weekly.number === issue.number);
+  if (weeklyIssues === null || own === undefined) return [];
+  const others = weeklyIssues.filter((weekly) => weekly.number !== issue.number);
+  const earlier = failedInWeek(run.gateIssues(others), weekStart(own.createdAt));
+  if (earlier.length + 1 < FAILED_RUNS_A_WEEK) return [];
+  const failedLine = (number: number) => {
+    const line = others.find((weekly) => weekly.number === number)?.body.split("\n")[0] ?? "";
+    const prefix = `${run.runName} failed: `;
+    return line.startsWith(prefix) ? `: ${line.slice(prefix.length)}` : "";
+  };
+  return [
+    {
+      kind: "comment",
+      issue: issue.number,
+      body: [
+        `@${operator} ${run.runName} failed ${earlier.length === 1 ? "twice" : `${earlier.length + 1} times`} this week, so the next ${run.issueName} waits for next week:`,
+        "",
+        ...earlier.map(({ number }) => `- #${number}${failedLine(number)}`),
+        `- #${issue.number}: ${how}.${runLink(runUrl)}`,
+      ].join("\n"),
+    },
+  ];
+}
+
+/** ` [The run](url)`, or nothing for a run that never started. */
+function runLink(runUrl: string | null): string {
+  return runUrl === null ? "" : ` [The run](${runUrl})`;
 }
 
 /** A failed weekly run's pending issue rewritten to its one line, keeping its own marker, and closed as not planned. */
-function failedIssue(role: WeeklyRole, { number, body }: Pick<IssueSnapshot, "number" | "body">, how: string, runUrl: string | null): Action[] {
+function failedIssue(
+  role: WeeklyRole,
+  { number, body }: Pick<IssueSnapshot, "number" | "body">,
+  how: string,
+  runUrl: string | null,
+): [Action, Action] {
   const run = WEEKLY_RUNS[role];
-  const link = runUrl === null ? "" : ` [The run](${runUrl})`;
   return [
     {
       kind: "edit-issue-body",
       issue: number,
-      body: [`${run.runName} failed: ${how}.${link}`, "", ...run.failedMarkers(body)].join("\n"),
+      body: [`${run.runName} failed: ${how}.${runLink(runUrl)}`, "", ...run.failedMarkers(body)].join("\n"),
     },
     { kind: "close", issue: number, reason: "not_planned" },
   ];

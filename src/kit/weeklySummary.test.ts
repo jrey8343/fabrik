@@ -33,7 +33,7 @@ import {
   UNKNOWN_COST_BASIS,
 } from "../__fixtures__/weeklySummary.ts";
 import { aMonitorIssueBody, AGROUP_STATS } from "../__fixtures__/monitor.ts";
-import { aDesignQueueIssue } from "../__fixtures__/snapshots.ts";
+import { aDesignQueueIssue, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
 import { RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
 import { readRunRecord, type RunRecord } from "./runRecord.ts";
@@ -1058,6 +1058,54 @@ describe("the Weekly summary", () => {
         const draft = anOpenPullRequest({ number: 51, ticket: 9, commits: [{ at: hoursAgo(96) }] });
         const facts = { openPullRequests: [draft], kitIssues: [aWeeklyLimitIssue(null, [{ role: "implement", issue: 9, label: "agent:implement" }])] };
         expect(stuckIn(facts)).toEqual([]);
+      });
+    });
+
+    // Two failed runs in a week hold the next Audit or Retro back until the next week (#443).
+    describe("an Audit or a Retro that failed twice in a week", () => {
+      const APP = "fabrik-app[bot]";
+      const issue = (number: number, name: "Audit" | "Retro", createdAt: string, body: string, author = APP) => ({
+        number,
+        title: `${name}: week of 2026-11-02`,
+        author,
+        createdAt,
+        body,
+      });
+      const failedAudit = (number: number, createdAt: string, author = APP) => issue(number, "Audit", createdAt, auditBody(AUDITED_SHA, "failed"), author);
+      const failedRetro = (number: number, createdAt: string) => issue(number, "Retro", createdAt, retroBody(RETRO_WINDOW_END, "failed"));
+      const url = (number: number) => `https://github.com/owner/product/issues/${number}`;
+      const bodyOf = (facts: GitHubFacts) => {
+        const result = weeklySummary(input({ facts: [facts] }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result.body;
+      };
+
+      it("lists it under Stuck, linking both, the second failing this week, however recently", () => {
+        const body = bodyOf(
+          factsOf({
+            audits: [failedAudit(96, "2026-11-08T02:05:00Z"), failedAudit(95, "2026-11-08T00:05:00Z"), issue(90, "Audit", "2026-11-01T00:05:00Z", auditBody(AUDITED_SHA))],
+            retros: [failedRetro(121, "2026-11-07T01:05:00Z"), failedRetro(120, "2026-11-07T00:05:00Z")],
+          }),
+        );
+
+        expect(body).toContain(
+          [
+            "### Stuck",
+            "",
+            `- Retro failed twice this week ([#120](${url(120)}), [#121](${url(121)}))`,
+            `- Audit failed twice this week ([#95](${url(95)}), [#96](${url(96)}))`,
+            "",
+          ].join("\n"),
+        );
+      });
+
+      it.each([
+        ["only once", [failedAudit(96, "2026-11-08T02:05:00Z"), issue(95, "Audit", "2026-11-03T00:05:00Z", auditBody(AUDITED_SHA))]],
+        ["twice, but last week", [failedAudit(86, "2026-10-25T02:05:00Z"), failedAudit(85, "2026-10-25T00:05:00Z")]],
+        ["twice, but in two weeks", [failedAudit(96, "2026-11-02T00:05:00Z"), failedAudit(95, "2026-11-01T12:05:00Z")]],
+        ["twice, one of them a person's issue", [failedAudit(96, "2026-11-08T02:05:00Z"), failedAudit(95, "2026-11-08T00:05:00Z", "someone")]],
+      ])("lists nothing for an Audit that failed %s", (_, audits) => {
+        expect(stuckIn({ audits })).toEqual([]);
       });
     });
   });

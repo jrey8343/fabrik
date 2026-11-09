@@ -929,6 +929,14 @@ export interface Snapshot {
   /** Gathered for a scheduled tick only: what the retro gate weighs. */
   readonly retro: RetroSnapshot | null;
   /**
+   * For an event that may fail a weekly run, on an issue labelled
+   * `fabrik:audit` or `fabrik:retro`: that label's newest issues, open and
+   * closed, the event's own among them, as the gate reads them. A failure that
+   * gives up on the week tells the Operator by them (src/loop/weeklyRuns.ts).
+   * Null for any other event.
+   */
+  readonly weeklyIssues: readonly WeeklyIssueSnapshot[] | null;
+  /**
    * Gathered for a scheduled tick: what the replay step weighs. And for
    * agent:replay added: every open replay issue alone, which a replay
    * Ticket's claim weighs, with no capacity or acceptance read.
@@ -1196,6 +1204,7 @@ export interface IssueContext {
   readonly issue: IssueSnapshot;
   readonly operator: Snapshot["operator"];
   readonly kitIssues: Snapshot["kitIssues"];
+  readonly weeklyIssues: Snapshot["weeklyIssues"];
 }
 
 /** The resolved Kit config, every default filled in (src/kit/config.ts). */

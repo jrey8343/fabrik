@@ -312,8 +312,8 @@ function actionsOf(plan: Plan): readonly Action[] {
 
 /** Decides an issue event, which needs the issue in the snapshot. */
 function withIssue(snapshot: Snapshot, decide: (context: IssueContext) => Plan): Plan {
-  const { issue, operator, kitIssues } = snapshot;
-  return issue === null ? missingFromSnapshot("the issue") : decide({ issue, operator, kitIssues });
+  const { issue, operator, kitIssues, weeklyIssues } = snapshot;
+  return issue === null ? missingFromSnapshot("the issue") : decide({ issue, operator, kitIssues, weeklyIssues });
 }
 
 /** Decides a pull-request event, which needs the pull request in the snapshot. */

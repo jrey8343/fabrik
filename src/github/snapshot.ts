@@ -534,6 +534,9 @@ export async function gatherSnapshot(
     ? await gatherHeld(github, repo, closedWeeklyLimit === null ? kitIssues : [...kitIssues, closedWeeklyLimit], appLogin)
     : null;
   const triggers = event.kind === "scheduled-tick" ? await gatherTriggerSweep(github, actions, repo, appLogin) : null;
+  // A weekly run's failure may give up on the week, which its gate's issues say (#443).
+  const weeklyLabel = WEEKLY_RUN_EVENTS.includes(event.kind) ? weeklyLabelOf(part?.issue?.labels ?? []) : null;
+  const weeklyIssues = weeklyLabel === null ? null : weeklyIssuesOf(await queryWeeklyIssues(github, repo, weeklyLabel), appLogin);
   // A push to the default branch may leave an agent PR conflicting with it; the tick catches any the push missed (#304).
   const conflicts =
     event.kind === "main-pushed" || event.kind === "kit-config-changed"
@@ -552,8 +555,16 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, triggers }
-    : { ...part, spec, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, triggers };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, triggers }
+    : { ...part, spec, kitIssues, startingComment, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, triggers };
+}
+
+/** The events that may fail an Auditor or Retro run on its pending issue: its opening, while every Subscription is used up, and its run's ending. */
+const WEEKLY_RUN_EVENTS: readonly LoopEvent["kind"][] = ["issue-opened", "agent-run-failed", "audit-run-finished", "retro-run-finished"];
+
+/** The weekly gate's label among an issue's labels, `fabrik:audit` or `fabrik:retro`, or null when it has neither. */
+function weeklyLabelOf(labels: readonly string[]): string | null {
+  return [AUDIT_LABEL, RETRO_LABEL].find((label) => labels.includes(label)) ?? null;
 }
 
 /**
@@ -947,6 +958,7 @@ type EventPart = Omit<
   | "startingComment"
   | "audit"
   | "retro"
+  | "weeklyIssues"
   | "replay"
   | "namedPullRequests"
   | "held"

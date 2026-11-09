@@ -148,6 +148,27 @@ describe("Each way a Retro run fails", () => {
   });
 });
 
+describe("A second failed Retro run in a week", () => {
+  it("@-mentions the Operator on the Retro it closes, with both runs and how each failed", () => {
+    const earlier = aRetroIssue({ number: 119, stateReason: "not_planned", createdAt: "2026-11-07T00:05:00Z", body: retroBody(RETRO_WINDOW_END, "failed") });
+    const pending = aRetroIssue({ number: 120, open: true, stateReason: null, createdAt: "2026-11-07T02:05:00Z", body: retroBody(RETRO_WINDOW_END, "pending") });
+
+    const plan = planFor(retroFailed(), snapshotOf(aRetro(), { weeklyIssues: [pending, earlier, aRetroIssue()] }), kitConfig());
+
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "comment",
+      issue: 120,
+      body: [
+        "@operator The Retro's run failed twice this week, so the next Retro waits for next week:",
+        "",
+        "- #119: it timed out.",
+        `- #120: it crashed. [The run](${RUN})`,
+      ].join("\n"),
+    });
+    expect(notificationsOf(plan)).toEqual(["mention on #120"]);
+  });
+});
+
 describe("A dead token or the weekly limit on a Retro run", () => {
   it("also opens the Rotate the Claude token issue, as for any run", () => {
     const plan = planFor(retroFailed(report("dead-token")), snapshotOf(aRetro()), kitConfig());

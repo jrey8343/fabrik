@@ -146,6 +146,60 @@ describe("A failed Auditor run on the pending Audit", () => {
   });
 });
 
+// Two failed Auditor runs in a week hold the next Audit back until the next
+// week (src/loop/weeklyGate.ts), so the second one's close tells the Operator (#443).
+describe("A second failed Auditor run in a week", () => {
+  const EARLIER_RUN = "https://github.com/acme/shop/actions/runs/41/attempts/1";
+  /** This week's earlier Audit, #97, whose run crashed. */
+  const earlier = anAuditIssue({
+    number: 97,
+    title: "Audit: week of 2026-11-02",
+    stateReason: "not_planned",
+    createdAt: "2026-11-08T00:05:00Z",
+    body: `The Auditor's run failed: it crashed. [The run](${EARLIER_RUN})\n\n<!-- fabrik:audit ${AUDITED_SHA} -->\n<!-- fabrik:audit-failed -->`,
+  });
+  /** The pending Audit, #98, as the gate's issues read it. */
+  const pending = anAuditIssue({
+    number: 98,
+    title: "Audit: week of 2026-11-02",
+    open: true,
+    stateReason: null,
+    createdAt: "2026-11-08T02:05:00Z",
+    body: auditBody(AUDITED_SHA, "pending"),
+  });
+
+  it("@-mentions the Operator on the Audit it closes, with both runs' links and how each failed", () => {
+    const plan = planFor(auditFailed(report("provider-error")), snapshotOf(anAudit(), { weeklyIssues: [pending, earlier, anAuditIssue()] }), kitConfig());
+
+    expect(actionsOf(plan)).toEqual([
+      expect.objectContaining({ kind: "edit-issue-body", issue: 98 }),
+      {
+        kind: "comment",
+        issue: 98,
+        body: [
+          "@operator The Auditor's run failed twice this week, so the next Audit waits for next week:",
+          "",
+          `- #97: it crashed. [The run](${EARLIER_RUN})`,
+          `- #98: the model provider returned an error. [The run](${RUN})`,
+        ].join("\n"),
+      },
+      { kind: "close", issue: 98, reason: "not_planned" },
+    ]);
+    expect(notificationsOf(plan)).toEqual(["mention on #98"]);
+  });
+
+  it.each([
+    ["the earlier failure was last week", [pending, { ...earlier, createdAt: "2026-11-01T00:05:00Z" }]],
+    ["the earlier Audit this week didn't fail", [pending, { ...earlier, body: auditBody(AUDITED_SHA, "filled") }]],
+    ["it's this week's first", [pending, anAuditIssue()]],
+  ])("mentions nobody when %s", (_, weeklyIssues) => {
+    const plan = planFor(auditFailed(), snapshotOf(anAudit(), { weeklyIssues }), kitConfig());
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["edit-issue-body", "close"]);
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+});
+
 describe("A dead token or the weekly limit on an Auditor run", () => {
   it("also opens the Rotate the Claude token issue, as for any run", () => {
     const plan = planFor(auditFailed(report("dead-token")), snapshotOf(anAudit()), kitConfig());
