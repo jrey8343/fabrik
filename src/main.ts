@@ -25,7 +25,7 @@ import {
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
-import { claimLanding, type Landing, type LandingFailure, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
+import { claimLanding, jobFailureReport, type Landing, type LandingFailure, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
 import { readReplayRunEnded } from "./kit/replayRecord.ts";
@@ -456,6 +456,13 @@ const landing = await thisLanding();
 if (landing !== null) await report(`The ${landing.job} job is landing ${landing.doing}.`);
 await main(landing).catch(async (error: unknown) => {
   console.error(error instanceof Error ? error.message : error);
-  if (landing !== null) await reportLandingFailure(landing, { kind: "error", error });
+  if (landing !== null) {
+    await reportLandingFailure(landing, { kind: "error", error });
+  } else {
+    // Any other job, the scheduled tick's included (#438), says in its summary which action failed and what landed before it.
+    const { summary, annotation } = jobFailureReport(error);
+    await report(summary);
+    console.log(`::error title=The Loop failed::${annotation}`);
+  }
   process.exitCode = 1;
 });

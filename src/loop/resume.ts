@@ -6,13 +6,19 @@
 // Design session cap as usual. A run whose issue or PR has closed, or moved on
 // in the Loop, since it was held is dropped instead. An Auditor run is no
 // longer held, and the tick can't start one, so a held marker one left before
-// that (#268), on a still-pending Audit, fails the Audit. A weekly-limit
-// issue that stays open gets a resumed marker for each run dealt with, so
-// that only a later held marker, if the resumed run is refused again, holds
-// it again; the marker carries the run's place in the order, so that held
-// again it keeps its first place even once the issue its first held marker
-// was on has closed. Only when every weekly-limit issue closes in one tick is
-// no open issue left to carry it, and a run held again then takes a new place.
+// that (#268), on a still-pending Audit, fails the Audit. Every weekly-limit
+// issue then gets a resumed marker for each run dealt with, so that only a
+// later held marker, if the resumed run is refused again, holds it again; the
+// marker carries the run's place in the order, so that held again it keeps
+// its first place even once the issue its first held marker was on has
+// closed. Only when every weekly-limit issue closes in one tick is no open
+// issue left to carry it, and a run held again then takes a new place. The
+// tick's own actions, the weekly-limit issue's close among them, come last
+// (#438): a tick that fails partway leaves the issue open with its held
+// markers, so the next tick deals with what's left rather than drop it. A
+// held run whose trigger label is back on its issue or PR, since the resume
+// landed but the tick failed before its resumed markers, isn't given it again
+// nor dropped: the next tick only leaves its markers.
 // Pure, no I/O.
 import { auditMarksIn } from "./markers.ts";
 import { type HeldRun, RUN_NAMES, resumedMarker, type Waiting, waitingHeldRuns } from "./heldRun.ts";
@@ -23,8 +29,9 @@ import { failedHeldAudit } from "./weeklyRuns.ts";
 
 /**
  * The scheduled tick's Plan, with every held run resumed or dropped when it
- * closes a weekly-limit issue. Before any reset, or with rotation off, it is
- * left as it is.
+ * closes a weekly-limit issue: the resumes, then the resumed markers, then
+ * the tick's own actions, the close among them. Before any reset, or with
+ * rotation off, it is left as it is.
  */
 export function resumingHeldRuns(tick: Plan, snapshot: Snapshot, config: KitConfig): Plan {
   if (tick.kind !== "act" || !rotationIsOn(config)) return tick;
@@ -45,6 +52,11 @@ export function resumingHeldRuns(tick: Plan, snapshot: Snapshot, config: KitConf
   for (const entry of waiting) {
     const { run } = entry;
     const on = snapshot.held.find((target) => target.number === run.issue);
+    // A hold takes the trigger label off, so one back on means the run was given it already (#438).
+    if (on?.open === true && run.label !== null && on.labels.includes(run.label)) {
+      dealtWith.push(entry);
+      continue;
+    }
     const reason = on === undefined ? `GitHub no longer has #${run.issue}` : movedOn(run, on);
     if (reason !== null || on === undefined) {
       resumes.push({ kind: "drop-held-run", role: run.role, issue: run.issue, reason: reason ?? "" });
@@ -56,19 +68,19 @@ export function resumingHeldRuns(tick: Plan, snapshot: Snapshot, config: KitConf
     }
     dealtWith.push(entry);
   }
-  // On every weekly-limit issue that stays open, so that a run held again keeps
-  // its place even once the issue its held markers were on has closed.
-  const markers = limits
-    .filter((issue) => !closing.has(issue.number))
-    .flatMap((issue): Action[] => {
-      const here = dealtWith.map(({ run, markers: counts }) =>
-        resumedMarker({ role: run.role, issue: run.issue, held: counts.get(issue.number) ?? 0, order: run.order ?? null }),
-      );
-      if (here.length === 0) return [];
-      const body = ["A Subscription's weekly limit reset, so the Kit has dealt with the runs held here.", "", ...here].join("\n");
-      return [{ kind: "comment", issue: issue.number, body }];
-    });
-  return { kind: "act", actions: [...tick.actions, ...resumes, ...markers] };
+  // On every weekly-limit issue, so that a run held again keeps its place even
+  // once the issue its held markers were on has closed, and so that one the
+  // tick fails to close resumes nothing again.
+  const markers = limits.flatMap((issue): Action[] => {
+    const here = dealtWith.map(({ run, markers: counts }) =>
+      resumedMarker({ role: run.role, issue: run.issue, held: counts.get(issue.number) ?? 0, order: run.order ?? null }),
+    );
+    if (here.length === 0) return [];
+    const body = ["A Subscription's weekly limit reset, so the Kit has dealt with the runs held here.", "", ...here].join("\n");
+    return [{ kind: "comment", issue: issue.number, body }];
+  });
+  // The tick's own actions, its close among them, last (#438): closed, the issue's held markers are no longer read, so whatever hadn't landed would be dropped.
+  return { kind: "act", actions: [...resumes, ...markers, ...tick.actions] };
 }
 
 /**

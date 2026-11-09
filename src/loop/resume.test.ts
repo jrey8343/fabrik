@@ -127,6 +127,103 @@ describe("The scheduled tick past a reset, with runs held and rotation on", () =
   });
 });
 
+describe("The reset tick, failing partway through its plan (#438)", () => {
+  // Subscription A's weekly-limit issue #40 holds three runs and resets; B's #41 stays open.
+  const kitIssues = [
+    weeklyLimitIssue(40, "Claude token 2", EARLIER, [held(7, "triage", "needs-triage"), held(12, "review", "agent:review"), held(9, "implement", "agent:implement")], true),
+    weeklyLimitIssue(41, "Claude token", LATER),
+  ];
+  const heldOn = [anIssueHeld(7, ["bug"]), aDraftHeld(12), anIssueHeld(9, ["enhancement", "ready-for-agent"])];
+  const NEXT_TICK = tick("2026-11-08T12:00:00.000Z");
+
+  /** The kit issues and held runs' issues and PRs once these actions have landed on GitHub. */
+  function landedOn(
+    before: { kitIssues: readonly KitIssueSnapshot[]; held: readonly HeldTargetSnapshot[] },
+    actions: readonly Action[],
+  ): { kitIssues: KitIssueSnapshot[]; held: HeldTargetSnapshot[] } {
+    let kit = [...before.kitIssues];
+    let held = [...before.held];
+    for (const action of actions) {
+      if (action.kind === "comment") {
+        kit = kit.map((issue) => (issue.number === action.issue ? { ...issue, comments: [...issue.comments, action.body] } : issue));
+      } else if (action.kind === "close") {
+        kit = kit.filter((issue) => issue.number !== action.issue);
+      } else if (action.kind === "add-labels") {
+        held = held.map((on) => (on.number === action.issue ? { ...on, labels: [...on.labels, ...action.labels] } : on));
+      }
+    }
+    return { kitIssues: kit, held };
+  }
+
+  it("resumes every held run, then leaves the resumed markers, and only then closes the weekly-limit issue", () => {
+    const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: heldOn }), TWO_SUBSCRIPTIONS);
+
+    const kinds = actionsOf(plan).map((action) => `${action.kind} #${"issue" in action ? action.issue : ""}`);
+    expect(kinds.slice(0, 6)).toEqual([
+      "add-labels #7",
+      "add-labels #12",
+      "add-labels #9",
+      "comment #40",
+      "comment #41",
+      "comment #40",
+    ]);
+    expect(kinds[6]).toBe("close #40");
+  });
+
+  it("failing on the second resume, leaves the weekly-limit issue open, so the next tick resumes what's left and every run resumes once", () => {
+    const first = actionsOf(planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: heldOn }), TWO_SUBSCRIPTIONS));
+    const failed = first.findIndex((action) => action.kind === "add-labels" && action.issue === 12);
+    const applied = first.slice(0, failed);
+    const after = landedOn({ kitIssues, held: heldOn }, applied);
+    expect(after.kitIssues.map((issue) => issue.number)).toEqual([40, 41]);
+
+    const next = actionsOf(planFor(NEXT_TICK, tickSnapshot(after), TWO_SUBSCRIPTIONS));
+
+    const resumed = [...applied, ...next].filter((action) => action.kind === "add-labels");
+    expect(resumed).toEqual([
+      { kind: "add-labels", issue: 7, labels: ["needs-triage"] },
+      { kind: "add-labels", issue: 12, labels: ["agent:review"] },
+      { kind: "add-labels", issue: 9, labels: ["agent:implement"] },
+    ]);
+    // #7 has needs-triage back from the first tick: resumed, not moved on.
+    expect(next.filter((action) => action.kind === "drop-held-run")).toEqual([]);
+    expect(next).toContainEqual({ kind: "close", issue: 40, reason: "completed" });
+  });
+
+  it("failing after the Review resume lands, before the resumed markers, gives the Review its label only once", () => {
+    const first = actionsOf(planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: heldOn }), TWO_SUBSCRIPTIONS));
+    const failed = first.findIndex((action) => action.kind === "add-labels" && action.issue === 9);
+    const applied = first.slice(0, failed);
+    const after = landedOn({ kitIssues, held: heldOn }, applied);
+
+    const next = actionsOf(planFor(NEXT_TICK, tickSnapshot(after), TWO_SUBSCRIPTIONS));
+
+    expect([...applied, ...next].filter((action) => action.kind === "add-labels")).toEqual([
+      { kind: "add-labels", issue: 7, labels: ["needs-triage"] },
+      { kind: "add-labels", issue: 12, labels: ["agent:review"] },
+      { kind: "add-labels", issue: 9, labels: ["agent:implement"] },
+    ]);
+    expect(next.filter((action) => action.kind === "drop-held-run")).toEqual([]);
+    expect(next).toContainEqual({
+      kind: "comment",
+      issue: 41,
+      body: expect.stringContaining('<!-- fabrik:resumed {"issue":12,"role":"review","held":0} -->'),
+    });
+  });
+
+  it("failing on the close, after the resumed markers, resumes nothing again on the next tick and closes the issue then", () => {
+    const first = actionsOf(planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: heldOn }), TWO_SUBSCRIPTIONS));
+    const failed = first.findIndex((action) => action.kind === "close");
+    const after = landedOn({ kitIssues, held: heldOn }, first.slice(0, failed));
+
+    const next = planFor(NEXT_TICK, tickSnapshot(after), TWO_SUBSCRIPTIONS);
+
+    expect(labelsAdded(next)).toEqual([]);
+    expect(actionsOf(next).filter((action) => action.kind === "drop-held-run")).toEqual([]);
+    expect(actionsOf(next)).toContainEqual({ kind: "close", issue: 40, reason: "completed" });
+  });
+});
+
 describe("A held run whose issue or PR has closed, or moved on in the Loop, at the reset", () => {
   const STALE: readonly (readonly [string, AgentRole, string | null, HeldTargetSnapshot, string])[] = [
     ["a closed Ticket", "implement", "agent:implement", anIssueHeld(7, ["ready-for-agent"], { open: false }), "#7 is closed"],
