@@ -1,6 +1,7 @@
 // GitHub and 1Password as the setup program's one run sees them, kept as
 // state: what one run creates, a later run finds. Its script answers every gh
 // and op command the run makes for acme/clinic, and git runs for real.
+import type { Allowances, BranchProtection } from "../setup/plan.ts";
 import type { Answer } from "./setupCommands.ts";
 
 export interface PullRequest {
@@ -26,6 +27,7 @@ export interface World {
   readonly vaults: Set<string>;
   /** Each vault's item titles. */
   readonly items: Map<string, Set<string>>;
+  /** The default branch's protection, as GitHub's GET answers it, or null when it has none. */
   protection: unknown;
   ruleset: Record<string, unknown> | null;
   readonly prs: PullRequest[];
@@ -54,6 +56,42 @@ export function store(world: World, vault: string, title: string): void {
   const items = world.items.get(vault) ?? new Set<string>();
   items.add(title);
   world.items.set(vault, items);
+}
+
+/** A protection as a PUT wrote it, in the shape GitHub's GET answers with: each switch an `{ enabled }`, each allowance an object. */
+function asGitHubReadsIt(put: BranchProtection): Record<string, unknown> {
+  const people = (allowances: Allowances) => ({
+    users: allowances.users.map((login) => ({ login })),
+    teams: allowances.teams.map((slug) => ({ slug })),
+    apps: allowances.apps.map((slug) => ({ slug })),
+  });
+  const checks = put.required_status_checks;
+  const reviews = put.required_pull_request_reviews;
+  const { required_status_checks: _checks, required_pull_request_reviews: _reviews, restrictions, ...switches } = put;
+  return {
+    ...Object.fromEntries(Object.entries(switches).map(([name, enabled]) => [name, { enabled }])),
+    ...(checks === null
+      ? {}
+      : {
+          required_status_checks: {
+            strict: checks.strict,
+            contexts: checks.checks.map((check) => check.context),
+            checks: checks.checks.map((check) => ({ context: check.context, app_id: check.app_id ?? null })),
+          },
+        }),
+    ...(reviews === null
+      ? {}
+      : {
+          required_pull_request_reviews: {
+            ...reviews,
+            ...(reviews.dismissal_restrictions === undefined ? {} : { dismissal_restrictions: people(reviews.dismissal_restrictions) }),
+            ...(reviews.bypass_pull_request_allowances === undefined
+              ? {}
+              : { bypass_pull_request_allowances: people(reviews.bypass_pull_request_allowances) }),
+          },
+        }),
+    ...(restrictions === null ? {} : { restrictions: people(restrictions) }),
+  };
 }
 
 const json = (value: unknown) => ({ stdout: JSON.stringify(value) });
@@ -96,7 +134,7 @@ export function worldScript(world: World, origin?: Origin): Record<string, Answe
     "gh api repos/acme/clinic/branches/main/protection": () =>
       world.protection === null ? { code: 1, stderr: "gh: Branch not protected (HTTP 404)" } : json(world.protection),
     "gh api --method PUT repos/acme/clinic/branches/main/protection": ({ input }) => {
-      world.protection = JSON.parse(input ?? "{}");
+      world.protection = asGitHubReadsIt(JSON.parse(input ?? "{}") as BranchProtection);
       return {};
     },
     "gh api repos/acme/clinic/rulesets?includes_parents=false": () => json(world.ruleset === null ? [] : [{ id: 1, name: world.ruleset["name"] }]),

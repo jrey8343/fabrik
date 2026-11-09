@@ -111,11 +111,75 @@ export interface SetupAnswers {
   readonly paused?: boolean;
 }
 
+/**
+ * A branch's protection, every setting of it, in the shape GitHub's PUT takes:
+ * gather reads it, and the protect-branch step writes it back with only the
+ * settings Setup owns changed. A setting the PUT leaves out GitHub switches
+ * off, so the step sends them all.
+ */
 export interface BranchProtection {
-  readonly requiredChecks: readonly string[];
-  readonly requiresPullRequest: boolean;
-  /** Who may skip the pull request requirement: app slugs, users and teams. */
-  readonly bypassAllowances: readonly string[];
+  readonly required_status_checks: {
+    readonly strict: boolean;
+    /** Each check, with the GitHub App it must come from when it's bound to one. */
+    readonly checks: readonly { readonly context: string; readonly app_id?: number }[];
+  } | null;
+  readonly enforce_admins: boolean;
+  readonly required_pull_request_reviews: {
+    readonly required_approving_review_count: number;
+    readonly dismiss_stale_reviews: boolean;
+    readonly require_code_owner_reviews: boolean;
+    readonly require_last_push_approval: boolean;
+    /** Who may dismiss a review. Only an organization repo's protection has it. */
+    readonly dismissal_restrictions?: Allowances;
+    /** Who may skip the pull request requirement. Only an organization repo's protection has it. */
+    readonly bypass_pull_request_allowances?: Allowances;
+  } | null;
+  /** Who may push to the branch. Only an organization repo's protection has it. */
+  readonly restrictions: Allowances | null;
+  readonly required_linear_history: boolean;
+  readonly allow_force_pushes: boolean;
+  readonly allow_deletions: boolean;
+  readonly block_creations: boolean;
+  readonly required_conversation_resolution: boolean;
+  readonly lock_branch: boolean;
+  readonly allow_fork_syncing: boolean;
+}
+
+/** Users by login, teams and apps by slug. */
+export interface Allowances {
+  readonly users: readonly string[];
+  readonly teams: readonly string[];
+  readonly apps: readonly string[];
+}
+
+/** A branch without protection, as GitHub's PUT takes it: every setting off. */
+export const UNPROTECTED: BranchProtection = {
+  required_status_checks: null,
+  enforce_admins: false,
+  required_pull_request_reviews: null,
+  restrictions: null,
+  required_linear_history: false,
+  allow_force_pushes: false,
+  allow_deletions: false,
+  block_creations: false,
+  required_conversation_resolution: false,
+  lock_branch: false,
+  allow_fork_syncing: false,
+};
+
+/** Who may skip a branch's pull request requirement, as `app:<slug>`, `user:<login>` or `team:<slug>`. */
+export function bypassAllowances(protection: BranchProtection): string[] {
+  const bypass = protection.required_pull_request_reviews?.bypass_pull_request_allowances;
+  return [
+    ...(bypass?.apps ?? []).map((app) => `app:${app}`),
+    ...(bypass?.users ?? []).map((user) => `user:${user}`),
+    ...(bypass?.teams ?? []).map((team) => `team:${team}`),
+  ];
+}
+
+/** The contexts of the checks a branch requires. */
+export function requiredChecks(protection: BranchProtection): string[] {
+  return (protection.required_status_checks?.checks ?? []).map((check) => check.context);
 }
 
 /** The repository ruleset named MERGE_GATE_RULESET, as setup reads it. */
@@ -154,7 +218,10 @@ export type SetupAction =
   | {
       readonly kind: "protect-branch";
       readonly branch: string;
-      readonly requiredChecks: readonly string[];
+      /** The protection as found, or null when the branch has none. */
+      readonly found: BranchProtection | null;
+      /** What the PUT sends: the protection as found, with only the settings Setup owns changed. */
+      readonly protection: BranchProtection;
     }
   | {
       /** Creates the Merge gate ruleset, or with its id puts the existing one right. */
@@ -501,7 +568,10 @@ function file(state: ProductState, path: string): string | null {
  * Branch protection requires a PR and the gating checks, with no bypass
  * allowance for anyone, but no approving review: the Operator works alone and
  * can't approve their own PRs. What keeps the Fabrik App from merging is the
- * Merge gate ruleset (mergeGate below), not a review.
+ * Merge gate ruleset (mergeGate below), not a review. Setup owns only those
+ * settings, the required checks, the PR, its approving reviews and its bypass
+ * allowances, and keeps every other one as it finds it, admin enforcement
+ * included.
  */
 function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupAction[] {
   const configText = state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig;
@@ -509,20 +579,48 @@ function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupA
   if (!config.ok) notes.push(`${KIT_CONFIG_PATH} is invalid, so its gating checks weren't required: ${config.errors.join("; ")}`);
   const gating = config.ok ? config.config.sandbox.checks : [];
   const current = state.protection;
-  const requiredChecks = [...new Set([...(current?.requiredChecks ?? []), ...gating])];
-  if (requiredChecks.length === 0) {
+  const found = current ?? UNPROTECTED;
+  const required = [...new Set([...requiredChecks(found), ...gating])];
+  if (required.length === 0) {
     notes.push(
       `${state.repo.defaultBranch} requires no gating checks yet: list the CI checks that must pass in sandbox.checks in ${KIT_CONFIG_PATH}, then run setup again.`,
     );
   }
   const satisfied =
     current !== null &&
-    current.requiresPullRequest &&
-    current.bypassAllowances.length === 0 &&
-    gating.every((check) => current.requiredChecks.includes(check));
+    current.required_pull_request_reviews !== null &&
+    bypassAllowances(current).length === 0 &&
+    gating.every((check) => requiredChecks(current).includes(check));
   if (satisfied) return [];
-  return [{ kind: "protect-branch", branch: state.repo.defaultBranch, requiredChecks }];
+  const checks = found.required_status_checks;
+  // Empty lists take away any bypass. GitHub rejects the field (HTTP 422) on a
+  // personal account's repo, which can't have bypass allowances anyway.
+  const { bypass_pull_request_allowances: _, ...reviews } = found.required_pull_request_reviews ?? NEW_PULL_REQUEST_RULE;
+  const wanted: BranchProtection = {
+    ...found,
+    required_status_checks:
+      required.length === 0
+        ? null
+        : {
+            strict: checks?.strict ?? false,
+            checks: required.map((context) => checks?.checks.find((check) => check.context === context) ?? { context }),
+          },
+    required_pull_request_reviews: {
+      ...reviews,
+      required_approving_review_count: 0,
+      ...(state.repo.inOrganization ? { bypass_pull_request_allowances: { users: [], teams: [], apps: [] } } : {}),
+    },
+  };
+  return [{ kind: "protect-branch", branch: state.repo.defaultBranch, found: current, protection: wanted }];
 }
+
+/** The pull request rule Setup adds to a branch that has none: no approving review, and a later push dismisses one. */
+const NEW_PULL_REQUEST_RULE: NonNullable<BranchProtection["required_pull_request_reviews"]> = {
+  dismiss_stale_reviews: true,
+  require_code_owner_reviews: false,
+  require_last_push_approval: false,
+  required_approving_review_count: 0,
+};
 
 /**
  * The Merge gate ruleset: an active repository ruleset on the default branch

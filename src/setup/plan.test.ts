@@ -7,7 +7,8 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { checkCallerWorkflow } from "../kit/caller.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
-import { aCleanProduct, afterApplying } from "../__fixtures__/productState.ts";
+import { aCleanProduct, afterApplying, aProtectedBranch } from "../__fixtures__/productState.ts";
+import { describeAction } from "./apply.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type ProductState, type SetupAction, planSetup, setupPaths } from "./plan.ts";
 
@@ -470,25 +471,114 @@ describe("Branch protection", () => {
   it("requires a PR and the Kit config's gating checks on the default branch, with no bypass and no approving review", () => {
     const state = aCleanProduct({ files: withChecks(["build", "test"]) });
 
-    expect(protects(state)).toEqual([{ kind: "protect-branch", branch: "main", requiredChecks: ["build", "test"] }]);
+    expect(protects(state)).toEqual([
+      {
+        kind: "protect-branch",
+        branch: "main",
+        found: null,
+        protection: {
+          required_status_checks: { strict: false, checks: [{ context: "build" }, { context: "test" }] },
+          enforce_admins: false,
+          required_pull_request_reviews: {
+            required_approving_review_count: 0,
+            dismiss_stale_reviews: true,
+            require_code_owner_reviews: false,
+            require_last_push_approval: false,
+          },
+          restrictions: null,
+          required_linear_history: false,
+          allow_force_pushes: false,
+          allow_deletions: false,
+          block_creations: false,
+          required_conversation_resolution: false,
+          lock_branch: false,
+          allow_fork_syncing: false,
+        },
+      },
+    ]);
+    expect(describeAction(protects(state)[0]!)).toBe(
+      "protect main: a pull request: not required → required; required checks: none → build, test; every other setting stays as it is",
+    );
   });
 
   it("keeps the checks the branch already requires", () => {
-    const state = aCleanProduct({
-      files: withChecks(["build"]),
-      protection: { requiredChecks: ["lint"], requiresPullRequest: true, bypassAllowances: [] },
-    });
+    const state = aCleanProduct({ files: withChecks(["build"]), protection: aProtectedBranch(["lint"]) });
 
-    expect(protects(state)[0]?.requiredChecks).toEqual(["lint", "build"]);
+    expect(protects(state)[0]?.protection.required_status_checks?.checks).toEqual([{ context: "lint" }, { context: "build" }]);
   });
 
-  it("takes away a bypass that would let the Fabrik App merge without the Operator", () => {
+  it("changes only the settings Setup owns, keeping every other one as it finds it, admin enforcement included", () => {
     const state = aCleanProduct({
-      files: withChecks(["build"]),
-      protection: { requiredChecks: ["build"], requiresPullRequest: true, bypassAllowances: ["app:fabrik"] },
+      files: withChecks(["ci", "lint"]),
+      protection: aProtectedBranch(["ci"], {
+        required_status_checks: { strict: true, checks: [{ context: "ci", app_id: 15368 }] },
+        enforce_admins: true,
+        required_pull_request_reviews: {
+          required_approving_review_count: 1,
+          dismiss_stale_reviews: false,
+          require_code_owner_reviews: true,
+          require_last_push_approval: true,
+        },
+        required_linear_history: true,
+        required_conversation_resolution: true,
+        allow_force_pushes: true,
+        lock_branch: true,
+      }),
     });
 
-    expect(protects(state)).toHaveLength(1);
+    const [action] = protects(state);
+
+    expect(action?.protection).toEqual({
+      required_status_checks: { strict: true, checks: [{ context: "ci", app_id: 15368 }, { context: "lint" }] },
+      enforce_admins: true,
+      required_pull_request_reviews: {
+        required_approving_review_count: 0,
+        dismiss_stale_reviews: false,
+        require_code_owner_reviews: true,
+        require_last_push_approval: true,
+      },
+      restrictions: null,
+      required_linear_history: true,
+      allow_force_pushes: true,
+      allow_deletions: false,
+      block_creations: false,
+      required_conversation_resolution: true,
+      lock_branch: true,
+      allow_fork_syncing: false,
+    });
+    expect(describeAction(action!)).toBe("protect main: required checks: ci → ci, lint; approving reviews: 1 → 0; every other setting stays as it is");
+  });
+
+  it("takes away a bypass that would let the Fabrik App merge without the Operator, keeping an organization repo's push and dismissal restrictions", () => {
+    const team = { users: [], teams: ["maintainers"], apps: [] };
+    const state = aCleanProduct({
+      repo: { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: true },
+      files: withChecks(["build"]),
+      protection: aProtectedBranch(["build"], {
+        required_pull_request_reviews: {
+          required_approving_review_count: 0,
+          dismiss_stale_reviews: true,
+          require_code_owner_reviews: false,
+          require_last_push_approval: false,
+          dismissal_restrictions: team,
+          bypass_pull_request_allowances: { users: ["octocat"], teams: [], apps: ["fabrik"] },
+        },
+        restrictions: team,
+      }),
+    });
+
+    const [action] = protects(state);
+
+    expect(action?.protection.required_pull_request_reviews).toEqual({
+      required_approving_review_count: 0,
+      dismiss_stale_reviews: true,
+      require_code_owner_reviews: false,
+      require_last_push_approval: false,
+      dismissal_restrictions: team,
+      bypass_pull_request_allowances: { users: [], teams: [], apps: [] },
+    });
+    expect(action?.protection.restrictions).toEqual(team);
+    expect(describeAction(action!)).toBe("protect main: bypass allowances: app:fabrik, user:octocat → none; every other setting stays as it is");
   });
 
   it("tells the Operator when there's no gating check to require yet", () => {
@@ -498,12 +588,19 @@ describe("Branch protection", () => {
   });
 
   it("leaves protection alone when it already requires all of that", () => {
-    const state = aCleanProduct({
-      files: withChecks(["build"]),
-      protection: { requiredChecks: ["build", "lint"], requiresPullRequest: true, bypassAllowances: [] },
-    });
+    const state = aCleanProduct({ files: withChecks(["build"]), protection: aProtectedBranch(["build", "lint"]) });
 
     expect(protects(state)).toEqual([]);
+  });
+
+  it("leaves protection alone once its own step is applied, whatever else the branch had", () => {
+    const state = aCleanProduct({
+      files: withChecks(["build"]),
+      protection: aProtectedBranch([], { required_pull_request_reviews: null, enforce_admins: true, required_linear_history: true }),
+    });
+    const plan = planSetup(state, kit);
+
+    expect(protects(afterApplying(state, plan))).toEqual([]);
   });
 
   describe("a Kit config with Extra skills", () => {
@@ -513,7 +610,7 @@ describe("Branch protection", () => {
     it("checks the config with its skills lock, so a config whose picks are pinned still has its gating checks required", () => {
       const state = aCleanProduct({ files: { ".fabrik/config.json": config, ".fabrik/skills.lock.json": pin("jrey8343/skills") } });
 
-      expect(protects(state)).toEqual([{ kind: "protect-branch", branch: "main", requiredChecks: ["build"] }]);
+      expect(protects(state).map((a) => a.protection.required_status_checks?.checks)).toEqual([[{ context: "build" }]]);
       expect(planSetup(state, kit).notes.join("\n")).not.toContain("is invalid");
     });
 
