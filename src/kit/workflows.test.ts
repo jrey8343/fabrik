@@ -742,6 +742,23 @@ describe("The agent jobs whose input step may read a sent-back Ticket's PR", () 
   });
 });
 
+// #454: the Review checks job gives up short of its timeout, or fails mid-wait,
+// and leaves a failure report naming why, for the push job's notice.
+describe("The Review checks job, when its wait fails", () => {
+  const wait = () => stepsOf(job("review-checks")).find((step) => step.includes("run: node kit/src/review/wait.ts product")) ?? "";
+
+  it("tells the wait its job's timeout, so it gives up short of it", () => {
+    expect(wait()).toContain("FABRIK_REVIEW_TIMEOUT_MINUTES: ${{ needs.kit.outputs.review-timeout-minutes }}\n");
+  });
+
+  it("leaves its failure report where the push job takes the agent jobs' from", () => {
+    expect(wait()).toContain("FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out\n");
+    const failure = stepsOf(job("review-checks")).find((step) => step.includes("name: fabrik-agent-failure\n")) ?? "";
+    expect(failure).toContain("if: failure()\n");
+    expect(failure).toContain(`path: \${{ runner.temp }}/fabrik-out/${AGENT_FAILURE_FILE}\n`);
+  });
+});
+
 // #431: run.ts bundles a run's commits before checking its reply, so a reply that
 // breaks its contract leaves them; the failure report's upload keeps the bundle, as
 // the notice says (src/loop/failures.ts), though the push job never pushes it.

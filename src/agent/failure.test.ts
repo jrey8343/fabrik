@@ -180,7 +180,23 @@ describe("Reading the failure report in the push job", () => {
     expect(readFailureReport(JSON.stringify({ failure: "missing-output", detail: "", commits }))).toEqual({ failure: "missing-output", detail: "" });
   });
 
-  it.each(["", "not json", JSON.stringify({ failure: "timeout" })])(
+  it("reads back the checks a Review gave up waiting on (#454)", () => {
+    const unreported = { failure: "unreported-checks", detail: "", checks: ["e2e"] };
+    const timeout = { failure: "timeout", detail: "", checks: ["build", "test"] };
+
+    expect(readFailureReport(JSON.stringify(unreported))).toEqual(unreported);
+    expect(readFailureReport(JSON.stringify(timeout))).toEqual(timeout);
+    expect(readFailureReport(JSON.stringify({ ...unreported, checks: "e2e" }))).toEqual({ failure: "unreported-checks", detail: "" });
+    expect(readFailureReport(JSON.stringify({ ...unreported, checks: ["e2e", 3] }))).toEqual({ failure: "unreported-checks", detail: "" });
+  });
+
+  it("reads back a GitHub request that failed while a Review waited for its checks (#454)", () => {
+    const report = { failure: "unread-checks", detail: "gh pr checks failed: HTTP 502: Bad Gateway" };
+
+    expect(readFailureReport(JSON.stringify(report))).toEqual(report);
+  });
+
+  it.each(["", "not json", JSON.stringify({ failure: "cancelled" })])(
     "treats an unreadable report (%j) as a crash, so a notice still goes out",
     (text) => {
       expect(readFailureReport(text).failure).toBe("crash");

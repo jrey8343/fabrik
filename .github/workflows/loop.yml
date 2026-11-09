@@ -919,10 +919,13 @@ jobs:
           retention-days: 7
 
   # A Review starts by waiting for the agent PR's required checks on its head.
-  # check_suite events don't fire for Actions CI, so it polls, bounded by the
-  # Review timeout. It holds only a read-only token and no secrets, and reads
-  # the Kit config as data. Red checks go straight to the push job as an
-  # Execution flaw; the Reviewer never runs.
+  # check_suite events don't fire for Actions CI, so it polls, logging what it
+  # waits on, and gives up a few minutes short of the Review timeout. It holds
+  # only a read-only token and no secrets, and reads the Kit config as data.
+  # Red checks go straight to the push job as an Execution flaw; the Reviewer
+  # never runs. Giving up, or an error, fails the job with a failure report
+  # naming why: a gating check that never reported, the checks still running,
+  # or the GitHub request that failed (src/review/wait.ts).
   review-checks:
     name: Review checks
     needs: kit
@@ -971,7 +974,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FABRIK_PULL_REQUEST: ${{ needs.kit.outputs.pull-request }}
+          FABRIK_REVIEW_TIMEOUT_MINUTES: ${{ needs.kit.outputs.review-timeout-minutes }}
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
         run: node kit/src/review/wait.ts product
+
+      # src/review/wait.ts writes this when it gives up or fails, for the push job's notice.
+      - name: Pass the failure report to the push job
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   # The Reviewer (ADR-0002). Read-only: a checkout of the PR's head at the
   # commit its checks passed on, no GitHub write credential, and only the
@@ -1696,8 +1711,9 @@ jobs:
           path: kit
           persist-credentials: false
 
-      # Whatever the agent job left: its result (and bundle), or its failure report.
-      # Red checks and a timeout leave nothing, and src/main.ts expects that.
+      # Whatever the agent job left: its result (and bundle), or its failure report,
+      # or the Review checks job's failure report. Red checks and a timeout leave
+      # nothing, and src/main.ts expects that.
       - name: Take the agent job's artifacts
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

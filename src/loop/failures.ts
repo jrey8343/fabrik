@@ -74,9 +74,14 @@ export function infrastructureFailureOf(run: Pick<FailedRun, "secretsStep" | "re
 
 function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: KitConfig): string {
   switch (failure) {
-    case "timeout":
+    case "timeout": {
+      const timeout = `${(run.prototype === true ? prototypeRole(config.roles) : config.roles[run.role]).timeoutMinutes}-minute timeout`;
+      // The Review checks job gives up short of its timeout itself, naming what still ran.
+      const running = run.report?.checks ?? [];
+      if (running.length > 0) return `it stopped waiting for its required checks short of its ${timeout}, with ${checkNames(running)} still running`;
       // A cancelled job's own result doesn't say who cancelled it (#436).
-      return `it was cancelled, by its ${(run.prototype === true ? prototypeRole(config.roles) : config.roles[run.role]).timeoutMinutes}-minute timeout or by hand`;
+      return `it was cancelled, by its ${timeout} or by hand`;
+    }
     case "unreachable-1password":
       return "its secrets couldn't be loaded from 1Password";
     case "crash":
@@ -102,15 +107,35 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
       return run.report?.refused === true
         ? "GitHub refused a request in the Kit's input step, so the agent never started"
         : "a GitHub request failed in the Kit's input step, so the agent never started";
+    case "unread-checks":
+      return "it was still waiting for its required checks when a GitHub request failed";
+    case "unreported-checks": {
+      const unreported = run.report?.checks ?? [];
+      // A report that lost its check names still says what to look for, without naming one.
+      if (unreported.length === 0) return "a required check never reported on this PR; check the gating checks' workflow names and `paths:` filters against `sandbox.checks`";
+      const [checks, its, workflows, names, filters, it] =
+        unreported.length === 1
+          ? (["check", "its", "workflow's", "name", "filter", "it"] as const)
+          : (["checks", "their", "workflows'", "names", "filters", "them"] as const);
+      return `the required ${checks} ${checkNames(unreported)} never reported on this PR; check ${its} ${workflows} ${names} and \`paths:\` ${filters}, or drop ${it} from \`sandbox.checks\``;
+    }
   }
+}
+
+/** Check names as a notice lists them: each in code, joined with commas and a last "and". */
+function checkNames(names: readonly string[]): string {
+  const quoted = names.map((name) => `\`${name.replace(/`/g, "'")}\``);
+  const last = quoted.pop();
+  return quoted.length === 0 ? (last ?? "") : `${quoted.join(", ")} and ${last}`;
 }
 
 /**
  * How the notice says to go on. GitHub refuses a refused input read again
- * each time the run goes again, so for that the Kit needs fixing first; a run
- * that hit the weekly limit waits for its reset, as the weekly-limit issue's
- * Steps say (#436); after any other failure, including an input read GitHub
- * failed or never answered, `resume` runs it again.
+ * each time the run goes again, so for that the Kit needs fixing first, and a
+ * required check that never reported needs its workflow or the Kit config
+ * fixing; a run that hit the weekly limit waits for its reset, as the
+ * weekly-limit issue's Steps say (#436); after any other failure, including an
+ * input read GitHub failed or never answered, `resume` runs it again.
  */
 function resumeAfter(failure: InfrastructureFailure, run: FailedRun, resume: string): string {
   const resumeMidSentence = `${resume.charAt(0).toLowerCase()}${resume.slice(1)}`;
@@ -118,6 +143,8 @@ function resumeAfter(failure: InfrastructureFailure, run: FailedRun, resume: str
     const resetsAt = run.report?.resetsAt;
     return `Once the weekly limit resets${resetsAt === undefined ? "" : ` at ${readable(resetsAt)}`}, ${resumeMidSentence}`;
   }
+  // A check that never reported won't on a re-run either, until its workflow or the Kit config changes (#454).
+  if (failure === "unreported-checks") return `Re-adding the \`${RESUME_LABELS[run.role]}\` label won't change this. After fixing the workflow or \`sandbox.checks\`, ${resumeMidSentence}`;
   if (failure !== "unread-inputs" || run.report?.refused !== true) return resume;
   return `GitHub refuses this request every time, so running it again won't help: the Kit needs fixing first. Once that fix is in, ${resumeMidSentence}`;
 }

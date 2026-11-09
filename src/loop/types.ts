@@ -14,7 +14,7 @@ export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" |
 
 export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit", "retro", "research"];
 
-/** How an agent job says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
+/** How an agent job, or the Review checks job (src/review/wait.ts), says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
 export type ReportedFailure =
   | "crash"
   | "missing-output"
@@ -25,10 +25,20 @@ export type ReportedFailure =
   /** With rotation on, the stream watch stopped a run whose stream showed overage. */
   | "usage-credits"
   /** The Kit's input step couldn't read the agent's inputs from GitHub, so the agent never started (#328). */
-  | "unread-inputs";
+  | "unread-inputs"
+  /** A GitHub request failed while the Review waited for its required checks. */
+  | "unread-checks"
+  /** The Review gave up waiting on gating checks that never reported on the PR's head, which no re-run fixes. */
+  | "unreported-checks"
+  /**
+   * The job ran out of time: reported by the Review checks job when it gave up
+   * on required checks still running, short of its job's timeout, or inferred
+   * by the push job for any role whose job was cancelled (src/loop/failures.ts).
+   */
+  | "timeout";
 
 /** Every kind of Infrastructure failure: what the agent job reported, or what the push job saw. */
-export type InfrastructureFailure = ReportedFailure | "timeout" | "unreachable-1password";
+export type InfrastructureFailure = ReportedFailure | "unreachable-1password";
 
 /** What a failed agent job left for the push job, when it got far enough to leave anything. */
 export interface FailureReport {
@@ -43,6 +53,11 @@ export interface FailureReport {
    * Absent for a 5xx, a rate limit or a call GitHub never answered.
    */
   readonly refused?: true;
+  /**
+   * For a Review that gave up waiting on its required checks: the gating
+   * checks that never reported, or for a timeout, the ones still running.
+   */
+  readonly checks?: readonly string[];
   /**
    * For a run that cut a branch (#431): what it had committed on it when it
    * failed, so the notice says whether any work was made and whether it was

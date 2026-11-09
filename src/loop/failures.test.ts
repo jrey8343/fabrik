@@ -255,6 +255,67 @@ describe("Failure notices", () => {
     expect(commentOf(plan)).toContain("Re-add `agent:review` on this PR to run it again.");
   });
 
+  // #454: the Review checks job gives up short of its timeout, or GitHub fails it mid-wait, and says which.
+  describe("when the Review stopped waiting for its required checks", () => {
+    const issue = anIssue({ number: 7, openPullRequests: [12] });
+    const review = (report: NonNullable<Extract<LoopEvent, { kind: "agent-run-failed" }>["report"]>) =>
+      planFor(failed({ role: "review", report }), snapshotOf(issue), kitConfig());
+
+    it("names a gating check that never reported, says where to look, and that re-adding the label won't change it", () => {
+      const plan = review({ failure: "unreported-checks", detail: "", checks: ["e2e"] });
+
+      expect(plan).toEqual({
+        kind: "act",
+        actions: [
+          { kind: "remove-label", issue: 12, label: "agent:review" },
+          { kind: "comment", issue: 12, body: expect.any(String) },
+        ],
+      });
+      expect(commentOf(plan)).toBe(
+        [
+          "@operator The Review run on #7 failed: the required check `e2e` never reported on this PR; check its workflow's name and `paths:` filter, or drop it from `sandbox.checks`.",
+          "",
+          "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-adding the `agent:review` label won't change this. After fixing the workflow or `sandbox.checks`, re-add `agent:review` on this PR to run it again.",
+          "",
+          `[The run](${RUN})`,
+        ].join("\n"),
+      );
+    });
+
+    it("names every gating check that never reported", () => {
+      const body = commentOf(review({ failure: "unreported-checks", detail: "", checks: ["e2e", "smoke"] }));
+
+      expect(body).toContain(
+        "failed: the required checks `e2e` and `smoke` never reported on this PR; check their workflows' names and `paths:` filters, or drop them from `sandbox.checks`.",
+      );
+    });
+
+    it("still says where to look when the report lost the names of the checks that never reported", () => {
+      const body = commentOf(review({ failure: "unreported-checks", detail: "" }));
+
+      expect(body).toContain(
+        "failed: a required check never reported on this PR; check the gating checks' workflow names and `paths:` filters against `sandbox.checks`.",
+      );
+    });
+
+    it("names the checks still running when it gave up short of its timeout, and offers the label to wait again", () => {
+      const body = commentOf(review({ failure: "timeout", detail: "", checks: ["build", "e2e", "lint"] }));
+
+      expect(body).toContain(
+        "The Review run on #7 failed: it stopped waiting for its required checks short of its 30-minute timeout, with `build`, `e2e` and `lint` still running.",
+      );
+      expect(body).toContain("Re-add `agent:review` on this PR to run it again.");
+    });
+
+    it("says it was still waiting when a GitHub request failed, quoting the error, rather than that the Reviewer crashed", () => {
+      const body = commentOf(review({ failure: "unread-checks", detail: "gh pr checks failed: HTTP 502: Bad Gateway" }));
+
+      expect(body).toContain("The Review run on #7 failed: it was still waiting for its required checks when a GitHub request failed.");
+      expect(body).toContain("> gh pr checks failed: HTTP 502: Bad Gateway");
+      expect(body).toContain("Re-add `agent:review` on this PR to run it again.");
+    });
+  });
+
   it("a Design-session turn failure keeps needs-design, so the issue stays in its session, and says a reply runs it again", () => {
     const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"] });
     const plan = planFor(failed({ role: "design" }), snapshotOf(issue), kitConfig());

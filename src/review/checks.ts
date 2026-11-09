@@ -9,7 +9,8 @@ export interface CheckState {
 }
 
 export type ChecksOutcome =
-  | { readonly kind: "pending" }
+  /** Still waiting: on gating checks that haven't reported on the PR's head, and on checks still running. */
+  | { readonly kind: "pending"; readonly unreported: readonly string[]; readonly running: readonly string[] }
   | { readonly kind: "green" }
   | { readonly kind: "red"; readonly failed: readonly string[] };
 
@@ -24,8 +25,9 @@ export function requiredChecksOutcome(checks: readonly CheckState[], gating: rea
   const gate = gating.length === 0 ? checks : checks.filter((check) => gating.includes(check.name));
   const failed = gate.filter((check) => check.bucket === "fail" || check.bucket === "cancel" || check.bucket === "skipping");
   if (failed.length > 0) return { kind: "red", failed: [...new Set(failed.map((check) => check.name))] };
-  const unreported = gating.some((name) => !checks.some((check) => check.name === name));
-  if (unreported || gate.some((check) => check.bucket === "pending")) return { kind: "pending" };
+  const unreported = gating.filter((name) => !checks.some((check) => check.name === name));
+  const running = [...new Set(gate.filter((check) => check.bucket === "pending").map((check) => check.name))];
+  if (unreported.length > 0 || running.length > 0) return { kind: "pending", unreported, running };
   return { kind: "green" };
 }
 
