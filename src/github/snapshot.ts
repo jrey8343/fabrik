@@ -441,6 +441,14 @@ export const IMPLEMENT_JOB_NAME = "Implement";
 export const RESEARCH_JOB_NAME = "Research";
 
 /**
+ * The name of the push job in .github/workflows/loop.yml (a test holds the
+ * two together). An Implement job is under way until its run's push job has
+ * landed it (#432). Called from a Product repo's caller workflow, it shows up
+ * as `<caller job> / Push`.
+ */
+export const PUSH_JOB_NAME = "Push";
+
+/**
  * The names of the claim job and the two Review jobs in
  * .github/workflows/loop.yml (a test holds them together), which the
  * stuck-trigger sweep reads a run behind a trigger label by (#419). Called
@@ -1741,24 +1749,46 @@ function firstTurnClaimed(timeline: readonly LabelTimelineItem[]): boolean {
 const UNFINISHED_RUNS = ["in_progress", "queued", "waiting", "pending", "requested"] as const;
 
 interface Job {
+  /** The workflow run the job is in. */
+  run: number;
   name: string;
   status: string;
   conclusion: string | null;
 }
 
 /**
- * The Implement and Research jobs not yet finished, across every workflow
- * run in the repo: running, and also queued or waiting (behind its
- * concurrency group, say) after its claim took the trigger label off, so no
- * slot goes uncounted between the label coming off and the run starting.
+ * The Implement jobs under way and the Research jobs not yet finished, across
+ * every workflow run in the repo. Each counts running, and also queued or
+ * waiting (behind its concurrency group, say) after its claim took the
+ * trigger label off, so no slot goes uncounted between the label coming off
+ * and the run starting. An Implement job counts on, once done, until its
+ * run's push job has opened the Ticket's draft PR (implementJobsUnderWay).
  */
 export async function countDispatchedRuns(
   github: Pick<GitHub, "rest">,
   repo: Repo,
 ): Promise<{ implement: number; research: number }> {
-  const unfinished = (await jobsOfUnfinishedRuns(github, repo)).filter((job) => job.status !== "completed");
-  const named = (jobName: string) => unfinished.filter(({ name }) => isJobNamed(name, jobName)).length;
-  return { implement: named(IMPLEMENT_JOB_NAME), research: named(RESEARCH_JOB_NAME) };
+  const jobs = await jobsOfUnfinishedRuns(github, repo);
+  const research = jobs.filter(({ name, status }) => status !== "completed" && isJobNamed(name, RESEARCH_JOB_NAME)).length;
+  return { implement: implementJobsUnderWay(jobs).length, research };
+}
+
+/**
+ * The one reading of an Implement job under way, which Dispatch, the stall
+ * check and the stuck-trigger sweep share (#432): one in a workflow run not
+ * yet finished that its run didn't skip, until that run's push job has
+ * landed it, whatever its conclusion. That takes in one waiting, queued or
+ * running, and also one that's done while its push job is still to open the
+ * Ticket's draft PR or post its failure notice: between the claim taking the
+ * label off and the PR opening, the run is all that shows the Ticket taken.
+ * Once the push job is done, the draft PR shows it, or nothing will, and the
+ * same run's Dispatch job, which follows the push job, doesn't count it twice. GitHub doesn't list a job still
+ * waiting on its `needs` until those jobs finish, but an Implement job needs
+ * only the Kit job, which its run's claim needs too.
+ */
+function implementJobsUnderWay(jobs: readonly Job[]): Job[] {
+  const landed = new Set(jobs.filter(({ name, status }) => status === "completed" && isJobNamed(name, PUSH_JOB_NAME)).map(({ run }) => run));
+  return jobs.filter(({ run, name, conclusion }) => conclusion !== "skipped" && isJobNamed(name, IMPLEMENT_JOB_NAME) && !landed.has(run));
 }
 
 /** Whether a job's name is `jobName`, or `<caller job> / <jobName>` when a Product repo's caller workflow ran it. */
@@ -1767,19 +1797,14 @@ function isJobNamed(name: string, jobName: string): boolean {
 }
 
 /**
- * Whether an Implement job is under way anywhere in the repo (#387): one in a
- * workflow run not yet finished that its run didn't skip. That takes in one
- * waiting, queued or running, and also one that's done while its push job is
- * still landing the run, which may still push or end it. GitHub doesn't list
- * a job still waiting on its `needs` until those jobs finish, but an Implement
- * job needs only the Kit job, which its run's claim needs too. Null when the
- * Actions API couldn't be read, so a failed read only leaves a stalled run
- * alone, never the rest of the conflict check.
+ * Whether an Implement job is under way anywhere in the repo (#387), as
+ * Dispatch reads it (implementJobsUnderWay). Null when the Actions API
+ * couldn't be read, so a failed read only leaves a stalled run alone, never
+ * the rest of the conflict check.
  */
 async function readImplementJobUnderWay(github: Pick<GitHub, "rest">, repo: Repo): Promise<boolean | null> {
   try {
-    const jobs = await jobsOfUnfinishedRuns(github, repo);
-    return jobs.some(({ name, conclusion }) => conclusion !== "skipped" && isJobNamed(name, IMPLEMENT_JOB_NAME));
+    return implementJobsUnderWay(await jobsOfUnfinishedRuns(github, repo)).length > 0;
   } catch {
     return null;
   }
@@ -1832,8 +1857,9 @@ async function gatherTriggerSweep(
 
 /**
  * Which roles have a job under way, across every workflow run in the repo
- * not yet finished, a job its run skipped aside, as readImplementJobUnderWay
- * reads an Implement job; null when the Actions API couldn't be read.
+ * not yet finished, a job its run skipped aside, and an Implement job as
+ * Dispatch reads it (implementJobsUnderWay); null when the Actions API
+ * couldn't be read.
  */
 async function readRolesUnderWay(github: Pick<GitHub, "rest">, repo: Repo): Promise<RolesUnderWay | null> {
   let jobs: Job[];
@@ -1845,7 +1871,7 @@ async function readRolesUnderWay(github: Pick<GitHub, "rest">, repo: Repo): Prom
   const anyJobNamed = (...names: string[]) => jobs.some(({ name }) => names.some((jobName) => isJobNamed(name, jobName)));
   const designTurns = new Set(jobs.flatMap((job) => DESIGN_JOB.exec(job.name)?.[1] ?? []).map(Number));
   return {
-    implement: anyJobNamed(IMPLEMENT_JOB_NAME),
+    implement: implementJobsUnderWay(jobs).length > 0,
     research: anyJobNamed(RESEARCH_JOB_NAME),
     review: anyJobNamed(REVIEW_CHECKS_JOB_NAME, REVIEW_JOB_NAME),
     claim: anyJobNamed(CLAIM_JOB_NAME),
@@ -1933,7 +1959,7 @@ async function jobsOfUnfinishedRuns(github: Pick<GitHub, "rest">, repo: Repo): P
     const page = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as {
       jobs: { name: string; status: string; conclusion?: string | null }[];
     };
-    jobs.push(...page.jobs.map((job) => ({ name: job.name, status: job.status, conclusion: job.conclusion ?? null })));
+    jobs.push(...page.jobs.map((job) => ({ run: id, name: job.name, status: job.status, conclusion: job.conclusion ?? null })));
   }
   return jobs;
 }

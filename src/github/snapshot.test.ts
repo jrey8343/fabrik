@@ -22,6 +22,7 @@ import {
   MERGEABLE_READS,
   MERGEABLE_WAIT_MS,
   PROTOTYPE_JOB_NAME,
+  PUSH_JOB_NAME,
   readKitConfigSources,
   RESEARCH_JOB_NAME,
   REVIEW_CHECKS_JOB_NAME,
@@ -89,10 +90,31 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
     expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 4, research: 0 });
   });
 
-  it("doesn't count a finished Implement job, or any other job", async () => {
+  // #432: the claim took the label off and the draft PR isn't open yet, so the run is all that holds the slot.
+  it("counts an Implement job that's done while its run's push job is still to land it", async () => {
     const actions = actionsWith([
-      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "completed" }, { name: "fabrik / Review", status: "in_progress" }] },
-      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement failed", status: "in_progress" }] },
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "completed", conclusion: "success" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "completed", conclusion: "failure" }, { name: "fabrik / Push", status: "in_progress" }] },
+      { id: 3, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "queued" }] },
+    ]);
+
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 3, research: 0 });
+  });
+
+  it("doesn't count an Implement job once its run's push job has landed it, one its run skipped, or any other job", async () => {
+    const actions = actionsWith([
+      {
+        id: 1,
+        status: "in_progress",
+        jobs: [
+          { name: "fabrik / Implement", status: "completed", conclusion: "success" },
+          { name: "fabrik / Push", status: "completed", conclusion: "success" },
+          { name: "fabrik / Dispatch", status: "in_progress" },
+        ],
+      },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "completed", conclusion: "skipped" }, { name: "fabrik / Review", status: "in_progress" }] },
+      { id: 3, status: "in_progress", jobs: [{ name: "fabrik / Implement failed", status: "in_progress" }] },
+      { id: 4, status: "completed", jobs: [{ name: "fabrik / Implement", status: "completed", conclusion: "success" }] },
     ]);
 
     expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0 });
@@ -129,6 +151,15 @@ describe("The Implement job's name", () => {
   });
 });
 
+describe("The push job's name", () => {
+  it("is the name loop.yml gives the push job, which an Implement job counts as under way until it lands", async () => {
+    const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
+    const pushJob = /^ {2}push:\n {4}name: (.+)$/m.exec(workflow)?.[1];
+
+    expect(pushJob).toBe(PUSH_JOB_NAME);
+  });
+});
+
 describe("The Research job's name", () => {
   it("is the name loop.yml gives the Research job, which Dispatch counts Research runs by", async () => {
     const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
@@ -145,7 +176,15 @@ describe("The judge job's name", () => {
     const judgeJob = new RegExp(`^ {2}${JUDGE_JOB}:\n {4}name: (.+)$`, "m").exec(workflow)?.[1];
     expect(judgeJob).toBeDefined();
     const actions = actionsWith([
-      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "completed" }, { name: `fabrik / ${judgeJob}`, status: "in_progress" }] },
+      {
+        id: 1,
+        status: "in_progress",
+        jobs: [
+          { name: "fabrik / Implement", status: "completed", conclusion: "success" },
+          { name: "fabrik / Push", status: "completed", conclusion: "success" },
+          { name: `fabrik / ${judgeJob}`, status: "in_progress" },
+        ],
+      },
       { id: 2, status: "queued", jobs: [{ name: `fabrik / ${judgeJob}`, status: "queued" }] },
     ]);
 
@@ -2501,11 +2540,13 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     expect(snapshot.conflicts?.implementJobUnderWay).toBe(true);
   });
 
-  it("reads no Implement job under way when the only unfinished runs skipped theirs, and finished runs don't count", async () => {
+  it("reads no Implement job under way when the only unfinished runs skipped theirs or have landed theirs, and finished runs don't count", async () => {
     const { github } = githubReading([[]]);
     const actions = actionsWith([
       { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "completed", conclusion: "skipped" }, { name: "fabrik / Push", status: "in_progress" }] },
       { id: 2, status: "completed", jobs: [{ name: "fabrik / Implement", status: "in_progress" }] },
+      // #432: as Dispatch reads it, the push job landing the run ends the Implement job's hold.
+      { id: 3, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "completed", conclusion: "success" }, { name: "fabrik / Score", status: "in_progress" }] },
     ]);
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "scheduled-tick", now: "2026-11-07T10:17:00Z" }, null, APP_LOGIN, actions as unknown as GitHub);
