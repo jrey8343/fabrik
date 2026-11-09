@@ -525,7 +525,14 @@ export async function gatherSnapshot(
     event.kind === "scheduled-tick" ||
     event.kind === "kit-config-changed" ||
     (event.kind === "issue-closed" && makesUnusable(part?.issue?.labels ?? []));
-  const held = freesASubscription ? await gatherHeld(github, repo, kitIssues, appLogin) : null;
+  // A weekly-limit issue closed by hand has left kitIssues, yet the runs held on it resume as it closes (#440).
+  const closedWeeklyLimit =
+    event.kind === "issue-closed" && (part?.issue?.labels ?? []).includes(WEEKLY_LIMIT_LABEL)
+      ? await gatherKitIssue(github, repo, event.issue, appLogin)
+      : null;
+  const held = freesASubscription
+    ? await gatherHeld(github, repo, closedWeeklyLimit === null ? kitIssues : [...kitIssues, closedWeeklyLimit], appLogin)
+    : null;
   const triggers = event.kind === "scheduled-tick" ? await gatherTriggerSweep(github, actions, repo, appLogin) : null;
   // A push to the default branch may leave an agent PR conflicting with it; the tick catches any the push missed (#304).
   const conflicts =
@@ -545,8 +552,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps, conflicts, triggers }
-    : { ...part, spec, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps, conflicts, triggers };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, triggers }
+    : { ...part, spec, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, triggers };
 }
 
 /**
@@ -935,7 +942,18 @@ async function gatherEventPart(
 
 type EventPart = Omit<
   Snapshot,
-  "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "replay" | "namedPullRequests" | "held" | "openMaps" | "conflicts" | "triggers"
+  | "kitIssues"
+  | "spec"
+  | "startingComment"
+  | "audit"
+  | "retro"
+  | "replay"
+  | "namedPullRequests"
+  | "held"
+  | "closedWeeklyLimit"
+  | "openMaps"
+  | "conflicts"
+  | "triggers"
 >;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body author { login __typename } }";
@@ -978,12 +996,18 @@ interface KitIssueComments {
   nodes: { body: string; author: Actor }[];
 }
 
+interface KitIssueNode {
+  number: number;
+  body: string;
+  author: Actor;
+  labels: { nodes: { name: string }[] };
+  comments: KitIssueComments;
+}
+
 interface KitIssuesQueryResult {
   repository: {
     owner: { login: string };
-    issues: {
-      nodes: { number: number; body: string; author: Actor; labels: { nodes: { name: string }[] }; comments: KitIssueComments }[];
-    };
+    issues: { nodes: KitIssueNode[] };
   };
 }
 
@@ -1005,18 +1029,48 @@ export async function gatherKitIssues(
     name: repo.name,
     labels: KIT_ISSUE_LABELS,
   });
-  const kitIssues = await Promise.all(
-    data.repository.issues.nodes.map(async (issue): Promise<KitIssueSnapshot> => {
-      const comments = [...(await earlierComments(github, repo, issue.number, issue.comments)), ...issue.comments.nodes];
-      return {
-        number: issue.number,
-        labels: issue.labels.nodes.map((label) => label.name),
-        body: byAppOf(issue.author, appLogin) ? issue.body : "",
-        comments: comments.filter((comment) => byAppOf(comment.author, appLogin)).map((comment) => comment.body),
-      };
-    }),
-  );
+  const kitIssues = await Promise.all(data.repository.issues.nodes.map((issue) => kitIssueOf(github, repo, issue, appLogin)));
   return { owner: data.repository.owner.login, kitIssues };
+}
+
+/** A Kit-owned issue as kitIssues holds it: only the App's own text, every comment of it. */
+async function kitIssueOf(github: GitHub, repo: Repo, issue: KitIssueNode, appLogin: string | null): Promise<KitIssueSnapshot> {
+  const comments = [...(await earlierComments(github, repo, issue.number, issue.comments)), ...issue.comments.nodes];
+  return {
+    number: issue.number,
+    labels: issue.labels.nodes.map((label) => label.name),
+    body: byAppOf(issue.author, appLogin) ? issue.body : "",
+    comments: comments.filter((comment) => byAppOf(comment.author, appLogin)).map((comment) => comment.body),
+  };
+}
+
+const KIT_ISSUE_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      closedWeeklyLimit: issue(number: $number) {
+        number
+        body
+        author { login __typename }
+        labels(first: 100) { nodes { name } }
+        comments(last: 100) { ${KIT_ISSUE_COMMENTS} }
+      }
+    }
+  }
+`;
+
+/**
+ * One Kit-owned issue by number, open or closed, as kitIssues holds an open
+ * one: for a weekly-limit issue closed by hand, whose held markers kitIssues
+ * no longer reads (#440).
+ */
+async function gatherKitIssue(github: GitHub, repo: Repo, number: number, appLogin: string | null): Promise<KitIssueSnapshot | null> {
+  const data = await github.graphql<{ repository: { closedWeeklyLimit: KitIssueNode | null } }>(KIT_ISSUE_QUERY, {
+    owner: repo.owner,
+    name: repo.name,
+    number,
+  });
+  const issue = data.repository.closedWeeklyLimit;
+  return issue === null ? null : kitIssueOf(github, repo, issue, appLogin);
 }
 
 /** The comments before this page, oldest first. */
@@ -1155,10 +1209,10 @@ interface HeldTargetNode {
 const HELD_TARGET_FIELDS = "__typename number state body author { login __typename } labels(first: 100) { nodes { name } }";
 
 /**
- * Each issue or PR a held marker on an open weekly-limit issue names, once,
+ * Each issue or PR a held marker on these weekly-limit issues names, once,
  * to tell a held run still in the state it was held in from one that has
- * moved on as it resumes (src/loop/resume.ts). A number naming nothing
- * GitHub has is left out.
+ * moved on as it resumes (src/loop/resume.ts): the open ones, and one closed
+ * by hand (#440). A number naming nothing GitHub has is left out.
  */
 async function gatherHeld(
   github: GitHub,

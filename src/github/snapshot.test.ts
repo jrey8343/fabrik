@@ -1833,10 +1833,23 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
    * these issues and PRs by number, and a closed issue with `closedLabels`
    * for an issue-closed event.
    */
-  function githubWith(comments: string[], targets: Record<number, unknown>, closedLabels: string[] = []) {
+  function githubWith(comments: string[], targets: Record<number, unknown>, closedLabels: string[] = [], closedComments: string[] = []) {
     const asked: number[][] = [];
     const github = {
       async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("closedWeeklyLimit: issue(number: $number)")) {
+          return {
+            repository: {
+              closedWeeklyLimit: {
+                number: variables["number"],
+                body: "<!-- fabrik:notified -->",
+                author: APP,
+                labels: { nodes: closedLabels.map((name) => ({ name })) },
+                comments: { nodes: [...closedComments.map((body) => ({ body, author: APP })), { body: heldMarker(11, "triage", "needs-triage"), author: { login: "mallory", __typename: "User" } }] },
+              },
+            },
+          };
+        }
         if (query.includes("issue(number: $number)")) {
           const data = issueData(variables["number"] as number);
           return {
@@ -1918,6 +1931,32 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
 
       expect(snapshot.held).toEqual(heldOn7);
     }
+  });
+
+  it("holds a weekly-limit issue closed by hand, with the App's own text, and gathers what its held markers name too (#440)", async () => {
+    const issue8 = { ...issue7, number: 8 };
+    const { github, asked } = githubWith([heldMarker(7, "triage", "needs-triage")], { 7: issue7, 8: issue8 }, ["fabrik:weekly-limit"], [
+      heldMarker(8, "triage", "needs-triage"),
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 60 }, null, "fabrik-app[bot]");
+
+    expect(snapshot.closedWeeklyLimit).toEqual({
+      number: 60,
+      labels: ["fabrik:weekly-limit"],
+      body: "<!-- fabrik:notified -->",
+      comments: [heldMarker(8, "triage", "needs-triage")],
+    });
+    expect(asked).toEqual([[7, 8]]);
+    expect(snapshot.held).toEqual([...heldOn7, { ...heldOn7[0], number: 8 }]);
+  });
+
+  it("holds no closed weekly-limit issue for any other issue closing", async () => {
+    const { github } = githubWith([], {}, ["fabrik:usage-credits"]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 60 }, null, "fabrik-app[bot]");
+
+    expect(snapshot.closedWeeklyLimit).toBeNull();
   });
 
   it("is gathered when the Kit config changes, since a Subscription newly listed is free (#439)", async () => {

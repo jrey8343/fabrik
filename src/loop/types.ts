@@ -941,12 +941,20 @@ export interface Snapshot {
    */
   readonly namedPullRequests: readonly NamedPullRequestSnapshot[] | null;
   /**
-   * Gathered for a scheduled tick only: each issue or PR a held marker on an
-   * open weekly-limit issue names, that GitHub has, in any order, so that the
-   * tick resumes only held runs still in the state they were held in
+   * Gathered for a scheduled tick, and for whatever may free a Subscription
+   * (#439): each issue or PR a held marker on an open weekly-limit issue, or
+   * on closedWeeklyLimit, names, that GitHub has, in any order, so that only
+   * held runs still in the state they were held in resume
    * (src/loop/resume.ts). A number naming nothing GitHub has isn't here.
    */
   readonly held: readonly HeldTargetSnapshot[] | null;
+  /**
+   * Gathered for an issue-closed event on a weekly-limit issue only: that
+   * issue, as kitIssues holds an open one, since it has left kitIssues, so
+   * that the runs held on it resume as it closes (#440). Null for any other
+   * event.
+   */
+  readonly closedWeeklyLimit: KitIssueSnapshot | null;
   /**
    * Gathered for a Design-session turn finishing only: the open `wayfinder:map`
    * issues, by number, oldest first, whoever made them, the Kit or the

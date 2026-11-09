@@ -4,7 +4,7 @@
 // with rotation on one per Subscription, which the Kit skips until the
 // Operator closes it (#433);
 // the weekly usage limit gets one per window, which a scheduled tick closes
-// after the reset. They don't restart stalled Tickets: each Ticket's own
+// after the reset, or the Operator closes when the reset isn't known. They don't restart stalled Tickets: each Ticket's own
 // failure comment names the trigger label to re-add. With rotation on, each
 // Subscription gets its own weekly-limit issue, which stays quiet while
 // another Subscription is free: only the one opened, or refused on, once none
@@ -254,10 +254,16 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
         "",
         "## Steps",
         "",
-        earliest === null
-          ? "- [ ] Wait until agent runs work again: when the first limit resets isn't known."
-          : `- [ ] Wait for the first limit to reset at ${readable(earliest)}.`,
-        "- [ ] Nothing to re-add: at the reset the Kit resumes each held run itself, in the order they were held.",
+        // With no reset known, nothing closes this issue but the Operator, whose close resumes the held runs (#440).
+        ...(earliest === null
+          ? [
+              `- [ ] ${UNKNOWN_RESET}`,
+              "- [ ] Nothing to re-add: the Kit resumes each held run itself, in the order they were held.",
+            ]
+          : [
+              `- [ ] Wait for the first limit to reset at ${readable(earliest)}.`,
+              "- [ ] Nothing to re-add: at the reset the Kit resumes each held run itself, in the order they were held.",
+            ]),
         "",
         "Run `/fabrik-pair` on this issue to work through these steps with an agent.",
         "",
@@ -292,6 +298,13 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
     firstReset: earliest,
   };
 }
+
+/**
+ * What a weekly-limit issue with no reset known asks of the Operator, with
+ * rotation on: only their close ends it, and resumes the runs held on it (#440).
+ */
+const UNKNOWN_RESET =
+  "The Kit doesn't know when this limit resets. Close this issue once agent runs work again, and the Kit resumes the held runs.";
 
 /** The line pointing the Operator at a Pairing session, at the end of a rotation issue's steps. */
 const PAIRING_LINE = "Run `/fabrik-pair` on this issue to work through these steps with an agent.";

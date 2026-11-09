@@ -14,7 +14,7 @@ import {
   tickSnapshot,
 } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
-import type { Action, AgentRole, HeldTargetSnapshot, KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
+import type { Action, AgentRole, HeldTargetSnapshot, KitIssueSnapshot, LoopEvent, Plan, Snapshot } from "./types.ts";
 
 const TWO_SUBSCRIPTIONS = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
 const EARLIER = "2026-11-08T10:00:00.000Z";
@@ -204,6 +204,97 @@ describe("A Subscription freed while runs are held, with rotation on (#439)", ()
 
     const markers = actionsOf(plan).find((action) => action.kind === "comment" && action.issue === 50);
     expect(markers).toEqual(expect.objectContaining({ body: expect.stringMatching(/^A Subscription is free again/) }));
+  });
+});
+
+// Closing a weekly-limit issue by hand is the Operator saying its Subscription
+// works again, so every run held on it resumes, as a reset would (#440).
+describe("A weekly-limit issue the Operator closes by hand, with runs held and rotation on (#440)", () => {
+  // A's weekly-limit issue #50 doesn't know its reset and holds five runs; B's #51 resets in days.
+  const limitA: KitIssueSnapshot = {
+    number: 50,
+    labels: ["fabrik:weekly-limit"],
+    body: "Every listed Subscription has now hit its limit.\n\n<!-- fabrik:notified -->\n<!-- fabrik:subscription Claude token -->",
+    comments: [
+      held(7, "triage", "needs-triage"),
+      held(60, "review", "agent:review"),
+      held(8, "implement", "agent:implement"),
+      // A Retry, whose Ticket has its agent PR open.
+      held(9, "implement", "agent:implement"),
+      held(10, "design", "agent:design"),
+    ],
+  };
+  const limitB = weeklyLimitIssue(51, "Claude token 2", "2026-11-14T10:00:00.000Z");
+  const heldOn = [
+    anIssueHeld(7, ["bug"]),
+    aDraftHeld(60),
+    anIssueHeld(8, ["enhancement", "ready-for-agent"]),
+    anIssueHeld(9, ["enhancement", "ready-for-agent"]),
+    anIssueHeld(10, ["enhancement", "needs-design"]),
+  ];
+  const closedA: LoopEvent = { kind: "issue-closed", issue: 50 };
+  const closedSnapshot = (kitIssues: readonly KitIssueSnapshot[], others: Partial<Pick<Snapshot, "held">> = {}) =>
+    snapshotOf(anIssue({ number: 50, open: false, byApp: true, labels: limitA.labels, body: limitA.body }), {
+      kitIssues,
+      closedWeeklyLimit: limitA,
+      held: heldOn,
+      ...others,
+    });
+
+  it("resumes the Triage, Review, Implement, Retry and Design runs held on it, before the Dispatch and Design queue checks", () => {
+    const plan = planFor(closedA, closedSnapshot([limitB]), TWO_SUBSCRIPTIONS);
+
+    const actions = actionsOf(plan);
+    expect(labelsAdded(plan)).toEqual([
+      { kind: "add-labels", issue: 7, labels: ["needs-triage"] },
+      { kind: "add-labels", issue: 60, labels: ["agent:review"] },
+      { kind: "add-labels", issue: 8, labels: ["agent:implement"] },
+      { kind: "add-labels", issue: 9, labels: ["agent:implement"] },
+      { kind: "add-labels", issue: 10, labels: ["agent:design"] },
+    ]);
+    const lastResume = actions.findLastIndex((action) => action.kind === "add-labels");
+    expect(actions.findIndex((action) => action.kind === "check-dispatch")).toBeGreaterThan(lastResume);
+    expect(actions.findIndex((action) => action.kind === "check-design-queue")).toBeGreaterThan(lastResume);
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("leaves the resumed markers on the weekly-limit issue still open, and none on the one closed", () => {
+    const plan = planFor(closedA, closedSnapshot([limitB]), TWO_SUBSCRIPTIONS);
+
+    const comments = actionsOf(plan).filter((action) => action.kind === "comment");
+    expect(comments.map((action) => ("issue" in action ? action.issue : null))).toEqual([51]);
+    expect(comments[0]).toEqual(
+      expect.objectContaining({ body: expect.stringContaining('<!-- fabrik:resumed {"issue":10,"role":"design","held":0} -->') }),
+    );
+  });
+
+  it("resumes them with no marker comment when no weekly-limit issue is left open", () => {
+    const plan = planFor(closedA, closedSnapshot([]), TWO_SUBSCRIPTIONS);
+
+    expect(labelsAdded(plan)).toHaveLength(5);
+    expect(actionsOf(plan).filter((action) => action.kind === "comment")).toEqual([]);
+  });
+
+  it("resumes them even while the Subscription has another issue open, since the Operator says it works again", () => {
+    const usageCreditsA: KitIssueSnapshot = {
+      number: 52,
+      labels: ["ready-for-human", "fabrik:usage-credits"],
+      body: "Turn off usage credits.\n\n<!-- fabrik:subscription Claude token -->",
+      comments: [],
+    };
+
+    const plan = planFor(closedA, closedSnapshot([limitB, usageCreditsA]), TWO_SUBSCRIPTIONS);
+
+    expect(labelsAdded(plan)).toHaveLength(5);
+  });
+
+  it("drops a held run whose issue has moved on, as the reset would", () => {
+    const moved = heldOn.map((on) => (on.number === 8 ? { ...on, open: false } : on));
+
+    const plan = planFor(closedA, closedSnapshot([limitB], { held: moved }), TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(plan)).toContainEqual({ kind: "drop-held-run", role: "implement", issue: 8, reason: expect.stringContaining("#8 is closed") });
+    expect(labelsAdded(plan)).toHaveLength(4);
   });
 });
 
@@ -503,6 +594,40 @@ describe("The weekly-limit issue that buzzes the Operator, with rotation on", ()
       }),
     );
     expect(opened).not.toEqual(expect.objectContaining({ body: expect.stringContaining("Re-add the trigger label") }));
+  });
+
+  it("with no reset known, asks the Operator to close it once runs work again, promising no resume at a reset (#440)", () => {
+    const refused: LoopEvent = {
+      kind: "agent-run-failed",
+      role: "implement",
+      issue: 7,
+      runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+      jobResult: "failure",
+      secretsStep: "success",
+      report: { failure: "weekly-limit", detail: "weekly limit reached" },
+      subscription: "Claude token",
+    };
+    const noReset: KitIssueSnapshot = {
+      number: 40,
+      labels: ["fabrik:weekly-limit"],
+      body: "The weekly usage limit of the `Claude token 2` Subscription is reached.\n\n<!-- fabrik:subscription Claude token 2 -->",
+      comments: [],
+    };
+    const snapshot = { ...tickSnapshot({ kitIssues: [noReset] }), issue: anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"] }) };
+
+    const actions = actionsOf(planFor(refused, snapshot, TWO_SUBSCRIPTIONS));
+    const opened = actions.find((action) => action.kind === "open-issue");
+
+    expect(opened).toEqual(
+      expect.objectContaining({
+        body: expect.stringContaining(
+          "The Kit doesn't know when this limit resets. Close this issue once agent runs work again, and the Kit resumes the held runs.",
+        ),
+      }),
+    );
+    const said = actions.flatMap((action) => (action.kind === "open-issue" || action.kind === "comment" ? [action.body] : [])).join("\n");
+    expect(said).not.toContain("at the reset");
+    expect(said).not.toContain("held until a Subscription's weekly limit resets");
   });
 });
 

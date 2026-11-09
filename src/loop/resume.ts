@@ -5,7 +5,10 @@
 // closed a usage-credits issue the Loop missed, or listed another
 // Subscription. Closing a usage-credits, token-rotation or weekly-limit issue
 // resumes them straight away, as does a Kit config change, so a Dispatch check
-// never starts a newer Ticket ahead of them. A run with a trigger label gets
+// never starts a newer Ticket ahead of them. A weekly-limit issue the Operator
+// closes by hand, as one whose reset isn't known, which only they can close,
+// resumes the runs held on it too, read from the issue itself, since it has
+// left the open Kit-owned issues (#440). A run with a trigger label gets
 // it back on the App token, so a normal Loop run starts it on the freed
 // Subscription, under Dispatch's max_in_flight cap and the Design session cap
 // as usual: each held run kept its slot. A run whose issue or PR has closed,
@@ -37,16 +40,24 @@ import { failedHeldAudit } from "./weeklyRuns.ts";
  * free once it lands: the resumes, then the resumed markers, then the Plan's
  * own actions, a weekly-limit issue's close among them. `closed` names a
  * Kit-owned issue already closed, as the one an issue-closed event is about,
- * which the snapshot may still list. While every Subscription is used up, or
- * with rotation off, or with no run held, it is left as it is.
+ * which the snapshot may still list. A weekly-limit one, the snapshot's
+ * closedWeeklyLimit, is the Operator saying its Subscription works again, so
+ * the runs held on it resume too, even while another issue keeps that
+ * Subscription used up (#440). While every Subscription is used up, or with
+ * rotation off, or with no run held, it is left as it is.
  */
 export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConfig, closed: number | null = null): Plan {
   if (plan.kind === "fail" || !rotationIsOn(config)) return plan;
   const planned = plan.kind === "act" ? plan.actions : [];
-  const limits = snapshot.kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
+  // A weekly-limit issue closed by hand has left kitIssues, so the snapshot holds it apart (#440).
+  const handClosed = snapshot.closedWeeklyLimit?.number === closed ? snapshot.closedWeeklyLimit : null;
+  const limits = [...snapshot.kitIssues.filter((issue) => issue.number !== closed), ...(handClosed === null ? [] : [handClosed])]
+    .filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL))
+    .sort((a, b) => a.number - b.number);
   const closing = new Set(planned.flatMap((action) => (action.kind === "close" ? [action.issue] : [])));
   const stillOpen = snapshot.kitIssues.filter((issue) => issue.number !== closed && !closing.has(issue.number));
-  if (freeSubscriptions(stillOpen, config).length === 0) return plan;
+  // The Operator closing a weekly-limit issue says its Subscription works again, whatever else is open (#440).
+  if (handClosed === null && freeSubscriptions(stillOpen, config).length === 0) return plan;
   const waiting = waitingHeldRuns(limits);
   if (waiting.length === 0) return plan;
   if (snapshot.held === null) {
@@ -73,13 +84,14 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
     }
     dealtWith.push(entry);
   }
-  // On every weekly-limit issue, so that a run held again keeps its place even
-  // once the issue its held markers were on has closed, and so that one the
-  // plan fails to close resumes nothing again.
+  // On every weekly-limit issue still open, so that a run held again keeps its
+  // place even once the issue its held markers were on has closed, and so that
+  // one the plan fails to close resumes nothing again. One already closed is no
+  // longer read.
   const why = limits.some((issue) => closing.has(issue.number))
     ? "A Subscription's weekly limit reset, so the Kit has dealt with the runs held here."
     : "A Subscription is free again, so the Kit has dealt with the runs held here.";
-  const markers = limits.flatMap((issue): Action[] => {
+  const markers = limits.filter((issue) => issue.number !== closed).flatMap((issue): Action[] => {
     const here = dealtWith.map(({ run, markers: counts }) =>
       resumedMarker({ role: run.role, issue: run.issue, held: counts.get(issue.number) ?? 0, order: run.order ?? null }),
     );

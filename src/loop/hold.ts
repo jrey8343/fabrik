@@ -17,12 +17,14 @@ import type { Action, KitConfig, KitIssueSnapshot, Plan } from "./types.ts";
 
 /** The line naming a held run, with its held marker, for a weekly-limit issue. */
 export function heldLine(held: HoldableRun, until: string | null): string {
-  const when =
+  const run = `The ${RUN_NAMES[held.role]} run on #${held.issue}`;
+  const resume = `re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
+  // With no reset known, only the Operator's close of this issue frees a Subscription for it (#440).
+  const line =
     until === null
-      ? "a Subscription's weekly limit resets, which isn't known"
-      : `${readable(until)}, when the first Subscription's weekly limit resets`;
-  const resume = `The Kit re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
-  return [`The ${RUN_NAMES[held.role]} run on #${held.issue} is held until ${when}. ${resume}`, "", heldMarker(held)].join("\n");
+      ? `${run} is held until a Subscription is free again. The Kit doesn't know when this limit resets. Close this issue once agent runs work again, and the Kit ${resume}`
+      : `${run} is held until ${readable(until)}, when the first Subscription's weekly limit resets. The Kit ${resume}`;
+  return [line, "", heldMarker(held)].join("\n");
 }
 
 /**
