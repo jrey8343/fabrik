@@ -210,7 +210,13 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
           aRunRecord({ repo: "acme/shop", runId: run, role, issue: ticket, verdict: role === "review" ? "pass" : null, replay: { issue: 140, arm, ticket, candidateSha: null } }),
         ),
       );
-    const outcomes = (records = armsOf(12, 9001)) => ({ records, scoreFiles: [], gates: [] });
+    /** What the store holds: these records, and each arm's patch of the Tickets they're of. */
+    const outcomes = (records = armsOf(12, 9001)) => ({
+      records,
+      scoreFiles: [],
+      gates: [],
+      patches: [...new Set(records.flatMap(({ replay, runId }) => (replay == null ? [] : [`replays/acme/shop/140/${replay.ticket}-${replay.arm}-${runId}.patch`])))],
+    });
     const finished = (body: string, end: ReplayTicketEnd = { kind: "done" }, store: ReturnType<typeof outcomes> | null = outcomes()) =>
       planFor({ ...ended(end), outcomes: store }, snapshotOf({ ...running, body }), kitConfig());
     const bodyOf = (plan: Plan) => {

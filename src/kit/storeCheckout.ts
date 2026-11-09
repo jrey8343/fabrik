@@ -98,6 +98,11 @@ export async function readStoreReplayGates(storeDir: string): Promise<ReplayArmG
   return files.filter((gates) => gates !== null);
 }
 
+/** Every Replay arm's patch under `replays/` (replayPatchPath), by its path in the store, whatever repo or replay issue. */
+export async function readStoreReplayPatches(storeDir: string): Promise<string[]> {
+  return pathsIn(storeDir, "replays", ".patch");
+}
+
 /**
  * A reader of the transcripts under `transcripts/`, each by its path in the
  * store, as its stream-json lines; null for a path the checkout doesn't hold.

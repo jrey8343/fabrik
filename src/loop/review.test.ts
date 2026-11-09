@@ -214,6 +214,22 @@ describe("Review: red CI", () => {
     expect(notificationsOf(plan)).toEqual([]);
     expect(body).toContain(`[The run](${RUN})`);
   });
+
+  it("says a skipped or neutral required check was skipped, which a Retry can't change, apart from the ones that didn't pass", () => {
+    const plan = planFor(redChecks({ failed: ["build", "e2e"], skipped: ["e2e"] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+
+    const [body] = commentsOf(plan);
+    expect(body).toContain("These required checks didn't pass, so the Reviewer didn't run:\n\n- `build`");
+    expect(body).toContain("These required checks were skipped or reported neutral, which a Retry can't change:\n\n- `e2e`");
+  });
+
+  it("says only that the checks were skipped when none failed", () => {
+    const plan = planFor(redChecks({ failed: ["e2e"], skipped: ["e2e"] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+
+    const [body] = commentsOf(plan);
+    expect(body).toContain("These required checks were skipped or reported neutral, so the Reviewer didn't run, and a Retry can't change that:\n\n- `e2e`");
+    expect(body).not.toContain("didn't pass");
+  });
 });
 
 describe("Review: the Reviewer's Verdict", () => {

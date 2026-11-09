@@ -610,6 +610,8 @@ export interface ReplayOutcomes {
   readonly scoreFiles: readonly ScoreFile[];
   /** Each done Ticket's arms' gates. */
   readonly gates: readonly ReplayArmGates[];
+  /** The store paths of the arms' patches it holds, so a patch never written is never linked. */
+  readonly patches: readonly string[];
 }
 
 /**
@@ -698,9 +700,11 @@ function ticketResultOf(ticket: number, run: number, outcomes: ReplayOutcomes): 
       // A done Ticket's arm with no Review record had none to spend: its patch wasn't laid (endOf in src/kit/replayRecord.ts).
       ...spentBy(review === undefined ? [implement] : [implement, review]),
       // The patch this run wrote, never another run's of the same arm.
-      patch: implement?.replay == null ? null : replayPatchPath(implement.repo, { ...implement.replay, run: implement.runId }),
+      patch: implement?.replay == null ? null : writtenPatch(replayPatchPath(implement.repo, { ...implement.replay, run: implement.runId })),
     };
   };
+  // Only a patch the store holds: none is written when the arm's patch was empty or the store couldn't be written to.
+  const writtenPatch = (path: string) => (outcomes.patches.includes(path) ? path : null);
   return { ticket, run, arms: { baseline: armResult("baseline"), variant: armResult("variant") }, original: originalOf(ticket, outcomes.records) };
 }
 
@@ -998,8 +1002,9 @@ function tallyWords(tally: Tally | null): string {
 
 /**
  * How `these` totals compare with `those`, measure by measure, from the
- * totals alone: each count both have measured something of, then each
- * figure's change where both are known.
+ * totals alone: each count both have and either measured something of, a
+ * side that measured none shown as –, then each figure's change where both
+ * are known.
  */
 function comparison(these: Totals, those: Totals): string[] {
   const counts: [string, Tally | null, Tally | null][] = [
@@ -1013,7 +1018,7 @@ function comparison(these: Totals, those: Totals): string[] {
     ["duration", these.durationMs, those.durationMs],
   ];
   return [
-    ...counts.flatMap(([name, a, b]) => (a === null || b === null || (a.of === 0 && b.of === 0) ? [] : [`${name} ${a.passed}/${a.of} vs ${b.passed}/${b.of}`])),
+    ...counts.flatMap(([name, a, b]) => (a === null || b === null || (a.of === 0 && b.of === 0) ? [] : [`${name} ${tallyWords(a)} vs ${tallyWords(b)}`])),
     ...figures.flatMap(([name, a, b]) => (a === null || b === null || b === 0 ? [] : [`${name} ${percentChange(a, b)}`])),
   ];
 }

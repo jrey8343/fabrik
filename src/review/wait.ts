@@ -86,7 +86,7 @@ export interface ChecksWaitOptions {
 /** How the wait ended. It gives up at its deadline, naming the gating checks that never reported and those still running. */
 export type ChecksWaitOutcome =
   | { readonly checks: "green" | "stale"; readonly headSha: string }
-  | { readonly checks: "red"; readonly headSha: string; readonly failed: readonly string[] }
+  | { readonly checks: "red"; readonly headSha: string; readonly failed: readonly string[]; readonly skipped: readonly string[] }
   | { readonly checks: "gave-up"; readonly headSha: string; readonly unreported: readonly string[]; readonly running: readonly string[] };
 
 /** The checks it waits on, as its log names them. */
@@ -131,7 +131,7 @@ export async function waitForRequiredChecks(github: ChecksWaitGitHub, options: C
     if (state.headRefOid !== headSha || state.state !== "OPEN" || !state.isDraft) return { checks: "stale", headSha };
     const result = requiredChecksOutcome(await whileWaiting(() => github.checks()), gating);
     if (result.kind === "green") return { checks: "green", headSha };
-    if (result.kind === "red") return { checks: "red", headSha, failed: result.failed };
+    if (result.kind === "red") return { checks: "red", headSha, failed: result.failed, skipped: result.skipped };
     const line = waitingOn(result.unreported, result.running);
     if (now() - started >= deadlineMs) {
       log(`Gave up waiting after ${Math.round(deadlineMs / 60_000)} minutes, still waiting on ${line}`);
@@ -197,10 +197,11 @@ async function main(productDir: string): Promise<void> {
     return;
   }
   const failed = outcome.checks === "red" ? outcome.failed : [];
+  const skipped = outcome.checks === "red" ? outcome.skipped : [];
   console.log(`Required checks on #${number} at ${outcome.headSha}: ${outcome.checks}${failed.length > 0 ? ` (${failed.join(", ")})` : ""}`);
   await appendFile(
     required("GITHUB_OUTPUT"),
-    `checks=${outcome.checks}\nhead-sha=${outcome.headSha}\nfailed=${JSON.stringify(failed)}\n`,
+    `checks=${outcome.checks}\nhead-sha=${outcome.headSha}\nfailed=${JSON.stringify(failed)}\nskipped=${JSON.stringify(skipped)}\n`,
   );
 }
 

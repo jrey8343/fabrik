@@ -291,6 +291,8 @@ export type LoopEvent =
       readonly headSha: string;
       /** The required checks that didn't pass; empty when they all did. */
       readonly failed: readonly string[];
+      /** The ones among `failed` that were skipped or reported neutral, which no Retry changes; absent when none were. */
+      readonly skipped?: readonly string[];
       /** The Review run, linked from the Verdict comment. */
       readonly runUrl: string;
     }

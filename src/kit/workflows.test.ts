@@ -1216,6 +1216,20 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
     expect(capture()).toContain(`timeout-minutes: ${CAPTURE_TIMEOUT_MINUTES}\n`);
   });
 
+  // Killed before it records a result, capture would read as no-result; the job notes it so the push job reads it as a timeout.
+  it("notes a capture step its own timeout stopped, for the push job (src/kit/pushJob.ts)", () => {
+    const started = stepAt("id: capture-started\n");
+    const timedOut = step("id: capture-time\n");
+
+    expect(started).toBeGreaterThan(stepAt("id: agent\n"));
+    expect(started).toBeLessThan(stepAt("id: capture\n"));
+    expect(stepAt("id: capture-time\n")).toBeGreaterThan(stepAt("id: capture\n"));
+    expect(timedOut).toContain("if: steps.capture.outcome == 'failure'\n");
+    expect(timedOut).toContain("STARTED_AT: ${{ steps.capture-started.outputs.at }}");
+    expect(timedOut).toContain(`TIMEOUT_MINUTES: ${CAPTURE_TIMEOUT_MINUTES}\n`);
+    expect(implement()).toContain("ui-capture-timed-out: ${{ steps.capture-time.outputs.timed-out }}");
+  });
+
   it("hands capture no secret: neither the 1Password step's outputs nor any GitHub token", () => {
     expect(capture()).not.toMatch(/FABRIK_SECRETS|steps\.op\.|secrets\.|github\.token|GH_TOKEN|GITHUB_TOKEN/);
   });

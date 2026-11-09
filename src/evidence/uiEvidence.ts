@@ -94,7 +94,8 @@ export type CaptureSide = (typeof CAPTURE_SIDES)[number];
  * prototype turn's capture had no variant to capture, a Capture identity's
  * sign-in failed (ADR-0012), no page it went to would load, so it took no
  * screenshot, or anything else it caught. The push job records the last, `no-result`, itself: a UI pull
- * request whose Implement job passed it no capture result it could read.
+ * request whose Implement job passed it no capture result it could read. The capture step's own
+ * timeout, which kills it before it records a result, is `timeout` all the same.
  */
 export const CAPTURE_FAILURES = ["build-failed", "server-did-not-start", "timeout", "no-routes", "no-variants", "sign-in-failed", "unreachable", "error", "no-result"] as const;
 
@@ -414,8 +415,8 @@ export interface ReviewerEvidence {
 /**
  * The UI evidence block of a UI PR's review prompt: the screenshots it was
  * given, each by route, viewport and side, and what to judge in them; or,
- * when capture failed or left no result, why, and to review the code as
- * usual. Any push to the PR starts a Review with the last Implement run's
+ * when capture failed, left no result, or took screenshots none of which were
+ * copied for the Review, why, and to review the code as usual. Any push to the PR starts a Review with the last Implement run's
  * evidence, so when the PR's head isn't the commit captured, the block says
  * the screenshots are of an earlier one.
  */
@@ -423,7 +424,12 @@ export function reviewerEvidenceBlock({ result, given, head, recorded }: Reviewe
   if (result === null || given.length === 0) {
     // With no capture result to read, the marker's reason is the one the PR body gives.
     const failure = result === null ? recorded : result.outcome === "failed" ? result.reason : null;
-    const why = failure === null ? UNREAD : `capture failed because ${FAILURE_WORDS[failure]}`;
+    const why =
+      failure !== null
+        ? `capture failed because ${FAILURE_WORDS[failure]}`
+        : result === null
+          ? UNREAD
+          : `the ${screenshots(result.captures.length)} capture took of this branch at \`${result.headSha.slice(0, 7)}\` weren't copied for this Review`;
     return ["## UI evidence", `${UI_PR}, but ${why}. There are no screenshots, so review the code as usual.`];
   }
   const captured = `\`${result.headSha.slice(0, 7)}\``;
@@ -598,7 +604,7 @@ export function failureWords(job: string): Readonly<Record<CaptureFailure, strin
       "signing in failed: a `ui.sign_in` command failed, ran out of time or left no session it could read, or a signed-in page landed on `ui.sign_in_path`, which its log names",
     unreachable: "no page it went to would load, refused or not found",
     error: `it hit an error the Kit didn't expect, which ${job}'s log shows`,
-    "no-result": "it left no result the push job could read",
+    "no-result": `it left no result the push job could read: ${job}'s log shows why`,
   };
 }
 

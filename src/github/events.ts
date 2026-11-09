@@ -214,11 +214,14 @@ export function agentRunEventFrom(
 /**
  * An Implement run's UI evidence, at `headSha`, the head the run built. Its
  * gallery is linked from the push job's own run, never from an address the
- * agent's runner passed out: an unzipped artifact opens in the browser.
+ * agent's runner passed out: an unzipped artifact opens in the browser. A
+ * capture step its own timeout stopped recorded no result, so the result is
+ * that it ran out of time.
  */
-function implementEvidence({ result, artifact, galleryArtifact, run, repoUrl }: PushJobEvidence, headSha: string): ImplementEvidence {
+function implementEvidence({ result, timedOut, artifact, galleryArtifact, run, repoUrl }: PushJobEvidence, headSha: string): ImplementEvidence {
+  const recorded = result ?? (timedOut ? ({ outcome: "failed", reason: "timeout", headSha, captures: [] } as const) : null);
   return {
-    ...(result === null ? {} : { result }),
+    ...(recorded === null ? {} : { result: recorded }),
     headSha,
     run,
     artifact,
@@ -273,6 +276,8 @@ export interface FinishedReview {
   readonly repoUrl: string;
   /** The required checks that didn't pass, from the checks job. */
   readonly failedChecks: readonly string[];
+  /** The ones among them that were skipped or reported neutral. */
+  readonly skippedChecks: readonly string[];
   /** The Reviewer's result, null when red checks kept it from running. */
   readonly result: AgentRunResult | null;
 }
@@ -281,7 +286,8 @@ export interface FinishedReview {
 export function reviewEventFrom(review: FinishedReview): LoopEvent {
   const { pullRequest, headSha, runUrl, result } = review;
   if (result === null) {
-    return { kind: "required-checks-finished", pullRequest, headSha, failed: review.failedChecks, runUrl };
+    const { failedChecks: failed, skippedChecks: skipped } = review;
+    return { kind: "required-checks-finished", pullRequest, headSha, failed, ...(skipped.length === 0 ? {} : { skipped }), runUrl };
   }
   if (result.role !== "review") throw new Error(`A Review's push job was handed a ${result.role} result`);
   if (result.issue !== pullRequest) throw new Error(`The Reviewer's result is for #${result.issue}, not #${pullRequest}`);

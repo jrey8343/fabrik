@@ -49,7 +49,7 @@ describe("Waiting for an agent PR's required checks", () => {
   it("ends red, naming the checks that didn't pass", async () => {
     const { github, options } = fakes([[check("build", "fail"), check("lint", "pass")]]);
 
-    expect(await waitForRequiredChecks(github, options([]))).toEqual({ checks: "red", headSha: HEAD, failed: ["build"] });
+    expect(await waitForRequiredChecks(github, options([]))).toEqual({ checks: "red", headSha: HEAD, failed: ["build"], skipped: [] });
   });
 
   it("ends stale when the PR moves on while it waits", async () => {

@@ -29,7 +29,7 @@ import { claimLanding, jobFailureReport, type Landing, type LandingFailure, land
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
 import { readReplayRunEnded } from "./kit/replayRecord.ts";
-import { readStoreReplayGates, readStoreRunRecords, readStoreScoreFiles } from "./kit/storeCheckout.ts";
+import { readStoreReplayGates, readStoreReplayPatches, readStoreRunRecords, readStoreScoreFiles } from "./kit/storeCheckout.ts";
 import type { ReplayStore } from "./github/replaySlice.ts";
 import { planFor } from "./loop/rules.ts";
 import type { KitConfig, LoopEvent } from "./loop/types.ts";
@@ -181,7 +181,7 @@ async function agentResultEvent(
     started: input.mainAtStart ?? null,
   });
   // The capture result and artifact ids come from the Implement job's outputs; the core decides whether the run is UI.
-  const capture = input.capture ?? { result: null, artifact: null, galleryArtifact: null };
+  const capture = input.capture ?? { result: null, artifact: null, galleryArtifact: null, timedOut: false };
   const evidence = { ...capture, run: Number(required("GITHUB_RUN_ID")), repoUrl: thisRepoUrl() };
   return { event: agentRunEventFrom(result, branch.changes, retry, null, evidence, thisRunUrl()), source, branch };
 }
@@ -227,6 +227,7 @@ async function replayRunEvent(path: string, config: KitConfig): Promise<EventSou
           records: Object.values((await readStoreRunRecords(storeDir, config.subscriptions)).records).filter((record) => record.repo === thisRepo),
           scoreFiles: Object.values(await readStoreScoreFiles(storeDir)).filter((file) => file.repo === thisRepo),
           gates: await readStoreReplayGates(storeDir),
+          patches: await readStoreReplayPatches(storeDir),
         };
   const { resetsAt, ...run } = ended;
   return {
@@ -264,6 +265,7 @@ async function finishedReviewEvent(
     runUrl: thisRunUrl(),
     repoUrl: thisRepoUrl(),
     failedChecks: input.failedChecks,
+    skippedChecks: input.skippedChecks,
     result,
   });
   return {

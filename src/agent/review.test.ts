@@ -182,6 +182,7 @@ describe("A Review's context", () => {
       runUrl: "https://github.com/jrey8343/penrith/actions/runs/7",
       repoUrl: "https://github.com/jrey8343/penrith",
       failedChecks: [],
+      skippedChecks: [],
       result: readAgentRunResult(artifact),
     });
     const plan = planFor(
@@ -334,7 +335,7 @@ describe("A Review's UI evidence", () => {
   // As when the marker names no artifact, so the Review job downloads nothing: the PR body names the reason, and so does the marker.
   it.each<[CaptureFailure, string]>([
     ["build-failed", "capture failed because `sandbox.build` failed, so there was no build to serve"],
-    ["no-result", "capture failed because it left no result the push job could read"],
+    ["no-result", "capture failed because it left no result the push job could read: the Implement job's log shows why"],
   ])("on a UI PR with nothing downloaded, whose marker records that capture failed with %s, says why, as the PR body does", async (failure, why) => {
     const { productDir, pullRequestFile, specFile } = await inputs(uiPullRequest);
     const nothing = join(await mkdtemp(join(tmpdir(), "fabrik-ui-evidence-")), "never-downloaded");
@@ -368,7 +369,7 @@ describe("A Review's UI evidence", () => {
     expect(parts.slice(parts.indexOf("## UI evidence"))).toEqual(NO_RESULT);
   });
 
-  it("on a UI PR whose download lacks a screenshot names only those it holds, and with none says capture left no result", async () => {
+  it("on a UI PR whose download lacks a screenshot names only those it holds, and with none says they weren't copied", async () => {
     const { productDir, pullRequestFile, specFile } = await inputs(uiPullRequest);
     const dir = await downloaded(CAPTURED);
     await rm(join(dir, "after-mobile-waitlist.png"));
@@ -380,7 +381,10 @@ describe("A Review's UI evidence", () => {
     await rm(join(dir, "after-desktop-waitlist.png"));
     const none = await inputs(uiPullRequest);
     const { parts: without } = await reviewContext(none.productDir, none.pullRequestFile, none.specFile, dir);
-    expect(without.slice(without.indexOf("## UI evidence"))).toEqual(NO_RESULT);
+    expect(without.slice(without.indexOf("## UI evidence"))).toEqual([
+      "## UI evidence",
+      "This pull request changes the Product repo's UI, but the 2 screenshots capture took of this branch at `4f2b9c0` weren't copied for this Review. There are no screenshots, so review the code as usual.",
+    ]);
   });
 
   it("on a UI PR with more than eight screenshots gives the Reviewer the eight that matter most, and only those are in its working directory", async () => {

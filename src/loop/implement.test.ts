@@ -499,7 +499,7 @@ describe("The evidence section on a first run's draft PR", () => {
       "<!-- fabrik:ui-evidence-start -->",
       "## UI evidence",
       "",
-      "**Capture failed:** it left no result the push job could read. There are no screenshots.",
+      "**Capture failed:** it left no result the push job could read: the Implement job's log shows why. There are no screenshots.",
       "",
       "No preview link: Kit config declares no `preview.url`.",
       `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"no-result"} -->`,

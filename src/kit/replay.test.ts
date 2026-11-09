@@ -1053,6 +1053,7 @@ describe("A Replay's results", () => {
               }),
             ],
       gates: [{ ticket, arm, run, gates: given.gates ?? "passed", hiddenTests: given.hiddenTests ?? "passed" }],
+      patches: [`replays/owner/product/140/${ticket}-${arm}-${run}.patch`],
     };
   }
 
@@ -1063,6 +1064,7 @@ describe("A Replay's results", () => {
       records: arms.flatMap(({ records }) => records),
       scoreFiles: arms.flatMap(({ scoreFiles }) => scoreFiles),
       gates: arms.flatMap(({ gates }) => gates),
+      patches: arms.flatMap(({ patches }) => patches),
     };
   }
 
@@ -1124,6 +1126,14 @@ describe("A Replay's results", () => {
       `| #12 (merged in #112) | baseline, default effort | passed | pass | failed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "baseline", 9003)} | – |`,
       `| #12 (merged in #112) | variant, effort high | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "variant", 9003)} | – |`,
     ]);
+  });
+
+  it("links no patch the store doesn't hold, as when none was written", () => {
+    const unwritten = { ...anArm(12, "variant", 9001), patches: [] };
+    const body = resultsIn(aFinishedReplay().body, outcomesOf(anArm(12, "baseline", 9001), unwritten, anArm(7, "baseline", 9002), anArm(7, "variant", 9002)));
+
+    expect(rowsOf(body)[0]).toContain(`| ${patchOf(12, "baseline", 9001)} |`);
+    expect(rowsOf(body)[1]).toBe("| #12 (merged in #112) | variant, effort high | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | – | – |");
   });
 
   /** The cells of a row with no result, after where its Ticket stands and before its flags. */
@@ -1326,6 +1336,16 @@ describe("A Replay's results", () => {
     expect(rowsOf(body)[1]).toBe(`| #12 (merged in #112) | variant, effort high | – | – | – | 0.80 | 0.90 | 0.75 | $1.00 | 12 | 2 min | ${patchOf(12, "variant", 9001)} | – |`);
     expect(totalsIn(body)).toContain("| variant | 1/1 | 1/1 | 1/1 | 0.80 (2/2) | 0.90 (2/2) | 0.75 (2/2) | $3.00 | 36 | 5 min |");
     expect(visible(body)).toContain("**variant: gates 1/1 vs 2/2; pass Verdicts 1/1 vs 2/2; hidden tests 1/1 vs 2/2; cost −25%; turns −25%; duration −25%**");
+  });
+
+  it("shows – for a side that measured none of a count, in the headline and the gap from the original alike", () => {
+    const noHiddenTests = (ticket: number) => anArm(ticket, "baseline", ticket === 12 ? 9001 : 9002, { hiddenTests: "no-hidden-tests" });
+    const outcomes = outcomesOf(noHiddenTests(12), anArm(12, "variant", 9001), noHiddenTests(7), anArm(7, "variant", 9002));
+
+    const body = resultsIn(aFinishedReplay().body, outcomes);
+
+    expect(visible(body)).toContain("**variant: gates 2/2 vs 2/2; pass Verdicts 2/2 vs 2/2; hidden tests 2/2 vs –; cost 0%; turns 0%; duration 0%**");
+    expect(totalsIn(body).at(-1)).toBe("Baseline vs original: pass Verdicts 2/2 vs –.");
   });
 
   it("heads the results with one line of the variant's totals against the baseline's", () => {

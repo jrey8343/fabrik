@@ -481,7 +481,7 @@ describe("The evidence section of a failed capture", () => {
     ],
     ["error", "**Capture failed:** it hit an error the Kit didn't expect, which the Implement job's log shows. There are no screenshots."],
     // The push job's own reason, when the Implement job passed it no capture result it could read.
-    ["no-result", "**Capture failed:** it left no result the push job could read. There are no screenshots."],
+    ["no-result", "**Capture failed:** it left no result the push job could read: the Implement job's log shows why. There are no screenshots."],
   ] satisfies [CaptureFailure, string][])("says plainly why when it failed for %s, with no gallery or routes", (reason, why) => {
     const failed: CaptureResult = { outcome: "failed", reason, headSha: HEAD, captures: [] };
 
@@ -758,6 +758,15 @@ describe("UI evidence of a route viewed signed in", () => {
       "- `fabrik-ui-evidence/after-mobile-2-pricing.png`: `/pricing` at mobile width (390×844), After",
       "- `fabrik-ui-evidence/after-desktop-1-today.png`: `/today` at desktop width (1440×900), After, signed in as `owner`. It answered 503, so it shows an error page, not the design",
       "- `fabrik-ui-evidence/before-mobile-2-pricing.png`: `/pricing` at mobile width (390×844), Before",
+    ]);
+  });
+
+  it("says the screenshots capture took weren't copied for the Review, when none of a captured result's were", () => {
+    const block = reviewerEvidenceBlock({ result: allCaptured, given: [], head: HEAD, recorded: null });
+
+    expect(block).toEqual([
+      "## UI evidence",
+      `This pull request changes the Product repo's UI, but the 6 screenshots capture took of this branch at \`4f2b9c0\` weren't copied for this Review. There are no screenshots, so review the code as usual.`,
     ]);
   });
 

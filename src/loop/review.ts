@@ -75,11 +75,20 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
     if (event.failed.length === 0) {
       return { kind: "nothing", reason: `#${pullRequest.number}'s required checks passed, so the Reviewer judges it` };
     }
+    const skipped = event.skipped ?? [];
+    const red = event.failed.filter((name) => !skipped.includes(name));
+    const listed = (heading: string, names: readonly string[]) =>
+      names.length === 0 ? [] : [[heading, "", ...names.map((name) => `- \`${name.replace(/`/g, "'")}\``)].join("\n")];
+    // A skipped or neutral check is no failure a Retry can fix, so the Verdict says so apart from the ones that failed.
     const findings = [
-      "These required checks didn't pass, so the Reviewer didn't run:",
-      "",
-      ...event.failed.map((name) => `- \`${name.replace(/`/g, "'")}\``),
-    ].join("\n");
+      ...listed("These required checks didn't pass, so the Reviewer didn't run:", red),
+      ...listed(
+        red.length === 0
+          ? "These required checks were skipped or reported neutral, so the Reviewer didn't run, and a Retry can't change that:"
+          : "These required checks were skipped or reported neutral, which a Retry can't change:",
+        skipped,
+      ),
+    ].join("\n\n");
     const held = heldOn(snapshot.kitIssues, config);
     return { kind: "act", actions: verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings }, snapshot.operator, held) };
   });

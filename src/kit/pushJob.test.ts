@@ -100,7 +100,7 @@ describe("What the push job applies", () => {
       retry: null,
       retryFlaw: null,
       startedBy: null,
-      capture: { result: null, artifact: null, galleryArtifact: null },
+      capture: { result: null, artifact: null, galleryArtifact: null, timedOut: false },
     });
   });
 
@@ -179,6 +179,18 @@ describe("What the push job applies", () => {
       expect(input).toMatchObject({ kind: "agent-result", capture: { result: captured, artifact: null, galleryArtifact: null } });
     });
 
+    it("notes that capture ran out of time when the Implement job says its capture step's own timeout stopped it", () => {
+      const input = withOutputs({ "ui-capture-result": "", "ui-capture-timed-out": "true", "ui-evidence-artifact": "", "ui-gallery-artifact": "" });
+
+      expect(input).toMatchObject({ kind: "agent-result", capture: { result: null, timedOut: true } });
+    });
+
+    it("notes no timeout when the Implement job says none", () => {
+      const input = withOutputs({ "ui-capture-result": JSON.stringify(captured), "ui-capture-timed-out": "" });
+
+      expect(input).toMatchObject({ kind: "agent-result", capture: { result: captured, timedOut: false } });
+    });
+
     it("isn't read for a run other than Implement", () => {
       const input = pushJobInput(needs("triage", { triage: ok({ "ui-capture-result": JSON.stringify(captured) }) }), 12);
 
@@ -212,7 +224,7 @@ describe("What the push job applies", () => {
         startedBy: null,
         prototype: {
           request: { request: { route: "/book", variants: 3, brief: "- **A**: one long form.\n- **B**: a stepper." }, reply: 9001 },
-          capture: { result: captured, artifact: null, galleryArtifact: 9201 },
+          capture: { result: captured, artifact: null, galleryArtifact: 9201, timedOut: false },
         },
       });
     });
@@ -239,17 +251,17 @@ describe("What the push job applies", () => {
     });
   });
 
-  it("applies red checks as such: the Reviewer didn't run", () => {
+  it("applies red checks as such, naming the skipped ones: the Reviewer didn't run", () => {
     const input = pushJobInput(
       needs(
         "review",
-        { "review-checks": { result: "success", outputs: { checks: "red", "head-sha": "a".repeat(40), failed: '["build"]' } }, review: { result: "skipped", outputs: {} } },
+        { "review-checks": { result: "success", outputs: { checks: "red", "head-sha": "a".repeat(40), failed: '["build","e2e"]', skipped: '["e2e"]' } }, review: { result: "skipped", outputs: {} } },
         { ticket: "7", "pull-request": "50" },
       ),
       50,
     );
 
-    expect(input).toEqual({ kind: "review", pullRequest: 50, ticket: 7, headSha: "a".repeat(40), failedChecks: ["build"], withResult: false });
+    expect(input).toEqual({ kind: "review", pullRequest: 50, ticket: 7, headSha: "a".repeat(40), failedChecks: ["build", "e2e"], skippedChecks: ["e2e"], withResult: false });
   });
 
   it("applies the Reviewer's Verdict once green checks let it run", () => {
@@ -262,7 +274,7 @@ describe("What the push job applies", () => {
       50,
     );
 
-    expect(input).toEqual({ kind: "review", pullRequest: 50, ticket: 7, headSha: "a".repeat(40), failedChecks: [], withResult: true });
+    expect(input).toEqual({ kind: "review", pullRequest: 50, ticket: 7, headSha: "a".repeat(40), failedChecks: [], skippedChecks: [], withResult: true });
   });
 
   it("does nothing when the PR moved on while its checks were awaited", () => {

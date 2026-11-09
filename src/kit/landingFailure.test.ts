@@ -15,7 +15,7 @@ const implementRetry: PushJobInput = {
   startedBy: null,
 };
 const triage: PushJobInput = { kind: "agent-result", role: "triage", issue: 7, pullRequest: null, review: null, startedBy: null };
-const verdict: PushJobInput = { kind: "review", pullRequest: 51, ticket: 12, headSha: "a".repeat(40), failedChecks: [], withResult: true };
+const verdict: PushJobInput = { kind: "review", pullRequest: 51, ticket: 12, headSha: "a".repeat(40), failedChecks: [], skippedChecks: [], withResult: true };
 const redChecks: PushJobInput = { ...verdict, failedChecks: ["test"], withResult: false };
 const agentFailure: PushJobInput = { kind: "agent-failure", role: "implement", issue: 12, jobResult: "failure", secretsStep: "success" };
 

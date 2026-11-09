@@ -728,6 +728,8 @@ jobs:
       # JSON line, empty when nothing was captured, and the numeric ids of the
       # zipped screenshots-and-result artifact and the unzipped gallery's.
       ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}
+      # "true" when capture's own timeout stopped it before it recorded a result (src/kit/pushJob.ts).
+      ui-capture-timed-out: ${{ steps.capture-time.outputs.timed-out }}
       ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}
       ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}
     steps:
@@ -829,6 +831,12 @@ jobs:
       # Kit's CAPTURE_TIMEOUT_MINUTES (src/evidence/capture.ts; a test holds the
       # two together). No secret reaches it, nor the build, server and sign-ins
       # it runs.
+      # So a capture step its own timeout stopped can be told from one that failed for any other reason.
+      - name: Note when capture starts
+        id: capture-started
+        if: success()
+        run: echo "at=$(date +%s)" >>"$GITHUB_OUTPUT"
+
       # Without a ui block it captures nothing and passes out no result, so
       # neither upload below runs; the Kit job's step summary says Visual
       # evidence is off (src/kit/kitJob.ts).
@@ -843,6 +851,20 @@ jobs:
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
           FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: node ../kit/src/evidence/capture-main.ts
+
+      # Its own timeout kills capture before it records a result, which the push
+      # job would read as none: note it, so the push job reads it as a timeout.
+      # The Kit's CAPTURE_TIMEOUT_MINUTES, as on the step (a test holds the two together).
+      - name: Note whether capture ran out of time
+        id: capture-time
+        if: steps.capture.outcome == 'failure'
+        env:
+          STARTED_AT: ${{ steps.capture-started.outputs.at }}
+          TIMEOUT_MINUTES: 20
+        run: |
+          if [ "$(( $(date +%s) - STARTED_AT ))" -ge "$(( TIMEOUT_MINUTES * 60 ))" ]; then
+            echo "timed-out=true" >>"$GITHUB_OUTPUT"
+          fi
 
       # The result and the bundle of the Implementer's commits (none if it made none).
       - name: Pass the Implementer's output and commits to the push job
@@ -947,6 +969,8 @@ jobs:
       checks: ${{ steps.wait.outputs.checks }}
       head-sha: ${{ steps.wait.outputs.head-sha }}
       failed: ${{ steps.wait.outputs.failed }}
+      # The ones among them skipped or reported neutral, which the Verdict says no Retry changes.
+      skipped: ${{ steps.wait.outputs.skipped }}
     steps:
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1911,7 +1935,8 @@ jobs:
   # transcript, its Run record (role `score`) and the score file to fabrik-runs.
   # It runs after the judge job whether that succeeded or failed, so a failed
   # judge still leaves its record and a judge-failed score file, unless the run
-  # was cancelled. continue-on-error, so scoring never fails the run.
+  # was cancelled. continue-on-error, so writing the score never fails the run;
+  # a judge that fails does, as the Score job has none, so the run shows red.
   score-record:
     name: Score record
     needs: [kit, push, score]

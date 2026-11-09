@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { aRecordWithTranscript } from "../__fixtures__/retroEvidence.ts";
 import { aScoreFile } from "../__fixtures__/weeklySummary.ts";
 import { recordPathOf, replayGatesPath } from "./runRecord.ts";
-import { readStoreReplayGates, readStoreRunRecords, readStoreScoreFiles, readStoreTranscripts } from "./storeCheckout.ts";
+import { readStoreReplayGates, readStoreReplayPatches, readStoreRunRecords, readStoreScoreFiles, readStoreTranscripts } from "./storeCheckout.ts";
 
 /** A checkout of the store holding these files, by their paths in it. */
 async function aCheckoutWith(files: Readonly<Record<string, string | Uint8Array>>): Promise<string> {
@@ -99,5 +99,16 @@ describe("Reading the store's checkout", () => {
 
     expect(await readStoreReplayGates(store)).toEqual([gates]);
     expect(await readStoreReplayGates(await aCheckoutWith({}))).toEqual([]);
+  });
+
+  // So a Replay's results link only a patch that was written (#156).
+  it("lists each Replay arm's patch by its path in the store, and none when there are none", async () => {
+    const store = await aCheckoutWith({
+      "replays/owner/product/140/12-variant-9001.patch": "diff --git a/x b/x\n",
+      [replayGatesPath("owner/product", { issue: 140, ticket: 12, arm: "baseline", run: 9001 })]: "{}",
+    });
+
+    expect(await readStoreReplayPatches(store)).toEqual(["replays/owner/product/140/12-variant-9001.patch"]);
+    expect(await readStoreReplayPatches(await aCheckoutWith({}))).toEqual([]);
   });
 });
